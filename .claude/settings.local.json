@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lh \"c:\\\\PersonalWork\\\\stock_bot\\\\v1\"/*.py)",
+      "Read(//c/PersonalWork/stock_bot/v1/**)",
+      "Bash(find . -name \"*.py\" -type f -exec wc -l {} +)",
+      "Bash(python -m pytest tests/test_growth_mode.py -v)",
+      "Bash(python -m unittest tests.test_growth_mode -v)",
+      "Bash(python -c \":*)",
+      "Bash(wc -l /c/PersonalWork/stock_bot/v1/*.py)",
+      "Bash(python -m unittest tests.test_run_mode -v)",
+      "Bash(schtasks /query)"
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+================================================================================
+CHANGE REVIEW PACKET
+Generated: {generated_date}
+Task ID:   {task_id}
+================================================================================
+
+## DECISION REQUIRED
+
+[ ] ACCEPT — merge changes as-is
+[ ] REVISE — accept with modifications (note below)
+[ ] REJECT — discard changes (note reason)
+
+Notes: ___________________________________________________________________
+
+================================================================================
+
+## CHANGED FILES
+
+{changed_files}
+
+================================================================================
+
+## DIFF SUMMARY
+
+{diff_summary}
+
+================================================================================
+
+## TEST RESULTS
+
+{test_results}
+
+================================================================================
+
+## OUTPUT CHANGES
+
+{output_changes}
+
+================================================================================
+
+## RISKS & ROLLBACK
+
+{risks}
+
+Rollback: `git checkout -- .` (discards all unstaged changes)
+         `git reset --soft HEAD~1` (undoes last commit, keeps changes staged)
+
+================================================================================
+
+## CHECKLIST BEFORE ACCEPTING
+
+[ ] Tests pass (all {test_count} expected)
+[ ] No secrets or credentials in diff
+[ ] No unintended files changed
+[ ] Behavior change is what was requested
+[ ] Output files look correct (if applicable)
+[ ] No new TODO/FIXME markers introduced without context
+
+================================================================================

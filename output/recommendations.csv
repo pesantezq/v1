@@ -1,0 +1,5 @@
+﻿Action,Symbol,Shares,Amount,Reason,Priority,Urgent,Timestamp
+REBALANCE_ALERT,VFH,,,Drift of 15.00% exceeds +/-7.00% band,0,True,2026-01-14 19:56:23
+BUY,VFH,4.0,530.16,Most underweight (-15.00%). Buy 4 shares @ $132.54,1,False,2026-01-14 19:56:23
+HOLD,GLD,,,Within band (4.72%),10,False,2026-01-14 19:56:23
+HOLD,QLD,,,Within band (3.30%),10,False,2026-01-14 19:56:23

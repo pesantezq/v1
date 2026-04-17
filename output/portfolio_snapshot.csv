@@ -1,0 +1,17 @@
+﻿Symbol,Shares,Price,Market_Value,Target_Weight,Actual_Weight,Drift,Asset_Class,Is_Leveraged,Leverage_Factor,Status,Timestamp
+QQQ,6.0,619.55,3717.3,0.45,0.5394,0.0894,us_equity,False,1.0,BREACH,2026-01-14 19:56:23
+VFH,0.0,132.54,0,0.15,0.0,-0.15,us_equity_sector,False,1.0,BREACH,2026-01-14 19:56:23
+VXUS,0.0,78.47,0,0.1,0.0,-0.1,international_equity,False,1.0,BREACH,2026-01-14 19:56:23
+GLD,4.0,425.94,1703.76,0.2,0.2472,0.0472,commodity,False,1.0,overweight,2026-01-14 19:56:23
+QLD,8.0,71.49,571.92,0.05,0.083,0.033,us_equity_leveraged,True,2.0,overweight,2026-01-14 19:56:23
+CASH,898.11,1.0,898.11,,0.1303,,cash,False,1.0,N/A,2026-01-14 19:56:23
+
+SUMMARY
+Total Holdings Value,5992.98
+Cash Available,898.11
+Total Portfolio,6891.09
+401(k) Balance,0.0
+Total Net Worth,6891.09
+Max Drift,0.1500
+Max Drift Symbol,VFH
+Rebalance Needed,True

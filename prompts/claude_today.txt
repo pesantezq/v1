@@ -1,0 +1,138 @@
+================================================================================
+CLAUDE CODE TASK PROMPT
+Generated: 2026-04-13
+Task ID:   watchlist_budget_guard
+Area:      reliability
+================================================================================
+
+## PROJECT CONTEXT
+
+This is a personal portfolio automation system (stock_bot v1).
+- Python 3.12, Windows 11, local Task Scheduler
+- Decision-support only — no broker API, no live trading
+- Entry point: `python main.py --run-mode daily|weekly|monthly`
+- Test command: `python -m unittest discover tests/ -v`
+- Expected test count: ~185 tests, 1 skip allowed
+
+Key constraints:
+- Prefer Python standard library
+- Do not break existing behavior or test coverage
+- Keep changes incremental and minimal
+- Do not expose secrets or API keys
+- Degrade gracefully when data is unavailable
+
+================================================================================
+
+## TASK
+
+**Enforce MAX_DAILY_CALLS budget on watchlist_scanner day-1 burst**
+
+Day-1 of watchlist_scanner makes ~21+ API calls (news + 20 OHLCV + up to 20 OVERVIEW) which exceeds MAX_DAILY_CALLS=20. The cache_manager call counter tracks calls but there is no pre-check before issuing OVERVIEW requests. Add a remaining-budget check before each OVERVIEW fetch and skip gracefully with a neutral score if budget is exhausted. Prevents silent API key throttling on first run.
+
+Area: reliability
+Tags: watchlist_scanner, api_budget, cache, reliability
+
+================================================================================
+
+## RELEVANT FILES TO INSPECT FIRST
+
+  - watchlist_scanner/scanner.py
+  - watchlist_scanner/alpha_vantage_client.py
+  - watchlist_scanner/fundamentals_engine.py
+  - watchlist_scanner/__main__.py
+  - api_budget.py
+  - watchlist_scanner/cache_manager.py
+  - fmp_client.py
+  - guardrails.py
+  - run_lock.py
+  - main.py
+
+  Also worth checking (cross-cutting):
+  - utils.py
+  - state_store.py
+
+================================================================================
+
+## ARCHITECTURE CONTEXT (repo snapshot)
+
+# Repo Overview: v1
+
+> Generated 2026-04-13T18:54:27Z by `tools/repo_overview.py`
+
+---
+
+## 1. High-Level Purpose
+
+**Summary:** Portfolio automation and decision-support system. Rules-based rebalancing, scoring (0-100), AI-assisted narrative generation, and watchlist scanning. Analysis-only â€” no broker API, no automated trades.
+
+**Runtime:** CLI (Python 3.12), Windows Task Scheduler, optional Streamlit GUI
+
+**Action-taking:** No â€” Produces recommendations and emails only. No trades are placed. Emails require explicit SMTP config.
+
+**Major workflows:**
+- Daily: fetch prices â†’ score â†’ guardrails â†’ recommendations â†’ ML â†’ email (if ACTION_REQUIRED)
+- Weekly: same as daily + always send digest
+- Monthly: same + contribution plan + Claude AI memo + CAGR projections
+- Watchlist scan: standalone Alpha Vantage scan with fundamental/technical/theme scoring
+- Theme engine: RSS ingestion â†’ Ollama theme detection â†’ candidate boosts
+
+## 2. Entry Points & Execution Flow
+
+- **[agent/__main__.py](agent/__main__.py)** (package `__main__`) â€” run modes: `n/a`
+- **[agent/agent_runner.py](agent/agent_runner.py)** (script) â€” run modes: `n/a`
+- **[agent/mcp_agent_tools.py](agent/mcp_agent_tools.py)** (script) â€” run modes: `n/a`
+- **[main.py](main.py)** (script) â€” run modes: `daily, weekly, monthly`
+- **[stockbot_mcp_server.py](stockbot_mcp_server.py)** (script) â€” run modes: `daily`
+- **[test_demo.py](test_demo.py)** (script) â€” run modes: `n/a`
+- **[tests/test_agent_bundle_builder.py](tests/test_agent_bundle_builder.py)** (script) â€” run modes: `n/a`
+- **[tests/test_agent_runner_offline_mode.py](tests/test_agent_runner_offline_mode.py)** (script) â€” run modes: `n/a`
+- **[tests/test_growth_mode.py](tests/test_growth_mode.py)** (script) â€” run modes: `n/a`
+- **[tests/test_guardrails.py](tests/test_guardrails.py)** (script) â€” run modes: `n/a`
+- **[tests/test_run_mode.py](tests/test_run_mode.py)** (script) â€” run modes: `daily`
+- **[tests/test_scanner.py](tests/test_scanner.py)** (script) â€” run modes: `n/a`
+- **[tests/test_sleeve.py](tests/test_sleeve.py)** (script) â€” run modes: `n/a`
+- **[tests/test_state_store.py](tests/test_state_store.py)** (script) â€” run modes: `n/a`
+- **[tests/test_theme_engine.py](tests/test_theme_engine.py)** (script) â€” run modes: `n/a`
+- **[theme_engine/__main__.py](theme_engine/__main__.py)** (package `__main__`) â€” run modes: `daily, weekly, monthly`
+- **[tools/build_prompt.py](tools/build_prompt.py)** (script) â€” run modes: `n/a`
+- **[tools/daily_packet.py](tools/daily_packet.py)** (script) â€” run modes: `n/a`
+- **[tools/repo_overview.py](tools/repo_overview.py)** (script) â€” run modes: `n/a`
+- **[tools/review_packet.py](tools/review_packet.py)** (script) â€” run modes: `n/a`
+- **[tools/task_ranker.py](tools/task_ranker.py)** (script) â€” run modes: `n/a`
+- **[watchlist_scanner/__main__.py](watchlist_scanner/__main__.py)** (package `__main__`) â€” run modes: `n/a`
+
+**Main execution flow** (inferred from `main.py`):
+
+1. Parse args â†’ load `.env` â†’ load `config.json` â†’ acquire run lock
+2. Idempotency check (SQLite `run_history`)
+
+================================================================================
+
+## REQUIREMENTS FOR THIS TASK
+
+1. Make the minimal change that achieves the stated goal
+2. All existing tests must continue to pass (run: `python -m unittest discover tests/ -v`)
+3. Add or update tests if modifying core logic or state
+4. Do not add dependencies unless absolutely necessary
+5. Do not refactor code outside the task scope
+6. Mark any assumptions clearly in your response
+
+================================================================================
+
+## EXPECTED DELIVERABLES
+
+When done, provide:
+1. List of files changed (path + brief reason)
+2. A short explanation of the approach taken
+3. Any assumptions or trade-offs made
+4. How to validate the change works
+
+================================================================================
+
+## VALIDATION
+
+Primary: `python -m unittest discover tests/ -v`  → all tests pass
+Secondary: `python main.py --dry-run --run-mode daily`  → no errors
+Optional: `python -m tools.review_packet`  → generates review packet
+
+================================================================================

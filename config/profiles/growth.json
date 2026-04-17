@@ -1,0 +1,18 @@
+{
+  "portfolio": {
+    "cash_reserve_pct": 0.03,
+    "max_position_pct": 0.45,
+    "rebalance_band_pct": 0.14
+  },
+  "signals": {
+    "min_signal_score": 0.48,
+    "min_confidence_score": 0.5,
+    "price_change_alert_pct": 2.75,
+    "volume_spike_factor": 1.4,
+    "cooldown_hours": 48
+  },
+  "execution": {
+    "max_new_positions_per_day": 2,
+    "max_capital_per_day": 1500
+  }
+}

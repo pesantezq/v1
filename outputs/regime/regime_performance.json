@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-04-16T09:39:15.207362",
+  "primary_window_days": 3,
+  "resolved_signals": 0,
+  "by_regime": {},
+  "observability": {
+    "regime_vs_success_correlation": {},
+    "degraded_mode_vs_regime_reliability": {},
+    "confidence_vs_outcome_within_regime": {}
+  }
+}

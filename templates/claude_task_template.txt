@@ -1,0 +1,76 @@
+================================================================================
+CLAUDE CODE TASK PROMPT
+Generated: {generated_date}
+Task ID:   {task_id}
+Area:      {task_area}
+================================================================================
+
+## PROJECT CONTEXT
+
+This is a personal portfolio automation system (stock_bot v1).
+- Python 3.12, Windows 11, local Task Scheduler
+- Decision-support only — no broker API, no live trading
+- Entry point: `python main.py --run-mode daily|weekly|monthly`
+- Test command: `python -m unittest discover tests/ -v`
+- Expected test count: ~185 tests, 1 skip allowed
+
+Key constraints:
+- Prefer Python standard library
+- Do not break existing behavior or test coverage
+- Keep changes incremental and minimal
+- Do not expose secrets or API keys
+- Degrade gracefully when data is unavailable
+
+================================================================================
+
+## TASK
+
+**{task_title}**
+
+{task_description}
+
+Area: {task_area}
+Tags: {task_tags}
+
+================================================================================
+
+## RELEVANT FILES TO INSPECT FIRST
+
+{relevant_files}
+
+================================================================================
+
+## ARCHITECTURE CONTEXT (repo snapshot)
+
+{repo_overview_snippet}
+
+================================================================================
+
+## REQUIREMENTS FOR THIS TASK
+
+1. Make the minimal change that achieves the stated goal
+2. All existing tests must continue to pass (run: `python -m unittest discover tests/ -v`)
+3. Add or update tests if modifying core logic or state
+4. Do not add dependencies unless absolutely necessary
+5. Do not refactor code outside the task scope
+6. Mark any assumptions clearly in your response
+
+================================================================================
+
+## EXPECTED DELIVERABLES
+
+When done, provide:
+1. List of files changed (path + brief reason)
+2. A short explanation of the approach taken
+3. Any assumptions or trade-offs made
+4. How to validate the change works
+
+================================================================================
+
+## VALIDATION
+
+Primary: `python -m unittest discover tests/ -v`  → all tests pass
+Secondary: `python main.py --dry-run --run-mode daily`  → no errors
+Optional: `python -m tools.review_packet`  → generates review packet
+
+================================================================================

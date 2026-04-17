@@ -1,0 +1,43 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Secrets / local config
+.env
+*.env.local
+
+# Runtime data (state, caches, DB) — stored locally only
+data/
+
+# Log files
+logs/
+
+# All generated outputs (overwritten every run)
+outputs/latest/
+outputs/history/
+outputs/evals/
+outputs/policy/
+
+# Daily update artifacts
+daily_update/
+
+# Backlog (runtime state)
+backlog/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pip dependency artefact left in root by some install commands
+=1.35.0

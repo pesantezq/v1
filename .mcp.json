@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "stockbot-mcp": {
+      "command": "py",
+      "args": ["-m", "stockbot_mcp_server"]
+    },
+    "agent-mcp": {
+      "command": "py",
+      "args": ["-m", "agent.mcp_agent_tools"]
+    }
+  }
+}

@@ -1,0 +1,280 @@
+{
+  "investor": {
+    "name": "Enrique Pesantez",
+    "age": 25,
+    "birthdate": "01-03",
+    "annual_income": 96000,
+    "monthly_expenses": 3900,
+    "investment_horizon_years": 35,
+    "risk_tolerance": "high",
+    "strategy": "buy-and-hold"
+  },
+  "portfolio": {
+    "holdings": [
+      {
+        "symbol": "QQQ",
+        "shares": 6,
+        "target_weight": 0.45,
+        "asset_class": "us_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "NASA",
+        "shares": 14,
+        "target_weight": 0.1,
+        "asset_class": "us_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "VFH",
+        "shares": 0,
+        "target_weight": 0.15,
+        "asset_class": "us_equity_sector",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "VXUS",
+        "shares": 0,
+        "target_weight": 0.1,
+        "asset_class": "international_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "GLD",
+        "shares": 4,
+        "target_weight": 0.2,
+        "asset_class": "commodity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "QLD",
+        "shares": 8,
+        "target_weight": 0.05,
+        "asset_class": "us_equity_leveraged",
+        "is_leveraged": true,
+        "leverage_factor": 2
+      }
+    ],
+    "cash_available": 464.16,
+    "target_cash_weight": 0.05,
+    "cash_reserve_pct": 0.05,
+    "max_position_pct": 0.4,
+    "rebalance_band_pct": 0.12,
+    "monthly_contribution": 1000,
+    "has_regular_contributions": true,
+    "is_taxable_account": true
+  },
+  "signals": {
+    "min_signal_score": 0.5,
+    "min_confidence_score": 0.5,
+    "theme_score_threshold": 0.4,
+    "price_change_alert_pct": 3.0,
+    "volume_spike_factor": 1.5,
+    "cooldown_hours": 72,
+    "min_evidence_count": 2,
+    "confidence_tiers": {
+      "high": 0.8,
+      "medium": 0.65,
+      "low": 0.5
+    },
+    "cooldown": {
+      "high": 6,
+      "medium": 24,
+      "low": 72
+    }
+  },
+  "ranking": {
+    "signal_weight": 0.45,
+    "confidence_weight": 0.3,
+    "evidence_weight": 0.15,
+    "freshness_weight": 0.1
+  },
+  "execution": {
+    "recommend_only": true,
+    "max_new_positions_per_day": 1,
+    "max_capital_per_day": 1000
+  },
+  "data": {
+    "max_daily_calls": 20
+  },
+  "watchlist": {
+    "core": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "AMD",
+      "META",
+      "GOOGL",
+      "TSLA",
+      "AMZN",
+      "QQQ",
+      "SPY"
+    ],
+    "tactical": [
+      "AVGO",
+      "SMCI",
+      "PLTR",
+      "NASA",
+      "XLE",
+      "XLF",
+      "XLK",
+      "IWM"
+    ],
+    "speculative": [
+      "COIN",
+      "MARA",
+      "RIOT"
+    ]
+  },
+  "rebalance_rules": {
+    "band_threshold": 0.12,
+    "use_cash_before_selling": true,
+    "direct_contributions_first": true,
+    "trim_leverage_before_core": true,
+    "avoid_taxable_sales": true,
+    "panic_sell_protection": true
+  },
+  "growth_mode": {
+    "mode": "accumulation_aggressive",
+    "concentration_cap": 0.4,
+    "leverage_cap": 0.15,
+    "target_cagr": 0.09,
+    "drawdown_thresholds": {
+      "modest_equity_tilt": 0.1,
+      "aggressive_equity_tilt": 0.2,
+      "deploy_all_cash": 0.3
+    },
+    "expected_returns": {
+      "us_equity": 0.1,
+      "us_equity_sector": 0.09,
+      "international_equity": 0.08,
+      "commodity": 0.04,
+      "us_equity_leveraged": 0.14,
+      "bonds": 0.04,
+      "cash": 0.04
+    }
+  },
+  "finance_analysis": {
+    "target_savings_rate": 0.15,
+    "target_emergency_months": 3,
+    "priorities": {
+      "savings": 3,
+      "emergency_fund": 4,
+      "portfolio_drift": 3,
+      "taxes": 3,
+      "budget": 2
+    },
+    "data_quality": {
+      "is_auto_imported": true,
+      "has_manual_entries": false,
+      "is_partial_period": false
+    }
+  },
+  "retirement_401k": {
+    "enabled": false,
+    "mode": "balance_only",
+    "balance": 0,
+    "holdings_csv_path": "",
+    "include_in_net_worth": true
+  },
+  "ml_advisor": {
+    "enabled": false
+  },
+  "market_data": {
+    "provider": "alpha_vantage",
+    "cache_ttl_seconds": 86400,
+    "max_retries": 3,
+    "retry_base_delay_seconds": 5,
+    "request_timeout_seconds": 30
+  },
+  "email": {
+    "enabled": true,
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "use_tls": true,
+    "sender_email": "",
+    "recipient_email": ""
+  },
+  "schedule": {
+    "weekly_summary_enabled": true,
+    "weekly_summary_day": "sunday",
+    "annual_review_enabled": true,
+    "annual_review_date": "01-03"
+  },
+  "output": {
+    "csv_path": "output/portfolio_snapshot.csv",
+    "excel_path": "output/portfolio_tracker.xlsx",
+    "history_enabled": true
+  },
+  "speculative_sleeve": {
+    "enabled": true,
+    "max_total": 0.1,
+    "max_per_position": 0.05,
+    "max_new_positions_per_month": 1
+  },
+  "scanner": {
+    "enabled": true,
+    "universe": "sp500",
+    "top_k_watchlist": 100,
+    "min_mkt_cap": 5000000000,
+    "min_rev_growth": 0.15,
+    "trend_filter_200dma": true,
+    "use_premium_endpoints": false,
+    "v3_max_symbols": 100
+  },
+  "api_limits": {
+    "fmp_daily_calls_budget": 230
+  },
+  "watchlist_scanner": {
+    "enabled": true,
+    "output_dir": "outputs/latest",
+    "cache_dir": "data/watchlist_cache"
+  },
+  "agent": {
+    "task_providers": {
+      "standalone": "ollama",
+      "weekly": "ollama",
+      "monthly": "anthropic",
+      "maintainer": "anthropic"
+    }
+  },
+  "theme_engine": {
+    "enabled": true,
+    "rss_feeds": [
+      "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
+      "https://feeds.marketwatch.com/marketwatch/topstories/"
+    ],
+    "max_items_per_run": 30,
+    "task_providers": {
+      "daily": "ollama"
+    },
+    "ollama_model": "gemma3:4b",
+    "max_theme_boost_points": 10,
+    "min_confidence": 0.6,
+    "output_dir": "outputs/latest",
+    "testing_mode": false
+  },
+  "holding_rationale": {
+    "QQQ": "long-term US growth engine - top 100 Nasdaq companies",
+    "VFH": "US financial sector diversification - cyclical exposure",
+    "VXUS": "international equity - reduces single-country concentration risk",
+    "GLD": "inflation hedge and portfolio ballast during stress periods",
+    "QLD": "2x leveraged Nasdaq - tactical growth amplifier, hard-capped at 5%"
+  },
+  "opportunity_cost": {
+    "idle_cash_threshold": 2000.0,
+    "projection_years": 10
+  },
+  "extended_watchlist": {
+    "enabled": true,
+    "confidence_threshold": 0.8,
+    "ttl_days": 7,
+    "max_symbols": 3,
+    "db_path": "data/portfolio.db"
+  }
+}

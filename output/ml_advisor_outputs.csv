@@ -1,0 +1,5 @@
+﻿RecKey,Symbol,PersistenceProbability,ExpectedResolutionPeriods,ActionBenefitProbability,FalseAlertProbability,OriginalScore,AdjustedScore,MLRecommendation,Explanation
+DRIFT_VFH,VFH,50%,4.0,60%,20%,80,80,Monitor,"Mixed signals. 50% persistence probability, 60% action benefit."
+DRIFT_QQQ,QQQ,50%,4.0,60%,20%,65,65,Monitor,"Mixed signals. 50% persistence probability, 60% action benefit."
+DRIFT_VXUS,VXUS,50%,4.0,60%,20%,65,65,Monitor,"Mixed signals. 50% persistence probability, 60% action benefit."
+DRIFT_GLD,GLD,50%,4.0,60%,20%,50,50,Monitor,"Mixed signals. 50% persistence probability, 60% action benefit."

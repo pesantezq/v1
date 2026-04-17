@@ -1,0 +1,20 @@
+# Portfolio Automation System - Dependencies
+# Python 3.11+ required
+
+# Core HTTP and data handling
+requests>=2.31.0
+
+# Data analysis and manipulation
+pandas>=2.0.0
+
+# Excel file handling
+openpyxl>=3.1.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# MCP server (Claude Code local integration)
+mcp>=1.0.0
+
+# RSS feed parsing (theme engine)
+feedparser>=6.0.0

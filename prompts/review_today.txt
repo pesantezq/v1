@@ -1,0 +1,20 @@
+================================================================================
+REVIEW PROMPT — 2026-04-13
+Task: watchlist_budget_guard — Enforce MAX_DAILY_CALLS budget on watchlist_scanner day-1 burst
+================================================================================
+
+Please review the changes you just made for task `watchlist_budget_guard`.
+
+Provide:
+1. Summary of what was changed (files + reason)
+2. Any assumptions made
+3. Potential risks or side effects
+4. How the change was validated
+
+Then run: `python -m unittest discover tests/ -v`
+And confirm all tests pass.
+
+After validation, run: `python -m tools.review_packet`
+to generate a human review packet at daily_update/review_packet.md
+
+================================================================================

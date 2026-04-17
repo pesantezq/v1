@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-04-16T09:39:15.164336",
+  "windows": [
+    1,
+    3,
+    7
+  ],
+  "primary_window_days": 3,
+  "tracked_signals": 42,
+  "resolved_signals": 0,
+  "by_window": {
+    "1d": {
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
+    },
+    "3d": {
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
+    },
+    "7d": {
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
+    }
+  },
+  "by_ticker": {},
+  "historically_strong_tickers": [],
+  "low_reliability_tickers": [],
+  "global_metrics": {
+    "high_confidence_success_rate": null,
+    "low_confidence_success_rate": null,
+    "degraded_mode_success_rate": null,
+    "normal_mode_success_rate": null
+  },
+  "future_activation": {
+    "enabled": false,
+    "mode": "observe_only",
+    "prepared_hooks": [
+      "historical_weighting",
+      "dynamic_cooldown",
+      "signal_dampening"
+    ]
+  },
+  "regime_performance": {
+    "generated_at": "2026-04-16T09:39:15.164336",
+    "primary_window_days": 3,
+    "resolved_signals": 0,
+    "by_regime": {},
+    "observability": {
+      "regime_vs_success_correlation": {},
+      "degraded_mode_vs_regime_reliability": {},
+      "confidence_vs_outcome_within_regime": {}
+    }
+  }
+}

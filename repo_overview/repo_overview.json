@@ -1,0 +1,2949 @@
+{
+  "repo_name": "v1",
+  "generated_at": "2026-04-13T18:54:27Z",
+  "high_level_purpose": {
+    "summary": "Portfolio automation and decision-support system. Rules-based rebalancing, scoring (0-100), AI-assisted narrative generation, and watchlist scanning. Analysis-only \u2014 no broker API, no automated trades.",
+    "primary_runtime": "CLI (Python 3.12), Windows Task Scheduler, optional Streamlit GUI",
+    "action_taking": false,
+    "action_taking_note": "Produces recommendations and emails only. No trades are placed. Emails require explicit SMTP config.",
+    "major_workflows": [
+      "Daily: fetch prices \u2192 score \u2192 guardrails \u2192 recommendations \u2192 ML \u2192 email (if ACTION_REQUIRED)",
+      "Weekly: same as daily + always send digest",
+      "Monthly: same + contribution plan + Claude AI memo + CAGR projections",
+      "Watchlist scan: standalone Alpha Vantage scan with fundamental/technical/theme scoring",
+      "Theme engine: RSS ingestion \u2192 Ollama theme detection \u2192 candidate boosts"
+    ],
+    "readme_excerpt": "A production-ready, rules-based portfolio tracking and rebalancing automation tool with comprehensive finance recommendation scoring. - **Market Data Integration**: Alpha Vantage API with retry logic, caching, and rate limiting - **Portfolio Tracking**: CSV and Excel output with historical tracking",
+    "main_docstring": "Portfolio Automation System - Main Entry Point"
+  },
+  "entry_points": [
+    {
+      "path": "agent/__main__.py",
+      "has_argparse": false,
+      "is_package_main": true,
+      "run_modes": []
+    },
+    {
+      "path": "agent/agent_runner.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "agent/mcp_agent_tools.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "main.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": [
+        "daily",
+        "weekly",
+        "monthly"
+      ]
+    },
+    {
+      "path": "stockbot_mcp_server.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": [
+        "daily"
+      ]
+    },
+    {
+      "path": "test_demo.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_agent_bundle_builder.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_agent_runner_offline_mode.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_growth_mode.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_guardrails.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_run_mode.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": [
+        "daily"
+      ]
+    },
+    {
+      "path": "tests/test_scanner.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_sleeve.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_state_store.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tests/test_theme_engine.py",
+      "has_argparse": false,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "theme_engine/__main__.py",
+      "has_argparse": true,
+      "is_package_main": true,
+      "run_modes": [
+        "daily",
+        "weekly",
+        "monthly"
+      ]
+    },
+    {
+      "path": "tools/build_prompt.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tools/daily_packet.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tools/repo_overview.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tools/review_packet.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "tools/task_ranker.py",
+      "has_argparse": true,
+      "is_package_main": false,
+      "run_modes": []
+    },
+    {
+      "path": "watchlist_scanner/__main__.py",
+      "has_argparse": true,
+      "is_package_main": true,
+      "run_modes": []
+    }
+  ],
+  "important_files": [
+    {
+      "path": "agent/__main__.py",
+      "score": 54,
+      "tags": [
+        "orchestration",
+        "agent"
+      ],
+      "purpose": "agent/__main__.py \u2014 Package entry point.",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "theme_engine/__main__.py",
+      "score": 54,
+      "tags": [
+        "entry_point"
+      ],
+      "purpose": "Theme Engine CLI.",
+      "key_classes": [],
+      "key_functions": [
+        "run",
+        "main"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/__main__.py",
+      "score": 54,
+      "tags": [
+        "entry_point"
+      ],
+      "purpose": "Watchlist Scanner CLI.",
+      "key_classes": [],
+      "key_functions": [
+        "run",
+        "main"
+      ]
+    },
+    {
+      "path": "main.py",
+      "score": 52,
+      "tags": [
+        "orchestration",
+        "entry_point"
+      ],
+      "purpose": "Portfolio Automation System - Main Entry Point",
+      "key_classes": [],
+      "key_functions": [
+        "parse_arguments",
+        "run_portfolio_update",
+        "main"
+      ]
+    },
+    {
+      "path": "tests/test_agent_runner_offline_mode.py",
+      "score": 34,
+      "tags": [
+        "orchestration",
+        "agent"
+      ],
+      "purpose": "tests/test_agent_runner_offline_mode.py",
+      "key_classes": [
+        "TestAgentRunnerOfflineMode",
+        "TestAgentRunnerStockbotTestingEnv"
+      ],
+      "key_functions": [
+        "setUp",
+        "tearDown",
+        "test_daily_creates_decision_memo",
+        "test_weekly_creates_decision_memo",
+        "test_monthly_creates_monthly_memo",
+        "test_monthly_creates_email_draft",
+        "test_email_draft_says_no_email_when_disabled",
+        "test_agent_bundle_written"
+      ]
+    },
+    {
+      "path": "agent/agent_runner.py",
+      "score": 24,
+      "tags": [
+        "agent",
+        "orchestration"
+      ],
+      "purpose": "agent/agent_runner.py \u2014 AI Agent runner for the portfolio automation system.",
+      "key_classes": [],
+      "key_functions": [
+        "main",
+        "run"
+      ]
+    },
+    {
+      "path": "agent/io_utils.py",
+      "score": 24,
+      "tags": [
+        "agent",
+        "utility"
+      ],
+      "purpose": "agent/io_utils.py \u2014 Safe I/O helpers for the AI agent layer.",
+      "key_classes": [],
+      "key_functions": [
+        "redact",
+        "read_json_safe",
+        "write_markdown_atomic",
+        "tail_latest_log"
+      ]
+    },
+    {
+      "path": "email_digest.py",
+      "score": 24,
+      "tags": [
+        "output",
+        "integration"
+      ],
+      "purpose": "Finance Email Digest Module",
+      "key_classes": [
+        "EmailDigestError",
+        "FinanceEmailDigest"
+      ],
+      "key_functions": [
+        "build_email_subject",
+        "build_top_summary",
+        "format_action_required_item",
+        "format_recommended_item",
+        "format_monitor_item",
+        "build_text_body",
+        "build_html_body",
+        "format_recommendations_for_csv"
+      ]
+    },
+    {
+      "path": "email_reporter.py",
+      "score": 24,
+      "tags": [
+        "output",
+        "integration"
+      ],
+      "purpose": "Email reporting module.",
+      "key_classes": [
+        "EmailError",
+        "EmailReporter"
+      ],
+      "key_functions": [
+        "create_email_reporter",
+        "should_send_report",
+        "is_configured",
+        "send_report"
+      ]
+    },
+    {
+      "path": "theme_engine/theme_store.py",
+      "score": 24,
+      "tags": [
+        "theme",
+        "state"
+      ],
+      "purpose": "Theme Store \u2014 persists theme signals to SQLite and writes JSON output files.",
+      "key_classes": [
+        "ThemeStore"
+      ],
+      "key_functions": [
+        "save_signals",
+        "get_recent_signals",
+        "compute_persistence"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/alpha_vantage_client.py",
+      "score": 24,
+      "tags": [
+        "integration"
+      ],
+      "purpose": "Alpha Vantage client for the watchlist scanner.",
+      "key_classes": [
+        "AVClientError",
+        "BudgetExceeded",
+        "WatchlistAVClient"
+      ],
+      "key_functions": [
+        "get_daily_ohlcv",
+        "get_news_sentiment",
+        "get_quote",
+        "get_overview"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/cache_manager.py",
+      "score": 24,
+      "tags": [
+        "state"
+      ],
+      "purpose": "Cache manager for the watchlist scanner.",
+      "key_classes": [
+        "CacheManager"
+      ],
+      "key_functions": [
+        "get",
+        "get_stale",
+        "get_age_seconds",
+        "set",
+        "is_valid",
+        "calls_today",
+        "increment_calls",
+        "would_exceed"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/config.py",
+      "score": 24,
+      "tags": [
+        "scanner",
+        "config"
+      ],
+      "purpose": "Watchlist Scanner \u2014 static defaults and constants.",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "watchlist_scanner/theme_engine.py",
+      "score": 24,
+      "tags": [
+        "scanner",
+        "theme"
+      ],
+      "purpose": "Keyword-based theme classifier for financial news headlines.",
+      "key_classes": [],
+      "key_functions": [
+        "classify_headlines",
+        "top_themes",
+        "extract_headline_examples"
+      ]
+    },
+    {
+      "path": "tests/test_agent_bundle_builder.py",
+      "score": 22,
+      "tags": [
+        "agent"
+      ],
+      "purpose": "tests/test_agent_bundle_builder.py",
+      "key_classes": [
+        "TestBundleBuilderBasic"
+      ],
+      "key_functions": [
+        "setUp",
+        "test_bundle_returns_dict",
+        "test_required_top_level_keys",
+        "test_run_mode_preserved",
+        "test_portfolio_value_positive",
+        "test_drawdown_fields",
+        "test_guardrails_concentration_violation",
+        "test_guardrails_leverage_violation"
+      ]
+    },
+    {
+      "path": "tests/test_guardrails.py",
+      "score": 22,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Unit tests for guardrails.py pre-flight structural checks.",
+      "key_classes": [
+        "_Holding",
+        "TestGuardrails"
+      ],
+      "key_functions": [
+        "test_all_ok_within_caps",
+        "test_concentration_violation_detected",
+        "test_leverage_violation_detected",
+        "test_leverage_within_cap_no_violation",
+        "test_both_violations_detected",
+        "test_skips_holdings_with_no_market_value",
+        "test_zero_portfolio_returns_ok_with_skip_message",
+        "test_to_dict_structure"
+      ]
+    },
+    {
+      "path": "tests/test_scanner.py",
+      "score": 22,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "Unit tests for scanner/candidate_scanner.py.",
+      "key_classes": [
+        "TestHardFilters",
+        "TestScoring",
+        "TestFullScan"
+      ],
+      "key_functions": [
+        "test_passes_all_criteria",
+        "test_fails_below_min_mkt_cap",
+        "test_fails_below_min_rev_growth",
+        "test_fails_below_200dma",
+        "test_fails_pe_too_high",
+        "test_fails_negative_fcf_yield",
+        "test_trend_filter_disabled_ignores_200dma",
+        "test_missing_rev_growth_fails"
+      ]
+    },
+    {
+      "path": "tests/test_sleeve.py",
+      "score": 22,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "Unit tests for sleeve/spec_sleeve_allocator.py.",
+      "key_classes": [
+        "_Holding",
+        "TestSleeveCaps",
+        "TestHoldingRules",
+        "TestEdgeCases"
+      ],
+      "key_functions": [
+        "test_sleeve_total_cap_respected",
+        "test_per_position_cap_respected",
+        "test_max_one_new_position_per_month",
+        "test_core_holding_blocked_as_new_buy",
+        "test_spec_topup_marked_not_new",
+        "test_insufficient_cash_skipped",
+        "test_empty_candidates_returns_empty",
+        "test_zero_portfolio_returns_empty"
+      ]
+    },
+    {
+      "path": "tests/test_state_store.py",
+      "score": 22,
+      "tags": [
+        "state"
+      ],
+      "purpose": "Unit tests for PortfolioStateStore (state_store.py).",
+      "key_classes": [
+        "TestRunHistory",
+        "TestSnapshots",
+        "TestEmailHistory",
+        "TestPortfolioPeaks"
+      ],
+      "key_functions": [
+        "setUp",
+        "tearDown",
+        "test_start_run_returns_true_for_new_run",
+        "test_start_run_returns_false_for_duplicate",
+        "test_is_completed_false_before_complete",
+        "test_complete_run_marks_completed",
+        "test_fail_run_marks_failed",
+        "test_check_run_status_none_when_missing"
+      ]
+    },
+    {
+      "path": "tests/test_theme_engine.py",
+      "score": 22,
+      "tags": [
+        "theme"
+      ],
+      "purpose": "Offline tests for the theme engine.",
+      "key_classes": [
+        "TestRSSCollector",
+        "TestThemeDetector",
+        "TestThemeMapper",
+        "TestThemeStore",
+        "TestApplyThemeBoosts",
+        "TestScannerIntegration"
+      ],
+      "key_functions": [
+        "setUp",
+        "tearDown",
+        "test_collect_returns_new_items",
+        "test_deduplication_skips_seen_items",
+        "test_summary_truncated_to_280",
+        "test_truncate_short_text_unchanged",
+        "test_item_hash_stable",
+        "test_max_items_respected"
+      ]
+    },
+    {
+      "path": "adjustment.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Portfolio Adjustment Module",
+      "key_classes": [
+        "RecommendationType",
+        "AdjustmentMode",
+        "ActionLevel",
+        "CashAnalysis",
+        "TaxContext",
+        "PortfolioAdjustment"
+      ],
+      "key_functions": [
+        "determine_adjustment_mode",
+        "calculate_trade_size",
+        "create_portfolio_adjustment",
+        "detect_structural_violations",
+        "generate_portfolio_adjustments",
+        "format_adjustments_for_email_view",
+        "get_email_prompt",
+        "calculate"
+      ]
+    },
+    {
+      "path": "agent/__init__.py",
+      "score": 12,
+      "tags": [
+        "agent"
+      ],
+      "purpose": "",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "agent/bundle_builder.py",
+      "score": 12,
+      "tags": [
+        "agent",
+        "output"
+      ],
+      "purpose": "agent/bundle_builder.py \u2014 Build agent_bundle.json from existing engine outputs.",
+      "key_classes": [],
+      "key_functions": [
+        "build_bundle"
+      ]
+    },
+    {
+      "path": "agent/llm_adapters.py",
+      "score": 12,
+      "tags": [
+        "agent",
+        "integration"
+      ],
+      "purpose": "agent/llm_adapters.py \u2014 LLM abstraction layer for the AI agent.",
+      "key_classes": [],
+      "key_functions": [
+        "call_ollama",
+        "call_claude"
+      ]
+    },
+    {
+      "path": "agent/mcp_agent_tools.py",
+      "score": 12,
+      "tags": [
+        "integration"
+      ],
+      "purpose": "StockBot \u2014 AI Agent MCP Testing Tools",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "agent/prompts.py",
+      "score": 12,
+      "tags": [
+        "agent"
+      ],
+      "purpose": "agent/prompts.py \u2014 LLM prompt templates for the AI agent layer.",
+      "key_classes": [],
+      "key_functions": [
+        "build_daily_weekly_prompt",
+        "build_monthly_prompt",
+        "build_maintainer_prompt"
+      ]
+    },
+    {
+      "path": "agent/repo_tree.py",
+      "score": 12,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "agent/repo_tree.py \u2014 Compact repo tree for maintainer prompts.",
+      "key_classes": [],
+      "key_functions": [
+        "get_repo_tree"
+      ]
+    },
+    {
+      "path": "api_budget.py",
+      "score": 12,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "Shared Alpha Vantage daily call budget.",
+      "key_classes": [
+        "AVDailyBudget"
+      ],
+      "key_functions": [
+        "used_today",
+        "remaining",
+        "scanner_remaining",
+        "can_reserve",
+        "reserve",
+        "status_line"
+      ]
+    },
+    {
+      "path": "contribution_engine.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Contribution Optimization Engine",
+      "key_classes": [
+        "ContributionAllocation",
+        "ContributionEngine"
+      ],
+      "key_functions": [
+        "to_dict",
+        "allocate"
+      ]
+    },
+    {
+      "path": "digest_builder.py",
+      "score": 12,
+      "tags": [
+        "output"
+      ],
+      "purpose": "Digest Builder Module",
+      "key_classes": [
+        "DigestContext"
+      ],
+      "key_functions": [
+        "build_top3_actions",
+        "build_what_changed",
+        "build_trajectory",
+        "build_opportunity_cost",
+        "compute_do_nothing_score",
+        "build_behavior_section",
+        "build_holding_rationale",
+        "build_system_status"
+      ]
+    },
+    {
+      "path": "drawdown.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Drawdown Tracking Module",
+      "key_classes": [
+        "DrawdownState",
+        "DrawdownTracker"
+      ],
+      "key_functions": [
+        "drawdown_from_ath",
+        "drawdown_from_12m_high",
+        "to_dict",
+        "from_dict",
+        "update",
+        "state",
+        "get_regime",
+        "should_suppress_sells"
+      ]
+    },
+    {
+      "path": "file_output.py",
+      "score": 12,
+      "tags": [
+        "output"
+      ],
+      "purpose": "File output module for CSV and Excel generation.",
+      "key_classes": [],
+      "key_functions": [
+        "ensure_directory",
+        "write_csv_snapshot",
+        "create_excel_workbook",
+        "write_contribution_plan_csv",
+        "write_compounding_dashboard_txt",
+        "export_recommendations_csv"
+      ]
+    },
+    {
+      "path": "finance_analyzer.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Finance Analyzer Module",
+      "key_classes": [
+        "FinanceSnapshot",
+        "FinanceHistoryStore",
+        "FinanceConfig",
+        "FinanceAnalyzer"
+      ],
+      "key_functions": [
+        "export_recommendations_csv",
+        "to_dict",
+        "from_dict",
+        "add",
+        "get_recent",
+        "get_trend_data",
+        "from_investor_config",
+        "analyze"
+      ]
+    },
+    {
+      "path": "fmp_client.py",
+      "score": 12,
+      "tags": [
+        "integration"
+      ],
+      "purpose": "FMP (Financial Modeling Prep) API Client",
+      "key_classes": [
+        "FMPError",
+        "CallBudgetExceeded",
+        "_CallCounter",
+        "_DiskCache",
+        "FMPClient"
+      ],
+      "key_functions": [
+        "today_count",
+        "increment",
+        "would_exceed",
+        "get",
+        "get_stale",
+        "set",
+        "calls_today",
+        "get_sp500_constituents"
+      ]
+    },
+    {
+      "path": "guardrails.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Guardrails Module",
+      "key_classes": [
+        "GuardrailViolation",
+        "GuardrailResult"
+      ],
+      "key_functions": [
+        "run_guardrail_checks",
+        "has_violations",
+        "to_dict"
+      ]
+    },
+    {
+      "path": "market_data.py",
+      "score": 12,
+      "tags": [
+        "integration"
+      ],
+      "purpose": "Market data module for fetching asset prices.",
+      "key_classes": [
+        "PriceCache",
+        "RateLimiter",
+        "MarketDataError",
+        "AlphaVantageClient"
+      ],
+      "key_functions": [
+        "create_market_client",
+        "update_holdings_with_prices",
+        "get",
+        "set",
+        "clear",
+        "wait_if_needed",
+        "get_quote",
+        "get_prices"
+      ]
+    },
+    {
+      "path": "ml_history.py",
+      "score": 12,
+      "tags": [
+        "state"
+      ],
+      "purpose": "ML History Tracking Module",
+      "key_classes": [
+        "MetricType",
+        "TrendDirection",
+        "ActionTaken",
+        "ResolutionType",
+        "RecommendationRecord",
+        "MLHistoryStore"
+      ],
+      "key_functions": [
+        "create_record_from_adjustment",
+        "update_record_resolution",
+        "to_dict",
+        "from_dict",
+        "is_resolved",
+        "days_open",
+        "add_record",
+        "update_record"
+      ]
+    },
+    {
+      "path": "portfolio.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Portfolio calculations module.",
+      "key_classes": [
+        "PortfolioSummary",
+        "HoldingAnalysis"
+      ],
+      "key_functions": [
+        "calculate_portfolio_values",
+        "calculate_allocations",
+        "calculate_effective_exposure",
+        "find_max_drift",
+        "analyze_holdings",
+        "generate_portfolio_summary",
+        "get_underweight_holdings",
+        "get_overweight_holdings"
+      ]
+    },
+    {
+      "path": "projections.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Projections Module",
+      "key_classes": [
+        "CompoundingDashboard"
+      ],
+      "key_functions": [
+        "compute_portfolio_cagr",
+        "project_future_value",
+        "estimate_milestone",
+        "compute_compounding_dashboard",
+        "format_dashboard_text",
+        "to_dict"
+      ]
+    },
+    {
+      "path": "recommendations.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Rules-based recommendation engine.",
+      "key_classes": [
+        "ActionType",
+        "Recommendation",
+        "RecommendationReport"
+      ],
+      "key_functions": [
+        "calculate_shares_to_buy",
+        "calculate_shares_to_sell",
+        "generate_buy_recommendations",
+        "generate_sell_recommendations",
+        "generate_hold_recommendations",
+        "generate_alert_recommendations",
+        "generate_recommendations",
+        "format_recommendations_text"
+      ]
+    },
+    {
+      "path": "scanner/__init__.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "scanner/candidate_scanner.py",
+      "score": 12,
+      "tags": [
+        "scanner",
+        "core_logic"
+      ],
+      "purpose": "S&P 500 Candidate Scanner",
+      "key_classes": [
+        "CandidateScanner"
+      ],
+      "key_functions": [
+        "apply_theme_boosts",
+        "full_scan",
+        "weekly_refresh",
+        "daily_refresh",
+        "save_watchlist",
+        "load_watchlist"
+      ]
+    },
+    {
+      "path": "scoring.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Finance Recommendation Scoring System (0-100)",
+      "key_classes": [
+        "ImpactArea",
+        "ActionLevel",
+        "TrendData",
+        "ScoringComponents",
+        "FinanceRecommendation"
+      ],
+      "key_functions": [
+        "calc_severity_savings_rate",
+        "calc_severity_emergency_fund",
+        "calc_severity_portfolio_drift",
+        "calc_severity_debt_utilization",
+        "calc_severity_budget_variance",
+        "calc_persistence",
+        "calc_impact",
+        "calc_priority"
+      ]
+    },
+    {
+      "path": "sleeve/__init__.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "sleeve/spec_sleeve_allocator.py",
+      "score": 12,
+      "tags": [
+        "scanner",
+        "core_logic"
+      ],
+      "purpose": "Speculative Sleeve Allocator",
+      "key_classes": [
+        "SleeveRecommendation",
+        "SpecSleeveAllocator"
+      ],
+      "key_functions": [
+        "to_dict",
+        "allocate"
+      ]
+    },
+    {
+      "path": "state_store.py",
+      "score": 12,
+      "tags": [
+        "state"
+      ],
+      "purpose": "SQLite-backed state store for portfolio automation.",
+      "key_classes": [
+        "PortfolioStateStore"
+      ],
+      "key_functions": [
+        "start_run",
+        "check_run_status",
+        "is_completed",
+        "is_stale_running",
+        "complete_run",
+        "fail_run",
+        "record_snapshot",
+        "get_recent_snapshots"
+      ]
+    },
+    {
+      "path": "theme_engine/__init__.py",
+      "score": 12,
+      "tags": [
+        "theme"
+      ],
+      "purpose": "Theme Engine package.",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "theme_engine/rss_collector.py",
+      "score": 12,
+      "tags": [
+        "theme",
+        "integration"
+      ],
+      "purpose": "RSS Collector \u2014 fetches and deduplicates RSS feed items.",
+      "key_classes": [
+        "RSSCollector"
+      ],
+      "key_functions": [
+        "collect"
+      ]
+    },
+    {
+      "path": "theme_engine/theme_detector.py",
+      "score": 12,
+      "tags": [
+        "theme",
+        "integration"
+      ],
+      "purpose": "Theme Detector \u2014 calls a local Ollama LLM to extract investing themes from headlines.",
+      "key_classes": [
+        "ThemeDetector"
+      ],
+      "key_functions": [
+        "detect"
+      ]
+    },
+    {
+      "path": "theme_engine/theme_mapper.py",
+      "score": 12,
+      "tags": [
+        "theme",
+        "core_logic"
+      ],
+      "purpose": "Theme Mapper \u2014 maps detected theme names to S&P 500 tickers using a static catalog.",
+      "key_classes": [
+        "ThemeMapper"
+      ],
+      "key_functions": [
+        "map_themes"
+      ]
+    },
+    {
+      "path": "tools/build_prompt.py",
+      "score": 12,
+      "tags": [
+        "agent"
+      ],
+      "purpose": "Prompt builder \u2014 generates ready-to-use Claude Code prompts.",
+      "key_classes": [],
+      "key_functions": [
+        "get_relevant_files",
+        "get_overview_snippet",
+        "load_task",
+        "load_template",
+        "build_prompt",
+        "build_review_prompt",
+        "run",
+        "main"
+      ]
+    },
+    {
+      "path": "universe/__init__.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "universe/sp500.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "S&P 500 Universe Manager",
+      "key_classes": [
+        "SP500Universe"
+      ],
+      "key_functions": [
+        "get_symbols",
+        "get_constituents"
+      ]
+    },
+    {
+      "path": "utils.py",
+      "score": 12,
+      "tags": [
+        "config",
+        "utility"
+      ],
+      "purpose": "Utility functions for the portfolio automation system.",
+      "key_classes": [
+        "Holding",
+        "Retirement401k",
+        "InvestorProfile",
+        "RebalanceRules",
+        "Config"
+      ],
+      "key_functions": [
+        "setup_logging",
+        "load_env",
+        "get_env",
+        "load_config",
+        "round_currency",
+        "round_percent",
+        "format_currency",
+        "format_percent"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/__init__.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "Watchlist Scanner \u2014 Alpha Vantage powered signal detection.",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "watchlist_scanner/confidence.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "Per-symbol confidence scoring for watchlist scan results.",
+      "key_classes": [],
+      "key_functions": [
+        "compute_confidence"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/extended_watchlist.py",
+      "score": 12,
+      "tags": [
+        "scanner"
+      ],
+      "purpose": "Extended Watchlist \u2014 dynamic symbol layer sourced from theme engine candidates.",
+      "key_classes": [
+        "ExtendedWatchlist"
+      ],
+      "key_functions": [
+        "get_active_symbols",
+        "get_active_tickers",
+        "get_history",
+        "get_outcome_history",
+        "evaluate_candidates",
+        "expire_stale",
+        "record_scan",
+        "drop_for_budget"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/fundamentals_engine.py",
+      "score": 12,
+      "tags": [
+        "core_logic"
+      ],
+      "purpose": "Fundamentals engine \u2014 parses Alpha Vantage OVERVIEW responses.",
+      "key_classes": [],
+      "key_functions": [
+        "parse_overview",
+        "fundamental_context_score",
+        "format_market_cap"
+      ]
+    },
+    {
+      "path": "watchlist_scanner/scanner.py",
+      "score": 12,
+      "tags": [
+        "scanner",
+        "core_logic"
+      ],
+      "purpose": "Watchlist Scanner \u2014 main scan orchestrator.",
+      "key_classes": [
+        "WatchlistScanner"
+      ],
+      "key_functions": [
+        "run"
+      ]
+    },
+    {
+      "path": "test_demo.py",
+      "score": 10,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "Test/Demo script for Portfolio Automation System.",
+      "key_classes": [],
+      "key_functions": [
+        "inject_mock_prices",
+        "run_demo"
+      ]
+    },
+    {
+      "path": "tests/__init__.py",
+      "score": 10,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "",
+      "key_classes": [],
+      "key_functions": []
+    },
+    {
+      "path": "tests/test_growth_mode.py",
+      "score": 10,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "Unit tests for Aggressive Wealth Growth Mode modules.",
+      "key_classes": [
+        "_Holding",
+        "_Analysis",
+        "TestDrawdownState",
+        "TestContributionEngine",
+        "TestStructuralViolations",
+        "TestProjections"
+      ],
+      "key_functions": [
+        "test_no_drawdown_at_ath",
+        "test_drawdown_calculation",
+        "test_no_negative_drawdown",
+        "test_regime_normal",
+        "test_regime_modest_dip",
+        "test_regime_significant_dip",
+        "test_regime_severe_dip",
+        "test_suppress_sells_normal"
+      ]
+    },
+    {
+      "path": "tests/test_run_mode.py",
+      "score": 10,
+      "tags": [
+        "utility"
+      ],
+      "purpose": "Unit tests for run-mode gating, run lock, and contribution plan.",
+      "key_classes": [
+        "_Holding",
+        "_Analysis",
+        "TestRunLock",
+        "TestRunModeGating",
+        "TestContributionBudget",
+        "TestDrawdownRegimes"
+      ],
+      "key_functions": [
+        "effective_exposure",
+        "setUp",
+        "tearDown",
+        "test_acquire_succeeds_when_no_lock_exists",
+        "test_acquire_fails_when_recent_lock_exists",
+        "test_acquire_succeeds_after_stale_lock",
+        "test_release_removes_lock_file",
+        "test_release_is_safe_when_no_lock"
+      ]
+    }
+  ],
+  "module_relationships": [
+    {
+      "file": "agent/__main__.py",
+      "imports": [
+        "agent/agent_runner.py"
+      ]
+    },
+    {
+      "file": "theme_engine/__main__.py",
+      "imports": [
+        "theme_engine/rss_collector.py",
+        "theme_engine/theme_detector.py",
+        "theme_engine/theme_mapper.py",
+        "theme_engine/theme_store.py",
+        "utils.py"
+      ]
+    },
+    {
+      "file": "watchlist_scanner/__main__.py",
+      "imports": [
+        "watchlist_scanner/fundamentals_engine.py",
+        "watchlist_scanner/cache_manager.py",
+        "watchlist_scanner/alpha_vantage_client.py",
+        "watchlist_scanner/scanner.py",
+        "watchlist_scanner/config.py",
+        "api_budget.py",
+        "watchlist_scanner/extended_watchlist.py"
+      ]
+    },
+    {
+      "file": "main.py",
+      "imports": [
+        "utils.py",
+        "market_data.py",
+        "portfolio.py",
+        "recommendations.py",
+        "file_output.py",
+        "email_reporter.py",
+        "scoring.py",
+        "finance_analyzer.py",
+        "email_digest.py",
+        "adjustment.py",
+        "ml_history.py",
+        "drawdown.py"
+      ]
+    },
+    {
+      "file": "tests/test_agent_runner_offline_mode.py",
+      "imports": [
+        "agent/agent_runner.py"
+      ]
+    },
+    {
+      "file": "agent/agent_runner.py",
+      "imports": [
+        "agent/bundle_builder.py",
+        "agent/io_utils.py",
+        "agent/llm_adapters.py",
+        "agent/prompts.py",
+        "agent/repo_tree.py"
+      ]
+    },
+    {
+      "file": "email_digest.py",
+      "imports": [
+        "utils.py",
+        "scoring.py",
+        "digest_builder.py"
+      ]
+    },
+    {
+      "file": "email_reporter.py",
+      "imports": [
+        "utils.py",
+        "portfolio.py",
+        "recommendations.py"
+      ]
+    },
+    {
+      "file": "watchlist_scanner/alpha_vantage_client.py",
+      "imports": [
+        "watchlist_scanner/cache_manager.py",
+        "watchlist_scanner/config.py",
+        "api_budget.py"
+      ]
+    },
+    {
+      "file": "tests/test_agent_bundle_builder.py",
+      "imports": [
+        "agent/bundle_builder.py"
+      ]
+    },
+    {
+      "file": "tests/test_guardrails.py",
+      "imports": [
+        "guardrails.py"
+      ]
+    },
+    {
+      "file": "tests/test_scanner.py",
+      "imports": [
+        "scanner/candidate_scanner.py"
+      ]
+    },
+    {
+      "file": "tests/test_sleeve.py",
+      "imports": [
+        "sleeve/spec_sleeve_allocator.py"
+      ]
+    },
+    {
+      "file": "tests/test_state_store.py",
+      "imports": [
+        "state_store.py"
+      ]
+    },
+    {
+      "file": "tests/test_theme_engine.py",
+      "imports": [
+        "theme_engine/rss_collector.py",
+        "theme_engine/theme_detector.py",
+        "theme_engine/theme_mapper.py",
+        "theme_engine/theme_store.py",
+        "scanner/candidate_scanner.py"
+      ]
+    },
+    {
+      "file": "adjustment.py",
+      "imports": [
+        "utils.py"
+      ]
+    },
+    {
+      "file": "agent/bundle_builder.py",
+      "imports": [
+        "agent/io_utils.py"
+      ]
+    },
+    {
+      "file": "agent/llm_adapters.py",
+      "imports": [
+        "agent/io_utils.py"
+      ]
+    },
+    {
+      "file": "digest_builder.py",
+      "imports": [
+        "projections.py",
+        "utils.py"
+      ]
+    },
+    {
+      "file": "file_output.py",
+      "imports": [
+        "utils.py",
+        "portfolio.py",
+        "recommendations.py"
+      ]
+    },
+    {
+      "file": "finance_analyzer.py",
+      "imports": [
+        "utils.py",
+        "portfolio.py",
+        "scoring.py",
+        "email_digest.py"
+      ]
+    },
+    {
+      "file": "market_data.py",
+      "imports": [
+        "utils.py",
+        "api_budget.py"
+      ]
+    },
+    {
+      "file": "portfolio.py",
+      "imports": [
+        "utils.py"
+      ]
+    },
+    {
+      "file": "projections.py",
+      "imports": [
+        "utils.py"
+      ]
+    },
+    {
+      "file": "recommendations.py",
+      "imports": [
+        "utils.py",
+        "portfolio.py"
+      ]
+    },
+    {
+      "file": "scoring.py",
+      "imports": [
+        "utils.py"
+      ]
+    },
+    {
+      "file": "universe/sp500.py",
+      "imports": [
+        "fmp_client.py"
+      ]
+    },
+    {
+      "file": "watchlist_scanner/scanner.py",
+      "imports": [
+        "watchlist_scanner/alpha_vantage_client.py",
+        "watchlist_scanner/cache_manager.py",
+        "watchlist_scanner/fundamentals_engine.py",
+        "watchlist_scanner/confidence.py",
+        "watchlist_scanner/config.py"
+      ]
+    },
+    {
+      "file": "test_demo.py",
+      "imports": [
+        "utils.py",
+        "portfolio.py",
+        "recommendations.py",
+        "file_output.py"
+      ]
+    },
+    {
+      "file": "tests/test_growth_mode.py",
+      "imports": [
+        "drawdown.py",
+        "contribution_engine.py",
+        "projections.py",
+        "adjustment.py"
+      ]
+    },
+    {
+      "file": "tests/test_run_mode.py",
+      "imports": [
+        "contribution_engine.py",
+        "drawdown.py",
+        "scoring.py",
+        "adjustment.py"
+      ]
+    }
+  ],
+  "data_models": [
+    {
+      "name": "CashAnalysis",
+      "file": "adjustment.py",
+      "kind": "dataclass",
+      "fields": [
+        "available_cash",
+        "cash_reserve_target",
+        "cash_excess",
+        "monthly_contribution",
+        "months_to_fix_via_contributions"
+      ],
+      "bases": []
+    },
+    {
+      "name": "TaxContext",
+      "file": "adjustment.py",
+      "kind": "dataclass",
+      "fields": [
+        "is_taxable_account",
+        "holding_period_days",
+        "is_long_term",
+        "unrealized_gain",
+        "cost_basis"
+      ],
+      "bases": []
+    },
+    {
+      "name": "PortfolioAdjustment",
+      "file": "adjustment.py",
+      "kind": "dataclass",
+      "fields": [
+        "rec_key",
+        "recommendation_type",
+        "adjustment_mode",
+        "action_level",
+        "symbol",
+        "final_score",
+        "title",
+        "what",
+        "why",
+        "do",
+        "next_check",
+        "shares",
+        "amount",
+        "timestamp",
+        "drift",
+        "band",
+        "is_leveraged",
+        "tax_context"
+      ],
+      "bases": []
+    },
+    {
+      "name": "ContributionAllocation",
+      "file": "contribution_engine.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "asset_class",
+        "current_weight",
+        "target_weight",
+        "drift",
+        "recommended_dollars",
+        "reason"
+      ],
+      "bases": []
+    },
+    {
+      "name": "DigestContext",
+      "file": "digest_builder.py",
+      "kind": "dataclass",
+      "fields": [
+        "total_value",
+        "cash_available",
+        "max_drift",
+        "drawdown_pct",
+        "drawdown_regime",
+        "monthly_contribution",
+        "expected_cagr",
+        "prior_snapshot",
+        "prior_drawdown_regime",
+        "dashboard",
+        "portfolio_adjustments",
+        "scored_recommendations",
+        "contribution_plan",
+        "holdings",
+        "holding_rationale",
+        "guardrail_violations",
+        "av_budget_remaining",
+        "av_budget_total",
+        "fmp_circuit_breaker_open",
+        "fmp_disabled_until",
+        "scanner_enabled",
+        "watchlist_enabled",
+        "last_successful_weekly_days_ago",
+        "last_successful_monthly_days_ago",
+        "idle_cash_threshold",
+        "idle_cash_projection_years",
+        "theme_highlights"
+      ],
+      "bases": []
+    },
+    {
+      "name": "DrawdownState",
+      "file": "drawdown.py",
+      "kind": "dataclass",
+      "fields": [
+        "all_time_high",
+        "rolling_12m_high",
+        "rolling_12m_high_date",
+        "last_update_date",
+        "current_value"
+      ],
+      "bases": []
+    },
+    {
+      "name": "FinanceSnapshot",
+      "file": "finance_analyzer.py",
+      "kind": "dataclass",
+      "fields": [
+        "date",
+        "portfolio_value",
+        "cash_available",
+        "emergency_fund_months",
+        "savings_rate",
+        "max_drift",
+        "max_drift_symbol",
+        "drifts_by_symbol"
+      ],
+      "bases": []
+    },
+    {
+      "name": "FinanceConfig",
+      "file": "finance_analyzer.py",
+      "kind": "dataclass",
+      "fields": [
+        "target_savings_rate",
+        "target_emergency_months",
+        "drift_band",
+        "monthly_income",
+        "monthly_expenses",
+        "priority_savings",
+        "priority_emergency",
+        "priority_drift",
+        "priority_taxes",
+        "priority_budget",
+        "is_auto_imported",
+        "has_manual_entries",
+        "is_partial_period"
+      ],
+      "bases": []
+    },
+    {
+      "name": "GuardrailViolation",
+      "file": "guardrails.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "violation_type",
+        "current_pct",
+        "cap_pct",
+        "required_action"
+      ],
+      "bases": []
+    },
+    {
+      "name": "GuardrailResult",
+      "file": "guardrails.py",
+      "kind": "dataclass",
+      "fields": [
+        "status",
+        "violations",
+        "summary"
+      ],
+      "bases": []
+    },
+    {
+      "name": "PriceCache",
+      "file": "market_data.py",
+      "kind": "dataclass",
+      "fields": [
+        "cache_dir",
+        "ttl_seconds",
+        "_cache"
+      ],
+      "bases": []
+    },
+    {
+      "name": "PersistenceEstimate",
+      "file": "ml_advisor.py",
+      "kind": "dataclass",
+      "fields": [
+        "probability",
+        "confidence",
+        "expected_periods",
+        "sample_size",
+        "explanation"
+      ],
+      "bases": []
+    },
+    {
+      "name": "ActionEffectivenessEstimate",
+      "file": "ml_advisor.py",
+      "kind": "dataclass",
+      "fields": [
+        "action_benefit_probability",
+        "expected_time_with_action",
+        "expected_time_without",
+        "confidence",
+        "sample_size",
+        "explanation"
+      ],
+      "bases": []
+    },
+    {
+      "name": "AlertFatigueEstimate",
+      "file": "ml_advisor.py",
+      "kind": "dataclass",
+      "fields": [
+        "false_alert_probability",
+        "repeat_alert_count",
+        "should_suppress",
+        "confidence",
+        "explanation"
+      ],
+      "bases": []
+    },
+    {
+      "name": "MLAdvisorOutput",
+      "file": "ml_advisor.py",
+      "kind": "dataclass",
+      "fields": [
+        "rec_key",
+        "symbol",
+        "persistence",
+        "effectiveness",
+        "alert_fatigue",
+        "original_score",
+        "adjusted_score",
+        "score_adjustment_reason",
+        "regime",
+        "regime_confidence",
+        "ml_recommendation",
+        "explanation"
+      ],
+      "bases": []
+    },
+    {
+      "name": "RecommendationRecord",
+      "file": "ml_history.py",
+      "kind": "dataclass",
+      "fields": [
+        "record_id",
+        "rec_key",
+        "symbol",
+        "created_date",
+        "resolved_date",
+        "metric_type",
+        "drift_percent",
+        "absolute_deviation",
+        "is_underweight",
+        "impact_area",
+        "asset_class",
+        "streak_length",
+        "trend_direction",
+        "rate_of_change",
+        "time_since_last_action",
+        "available_cash",
+        "cash_excess",
+        "contribution_rate",
+        "is_taxable",
+        "market_volatility",
+        "macro_regime",
+        "original_action",
+        "adjustment_mode",
+        "original_score",
+        "action_level",
+        "persisted",
+        "persistence_periods",
+        "action_taken",
+        "action_effective",
+        "resolution_periods",
+        "resolution_type",
+        "alert_count",
+        "resolved_without_action",
+        "final_drift_percent",
+        "final_deviation"
+      ],
+      "bases": []
+    },
+    {
+      "name": "PortfolioSummary",
+      "file": "portfolio.py",
+      "kind": "dataclass",
+      "fields": [
+        "total_holdings_value",
+        "cash_value",
+        "total_portfolio_value",
+        "retirement_401k_value",
+        "total_net_worth",
+        "cash_weight",
+        "max_drift",
+        "max_drift_symbol",
+        "has_breach",
+        "breach_threshold",
+        "effective_equity_exposure",
+        "effective_leverage_exposure",
+        "timestamp"
+      ],
+      "bases": []
+    },
+    {
+      "name": "HoldingAnalysis",
+      "file": "portfolio.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "shares",
+        "current_price",
+        "market_value",
+        "target_weight",
+        "actual_weight",
+        "drift",
+        "drift_direction",
+        "is_breached",
+        "effective_exposure",
+        "asset_class",
+        "is_leveraged"
+      ],
+      "bases": []
+    },
+    {
+      "name": "CompoundingDashboard",
+      "file": "projections.py",
+      "kind": "dataclass",
+      "fields": [
+        "current_portfolio_value",
+        "drawdown_pct",
+        "expected_cagr",
+        "monthly_contribution",
+        "projected_value_10yr",
+        "projected_value_10yr_no_contrib",
+        "projected_value_10yr_extra_200",
+        "extra_200_impact",
+        "years_to_100k",
+        "years_to_250k",
+        "years_to_500k",
+        "years_to_1m",
+        "cagr_assumption_note"
+      ],
+      "bases": []
+    },
+    {
+      "name": "Recommendation",
+      "file": "recommendations.py",
+      "kind": "dataclass",
+      "fields": [
+        "action_type",
+        "symbol",
+        "shares",
+        "amount",
+        "reason",
+        "priority",
+        "is_urgent"
+      ],
+      "bases": []
+    },
+    {
+      "name": "RecommendationReport",
+      "file": "recommendations.py",
+      "kind": "dataclass",
+      "fields": [
+        "recommendations",
+        "summary_message",
+        "has_actions",
+        "has_urgent_actions",
+        "notes"
+      ],
+      "bases": []
+    },
+    {
+      "name": "RetirementHolding",
+      "file": "retirement.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "name",
+        "shares",
+        "price",
+        "market_value",
+        "percentage"
+      ],
+      "bases": []
+    },
+    {
+      "name": "RetirementSummary",
+      "file": "retirement.py",
+      "kind": "dataclass",
+      "fields": [
+        "total_balance",
+        "holdings",
+        "mode",
+        "last_updated"
+      ],
+      "bases": []
+    },
+    {
+      "name": "TrendData",
+      "file": "scoring.py",
+      "kind": "dataclass",
+      "fields": [
+        "current_value",
+        "previous_values",
+        "periods_below_threshold",
+        "periods_above_threshold",
+        "threshold",
+        "is_increasing_bad"
+      ],
+      "bases": []
+    },
+    {
+      "name": "ScoringComponents",
+      "file": "scoring.py",
+      "kind": "dataclass",
+      "fields": [
+        "severity",
+        "persistence",
+        "impact",
+        "priority",
+        "confidence"
+      ],
+      "bases": []
+    },
+    {
+      "name": "FinanceRecommendation",
+      "file": "scoring.py",
+      "kind": "dataclass",
+      "fields": [
+        "id",
+        "impact_area",
+        "components",
+        "title",
+        "trigger",
+        "what_changed",
+        "why_it_matters",
+        "action",
+        "next_check",
+        "evidence",
+        "created_at",
+        "last_sent"
+      ],
+      "bases": []
+    },
+    {
+      "name": "SleeveRecommendation",
+      "file": "sleeve/spec_sleeve_allocator.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "score",
+        "sector",
+        "max_add_dollars",
+        "is_new_position",
+        "current_position_dollars",
+        "reason"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Holding",
+      "file": "tests/test_growth_mode.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "shares",
+        "target_weight",
+        "asset_class",
+        "is_leveraged",
+        "leverage_factor",
+        "current_price",
+        "market_value",
+        "actual_weight",
+        "drift"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Analysis",
+      "file": "tests/test_growth_mode.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "drift",
+        "actual_weight",
+        "target_weight",
+        "is_breached",
+        "drift_direction"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_H",
+      "file": "tests/test_growth_mode.py",
+      "kind": "dataclass",
+      "fields": [
+        "asset_class",
+        "actual_weight"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Holding",
+      "file": "tests/test_guardrails.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "market_value",
+        "is_leveraged",
+        "leverage_factor"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Holding",
+      "file": "tests/test_run_mode.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "shares",
+        "target_weight",
+        "asset_class",
+        "is_leveraged",
+        "leverage_factor",
+        "current_price",
+        "market_value",
+        "actual_weight",
+        "drift"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Analysis",
+      "file": "tests/test_run_mode.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "drift",
+        "is_breached"
+      ],
+      "bases": []
+    },
+    {
+      "name": "_Holding",
+      "file": "tests/test_sleeve.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "market_value",
+        "asset_class"
+      ],
+      "bases": []
+    },
+    {
+      "name": "Holding",
+      "file": "utils.py",
+      "kind": "dataclass",
+      "fields": [
+        "symbol",
+        "shares",
+        "target_weight",
+        "asset_class",
+        "is_leveraged",
+        "leverage_factor",
+        "current_price",
+        "market_value",
+        "actual_weight",
+        "drift"
+      ],
+      "bases": []
+    },
+    {
+      "name": "Retirement401k",
+      "file": "utils.py",
+      "kind": "dataclass",
+      "fields": [
+        "enabled",
+        "mode",
+        "balance",
+        "holdings_csv_path",
+        "include_in_net_worth",
+        "holdings"
+      ],
+      "bases": []
+    },
+    {
+      "name": "InvestorProfile",
+      "file": "utils.py",
+      "kind": "dataclass",
+      "fields": [
+        "name",
+        "age",
+        "birthdate",
+        "annual_income",
+        "monthly_expenses",
+        "investment_horizon_years",
+        "risk_tolerance",
+        "strategy"
+      ],
+      "bases": []
+    },
+    {
+      "name": "RebalanceRules",
+      "file": "utils.py",
+      "kind": "dataclass",
+      "fields": [
+        "band_threshold",
+        "use_cash_before_selling",
+        "direct_contributions_first",
+        "trim_leverage_before_core",
+        "avoid_taxable_sales",
+        "panic_sell_protection"
+      ],
+      "bases": []
+    },
+    {
+      "name": "Config",
+      "file": "utils.py",
+      "kind": "dataclass",
+      "fields": [
+        "investor",
+        "holdings",
+        "cash_available",
+        "target_cash_weight",
+        "rebalance_rules",
+        "retirement_401k",
+        "market_data",
+        "email",
+        "schedule",
+        "output",
+        "ml_advisor",
+        "growth_mode",
+        "monthly_contribution",
+        "has_regular_contributions",
+        "is_taxable_account",
+        "speculative_sleeve",
+        "scanner",
+        "api_limits",
+        "theme_engine",
+        "watchlist_scanner",
+        "holding_rationale",
+        "opportunity_cost"
+      ],
+      "bases": []
+    }
+  ],
+  "state_storage": {
+    "sqlite_tables": [
+      "dataclasses",
+      "datetime",
+      "enum",
+      "typing",
+      "utils",
+      "portfolio",
+      "overweight",
+      "agent",
+      "pathlib",
+      "engine",
+      "files",
+      "existing",
+      "drawdown",
+      "prices",
+      "first",
+      "snapshots",
+      "any",
+      "exc",
+      "config",
+      "mcp",
+      "this",
+      "dotenv",
+      "data",
+      "sqlite_master",
+      "available",
+      "the",
+      "bundle",
+      "listing",
+      "collectively",
+      "api_budget",
+      "__future__",
+      "new",
+      "most",
+      "projections",
+      "pre",
+      "user",
+      "peak",
+      "all",
+      "12m",
+      "email",
+      "scoring",
+      "digest_builder",
+      "recommendations",
+      "openpyxl",
+      "disk",
+      "historical",
+      "main",
+      "email_digest",
+      "fmp_client",
+      "live",
+      "adjustment",
+      "workflow",
+      "completed",
+      "failed",
+      "result",
+      "market_data",
+      "retirement",
+      "file_output",
+      "email_reporter",
+      "finance_analyzer",
+      "ml_history",
+      "ml_advisor",
+      "contribution_engine",
+      "run_lock",
+      "state_store",
+      "guardrails",
+      "ledger",
+      "loaded",
+      "universe",
+      "scanner",
+      "sleeve",
+      "theme_engine",
+      "watchlist_scanner",
+      "history",
+      "holdings",
+      "cache",
+      "an",
+      "resolution",
+      "streak",
+      "today",
+      "compute_portfolio_cagr",
+      "underweight",
+      "price",
+      "bulk",
+      "stored",
+      "min_rev_growth",
+      "raw",
+      "full_scan",
+      "baseline",
+      "target",
+      "spec",
+      "run_history",
+      "email_history",
+      "portfolio_peaks",
+      "theme_signals",
+      "alert_events",
+      "subsystem_health",
+      "structural_violations",
+      "cash_ledger",
+      "extended_watchlist",
+      "a",
+      "contextlib",
+      "pipeline",
+      "unittest",
+      "tests",
+      "sent_at",
+      "headlines",
+      "approved",
+      "mapper",
+      "proposed_task",
+      "repo",
+      "untracked",
+      "names",
+      "docstring",
+      "key",
+      "coupling",
+      "memory",
+      "code",
+      "import",
+      "scratch",
+      "backlog",
+      "decimal",
+      "log_dir",
+      "third",
+      "dictionary",
+      "technicals",
+      "data_quality",
+      "overview",
+      "_compute_technicals",
+      "parse_overview",
+      "theme",
+      "company",
+      "fundamental_context_score",
+      "fundamentals_engine",
+      "stale",
+      "ticker",
+      "signal_score"
+    ],
+    "sqlite_files": [
+      "data/portfolio.db",
+      "portfolio.db",
+      "test.db"
+    ],
+    "json_state_files": [
+      "approved_actions.json",
+      "data/drawdown_state.json",
+      "data/finance_history.json",
+      "data/last_success.json",
+      "drawdown_state.json",
+      "finance_history.json",
+      "last_success.json",
+      "call_counter.json",
+      "data/ml_history.json",
+      "data/fmp_cache/top100_watchlist.json",
+      "rss_seen.json",
+      "data/rss_seen.json",
+      "watchlist_signals.json"
+    ],
+    "schema_owners": [
+      "adjustment.py",
+      "agent/__main__.py",
+      "agent/agent_runner.py",
+      "agent/bundle_builder.py",
+      "agent/io_utils.py",
+      "agent/llm_adapters.py",
+      "agent/mcp_agent_tools.py",
+      "agent/repo_tree.py",
+      "api_budget.py",
+      "contribution_engine.py",
+      "digest_builder.py",
+      "drawdown.py",
+      "email_digest.py",
+      "email_reporter.py",
+      "file_output.py",
+      "finance_analyzer.py",
+      "fmp_client.py",
+      "guardrails.py",
+      "main.py",
+      "market_data.py",
+      "ml_advisor.py",
+      "ml_history.py",
+      "portfolio.py",
+      "projections.py",
+      "recommendations.py",
+      "retirement.py",
+      "run_lock.py",
+      "scanner/candidate_scanner.py",
+      "scoring.py",
+      "sleeve/spec_sleeve_allocator.py",
+      "state_store.py",
+      "stockbot_mcp_server.py",
+      "test_demo.py",
+      "tests/test_agent_bundle_builder.py",
+      "tests/test_agent_runner_offline_mode.py",
+      "tests/test_growth_mode.py",
+      "tests/test_guardrails.py",
+      "tests/test_run_mode.py",
+      "tests/test_scanner.py",
+      "tests/test_sleeve.py",
+      "tests/test_state_store.py",
+      "tests/test_theme_engine.py",
+      "theme_engine/__main__.py",
+      "theme_engine/rss_collector.py",
+      "theme_engine/theme_detector.py",
+      "theme_engine/theme_mapper.py",
+      "theme_engine/theme_store.py",
+      "tools/build_prompt.py",
+      "tools/daily_packet.py",
+      "tools/repo_overview.py",
+      "tools/review_packet.py",
+      "tools/task_ranker.py",
+      "universe/sp500.py",
+      "utils.py",
+      "watchlist_scanner/__main__.py",
+      "watchlist_scanner/alpha_vantage_client.py",
+      "watchlist_scanner/cache_manager.py",
+      "watchlist_scanner/confidence.py",
+      "watchlist_scanner/config.py",
+      "watchlist_scanner/extended_watchlist.py",
+      "watchlist_scanner/fundamentals_engine.py",
+      "watchlist_scanner/scanner.py",
+      "watchlist_scanner/theme_engine.py"
+    ]
+  },
+  "config": {
+    "config_files": [
+      ".mcp.json",
+      "config.json"
+    ],
+    "env_vars_in_code": [
+      "STOCKBOT_TESTING",
+      "OLLAMA_MODEL",
+      "ANTHROPIC_MODEL",
+      "ANTHROPIC_API_KEY",
+      "FMP_API_KEY",
+      "STOCKBOT_ENABLE_OLLAMA_TEST",
+      "ALPHA_VANTAGE_API_KEY"
+    ],
+    "env_file_keys": [
+      "ALPHA_VANTAGE_API_KEY",
+      "EMAIL_PASSWORD",
+      "EMAIL_SENDER",
+      "EMAIL_RECIPIENT",
+      "FMP_API_KEY",
+      "DEBUG",
+      "ANTHROPIC_API_KEY",
+      "OLLAMA_MODEL"
+    ],
+    "feature_flags": [
+      "retirement_401k.enabled = False",
+      "ml_advisor.enabled = False",
+      "email.enabled = True",
+      "speculative_sleeve.enabled = True",
+      "scanner.enabled = True",
+      "watchlist_scanner.enabled = True",
+      "theme_engine.enabled = True",
+      "extended_watchlist.enabled = True"
+    ],
+    "constants_sample": [
+      {
+        "name": "FMP_BASE_URL",
+        "value": "'https://financialmodelingprep.com/api'",
+        "file": "fmp_client.py"
+      },
+      {
+        "name": "_DEFAULT_CACHE_DIR",
+        "value": "Path('data/fmp_cache')",
+        "file": "fmp_client.py"
+      },
+      {
+        "name": "_DEFAULT_PATH",
+        "value": "Path('data/av_budget.json')",
+        "file": "api_budget.py"
+      }
+    ]
+  },
+  "integrations": [
+    {
+      "name": "Alpha Vantage API",
+      "files": [
+        "market_data.py",
+        "watchlist_scanner/alpha_vantage_client.py"
+      ],
+      "purpose": "Market data (prices, news sentiment, company overview)",
+      "auth": "ALPHA_VANTAGE_API_KEY env var",
+      "optional": false
+    },
+    {
+      "name": "Financial Modeling Prep (FMP) API",
+      "files": [
+        "fmp_client.py"
+      ],
+      "purpose": "S&P 500 universe, bulk profiles, metrics",
+      "auth": "FMP_API_KEY env var",
+      "optional": true
+    },
+    {
+      "name": "Ollama (local LLM)",
+      "files": [
+        "agent/llm_adapters.py",
+        "theme_engine/theme_detector.py"
+      ],
+      "purpose": "Daily/weekly AI narrative generation and theme detection",
+      "auth": "None (local)",
+      "optional": true
+    },
+    {
+      "name": "Anthropic Claude API",
+      "files": [
+        "agent/llm_adapters.py"
+      ],
+      "purpose": "Monthly AI memos; maintainer patch generation",
+      "auth": "ANTHROPIC_API_KEY env var",
+      "optional": true
+    },
+    {
+      "name": "SMTP Email",
+      "files": [
+        "email_reporter.py",
+        "email_digest.py"
+      ],
+      "purpose": "Sends portfolio digests and alerts",
+      "auth": "EMAIL_USER / EMAIL_PASSWORD / SMTP_HOST env vars",
+      "optional": true
+    },
+    {
+      "name": "MCP Server (Claude Code integration)",
+      "files": [
+        "stockbot_mcp_server.py",
+        "agent/mcp_agent_tools.py"
+      ],
+      "purpose": "Exposes tools to Claude Code IDE sessions",
+      "auth": "None (local)",
+      "optional": true
+    }
+  ],
+  "outputs": [
+    {
+      "producer": "agent/bundle_builder.py",
+      "outputs": [
+        "outputs/latest/portfolio_snapshot.csv",
+        "outputs/latest/contribution_plan.csv",
+        "outputs/latest/candidates_top20.csv",
+        "outputs/latest/spec_sleeve_plan.csv"
+      ]
+    },
+    {
+      "producer": "agent/mcp_agent_tools.py",
+      "outputs": [
+        "test_decision_memo.md",
+        "spec_sleeve_plan.csv",
+        "decision_memo.md",
+        "monthly_memo.md",
+        "email_draft.md",
+        "escalation_packet.md",
+        "outputs/latest/test_decision_memo.md"
+      ]
+    },
+    {
+      "producer": "main.py",
+      "outputs": [
+        "output/snapshot.csv",
+        "portfolio_snapshot.csv",
+        "portfolio_tracker.xlsx",
+        "recommendations.csv",
+        "scored_recommendations.csv",
+        "email_view.csv",
+        "email_prompt.txt",
+        "ml_advisor_outputs.csv"
+      ]
+    },
+    {
+      "producer": "stockbot_mcp_server.py",
+      "outputs": [
+        "portfolio_snapshot.csv",
+        "spec_sleeve_plan.csv",
+        "contribution_plan.csv",
+        "candidates_top20.csv",
+        "compounding_dashboard.txt"
+      ]
+    },
+    {
+      "producer": "tests/test_agent_bundle_builder.py",
+      "outputs": [
+        "contribution_plan.csv"
+      ]
+    },
+    {
+      "producer": "tests/test_agent_runner_offline_mode.py",
+      "outputs": [
+        "decision_memo.md",
+        "monthly_memo.md",
+        "email_draft.md",
+        "escalation_packet.md"
+      ]
+    },
+    {
+      "producer": "tools/build_prompt.py",
+      "outputs": [
+        "REPO_OVERVIEW.md",
+        "claude_today.txt",
+        "claude_task_template.txt",
+        "review_today.txt"
+      ]
+    },
+    {
+      "producer": "tools/daily_packet.py",
+      "outputs": [
+        "REPO_OVERVIEW.md",
+        "daily_packet.md"
+      ]
+    },
+    {
+      "producer": "tools/repo_overview.py",
+      "outputs": [
+        "requirements.txt",
+        "readme.md",
+        "README.md",
+        "outputs/latest/portfolio_snapshot.csv",
+        "outputs/latest/recommendations.csv",
+        "outputs/latest/contribution_plan.csv",
+        "outputs/latest/compounding_dashboard.txt",
+        "outputs/latest/decision_memo.md"
+      ]
+    },
+    {
+      "producer": "tools/review_packet.py",
+      "outputs": [
+        "review_template.txt",
+        "review_packet.md"
+      ]
+    },
+    {
+      "producer": "tools/task_ranker.py",
+      "outputs": [
+        "proposed_task.md"
+      ]
+    },
+    {
+      "producer": "watchlist_scanner/__main__.py",
+      "outputs": [
+        "watchlist_alerts.csv",
+        "watchlist_summary.md"
+      ]
+    }
+  ],
+  "cadence": {
+    "run_modes": [
+      "weekly",
+      "monthly",
+      "daily",
+      "batch"
+    ],
+    "scheduler_references": [
+      "digest_builder.py",
+      "main.py",
+      "state_store.py"
+    ],
+    "mode_specific_behaviors": {}
+  },
+  "known_issues": [],
+  "safe_edit_zones": [
+    {
+      "path": "watchlist_scanner/theme_engine.py",
+      "reason": "tags: theme; low coupling"
+    },
+    {
+      "path": "agent/__init__.py",
+      "reason": "tags: agent; low coupling"
+    },
+    {
+      "path": "agent/prompts.py",
+      "reason": "tags: agent; low coupling"
+    },
+    {
+      "path": "agent/repo_tree.py",
+      "reason": "tags: utility; low coupling"
+    },
+    {
+      "path": "digest_builder.py",
+      "reason": "tags: output; low coupling"
+    },
+    {
+      "path": "theme_engine/__init__.py",
+      "reason": "tags: theme; low coupling"
+    },
+    {
+      "path": "tools/build_prompt.py",
+      "reason": "tags: agent; low coupling"
+    }
+  ],
+  "risky_edit_zones": [
+    {
+      "path": "agent/__main__.py",
+      "reason": "tags: orchestration"
+    },
+    {
+      "path": "main.py",
+      "reason": "tags: orchestration"
+    },
+    {
+      "path": "agent/agent_runner.py",
+      "reason": "tags: orchestration"
+    },
+    {
+      "path": "email_digest.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "email_reporter.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "theme_engine/theme_store.py",
+      "reason": "tags: state"
+    },
+    {
+      "path": "watchlist_scanner/alpha_vantage_client.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "watchlist_scanner/cache_manager.py",
+      "reason": "tags: state"
+    },
+    {
+      "path": "watchlist_scanner/config.py",
+      "reason": "tags: config"
+    },
+    {
+      "path": "adjustment.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "agent/llm_adapters.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "agent/mcp_agent_tools.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "contribution_engine.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "drawdown.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "finance_analyzer.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "fmp_client.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "guardrails.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "market_data.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "ml_history.py",
+      "reason": "tags: state"
+    },
+    {
+      "path": "portfolio.py",
+      "reason": "imported by 6 modules; tags: core_logic"
+    },
+    {
+      "path": "projections.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "recommendations.py",
+      "reason": "imported by 4 modules; tags: core_logic"
+    },
+    {
+      "path": "scanner/candidate_scanner.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "scoring.py",
+      "reason": "imported by 4 modules; tags: core_logic"
+    },
+    {
+      "path": "sleeve/spec_sleeve_allocator.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "state_store.py",
+      "reason": "tags: state"
+    },
+    {
+      "path": "theme_engine/rss_collector.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "theme_engine/theme_detector.py",
+      "reason": "tags: integration"
+    },
+    {
+      "path": "theme_engine/theme_mapper.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "utils.py",
+      "reason": "imported by 14 modules; tags: config"
+    },
+    {
+      "path": "watchlist_scanner/fundamentals_engine.py",
+      "reason": "tags: core_logic"
+    },
+    {
+      "path": "watchlist_scanner/scanner.py",
+      "reason": "tags: core_logic"
+    }
+  ],
+  "tests": {
+    "test_dir": "tests/",
+    "framework": "unittest",
+    "test_files": [
+      {
+        "path": "tests/test_agent_bundle_builder.py",
+        "test_count": 19
+      },
+      {
+        "path": "tests/test_agent_runner_offline_mode.py",
+        "test_count": 18
+      },
+      {
+        "path": "tests/test_growth_mode.py",
+        "test_count": 30
+      },
+      {
+        "path": "tests/test_guardrails.py",
+        "test_count": 9
+      },
+      {
+        "path": "tests/test_run_mode.py",
+        "test_count": 18
+      },
+      {
+        "path": "tests/test_scanner.py",
+        "test_count": 16
+      },
+      {
+        "path": "tests/test_sleeve.py",
+        "test_count": 9
+      },
+      {
+        "path": "tests/test_state_store.py",
+        "test_count": 19
+      },
+      {
+        "path": "tests/test_theme_engine.py",
+        "test_count": 47
+      }
+    ],
+    "total_tests": 185,
+    "smoke_test_command": "python -m unittest discover tests/ -v"
+  },
+  "prompt_helpers": [
+    {
+      "scenario": "Changing email digest content or UX",
+      "inspect_first": [
+        "email_digest.py",
+        "digest_builder.py",
+        "email_reporter.py"
+      ],
+      "notes": "Dedup is SHA-256 hash in state_store.py:email_history. Anti-spam gating in email_digest.py."
+    },
+    {
+      "scenario": "Changing state persistence or schema",
+      "inspect_first": [
+        "state_store.py",
+        "guardrails.py",
+        "ml_history.py"
+      ],
+      "notes": "SQLite DDL is in state_store.py. Tables: run_history, snapshots, email_history, portfolio_peaks, theme_signals. Any schema change needs migration or a fresh db."
+    },
+    {
+      "scenario": "Changing scoring or rebalancing logic",
+      "inspect_first": [
+        "scoring.py",
+        "adjustment.py",
+        "finance_analyzer.py",
+        "recommendations.py"
+      ],
+      "notes": "Scores are 0-100. Growth mode changes scoring weights \u2014 check config.json growth_mode.mode. Structural violations in guardrails.py gate actions."
+    },
+    {
+      "scenario": "Changing scanner / API budgeting",
+      "inspect_first": [
+        "fmp_client.py",
+        "scanner/candidate_scanner.py",
+        "watchlist_scanner/alpha_vantage_client.py",
+        "api_budget.py",
+        "watchlist_scanner/cache_manager.py"
+      ],
+      "notes": "FMP budget guard: 230 calls/day. AV budget: 20 calls/day. Cache TTLs in watchlist_scanner/config.py. Daily call counter persisted in data/watchlist_cache/call_counter.json."
+    },
+    {
+      "scenario": "Changing scheduler or run cadence",
+      "inspect_first": [
+        "main.py",
+        "run_lock.py",
+        "state_store.py"
+      ],
+      "notes": "Run modes: daily|weekly|monthly via --run-mode flag. Idempotency anchor: run_history table (run_id = YYYY-MM-DD_mode). Lock file: data/run.lock (30-min stale threshold). Task Scheduler setup in README.md."
+    },
+    {
+      "scenario": "Changing AI agent narrative / prompts",
+      "inspect_first": [
+        "agent/prompts.py",
+        "agent/agent_runner.py",
+        "agent/llm_adapters.py",
+        "agent/bundle_builder.py"
+      ],
+      "notes": "LLM routing: daily/weekly \u2192 Ollama \u2192 Claude fallback. monthly \u2192 Claude. Offline stub active when STOCKBOT_TESTING=1. Bundle JSON is in outputs/latest/agent_bundle.json."
+    },
+    {
+      "scenario": "Changing theme engine or RSS collection",
+      "inspect_first": [
+        "theme_engine/theme_detector.py",
+        "theme_engine/rss_collector.py",
+        "theme_engine/theme_mapper.py",
+        "data/themes_catalog.json"
+      ],
+      "notes": "Theme detection uses Ollama. testing_mode=True or STOCKBOT_TESTING=1 returns MOCK_THEMES. Theme boosts are applied in scanner/candidate_scanner.py:apply_theme_boosts()."
+    },
+    {
+      "scenario": "Changing watchlist scanner behavior",
+      "inspect_first": [
+        "watchlist_scanner/__main__.py",
+        "watchlist_scanner/scanner.py",
+        "watchlist_scanner/fundamentals_engine.py"
+      ],
+      "notes": "3-component score: theme_news\u00d70.45 + technical\u00d70.30 + fundamentals\u00d70.25. Free-tier AV uses TIME_SERIES_DAILY (no adjusted close). ETFs return empty OVERVIEW \u2014 handled gracefully."
+    },
+    {
+      "scenario": "Changing output file formats or paths",
+      "inspect_first": [
+        "file_output.py",
+        "agent/io_utils.py",
+        "main.py"
+      ],
+      "notes": "outputs/latest/ is always overwritten. outputs/history/YYYY-MM-DD/ is archived once per day. Atomic writes use temp-then-rename pattern in agent/io_utils.py."
+    },
+    {
+      "scenario": "Adding a new config section or feature flag",
+      "inspect_first": [
+        "utils.py",
+        "config.json"
+      ],
+      "notes": "Config is a dataclass hierarchy in utils.py (Config \u2192 sub-configs). Feature flags follow pattern: config.section.enabled (bool). Always add defaults so old configs remain valid."
+    }
+  ]
+}
