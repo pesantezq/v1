@@ -1125,6 +1125,30 @@ def run_portfolio_update(
                             _cov_err,
                         )
 
+                # Log finalized portfolio actions to trade_events.jsonl
+                if not dry_run and decision_layer.get("actions"):
+                    try:
+                        from trade_event_logger import append_trade_events as _append_tevents
+                        _te_written = _append_tevents(
+                            actions=decision_layer["actions"],
+                            run_id=f"{date.today().isoformat()}_{run_mode}",
+                            run_mode=run_mode,
+                            portfolio_value=summary.total_portfolio_value,
+                            cash_available=config.cash_available,
+                            drawdown_regime=drawdown_regime,
+                            degraded_mode=bool(_scanner_meta.get("fallback_used")),
+                            degraded_reason=_scanner_meta.get("fmp_error"),
+                        )
+                        if _te_written:
+                            logger.info(
+                                "MARKET COVERAGE: logged %d trade events", _te_written
+                            )
+                    except Exception as _te_err:
+                        logger.warning(
+                            "MARKET COVERAGE: trade_event_logger write failed (non-fatal): %s",
+                            _te_err,
+                        )
+
                 # Write output files
                 if not dry_run:
                     try:
@@ -1792,6 +1816,28 @@ def run_portfolio_update(
             )
         except Exception as _policy_err:
             logger.debug("POLICY EVAL: non-fatal error — %s", _policy_err)
+
+        # =====================
+        # 7e. PROFIT ATTRIBUTION (read-only learning layer)
+        # =====================
+        # Answers "what decisions actually made money?" — never modifies live logic.
+        _pa_summary = None
+        try:
+            from profit_attribution import run_profit_attribution, write_attribution_reports
+            _pa_summary = run_profit_attribution()
+            write_attribution_reports(_pa_summary, dry_run=dry_run)
+            _pa_m = _pa_summary.metrics
+            logger.info(
+                "PROFIT ATTR: %d trades, %d attr | win=%.0f%% rr=%s exp=%s | %d missed opps",
+                _pa_m.total_entries,
+                _pa_m.attributable_entries,
+                (_pa_m.win_rate or 0) * 100,
+                f"{_pa_m.risk_reward:.2f}x" if _pa_m.risk_reward is not None else "—",
+                f"{(_pa_m.expectancy or 0) * 100:+.2f}%" if _pa_m.expectancy is not None else "—",
+                len(_pa_summary.missed_opportunities),
+            )
+        except Exception as _pa_err:
+            logger.debug("PROFIT ATTR: non-fatal error — %s", _pa_err)
 
         # =====================
         # 7c. BUILD DIGEST CONTEXT (enhanced email sections)

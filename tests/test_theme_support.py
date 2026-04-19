@@ -132,7 +132,9 @@ class TestComputeThemeSupport(unittest.TestCase):
             MarketEvent(symbol="TRIPLE", event_type=EventType.STRONG_MOVE_UP, strength=1.0),
             MarketEvent(symbol="TRIPLE", event_type=EventType.VOLUME_SPIKE, strength=1.0),
         ]
-        scores = compute_theme_support(results, events)
+        # min_positive_symbols_for_breadth=1 so the guard doesn't suppress broad_score
+        # for this single-symbol universe (the focus here is that bonuses stack to 1.0).
+        scores = compute_theme_support(results, events, {"min_positive_symbols_for_breadth": 1})
         # broad_score = min(1.0, 1/(1*0.15)) = 1.0; bonus = 0.35 → capped at 1.0
         self.assertAlmostEqual(scores["TRIPLE"], 1.0, places=3)
 
@@ -162,11 +164,40 @@ class TestComputeThemeSupport(unittest.TestCase):
         events = [
             MarketEvent(symbol="S0", event_type=EventType.STRONG_MOVE_UP, strength=0.8)
         ]
+        # min_positive_symbols_for_breadth=1 so the guard doesn't interfere with
+        # testing the breadth_threshold config itself.
+        base_cfg = {"min_positive_symbols_for_breadth": 1}
         # With breadth_threshold=0.05 (5%), 1/10=10% → broad_score = 10/5 = 2.0 → capped 1.0
-        scores_loose = compute_theme_support(results, events, {"theme_breadth_threshold": 0.05})
+        scores_loose = compute_theme_support(results, events, {**base_cfg, "theme_breadth_threshold": 0.05})
         # With breadth_threshold=0.5 (50%), 1/10=10% → broad_score = 10/50 = 0.2
-        scores_tight = compute_theme_support(results, events, {"theme_breadth_threshold": 0.50})
+        scores_tight = compute_theme_support(results, events, {**base_cfg, "theme_breadth_threshold": 0.50})
         self.assertGreater(scores_loose["S0"], scores_tight["S0"])
+
+    def test_few_positives_below_minimum_suppresses_broad_score(self):
+        # 2 positive events out of 10 symbols; default min_positive=3 → broad_score=0.0
+        # Only per-symbol bonuses differentiate the two movers from flat symbols.
+        results = self._make_results(10)
+        from event_detection import MarketEvent
+        events = [
+            MarketEvent(symbol="S0", event_type=EventType.STRONG_MOVE_UP, strength=0.8),
+            MarketEvent(symbol="S1", event_type=EventType.BREAKOUT_PROXY, strength=0.9),
+        ]
+        scores = compute_theme_support(results, events)
+        # Flat symbols get no bonus → score must be 0.0
+        self.assertAlmostEqual(scores["S2"], 0.0, places=3)
+        # Active symbols still get their per-symbol bonus despite broad_score=0
+        self.assertGreater(scores["S1"], 0.0)
+        self.assertGreater(scores["S0"], 0.0)
+
+    def test_min_positive_guard_configurable_to_zero(self):
+        # min_positive_symbols_for_breadth=0 disables the guard entirely
+        results = self._make_results(10)
+        from event_detection import MarketEvent
+        events = [MarketEvent(symbol="S0", event_type=EventType.STRONG_MOVE_UP, strength=0.8)]
+        scores = compute_theme_support(results, events, {"min_positive_symbols_for_breadth": 0})
+        # 1 positive in 10 at breadth_threshold=0.15: broad_score = 1/(10*0.15) ≈ 0.667
+        # All flat symbols inherit the broad score
+        self.assertGreater(scores["S9"], 0.0)
 
 
 # ===========================================================================
@@ -378,9 +409,9 @@ class TestExitEngineNumericTheme(unittest.TestCase):
         self.assertNotIn("thesis_weakening", suggestion.triggers)
 
     def test_theme_exactly_at_floor_does_not_trigger(self):
-        # Default floor is 0.40; at 0.40 we are NOT below it
+        # Default floor is 0.30; at 0.30 we are NOT below it
         suggestion = evaluate_exit(
-            self._holding(theme_support=0.40),
+            self._holding(theme_support=0.30),
             strategy_type="compounder",
         )
         self.assertNotIn("thesis_weakening", suggestion.triggers)

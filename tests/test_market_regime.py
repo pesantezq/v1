@@ -123,5 +123,111 @@ class TestMarketRegime(unittest.TestCase):
         )
 
 
+class TestRegimeHysteresis(unittest.TestCase):
+    """Regime switching requires stronger confirmation than staying in the current regime."""
+
+    _RISK_ON_PRIOR = {"regime_label": "risk_on"}
+    _RISK_OFF_PRIOR = {"regime_label": "risk_off"}
+
+    def test_risk_on_held_against_single_weak_signal(self):
+        # Two inputs → confidence ≈ 0.53, label = "neutral"
+        # 0.53 < floor(0.65) AND input_count(2) < min_inputs(3) → held at risk_on
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "mixed", "breadth_sma50": 0.50},
+            prior_regime=self._RISK_ON_PRIOR,
+        )
+        self.assertEqual(regime["regime_label"], "risk_on")
+        self.assertTrue(regime["regime_held"])
+        self.assertEqual(regime["regime_raw_label"], "neutral")
+
+    def test_risk_off_held_against_single_strong_day(self):
+        # One strong up day + limited breadth → neutral with low confidence → held at risk_off
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "up", "avg_price_change_pct": 1.8},
+            prior_regime=self._RISK_OFF_PRIOR,
+        )
+        self.assertEqual(regime["regime_label"], "risk_off")
+        self.assertTrue(regime["regime_held"])
+
+    def test_confirmed_switch_from_risk_off_to_risk_on(self):
+        # Full multi-signal evidence → confidence ≈ 0.88, 6 inputs → switch confirmed
+        regime = detect_market_regime(
+            regime_inputs={
+                "index_trend_state": "up",
+                "breadth_sma50": 0.80,
+                "breadth_sma20": 0.75,
+                "avg_price_change_pct": 1.8,
+                "volatility_proxy": 1.5,
+                "sector_leadership_concentration": 0.35,
+            },
+            prior_regime=self._RISK_OFF_PRIOR,
+        )
+        self.assertEqual(regime["regime_label"], "risk_on")
+        self.assertFalse(regime["regime_held"])
+
+    def test_confirmed_switch_from_risk_on_to_risk_off(self):
+        # Strong multi-signal downside evidence → switch confirmed against prior risk_on
+        regime = detect_market_regime(
+            regime_inputs={
+                "index_trend_state": "down",
+                "breadth_sma50": 0.25,
+                "breadth_sma20": 0.30,
+                "avg_price_change_pct": -1.5,
+                "volatility_proxy": 1.0,
+            },
+            prior_regime=self._RISK_ON_PRIOR,
+        )
+        self.assertEqual(regime["regime_label"], "risk_off")
+        self.assertFalse(regime["regime_held"])
+
+    def test_no_prior_regime_no_hysteresis(self):
+        # Without prior_regime, behavior is identical to the current (stateless) path
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "mixed", "breadth_sma50": 0.50},
+        )
+        self.assertFalse(regime["regime_held"])
+        self.assertEqual(regime["regime_label"], "neutral")
+        self.assertEqual(regime["regime_raw_label"], "neutral")
+
+    def test_same_prior_and_computed_label_does_not_hold(self):
+        # When prior matches the fresh label there is nothing to hold — regime_held stays False
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "mixed", "breadth_sma50": 0.50},
+            prior_regime={"regime_label": "neutral"},
+        )
+        self.assertFalse(regime["regime_held"])
+        self.assertEqual(regime["regime_label"], "neutral")
+
+    def test_held_reason_appears_in_reasoning(self):
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "mixed", "breadth_sma50": 0.50},
+            prior_regime=self._RISK_ON_PRIOR,
+        )
+        self.assertIn("held", regime["regime_reasoning"].lower())
+
+    def test_hysteresis_thresholds_configurable(self):
+        # floor=0.30, min_inputs=1 → even weak evidence confirms the switch
+        regime = detect_market_regime(
+            regime_inputs={
+                "index_trend_state": "mixed",
+                "breadth_sma50": 0.50,
+                "hysteresis_confidence_floor": 0.30,
+                "hysteresis_min_inputs": 1,
+            },
+            prior_regime=self._RISK_ON_PRIOR,
+        )
+        self.assertFalse(regime["regime_held"])
+        self.assertEqual(regime["regime_label"], "neutral")
+
+    def test_invalid_prior_label_is_ignored(self):
+        # Unknown prior label → hysteresis not applied, raw label returned as-is
+        regime = detect_market_regime(
+            regime_inputs={"index_trend_state": "mixed", "breadth_sma50": 0.50},
+            prior_regime={"regime_label": "unknown_label"},
+        )
+        self.assertFalse(regime["regime_held"])
+        self.assertEqual(regime["regime_label"], "neutral")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

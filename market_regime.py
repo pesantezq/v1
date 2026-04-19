@@ -4,6 +4,7 @@ from typing import Any
 
 
 _INDEX_TICKERS = {"SPY", "QQQ", "DIA", "IWM"}
+_VALID_REGIME_LABELS = {"risk_on", "risk_off", "neutral", "high_volatility"}
 
 
 def _safe_float(value: Any) -> float | None:
@@ -29,6 +30,7 @@ def detect_market_regime(
     portfolio_construction: dict[str, Any] | None = None,
     data_health: dict[str, Any] | None = None,
     regime_inputs: dict[str, Any] | None = None,
+    prior_regime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = list(results or [])
     portfolio_view = portfolio_construction if isinstance(portfolio_construction, dict) else {}
@@ -173,6 +175,32 @@ def detect_market_regime(
         regime_data_quality = "partial"
 
     confidence = round(_clamp(confidence), 2)
+
+    # Hysteresis: a regime switch requires stronger confirmation than staying in the
+    # current regime.  Both a minimum confidence AND a minimum input count must be
+    # met.  If either falls short the prior regime is held and the raw candidate
+    # label is preserved in regime_raw_label for transparency.
+    raw_label = label
+    regime_held = False
+    if isinstance(prior_regime, dict):
+        prior_label = str(prior_regime.get("regime_label") or "")
+        if prior_label in _VALID_REGIME_LABELS and prior_label != raw_label:
+            hysteresis_floor = _safe_float(override_inputs.get("hysteresis_confidence_floor")) or 0.65
+            hysteresis_min_inputs = int(_safe_float(override_inputs.get("hysteresis_min_inputs")) or 3)
+            meets_floor = confidence >= hysteresis_floor
+            meets_inputs = input_count >= hysteresis_min_inputs
+            if not (meets_floor and meets_inputs):
+                label = prior_label
+                regime_held = True
+                shortfall: list[str] = []
+                if not meets_floor:
+                    shortfall.append(f"confidence {confidence:.2f} < floor {hysteresis_floor:.2f}")
+                if not meets_inputs:
+                    shortfall.append(f"only {input_count} inputs < minimum {hysteresis_min_inputs}")
+                reasons.append(
+                    f"regime held at {prior_label} (switch to {raw_label} not confirmed: {'; '.join(shortfall)})"
+                )
+
     reasoning = "; ".join(dict.fromkeys(reasons))
     summary_line = (
         f"Market regime: {label} (confidence {confidence:.2f}) - {reasoning}"
@@ -184,6 +212,8 @@ def detect_market_regime(
         "regime_reasoning": reasoning,
         "regime_summary_line": summary_line,
         "regime_data_quality": regime_data_quality,
+        "regime_held": regime_held,
+        "regime_raw_label": raw_label,
         "regime_inputs": {
             "index_trend_state": index_trend_state,
             "breadth_sma50": round(breadth_sma50, 3) if breadth_sma50 is not None else None,

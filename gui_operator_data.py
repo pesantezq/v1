@@ -1169,3 +1169,45 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "health": health,
         "provider_snapshot": provider_snapshot,
     }
+
+
+# ---------------------------------------------------------------------------
+# Attribution / Rotation loaders (read-only, no side effects)
+# ---------------------------------------------------------------------------
+
+def load_profit_attribution(root: Path | str) -> dict[str, Any]:
+    """
+    Load outputs/policy/profit_attribution.json.
+
+    Returns {} when the file is absent or malformed.
+    Read-only — never writes or modifies any artifact.
+    """
+    return _safe_json(Path(root) / "outputs" / "policy" / "profit_attribution.json")
+
+
+def load_rotation_events(root: Path | str) -> list[dict[str, Any]]:
+    """
+    Load outputs/policy/rotation_events.jsonl (line-delimited JSON).
+
+    Returns [] when the file is absent, empty, or unreadable.
+    Malformed lines are silently skipped.
+    Read-only — never writes or modifies any artifact.
+    """
+    path = Path(root) / "outputs" / "policy" / "rotation_events.jsonl"
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    records.append(obj)
+            except json.JSONDecodeError:
+                pass
+    except Exception:
+        pass
+    return records

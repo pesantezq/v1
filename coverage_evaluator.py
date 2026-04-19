@@ -282,6 +282,22 @@ class CoverageEvalResult:
 # Public API
 # ---------------------------------------------------------------------------
 
+def build_coverage_outcomes(
+    history_path=None,
+) -> List[CoverageOutcome]:
+    """
+    Return individual CoverageOutcome records for downstream analysis layers.
+
+    Separates data loading from aggregation so callers like profit_attribution
+    can work at trade level without re-implementing the outcome-build logic.
+    Always returns a list (empty on missing/bad data).
+    """
+    records = load_coverage_history(history_path)
+    if not records:
+        return []
+    return _build_outcomes(records)
+
+
 def evaluate_coverage(
     history_path=None,
 ) -> CoverageEvalResult:

@@ -29,7 +29,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 from agent.llm_adapters import resolve_ollama_base_url, validate_ollama_connection
-from gui_operator_data import load_operator_dashboard_data
+from gui_operator_data import (
+    load_operator_dashboard_data,
+    load_profit_attribution,
+    load_rotation_events,
+)
+from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
 
 # -- Paths -------------------------------------------------------------------
@@ -507,6 +512,274 @@ def _render_bar_chart_fallback(df: pd.DataFrame, *, index_col: str, value_cols: 
         st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def _load_market_opportunities() -> dict:
+    """Load market_opportunities.json from the latest outputs directory."""
+    return _load_json(OUTPUTS_LATEST / "market_opportunities.json")
+
+
+def _load_performance_summary() -> dict:
+    """Load performance_summary.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "performance_summary.json")
+
+
+def _action_tone(action: str) -> str:
+    return {
+        "BUY": "good",
+        "PROMOTE_TO_PORTFOLIO": "good",
+        "SELL": "bad",
+        "TRIM": "warn",
+        "ADD_TO_WATCHLIST": "neutral",
+        "HOLD": "neutral",
+    }.get(str(action).upper(), "neutral")
+
+
+def _conviction_band_tone(band: str) -> str:
+    return {
+        "high_conviction": "good",
+        "normal": "good",
+        "starter": "warn",
+        "observe": "warn",
+        "defer": "bad",
+        "suppressed": "bad",
+    }.get(str(band).lower(), "neutral")
+
+
+def _render_mc_freshness(mc: dict) -> None:
+    """One-line 'data as of' caption for decision-data tabs."""
+    path = OUTPUTS_LATEST / "market_opportunities.json"
+    if not path.exists():
+        st.caption(
+            "Data: market_opportunities.json not found — run a market scan to populate this tab."
+        )
+        return
+    st.caption(f"Data: market_opportunities.json updated {_file_age(path)}")
+
+
+def _render_action_strip(mc: dict, bundle: dict) -> None:
+    """Compact always-visible strip answering 'What should I do right now?'"""
+    decision_layer    = mc.get("decision_layer") or {}
+    actions           = decision_layer.get("actions") or []
+    portfolio_rows    = bundle.get("portfolio_view", {}).get("rows") or []
+    promoted          = mc.get("promoted") or []
+
+    buy_actions  = [a for a in actions if a.get("action", "").upper() in {"BUY", "PROMOTE_TO_PORTFOLIO"}]
+    sell_actions = [a for a in actions if a.get("action", "").upper() in {"SELL", "TRIM"}]
+
+    portfolio_symbols = {r.get("ticker", "").upper() for r in portfolio_rows}
+    rotation_candidates = sorted(
+        [p for p in promoted if p.get("symbol", "").upper() not in portfolio_symbols],
+        key=lambda x: x.get("score", 0),
+        reverse=True,
+    )
+
+    mc_path   = OUTPUTS_LATEST / "market_opportunities.json"
+    freshness = _file_age(mc_path) if mc_path.exists() else "no data yet"
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    with c1:
+        top_buy = buy_actions[0] if buy_actions else None
+        if top_buy:
+            action_short = "PROMOTE" if "PROMOTE" in str(top_buy.get("action", "")).upper() else top_buy.get("action", "BUY")
+            reason       = (top_buy.get("rationale") or [""])[0][:45]
+            st.markdown(
+                _badge(f"{action_short} {top_buy.get('symbol', '?')}", "good")
+                + f"<br><small style='color:#5f6b7a'>score {top_buy.get('score', 0):.0f}"
+                + (f" · {reason}" if reason else "") + "</small>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(_badge("No buy signals", "neutral"), unsafe_allow_html=True)
+        st.caption("Top buy")
+
+    with c2:
+        top_sell = sell_actions[0] if sell_actions else None
+        if top_sell:
+            reason = (top_sell.get("rationale") or [""])[0][:50]
+            st.markdown(
+                _badge(f"{top_sell.get('action', 'SELL')} {top_sell.get('symbol', '?')}", "bad")
+                + (f"<br><small style='color:#5f6b7a'>{reason}</small>" if reason else ""),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(_badge("No exit signals", "good"), unsafe_allow_html=True)
+        st.caption("Top exit")
+
+    with c3:
+        rot = rotation_candidates[0] if rotation_candidates else None
+        if rot:
+            st.markdown(
+                _badge(f"ROTATE? {rot.get('symbol', '?')}", "warn")
+                + f"<br><small style='color:#5f6b7a'>score {rot.get('score', 0):.0f} · not in portfolio</small>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(_badge("No rotation candidate", "neutral"), unsafe_allow_html=True)
+        st.caption("Rotation")
+
+    with c4:
+        urgent    = len(sell_actions)
+        total_act = len(buy_actions) + urgent
+        tone      = "bad" if urgent > 1 else ("warn" if urgent == 1 else ("good" if total_act == 0 else "neutral"))
+        st.markdown(
+            _badge(f"{urgent} exit · {len(buy_actions)} buy", tone),
+            unsafe_allow_html=True,
+        )
+        st.caption("Action count")
+
+    with c5:
+        tone = "neutral" if mc_path.exists() else "bad"
+        st.markdown(_badge(freshness, tone), unsafe_allow_html=True)
+        st.caption("Last scan")
+
+
+def _render_portfolio_health_row(bundle: dict, mc: dict) -> None:
+    """Single-row health status bar showing regime, action counts, and conviction summary."""
+    portfolio_view = bundle.get("portfolio_view", {})
+    overview       = bundle.get("overview", {})
+    rows           = portfolio_view.get("rows") or []
+    decision_layer = mc.get("decision_layer") or {}
+    actions        = decision_layer.get("actions") or []
+
+    regime      = overview.get("market_regime") or "—"
+    regime_conf = overview.get("market_regime_confidence")
+    regime_tone = _confidence_tone(regime_conf) if regime_conf is not None else "neutral"
+
+    exit_flags     = len([a for a in actions if a.get("action", "").upper() in {"SELL", "TRIM"}])
+    immediate_acts = len([a for a in actions if a.get("action", "").upper() in {"BUY", "PROMOTE_TO_PORTFOLIO", "SELL", "TRIM"}])
+    high_conv      = len([r for r in rows if str(r.get("conviction_band", "")).lower() in {"high_conviction", "normal"}])
+    top_sector     = str(portfolio_view.get("top_sector") or "—")[:15]
+    regime_fit     = str(portfolio_view.get("portfolio_fit_vs_regime") or "—").replace("_", " ")
+    fit_tone       = "warn" if "stretched" in regime_fit.lower() else ("bad" if "misaligned" in regime_fit.lower() else "good")
+
+    h1, h2, h3, h4, h5 = st.columns(5)
+    h1.markdown(_badge(f"Regime: {regime}", regime_tone), unsafe_allow_html=True)
+    h2.markdown(
+        _badge(
+            f"{immediate_acts} action{'s' if immediate_acts != 1 else ''}",
+            "bad" if immediate_acts > 3 else ("warn" if immediate_acts > 0 else "good"),
+        ),
+        unsafe_allow_html=True,
+    )
+    h3.markdown(
+        _badge(
+            f"{exit_flags} exit flag{'s' if exit_flags != 1 else ''}",
+            "bad" if exit_flags > 0 else "good",
+        ),
+        unsafe_allow_html=True,
+    )
+    h4.markdown(
+        _badge(
+            f"{high_conv} high-conviction",
+            "good" if high_conv >= 3 else ("warn" if high_conv > 0 else "neutral"),
+        ),
+        unsafe_allow_html=True,
+    )
+    h5.markdown(_badge(f"Fit: {regime_fit}", fit_tone), unsafe_allow_html=True)
+
+
+def _load_signal_outcomes_df() -> pd.DataFrame:
+    """Load signal_outcomes.csv — tracks every signal from emission to resolution."""
+    return _csv_to_df(ROOT / "outputs" / "performance" / "signal_outcomes.csv")
+
+
+def _load_profit_attribution() -> dict:
+    """Load profit_attribution.json from the policy outputs directory."""
+    return load_profit_attribution(ROOT)
+
+
+def _load_rotation_events() -> list:
+    """Load rotation_events.jsonl. Returns [] when absent or malformed."""
+    return load_rotation_events(ROOT)
+
+
+def _compute_system_confidence(perf_summary: dict) -> dict:
+    """Heuristic system confidence from resolved performance data."""
+    tracked  = int(_coerce_num(perf_summary.get("tracked_signals"), 0))
+    resolved = int(_coerce_num(perf_summary.get("resolved_signals"), 0))
+
+    if resolved < 5:
+        return {
+            "level": "BUILDING",
+            "tone": "neutral",
+            "reasons": [f"{tracked} signals tracked, {resolved} resolved — baseline building"],
+        }
+
+    by_window = perf_summary.get("by_window") or {}
+    win_rates = [
+        float(v.get("win_rate") or 0)
+        for v in by_window.values()
+        if isinstance(v, dict) and v.get("win_rate") is not None
+    ]
+    avg_wr = sum(win_rates) / len(win_rates) if win_rates else 0.0
+    global_metrics = perf_summary.get("global_metrics") or {}
+    hc_sr = global_metrics.get("high_confidence_success_rate")
+
+    score = 0
+    reasons: list[str] = []
+
+    if avg_wr >= 0.6:
+        score += 2
+        reasons.append(f"win rate {avg_wr*100:.0f}% is strong")
+    elif avg_wr >= 0.45:
+        score += 1
+        reasons.append(f"win rate {avg_wr*100:.0f}% is moderate")
+    else:
+        reasons.append(f"win rate {avg_wr*100:.0f}% needs improvement")
+
+    if hc_sr is not None:
+        try:
+            hcsr = float(hc_sr)
+            if hcsr >= 0.65:
+                score += 2
+                reasons.append("high-confidence signals are well-calibrated")
+            elif hcsr >= 0.50:
+                score += 1
+                reasons.append("high-confidence signals show moderate calibration")
+            else:
+                reasons.append("high-confidence signals underperforming")
+        except (TypeError, ValueError):
+            pass
+
+    if tracked >= 20:
+        score += 1
+        reasons.append(f"{tracked} tracked signals provide adequate sample coverage")
+
+    if score >= 4:
+        return {"level": "HIGH", "tone": "good", "reasons": reasons}
+    if score >= 2:
+        return {"level": "MEDIUM", "tone": "warn", "reasons": reasons}
+    return {"level": "LOW", "tone": "bad", "reasons": reasons}
+
+
+def _action_priority(action: dict) -> str:
+    """Return HIGH / MEDIUM / LOW for a given action dict."""
+    act        = str(action.get("action", "")).upper()
+    score      = _coerce_num(action.get("score"), 0)
+    confidence = _coerce_num(action.get("confidence"), 0)
+
+    if act in {"SELL", "TRIM"}:
+        return "HIGH"
+    if act in {"BUY", "PROMOTE_TO_PORTFOLIO"}:
+        if score >= 70 and confidence >= 0.75:
+            return "HIGH"
+        if score >= 55 or confidence >= 0.65:
+            return "MEDIUM"
+        return "LOW"
+    return "LOW"
+
+
+def _render_system_confidence_indicator(perf_summary: dict) -> None:
+    """Single-line system confidence badge shown near the top of the dashboard."""
+    conf = _compute_system_confidence(perf_summary)
+    reason = conf["reasons"][0] if conf["reasons"] else ""
+    st.markdown(
+        _badge(f"System Confidence: {conf['level']}", conf["tone"])
+        + (f"<small style='color:#5f6b7a;margin-left:0.6rem'>{reason}</small>" if reason else ""),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_output_scope_browser(scope: str, base_dir: Path) -> None:
     if not base_dir.exists() or not any(base_dir.iterdir()):
         st.info(f"No files in `{base_dir.relative_to(ROOT)}/` yet.")
@@ -553,7 +826,7 @@ def _render_output_scope_browser(scope: str, base_dir: Path) -> None:
         st.download_button(f"Download {sel}", fh.read(), file_name=sel)
 
 
-def _render_overview_mode(bundle: dict) -> None:
+def _render_overview_mode(bundle: dict, mc: dict) -> None:
     overview = bundle["overview"]
     memo = bundle["memo"]
     signal_triage = bundle["signal_triage"]
@@ -610,6 +883,46 @@ def _render_overview_mode(bundle: dict) -> None:
                     "bad",
                 ) if overview["status_badges"]["low_recommendation_confidence"] else _badge("Confidence Acceptable", "good"),
             ],
+        )
+
+    # Quick action panel: answers "What should I buy / sell?" at a glance
+    _dec = mc.get("decision_layer") or {}
+    if _dec.get("available"):
+        _all_acts = _dec.get("actions") or []
+        _buy_acts  = [a for a in _all_acts if a.get("action", "").upper() in {"BUY", "PROMOTE_TO_PORTFOLIO"}]
+        _sell_acts = [a for a in _all_acts if a.get("action", "").upper() in {"SELL", "TRIM"}]
+        st.subheader("Quick Actions")
+        qa_left, qa_right = st.columns(2)
+        with qa_left:
+            if _buy_acts:
+                st.markdown("**Buy / Promote**")
+                for _a in _buy_acts[:4]:
+                    _s = _a.get("score")
+                    _r = (_a.get("rationale") or [""])[0][:60]
+                    st.markdown(
+                        _badge(_a.get("action", "BUY"), "good")
+                        + f" **{_a.get('symbol', '?')}**"
+                        + (f" &nbsp;score {_s:.0f}" if _s else "")
+                        + (f"<br><small style='color:#5f6b7a'>{_r}</small>" if _r else ""),
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("No active buy signals.")
+        with qa_right:
+            if _sell_acts:
+                st.markdown("**Exit / Reduce**")
+                for _a in _sell_acts[:4]:
+                    _r = (_a.get("rationale") or [""])[0][:60]
+                    st.markdown(
+                        _badge(_a.get("action", "SELL"), _action_tone(_a.get("action", "SELL")))
+                        + f" **{_a.get('symbol', '?')}**"
+                        + (f"<br><small style='color:#5f6b7a'>{_r}</small>" if _r else ""),
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.success("No active exit signals.")
+        st.caption(
+            _dec.get("summary_line") or "Switch to Advanced → Decision Center for full detail."
         )
 
     st.subheader("Artifact Freshness")
@@ -1036,7 +1349,10 @@ def _render_performance_tab(bundle: dict) -> None:
     st.subheader("Performance")
     _render_interpretation("Higher confidence should correspond to higher hit rates. Sample sizes are shown on every table and flagged when thin.")
     if not performance["available"]:
-        st.info("No data available.")
+        st.info(
+            "No resolved performance data yet. Signals need time to mature before stats appear — "
+            "check back after a few trade cycles resolve."
+        )
         _render_outputs_action(performance.get("output_target"), button_key="performance_open_missing")
         return
 
@@ -1108,7 +1424,10 @@ def _render_regime_analytics_tab(bundle: dict) -> None:
     st.subheader("Regime")
     _render_interpretation("Use this view to check whether realized outcomes differ meaningfully across market regimes and whether degraded-data notes are accumulating.")
     if not regime_view["available"]:
-        st.info("No data available.")
+        st.info(
+            "No regime analytics data yet. This tab populates once signal outcomes have been "
+            "resolved across different market regimes."
+        )
         _render_outputs_action(regime_view.get("output_target"), button_key="regime_open_missing")
         return
 
@@ -1158,7 +1477,10 @@ def _render_recommendation_quality_tab(bundle: dict) -> None:
     st.subheader("Recommendation Quality")
     _render_interpretation("Higher scores and higher confidence should trend toward better outcomes over time, but small samples can easily distort the picture.")
     if not quality["available"]:
-        st.info("No data available.")
+        st.info(
+            "No recommendation quality data yet. This tab populates once resolved trade "
+            "outcomes are available for analysis."
+        )
         _render_outputs_action(quality.get("output_targets", {}).get("outcomes"), button_key="quality_open_missing")
         return
 
@@ -1304,6 +1626,1251 @@ def _render_weekly_review_tab(bundle: dict) -> None:
                 mime="text/plain",
                 use_container_width=True,
             )
+
+
+# ============================================================================
+# DECISION INTELLIGENCE TABS
+# ============================================================================
+
+def _render_decision_center_tab(bundle: dict, mc: dict) -> None:
+    st.subheader("Portfolio Decision Center")
+    _render_mc_freshness(mc)
+    _render_interpretation(
+        "Actionable decisions from the last run. Shows WHY each action was recommended — "
+        "score, confidence, strategy type, and full rationale."
+    )
+
+    decision_layer = mc.get("decision_layer") or {}
+
+    if not decision_layer.get("available"):
+        st.info(
+            "No portfolio decision data found. "
+            "Run a Daily/Weekly/Monthly analysis with market_coverage enabled."
+        )
+        st.caption("Expected at: `outputs/latest/market_opportunities.json`")
+        return
+
+    actions = decision_layer.get("actions") or []
+    if not actions:
+        st.info("Decision layer ran but produced no actions.")
+        st.caption(decision_layer.get("summary_line") or "")
+        return
+
+    buy_actions  = [a for a in actions if a.get("action", "").upper() in {"BUY", "PROMOTE_TO_PORTFOLIO"}]
+    sell_actions = [a for a in actions if a.get("action", "").upper() in {"SELL", "TRIM"}]
+    watch_actions = [a for a in actions if a.get("action", "").upper() == "ADD_TO_WATCHLIST"]
+    hold_actions = [a for a in actions if a.get("action", "").upper() == "HOLD"]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Buy / Promote", len(buy_actions))
+    m2.metric("Sell / Trim", len(sell_actions))
+    m3.metric("Watch", len(watch_actions))
+    m4.metric("Hold", len(hold_actions))
+    st.caption(decision_layer.get("summary_line") or "")
+
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    all_action_types = sorted({a.get("action", "UNKNOWN") for a in actions})
+    default_types = [t for t in all_action_types if t.upper() not in {"ADD_TO_WATCHLIST", "HOLD"}] or all_action_types
+    with col_f1:
+        selected_types = st.multiselect(
+            "Filter by action", all_action_types, default=default_types, key="dc_action_filter"
+        )
+    all_strategies = sorted({a.get("strategy_type") or "unknown" for a in actions})
+    with col_f2:
+        selected_strategies = st.multiselect(
+            "Filter by strategy", all_strategies, default=all_strategies, key="dc_strategy_filter"
+        )
+    with col_f3:
+        high_conf_only = st.checkbox("High confidence only (≥75%)", key="dc_high_conf_filter")
+    with col_f4:
+        exits_only = st.checkbox("Exits only", key="dc_exits_only_filter")
+
+    filtered = [
+        a for a in actions
+        if a.get("action", "") in selected_types
+        and (a.get("strategy_type") or "unknown") in selected_strategies
+        and (not high_conf_only or _coerce_num(a.get("confidence"), 0) >= 0.75)
+        and (not exits_only or a.get("action", "").upper() in {"SELL", "TRIM"})
+    ]
+
+    if not filtered:
+        st.info("No actions match the current filters.")
+        return
+
+    rows = []
+    for a in filtered:
+        conf  = a.get("confidence")
+        score = a.get("score")
+        rationale = a.get("rationale") or []
+        rows.append({
+            "Priority":   _action_priority(a),
+            "Symbol":     a.get("symbol", "?"),
+            "Action":     a.get("action", "?"),
+            "Strategy":   a.get("strategy_type") or "—",
+            "Score":      f"{score:.1f}" if score is not None else "—",
+            "Confidence": f"{conf * 100:.0f}%" if conf is not None else "—",
+            "Key Reason": (rationale[0] if rationale else "—")[:80],
+            "Allocation": _fmt_pct(a.get("suggested_allocation_pct")) if a.get("suggested_allocation_pct") else "—",
+        })
+    high_priority = [r for r in rows if r["Priority"] == "HIGH"]
+    if high_priority:
+        st.markdown(
+            "**High priority:** "
+            + "  ".join(
+                _badge(f"{r['Action']} {r['Symbol']}", _action_tone(r["Action"]))
+                for r in high_priority
+            ),
+            unsafe_allow_html=True,
+        )
+    st.dataframe(_coerce_df(rows), use_container_width=True, hide_index=True)
+
+    st.subheader("Decision Detail")
+    sym_options = [a.get("symbol", "?") for a in filtered]
+    selected_sym = st.selectbox("Inspect decision for", sym_options, key="dc_sym_select")
+    sel_action = next((a for a in filtered if a.get("symbol") == selected_sym), None)
+
+    if sel_action:
+        action_type = sel_action.get("action", "UNKNOWN")
+        tone = _action_tone(action_type)
+        col_a, col_b, col_c = st.columns(3)
+        col_a.markdown(
+            _badge(action_type, tone) + " " + _badge(sel_action.get("strategy_type") or "unclassified", "neutral"),
+            unsafe_allow_html=True,
+        )
+        score = sel_action.get("score")
+        confidence = sel_action.get("confidence")
+        col_b.metric("Score", f"{score:.1f}" if score is not None else "N/A")
+        col_c.metric("Confidence", f"{confidence * 100:.0f}%" if confidence is not None else "N/A")
+
+        rationale = sel_action.get("rationale") or []
+        if rationale:
+            st.markdown("**Why this decision?**")
+            for r in rationale:
+                st.markdown(f"- {r}")
+
+        alloc_pct = sel_action.get("suggested_allocation_pct")
+        alloc_amt = sel_action.get("suggested_allocation_amount")
+        if alloc_pct is not None or alloc_amt:
+            parts = []
+            if alloc_pct is not None:
+                parts.append(f"{alloc_pct * 100:.1f}%")
+            if alloc_amt:
+                parts.append(f"~${alloc_amt:,.0f}")
+            st.caption("Suggested allocation: " + " / ".join(parts))
+
+        related = sel_action.get("related_symbol")
+        if related:
+            st.caption(f"Compared against: {related}")
+
+        exit_plan = sel_action.get("exit_plan") or {}
+        if exit_plan:
+            with st.expander("Exit Plan", expanded=False):
+                for k, v in exit_plan.items():
+                    if v:
+                        st.markdown(f"**{k.replace('_', ' ').title()}:** {v}")
+
+
+def _render_opportunities_tab(bundle: dict, mc: dict) -> None:
+    st.subheader("Opportunity Ranking")
+    _render_mc_freshness(mc)
+    _render_interpretation(
+        "Top-ranked market candidates from the last scan. Promoted items cleared the score threshold. "
+        "Deferred items are in the watchlist but below the actionable bar."
+    )
+
+    promoted = mc.get("promoted") or []
+    snapshot_rows = bundle.get("portfolio_view", {}).get("rows") or []
+
+    tab_promoted, tab_deferred, tab_events = st.tabs(["Promoted Candidates", "Deferred / Watchlist", "Market Events"])
+
+    with tab_promoted:
+        if not promoted:
+            st.info(
+                "No promoted candidates in the latest run. "
+                "Run a market coverage scan to populate this tab — candidates appear once they "
+                "clear the score and confidence thresholds."
+            )
+        else:
+            promo_rows = [
+                {
+                    "Rank":           p.get("rank", "?"),
+                    "Symbol":         p.get("symbol", "?"),
+                    "Score":          f"{p.get('score', 0):.1f}",
+                    "Label":          p.get("label", "—"),
+                    "Theme Support":  f"{p.get('theme_support', 0) * 100:.0f}%" if p.get("theme_support") is not None else "—",
+                    "Events":         ", ".join(p.get("events") or []) or "—",
+                    "Portfolio Hint": (p.get("portfolio_context") or {}).get("action_hint") or "—",
+                }
+                for p in promoted
+            ]
+            st.dataframe(_coerce_df(promo_rows), use_container_width=True, hide_index=True)
+
+            st.subheader("Why was it promoted?")
+            sym_opts = [p.get("symbol", "?") for p in promoted]
+            sel = st.selectbox("Inspect candidate", sym_opts, key="opp_promo_sel")
+            sel_promo = next((p for p in promoted if p.get("symbol") == sel), None)
+            if sel_promo:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Score", f"{sel_promo.get('score', 0):.1f}")
+                c2.metric("Rank", f"#{sel_promo.get('rank', '?')}")
+                c3.metric("Label", sel_promo.get("label", "—"))
+
+                events = sel_promo.get("events") or []
+                if events:
+                    st.markdown("**Events:** " + "".join(_badge(e, "neutral") for e in events), unsafe_allow_html=True)
+
+                reasons = sel_promo.get("reasons") or []
+                if reasons:
+                    st.markdown("**Scoring factors:**")
+                    for r in reasons:
+                        st.markdown(f"- {r}")
+
+                portfolio_ctx = sel_promo.get("portfolio_context") or {}
+                if portfolio_ctx.get("action_hint"):
+                    st.info(f"Portfolio context: {portfolio_ctx['action_hint']}")
+
+    with tab_deferred:
+        deferred = [
+            r for r in snapshot_rows
+            if str(r.get("conviction_band", "")).lower() in {"defer", "suppressed", "observe"}
+        ]
+        if not deferred:
+            st.info("No deferred or suppressed signals in the latest portfolio construction data.")
+        else:
+            st.caption(f"{len(deferred)} symbols below actionable conviction threshold.")
+            defer_rows = [
+                {
+                    "Symbol":     r.get("ticker", "?"),
+                    "Band":       r.get("conviction_band", "—"),
+                    "Conviction": _fmt_ratio_pct(r.get("conviction_score")),
+                    "Sector":     r.get("sector", "—"),
+                    "Alloc":      _fmt_pct(r.get("suggested_allocation")) if r.get("suggested_allocation") else "$0",
+                    "Why Deferred": "Score below actionable threshold",
+                }
+                for r in sorted(deferred, key=lambda x: x.get("conviction_score", 0))
+            ]
+            st.dataframe(_coerce_df(defer_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                "These symbols passed initial screening but did not clear the conviction "
+                "threshold for allocation. Re-run to check for updated scores."
+            )
+
+    with tab_events:
+        event_summary = mc.get("event_summary") or {}
+        if not event_summary:
+            st.info("No market events detected in the latest run.")
+        else:
+            ev_rows = [
+                {"Event": k.replace("_", " ").title(), "Count": v}
+                for k, v in sorted(event_summary.items(), key=lambda x: x[1], reverse=True)
+            ]
+            st.dataframe(_coerce_df(ev_rows), use_container_width=True, hide_index=True)
+
+
+def _render_portfolio_vs_market_tab(bundle: dict, mc: dict) -> None:
+    st.subheader("Portfolio vs Market Opportunities")
+    _render_mc_freshness(mc)
+    _render_interpretation(
+        "Compare watchlist conviction against top external opportunities. "
+        "Strong external candidates with higher scores may justify rotation."
+    )
+
+    promoted = mc.get("promoted") or []
+    portfolio_rows = bundle.get("portfolio_view", {}).get("rows") or []
+
+    if not portfolio_rows and not promoted:
+        st.info("No portfolio or opportunity data available. Run the system to populate.")
+        return
+
+    left_col, right_col = st.columns(2)
+
+    with left_col:
+        st.markdown("### Watchlist Holdings")
+        if not portfolio_rows:
+            st.info("No portfolio construction data.")
+        else:
+            actionable = [r for r in portfolio_rows if str(r.get("conviction_band", "")).lower() not in {"defer", "suppressed"}]
+            held_rows = [
+                {
+                    "Symbol":     r.get("ticker", "?"),
+                    "Conviction": _fmt_ratio_pct(r.get("conviction_score")),
+                    "Band":       r.get("conviction_band", "—"),
+                    "Alloc":      _fmt_pct(r.get("suggested_allocation")) if r.get("suggested_allocation") else "—",
+                    "Sector":     r.get("sector", "—"),
+                }
+                for r in sorted(portfolio_rows, key=lambda x: x.get("conviction_score", 0), reverse=True)
+            ]
+            st.dataframe(_coerce_df(held_rows), use_container_width=True, hide_index=True)
+            st.caption(f"{len(actionable)} actionable  |  {len(portfolio_rows) - len(actionable)} deferred")
+
+    with right_col:
+        st.markdown("### External Opportunities (Promoted)")
+        if not promoted:
+            st.info("No promoted opportunities. Enable market_coverage and re-run.")
+        else:
+            promo_rows = [
+                {
+                    "Symbol": p.get("symbol", "?"),
+                    "Score":  f"{p.get('score', 0):.1f}",
+                    "Rank":   f"#{p.get('rank', '?')}",
+                    "Label":  p.get("label", "—"),
+                    "Events": ", ".join(p.get("events") or [])[:40] or "—",
+                }
+                for p in sorted(promoted, key=lambda x: x.get("score", 0), reverse=True)
+            ]
+            st.dataframe(_coerce_df(promo_rows), use_container_width=True, hide_index=True)
+
+    if promoted and portfolio_rows:
+        st.subheader("Rotation Potential")
+        portfolio_symbols = {r.get("ticker", "").upper() for r in portfolio_rows}
+        rotation_candidates = [
+            p for p in promoted
+            if p.get("symbol", "").upper() not in portfolio_symbols and p.get("score", 0) >= 40
+        ]
+        if rotation_candidates:
+            rot_rows = [
+                {
+                    "Symbol": p.get("symbol", "?"),
+                    "Score":  f"{p.get('score', 0):.1f}",
+                    "Label":  p.get("label", "—"),
+                    "Events": ", ".join(p.get("events") or [])[:40] or "—",
+                    "In Portfolio": "No",
+                }
+                for p in rotation_candidates[:10]
+            ]
+            st.dataframe(_coerce_df(rot_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                f"{len(rotation_candidates)} external candidates not currently in watchlist — "
+                "review for potential rotation."
+            )
+        else:
+            st.success("No strong rotation candidates identified outside current portfolio.")
+
+        # Rotation spotlight: weakest holding vs strongest external candidate
+        not_in_portfolio = [
+            p for p in promoted
+            if p.get("symbol", "").upper() not in portfolio_symbols
+        ]
+        if portfolio_rows and not_in_portfolio:
+            weakest  = min(portfolio_rows, key=lambda x: x.get("conviction_score", 1.0))
+            strongest = max(not_in_portfolio, key=lambda x: x.get("score", 0))
+            st.subheader("Rotation Spotlight")
+            rs_c1, rs_c2 = st.columns(2)
+            with rs_c1:
+                st.markdown("**Weakest Current Holding**")
+                band = weakest.get("conviction_band", "—")
+                st.markdown(
+                    _badge(weakest.get("ticker", "?"), _conviction_band_tone(band))
+                    + f"  conviction {_fmt_ratio_pct(weakest.get('conviction_score'))}  ·  band: {band}",
+                    unsafe_allow_html=True,
+                )
+            with rs_c2:
+                st.markdown("**Strongest External Candidate**")
+                st.markdown(
+                    _badge(strongest.get("symbol", "?"), "good")
+                    + f"  score {strongest.get('score', 0):.1f}  ·  {strongest.get('label', '—')}",
+                    unsafe_allow_html=True,
+                )
+            ext_score  = strongest.get("score", 0)
+            hold_conv  = weakest.get("conviction_score", 1.0)
+            if ext_score >= 65 and hold_conv < 0.35:
+                st.warning(
+                    f"Rotation may be justified: {strongest.get('symbol','?')} (score {ext_score:.0f}) "
+                    f"vs {weakest.get('ticker','?')} (conviction {hold_conv:.2f})"
+                )
+            elif ext_score >= 55 and hold_conv < 0.50:
+                st.info(
+                    f"Worth monitoring: {strongest.get('symbol','?')} (score {ext_score:.0f}) "
+                    f"vs {weakest.get('ticker','?')} (conviction {hold_conv:.2f})"
+                )
+            else:
+                st.success("Current holdings compare favorably against available external opportunities.")
+
+    portfolio_review = mc.get("portfolio_review") or {}
+    if portfolio_review.get("available"):
+        with st.expander("Portfolio Review Summary", expanded=False):
+            st.markdown(f"- {portfolio_review.get('summary_line', 'Portfolio review available.')}")
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Confirmations", portfolio_review.get("existing_holding_confirmations", 0))
+            rc2.metric("Scanner Confirmed", portfolio_review.get("scanner_confirmation_count", 0))
+            rc3.metric("New Rotation Candidates", portfolio_review.get("new_rotation_candidates", 0))
+
+    regime_commentary = bundle.get("portfolio_view", {}).get("regime_commentary") or ""
+    if regime_commentary:
+        st.caption(f"Regime context: {regime_commentary}")
+
+
+def _render_strategy_breakdown_tab(bundle: dict, mc: dict, perf_summary: dict | None = None) -> None:
+    st.subheader("Strategy Breakdown")
+    _render_mc_freshness(mc)
+    _render_interpretation(
+        "Decisions split by strategy type. Compounders are long-term quality holds "
+        "(wider exits). Momentum trades are event-driven setups (tighter exits)."
+    )
+
+    decision_layer = mc.get("decision_layer") or {}
+    actions = decision_layer.get("actions") or []
+
+    compounders   = [a for a in actions if str(a.get("strategy_type") or "").lower() == "compounder"]
+    momentum      = [a for a in actions if str(a.get("strategy_type") or "").lower() == "momentum"]
+    unclassified  = [a for a in actions if not a.get("strategy_type")]
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Compounders", len(compounders))
+    m2.metric("Momentum", len(momentum))
+    m3.metric("Unclassified", len(unclassified))
+
+    tab_comp, tab_mom, tab_sector, tab_perf = st.tabs(
+        ["Compounders", "Momentum", "Sector View", "Strategy Performance"]
+    )
+
+    def _strategy_df(items: list) -> pd.DataFrame:
+        return _coerce_df(
+            [
+                {
+                    "Symbol":     a.get("symbol", "?"),
+                    "Action":     a.get("action", "?"),
+                    "Score":      f"{a.get('score', 0):.1f}" if a.get("score") is not None else "—",
+                    "Confidence": f"{a.get('confidence', 0) * 100:.0f}%" if a.get("confidence") is not None else "—",
+                    "Allocation": _fmt_pct(a.get("suggested_allocation_pct")) if a.get("suggested_allocation_pct") else "—",
+                    "Key Reason": (a.get("rationale") or ["—"])[0][:80],
+                }
+                for a in sorted(items, key=lambda x: x.get("score") or 0, reverse=True)
+            ]
+        )
+
+    with tab_comp:
+        if not compounders:
+            st.info(
+                "No compounder decisions in the latest run. "
+                "This populates with long-term quality candidates once market_coverage has run."
+            )
+        else:
+            st.dataframe(_strategy_df(compounders), use_container_width=True, hide_index=True)
+            st.caption(
+                "Compounders: quality businesses held long-term. "
+                "Exit triggers: −5% below 200 DMA, or 25% profit protection."
+            )
+
+    with tab_mom:
+        if not momentum:
+            st.info(
+                "No momentum decisions in the latest run. "
+                "This populates with event-driven or trend-following setups from the latest market scan."
+            )
+        else:
+            st.dataframe(_strategy_df(momentum), use_container_width=True, hide_index=True)
+            st.caption(
+                "Momentum: event-driven or trend-following. "
+                "Exit triggers: −3% below 50 DMA, or 12% profit protection."
+            )
+
+    with tab_sector:
+        groupings = bundle.get("portfolio_view", {}).get("groupings") or {}
+        by_sector = groupings.get("by_sector") or []
+        if not by_sector:
+            st.info("No sector grouping data available.")
+        else:
+            sec_rows = [
+                {
+                    "Sector":       g["name"],
+                    "Count":        g["count"],
+                    "Avg Conviction": _fmt_ratio_pct(g.get("avg_conviction_score")),
+                    "Total Alloc":  _fmt_pct(g.get("total_suggested_allocation")),
+                    "Tickers":      ", ".join(g.get("tickers") or []),
+                }
+                for g in sorted(by_sector, key=lambda x: x.get("total_suggested_allocation", 0), reverse=True)
+            ]
+            st.dataframe(_coerce_df(sec_rows), use_container_width=True, hide_index=True)
+            portfolio_view = bundle.get("portfolio_view", {})
+            if portfolio_view.get("warnings"):
+                for w in portfolio_view["warnings"]:
+                    st.warning(w)
+
+    with tab_perf:
+        perf = bundle.get("performance_view", {})
+        if perf_summary is None:
+            perf_summary = _load_performance_summary()
+
+        if not perf.get("available") and not perf_summary:
+            st.info("No resolved performance data yet. Trades need time to resolve before stats appear.")
+        else:
+            if perf.get("available"):
+                dist = perf.get("return_distribution") or {}
+                pc1, pc2, pc3, pc4 = st.columns(4)
+                pc1.metric("Avg Return 5d",    _fmt_ratio_pct(dist.get("avg_return_5d")))
+                pc2.metric("Median Return 5d", _fmt_ratio_pct(dist.get("median_return_5d")))
+                pc3.metric("Strong Win Rate",  _fmt_ratio_pct(dist.get("strong_win_rate")))
+                pc4.metric("Adverse Rate",     _fmt_ratio_pct(dist.get("adverse_rate")))
+
+                calibration = perf.get("calibration_rows") or []
+                if calibration:
+                    cal_rows = [
+                        {
+                            "Confidence Bucket": r["bucket"],
+                            "Hit Rate":          _fmt_ratio_pct(r["hit_rate"]),
+                            "Avg Return 5d":     _fmt_ratio_pct(r["avg_return_5d"]),
+                            "Sample":            r["attributable_count"],
+                        }
+                        for r in calibration
+                    ]
+                    st.dataframe(_coerce_df(cal_rows), use_container_width=True, hide_index=True)
+
+            tracked = perf_summary.get("tracked_signals", 0)
+            resolved = perf_summary.get("resolved_signals", 0)
+            if tracked:
+                st.caption(f"Signal tracking: {tracked} tracked, {resolved} resolved.")
+
+            historically_strong = perf_summary.get("historically_strong_tickers") or []
+            low_reliability = perf_summary.get("low_reliability_tickers") or []
+            if historically_strong or low_reliability:
+                sr_c1, sr_c2 = st.columns(2)
+                with sr_c1:
+                    if historically_strong:
+                        st.markdown("**Historically strong:**")
+                        for t in historically_strong[:5]:
+                            st.markdown(f"- {_badge(t, 'good')}", unsafe_allow_html=True)
+                with sr_c2:
+                    if low_reliability:
+                        st.markdown("**Low reliability:**")
+                        for t in low_reliability[:5]:
+                            st.markdown(f"- {_badge(t, 'bad')}", unsafe_allow_html=True)
+
+        # Strategy recommendation — regime-based when no resolved data
+        st.subheader("Strategy Recommendation")
+        regime_label = bundle.get("overview", {}).get("market_regime") or ""
+        regime_lower = regime_label.lower()
+        resolved_count = int(_coerce_num((perf_summary or {}).get("resolved_signals"), 0))
+
+        if resolved_count >= 5 and perf.get("available"):
+            st.caption("Recommendation is performance-based (sufficient resolved data).")
+        else:
+            if "risk_on" in regime_lower:
+                rec, rec_tone = "Favor Momentum", "good"
+                rec_reason = "risk-on regime historically favors trend-following and event-driven setups"
+            elif "risk_off" in regime_lower or "bear" in regime_lower:
+                rec, rec_tone = "Favor Compounders", "warn"
+                rec_reason = "defensive regime favors quality compounders with wider exit tolerance"
+            elif "high_vol" in regime_lower or "volatile" in regime_lower:
+                rec, rec_tone = "Reduce Exposure", "bad"
+                rec_reason = "high volatility regime — reduce position sizes across both strategies"
+            else:
+                rec, rec_tone = "Balanced", "neutral"
+                rec_reason = "neutral regime — balanced allocation between strategies is appropriate"
+            st.markdown(_badge(rec, rec_tone), unsafe_allow_html=True)
+            st.caption(rec_reason)
+            if not resolved_count:
+                st.caption(
+                    f"Regime: {regime_label or 'unknown'} · Recommendation is regime-based only — "
+                    "no resolved performance data available yet."
+                )
+
+
+def _render_exit_signals_tab(bundle: dict, mc: dict) -> None:
+    st.subheader("Exit Signals")
+    _render_mc_freshness(mc)
+    _render_interpretation(
+        "Signals to exit or reduce positions. Includes active SELL/TRIM decisions "
+        "and low-conviction holdings that may warrant review."
+    )
+
+    decision_layer = mc.get("decision_layer") or {}
+    actions = decision_layer.get("actions") or []
+    exit_actions = [a for a in actions if a.get("action", "").upper() in {"SELL", "TRIM"}]
+
+    snapshot_rows = bundle.get("portfolio_view", {}).get("rows") or []
+    low_conviction = [
+        r for r in snapshot_rows
+        if str(r.get("conviction_band", "")).lower() in {"defer", "suppressed"}
+    ]
+
+    ec1, ec2 = st.columns(2)
+    ec1.metric("Active Exit Decisions", len(exit_actions))
+    ec2.metric("Low Conviction Holdings", len(low_conviction))
+
+    if not exit_actions and not low_conviction:
+        st.success("No active exit signals. All tracked positions are within acceptable conviction range.")
+        return
+
+    if exit_actions:
+        st.subheader("Active Exit Decisions")
+        for a in exit_actions:
+            action_type = a.get("action", "SELL")
+            tone = _action_tone(action_type)
+            sym  = a.get("symbol", "?")
+            strat = a.get("strategy_type") or "unknown"
+
+            with st.expander(f"{action_type} — {sym}  [{strat}]", expanded=False):
+                ea_c1, ea_c2 = st.columns(2)
+                ea_c1.markdown(_badge(action_type, tone), unsafe_allow_html=True)
+                score = a.get("score")
+                if score is not None:
+                    ea_c2.metric("Score", f"{score:.1f}")
+
+                rationale = a.get("rationale") or []
+                if rationale:
+                    st.markdown("**Exit rationale:**")
+                    for r in rationale:
+                        is_trend = any(kw in r.lower() for kw in ["trend", "break", "weak", "below"])
+                        t = "bad" if is_trend else "warn"
+                        st.markdown(_badge("trigger", t) + f"  {r}", unsafe_allow_html=True)
+
+                exit_plan = a.get("exit_plan") or {}
+                triggers = exit_plan.get("triggers") or []
+                if triggers:
+                    st.caption("Trigger types: " + ", ".join(triggers))
+
+                related = a.get("related_symbol")
+                if related:
+                    st.caption(f"Consider rotating into: {related}")
+
+                alloc_pct = a.get("suggested_allocation_pct")
+                alloc_amt = a.get("suggested_allocation_amount")
+                if alloc_pct is not None or alloc_amt:
+                    parts = []
+                    if alloc_pct is not None:
+                        parts.append(f"{alloc_pct * 100:.1f}%")
+                    if alloc_amt:
+                        parts.append(f"~${alloc_amt:,.0f}")
+                    st.caption("Reduce to: " + " / ".join(parts))
+
+    if low_conviction:
+        st.subheader("Low Conviction Holdings (Watchlist)")
+        st.caption(
+            "These symbols scored below the actionable conviction threshold. "
+            "Consider reviewing for removal or reduced weight."
+        )
+        lc_rows = [
+            {
+                "Symbol":     r.get("ticker", "?"),
+                "Band":       r.get("conviction_band", "—"),
+                "Conviction": _fmt_ratio_pct(r.get("conviction_score")),
+                "Sector":     r.get("sector", "—"),
+                "Alloc":      _fmt_pct(r.get("suggested_allocation")) if r.get("suggested_allocation") else "$0",
+            }
+            for r in sorted(low_conviction, key=lambda x: x.get("conviction_score", 0))
+        ]
+        st.dataframe(_coerce_df(lc_rows), use_container_width=True, hide_index=True)
+
+    regime_commentary = bundle.get("portfolio_view", {}).get("regime_commentary") or ""
+    if regime_commentary:
+        st.caption(f"Regime context: {regime_commentary}")
+
+    regime_label = bundle.get("overview", {}).get("market_regime") or ""
+    if regime_label:
+        regime_tone = "bad" if "risk_off" in regime_label.lower() else (
+            "warn" if "high_vol" in regime_label.lower() else "good"
+        )
+        st.markdown(_badge(f"Regime: {regime_label}", regime_tone), unsafe_allow_html=True)
+
+
+def _render_outcomes_tab(mc: dict, perf_summary: dict, outcomes_df: pd.DataFrame) -> None:
+    st.subheader("Decision → Outcome")
+    _render_interpretation(
+        "Tracks every emitted signal from emission to resolution. "
+        "Returns populate automatically once the evaluation window closes (1d / 3d / 7d)."
+    )
+
+    tracked  = int(_coerce_num(perf_summary.get("tracked_signals"), 0))
+    resolved = int(_coerce_num(perf_summary.get("resolved_signals"), 0))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Signals Tracked", tracked)
+    m2.metric("Resolved", resolved)
+    m3.metric("Pending", max(0, tracked - resolved))
+
+    if tracked == 0:
+        st.info(
+            "No signals tracked yet. Run the system to start populating the outcome log. "
+            "Once signals are emitted they appear here and resolve after 1d / 3d / 7d."
+        )
+        return
+
+    if outcomes_df.empty:
+        st.info("Signal outcomes file not found or empty — check `outputs/performance/signal_outcomes.csv`.")
+        return
+
+    has_outcome = "outcome_return_3d" in outcomes_df.columns
+    display_rows = []
+    for _, row in outcomes_df.iterrows():
+        ret_3d  = None
+        status  = "Pending"
+        if has_outcome:
+            raw_ret = row.get("outcome_return_3d")
+            if raw_ret is not None and str(raw_ret).strip() not in ("", "nan"):
+                try:
+                    ret_3d = float(raw_ret)
+                    status = "Win" if row.get("outcome_success_3d") else "Loss"
+                except (TypeError, ValueError):
+                    pass
+
+        signal_date = str(row.get("signal_time", "?"))[:10]
+        ret_str = f"{ret_3d * 100:+.1f}%" if ret_3d is not None else "Pending"
+
+        display_rows.append({
+            "Ticker":       row.get("ticker", "?"),
+            "Signal Date":  signal_date,
+            "Intent":       str(row.get("prediction_intent", "?")).upper(),
+            "Score":        _fmt_ratio_pct(row.get("signal_score")),
+            "Confidence":   _fmt_ratio_pct(row.get("confidence_score")),
+            "Band":         row.get("conviction_band") or "—",
+            "3d Return":    ret_str,
+            "Status":       status,
+        })
+
+    if display_rows:
+        view_filter = st.radio(
+            "Show",
+            ["All signals", "Resolved only", "Pending only"],
+            horizontal=True,
+            key="outcomes_filter",
+        )
+        filtered_rows = display_rows
+        if view_filter == "Resolved only":
+            filtered_rows = [r for r in display_rows if r["Status"] != "Pending"]
+        elif view_filter == "Pending only":
+            filtered_rows = [r for r in display_rows if r["Status"] == "Pending"]
+
+        if not filtered_rows:
+            st.info("No records match the current filter.")
+        else:
+            st.dataframe(_coerce_df(filtered_rows), use_container_width=True, hide_index=True)
+
+    if resolved == 0 and tracked > 0:
+        st.info(
+            f"{tracked} signals are being tracked — outcomes appear automatically once evaluation windows close. "
+            "No manual action required."
+        )
+
+    strong = perf_summary.get("historically_strong_tickers") or []
+    weak   = perf_summary.get("low_reliability_tickers") or []
+    if strong or weak:
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            st.markdown("**Historically strong signals:**")
+            for t in strong[:8]:
+                st.markdown(f"- {_badge(t, 'good')}", unsafe_allow_html=True)
+        with sc2:
+            st.markdown("**Low reliability:**")
+            for t in weak[:8]:
+                st.markdown(f"- {_badge(t, 'bad')}", unsafe_allow_html=True)
+
+
+def _render_execution_tab(mc: dict) -> None:
+    st.subheader("Execution vs Recommendation")
+    _render_interpretation(
+        "Compares what the system recommended to what was actually executed. "
+        "Requires trade event logging to be active."
+    )
+
+    trade_events_path = OUTPUTS_LATEST / "trade_events.json"
+    trade_events = _load_json(trade_events_path)
+
+    if not trade_events:
+        st.info(
+            "No execution log found. "
+            "Trade events are logged automatically when the system executes recommendations. "
+            "Expected at: `outputs/latest/trade_events.json`"
+        )
+        decision_layer = mc.get("decision_layer") or {}
+        actions = decision_layer.get("actions") or []
+        actionable = [
+            a for a in actions
+            if a.get("action", "").upper() in {"BUY", "SELL", "TRIM", "PROMOTE_TO_PORTFOLIO"}
+        ]
+        if actionable:
+            st.subheader("Current Pending Recommendations")
+            st.caption("Mark these as executed manually once confirmed.")
+            rec_rows = [
+                {
+                    "Symbol":    a.get("symbol", "?"),
+                    "Action":    a.get("action", "?"),
+                    "Score":     f"{a.get('score', 0):.1f}" if a.get("score") is not None else "—",
+                    "Confidence": f"{a.get('confidence', 0) * 100:.0f}%" if a.get("confidence") is not None else "—",
+                    "Executed?": "—",
+                }
+                for a in actionable
+            ]
+            st.dataframe(_coerce_df(rec_rows), use_container_width=True, hide_index=True)
+        return
+
+    events = trade_events if isinstance(trade_events, list) else (trade_events.get("events") or [])
+    if not events:
+        st.info("Trade events file exists but contains no records.")
+        return
+
+    event_rows = [
+        {
+            "Symbol":    ev.get("symbol", "?"),
+            "Action":    ev.get("action", "?"),
+            "Executed":  "Yes" if ev.get("executed") else "No",
+            "Timestamp": str(ev.get("timestamp", "?"))[:16],
+            "Notes":     ev.get("notes") or "—",
+        }
+        for ev in events
+    ]
+    st.dataframe(_coerce_df(event_rows), use_container_width=True, hide_index=True)
+
+
+# -- Attribution / Rotation panels -------------------------------------------
+
+def _render_insights_tab(pa: dict, rot_events: list) -> None:
+    """System Insights — read-only operator guidance synthesised from existing analytics."""
+    st.subheader("System Insights")
+    _render_interpretation(
+        "Observe-only. Synthesises existing analytics artifacts into concise operator guidance. "
+        "Does not modify any live decision behavior or backend analytics."
+    )
+
+    _STATUS_TONE: dict[str, str] = {
+        "Healthy": "good",
+        "Watch": "warn",
+        "Investigate": "bad",
+        "Insufficient Data": "neutral",
+    }
+    _TRUST_LABEL: dict[str, str] = {
+        "high": "high confidence",
+        "medium": "medium confidence",
+        "low": "low confidence",
+    }
+
+    cards = _generate_insights(pa, rot_events)
+
+    st.markdown("**At a Glance**")
+    glance_cols = st.columns(len(cards))
+    for col, card in zip(glance_cols, cards):
+        tone = _STATUS_TONE.get(card.status, "neutral")
+        with col:
+            _render_operator_card(
+                card.category,
+                card.status,
+                _TRUST_LABEL.get(card.trust, card.trust),
+                badges=[_badge(card.status, tone)],
+            )
+
+    st.divider()
+    st.markdown("**Guidance**")
+    for card in cards:
+        tone = _STATUS_TONE.get(card.status, "neutral")
+        auto_expand = card.status in ("Watch", "Investigate")
+        with st.expander(
+            f"{card.category} — {card.title}",
+            expanded=auto_expand,
+        ):
+            badge_row = (
+                _badge(card.status, tone)
+                + " "
+                + _badge(_TRUST_LABEL.get(card.trust, card.trust), "neutral")
+            )
+            st.markdown(badge_row, unsafe_allow_html=True)
+            st.markdown(card.guidance)
+            if card.detail and card.detail != "—":
+                st.caption(f"Supporting: {card.detail}")
+
+    st.caption(
+        "Observe-only — these interpretations do not change live behavior, "
+        "thresholds, or analytics computations."
+    )
+
+
+def _render_attribution_tab(pa: dict) -> None:
+    """Profit attribution overview split into three sub-tabs."""
+    st.subheader("Profit Attribution")
+    _render_interpretation(
+        "Read-only. Shows what actually made money — "
+        "Opportunity Attribution (scanner-level promotions) and "
+        "Execution Attribution (system-recommended actions). "
+        "Does not modify any live decision logic."
+    )
+
+    if not pa:
+        st.info(
+            "No attribution data yet. "
+            "Expected at: `outputs/policy/profit_attribution.json` — "
+            "this file is generated after coverage outcomes resolve."
+        )
+        return
+
+    tab_ov, tab_ex, tab_bands = st.tabs(
+        ["Opportunity Overview", "Execution", "Conf. Bands"]
+    )
+
+    # ------------------------------------------------------------------ #
+    # Sub-tab 1: Opportunity overview
+    # ------------------------------------------------------------------ #
+    with tab_ov:
+        st.markdown("**Opportunity Attribution** — scanner-promoted candidates")
+        _render_interpretation(
+            "Coverage attribution tracks every scanner promotion event "
+            "through to its forward-return outcome."
+        )
+        m = pa.get("metrics") or {}
+        total       = _coerce_num(m.get("total_entries"), 0)
+        attributable = _coerce_num(m.get("attributable_entries"), 0)
+        coverage     = _coerce_num(m.get("coverage_rate"), 0)
+        win_rate     = m.get("win_rate")
+        avg_gain     = m.get("avg_gain")
+        avg_loss     = m.get("avg_loss")
+        risk_reward  = m.get("risk_reward")
+        expectancy   = m.get("expectancy")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Entries", int(total))
+        c2.metric("Attributed", int(attributable))
+        c3.metric("Coverage", _fmt_ratio_pct(coverage))
+        c4.metric("Win Rate", _fmt_ratio_pct(win_rate) if win_rate is not None else "—")
+
+        if win_rate is not None:
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Avg Gain", _fmt_ratio_pct(avg_gain) if avg_gain is not None else "—")
+            e2.metric("Avg Loss", _fmt_ratio_pct(avg_loss) if avg_loss is not None else "—")
+            e3.metric("Risk/Reward", f"{float(risk_reward):.2f}x" if risk_reward is not None else "—")
+            e4.metric("Expectancy", _fmt_ratio_pct(expectancy) if expectancy is not None else "—")
+
+        # Exit quality summary
+        exit_summary = pa.get("exit_summary") or {}
+        if any(v > 0 for v in exit_summary.values()):
+            st.markdown("**Exit Quality Distribution**")
+            exit_order = ["protected", "partial", "gave_back", "reversed", "no_gain", "unresolved"]
+            exit_tone  = {"protected": "good", "partial": "warn", "gave_back": "warn",
+                          "reversed": "bad", "no_gain": "bad", "unresolved": "neutral"}
+            exit_html  = " ".join(
+                _badge(f"{lbl}: {exit_summary[lbl]}", exit_tone.get(lbl, "neutral"))
+                for lbl in exit_order if exit_summary.get(lbl, 0) > 0
+            )
+            st.markdown(exit_html, unsafe_allow_html=True)
+            st.caption(
+                "protected ≥70% of peak retained · partial 30–70% · "
+                "gave_back <30% · reversed = gain turned to loss · no_gain = never rose"
+            )
+
+        # Best / worst trades
+        best_trades  = pa.get("best_trades") or []
+        worst_trades = pa.get("worst_trades") or []
+        if best_trades or worst_trades:
+            bw1, bw2 = st.columns(2)
+            with bw1:
+                if best_trades:
+                    st.markdown("**Top Trades (T+5d)**")
+                    st.dataframe(
+                        _coerce_df([
+                            {
+                                "Symbol":   t.get("symbol", "?"),
+                                "Strategy": t.get("strategy_type", "?"),
+                                "Return 5d": _fmt_ratio_pct(t.get("return_5d")),
+                                "Score":    f"{t.get('entry_score', 0):.0f}",
+                                "Regime":   t.get("entry_regime", "?"),
+                            }
+                            for t in best_trades
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
+            with bw2:
+                if worst_trades:
+                    st.markdown("**Worst Trades (T+5d)**")
+                    st.dataframe(
+                        _coerce_df([
+                            {
+                                "Symbol":   t.get("symbol", "?"),
+                                "Strategy": t.get("strategy_type", "?"),
+                                "Return 5d": _fmt_ratio_pct(t.get("return_5d")),
+                                "Score":    f"{t.get('entry_score', 0):.0f}",
+                            }
+                            for t in worst_trades
+                        ]),
+                        use_container_width=True, hide_index=True,
+                    )
+
+        # Data quality notes
+        dq_notes = pa.get("data_quality_notes") or []
+        for note in dq_notes:
+            st.caption(f"Data note: {note}")
+
+        if int(total) == 0:
+            st.info(
+                "Attribution file exists but contains no entries yet — "
+                "run the system after signals have resolved."
+            )
+
+    # ------------------------------------------------------------------ #
+    # Sub-tab 2: Execution attribution
+    # ------------------------------------------------------------------ #
+    with tab_ex:
+        st.markdown("**Execution Attribution** — system-recommended actions")
+        _render_interpretation(
+            "Advisory execution events from trade_events.jsonl. "
+            "Answers: 'What actions the system recommended actually made money?' "
+            "These are not broker fills — they are system-issued advisory signals."
+        )
+        ex = pa.get("execution")
+        if not ex:
+            st.info(
+                "No execution attribution data. "
+                "Execution tracking requires `trade_events.jsonl` to be present and "
+                "coverage outcomes to have resolved."
+            )
+            return
+
+        total_ev    = _coerce_num(ex.get("total_events"), 0)
+        matched_ev  = _coerce_num(ex.get("matched_events"), 0)
+        match_rate  = _coerce_num(ex.get("match_rate"), 0)
+
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Events Logged",     int(total_ev))
+        f2.metric("Matched to Outcome", int(matched_ev))
+        f3.metric("Match Rate",         _fmt_ratio_pct(match_rate))
+
+        by_action = ex.get("by_action") or []
+        if by_action:
+            action_rows = [
+                {
+                    "Action":           a.get("action", "?"),
+                    "Events":           _coerce_num(a.get("total_events"), 0),
+                    "Matched":          _coerce_num(a.get("matched_events"), 0),
+                    "Win Rate":         _fmt_ratio_pct(a.get("win_rate")) if a.get("win_rate") is not None else "—",
+                    "Avg Gain":         _fmt_ratio_pct(a.get("avg_gain")) if a.get("avg_gain") is not None else "—",
+                    "Avg Loss":         _fmt_ratio_pct(a.get("avg_loss")) if a.get("avg_loss") is not None else "—",
+                    "R/R":              f"{float(a['risk_reward']):.2f}x" if a.get("risk_reward") is not None else "—",
+                    "Expectancy":       _fmt_ratio_pct(a.get("expectancy")) if a.get("expectancy") is not None else "—",
+                    "Avg Exit Quality": _fmt_ratio_pct(a.get("avg_exit_quality")) if a.get("avg_exit_quality") is not None else "—",
+                }
+                for a in by_action
+            ]
+            st.markdown("**Performance by Action Type**")
+            st.dataframe(_coerce_df(action_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                "Win rate / gain / loss / R/R apply to BUY and PROMOTE events. "
+                "Avg exit quality (latest return ÷ peak gain) is most meaningful for SELL and TRIM."
+            )
+
+        ex_dq = ex.get("data_quality_notes") or []
+        for note in ex_dq:
+            st.caption(f"Data note: {note}")
+
+    # ------------------------------------------------------------------ #
+    # Sub-tab 3: Confidence bands
+    # ------------------------------------------------------------------ #
+    with tab_bands:
+        st.markdown("**Confidence Band Analysis**")
+        _render_interpretation(
+            "Observe-only. Does not change any thresholds or decision behavior. "
+            "Tiers: low < 0.65 · medium 0.65–0.80 · high > 0.80. "
+            "Events with no confidence value fall into low."
+        )
+        ex = pa.get("execution")
+        if not ex:
+            st.info(
+                "No confidence band data. "
+                "Requires execution attribution to be present with resolved outcomes."
+            )
+            return
+
+        cal = ex.get("confidence_calibration") or {}
+        cal_status = cal.get("status", "no_data")
+        cal_tone = {
+            "healthy": "good",
+            "weak_separation": "warn",
+            "insufficient_data": "neutral",
+            "no_data": "neutral",
+        }.get(cal_status, "neutral")
+        st.markdown(
+            _badge(f"Calibration: {cal_status}", cal_tone),
+            unsafe_allow_html=True,
+        )
+        st.caption("observe_only — this analysis never modifies live confidence thresholds")
+
+        band_order = ("low", "medium", "high")
+        by_conf = {b.get("name", ""): b for b in (ex.get("by_confidence_band") or [])}
+
+        band_rows = []
+        for band in band_order:
+            b = by_conf.get(band, {})
+            total_b      = _coerce_num(b.get("total_entries"), 0)
+            attributable = _coerce_num(b.get("attributable"), 0)
+            small        = b.get("small_sample", False)
+            win_rate_b   = b.get("win_rate")
+            avg_gain_b   = b.get("avg_gain")
+            avg_loss_b   = b.get("avg_loss")
+            rr_b         = b.get("risk_reward")
+            band_rows.append({
+                "Band":      band,
+                "Events":    int(total_b),
+                "Matched":   int(attributable),
+                "Win Rate":  _fmt_ratio_pct(win_rate_b) if win_rate_b is not None else "—",
+                "Avg Gain":  _fmt_ratio_pct(avg_gain_b) if avg_gain_b is not None else "—",
+                "Avg Loss":  _fmt_ratio_pct(avg_loss_b) if avg_loss_b is not None else "—",
+                "R/R":       f"{float(rr_b):.2f}x" if rr_b is not None else "—",
+                "Small?":    "⚠" if small else "",
+            })
+        if any(r["Events"] > 0 for r in band_rows):
+            st.dataframe(_coerce_df(band_rows), use_container_width=True, hide_index=True)
+
+        ss = cal.get("sample_summary") or {}
+        low_m   = _coerce_num(ss.get("low_matched"), 0)
+        med_m   = _coerce_num(ss.get("medium_matched"), 0)
+        high_m  = _coerce_num(ss.get("high_matched"), 0)
+        total_m = int(low_m + med_m + high_m)
+        if total_m < 5:
+            st.warning(
+                f"Small-sample caution: only {total_m} matched execution events — "
+                "calibration conclusions are not yet reliable."
+            )
+        elif total_m > 0:
+            band_order_valid = cal.get("band_order_valid")
+            if band_order_valid is True:
+                st.markdown(
+                    _badge("Band order valid: high ≥ medium ≥ low on win rate", "good"),
+                    unsafe_allow_html=True,
+                )
+            elif band_order_valid is False:
+                st.markdown(
+                    _badge("Band order inverted — high confidence not outperforming low", "bad"),
+                    unsafe_allow_html=True,
+                )
+
+            strongest = cal.get("strongest_band")
+            weakest   = cal.get("weakest_band")
+            if strongest:
+                st.caption(f"Strongest band: {strongest}  |  Weakest: {weakest or '—'}")
+
+        recommendation = cal.get("recommendation", "")
+        rec_reason     = cal.get("recommendation_reason", "")
+        if recommendation:
+            st.markdown(f"**Recommendation (observe-only):** {recommendation}")
+            if rec_reason:
+                st.caption(f"Reason: {rec_reason}")
+
+
+def _render_rotation_tab(rot_events: list) -> None:
+    """Rotation quality panel — observe-only advisory."""
+    st.subheader("Rotation Quality")
+    _render_interpretation(
+        "Observe-only. Tracks every rotation evaluation: when a challenger score was compared "
+        "to an incumbent's. Helps identify whether small-margin rotations are noisy or whether "
+        "momentum rotations add value. Does not modify rotation thresholds or exit behavior."
+    )
+
+    if not rot_events:
+        st.info(
+            "No rotation events yet. "
+            "Expected at: `outputs/policy/rotation_events.jsonl` — "
+            "populated automatically when exit evaluation runs with a challenger opportunity."
+        )
+        return
+
+    total     = len(rot_events)
+    triggered = sum(1 for e in rot_events if e.get("rotation_triggered"))
+    not_trig  = total - triggered
+    resolved  = sum(1 for e in rot_events if e.get("outcome_resolved"))
+    degraded  = sum(1 for e in rot_events if e.get("degraded_mode"))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Evaluations",  total)
+    m2.metric("Triggered",          triggered)
+    m3.metric("Not Triggered",      not_trig)
+    m4.metric("Outcomes Resolved",  resolved)
+
+    if degraded > 0:
+        st.warning(f"{degraded} of {total} rotation evaluations occurred during degraded-data mode — treat those outcomes with caution.")
+
+    # ----- By strategy -----
+    strat_counts: dict = {}
+    strat_triggered: dict = {}
+    for e in rot_events:
+        s = str(e.get("strategy_type") or "unknown")
+        strat_counts[s]   = strat_counts.get(s, 0) + 1
+        if e.get("rotation_triggered"):
+            strat_triggered[s] = strat_triggered.get(s, 0) + 1
+
+    if strat_counts:
+        st.markdown("**By Strategy Type**")
+        strat_rows = [
+            {
+                "Strategy":     s,
+                "Evaluations":  strat_counts[s],
+                "Triggered":    strat_triggered.get(s, 0),
+                "Trigger Rate": _fmt_ratio_pct(strat_triggered.get(s, 0) / strat_counts[s]) if strat_counts[s] > 0 else "—",
+            }
+            for s in sorted(strat_counts)
+        ]
+        st.dataframe(_coerce_df(strat_rows), use_container_width=True, hide_index=True)
+
+    # ----- Margin analysis -----
+    margins = [e.get("actual_margin") for e in rot_events if e.get("actual_margin") is not None]
+    req_margins = [e.get("required_margin") for e in rot_events if e.get("required_margin") is not None]
+    if margins:
+        avg_margin  = sum(margins) / len(margins)
+        avg_req     = sum(req_margins) / len(req_margins) if req_margins else None
+
+        small_margin_triggered = [
+            e for e in rot_events
+            if e.get("rotation_triggered") and e.get("actual_margin") is not None
+            and e.get("required_margin") is not None
+            and e["actual_margin"] < (e["required_margin"] * 1.25)
+        ]
+
+        ma1, ma2, ma3 = st.columns(3)
+        ma1.metric("Avg Score Margin",    f"{avg_margin:+.1f}")
+        ma2.metric("Avg Required Margin", f"{avg_req:+.1f}" if avg_req is not None else "—")
+        ma3.metric("Small-Margin Triggers", len(small_margin_triggered),
+                   help="Rotations triggered within 25% above the required margin — potentially noisy.")
+
+        if len(small_margin_triggered) >= 3:
+            st.warning(
+                f"{len(small_margin_triggered)} small-margin rotation(s) were triggered. "
+                "Consider reviewing the required_margin threshold once more outcomes resolve."
+            )
+
+    # ----- Breakout challenger analysis -----
+    breakout_triggers = sum(
+        1 for e in rot_events if e.get("rotation_triggered") and e.get("challenger_is_breakout")
+    )
+    if triggered > 0:
+        st.markdown("**Challenger Type at Trigger**")
+        bt1, bt2 = st.columns(2)
+        bt1.metric("Breakout Challenger", breakout_triggers)
+        bt2.metric("Non-Breakout",        triggered - breakout_triggers)
+
+    # ----- Forward return summary (only when data is available) -----
+    resolved_events = [
+        e for e in rot_events
+        if e.get("outcome_resolved") and e.get("forward_return_5d") is not None
+    ]
+    if resolved_events:
+        trig_returns  = [e["forward_return_5d"] for e in resolved_events if e.get("rotation_triggered")]
+        ntrig_returns = [e["forward_return_5d"] for e in resolved_events if not e.get("rotation_triggered")]
+
+        st.markdown("**Forward Return (T+5d) — Observe-Only**")
+        r1, r2 = st.columns(2)
+        if trig_returns:
+            avg_tr = sum(trig_returns) / len(trig_returns)
+            wins   = sum(1 for r in trig_returns if r > 0)
+            r1.metric(
+                "Triggered — Avg Return",
+                _fmt_ratio_pct(avg_tr),
+                help=f"n={len(trig_returns)}, win rate {wins}/{len(trig_returns)}",
+            )
+        if ntrig_returns:
+            avg_nt = sum(ntrig_returns) / len(ntrig_returns)
+            wins_n = sum(1 for r in ntrig_returns if r > 0)
+            r2.metric(
+                "Not Triggered — Avg Return",
+                _fmt_ratio_pct(avg_nt),
+                help=f"n={len(ntrig_returns)}, win rate {wins_n}/{len(ntrig_returns)}",
+            )
+
+        if len(resolved_events) < 5:
+            st.warning(
+                f"Small-sample caution: only {len(resolved_events)} rotation events have resolved outcomes. "
+                "These figures are observational only and should not drive threshold changes."
+            )
+    elif total > 0:
+        st.caption(
+            f"{total} rotation event(s) logged — forward outcomes not yet resolved. "
+            "Check back after T+5d."
+        )
+
+    st.caption("Observe-only — no rotation thresholds or exit logic is modified by this panel.")
 
 
 # -- v2 helpers --------------------------------------------------------------
@@ -1513,7 +3080,12 @@ st.sidebar.caption(f"`{ROOT}`")
 
 def page_dashboard() -> None:
     _operator_dashboard_css()
-    bundle = load_operator_dashboard_data(ROOT)
+    bundle       = load_operator_dashboard_data(ROOT)
+    mc           = _load_market_opportunities()
+    perf_summary = _load_performance_summary()
+    outcomes_df  = _load_signal_outcomes_df()
+    pa           = _load_profit_attribution()
+    rot_events   = _load_rotation_events()
 
     title_col, action_col = st.columns([5, 1])
     with title_col:
@@ -1526,6 +3098,11 @@ def page_dashboard() -> None:
         if st.button("Refresh", use_container_width=True):
             st.rerun()
 
+    _render_system_confidence_indicator(perf_summary)
+    _render_action_strip(mc, bundle)
+    _render_portfolio_health_row(bundle, mc)
+    st.divider()
+
     mode = st.radio(
         "Dashboard mode",
         ["Overview", "Advanced"],
@@ -1534,24 +3111,58 @@ def page_dashboard() -> None:
     )
 
     if mode == "Overview":
-        _render_overview_mode(bundle)
+        _render_overview_mode(bundle, mc)
         return
 
-    tab_status, tab_memo, tab_triage, tab_portfolio, tab_strategy, tab_health, tab_performance, tab_regime, tab_quality, tab_weekly = st.tabs(
+    (
+        tab_insights,
+        tab_decisions, tab_opps, tab_pvm, tab_strat_break, tab_exits,
+        tab_outcomes, tab_execution,
+        tab_status, tab_memo, tab_triage, tab_portfolio, tab_strategy,
+        tab_health, tab_performance, tab_regime, tab_quality,
+        tab_attribution, tab_rotation,
+        tab_weekly,
+    ) = st.tabs(
         [
+            "Insights",
+            "Decision Center",
+            "Opportunities",
+            "Portfolio vs Market",
+            "Strategy Breakdown",
+            "Exit Signals",
+            "Outcomes",
+            "Execution",
             "Run Status",
             "Memo Review",
             "Signal Triage",
-            "Portfolio Construction",
-            "Strategy Recommendation",
-            "Health / Reliability",
+            "Portfolio",
+            "Strategy",
+            "Health",
             "Performance",
             "Regime",
-            "Recommendation Quality",
+            "Rec. Quality",
+            "Attribution",
+            "Rotation",
             "Weekly Review",
         ]
     )
 
+    with tab_insights:
+        _render_insights_tab(pa, rot_events)
+    with tab_decisions:
+        _render_decision_center_tab(bundle, mc)
+    with tab_opps:
+        _render_opportunities_tab(bundle, mc)
+    with tab_pvm:
+        _render_portfolio_vs_market_tab(bundle, mc)
+    with tab_strat_break:
+        _render_strategy_breakdown_tab(bundle, mc, perf_summary)
+    with tab_exits:
+        _render_exit_signals_tab(bundle, mc)
+    with tab_outcomes:
+        _render_outcomes_tab(mc, perf_summary, outcomes_df)
+    with tab_execution:
+        _render_execution_tab(mc)
     with tab_status:
         _render_run_status_tab(bundle)
     with tab_memo:
@@ -1570,6 +3181,10 @@ def page_dashboard() -> None:
         _render_regime_analytics_tab(bundle)
     with tab_quality:
         _render_recommendation_quality_tab(bundle)
+    with tab_attribution:
+        _render_attribution_tab(pa)
+    with tab_rotation:
+        _render_rotation_tab(rot_events)
     with tab_weekly:
         _render_weekly_review_tab(bundle)
 

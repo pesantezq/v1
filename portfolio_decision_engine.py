@@ -66,6 +66,7 @@ def generate_portfolio_actions(
         "min_degraded_buy_confidence": 0.75,
         "promote_score_threshold": 72.0,
         "watchlist_score_threshold": 55.0,
+        "buy_starter_multiplier": 0.70,
     }
     cfg.update(config or {})
     allocation_cfg = cfg.get("allocation_engine", {}) if isinstance(cfg.get("allocation_engine", {}), dict) else {}
@@ -188,18 +189,31 @@ def generate_portfolio_actions(
         if allocation.deployable_cash <= 0:
             action = "ADD_TO_WATCHLIST"
             rationale.append("no capital is available after keeping the cash reserve intact")
+            final_alloc_pct = None
+            final_alloc_amt = None
         elif allocation.suggested_amount <= 0:
             action = "ADD_TO_WATCHLIST"
             rationale.append("sizing constraints left no practical allocation to deploy")
+            final_alloc_pct = None
+            final_alloc_amt = None
         elif score >= _config_float(cfg, "promote_score_threshold", 72.0) and confidence >= min_buy_confidence:
             action = "PROMOTE_TO_PORTFOLIO"
             rationale.append("setup clears the score and confidence bar for a portfolio slot")
+            final_alloc_pct = allocation.suggested_pct
+            final_alloc_amt = allocation.suggested_amount
         elif score >= _config_float(cfg, "watchlist_score_threshold", 55.0) and confidence >= max(0.0, min_buy_confidence - 0.05):
             action = "BUY"
             rationale.append("setup is good enough for a starter position but not a full portfolio promotion")
+            # BUY is a starter position — apply the multiplier so it is always
+            # smaller than a full PROMOTE_TO_PORTFOLIO allocation.
+            buy_mul = max(0.0, min(1.0, _config_float(cfg, "buy_starter_multiplier", 0.70)))
+            final_alloc_pct = round(allocation.suggested_pct * buy_mul, 4)
+            final_alloc_amt = round(allocation.suggested_amount * buy_mul, 2)
         else:
             action = "ADD_TO_WATCHLIST"
             rationale.append("setup is interesting, but not strong enough yet to improve portfolio profit potential")
+            final_alloc_pct = None
+            final_alloc_amt = None
 
         actions.append(
             PortfolioAction(
@@ -209,8 +223,8 @@ def generate_portfolio_actions(
                 score=round(score, 1),
                 confidence=round(confidence, 3),
                 rationale=rationale,
-                suggested_allocation_pct=allocation.suggested_pct if action in {"BUY", "PROMOTE_TO_PORTFOLIO"} else None,
-                suggested_allocation_amount=allocation.suggested_amount if action in {"BUY", "PROMOTE_TO_PORTFOLIO"} else None,
+                suggested_allocation_pct=final_alloc_pct,
+                suggested_allocation_amount=final_alloc_amt,
             )
         )
 

@@ -11,7 +11,8 @@ STRONG_MOVE_UP        daily price change >= strong_move_pct
 STRONG_MOVE_DOWN      daily price change <= -strong_move_pct
 VOLUME_SPIKE          relative volume >= volume_spike_factor
 BREAKOUT_PROXY        price within breakout_proximity_pct of 52-week high
-                      AND pct_change_1d > 0.5 (requires upward pressure)
+                      AND pct_change_1d >= 1.0 (meaningful upward pressure)
+                      AND rel_volume >= 0.8 (volume-confirmed, or data absent)
 VOLATILITY_EXPANSION  intraday range (high−low)/price >= volatility_expansion_pct
 
 strength field
@@ -200,7 +201,11 @@ def compute_theme_support(
         1 for sym in priced_symbols
         if symbol_events.get(sym, set()) & _POSITIVE_TYPES
     )
-    broad_score = min(1.0, positive_count / max(1, total_priced * breadth_threshold))
+    min_positive = int(cfg.get("min_positive_symbols_for_breadth", 3))
+    if positive_count < min_positive:
+        broad_score = 0.0
+    else:
+        broad_score = min(1.0, positive_count / max(1, total_priced * breadth_threshold))
 
     # Per-symbol bonuses
     result: Dict[str, float] = {}
@@ -281,8 +286,11 @@ def _detect_for_symbol(
             ))
 
     # ── Breakout proxy ─────────────────────────────────────────────────
-    # Fires when price is within breakout_proximity_pct of 52-week high
-    # AND there is upward daily pressure (pct_change_1d > 0.5).
+    # Fires when price is within breakout_proximity_pct of 52-week high,
+    # upward daily pressure is at least 1.0% (raised from 0.5% to reduce
+    # false signals on low-momentum drift near the high), AND volume is at least
+    # 80% of average (volume_ok is True when rel_volume is unavailable so
+    # we do not penalise missing data).
     if (
         sr.pct_from_year_high is not None
         and sr.pct_change_1d is not None
@@ -290,7 +298,8 @@ def _detect_for_symbol(
         proximity_thresh = t["breakout_proximity_pct"]
         # pct_from_year_high is 0 at the high, negative below it
         pct_below = -min(0.0, sr.pct_from_year_high)  # 0 at high, positive below
-        if pct_below <= proximity_thresh and sr.pct_change_1d > 0.5:
+        volume_ok = sr.rel_volume is None or sr.rel_volume >= 0.8
+        if pct_below <= proximity_thresh and sr.pct_change_1d >= 1.0 and volume_ok:
             # Strength: 1.0 when at the high, ~0.5 when at the edge
             strength = round(
                 max(0.0, 1.0 - pct_below / max(proximity_thresh, 1e-9)),

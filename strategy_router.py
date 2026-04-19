@@ -69,6 +69,9 @@ def route_opportunity(opportunity: Any) -> StrategyRoute:
     if "BREAKOUT_PROXY" in events:
         compounder_votes += 1
         rationale.append("near 52-week high breakout proxy is active")
+        if "STRONG_MOVE_UP" in events and (pct_from_200dma is None or pct_from_200dma < 10):
+            momentum_votes += 1
+            rationale.append("breakout is recent and not well-established above 200dma — tactical bias")
     if "STRONG_MOVE_UP" in events:
         momentum_votes += 1
         rationale.append("fast upward move is active")

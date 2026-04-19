@@ -241,8 +241,9 @@ def _score_symbol(
 
     # ── Volume Confirmation ───────────────────────────────────────────
     # Normalised: 3× average → 100 pts.
+    # Volume on a down-move is sell pressure, not confirmation — suppress credit.
     vol_raw = 0.0
-    if sr.rel_volume is not None:
+    if sr.rel_volume is not None and EventType.STRONG_MOVE_DOWN not in triggered_events:
         vol_raw = min(100.0, sr.rel_volume / 3.0 * 100)
         if sr.rel_volume >= 2.0:
             reasons.append(

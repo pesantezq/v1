@@ -116,6 +116,79 @@ class TestStrategyRouter(unittest.TestCase):
         self.assertEqual(route.strategy_type, "momentum")
         self.assertGreater(route.signals["momentum_votes"], route.signals["compounder_votes"])
 
+    def test_fresh_breakout_with_strong_move_up_gets_momentum_bias(self):
+        # BREAKOUT_PROXY + STRONG_MOVE_UP + pct_from_200dma=3 (< 5 so established-trend
+        # compounder vote doesn't also fire, and < 10 so fresh-bias does fire).
+        # BREAKOUT_PROXY adds 1 compounder; fresh-bias adds 1 momentum;
+        # STRONG_MOVE_UP adds 1 momentum → 2 momentum vs 1 compounder → momentum wins.
+        route = route_opportunity(
+            self._opportunity(
+                events=["BREAKOUT_PROXY", "STRONG_MOVE_UP"],
+                factor_breakdown={
+                    "momentum": 55.0,
+                    "relative_strength": 60.0,
+                    "volume_confirmation": 50.0,
+                    "volatility_sanity": 70.0,
+                },
+                theme_support=0.0,
+                pct_from_200dma=3.0,
+            )
+        )
+        self.assertEqual(route.strategy_type, "momentum")
+        self.assertGreater(route.signals["momentum_votes"], route.signals["compounder_votes"])
+        self.assertTrue(any("tactical bias" in r for r in route.rationale))
+
+    def test_established_breakout_above_200dma_does_not_get_fresh_bias(self):
+        # pct_from_200dma=15 (well established) — fresh-breakout rule must not fire
+        route = route_opportunity(
+            self._opportunity(
+                events=["BREAKOUT_PROXY", "STRONG_MOVE_UP"],
+                factor_breakdown={
+                    "momentum": 55.0,
+                    "relative_strength": 80.0,
+                    "volume_confirmation": 50.0,
+                    "volatility_sanity": 70.0,
+                },
+                theme_support=0.0,
+                pct_from_200dma=15.0,
+            )
+        )
+        self.assertFalse(any("tactical bias" in r for r in route.rationale))
+
+    def test_breakout_proxy_without_strong_move_up_no_fresh_bias(self):
+        # BREAKOUT_PROXY alone (no STRONG_MOVE_UP) → fresh-breakout bias does not fire
+        route = route_opportunity(
+            self._opportunity(
+                events=["BREAKOUT_PROXY"],
+                factor_breakdown={
+                    "momentum": 55.0,
+                    "relative_strength": 60.0,
+                    "volume_confirmation": 50.0,
+                    "volatility_sanity": 70.0,
+                },
+                theme_support=0.0,
+                pct_from_200dma=5.0,
+            )
+        )
+        self.assertFalse(any("tactical bias" in r for r in route.rationale))
+
+    def test_fresh_breakout_with_missing_200dma_gets_momentum_bias(self):
+        # pct_from_200dma=None → treated as recent/unconfirmed → bias fires
+        route = route_opportunity(
+            self._opportunity(
+                events=["BREAKOUT_PROXY", "STRONG_MOVE_UP"],
+                factor_breakdown={
+                    "momentum": 55.0,
+                    "relative_strength": 60.0,
+                    "volume_confirmation": 50.0,
+                    "volatility_sanity": 70.0,
+                },
+                theme_support=0.0,
+                pct_from_200dma=None,
+            )
+        )
+        self.assertTrue(any("tactical bias" in r for r in route.rationale))
+
     def test_label_still_tips_tie_toward_compounder(self):
         # label=compounder (+1) and exactly one compounder signal (RS >= 75):
         # total 2 compounder vs 0 momentum → compounder wins.

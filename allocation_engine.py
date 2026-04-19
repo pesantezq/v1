@@ -25,8 +25,9 @@ DEFAULT_CONFIG = {
     "risk_off_compounder_multiplier": 0.85,
     "risk_off_momentum_multiplier": 0.55,
     "max_position_cap": 0.08,
-    "sector_cap": None,
+    "sector_cap": 0.20,
     "cash_reserve_pct": 0.05,
+    "min_position_pct": 0.01,
 }
 
 
@@ -110,6 +111,14 @@ def suggest_allocation(
     if bool(context.get("degraded_mode")):
         suggested_pct *= _config_float(cfg, "degraded_penalty", DEFAULT_CONFIG["degraded_penalty"], minimum=0.0)
         rationale.append("degraded data mode reduces position size")
+
+    # Enforce a minimum viable position size.  When compounding penalties
+    # (risk-off + degraded + low-confidence) would produce a sub-threshold
+    # position, zeroing it prevents economically pointless micro-trades.
+    min_pos_pct = _config_float(cfg, "min_position_pct", DEFAULT_CONFIG["min_position_pct"], minimum=0.0)
+    if min_pos_pct > 0 and 0 < suggested_pct < min_pos_pct:
+        suggested_pct = 0.0
+        rationale.append("position would be too small to execute meaningfully after penalty adjustments")
 
     portfolio_value = max(0.0, as_finite_float(portfolio_value, default=0.0) or 0.0)
     cash_available = max(0.0, as_finite_float(cash_available, default=0.0) or 0.0)

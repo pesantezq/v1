@@ -9,7 +9,8 @@
       "Bash(python -c \":*)",
       "Bash(wc -l /c/PersonalWork/stock_bot/v1/*.py)",
       "Bash(python -m unittest tests.test_run_mode -v)",
-      "Bash(schtasks /query)"
+      "Bash(schtasks /query)",
+      "Bash(pip install *)"
     ]
   }
 }

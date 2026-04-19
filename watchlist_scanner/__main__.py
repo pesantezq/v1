@@ -14,6 +14,7 @@ Output files (written to --output-dir):
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -41,6 +42,20 @@ from watchlist_scanner.postprocess import (
 )
 
 logger = logging.getLogger("watchlist_scanner")
+
+
+def _load_prior_regime(portfolio_out: Path) -> dict | None:
+    """Return the market_regime dict from the previous run's portfolio snapshot, or None."""
+    try:
+        path = portfolio_out / "portfolio_snapshot.json"
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            regime = data.get("market_regime") if isinstance(data, dict) else None
+            if isinstance(regime, dict) and regime.get("regime_label"):
+                return regime
+    except Exception as exc:
+        logger.debug("Prior regime unavailable (non-fatal): %s", exc)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -318,11 +333,14 @@ def run(
         result,
         portfolio_config=config.get("portfolio_construction", {}),
     )
+    _portfolio_out = Path(output_dir).parent / "portfolio"
+    _prior_regime = _load_prior_regime(_portfolio_out)
     regime = detect_market_regime(
         results=result.get("results", []),
         portfolio_construction=result.get("portfolio_construction"),
         data_health=data_health,
         regime_inputs=config.get("market_regime", {}),
+        prior_regime=_prior_regime,
     )
     regime_commentary = regime_fit_commentary(
         regime=regime,

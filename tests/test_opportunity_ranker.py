@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from event_detection import EventType, MarketEvent
 from opportunity_ranker import rank_opportunities, _DEFAULT_WEIGHTS
 
 
@@ -126,6 +127,40 @@ class TestVolumeGatedMomentum(unittest.TestCase):
         half_vol = _sr("HALF", pct_change_1d=5.0, rel_volume=0.5, pct_from_year_high=-5.0)
         results = rank_opportunities([half_vol], events=[])
         self.assertAlmostEqual(results[0].factor_breakdown.momentum, 50.0, places=1)
+
+
+class TestVolumeDirectionBlindness(unittest.TestCase):
+    """Volume on a down-move is sell pressure; it must not credit the score."""
+
+    def _down_event(self, symbol: str) -> MarketEvent:
+        return MarketEvent(symbol=symbol, event_type=EventType.STRONG_MOVE_DOWN, strength=0.8)
+
+    def test_strong_move_down_suppresses_volume_confirmation(self):
+        # Stock dropping on 4× volume; without fix this would score vol_raw=100
+        sr = _sr("DROP", pct_change_1d=-3.5, rel_volume=4.0, pct_from_year_high=-8.0)
+        events = [self._down_event("DROP")]
+        results = rank_opportunities([sr], events=events)
+        self.assertEqual(results[0].factor_breakdown.volume_confirmation, 0.0)
+
+    def test_strong_move_down_suppresses_volume_reason(self):
+        sr = _sr("DROP2", pct_change_1d=-2.0, rel_volume=5.0, pct_from_year_high=-10.0)
+        events = [self._down_event("DROP2")]
+        results = rank_opportunities([sr], events=events)
+        reasons_joined = " ".join(results[0].reasons)
+        self.assertNotIn("vol:", reasons_joined)
+
+    def test_no_down_event_volume_credit_unaffected(self):
+        # Same rel_volume but no STRONG_MOVE_DOWN — volume credit should apply normally
+        sr = _sr("UP", pct_change_1d=3.0, rel_volume=4.0, pct_from_year_high=-2.0)
+        results = rank_opportunities([sr], events=[])
+        self.assertGreater(results[0].factor_breakdown.volume_confirmation, 0.0)
+
+    def test_down_event_on_different_symbol_does_not_suppress_other(self):
+        # STRONG_MOVE_DOWN on BEAR must not affect BULL's volume credit
+        bull = _sr("BULL", pct_change_1d=3.0, rel_volume=4.0, pct_from_year_high=-2.0)
+        events = [self._down_event("BEAR")]
+        results = rank_opportunities([bull], events=events)
+        self.assertGreater(results[0].factor_breakdown.volume_confirmation, 0.0)
 
 
 class TestVolatilitySanity(unittest.TestCase):
