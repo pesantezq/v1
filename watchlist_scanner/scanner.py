@@ -56,6 +56,7 @@ from watchlist_scanner.config import (
 )
 from watchlist_scanner.models import AlertDecision, WatchlistRow, WatchlistScanResult
 from watchlist_scanner.theme_alignment import load_theme_opportunities, enrich_row_with_theme
+from watchlist_scanner.portfolio_fit import load_portfolio_snapshot, enrich_row_with_portfolio_fit
 
 logger = logging.getLogger("watchlist_scanner.scanner")
 
@@ -407,6 +408,17 @@ class WatchlistScanner:
         for r in results:
             enrich_row_with_theme(r, _theme_opps)
 
+        # ── Step 4c: Portfolio fit enrichment (additive, non-blocking) ──
+        # Loads outputs/portfolio/portfolio_snapshot.json to evaluate how well
+        # each symbol fits the current portfolio (sector, diversification, cash).
+        # Adds portfolio_fit_score, portfolio_fit_label, portfolio_fit_reason to every row.
+        # When the snapshot is absent or empty, rows receive neutral defaults (score=0.5).
+        _portfolio_snapshot = load_portfolio_snapshot(self._root)
+        if _portfolio_snapshot:
+            logger.info("Portfolio fit: snapshot loaded — enriching %d result(s)", len(results))
+        for r in results:
+            enrich_row_with_portfolio_fit(r, _portfolio_snapshot)
+
         # ── Step 5: Enrich results with alert_priority + trusted_signal_score ──
         # alert_priority: "high" | "normal" | "watch" | None (suppressed)
         # trusted_signal_score: confidence-adjusted rank for ordering alerts
@@ -464,7 +476,7 @@ class WatchlistScanner:
             key=lambda x: (
                 x.get("priority_score", 0.0),
                 x.get("trusted_signal_score", 0.0),
-                x.get("theme_alignment_score", 0.0),
+                x.get("final_rank_score", 0.0),
             ),
             reverse=True,
         )

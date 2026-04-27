@@ -631,6 +631,11 @@ def _normalize_signal_triage(watchlist: dict[str, Any]) -> dict[str, Any]:
                     "theme_match_count": int(row.get("theme_match_count") or 0),
                     "augmented_signal_score": row.get("augmented_signal_score"),
                     "theme_reason": row.get("theme_reason") or "",
+                    # Portfolio fit fields (present only when portfolio snapshot exists)
+                    "portfolio_fit_label": row.get("portfolio_fit_label") or "neutral",
+                    "portfolio_fit_score": row.get("portfolio_fit_score"),
+                    "portfolio_fit_reason": row.get("portfolio_fit_reason") or "",
+                    "final_rank_score": row.get("final_rank_score"),
                     "raw": row,
                 }
             )
@@ -650,6 +655,15 @@ def _normalize_signal_triage(watchlist: dict[str, Any]) -> dict[str, Any]:
                     "degraded_impact": 0.0,
                     "signal_reliability": row.get("data_mode") or "Unknown",
                     "actionable_signal": row.get("normalized_allocation", 0) not in (0, None, ""),
+                    "theme_alignment_label": "none",
+                    "theme_top_name": None,
+                    "theme_match_count": 0,
+                    "augmented_signal_score": None,
+                    "theme_reason": "",
+                    "portfolio_fit_label": "neutral",
+                    "portfolio_fit_score": None,
+                    "portfolio_fit_reason": "",
+                    "final_rank_score": None,
                     "raw": row,
                 }
             )

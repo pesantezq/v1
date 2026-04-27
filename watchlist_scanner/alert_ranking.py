@@ -78,7 +78,21 @@ def apply_priority_score(
         4,
     )
 
+    # final_rank_score: holistic ordering score that blends signal quality,
+    # confidence, theme alignment, and portfolio fit.
+    # Used as a secondary sort tiebreaker — does NOT replace priority_score.
+    portfolio_fit_score = float(signal.get("portfolio_fit_score") or 0.5)
+    theme_alignment_score = float(signal.get("theme_alignment_score") or 0.0)
+    final_rank_score = round(
+        augmented_signal_score * 0.40
+        + confidence_score * 0.25
+        + theme_alignment_score * 0.15
+        + portfolio_fit_score * 0.20,
+        4,
+    )
+
     signal["priority_score"] = priority_score
     signal["augmented_priority_score"] = augmented_priority_score
+    signal["final_rank_score"] = final_rank_score
     signal["priority_explanation"] = build_priority_explanation(signal)
     return signal
