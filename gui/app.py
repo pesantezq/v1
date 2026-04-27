@@ -553,6 +553,11 @@ def _load_allocation_policy_simulation() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "allocation_policy_simulation.json")
 
 
+def _load_approved_allocation_policy() -> dict:
+    """Load approved_allocation_policy.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "approved_allocation_policy.json")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -2012,6 +2017,82 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
         sim_gen_at = sim.get("generated_at", "")
         if sim_gen_at:
             st.caption(f"Generated {sim_gen_at[:19].replace('T', ' ')}")
+
+    # ── Approved Allocation Policy ────────────────────────────────────────────
+    st.subheader("Approved Allocation Policy")
+    _render_interpretation(
+        "Shows whether rank-aware allocation sizing has been formally approved based on "
+        "simulation evidence. Approval is advisory only — applied_to_live is always false "
+        "and live recommendations are unaffected unless explicitly configured."
+    )
+    aap = _load_approved_allocation_policy()
+    if not aap:
+        st.info(
+            "No approved allocation policy yet. Run: "
+            "`python -m watchlist_scanner.allocation_policy_activation --approve` "
+            "to generate when simulation rules pass."
+        )
+        st.markdown(
+            _badge("Rank-aware sizing: not activated", "neutral"),
+            unsafe_allow_html=True,
+        )
+    else:
+        activation_status = str(aap.get("activation_status") or "unknown")
+        applied_to_live = aap.get("applied_to_live", False)
+        tone = "good" if activation_status == "approved_not_live" else "warn"
+        st.markdown(
+            _badge(f"Activation status: {activation_status}", tone),
+            unsafe_allow_html=True,
+        )
+        live_tone = "bad" if applied_to_live else "warn"
+        st.markdown(
+            _badge(
+                f"applied_to_live: {applied_to_live} — advisory sizing only, not live",
+                live_tone,
+            ),
+            unsafe_allow_html=True,
+        )
+
+        aap_approved_at = aap.get("approved_at", "")
+        aap_sample = aap.get("sample_size")
+        aap_window = aap.get("primary_window_days", 3)
+        if aap_approved_at:
+            st.caption(
+                f"Approved {aap_approved_at[:19].replace('T', ' ')} "
+                f"· {aap_sample} signals · {aap_window}d window"
+            )
+
+        aap_note = aap.get("approval_note", "")
+        if aap_note:
+            st.caption(f"Note: {aap_note}")
+
+        aap_delta = aap.get("delta") or {}
+        aap_b = aap.get("baseline") or {}
+        aap_ra = aap.get("rank_aware") or {}
+        aap_cols = st.columns(4)
+        with aap_cols[0]:
+            eff_delta = aap_delta.get("efficiency_delta")
+            st.metric("Efficiency Delta", f"{eff_delta:+.4f}" if eff_delta is not None else "—")
+        with aap_cols[1]:
+            ret_delta = aap_delta.get("total_return_delta")
+            st.metric("Return Delta", f"{ret_delta:+.4f}" if ret_delta is not None else "—")
+        with aap_cols[2]:
+            b_eff = aap_b.get("capital_efficiency")
+            st.metric("Baseline Efficiency", f"{b_eff:.4f}" if b_eff is not None else "—")
+        with aap_cols[3]:
+            ra_eff = aap_ra.get("capital_efficiency")
+            st.metric("Rank-Aware Efficiency", f"{ra_eff:.4f}" if ra_eff is not None else "—")
+
+        rules_passed = list(aap.get("rules_passed") or [])
+        rules_failed = list(aap.get("rules_failed") or [])
+        if rules_passed or rules_failed:
+            st.markdown("**Activation Rules**")
+            rule_rows = []
+            for r in rules_passed:
+                rule_rows.append({"Rule": r, "Status": "PASS"})
+            for r in rules_failed:
+                rule_rows.append({"Rule": r, "Status": "FAIL"})
+            st.dataframe(_coerce_df(rule_rows), use_container_width=True, hide_index=True)
 
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
