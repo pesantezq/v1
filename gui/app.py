@@ -522,6 +522,21 @@ def _load_performance_summary() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "performance_summary.json")
 
 
+def _load_weight_tuning_suggestions() -> dict:
+    """Load weight_tuning_suggestions.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "weight_tuning_suggestions.json")
+
+
+def _load_policy_simulation() -> dict:
+    """Load policy_simulation.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "policy_simulation.json")
+
+
+def _load_config_proposal() -> dict:
+    """Load config_proposal.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "config_proposal.json")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -1577,6 +1592,176 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
         st.caption(f"Total signals: {ttp.get('total', 0)}")
     else:
         st.info("No theme type data in resolved signals.")
+
+    # ── Weight Tuning Suggestions ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Weight Tuning Suggestions")
+    _render_interpretation(
+        "Observe-only advisory. Candidate weight blends are back-tested against resolved signal "
+        "history. No live scoring is changed. Run generate_weight_tuning_report() to refresh."
+    )
+    wt = _load_weight_tuning_suggestions()
+    if not wt or not wt.get("candidates"):
+        st.info(
+            "No weight tuning data yet. Run "
+            "`generate_weight_tuning_report()` from weight_tuning.py to produce suggestions."
+        )
+    else:
+        recommended = wt.get("recommended_candidate", "—")
+        reason = wt.get("recommendation_reason", "")
+        resolved = int(wt.get("resolved_rows") or 0)
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            st.metric("Recommended Blend", recommended)
+        with col_b:
+            st.caption(reason)
+            st.caption(
+                f"Based on {resolved} resolved signal(s) | "
+                "Observe-only — no config change applied."
+            )
+        wt_rows = []
+        for c in wt.get("candidates", []):
+            w = c.get("weights", {})
+            weights_str = (
+                f"aug:{w.get('augmented_signal_score', 0):.2f} "
+                f"conf:{w.get('confidence_score', 0):.2f} "
+                f"theme:{w.get('theme_alignment_score', 0):.2f} "
+                f"fit:{w.get('portfolio_fit_score', 0):.2f}"
+            )
+            ret = c.get("top_quartile_avg_return")
+            wt_rows.append({
+                "Candidate": c.get("name", ""),
+                "Weights": weights_str,
+                f"Top-Q Hit Rate": _fmt_ratio_pct(c.get("top_quartile_hit_rate")),
+                f"Top-Q Avg Return": f"{ret:+.2f}%" if ret is not None else "—",
+                "Top-Q Dir. Correct": _fmt_ratio_pct(c.get("top_quartile_direction_correct_rate")),
+                "Resolved (Top-Q)": c.get("sample_size", 0),
+                "Thin Sample": "⚠" if c.get("low_sample_warning") else "",
+            })
+        st.dataframe(_coerce_df(wt_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "⚠ = fewer than 20 resolved signals in top quartile — treat as directional only."
+        )
+
+    # ── Policy Simulation ─────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Policy Simulation")
+    _render_interpretation(
+        "Observe-only comparison of all ranking weight candidates against resolved history. "
+        "Δ columns show improvement or degradation vs current weights. "
+        "Run generate_policy_simulation_report() to refresh."
+    )
+    ps = _load_policy_simulation()
+    if not ps or not ps.get("all_policies"):
+        st.info(
+            "No policy simulation data yet. Run "
+            "`generate_policy_simulation_report()` from policy_simulation.py."
+        )
+    else:
+        wl = f"{int(ps.get('primary_window_days') or 3)}d"
+        recommended = ps.get("recommended_candidate", "—")
+        resolved = int(ps.get("resolved_rows") or 0)
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            st.metric("Recommended Policy", recommended)
+        with col_b:
+            st.caption(f"Based on {resolved} resolved signal(s). Observe-only — no config changed.")
+
+        ps_rows = []
+        for p in ps.get("all_policies", []):
+            d = p.get("delta_vs_current") or {}
+            ret = p.get("top_quartile_avg_return")
+            dhit = d.get("hit_rate")
+            dret = d.get("avg_return")
+            ddir = d.get("direction_correct_rate")
+            ps_rows.append({
+                "Rank": p.get("rank", "—"),
+                "Candidate": p.get("name", ""),
+                f"Hit Rate ({wl})": _fmt_ratio_pct(p.get("top_quartile_hit_rate")),
+                f"Avg Return ({wl})": f"{ret:+.2f}%" if ret is not None else "—",
+                "Dir. Correct": _fmt_ratio_pct(p.get("top_quartile_direction_correct_rate")),
+                "Δ Hit Rate": f"{dhit:+.3f}" if dhit is not None else "—",
+                "Δ Avg Return": f"{dret:+.3f}" if dret is not None else "—",
+                "Δ Dir. Correct": f"{ddir:+.3f}" if ddir is not None else "—",
+                "Resolved (Top-Q)": p.get("sample_size", 0),
+                "Thin Sample": "⚠" if p.get("low_sample_warning") else "",
+            })
+        st.dataframe(_coerce_df(ps_rows), use_container_width=True, hide_index=True)
+        st.caption("Rank 1 = best. Δ = delta vs current weights. ⚠ = fewer than 20 resolved in top quartile.")
+
+        cur = ps.get("current_policy") or {}
+        rec = ps.get("recommended_policy") or {}
+        if cur and rec and cur.get("name") != rec.get("name"):
+            st.markdown("**Current vs Recommended**")
+            cmp_rows = []
+            for policy in [cur, rec]:
+                ret_ = policy.get("top_quartile_avg_return")
+                cmp_rows.append({
+                    "Policy": policy.get("name", ""),
+                    f"Hit Rate ({wl})": _fmt_ratio_pct(policy.get("top_quartile_hit_rate")),
+                    f"Avg Return ({wl})": f"{ret_:+.2f}%" if ret_ is not None else "—",
+                    "Dir. Correct": _fmt_ratio_pct(policy.get("top_quartile_direction_correct_rate")),
+                    "Resolved": policy.get("sample_size", 0),
+                })
+            st.dataframe(_coerce_df(cmp_rows), use_container_width=True, hide_index=True)
+
+    # ── Config Proposal ───────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Config Proposal")
+    _render_interpretation(
+        "Observe-only weight proposal derived from policy simulation. "
+        "Not applied to live scoring. Inspect and apply manually if validated."
+    )
+    cp = _load_config_proposal()
+    if not cp:
+        st.info(
+            "No config proposal yet. Run "
+            "`generate_policy_simulation_report()` from policy_simulation.py."
+        )
+    else:
+        st.markdown(_badge("NOT APPLIED — observe only", "warn"), unsafe_allow_html=True)
+        st.caption(cp.get("advisory_note", ""))
+
+        cand_name = cp.get("recommended_candidate", "—")
+        reason = cp.get("recommendation_reason", "")
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            st.metric("Proposed Blend", cand_name)
+        with col_b:
+            if reason:
+                st.caption(reason)
+
+        proposed = cp.get("proposed_weights") or {}
+        current_w = cp.get("current_weights") or {}
+        deltas_w = cp.get("weight_deltas") or {}
+        w_rows = []
+        for k in current_w:
+            label = k.replace("_score", "").replace("_", " ").title()
+            w_rows.append({
+                "Component": label,
+                "Current": f"{current_w.get(k, 0):.2f}",
+                "Proposed": f"{proposed.get(k, 0):.2f}",
+                "Δ": f"{deltas_w.get(k, 0):+.2f}",
+            })
+        st.dataframe(_coerce_df(w_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("**Expected Performance Delta vs Current**")
+        perf_d = cp.get("performance_delta") or {}
+        pd_rows = [
+            {
+                "Metric": "Hit Rate",
+                "Δ": f"{perf_d['hit_rate_delta']:+.3f}" if perf_d.get("hit_rate_delta") is not None else "—",
+            },
+            {
+                "Metric": "Avg Return (%)",
+                "Δ": f"{perf_d['avg_return_delta']:+.3f}" if perf_d.get("avg_return_delta") is not None else "—",
+            },
+            {
+                "Metric": "Dir. Correct Rate",
+                "Δ": f"{perf_d['direction_correct_rate_delta']:+.3f}" if perf_d.get("direction_correct_rate_delta") is not None else "—",
+            },
+        ]
+        st.dataframe(_coerce_df(pd_rows), use_container_width=True, hide_index=True)
 
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
