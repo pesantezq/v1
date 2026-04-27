@@ -543,6 +543,11 @@ def _load_approved_ranking_config() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "approved_ranking_config.json")
 
 
+def _load_allocation_preview() -> dict:
+    """Load allocation_policy_preview.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "allocation_policy_preview.json")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -1850,6 +1855,64 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
         st.caption(arc.get("approval_note", ""))
         if arc.get("low_sample_warning"):
             st.caption("⚠ Approved from thin sample — validate before applying to live scoring.")
+
+    # ── Allocation Preview (Rank-Aware) ──────────────────────────────────────
+    st.subheader("Allocation Preview (Rank-Aware)")
+    _render_interpretation(
+        "Simulates how final_rank_score would influence position sizing. "
+        "Uses approved weights when active, otherwise default weights. "
+        "Affects only ordering tiebreakers — not alert gating or live allocation."
+    )
+    st.markdown(
+        _badge("Preview only — not applied to live allocation", "warn"),
+        unsafe_allow_html=True,
+    )
+    ap = _load_allocation_preview()
+    if not ap:
+        st.info(
+            "No allocation preview yet. Run: "
+            "`python -m watchlist_scanner.allocation_preview` to generate."
+        )
+    else:
+        ap_opps = ap.get("opportunities") or []
+        ap_meta_cols = st.columns(3)
+        with ap_meta_cols[0]:
+            st.metric("Candidates", ap.get("candidate_count", len(ap_opps)))
+        with ap_meta_cols[1]:
+            total_base = ap.get("total_baseline_pct")
+            st.metric("Total Baseline", f"{total_base:.1%}" if total_base is not None else "—")
+        with ap_meta_cols[2]:
+            total_prev = ap.get("total_preview_pct")
+            st.metric("Total Preview", f"{total_prev:.1%}" if total_prev is not None else "—")
+
+        if not ap_opps:
+            st.info("No eligible signals in preview (filter_allowed + confidence threshold).")
+        else:
+            ap_rows = []
+            for o in ap_opps:
+                cap_str = ", ".join(o.get("capped_by") or []) or "—"
+                ap_rows.append({
+                    "Ticker": o.get("ticker", "—"),
+                    "Rank Score": f"{o['final_rank_score']:.3f}" if o.get("final_rank_score") is not None else "—",
+                    "Rank": o.get("rank_label", "—").title(),
+                    "Multiplier": f"×{o['rank_multiplier']:.2f}" if o.get("rank_multiplier") is not None else "—",
+                    "Baseline": f"{o['baseline_size']:.1%}" if o.get("baseline_size") is not None else "—",
+                    "Preview Size": f"{o['preview_size']:.1%}" if o.get("preview_size") is not None else "—",
+                    "Portfolio Fit": str(o.get("portfolio_fit_label") or "—").title(),
+                    "Capped By": cap_str,
+                    "Reason": o.get("reason", ""),
+                })
+            st.dataframe(_coerce_df(ap_rows), use_container_width=True, hide_index=True)
+
+        gen_at = ap.get("generated_at", "")
+        conf_thr = ap.get("confidence_threshold")
+        caption_parts = []
+        if gen_at:
+            caption_parts.append(f"Generated {gen_at[:19].replace('T', ' ')}")
+        if conf_thr is not None:
+            caption_parts.append(f"confidence ≥ {conf_thr:.2f}")
+        if caption_parts:
+            st.caption(" · ".join(caption_parts))
 
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
