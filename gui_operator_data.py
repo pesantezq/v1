@@ -625,6 +625,12 @@ def _normalize_signal_triage(watchlist: dict[str, Any]) -> dict[str, Any]:
                     "degraded_impact": _coerce_float(row.get("degraded_confidence_penalty")),
                     "signal_reliability": row.get("signal_reliability") or row.get("data_quality") or "Unknown",
                     "actionable_signal": _coerce_bool(row.get("actionable_signal")),
+                    # Theme alignment fields (present only when theme_discovery has run)
+                    "theme_alignment_label": row.get("theme_alignment_label") or "none",
+                    "theme_top_name": row.get("theme_top_name"),
+                    "theme_match_count": int(row.get("theme_match_count") or 0),
+                    "augmented_signal_score": row.get("augmented_signal_score"),
+                    "theme_reason": row.get("theme_reason") or "",
                     "raw": row,
                 }
             )

@@ -64,6 +64,21 @@ def apply_priority_score(
         4,
     )
 
+    # augmented_priority_score: same formula but uses augmented_signal_score
+    # (signal_score + soft theme contribution) as the signal component.
+    # Kept separate so existing consumers of priority_score are unaffected.
+    augmented_signal_score = float(
+        signal.get("augmented_signal_score") or signal_score
+    )
+    augmented_priority_score = round(
+        augmented_signal_score * float(cfg["signal_weight"])
+        + confidence_score * float(cfg["confidence_weight"])
+        + evidence_factor * float(cfg["evidence_weight"])
+        + freshness_factor * float(cfg["freshness_weight"]),
+        4,
+    )
+
     signal["priority_score"] = priority_score
+    signal["augmented_priority_score"] = augmented_priority_score
     signal["priority_explanation"] = build_priority_explanation(signal)
     return signal

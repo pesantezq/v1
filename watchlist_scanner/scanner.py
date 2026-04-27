@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, date
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -54,6 +55,7 @@ from watchlist_scanner.config import (
     EXCEPTIONAL_SIGNAL_SCORE,
 )
 from watchlist_scanner.models import AlertDecision, WatchlistRow, WatchlistScanResult
+from watchlist_scanner.theme_alignment import load_theme_opportunities, enrich_row_with_theme
 
 logger = logging.getLogger("watchlist_scanner.scanner")
 
@@ -250,6 +252,7 @@ class WatchlistScanner:
         exceptional_signal_score: float = EXCEPTIONAL_SIGNAL_SCORE,
         signals_config: dict[str, Any] | None = None,
         ranking_config: dict[str, Any] | None = None,
+        root: Path | str | None = None,
     ) -> None:
         self.watchlist = watchlist
         self._cache = cache
@@ -265,6 +268,8 @@ class WatchlistScanner:
         self._exceptional_signal = exceptional_signal_score
         self._signals_config = dict(signals_config or {})
         self._ranking_config = dict(ranking_config or {})
+        # Root is used to locate theme_opportunities.json; defaults to repo root.
+        self._root: Path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -388,6 +393,20 @@ class WatchlistScanner:
             except Exception as exc:
                 logger.warning("Error scanning %s: %s", symbol, exc)
 
+        # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
+        # Loads outputs/latest/theme_opportunities.json produced by theme_discovery.
+        # Adds theme_* explainability fields + augmented_signal_score to every row.
+        # When theme artifact is absent or empty, rows are untouched except for
+        # safe defaults (theme_alignment_score=0, augmented_signal_score=signal_score).
+        _theme_opps = load_theme_opportunities(self._root)
+        if _theme_opps:
+            logger.info(
+                "Theme alignment: %d theme(s) loaded — enriching %d result(s)",
+                len(_theme_opps), len(results),
+            )
+        for r in results:
+            enrich_row_with_theme(r, _theme_opps)
+
         # ── Step 5: Enrich results with alert_priority + trusted_signal_score ──
         # alert_priority: "high" | "normal" | "watch" | None (suppressed)
         # trusted_signal_score: confidence-adjusted rank for ordering alerts
@@ -419,6 +438,11 @@ class WatchlistScanner:
             r["trusted_signal_score"] = round(
                 float(r.get("signal_score") or 0.0) * (0.7 + 0.3 * conf), 4
             )
+            r["trusted_augmented_signal_score"] = round(
+                float(r.get("augmented_signal_score") or r.get("signal_score") or 0.0)
+                * (0.7 + 0.3 * conf),
+                4,
+            )
             filter_decision = should_emit_alert(r, self._signals_config)
             r["filter_allowed"] = bool(filter_decision["allowed"])
             r["filter_reason"] = filter_decision["reason"]
@@ -431,10 +455,17 @@ class WatchlistScanner:
                 r["alert_priority"] = None
             apply_priority_score(r, self._ranking_config)
 
-        # Identify alerts and sort by trusted_signal_score (confidence-adjusted)
+        # Identify alerts and sort by priority_score (primary), trusted_signal_score
+        # (secondary), then theme_alignment_score as a soft tiebreaker.
+        # Theme never overrides alert gating — it only affects ordering among
+        # already-eligible alerts.
         alerts = [r for r in results if r["alert_priority"] is not None and r.get("filter_allowed", True)]
         alerts.sort(
-            key=lambda x: (x.get("priority_score", 0.0), x.get("trusted_signal_score", 0.0)),
+            key=lambda x: (
+                x.get("priority_score", 0.0),
+                x.get("trusted_signal_score", 0.0),
+                x.get("theme_alignment_score", 0.0),
+            ),
             reverse=True,
         )
 
