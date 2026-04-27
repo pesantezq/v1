@@ -1485,6 +1485,100 @@ def _render_regime_analytics_tab(bundle: dict) -> None:
         st.caption(note)
 
 
+def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
+    st.subheader("Signal Enrichment Performance")
+    _render_interpretation(
+        "Evaluate whether theme alignment, portfolio fit, and final rank score actually improve "
+        "signal outcomes. Buckets with fewer than 10 resolved samples are flagged — treat those as "
+        "directional only."
+    )
+    if not perf_summary:
+        st.info(
+            "No performance data yet. Run a scan cycle and wait for signals to resolve before "
+            "enrichment stats appear."
+        )
+        return
+
+    primary_days = int(perf_summary.get("primary_window_days") or 3)
+    window_label = f"{primary_days}d"
+
+    def _bucket_table(buckets: dict, label_col: str) -> list[dict]:
+        rows = []
+        for name, stats in buckets.items():
+            rows.append({
+                label_col: name,
+                "Count": stats.get("count") or 0,
+                "Resolved": stats.get("resolved") or 0,
+                f"Win Rate ({window_label})": _fmt_ratio_pct(stats.get("hit_rate")),
+                f"Avg Return ({window_label})": f"{stats['avg_return']:+.2f}%" if stats.get("avg_return") is not None else "—",
+                "Thin Sample": "⚠" if stats.get("low_sample_warning") else "",
+            })
+        return rows
+
+    # ── Theme Alignment ──────────────────────────────────────────────────────
+    st.markdown("#### Theme Alignment Performance")
+    tap = perf_summary.get("theme_alignment_performance") or {}
+    tap_buckets = tap.get("buckets") or {}
+    if tap_buckets:
+        st.dataframe(
+            _coerce_df(_bucket_table(tap_buckets, "Alignment Tier")),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"Total signals: {tap.get('total', 0)}")
+    else:
+        st.info("No theme alignment data in resolved signals.")
+
+    # ── Portfolio Fit ────────────────────────────────────────────────────────
+    st.markdown("#### Portfolio Fit Performance")
+    pfp = perf_summary.get("portfolio_fit_performance") or {}
+    pfp_buckets = pfp.get("buckets") or {}
+    if pfp_buckets:
+        st.dataframe(
+            _coerce_df(_bucket_table(pfp_buckets, "Fit Label")),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"Total signals: {pfp.get('total', 0)}")
+    else:
+        st.info("No portfolio fit data in resolved signals.")
+
+    # ── Final Rank Score Quartiles ────────────────────────────────────────────
+    st.markdown("#### Rank Score Performance (Quartiles)")
+    frp = perf_summary.get("final_rank_performance") or {}
+    frp_quartiles = frp.get("quartiles") or {}
+    if frp_quartiles:
+        q_rows = []
+        for q_name, stats in frp_quartiles.items():
+            q_rows.append({
+                "Quartile": q_name,
+                "Count": stats.get("count") or 0,
+                "Resolved": stats.get("resolved") or 0,
+                "Avg Rank Score": f"{stats['avg_final_rank_score']:.4f}" if stats.get("avg_final_rank_score") is not None else "—",
+                f"Avg Return ({window_label})": f"{stats['avg_return']:+.2f}%" if stats.get("avg_return") is not None else "—",
+                "Dir. Correct": _fmt_ratio_pct(stats.get("direction_correct_rate")),
+                "Thin Sample": "⚠" if stats.get("low_sample_warning") else "",
+            })
+        st.dataframe(_coerce_df(q_rows), use_container_width=True, hide_index=True)
+        st.caption(f"Q1 = top 25% by final_rank_score. Total scored: {frp.get('scored', 0)} / {frp.get('total', 0)}")
+    else:
+        st.info("No final_rank_score data in resolved signals.")
+
+    # ── Theme Type ───────────────────────────────────────────────────────────
+    st.markdown("#### Theme Type Performance")
+    ttp = perf_summary.get("theme_type_performance") or {}
+    ttp_types = ttp.get("by_type") or {}
+    if ttp_types:
+        st.dataframe(
+            _coerce_df(_bucket_table(ttp_types, "Theme Type")),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(f"Total signals: {ttp.get('total', 0)}")
+    else:
+        st.info("No theme type data in resolved signals.")
+
+
 def _render_recommendation_quality_tab(bundle: dict) -> None:
     quality = bundle["recommendation_quality_view"]
     st.subheader("Recommendation Quality")
@@ -3132,7 +3226,7 @@ def page_dashboard() -> None:
         tab_decisions, tab_opps, tab_pvm, tab_strat_break, tab_exits,
         tab_outcomes, tab_execution,
         tab_status, tab_memo, tab_triage, tab_portfolio, tab_strategy,
-        tab_health, tab_performance, tab_regime, tab_quality,
+        tab_health, tab_performance, tab_regime, tab_enrichment, tab_quality,
         tab_attribution, tab_rotation,
         tab_weekly,
     ) = st.tabs(
@@ -3153,6 +3247,7 @@ def page_dashboard() -> None:
             "Health",
             "Performance",
             "Regime",
+            "Signal Enrichment",
             "Rec. Quality",
             "Attribution",
             "Rotation",
@@ -3192,6 +3287,8 @@ def page_dashboard() -> None:
         _render_performance_tab(bundle)
     with tab_regime:
         _render_regime_analytics_tab(bundle)
+    with tab_enrichment:
+        _render_signal_enrichment_tab(perf_summary)
     with tab_quality:
         _render_recommendation_quality_tab(bundle)
     with tab_attribution:

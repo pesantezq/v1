@@ -142,6 +142,13 @@ class WatchlistStateStore:
         regime_label: str = "neutral",
         regime_confidence: float | None = None,
         regime_data_quality: str = "limited",
+        theme_alignment_score: float | None = None,
+        theme_top_name: str | None = None,
+        theme_type: str | None = None,
+        portfolio_fit_score: float | None = None,
+        portfolio_fit_label: str | None = None,
+        final_rank_score: float | None = None,
+        augmented_signal_score: float | None = None,
     ) -> dict[str, Any] | None:
         return self._store.record_watchlist_signal_feedback(
             signal_key=signal_key,
@@ -161,6 +168,13 @@ class WatchlistStateStore:
             regime_label=regime_label,
             regime_confidence=regime_confidence,
             regime_data_quality=regime_data_quality,
+            theme_alignment_score=theme_alignment_score,
+            theme_top_name=theme_top_name,
+            theme_type=theme_type,
+            portfolio_fit_score=portfolio_fit_score,
+            portfolio_fit_label=portfolio_fit_label,
+            final_rank_score=final_rank_score,
+            augmented_signal_score=augmented_signal_score,
         )
 
     def list_signal_feedback(

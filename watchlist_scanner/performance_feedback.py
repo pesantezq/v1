@@ -83,6 +83,13 @@ def record_scan_signals(
             regime_label=str(row.get("regime_label") or regime.get("regime_label") or "neutral"),
             regime_confidence=float(row.get("regime_confidence") or regime.get("regime_confidence") or 0.0),
             regime_data_quality=str(row.get("regime_data_quality") or regime.get("regime_data_quality") or "limited"),
+            theme_alignment_score=float(row["theme_alignment_score"]) if row.get("theme_alignment_score") is not None else None,
+            theme_top_name=str(row["theme_top_name"]) if row.get("theme_top_name") else None,
+            theme_type=str(row["theme_type"]) if row.get("theme_type") else None,
+            portfolio_fit_score=float(row["portfolio_fit_score"]) if row.get("portfolio_fit_score") is not None else None,
+            portfolio_fit_label=str(row["portfolio_fit_label"]) if row.get("portfolio_fit_label") else None,
+            final_rank_score=float(row["final_rank_score"]) if row.get("final_rank_score") is not None else None,
+            augmented_signal_score=float(row["augmented_signal_score"]) if row.get("augmented_signal_score") is not None else None,
         )
         if created is None:
             skipped += 1
@@ -211,6 +218,186 @@ def _avg_metric(rows: list[dict[str, Any]], key: str) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 3)
+
+
+_MIN_SAMPLE_SIZE = 10
+
+_THEME_ALIGNMENT_BUCKETS: list[tuple[str, float, float]] = [
+    ("none", -0.001, 0.0),
+    ("weak", 0.0, 0.3),
+    ("moderate", 0.3, 0.7),
+    ("strong", 0.7, 1.01),
+]
+
+_PORTFOLIO_FIT_BUCKETS: list[tuple[str, float, float]] = [
+    ("poor", -0.001, 0.35),
+    ("neutral", 0.35, 0.55),
+    ("good", 0.55, 0.75),
+    ("strong", 0.75, 1.01),
+]
+
+
+def _enrichment_bucket_stats(
+    bucket_rows: list[dict[str, Any]],
+    *,
+    primary_window_days: int,
+) -> dict[str, Any]:
+    return_col = f"outcome_return_{primary_window_days}d"
+    success_col = f"outcome_success_{primary_window_days}d"
+    resolved = [r for r in bucket_rows if r.get(return_col) is not None]
+    total = len(bucket_rows)
+    n = len(resolved)
+    if not n:
+        return {
+            "count": total,
+            "resolved": 0,
+            "avg_return": None,
+            "hit_rate": None,
+            "low_sample_warning": total < _MIN_SAMPLE_SIZE,
+        }
+    avg_return = round(sum(float(r.get(return_col) or 0.0) for r in resolved) / n, 3)
+    hit_rate = round(sum(1 for r in resolved if int(r.get(success_col) or 0) == 1) / n, 3)
+    return {
+        "count": total,
+        "resolved": n,
+        "avg_return": avg_return,
+        "hit_rate": hit_rate,
+        "low_sample_warning": n < _MIN_SAMPLE_SIZE,
+    }
+
+
+def build_theme_alignment_performance(
+    rows: list[dict[str, Any]],
+    *,
+    primary_window_days: int = PRIMARY_WINDOW_DAYS,
+) -> dict[str, Any]:
+    buckets: dict[str, list[dict[str, Any]]] = {name: [] for name, _, _ in _THEME_ALIGNMENT_BUCKETS}
+    for row in rows:
+        raw = row.get("theme_alignment_score")
+        score = float(raw) if raw is not None else None
+        for name, lo, hi in _THEME_ALIGNMENT_BUCKETS:
+            if score is None or score == 0.0:
+                if name == "none":
+                    buckets[name].append(row)
+                    break
+            elif lo < score <= hi:
+                buckets[name].append(row)
+                break
+        else:
+            buckets["none"].append(row)
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "primary_window_days": primary_window_days,
+        "total": len(rows),
+        "buckets": {
+            name: _enrichment_bucket_stats(group, primary_window_days=primary_window_days)
+            for name, group in buckets.items()
+        },
+    }
+
+
+def build_portfolio_fit_performance(
+    rows: list[dict[str, Any]],
+    *,
+    primary_window_days: int = PRIMARY_WINDOW_DAYS,
+) -> dict[str, Any]:
+    buckets: dict[str, list[dict[str, Any]]] = {name: [] for name, _, _ in _PORTFOLIO_FIT_BUCKETS}
+    for row in rows:
+        raw = row.get("portfolio_fit_score")
+        label = str(row.get("portfolio_fit_label") or "").lower()
+        if raw is not None:
+            score = float(raw)
+            for name, lo, hi in _PORTFOLIO_FIT_BUCKETS:
+                if lo < score <= hi or (name == "poor" and score <= 0.35):
+                    buckets[name].append(row)
+                    break
+        elif label in buckets:
+            buckets[label].append(row)
+        else:
+            buckets["neutral"].append(row)
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "primary_window_days": primary_window_days,
+        "total": len(rows),
+        "buckets": {
+            name: _enrichment_bucket_stats(group, primary_window_days=primary_window_days)
+            for name, group in buckets.items()
+        },
+    }
+
+
+def build_final_rank_performance(
+    rows: list[dict[str, Any]],
+    *,
+    primary_window_days: int = PRIMARY_WINDOW_DAYS,
+) -> dict[str, Any]:
+    return_col = f"outcome_return_{primary_window_days}d"
+    direction_col = f"direction_correct_{primary_window_days}d"
+    scored = [r for r in rows if r.get("final_rank_score") is not None]
+    if not scored:
+        return {
+            "generated_at": datetime.now().isoformat(),
+            "primary_window_days": primary_window_days,
+            "total": len(rows),
+            "scored": 0,
+            "quartiles": {},
+        }
+    sorted_rows = sorted(scored, key=lambda r: float(r.get("final_rank_score") or 0.0), reverse=True)
+    n = len(sorted_rows)
+    q_size = max(1, n // 4)
+    quartile_groups = {
+        "Q1": sorted_rows[:q_size],
+        "Q2": sorted_rows[q_size: 2 * q_size],
+        "Q3": sorted_rows[2 * q_size: 3 * q_size],
+        "Q4": sorted_rows[3 * q_size:],
+    }
+    quartile_stats: dict[str, Any] = {}
+    for q_name, group in quartile_groups.items():
+        if not group:
+            quartile_stats[q_name] = {"count": 0, "resolved": 0, "avg_final_rank_score": None, "avg_return": None, "direction_correct_rate": None, "low_sample_warning": True}
+            continue
+        resolved = [r for r in group if r.get(return_col) is not None]
+        avg_rank = round(sum(float(r.get("final_rank_score") or 0.0) for r in group) / len(group), 4)
+        avg_return = round(sum(float(r.get(return_col) or 0.0) for r in resolved) / len(resolved), 3) if resolved else None
+        dir_rate = round(sum(1 for r in resolved if int(r.get(direction_col) or 0) == 1) / len(resolved), 3) if resolved else None
+        quartile_stats[q_name] = {
+            "count": len(group),
+            "resolved": len(resolved),
+            "avg_final_rank_score": avg_rank,
+            "avg_return": avg_return,
+            "direction_correct_rate": dir_rate,
+            "low_sample_warning": len(resolved) < _MIN_SAMPLE_SIZE,
+        }
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "primary_window_days": primary_window_days,
+        "total": len(rows),
+        "scored": len(scored),
+        "quartiles": quartile_stats,
+    }
+
+
+def build_theme_type_performance(
+    rows: list[dict[str, Any]],
+    *,
+    primary_window_days: int = PRIMARY_WINDOW_DAYS,
+) -> dict[str, Any]:
+    by_type: dict[str, list[dict[str, Any]]] = {"classified": [], "emerging": [], "none": []}
+    for row in rows:
+        t = str(row.get("theme_type") or "").lower()
+        if t in by_type:
+            by_type[t].append(row)
+        else:
+            by_type["none"].append(row)
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "primary_window_days": primary_window_days,
+        "total": len(rows),
+        "by_type": {
+            t: _enrichment_bucket_stats(group, primary_window_days=primary_window_days)
+            for t, group in by_type.items()
+        },
+    }
 
 
 def build_regime_performance_summary(
@@ -491,6 +678,18 @@ def build_signal_performance_summary(
         "normal_mode_success_rate": _success_rate(normal),
     }
     summary["regime_performance"] = regime_summary
+    summary["theme_alignment_performance"] = build_theme_alignment_performance(
+        rows, primary_window_days=primary_window_days
+    )
+    summary["portfolio_fit_performance"] = build_portfolio_fit_performance(
+        rows, primary_window_days=primary_window_days
+    )
+    summary["final_rank_performance"] = build_final_rank_performance(
+        rows, primary_window_days=primary_window_days
+    )
+    summary["theme_type_performance"] = build_theme_type_performance(
+        rows, primary_window_days=primary_window_days
+    )
     return summary
 
 
@@ -540,6 +739,13 @@ def _write_signal_outcomes_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "regime_label",
         "regime_confidence",
         "regime_data_quality",
+        "theme_alignment_score",
+        "theme_top_name",
+        "theme_type",
+        "portfolio_fit_score",
+        "portfolio_fit_label",
+        "final_rank_score",
+        "augmented_signal_score",
         "outcome_return_1d",
         "outcome_success_1d",
         "direction_correct_1d",

@@ -211,7 +211,14 @@ class PortfolioStateStore:
             outcome_success_7d     INTEGER,
             direction_correct_7d   INTEGER,
             outcome_price_7d       REAL,
-            evaluated_at_7d        TEXT
+            evaluated_at_7d        TEXT,
+            theme_alignment_score  REAL,
+            theme_top_name         TEXT,
+            theme_type             TEXT,
+            portfolio_fit_score    REAL,
+            portfolio_fit_label    TEXT,
+            final_rank_score       REAL,
+            augmented_signal_score REAL
         );
 
         CREATE INDEX IF NOT EXISTS idx_watchlist_signal_feedback_ticker_time
@@ -345,6 +352,13 @@ class PortfolioStateStore:
                 ("direction_correct_7d", "ALTER TABLE watchlist_signal_feedback ADD COLUMN direction_correct_7d INTEGER"),
                 ("outcome_price_7d", "ALTER TABLE watchlist_signal_feedback ADD COLUMN outcome_price_7d REAL"),
                 ("evaluated_at_7d", "ALTER TABLE watchlist_signal_feedback ADD COLUMN evaluated_at_7d TEXT"),
+                ("theme_alignment_score", "ALTER TABLE watchlist_signal_feedback ADD COLUMN theme_alignment_score REAL"),
+                ("theme_top_name", "ALTER TABLE watchlist_signal_feedback ADD COLUMN theme_top_name TEXT"),
+                ("theme_type", "ALTER TABLE watchlist_signal_feedback ADD COLUMN theme_type TEXT"),
+                ("portfolio_fit_score", "ALTER TABLE watchlist_signal_feedback ADD COLUMN portfolio_fit_score REAL"),
+                ("portfolio_fit_label", "ALTER TABLE watchlist_signal_feedback ADD COLUMN portfolio_fit_label TEXT"),
+                ("final_rank_score", "ALTER TABLE watchlist_signal_feedback ADD COLUMN final_rank_score REAL"),
+                ("augmented_signal_score", "ALTER TABLE watchlist_signal_feedback ADD COLUMN augmented_signal_score REAL"),
             ]:
                 if column_name not in cols:
                     conn.execute(ddl)
@@ -1034,6 +1048,13 @@ class PortfolioStateStore:
         regime_label: str = "neutral",
         regime_confidence: float | None = None,
         regime_data_quality: str = "limited",
+        theme_alignment_score: float | None = None,
+        theme_top_name: str | None = None,
+        theme_type: str | None = None,
+        portfolio_fit_score: float | None = None,
+        portfolio_fit_label: str | None = None,
+        final_rank_score: float | None = None,
+        augmented_signal_score: float | None = None,
     ) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             conn.execute(
@@ -1043,8 +1064,11 @@ class PortfolioStateStore:
                     signal_score, confidence_score, effective_score,
                     conviction_score, conviction_band, normalized_allocation,
                     price_at_signal, prediction_intent, data_mode, degraded_mode,
-                    regime_label, regime_confidence, regime_data_quality
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    regime_label, regime_confidence, regime_data_quality,
+                    theme_alignment_score, theme_top_name, theme_type,
+                    portfolio_fit_score, portfolio_fit_label, final_rank_score,
+                    augmented_signal_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     signal_key,
@@ -1064,6 +1088,13 @@ class PortfolioStateStore:
                     regime_label,
                     regime_confidence,
                     regime_data_quality,
+                    theme_alignment_score,
+                    theme_top_name,
+                    theme_type,
+                    portfolio_fit_score,
+                    portfolio_fit_label,
+                    final_rank_score,
+                    augmented_signal_score,
                 ),
             )
             row = conn.execute(
