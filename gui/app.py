@@ -537,6 +537,11 @@ def _load_config_proposal() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "config_proposal.json")
 
 
+def _load_approved_ranking_config() -> dict:
+    """Load approved_ranking_config.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "approved_ranking_config.json")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -1762,6 +1767,65 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
             },
         ]
         st.dataframe(_coerce_df(pd_rows), use_container_width=True, hide_index=True)
+
+    # ── Approved Ranking Config ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Approved Ranking Config")
+    _render_interpretation(
+        "A human-approved weight config that has passed review. "
+        "Not applied to live scoring until manually wired in. "
+        "Promote via: python -m watchlist_scanner.config_promotion --approve"
+    )
+    arc = _load_approved_ranking_config()
+    if not arc:
+        st.info(
+            "No approved config yet. Review config_proposal.json and run: "
+            "`python -m watchlist_scanner.config_promotion --approve`"
+        )
+    else:
+        st.markdown(_badge("NOT APPLIED TO LIVE SCORING", "warn"), unsafe_allow_html=True)
+
+        meta_cols = st.columns(3)
+        with meta_cols[0]:
+            st.metric("Approved Candidate", arc.get("recommended_candidate", "—"))
+        with meta_cols[1]:
+            approved_at = arc.get("approved_at", "")
+            st.metric("Approved At", approved_at[:19].replace("T", " ") if approved_at else "—")
+        with meta_cols[2]:
+            warn = arc.get("low_sample_warning")
+            n = arc.get("sample_size")
+            sample_str = f"{n}" if n is not None else "—"
+            if warn:
+                sample_str += " ⚠"
+            st.metric("Sample Size (Top-Q)", sample_str)
+
+        approved_weights = arc.get("proposed_weights") or {}
+        current_weights = arc.get("current_weights") or {}
+        weight_deltas = arc.get("weight_deltas") or {}
+        aw_rows = []
+        for k in current_weights:
+            label = k.replace("_score", "").replace("_", " ").title()
+            aw_rows.append({
+                "Component": label,
+                "Current": f"{current_weights.get(k, 0):.2f}",
+                "Approved": f"{approved_weights.get(k, 0):.2f}",
+                "Δ": f"{weight_deltas.get(k, 0):+.2f}",
+            })
+        st.dataframe(_coerce_df(aw_rows), use_container_width=True, hide_index=True)
+
+        perf_d = arc.get("performance_delta") or {}
+        if any(v is not None for v in perf_d.values()):
+            st.markdown("**Expected Performance Delta vs Current**")
+            ap_rows = [
+                {"Metric": "Hit Rate", "Δ": f"{perf_d['hit_rate_delta']:+.3f}" if perf_d.get("hit_rate_delta") is not None else "—"},
+                {"Metric": "Avg Return (%)", "Δ": f"{perf_d['avg_return_delta']:+.3f}" if perf_d.get("avg_return_delta") is not None else "—"},
+                {"Metric": "Dir. Correct Rate", "Δ": f"{perf_d['direction_correct_rate_delta']:+.3f}" if perf_d.get("direction_correct_rate_delta") is not None else "—"},
+            ]
+            st.dataframe(_coerce_df(ap_rows), use_container_width=True, hide_index=True)
+
+        st.caption(arc.get("approval_note", ""))
+        if arc.get("low_sample_warning"):
+            st.caption("⚠ Approved from thin sample — validate before applying to live scoring.")
 
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
