@@ -19,10 +19,10 @@
         "is_leveraged": false,
         "leverage_factor": 1
       },
-           {
+      {
         "symbol": "NASA",
         "shares": 14,
-        "target_weight": 0.10,
+        "target_weight": 0.1,
         "asset_class": "us_equity",
         "is_leveraged": false,
         "leverage_factor": 1
@@ -38,7 +38,7 @@
       {
         "symbol": "VXUS",
         "shares": 0,
-        "target_weight": 0.10,
+        "target_weight": 0.1,
         "asset_class": "international_equity",
         "is_leveraged": false,
         "leverage_factor": 1
@@ -46,7 +46,7 @@
       {
         "symbol": "GLD",
         "shares": 4,
-        "target_weight": 0.20,
+        "target_weight": 0.2,
         "asset_class": "commodity",
         "is_leveraged": false,
         "leverage_factor": 1
@@ -76,16 +76,16 @@
   },
   "growth_mode": {
     "mode": "accumulation_aggressive",
-    "concentration_cap": 0.40,
+    "concentration_cap": 0.4,
     "leverage_cap": 0.15,
     "target_cagr": 0.09,
     "drawdown_thresholds": {
-      "modest_equity_tilt": 0.10,
-      "aggressive_equity_tilt": 0.20,
-      "deploy_all_cash": 0.30
+      "modest_equity_tilt": 0.1,
+      "aggressive_equity_tilt": 0.2,
+      "deploy_all_cash": 0.3
     },
     "expected_returns": {
-      "us_equity": 0.10,
+      "us_equity": 0.1,
       "us_equity_sector": 0.09,
       "international_equity": 0.08,
       "commodity": 0.04,
@@ -148,7 +148,7 @@
   },
   "speculative_sleeve": {
     "enabled": true,
-    "max_total": 0.10,
+    "max_total": 0.1,
     "max_per_position": 0.05,
     "max_new_positions_per_month": 1
   },
@@ -163,10 +163,26 @@
     "v3_max_symbols": 100,
     "fallback_watchlist_enabled": true,
     "fallback_watchlist_symbols": [
-      "NVDA","MSFT","AMZN","GOOGL","META",
-      "AAPL","TSLA","AMD","AVGO","NFLX",
-      "JPM","V","MA","XOM","LLY",
-      "UNH","COST","HD","PG","KO"
+      "NVDA",
+      "MSFT",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "AAPL",
+      "TSLA",
+      "AMD",
+      "AVGO",
+      "NFLX",
+      "JPM",
+      "V",
+      "MA",
+      "XOM",
+      "LLY",
+      "UNH",
+      "COST",
+      "HD",
+      "PG",
+      "KO"
     ],
     "fallback_watchlist_max_size": 20,
     "fallback_watchlist_include_theme_candidates": true,
@@ -178,9 +194,28 @@
   "watchlist_scanner": {
     "enabled": true,
     "watchlist": [
-      "AAPL","MSFT","NVDA","AMD","META","GOOGL","TSLA","AMZN",
-      "SMCI","AVGO","PLTR","COIN","MARA","RIOT",
-      "SPY","QQQ","XLE","XLF","XLK","IWM","NASA"
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "AMD",
+      "META",
+      "GOOGL",
+      "TSLA",
+      "AMZN",
+      "SMCI",
+      "AVGO",
+      "PLTR",
+      "COIN",
+      "MARA",
+      "RIOT",
+      "SPY",
+      "QQQ",
+      "XLE",
+      "XLF",
+      "XLK",
+      "IWM",
+      "NASA",
+      "CHAT"
     ],
     "max_daily_calls": 20,
     "price_change_alert_pct": 3.0,
@@ -191,24 +226,24 @@
     "cache_dir": "data/watchlist_cache",
     "signals": {
       "degraded_confidence_penalty": 0.15,
-      "minimum_confidence_for_alert": 0.50,
+      "minimum_confidence_for_alert": 0.5,
       "minimum_confidence_for_alert_in_degraded_mode": 0.65,
       "cooldown_enabled": true,
       "cooldown_hours_default": 24,
       "cooldown_hours_strong_signal": 6,
       "cooldown_hours_weak_signal": 72,
       "strong_signal_threshold": 0.75,
-      "weak_signal_threshold": 0.40,
+      "weak_signal_threshold": 0.4,
       "cooldown_min_effective_score_delta_for_reset": 0.15,
       "cooldown_allow_direction_change_bypass": true,
       "cooldown_allow_high_confidence_bypass": false,
-      "min_signal_score": 0.50,
-      "min_confidence_score": 0.50,
+      "min_signal_score": 0.5,
+      "min_confidence_score": 0.5,
       "min_evidence_count": 2,
       "confidence_tiers": {
-        "high": 0.80,
+        "high": 0.8,
         "medium": 0.65,
-        "low": 0.50
+        "low": 0.5
       },
       "cooldown": {
         "high": 6,
@@ -237,12 +272,12 @@
     "testing_mode": false
   },
   "holding_rationale": {
-    "QQQ":  "long-term US growth engine — top 100 Nasdaq companies",
+    "QQQ": "long-term US growth engine — top 100 Nasdaq companies",
     "NASA": "space & aerospace sector ETF — long-term thematic growth exposure",
-    "VFH":  "US financial sector diversification — cyclical exposure",
+    "VFH": "US financial sector diversification — cyclical exposure",
     "VXUS": "international equity — reduces single-country concentration risk",
-    "GLD":  "inflation hedge and portfolio ballast during stress periods",
-    "QLD":  "2× leveraged Nasdaq — tactical growth amplifier, hard-capped at 5%"
+    "GLD": "inflation hedge and portfolio ballast during stress periods",
+    "QLD": "2× leveraged Nasdaq — tactical growth amplifier, hard-capped at 5%"
   },
   "opportunity_cost": {
     "idle_cash_threshold": 2000.0,
@@ -250,55 +285,83 @@
   },
   "extended_watchlist": {
     "enabled": true,
-    "confidence_threshold": 0.80,
+    "confidence_threshold": 0.8,
     "ttl_days": 7,
     "max_symbols": 3,
     "db_path": "data/portfolio.db"
   },
   "scraped_intel": {
     "enabled": true,
-    "adapters": ["sec_filings", "rss_news"],
+    "adapters": [
+      "sec_filings",
+      "rss_news"
+    ],
     "lookback_days": 30,
     "cache_dir": "data/scraped_cache",
     "db_path": "data/portfolio.db",
     "rss_feeds": [
       "https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
     ],
-    "export_enabled": false,
+    "export_enabled": true,
     "export_dir": "data/training_export",
-    "comparison_mode": false,
+    "comparison_mode": true,
     "comparison_max_signal_boost": 0.12,
-    "comparison_max_conf_boost": 0.10,
+    "comparison_max_conf_boost": 0.1,
     "comparison_output_dir": "outputs/latest",
-    "comparison_outcome_tracking": false,
-    "comparison_outcome_windows": [1, 5, 20],
+    "comparison_outcome_tracking": true,
+    "comparison_outcome_windows": [
+      1,
+      5,
+      20
+    ],
     "comparison_outcome_db_path": "data/portfolio.db",
     "comparison_since_date": null,
-    "tuning_enabled": false,
+    "tuning_enabled": true,
     "tuning_output_dir": "outputs/latest",
     "tuning_since_date": null,
     "tuning_min_sample_size": 10,
-    "tuning_windows": [1, 5, 20],
+    "tuning_windows": [
+      1,
+      5,
+      20
+    ],
     "tuning_objective": "win_rate_lift",
-    "tuning_signal_boost_grid": [0.08, 0.10, 0.12, 0.14, 0.16],
-    "tuning_conf_boost_grid": [0.06, 0.08, 0.10, 0.12],
-    "tuning_weight_step": 0.10,
+    "tuning_signal_boost_grid": [
+      0.08,
+      0.1,
+      0.12,
+      0.14,
+      0.16
+    ],
+    "tuning_conf_boost_grid": [
+      0.06,
+      0.08,
+      0.1,
+      0.12
+    ],
+    "tuning_weight_step": 0.1,
     "tuning_max_candidates": 500,
-    "tuning_require_all_windows": false,
-    "promotion_review_enabled": false,
+    "tuning_require_all_windows": true,
+    "promotion_review_enabled": true,
     "promotion_review_output_dir": "outputs/latest",
     "promotion_min_sample_size": 30,
     "promotion_min_window_sample_size": 10,
-    "promotion_required_windows": [5, 20],
+    "promotion_required_windows": [
+      5,
+      20
+    ],
     "promotion_min_win_rate_lift": 0.05,
     "promotion_min_avg_return_lift": 0.0,
-    "promotion_max_instability_gap": 0.20,
-    "promotion_max_feature_concentration": 0.60,
-    "promotion_require_dual_window_outperformance": false
+    "promotion_max_instability_gap": 0.2,
+    "promotion_max_feature_concentration": 0.6,
+    "promotion_require_dual_window_outperformance": true
   },
   "market_universe": {
-    "enabled": false,
-    "groups": ["nasdaq100", "sector_etfs"],
+    "enabled": true,
+    "groups": [
+      "nasdaq100",
+      "sector_etfs"
+    ],
     "max_symbols": 300
   },
   "universal_scanner": {
@@ -313,10 +376,10 @@
   },
   "opportunity_ranker": {
     "weights": {
-      "momentum": 0.40,
+      "momentum": 0.4,
       "relative_strength": 0.25,
       "volume_confirmation": 0.25,
-      "volatility_sanity": 0.10
+      "volatility_sanity": 0.1
     },
     "min_score": 30.0
   },

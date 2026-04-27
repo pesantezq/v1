@@ -1,0 +1,101 @@
+{
+  "generated_at": "2026-04-27T16:09:43.551794",
+  "observe_only": true,
+  "primary_window_days": 3,
+  "total_rows": 210,
+  "resolved_rows": 105,
+  "current_weights": {
+    "augmented_signal_score": 0.4,
+    "confidence_score": 0.25,
+    "theme_alignment_score": 0.15,
+    "portfolio_fit_score": 0.2
+  },
+  "recommended_candidate": "signal_heavy",
+  "recommendation_reason": "Best top-quartile hit rate (75.0%, avg return +2.69%) across 24 resolved signals",
+  "candidates": [
+    {
+      "name": "current",
+      "weights": {
+        "augmented_signal_score": 0.4,
+        "confidence_score": 0.25,
+        "theme_alignment_score": 0.15,
+        "portfolio_fit_score": 0.2
+      },
+      "top_quartile_avg_return": 2.71,
+      "top_quartile_hit_rate": 0.708,
+      "top_quartile_direction_correct_rate": 0.708,
+      "sample_size": 24,
+      "low_sample_warning": false
+    },
+    {
+      "name": "theme_heavy",
+      "weights": {
+        "augmented_signal_score": 0.3,
+        "confidence_score": 0.2,
+        "theme_alignment_score": 0.35,
+        "portfolio_fit_score": 0.15
+      },
+      "top_quartile_avg_return": 2.71,
+      "top_quartile_hit_rate": 0.708,
+      "top_quartile_direction_correct_rate": 0.708,
+      "sample_size": 24,
+      "low_sample_warning": false
+    },
+    {
+      "name": "portfolio_fit_heavy",
+      "weights": {
+        "augmented_signal_score": 0.3,
+        "confidence_score": 0.2,
+        "theme_alignment_score": 0.1,
+        "portfolio_fit_score": 0.4
+      },
+      "top_quartile_avg_return": 2.58,
+      "top_quartile_hit_rate": 0.714,
+      "top_quartile_direction_correct_rate": 0.714,
+      "sample_size": 21,
+      "low_sample_warning": false
+    },
+    {
+      "name": "confidence_heavy",
+      "weights": {
+        "augmented_signal_score": 0.3,
+        "confidence_score": 0.45,
+        "theme_alignment_score": 0.1,
+        "portfolio_fit_score": 0.15
+      },
+      "top_quartile_avg_return": 2.796,
+      "top_quartile_hit_rate": 0.741,
+      "top_quartile_direction_correct_rate": 0.741,
+      "sample_size": 27,
+      "low_sample_warning": false
+    },
+    {
+      "name": "signal_heavy",
+      "weights": {
+        "augmented_signal_score": 0.55,
+        "confidence_score": 0.2,
+        "theme_alignment_score": 0.15,
+        "portfolio_fit_score": 0.1
+      },
+      "top_quartile_avg_return": 2.686,
+      "top_quartile_hit_rate": 0.75,
+      "top_quartile_direction_correct_rate": 0.75,
+      "sample_size": 24,
+      "low_sample_warning": false
+    },
+    {
+      "name": "balanced",
+      "weights": {
+        "augmented_signal_score": 0.25,
+        "confidence_score": 0.25,
+        "theme_alignment_score": 0.25,
+        "portfolio_fit_score": 0.25
+      },
+      "top_quartile_avg_return": 2.667,
+      "top_quartile_hit_rate": 0.682,
+      "top_quartile_direction_correct_rate": 0.682,
+      "sample_size": 22,
+      "low_sample_warning": false
+    }
+  ]
+}

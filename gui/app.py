@@ -234,7 +234,7 @@ def _render_file(fpath: Path) -> None:
                  if not ln.startswith("#") and not ln.startswith("SUMMARY")]
         try:
             df = pd.read_csv(io.StringIO("\n".join(clean))).dropna(how="all")
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
         except Exception:
             st.text_area("Raw", content, height=400)
 
@@ -420,7 +420,7 @@ def _render_outputs_action(target: dict | None, *, button_key: str, path_only: b
     if not target:
         return
     if not path_only and target.get("scope") in {"Latest", "Portfolio", "Policy", "Regime", "Reports"}:
-        if st.button("Open in Outputs", key=button_key, use_container_width=True):
+        if st.button("Open in Outputs", key=button_key, width="stretch"):
             _set_outputs_focus(target)
     st.caption(f"Raw artifact: `{target.get('relative_path') or target.get('path') or 'Unavailable'}`")
 
@@ -510,7 +510,7 @@ def _render_bar_chart_fallback(df: pd.DataFrame, *, index_col: str, value_cols: 
                 chart_df[col] = chart_df[col].map(_coerce_num)
         st.bar_chart(chart_df.set_index(index_col))
     except Exception:
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
 
 
 def _load_market_opportunities() -> dict:
@@ -934,6 +934,41 @@ def _render_system_confidence_indicator(perf_summary: dict) -> None:
     )
 
 
+def _render_daily_memo_section() -> None:
+    """
+    Daily Memo panel on the dashboard.
+
+    'Generate Daily Memo' button builds plain-text and Markdown memos from the
+    latest system_decision_summary.json and writes them to outputs/latest/.
+    The preview uses st.code() which has a built-in copy button.
+    """
+    col_btn, col_status = st.columns([2, 8])
+    with col_btn:
+        generate_clicked = st.button("Generate Daily Memo", type="secondary", use_container_width=True)
+
+    if generate_clicked:
+        try:
+            from watchlist_scanner.daily_memo import generate_daily_memo  # lazy import
+            memo_txt, _ = generate_daily_memo()
+            st.session_state["_daily_memo_text"] = memo_txt
+            st.session_state["_daily_memo_error"] = None
+        except Exception as exc:
+            st.session_state["_daily_memo_error"] = str(exc)
+            st.session_state["_daily_memo_text"] = None
+
+    err  = st.session_state.get("_daily_memo_error")
+    memo = st.session_state.get("_daily_memo_text")
+
+    if err:
+        with col_status:
+            st.error(f"Memo generation failed: {err}")
+    elif memo:
+        with col_status:
+            st.success("Memo written to outputs/latest/daily_memo.txt and daily_memo.md")
+        with st.expander("Daily Memo Preview  (copy button top-right)", expanded=True):
+            st.code(memo, language=None)
+
+
 def _render_output_scope_browser(scope: str, base_dir: Path) -> None:
     if not base_dir.exists() or not any(base_dir.iterdir()):
         st.info(f"No files in `{base_dir.relative_to(ROOT)}/` yet.")
@@ -970,7 +1005,7 @@ def _render_output_scope_browser(scope: str, base_dir: Path) -> None:
                 ]
             ),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
     fp = file_map[sel]
@@ -1125,7 +1160,7 @@ def _render_overview_mode(bundle: dict, mc: dict) -> None:
                     for row in signal_triage["rows"][:8]
                 ]
             )
-            st.dataframe(triage_df, use_container_width=True, hide_index=True)
+            st.dataframe(triage_df, width="stretch", hide_index=True)
             counts_text = ", ".join(
                 f"{band}: {count}" for band, count in signal_triage["counts_by_band"].items()
             )
@@ -1149,7 +1184,7 @@ def _render_overview_mode(bundle: dict, mc: dict) -> None:
         ]
     )
     if not freshness_df.empty:
-        st.dataframe(freshness_df, use_container_width=True, hide_index=True)
+        st.dataframe(freshness_df, width="stretch", hide_index=True)
 
     if strategy.get("output_target"):
         action_cols = st.columns(2)
@@ -1213,7 +1248,7 @@ def _render_run_status_tab(bundle: dict) -> None:
             for row in run_status["artifact_freshness"]
         ]
     )
-    st.dataframe(freshness_df, use_container_width=True, hide_index=True)
+    st.dataframe(freshness_df, width="stretch", hide_index=True)
 
     if run_status["missing_artifact_warnings"]:
         st.warning("Missing artifacts: " + ", ".join(run_status["missing_artifact_warnings"]))
@@ -1302,7 +1337,7 @@ def _render_signal_triage_tab(bundle: dict) -> None:
             for row in filtered_rows
         ]
     )
-    st.dataframe(triage_df, use_container_width=True, hide_index=True)
+    st.dataframe(triage_df, width="stretch", hide_index=True)
 
     if triage["summary_line"]:
         st.caption(triage["summary_line"])
@@ -1440,7 +1475,7 @@ def _render_strategy_tab(bundle: dict) -> None:
                     for row in policy_alts
                 ]
             )
-            st.dataframe(alt_df, use_container_width=True, hide_index=True)
+            st.dataframe(alt_df, width="stretch", hide_index=True)
         else:
             st.caption("No alternative policy rankings available.")
     with alt_right:
@@ -1455,7 +1490,7 @@ def _render_strategy_tab(bundle: dict) -> None:
                     for row in profile_alts
                 ]
             )
-            st.dataframe(alt_df, use_container_width=True, hide_index=True)
+            st.dataframe(alt_df, width="stretch", hide_index=True)
         else:
             st.caption("No alternative profile rankings available.")
 
@@ -1508,7 +1543,7 @@ def _render_health_tab(bundle: dict) -> None:
         ]
     )
     st.subheader("Artifact Availability")
-    st.dataframe(artifact_df, use_container_width=True, hide_index=True)
+    st.dataframe(artifact_df, width="stretch", hide_index=True)
 
 
 def _render_performance_tab(bundle: dict) -> None:
@@ -1562,7 +1597,7 @@ def _render_performance_tab(bundle: dict) -> None:
                     for row in calibration_rows
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1632,7 +1667,7 @@ def _render_regime_analytics_tab(bundle: dict) -> None:
                 for row in regime_rows
             ]
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     for note in regime_view.get("notes", []):
@@ -1676,7 +1711,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
     if tap_buckets:
         st.dataframe(
             _coerce_df(_bucket_table(tap_buckets, "Alignment Tier")),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.caption(f"Total signals: {tap.get('total', 0)}")
@@ -1690,7 +1725,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
     if pfp_buckets:
         st.dataframe(
             _coerce_df(_bucket_table(pfp_buckets, "Fit Label")),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.caption(f"Total signals: {pfp.get('total', 0)}")
@@ -1713,7 +1748,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Dir. Correct": _fmt_ratio_pct(stats.get("direction_correct_rate")),
                 "Thin Sample": "⚠" if stats.get("low_sample_warning") else "",
             })
-        st.dataframe(_coerce_df(q_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(q_rows), width="stretch", hide_index=True)
         st.caption(f"Q1 = top 25% by final_rank_score. Total scored: {frp.get('scored', 0)} / {frp.get('total', 0)}")
     else:
         st.info("No final_rank_score data in resolved signals.")
@@ -1725,7 +1760,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
     if ttp_types:
         st.dataframe(
             _coerce_df(_bucket_table(ttp_types, "Theme Type")),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.caption(f"Total signals: {ttp.get('total', 0)}")
@@ -1777,7 +1812,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Resolved (Top-Q)": c.get("sample_size", 0),
                 "Thin Sample": "⚠" if c.get("low_sample_warning") else "",
             })
-        st.dataframe(_coerce_df(wt_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(wt_rows), width="stretch", hide_index=True)
         st.caption(
             "⚠ = fewer than 20 resolved signals in top quartile — treat as directional only."
         )
@@ -1825,7 +1860,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Resolved (Top-Q)": p.get("sample_size", 0),
                 "Thin Sample": "⚠" if p.get("low_sample_warning") else "",
             })
-        st.dataframe(_coerce_df(ps_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(ps_rows), width="stretch", hide_index=True)
         st.caption("Rank 1 = best. Δ = delta vs current weights. ⚠ = fewer than 20 resolved in top quartile.")
 
         cur = ps.get("current_policy") or {}
@@ -1842,7 +1877,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                     "Dir. Correct": _fmt_ratio_pct(policy.get("top_quartile_direction_correct_rate")),
                     "Resolved": policy.get("sample_size", 0),
                 })
-            st.dataframe(_coerce_df(cmp_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(cmp_rows), width="stretch", hide_index=True)
 
     # ── Config Proposal ───────────────────────────────────────────────────────
     st.markdown("---")
@@ -1882,7 +1917,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Proposed": f"{proposed.get(k, 0):.2f}",
                 "Δ": f"{deltas_w.get(k, 0):+.2f}",
             })
-        st.dataframe(_coerce_df(w_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(w_rows), width="stretch", hide_index=True)
 
         st.markdown("**Expected Performance Delta vs Current**")
         perf_d = cp.get("performance_delta") or {}
@@ -1900,7 +1935,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Δ": f"{perf_d['direction_correct_rate_delta']:+.3f}" if perf_d.get("direction_correct_rate_delta") is not None else "—",
             },
         ]
-        st.dataframe(_coerce_df(pd_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(pd_rows), width="stretch", hide_index=True)
 
     # ── Approved Ranking Config ───────────────────────────────────────────────
     st.markdown("---")
@@ -1968,7 +2003,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 "Approved": f"{approved_weights.get(k, 0):.2f}",
                 "Δ": f"{weight_deltas.get(k, 0):+.2f}",
             })
-        st.dataframe(_coerce_df(aw_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(aw_rows), width="stretch", hide_index=True)
 
         perf_d = arc.get("performance_delta") or {}
         if any(v is not None for v in perf_d.values()):
@@ -1978,7 +2013,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 {"Metric": "Avg Return (%)", "Δ": f"{perf_d['avg_return_delta']:+.3f}" if perf_d.get("avg_return_delta") is not None else "—"},
                 {"Metric": "Dir. Correct Rate", "Δ": f"{perf_d['direction_correct_rate_delta']:+.3f}" if perf_d.get("direction_correct_rate_delta") is not None else "—"},
             ]
-            st.dataframe(_coerce_df(ap_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(ap_rows), width="stretch", hide_index=True)
 
         st.caption(arc.get("approval_note", ""))
         if arc.get("low_sample_warning"):
@@ -2030,7 +2065,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                     "Capped By": cap_str,
                     "Reason": o.get("reason", ""),
                 })
-            st.dataframe(_coerce_df(ap_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(ap_rows), width="stretch", hide_index=True)
 
         gen_at = ap.get("generated_at", "")
         conf_thr = ap.get("confidence_threshold")
@@ -2130,7 +2165,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                     "Preview Contrib": f"{d['preview_contribution']:.4f}" if d.get("preview_contribution") is not None else "—",
                     "Win": "Y" if d.get("win") else "N",
                 })
-            st.dataframe(_coerce_df(sim_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(sim_rows), width="stretch", hide_index=True)
 
         sim_gen_at = sim.get("generated_at", "")
         if sim_gen_at:
@@ -2210,7 +2245,7 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 rule_rows.append({"Rule": r, "Status": "PASS"})
             for r in rules_failed:
                 rule_rows.append({"Rule": r, "Status": "FAIL"})
-            st.dataframe(_coerce_df(rule_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(rule_rows), width="stretch", hide_index=True)
 
     # ── Rank-Aware Advisory Sizing ────────────────────────────────────────────
     st.subheader("Rank-Aware Advisory Sizing")
@@ -2390,7 +2425,7 @@ def _render_recommendation_quality_tab(bundle: dict) -> None:
                     for row in decile_rows
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -2414,7 +2449,7 @@ def _render_weekly_review_tab(bundle: dict) -> None:
 
     action_cols = st.columns([1, 1, 1, 2])
     with action_cols[0]:
-        if st.button("Regenerate", key="weekly_review_regenerate", use_container_width=True):
+        if st.button("Regenerate", key="weekly_review_regenerate", width="stretch"):
             try:
                 result = generate_weekly_summary(root=ROOT)
             except Exception as exc:
@@ -2456,7 +2491,7 @@ def _render_weekly_review_tab(bundle: dict) -> None:
                 markdown,
                 file_name=Path(report.get("path", "weekly_summary.md")).name,
                 mime="text/markdown",
-                use_container_width=True,
+                width="stretch",
             )
         with export_cols[1]:
             st.download_button(
@@ -2464,7 +2499,7 @@ def _render_weekly_review_tab(bundle: dict) -> None:
                 plain_text,
                 file_name="weekly_summary.txt",
                 mime="text/plain",
-                use_container_width=True,
+                width="stretch",
             )
 
 
@@ -2562,7 +2597,7 @@ def _render_decision_center_tab(bundle: dict, mc: dict) -> None:
             ),
             unsafe_allow_html=True,
         )
-    st.dataframe(_coerce_df(rows), use_container_width=True, hide_index=True)
+    st.dataframe(_coerce_df(rows), width="stretch", hide_index=True)
 
     st.subheader("Decision Detail")
     sym_options = [a.get("symbol", "?") for a in filtered]
@@ -2643,7 +2678,7 @@ def _render_opportunities_tab(bundle: dict, mc: dict) -> None:
                 }
                 for p in promoted
             ]
-            st.dataframe(_coerce_df(promo_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(promo_rows), width="stretch", hide_index=True)
 
             st.subheader("Why was it promoted?")
             sym_opts = [p.get("symbol", "?") for p in promoted]
@@ -2689,7 +2724,7 @@ def _render_opportunities_tab(bundle: dict, mc: dict) -> None:
                 }
                 for r in sorted(deferred, key=lambda x: x.get("conviction_score", 0))
             ]
-            st.dataframe(_coerce_df(defer_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(defer_rows), width="stretch", hide_index=True)
             st.caption(
                 "These symbols passed initial screening but did not clear the conviction "
                 "threshold for allocation. Re-run to check for updated scores."
@@ -2704,7 +2739,7 @@ def _render_opportunities_tab(bundle: dict, mc: dict) -> None:
                 {"Event": k.replace("_", " ").title(), "Count": v}
                 for k, v in sorted(event_summary.items(), key=lambda x: x[1], reverse=True)
             ]
-            st.dataframe(_coerce_df(ev_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(ev_rows), width="stretch", hide_index=True)
 
 
 def _render_portfolio_vs_market_tab(bundle: dict, mc: dict) -> None:
@@ -2740,7 +2775,7 @@ def _render_portfolio_vs_market_tab(bundle: dict, mc: dict) -> None:
                 }
                 for r in sorted(portfolio_rows, key=lambda x: x.get("conviction_score", 0), reverse=True)
             ]
-            st.dataframe(_coerce_df(held_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(held_rows), width="stretch", hide_index=True)
             st.caption(f"{len(actionable)} actionable  |  {len(portfolio_rows) - len(actionable)} deferred")
 
     with right_col:
@@ -2758,7 +2793,7 @@ def _render_portfolio_vs_market_tab(bundle: dict, mc: dict) -> None:
                 }
                 for p in sorted(promoted, key=lambda x: x.get("score", 0), reverse=True)
             ]
-            st.dataframe(_coerce_df(promo_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(promo_rows), width="stretch", hide_index=True)
 
     if promoted and portfolio_rows:
         st.subheader("Rotation Potential")
@@ -2778,7 +2813,7 @@ def _render_portfolio_vs_market_tab(bundle: dict, mc: dict) -> None:
                 }
                 for p in rotation_candidates[:10]
             ]
-            st.dataframe(_coerce_df(rot_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(rot_rows), width="stretch", hide_index=True)
             st.caption(
                 f"{len(rotation_candidates)} external candidates not currently in watchlist — "
                 "review for potential rotation."
@@ -2886,7 +2921,7 @@ def _render_strategy_breakdown_tab(bundle: dict, mc: dict, perf_summary: dict | 
                 "This populates with long-term quality candidates once market_coverage has run."
             )
         else:
-            st.dataframe(_strategy_df(compounders), use_container_width=True, hide_index=True)
+            st.dataframe(_strategy_df(compounders), width="stretch", hide_index=True)
             st.caption(
                 "Compounders: quality businesses held long-term. "
                 "Exit triggers: −5% below 200 DMA, or 25% profit protection."
@@ -2899,7 +2934,7 @@ def _render_strategy_breakdown_tab(bundle: dict, mc: dict, perf_summary: dict | 
                 "This populates with event-driven or trend-following setups from the latest market scan."
             )
         else:
-            st.dataframe(_strategy_df(momentum), use_container_width=True, hide_index=True)
+            st.dataframe(_strategy_df(momentum), width="stretch", hide_index=True)
             st.caption(
                 "Momentum: event-driven or trend-following. "
                 "Exit triggers: −3% below 50 DMA, or 12% profit protection."
@@ -2921,7 +2956,7 @@ def _render_strategy_breakdown_tab(bundle: dict, mc: dict, perf_summary: dict | 
                 }
                 for g in sorted(by_sector, key=lambda x: x.get("total_suggested_allocation", 0), reverse=True)
             ]
-            st.dataframe(_coerce_df(sec_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(sec_rows), width="stretch", hide_index=True)
             portfolio_view = bundle.get("portfolio_view", {})
             if portfolio_view.get("warnings"):
                 for w in portfolio_view["warnings"]:
@@ -2954,7 +2989,7 @@ def _render_strategy_breakdown_tab(bundle: dict, mc: dict, perf_summary: dict | 
                         }
                         for r in calibration
                     ]
-                    st.dataframe(_coerce_df(cal_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(_coerce_df(cal_rows), width="stretch", hide_index=True)
 
             tracked = perf_summary.get("tracked_signals", 0)
             resolved = perf_summary.get("resolved_signals", 0)
@@ -3090,7 +3125,7 @@ def _render_exit_signals_tab(bundle: dict, mc: dict) -> None:
             }
             for r in sorted(low_conviction, key=lambda x: x.get("conviction_score", 0))
         ]
-        st.dataframe(_coerce_df(lc_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(lc_rows), width="stretch", hide_index=True)
 
     regime_commentary = bundle.get("portfolio_view", {}).get("regime_commentary") or ""
     if regime_commentary:
@@ -3174,7 +3209,7 @@ def _render_outcomes_tab(mc: dict, perf_summary: dict, outcomes_df: pd.DataFrame
         if not filtered_rows:
             st.info("No records match the current filter.")
         else:
-            st.dataframe(_coerce_df(filtered_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(filtered_rows), width="stretch", hide_index=True)
 
     if resolved == 0 and tracked > 0:
         st.info(
@@ -3231,7 +3266,7 @@ def _render_execution_tab(mc: dict) -> None:
                 }
                 for a in actionable
             ]
-            st.dataframe(_coerce_df(rec_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(rec_rows), width="stretch", hide_index=True)
         return
 
     events = trade_events if isinstance(trade_events, list) else (trade_events.get("events") or [])
@@ -3249,7 +3284,7 @@ def _render_execution_tab(mc: dict) -> None:
         }
         for ev in events
     ]
-    st.dataframe(_coerce_df(event_rows), use_container_width=True, hide_index=True)
+    st.dataframe(_coerce_df(event_rows), width="stretch", hide_index=True)
 
 
 # -- Attribution / Rotation panels -------------------------------------------
@@ -3403,7 +3438,7 @@ def _render_attribution_tab(pa: dict) -> None:
                             }
                             for t in best_trades
                         ]),
-                        use_container_width=True, hide_index=True,
+                        width="stretch", hide_index=True,
                     )
             with bw2:
                 if worst_trades:
@@ -3418,7 +3453,7 @@ def _render_attribution_tab(pa: dict) -> None:
                             }
                             for t in worst_trades
                         ]),
-                        use_container_width=True, hide_index=True,
+                        width="stretch", hide_index=True,
                     )
 
         # Data quality notes
@@ -3477,7 +3512,7 @@ def _render_attribution_tab(pa: dict) -> None:
                 for a in by_action
             ]
             st.markdown("**Performance by Action Type**")
-            st.dataframe(_coerce_df(action_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(action_rows), width="stretch", hide_index=True)
             st.caption(
                 "Win rate / gain / loss / R/R apply to BUY and PROMOTE events. "
                 "Avg exit quality (latest return ÷ peak gain) is most meaningful for SELL and TRIM."
@@ -3543,7 +3578,7 @@ def _render_attribution_tab(pa: dict) -> None:
                 "Small?":    "⚠" if small else "",
             })
         if any(r["Events"] > 0 for r in band_rows):
-            st.dataframe(_coerce_df(band_rows), use_container_width=True, hide_index=True)
+            st.dataframe(_coerce_df(band_rows), width="stretch", hide_index=True)
 
         ss = cal.get("sample_summary") or {}
         low_m   = _coerce_num(ss.get("low_matched"), 0)
@@ -3633,7 +3668,7 @@ def _render_rotation_tab(rot_events: list) -> None:
             }
             for s in sorted(strat_counts)
         ]
-        st.dataframe(_coerce_df(strat_rows), use_container_width=True, hide_index=True)
+        st.dataframe(_coerce_df(strat_rows), width="stretch", hide_index=True)
 
     # ----- Margin analysis -----
     margins = [e.get("actual_margin") for e in rot_events if e.get("actual_margin") is not None]
@@ -3935,10 +3970,11 @@ def page_dashboard() -> None:
             "Missing files degrade gracefully and the dashboard does not alter live investing behavior."
         )
     with action_col:
-        if st.button("Refresh", use_container_width=True):
+        if st.button("Refresh", width="stretch"):
             st.rerun()
 
     _render_system_summary()
+    _render_daily_memo_section()
     st.divider()
     _render_system_confidence_indicator(perf_summary)
     _render_action_strip(mc, bundle)
@@ -4063,11 +4099,11 @@ def page_run_controls() -> None:
 
     st.subheader("Main Portfolio Analysis")
     m1, m2, m3 = st.columns(3)
-    run_daily   = m1.button("Run Daily",   use_container_width=True, type="primary",
+    run_daily   = m1.button("Run Daily",   width="stretch", type="primary",
                             help="Alert-only digest; uses cached prices if < 24 h old.")
-    run_weekly  = m2.button("Run Weekly",  use_container_width=True,
+    run_weekly  = m2.button("Run Weekly",  width="stretch",
                             help="Full digest + S&P 500 watchlist refresh (~3 FMP calls).")
-    run_monthly = m3.button("Run Monthly", use_container_width=True,
+    run_monthly = m3.button("Run Monthly", width="stretch",
                             help="Capital deployment memo + full S&P 500 scan.")
 
     if run_daily:
@@ -4095,7 +4131,7 @@ def page_run_controls() -> None:
         agent_mode    = st.selectbox("Mode", ["daily", "weekly", "monthly"], key="ag_mode")
         agent_offline = st.checkbox("Force offline (no LLM)", key="ag_offline",
                                     help="--no-network: templated memo, no Ollama/Claude needed.")
-        if st.button("Run AI Agent", use_container_width=True, key="btn_agent"):
+        if st.button("Run AI Agent", width="stretch", key="btn_agent"):
             cmd = [PYTHON, "-m", "agent", "--mode", agent_mode]
             if agent_offline:
                 cmd.append("--no-network")
@@ -4107,7 +4143,7 @@ def page_run_controls() -> None:
         st.markdown("**Watchlist Scanner** (`python -m watchlist_scanner`)")
         wl_dry = st.checkbox("Dry run", value=True, key="wl_dry",
                              help="Uses cached data only -- no Alpha Vantage calls.")
-        if st.button("Run Watchlist Scanner", use_container_width=True, key="btn_wl"):
+        if st.button("Run Watchlist Scanner", width="stretch", key="btn_wl"):
             cmd = [PYTHON, "-m", "watchlist_scanner"]
             if wl_dry:
                 cmd.append("--dry-run")
@@ -4118,7 +4154,7 @@ def page_run_controls() -> None:
     with s3:
         st.markdown("**Theme Engine** (`python -m theme_engine`)")
         theme_mode = st.selectbox("Mode", ["daily", "weekly", "monthly"], key="th_mode")
-        if st.button("Run Theme Engine", use_container_width=True, key="btn_theme"):
+        if st.button("Run Theme Engine", width="stretch", key="btn_theme"):
             cmd = [PYTHON, "-m", "theme_engine", "--mode", theme_mode]
             with st.spinner(f"Running theme engine ({theme_mode})..."):
                 rc, out = _run_command(cmd, timeout=120)
@@ -4254,7 +4290,7 @@ def page_watchlist_manager() -> None:
                     "Note":    meta.get("note", ""),
                 })
             df = pd.DataFrame(rows)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width="stretch", hide_index=True)
             enabled_count = sum(1 for r in rows if r["Enabled"])
             st.caption(f"{len(symbols)} symbols -- {enabled_count} enabled")
 
@@ -4289,7 +4325,10 @@ def page_watchlist_manager() -> None:
                         "note":    new_note,
                     }
                     err = _save_wl_tags(tags_db)
-                    st.success(f"Saved metadata for {sel_sym}.") if not err else st.error(err)
+                    if not err:
+                        st.success(f"Saved metadata for {sel_sym}.")
+                    else:
+                        st.error(err)
 
             # Group-by-tag view
             if tags_db:
@@ -4355,7 +4394,10 @@ def page_watchlist_manager() -> None:
             new_syms = [s.strip().upper() for s in bulk_txt.split(",") if s.strip()]
             cfg_raw.setdefault("watchlist_scanner", {})["watchlist"] = new_syms
             err = _save_config(cfg_raw)
-            st.success(f"Saved {len(new_syms)} symbols.") if not err else st.error(err)
+            if not err:
+                st.success(f"Saved {len(new_syms)} symbols.")
+            else:
+                st.error(err)
 
     # -- Import / Export ------------------------------------------------------
     with tab_import:
@@ -4425,7 +4467,7 @@ def page_run_history() -> None:
             mask &= df["status"] == f_status
 
         display = df[mask].head(int(f_limit))
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
         st.caption(f"{len(display)} rows shown ({len(df)} total in DB)")
     else:
         st.info("No run history in database yet. Run the portfolio analysis first.")
@@ -4456,7 +4498,7 @@ def page_run_history() -> None:
             "Size KB":  f"{kb:.1f}",
             "Age":      _file_age(d),
         })
-    st.dataframe(pd.DataFrame(hist_summary), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(hist_summary), width="stretch", hide_index=True)
 
     sel_date = st.selectbox("Inspect snapshot", [d.name for d in date_dirs], key="rh_date")
     if sel_date:
@@ -4482,7 +4524,7 @@ def page_run_history() -> None:
         "SELECT * FROM portfolio_peaks ORDER BY recorded_at DESC LIMIT 20"
     )
     if peaks:
-        st.dataframe(pd.DataFrame(peaks), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(peaks), width="stretch", hide_index=True)
     else:
         st.info("No portfolio_peaks records yet.")
 
@@ -4565,7 +4607,7 @@ def page_api_health() -> None:
             {"Endpoint": "Company Overview",     "TTL": "7d",   "Cached files": cs["overview"]},
             {"Endpoint": "Real-time Quote",      "TTL": "30m",  "Cached files": cs["quote"]},
         ])
-        st.dataframe(cache_df, use_container_width=True, hide_index=True)
+        st.dataframe(cache_df, width="stretch", hide_index=True)
         st.caption(
             "Cached responses serve future requests without consuming budget. "
             "Clear caches in Diagnostics > Maintenance to force fresh API fetches."
@@ -4625,7 +4667,10 @@ def page_api_health() -> None:
             continue
         row1, row2 = st.columns([4, 1])
         row1.markdown(f"**`{key}`** -- {info['desc']}")
-        row2.success("Set") if info["set"] else row2.error("Missing")
+        if info["set"]:
+            row2.success("Set")
+        else:
+            row2.error("Missing")
 
     st.divider()
 
@@ -4715,14 +4760,17 @@ def page_config_editor() -> None:
                 cfg_raw["rebalance_rules"]["avoid_taxable_sales"]        = new_avoid_tax
                 cfg_raw["rebalance_rules"]["trim_leverage_before_core"]  = new_trim_lev
                 err = _save_config(cfg_raw)
-                st.success("Saved.") if not err else st.error(f"Failed: {err}")
+                if not err:
+                    st.success("Saved.")
+                else:
+                    st.error(f"Failed: {err}")
 
     # -- Holdings -------------------------------------------------------------
     with tab_hold:
         holdings = cfg_raw.get("portfolio", {}).get("holdings", [])
         st.subheader(f"{len(holdings)} Holdings")
         if holdings:
-            st.dataframe(pd.DataFrame(holdings), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(holdings), width="stretch", hide_index=True)
 
         st.caption("Update share counts below. Add/remove symbols by editing config.json directly.")
         with st.form("form_holdings"):
@@ -4740,7 +4788,10 @@ def page_config_editor() -> None:
             if st.form_submit_button("Save Share Counts", type="primary"):
                 cfg_raw["portfolio"]["holdings"] = updated
                 err = _save_config(cfg_raw)
-                st.success("Saved.") if not err else st.error(f"Failed: {err}")
+                if not err:
+                    st.success("Saved.")
+                else:
+                    st.error(f"Failed: {err}")
 
     # -- Features & Services --------------------------------------------------
     with tab_feat:
@@ -4789,7 +4840,10 @@ def page_config_editor() -> None:
                     "enabled": email_on, "sender_email": new_from, "recipient_email": new_to,
                 })
                 err = _save_config(cfg_raw)
-                st.success("Saved.") if not err else st.error(f"Failed: {err}")
+                if not err:
+                    st.success("Saved.")
+                else:
+                    st.error(f"Failed: {err}")
 
         st.divider()
         st.subheader("Watchlist Symbols (quick edit)")
@@ -4799,7 +4853,10 @@ def page_config_editor() -> None:
             new_syms = [s.strip().upper() for s in new_wl_txt.split(",") if s.strip()]
             cfg_raw.setdefault("watchlist_scanner", {})["watchlist"] = new_syms
             err = _save_config(cfg_raw)
-            st.success(f"Saved {len(new_syms)} symbols.") if not err else st.error(str(err))
+            if not err:
+                st.success(f"Saved {len(new_syms)} symbols.")
+            else:
+                st.error(str(err))
 
     # -- Secrets --------------------------------------------------------------
     with tab_env:
@@ -4809,7 +4866,10 @@ def page_config_editor() -> None:
         for key, info in _env_status().items():
             k1, k2 = st.columns([4, 1])
             k1.markdown(f"**`{key}`** -- {info['desc']}")
-            k2.success("Set") if info["set"] else k2.error("Missing")
+            if info["set"]:
+                k2.success("Set")
+            else:
+                k2.error("Missing")
 
         st.divider()
         if ENV_PATH.exists():
@@ -4892,7 +4952,10 @@ def page_prompts() -> None:
                                 "updated":  date.today().isoformat(),
                             })
                             err = _save_prompts(prompts)
-                            st.success("Saved.") if not err else st.error(err)
+                            if not err:
+                                st.success("Saved.")
+                            else:
+                                st.error(err)
 
                         if st.button("Delete", key=f"pr_del_{real_idx}"):
                             prompts.pop(real_idx)
@@ -5074,7 +5137,10 @@ def page_diagnostics() -> None:
                  "print('OK -- no issues' if not issues else '\\n'.join(issues))"],
                 timeout=10,
             )
-            (st.success if rc == 0 and "OK" in out else st.warning)(out.strip() or "(no output)")
+            if rc == 0 and "OK" in out:
+                st.success(out.strip() or "(no output)")
+            else:
+                st.warning(out.strip() or "(no output)")
 
         st.subheader("Ollama")
         if st.button("Ping Ollama", key="btn_ollama_diag"):
@@ -5124,7 +5190,7 @@ def page_diagnostics() -> None:
                              "Age": _file_age(path), "Status": "OK"})
             else:
                 rows.append({"File": name, "Size": "--", "Age": "--", "Status": "MISSING"})
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
         st.subheader("Output Directories")
         for dp, label in [
@@ -5176,14 +5242,14 @@ def page_diagnostics() -> None:
             "FROM run_history ORDER BY started_at DESC LIMIT 20"
         )
         if db_rows:
-            st.dataframe(pd.DataFrame(db_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(db_rows), hide_index=True, width="stretch")
         else:
             st.info("No run history yet.")
 
         st.subheader("Portfolio Peaks (DB)")
         peaks = _query_db("SELECT * FROM portfolio_peaks ORDER BY recorded_at DESC LIMIT 5")
         if peaks:
-            st.dataframe(pd.DataFrame(peaks), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(peaks), hide_index=True, width="stretch")
         else:
             st.info("No portfolio_peaks records yet.")
 
@@ -5223,9 +5289,10 @@ def page_diagnostics() -> None:
                         rc, out = _run_command(
                             [PYTHON, "-m", "unittest", f"tests.{tf.stem}", "-v"], timeout=60
                         )
-                    (st.success if rc == 0 else st.error)(
-                        f"`{tf.name}` {'passed' if rc == 0 else f'failed (exit {rc})'}"
-                    )
+                    if rc == 0:
+                        st.success(f"`{tf.name}` passed")
+                    else:
+                        st.error(f"`{tf.name}` failed (exit {rc})")
                     st.text_area("Output", out, height=200, key=f"out_{tf.stem}")
 
     # -- Maintenance ----------------------------------------------------------
@@ -5243,9 +5310,10 @@ def page_diagnostics() -> None:
                      "print('OK -- no issues' if not issues else '\\n'.join(issues))"],
                     timeout=10,
                 )
-                (st.success if rc == 0 and "OK" in out else st.warning)(
-                    out.strip() or "(no output)"
-                )
+                if rc == 0 and "OK" in out:
+                    st.success(out.strip() or "(no output)")
+                else:
+                    st.warning(out.strip() or "(no output)")
 
         with m2:
             st.markdown("**Alpha Vantage**")
@@ -5335,7 +5403,10 @@ def page_diagnostics() -> None:
                 for f in files:
                     f.unlink(missing_ok=True)
                 cleared.append(f"watchlist_cache/ ({len(files)} files)")
-            st.success(f"Cleared: {', '.join(cleared)}") if cleared else st.info("Nothing to clear.")
+            if cleared:
+                st.success(f"Cleared: {', '.join(cleared)}")
+            else:
+                st.info("Nothing to clear.")
 
     # -- Scheduler ------------------------------------------------------------
     with tab_sched:
@@ -5368,7 +5439,7 @@ def page_diagnostics() -> None:
                 "API calls":   "~8 FMP + 1 Claude",
             },
         ]
-        st.dataframe(pd.DataFrame(modes_info), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(modes_info), width="stretch", hide_index=True)
 
         st.subheader("Sub-system Commands")
         st.code(
@@ -5388,7 +5459,7 @@ def page_diagnostics() -> None:
             "FROM run_history GROUP BY mode ORDER BY last_run DESC"
         )
         if db_rows:
-            st.dataframe(pd.DataFrame(db_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(db_rows), width="stretch", hide_index=True)
         else:
             st.info("No run history in database yet.")
 

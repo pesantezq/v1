@@ -1,6 +1,16 @@
 # Regime Performance
 
-Generated: 2026-04-16T09:39:15.207362  
-Resolved signals: **0**  
+Generated: 2026-04-27T16:09:43.526795  
+Resolved signals: **105**  
 
-No resolved regime-tagged outcomes yet.
+## neutral
+
+- Total signals: **105**
+- Win rate: **80.0%**
+- Avg return: **+3.29%**
+- Avg signal score: **0.23**
+- Avg conviction score: n/a
+- Avg holding outcome: **+0.00%**
+- Best conviction band: `unknown`
+- Worst conviction band: `unknown`
+- Degraded data impact: no degraded data in this regime sample

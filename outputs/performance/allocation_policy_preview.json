@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-04-27T16:09:43.584309",
+  "observe_only": true,
+  "not_applied": true,
+  "confidence_threshold": 0.5,
+  "candidate_count": 5,
+  "total_baseline_pct": 0.1,
+  "total_preview_pct": 0.06,
+  "opportunities": [
+    {
+      "ticker": "AMD",
+      "final_rank_score": 0.5074,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.02,
+      "preview_size": 0.02,
+      "capped_by": [],
+      "sector": "TECHNOLOGY",
+      "confidence_score": 0.8875,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.507); portfolio fit: good"
+    },
+    {
+      "ticker": "NVDA",
+      "final_rank_score": 0.494,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.02,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "TECHNOLOGY",
+      "confidence_score": 0.8875,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.494); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "AMZN",
+      "final_rank_score": 0.4825,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.02,
+      "preview_size": 0.02,
+      "capped_by": [],
+      "sector": "CONSUMER CYCLICAL",
+      "confidence_score": 0.8875,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.482); portfolio fit: good"
+    },
+    {
+      "ticker": "SMCI",
+      "final_rank_score": 0.4618,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.02,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "TECHNOLOGY",
+      "confidence_score": 0.8875,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.462); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "NASA",
+      "final_rank_score": 0.3537,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.02,
+      "preview_size": 0.02,
+      "capped_by": [],
+      "sector": "UNKNOWN",
+      "confidence_score": 0.8125,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.354); portfolio fit: good"
+    }
+  ]
+}
