@@ -548,6 +548,11 @@ def _load_allocation_preview() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "allocation_policy_preview.json")
 
 
+def _load_allocation_policy_simulation() -> dict:
+    """Load allocation_policy_simulation.json from the performance outputs directory."""
+    return _load_json(ROOT / "outputs" / "performance" / "allocation_policy_simulation.json")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -1913,6 +1918,100 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
             caption_parts.append(f"confidence ≥ {conf_thr:.2f}")
         if caption_parts:
             st.caption(" · ".join(caption_parts))
+
+    # ── Allocation Policy Simulation ─────────────────────────────────────────
+    st.subheader("Allocation Policy Simulation")
+    _render_interpretation(
+        "Evaluates whether rank-aware allocation would have improved outcomes vs baseline "
+        "allocation on resolved historical signals. Uses normalized_allocation as baseline "
+        "and applies rank multipliers to compute the rank-aware counterfactual."
+    )
+    st.markdown(
+        _badge("Simulation only — not applied to live allocation", "warn"),
+        unsafe_allow_html=True,
+    )
+    sim = _load_allocation_policy_simulation()
+    if not sim:
+        st.info(
+            "No simulation data yet. Run: "
+            "`python -m watchlist_scanner.allocation_policy_simulation` to generate."
+        )
+    else:
+        sim_sample = sim.get("sample_size", 0)
+        sim_window = sim.get("primary_window_days", 3)
+        st.caption(
+            f"Based on {sim_sample} resolved signal{'s' if sim_sample != 1 else ''} "
+            f"· Primary window: {sim_window}d"
+        )
+        b = sim.get("baseline") or {}
+        ra = sim.get("rank_aware") or {}
+        delta = sim.get("delta") or {}
+
+        sim_top = st.columns(4)
+        with sim_top[0]:
+            st.metric("Sample Size", sim_sample)
+        b_ret = b.get("total_return")
+        ra_ret = ra.get("total_return")
+        delta_ret = delta.get("total_return_delta")
+        with sim_top[1]:
+            st.metric("Total Return (Baseline)", f"{b_ret:.4f}" if b_ret is not None else "—")
+        with sim_top[2]:
+            st.metric(
+                "Total Return (Rank-Aware)",
+                f"{ra_ret:.4f}" if ra_ret is not None else "—",
+                delta=f"{delta_ret:+.4f}" if delta_ret is not None else None,
+            )
+        with sim_top[3]:
+            eff_delta = delta.get("efficiency_delta")
+            st.metric("Efficiency Delta", f"{eff_delta:+.4f}" if eff_delta is not None else "—")
+
+        sim_mid = st.columns(3)
+        b_avg = b.get("avg_return_per_trade")
+        ra_avg = ra.get("avg_return_per_trade")
+        wc_delta = delta.get("win_capital_delta")
+        with sim_mid[0]:
+            st.metric("Avg Return/Trade (Baseline)", f"{b_avg:.4f}" if b_avg is not None else "—")
+        with sim_mid[1]:
+            st.metric("Avg Return/Trade (Rank-Aware)", f"{ra_avg:.4f}" if ra_avg is not None else "—")
+        with sim_mid[2]:
+            st.metric("Win Capital Delta", f"{wc_delta:+.4f}" if wc_delta is not None else "—")
+
+        sim_eff = st.columns(2)
+        b_eff = b.get("capital_efficiency")
+        ra_eff = ra.get("capital_efficiency")
+        with sim_eff[0]:
+            st.metric(
+                "Capital Efficiency (Baseline)",
+                f"{b_eff:.4f}" if b_eff is not None else "—",
+            )
+        with sim_eff[1]:
+            st.metric(
+                "Capital Efficiency (Rank-Aware)",
+                f"{ra_eff:.4f}" if ra_eff is not None else "—",
+            )
+
+        sim_details = sim.get("details") or []
+        if sim_details:
+            st.markdown("**Per-Signal Breakdown**")
+            sim_rows = []
+            for d in sim_details:
+                sim_rows.append({
+                    "Ticker": d.get("ticker", "—"),
+                    "Return": f"{d['outcome_return']:.2f}%" if d.get("outcome_return") is not None else "—",
+                    "Rank Score": f"{d['rank_score']:.3f}" if d.get("rank_score") is not None else "—",
+                    "Rank": str(d.get("rank_label") or "—").title(),
+                    "Multiplier": f"×{d['rank_multiplier']:.2f}" if d.get("rank_multiplier") is not None else "—",
+                    "Baseline Size": f"{d['baseline_size']:.1%}" if d.get("baseline_size") is not None else "—",
+                    "Preview Size": f"{d['preview_size']:.1%}" if d.get("preview_size") is not None else "—",
+                    "Baseline Contrib": f"{d['baseline_contribution']:.4f}" if d.get("baseline_contribution") is not None else "—",
+                    "Preview Contrib": f"{d['preview_contribution']:.4f}" if d.get("preview_contribution") is not None else "—",
+                    "Win": "Y" if d.get("win") else "N",
+                })
+            st.dataframe(_coerce_df(sim_rows), use_container_width=True, hide_index=True)
+
+        sim_gen_at = sim.get("generated_at", "")
+        if sim_gen_at:
+            st.caption(f"Generated {sim_gen_at[:19].replace('T', ' ')}")
 
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
