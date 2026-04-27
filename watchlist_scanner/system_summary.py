@@ -46,7 +46,8 @@ logger = logging.getLogger("watchlist_scanner.system_summary")
 # ---------------------------------------------------------------------------
 
 _SIGNALS_REL          = ("outputs", "latest", "watchlist_signals.json")
-_THEMES_REL           = ("outputs", "latest", "theme_opportunities.json")
+_THEMES_DISCOVERY_REL = ("outputs", "latest", "theme_opportunities.json")
+_THEMES_ENGINE_REL    = ("outputs", "latest", "theme_signals.json")
 _PORTFOLIO_REL        = ("outputs", "portfolio", "portfolio_snapshot.json")
 _RANKING_CONFIG_REL   = ("outputs", "performance", "approved_ranking_config.json")
 _ALLOC_POLICY_REL     = ("outputs", "performance", "approved_allocation_policy.json")
@@ -85,14 +86,90 @@ def _safe_load_list(path: Path) -> list[Any]:
         return []
 
 
+def _normalize_theme_record(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Map a theme record from either source to the internal normalized shape:
+      {name, type, score, persistence, acceleration, tickers}
+
+    theme_discovery schema uses: score, persistence_score, acceleration_score, theme_type
+    theme_engine schema uses:    confidence (=score), persistence_7d (days seen), catalog_match (=type)
+    """
+    # Score: theme_discovery has "score"; theme_engine has "confidence"
+    score_raw = raw.get("score")
+    if score_raw is None:
+        score_raw = raw.get("confidence", 0.0)
+    score = _flt(score_raw, 0.0)
+
+    # Persistence: check most-specific names first
+    if raw.get("persistence_score") is not None:
+        persistence = _flt(raw["persistence_score"], 0.0)
+    elif raw.get("persistence") is not None:
+        persistence = _flt(raw["persistence"], 0.0)
+    elif raw.get("persistence_7d") is not None:
+        # persistence_7d is a count of days seen (0..N); normalize to 0..1 capped at 1
+        persistence = min(1.0, _flt(raw["persistence_7d"], 0.0) / 7.0)
+    else:
+        persistence = 0.0
+
+    # Acceleration: only theme_discovery emits this
+    accel_raw = raw.get("acceleration_score")
+    if accel_raw is None:
+        accel_raw = raw.get("acceleration", 0.0)
+    acceleration = _flt(accel_raw, 0.0)
+
+    # Type: theme_discovery uses "theme_type"; theme_engine uses "catalog_match"
+    theme_type = str(
+        raw.get("theme_type") or raw.get("type") or raw.get("catalog_match") or "classified"
+    )
+
+    return {
+        "name":         str(raw.get("name") or "Unknown"),
+        "type":         theme_type,
+        "score":        score,
+        "persistence":  persistence,
+        "acceleration": acceleration,
+        "tickers":      list(raw.get("tickers") or []),
+    }
+
+
+def _merge_theme_sources(
+    discovery: dict[str, Any],
+    engine: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Merge theme lists from theme_discovery (theme_opportunities.json) and
+    theme_engine (theme_signals.json).  Both sources are normalized to the
+    internal shape.  When both name the same theme, the higher-score record wins.
+    Returns {} when both sources are empty or missing.
+    """
+    d_raw = (discovery.get("themes") or []) if isinstance(discovery, dict) else []
+    e_raw = (engine.get("themes") or []) if isinstance(engine, dict) else []
+
+    if not d_raw and not e_raw:
+        return {}
+
+    by_name: dict[str, dict[str, Any]] = {}
+    for raw in (*d_raw, *e_raw):
+        if not isinstance(raw, dict):
+            continue
+        norm = _normalize_theme_record(raw)
+        name = norm["name"]
+        if name not in by_name or norm["score"] > by_name[name]["score"]:
+            by_name[name] = norm
+
+    return {"themes": list(by_name.values())}
+
+
 def _load_artifacts(root: Path) -> dict[str, Any]:
     """
     Load all source artifacts. Returns a dict keyed by artifact name.
     Each value is either a dict (or {} if missing/malformed).
     """
+    discovery_themes = _safe_load(root.joinpath(*_THEMES_DISCOVERY_REL))
+    engine_themes    = _safe_load(root.joinpath(*_THEMES_ENGINE_REL))
     return {
         "signals":          _safe_load(root.joinpath(*_SIGNALS_REL)),
-        "themes":           _safe_load(root.joinpath(*_THEMES_REL)),
+        "themes":           _merge_theme_sources(discovery_themes, engine_themes),
         "portfolio":        _safe_load(root.joinpath(*_PORTFOLIO_REL)),
         "ranking_config":   _safe_load(root.joinpath(*_RANKING_CONFIG_REL)),
         "alloc_policy":     _safe_load(root.joinpath(*_ALLOC_POLICY_REL)),
@@ -104,9 +181,13 @@ def _load_artifacts(root: Path) -> dict[str, Any]:
 
 def _artifact_flags(root: Path) -> dict[str, bool]:
     """Return {artifact_name: True/False} existence flags."""
+    has_discovery = root.joinpath(*_THEMES_DISCOVERY_REL).exists()
+    has_engine    = root.joinpath(*_THEMES_ENGINE_REL).exists()
     return {
         "watchlist_signals":         root.joinpath(*_SIGNALS_REL).exists(),
-        "theme_opportunities":       root.joinpath(*_THEMES_REL).exists(),
+        "theme_opportunities":       has_discovery,
+        "theme_signals":             has_engine,
+        "theme_data_available":      has_discovery or has_engine,
         "portfolio_snapshot":        root.joinpath(*_PORTFOLIO_REL).exists(),
         "approved_ranking_config":   root.joinpath(*_RANKING_CONFIG_REL).exists(),
         "approved_allocation_policy":root.joinpath(*_ALLOC_POLICY_REL).exists(),
@@ -135,19 +216,20 @@ def _signal_list(signals: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _theme_list(themes: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Extract a normalised list of theme dicts from a theme_opportunities dict.
-    Handles both {themes: [...]} and {name: {score:...}, ...} shapes.
+    Extract and normalize a list of theme dicts.
+    Handles {themes: [...]} lists and {name: {score|confidence:...}, ...} top-key shapes.
+    Records produced by _merge_theme_sources are already normalized but remain idempotent.
     """
     if not themes:
         return []
     raw_themes = themes.get("themes")
     if isinstance(raw_themes, list):
-        return [t for t in raw_themes if isinstance(t, dict)]
+        return [_normalize_theme_record(t) for t in raw_themes if isinstance(t, dict)]
     # Fallback: treat top-level keys as theme names when their values are dicts
     candidates = []
     for key, val in themes.items():
-        if isinstance(val, dict) and "score" in val:
-            candidates.append({"name": key, **val})
+        if isinstance(val, dict) and ("score" in val or "confidence" in val):
+            candidates.append(_normalize_theme_record({"name": key, **val}))
     return candidates
 
 
@@ -157,20 +239,21 @@ def _theme_list(themes: dict[str, Any]) -> list[dict[str, Any]]:
 
 def compute_top_theme(themes: dict[str, Any]) -> dict[str, Any]:
     """
-    Return the highest-scoring theme from theme_opportunities.
-    Safe against missing/empty data — returns an empty dict if unavailable.
+    Return the highest-scoring theme from merged theme sources.
+    Records are normalized by _theme_list — all have score, type, persistence, acceleration.
+    Returns {} when no theme data is available.
     """
     theme_list = _theme_list(themes)
     if not theme_list:
         return {}
     best = max(theme_list, key=lambda t: _flt(t.get("score"), -1.0))
     return {
-        "name":        str(best.get("name") or "Unknown"),
-        "type":        str(best.get("type") or best.get("theme_type") or "classified"),
-        "score":       round(_flt(best.get("score"), 0.0), 4),
-        "persistence": round(_flt(best.get("persistence"), 0.0), 4),
-        "acceleration":round(_flt(best.get("acceleration"), 0.0), 4),
-        "tickers":     list(best.get("tickers") or [])[:10],
+        "name":         str(best.get("name") or "Unknown"),
+        "type":         str(best.get("type") or "classified"),
+        "score":        round(_flt(best.get("score"), 0.0), 4),
+        "persistence":  round(_flt(best.get("persistence"), 0.0), 4),
+        "acceleration": round(_flt(best.get("acceleration"), 0.0), 4),
+        "tickers":      list(best.get("tickers") or [])[:10],
     }
 
 

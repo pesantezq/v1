@@ -189,6 +189,7 @@ def _step_watchlist_scan(raw_cfg: dict[str, Any], dry_run: bool) -> str:
         signals_config=raw_cfg.get("signals"),
         ranking_config=raw_cfg.get("ranking"),
         scraped_intel_config=raw_cfg.get("scraped_intel"),
+        data_sources_config=raw_cfg.get("data_sources", {}),
     )
     alerts  = len(result.get("alerts") or [])
     signals = len(result.get("results") or [])

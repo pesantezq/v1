@@ -158,6 +158,64 @@ def fundamental_context_score(fundamentals: dict[str, Any]) -> float:
     return round(min(1.0, total), 4)
 
 
+def parse_fmp_profile(
+    profile: dict[str, Any],
+    quote: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Map an FMP v3/profile response (+ optional batch-quote row) to the same
+    schema as parse_overview() so the rest of the pipeline needs no changes.
+
+    Fields that are not available on the FMP free-tier profile endpoint are
+    returned as None:
+        forward_pe, profit_margin, revenue_ttm, gross_profit_ttm,
+        analyst_target_price, dividend_yield, book_value
+
+    The optional quote dict (from FMPClient.get_batch_quotes) fills in PE,
+    SMAs, 52-week range, and EPS which are not present on the profile endpoint.
+    """
+    if not profile:
+        return {}
+    q = quote or {}
+
+    def _pf(*keys: str) -> float | None:
+        for k in keys:
+            v = _safe_float(profile.get(k))
+            if v is not None:
+                return v
+        return None
+
+    def _qf(*keys: str) -> float | None:
+        for k in keys:
+            v = _safe_float(q.get(k))
+            if v is not None:
+                return v
+        return None
+
+    return {
+        "symbol":               _safe_str(profile.get("symbol")),
+        "name":                 _safe_str(profile.get("companyName")),
+        "sector":               _safe_str(profile.get("sector")),
+        "industry":             _safe_str(profile.get("industry")),
+        "description":          (profile.get("description") or "")[:200],
+        "market_cap":           _pf("mktCap") or _qf("marketCap"),
+        "pe_ratio":             _qf("pe") or _pf("pe"),
+        "forward_pe":           None,
+        "profit_margin":        None,
+        "revenue_ttm":          None,
+        "gross_profit_ttm":     None,
+        "beta":                 _pf("beta"),
+        "analyst_target_price": None,
+        "dividend_yield":       None,
+        "eps":                  _qf("eps"),
+        "book_value":           None,
+        "52w_high":             _qf("yearHigh"),
+        "52w_low":              _qf("yearLow"),
+        "50dma":                _qf("priceAvg50"),
+        "200dma":               _qf("priceAvg200"),
+    }
+
+
 def format_market_cap(mktcap: float | None) -> str:
     """Human-readable market-cap string (e.g. '$1.23T', '$456.7B', '$12.3M')."""
     if not mktcap:

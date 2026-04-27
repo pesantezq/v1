@@ -71,6 +71,7 @@ def run(
     signals_config: dict | None = None,
     ranking_config: dict | None = None,
     scraped_intel_config: dict | None = None,
+    data_sources_config: dict | None = None,
 ) -> WatchlistScanResult:
     """
     Execute the watchlist scanner from config dict.
@@ -170,6 +171,18 @@ def run(
 
     av = WatchlistAVClient(cache=cache, max_calls=max_calls, budget=_shared_budget)
 
+    # Optional FMP client for fallback when AV budget is exhausted or returns bad data.
+    _fmp_client = None
+    _ds_cfg = dict(data_sources_config or {})
+    if _ds_cfg.get("fmp_enabled", True):
+        try:
+            from fmp_client import FMPClient, FMPError
+            fmp_budget = int(config.get("fmp_daily_calls_budget", 230))
+            _fmp_client = FMPClient(daily_budget=fmp_budget)
+            logger.info("FMP fallback client ready (budget=%d/day)", fmp_budget)
+        except Exception as exc:
+            logger.info("FMP fallback client not available: %s", exc)
+
     scanner = WatchlistScanner(
         watchlist=watchlist,
         cache=cache,
@@ -180,6 +193,8 @@ def run(
         min_signal_score=float(config.get("min_signal_score", 0.50)),
         signals_config=signals_config,
         ranking_config=ranking_config,
+        fmp_client=_fmp_client,
+        data_sources=_ds_cfg,
     )
 
     result = scanner.run(dry_run=dry_run)

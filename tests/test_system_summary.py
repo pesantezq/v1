@@ -28,6 +28,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from watchlist_scanner.system_summary import (
+    _merge_theme_sources,
+    _normalize_theme_record,
     build_system_decision_summary,
     compute_best_portfolio_fit,
     compute_capital_preview,
@@ -171,12 +173,36 @@ def _all_flags(value: bool = True) -> dict:
     return {
         "watchlist_signals": value,
         "theme_opportunities": value,
+        "theme_signals": value,
+        "theme_data_available": value,
         "portfolio_snapshot": value,
         "approved_ranking_config": value,
         "approved_allocation_policy": value,
         "allocation_preview": value,
         "allocation_simulation": value,
         "weight_tuning_suggestions": value,
+    }
+
+
+def _engine_theme(name="AI Infrastructure", confidence=0.95, persistence_7d=3, **kwargs) -> dict:
+    """Build a theme record in the theme_engine (theme_signals.json) schema."""
+    return {
+        "name": name,
+        "confidence": confidence,
+        "persistence_7d": persistence_7d,
+        "catalog_match": kwargs.pop("catalog_match", name),
+        "rationale": "Test rationale.",
+        "tickers": kwargs.pop("tickers", ["NVDA", "AMD"]),
+        **kwargs,
+    }
+
+
+def _engine_themes(*theme_dicts) -> dict:
+    """Build a theme_signals.json-style dict."""
+    return {
+        "generated_at": "2026-04-27T20:00:00",
+        "run_date": "2026-04-27",
+        "themes": list(theme_dicts),
     }
 
 
@@ -750,3 +776,250 @@ class TestGenerateSystemDecisionSummary:
         ]
         for key in required_keys:
             assert key in data, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# TestNormalizeThemeRecord — unit tests for _normalize_theme_record
+# ---------------------------------------------------------------------------
+
+class TestNormalizeThemeRecord:
+    def test_discovery_schema_score_used(self):
+        raw = {"name": "AI", "score": 0.85, "type": "classified",
+               "persistence_score": 0.60, "acceleration_score": 0.25, "tickers": ["NVDA"]}
+        norm = _normalize_theme_record(raw)
+        assert norm["score"] == pytest.approx(0.85)
+        assert norm["persistence"] == pytest.approx(0.60)
+        assert norm["acceleration"] == pytest.approx(0.25)
+        assert norm["type"] == "classified"
+
+    def test_engine_schema_confidence_becomes_score(self):
+        raw = _engine_theme("Cybersecurity", confidence=0.88, persistence_7d=4)
+        norm = _normalize_theme_record(raw)
+        assert norm["score"] == pytest.approx(0.88)
+
+    def test_engine_schema_persistence_7d_normalized(self):
+        raw = _engine_theme(persistence_7d=7)
+        norm = _normalize_theme_record(raw)
+        assert norm["persistence"] == pytest.approx(1.0)
+
+    def test_engine_schema_persistence_7d_zero(self):
+        raw = _engine_theme(persistence_7d=0)
+        norm = _normalize_theme_record(raw)
+        assert norm["persistence"] == pytest.approx(0.0)
+
+    def test_engine_schema_persistence_7d_partial(self):
+        raw = _engine_theme(persistence_7d=3)
+        norm = _normalize_theme_record(raw)
+        assert norm["persistence"] == pytest.approx(3.0 / 7.0)
+
+    def test_engine_schema_persistence_7d_capped_at_1(self):
+        raw = _engine_theme(persistence_7d=14)
+        norm = _normalize_theme_record(raw)
+        assert norm["persistence"] == pytest.approx(1.0)
+
+    def test_engine_schema_catalog_match_becomes_type(self):
+        raw = _engine_theme("AI Infrastructure", catalog_match="AI Infrastructure")
+        norm = _normalize_theme_record(raw)
+        assert norm["type"] == "AI Infrastructure"
+
+    def test_engine_schema_no_acceleration(self):
+        raw = _engine_theme()
+        norm = _normalize_theme_record(raw)
+        assert norm["acceleration"] == pytest.approx(0.0)
+
+    def test_tickers_preserved(self):
+        raw = _engine_theme(tickers=["NVDA", "AMD", "MSFT"])
+        norm = _normalize_theme_record(raw)
+        assert norm["tickers"] == ["NVDA", "AMD", "MSFT"]
+
+    def test_missing_name_defaults_to_unknown(self):
+        norm = _normalize_theme_record({"confidence": 0.5})
+        assert norm["name"] == "Unknown"
+
+    def test_missing_tickers_defaults_to_empty_list(self):
+        norm = _normalize_theme_record({"name": "AI", "score": 0.5})
+        assert norm["tickers"] == []
+
+    def test_all_missing_fields_returns_safe_defaults(self):
+        norm = _normalize_theme_record({})
+        assert norm["score"] == pytest.approx(0.0)
+        assert norm["persistence"] == pytest.approx(0.0)
+        assert norm["acceleration"] == pytest.approx(0.0)
+        assert norm["type"] == "classified"
+        assert norm["name"] == "Unknown"
+
+    def test_persistence_field_alias_respected(self):
+        raw = {"name": "AI", "score": 0.8, "persistence": 0.55}
+        norm = _normalize_theme_record(raw)
+        assert norm["persistence"] == pytest.approx(0.55)
+
+    def test_output_has_required_keys(self):
+        norm = _normalize_theme_record({})
+        for key in ("name", "type", "score", "persistence", "acceleration", "tickers"):
+            assert key in norm
+
+    def test_idempotent_on_already_normalized_record(self):
+        raw = {"name": "AI", "type": "classified", "score": 0.9,
+               "persistence": 0.7, "acceleration": 0.1, "tickers": ["NVDA"]}
+        norm1 = _normalize_theme_record(raw)
+        norm2 = _normalize_theme_record(norm1)
+        assert norm1 == norm2
+
+
+# ---------------------------------------------------------------------------
+# TestMergeThemeSources — unit tests for _merge_theme_sources
+# ---------------------------------------------------------------------------
+
+class TestMergeThemeSources:
+    def test_empty_both_returns_empty(self):
+        assert _merge_theme_sources({}, {}) == {}
+
+    def test_empty_engine_uses_discovery(self):
+        discovery = _themes(_theme("AI", 0.80))
+        result = _merge_theme_sources(discovery, {})
+        themes = result["themes"]
+        assert len(themes) == 1
+        assert themes[0]["name"] == "AI"
+
+    def test_empty_discovery_uses_engine(self):
+        engine = _engine_themes(_engine_theme("AI Infrastructure", 0.95))
+        result = _merge_theme_sources({}, engine)
+        themes = result["themes"]
+        assert len(themes) == 1
+        assert themes[0]["name"] == "AI Infrastructure"
+        assert themes[0]["score"] == pytest.approx(0.95)
+
+    def test_deduplication_higher_score_wins(self):
+        discovery = _themes(_theme("AI", 0.70))
+        engine = _engine_themes(_engine_theme("AI", 0.90))
+        result = _merge_theme_sources(discovery, engine)
+        themes = result["themes"]
+        ai_themes = [t for t in themes if t["name"] == "AI"]
+        assert len(ai_themes) == 1
+        assert ai_themes[0]["score"] == pytest.approx(0.90)
+
+    def test_deduplication_lower_score_in_engine_does_not_win(self):
+        discovery = _themes(_theme("AI", 0.90))
+        engine = _engine_themes(_engine_theme("AI", 0.60))
+        result = _merge_theme_sources(discovery, engine)
+        ai_themes = [t for t in result["themes"] if t["name"] == "AI"]
+        assert ai_themes[0]["score"] == pytest.approx(0.90)
+
+    def test_non_overlapping_themes_all_included(self):
+        discovery = _themes(_theme("Energy", 0.70))
+        engine = _engine_themes(_engine_theme("AI Infrastructure", 0.95))
+        result = _merge_theme_sources(discovery, engine)
+        names = {t["name"] for t in result["themes"]}
+        assert "Energy" in names
+        assert "AI Infrastructure" in names
+
+    def test_both_empty_themes_lists_returns_empty(self):
+        assert _merge_theme_sources({"themes": []}, {"themes": []}) == {}
+
+    def test_malformed_entry_skipped(self):
+        engine = {"themes": ["not_a_dict", None, {"name": "AI", "confidence": 0.9}]}
+        result = _merge_theme_sources({}, engine)
+        assert len(result["themes"]) == 1
+        assert result["themes"][0]["name"] == "AI"
+
+
+# ---------------------------------------------------------------------------
+# TestComputeTopThemeSchemas — regression tests for both artifact schemas
+# ---------------------------------------------------------------------------
+
+class TestComputeTopThemeSchemas:
+    def test_discovery_schema_top_theme_populated(self):
+        themes = _themes(_theme("AI", 0.80), _theme("Energy", 0.90))
+        result = compute_top_theme(themes)
+        assert result.get("name") == "Energy"
+        assert result.get("score") == pytest.approx(0.90)
+
+    def test_engine_schema_top_theme_not_blank(self):
+        """Regression: confidence-based schema must populate top_theme (was returning {} before fix)."""
+        themes = _engine_themes(
+            _engine_theme("AI Infrastructure", confidence=0.95, persistence_7d=3),
+            _engine_theme("Cybersecurity", confidence=0.88, persistence_7d=1),
+        )
+        result = compute_top_theme(themes)
+        assert result.get("name") == "AI Infrastructure"
+        assert result.get("score") == pytest.approx(0.95)
+
+    def test_engine_schema_score_not_zero(self):
+        themes = _engine_themes(_engine_theme("Defense", confidence=0.75))
+        result = compute_top_theme(themes)
+        assert result["score"] > 0.0
+
+    def test_engine_schema_result_shape(self):
+        themes = _engine_themes(_engine_theme())
+        result = compute_top_theme(themes)
+        for key in ("name", "type", "score", "persistence", "acceleration", "tickers"):
+            assert key in result
+
+    def test_missing_theme_files_returns_empty(self):
+        result = compute_top_theme({})
+        assert result == {}
+
+    def test_malformed_theme_entry_does_not_crash(self):
+        themes = {"themes": [None, "bad", 42, {"name": "AI", "confidence": 0.7}]}
+        result = compute_top_theme(themes)
+        assert result.get("name") == "AI"
+
+    def test_build_summary_with_engine_themes_artifact(self, tmp_path):
+        """End-to-end: write theme_signals.json, run generate, assert top_theme populated."""
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+        signals_data = {
+            "generated_at": "2026-04-27T20:00:00",
+            "run_date": "2026-04-27",
+            "themes": [
+                {"name": "AI Infrastructure", "confidence": 0.95,
+                 "persistence_7d": 3, "catalog_match": "AI Infrastructure",
+                 "tickers": ["NVDA", "AMD"]},
+                {"name": "Defense", "confidence": 0.75,
+                 "persistence_7d": 1, "catalog_match": "Defense",
+                 "tickers": ["LMT", "RTX"]},
+            ],
+        }
+        (out_dir / "theme_signals.json").write_text(
+            json.dumps(signals_data), encoding="utf-8"
+        )
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+        assert result["top_theme"].get("name") == "AI Infrastructure", (
+            f"top_theme should be 'AI Infrastructure', got: {result['top_theme']}"
+        )
+        assert result["top_theme"]["score"] == pytest.approx(0.95)
+
+    def test_build_summary_with_only_discovery_artifact(self, tmp_path):
+        """theme_opportunities.json (no theme_signals.json) still populates top_theme."""
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+        opp_data = {
+            "generated_at": "2026-04-27T20:00:00",
+            "themes": [
+                {"name": "Semicap Equipment", "theme_type": "classified",
+                 "score": 0.82, "persistence_score": 0.50, "acceleration_score": 0.10,
+                 "tickers": ["AMAT", "LRCX"]},
+            ],
+        }
+        (out_dir / "theme_opportunities.json").write_text(
+            json.dumps(opp_data), encoding="utf-8"
+        )
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+        assert result["top_theme"].get("name") == "Semicap Equipment"
+
+    def test_artifact_flags_include_theme_signals(self, tmp_path):
+        """data_health.artifact_flags must include theme_signals key."""
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+        flags = result["data_health"]["artifact_flags"]
+        assert "theme_signals" in flags
+        assert "theme_data_available" in flags
+
+    def test_theme_data_available_true_when_engine_file_exists(self, tmp_path):
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+        signals_data = {"themes": [{"name": "AI", "confidence": 0.9, "tickers": []}]}
+        (out_dir / "theme_signals.json").write_text(json.dumps(signals_data), encoding="utf-8")
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+        flags = result["data_health"]["artifact_flags"]
+        assert flags["theme_signals"] is True
+        assert flags["theme_data_available"] is True
