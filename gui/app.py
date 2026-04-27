@@ -558,6 +558,16 @@ def _load_approved_allocation_policy() -> dict:
     return _load_json(ROOT / "outputs" / "performance" / "approved_allocation_policy.json")
 
 
+def _load_system_decision_summary() -> dict:
+    """Load system_decision_summary.json from the latest outputs directory."""
+    return _load_json(ROOT / "outputs" / "latest" / "system_decision_summary.json")
+
+
+def _load_system_decision_summary_md() -> str:
+    """Load system_decision_summary.md from the latest outputs directory."""
+    return _read_text(ROOT / "outputs" / "latest" / "system_decision_summary.md")
+
+
 def _action_tone(action: str) -> str:
     return {
         "BUY": "good",
@@ -803,6 +813,114 @@ def _action_priority(action: dict) -> str:
             return "MEDIUM"
         return "LOW"
     return "LOW"
+
+
+def _render_system_summary() -> None:
+    """
+    Compact System Summary strip at the top of the dashboard.
+
+    Shows top theme, top opportunity, capital allocation delta, and policy status
+    in a 4-column card row.  An expander reveals the full Markdown summary.
+    Beginner-safe: skips silently when the summary file hasn't been generated yet.
+    """
+    summary = _load_system_decision_summary()
+    md_text = _load_system_decision_summary_md()
+
+    if not summary:
+        st.info(
+            "System summary not yet generated. "
+            "Run `python -m watchlist_scanner.system_summary` to create it."
+        )
+        return
+
+    gen_at = str(summary.get("generated_at") or "")
+    gen_display = gen_at[:19].replace("T", " ") if gen_at else "unknown"
+
+    tt  = summary.get("top_theme") or {}
+    to  = summary.get("top_opportunity") or {}
+    cp  = summary.get("capital_preview") or {}
+    ss  = summary.get("system_state") or {}
+    ch  = summary.get("changes") or {}
+
+    summary_cols = st.columns(4)
+
+    with summary_cols[0]:
+        theme_name  = str(tt.get("name") or "—")
+        theme_score = tt.get("score")
+        theme_type  = str(tt.get("type") or "")
+        _render_operator_card(
+            "Top Theme",
+            theme_name,
+            f"{theme_type.title()} · Score {theme_score:.3f}" if theme_score is not None else theme_type.title(),
+            badges=[
+                _badge(
+                    f"Persist {tt.get('persistence', 0.0):.2f}",
+                    "good" if float(tt.get("persistence") or 0) >= 0.5 else "neutral",
+                ) if tt else _badge("no data", "neutral"),
+            ],
+        )
+
+    with summary_cols[1]:
+        ticker = str(to.get("ticker") or "—")
+        rank   = to.get("final_rank_score")
+        fit    = str(to.get("portfolio_fit_label") or "—")
+        mult   = to.get("rank_multiplier", 1.0)
+        _render_operator_card(
+            "Top Opportunity",
+            ticker,
+            f"Rank {rank:.3f} · Fit: {fit.title()}" if rank is not None else fit.title(),
+            badges=[
+                _badge(f"×{mult:.2f} multiplier", "good" if mult > 1.0 else "neutral"),
+                _badge(str(to.get("conviction_band") or "—").replace("_", " "), "neutral"),
+            ],
+        )
+
+    with summary_cols[2]:
+        base_pct    = cp.get("total_baseline_pct")
+        preview_pct = cp.get("total_preview_pct")
+        delta       = cp.get("preview_vs_baseline_delta", 0.0)
+        delta_tone  = "good" if delta > 0 else ("warn" if delta < 0 else "neutral")
+        _render_operator_card(
+            "Capital Preview",
+            f"{preview_pct * 100:.1f}%" if preview_pct is not None else "—",
+            f"Baseline {base_pct * 100:.1f}%" if base_pct is not None else "Baseline —",
+            badges=[
+                _badge(
+                    f"Δ {delta * 100:+.2f}%",
+                    delta_tone,
+                ),
+                _badge("advisory only", "warn"),
+            ],
+        )
+
+    with summary_cols[3]:
+        ws = str(ss.get("ranking_weights_source") or "default")
+        ap = str(ss.get("allocation_policy_status") or "not_approved")
+        change_count = int(ch.get("change_count") or 0)
+        ws_tone = "good" if ws == "approved" else "neutral"
+        ap_tone = "good" if ap == "approved_not_live" else "neutral"
+        _render_operator_card(
+            "Policy Status",
+            ws.replace("_", " ").title(),
+            ap.replace("_", " ").title(),
+            badges=[
+                _badge(f"weights: {ws}", ws_tone),
+                _badge(f"allocation: {ap}", ap_tone),
+                _badge(
+                    f"{change_count} change{'s' if change_count != 1 else ''} detected",
+                    "warn" if change_count > 0 else "neutral",
+                ),
+            ],
+        )
+
+    st.caption(f"System summary generated {gen_display}")
+
+    if md_text:
+        with st.expander("Full System Decision Summary (Markdown)", expanded=False):
+            st.markdown(md_text)
+    elif summary:
+        with st.expander("Full System Decision Summary (JSON)", expanded=False):
+            st.json(summary, expanded=1)
 
 
 def _render_system_confidence_indicator(perf_summary: dict) -> None:
@@ -3820,6 +3938,8 @@ def page_dashboard() -> None:
         if st.button("Refresh", use_container_width=True):
             st.rerun()
 
+    _render_system_summary()
+    st.divider()
     _render_system_confidence_indicator(perf_summary)
     _render_action_strip(mc, bundle)
     _render_portfolio_health_row(bundle, mc)
