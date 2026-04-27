@@ -397,19 +397,37 @@ class WatchlistScanner:
                 logger.warning("FMP batch-profiles pre-fetch failed (non-fatal): %s", exc)
 
         # ── Step 1: Fetch news for the entire watchlist (1 API call) ─────────
+        # Fallback order: AV NEWS_SENTIMENT → FMP stock_news → missing
         news_source: str = "alpha_vantage"
         articles: list[dict] = []
         if not dry_run:
+            _av_news_failed = False
             try:
                 fetched = self._av.get_news_sentiment(self.watchlist, limit=50)
                 articles = fetched or []
                 logger.info("News fetch: %d articles", len(articles))
             except BudgetExceeded as exc:
-                logger.warning("Skipping news fetch — %s", exc)
-                news_source = "missing"
+                logger.warning("Skipping AV news fetch — %s", exc)
+                _av_news_failed = True
             except Exception as exc:
-                logger.warning("News fetch failed: %s", exc)
-                news_source = "missing"
+                logger.warning("AV news fetch failed: %s", exc)
+                _av_news_failed = True
+
+            if _av_news_failed:
+                if self._fmp_enabled and self._fmp is not None:
+                    try:
+                        fmp_arts = self._fmp.get_stock_news(self.watchlist, limit=50, ttl_hours=4)
+                        if fmp_arts:
+                            articles = fmp_arts
+                            news_source = "fmp"
+                            logger.info("FMP news fallback: %d articles", len(articles))
+                        else:
+                            news_source = "missing"
+                    except Exception as fmp_exc:
+                        logger.warning("FMP news fallback failed: %s", fmp_exc)
+                        news_source = "missing"
+                else:
+                    news_source = "missing"
 
         # ── Step 2: Build per-ticker news lookup ─────────────────────────────
         ticker_articles: dict[str, list[dict]] = {sym: [] for sym in self.watchlist}
@@ -853,7 +871,7 @@ class WatchlistScanner:
             "price_data_source":   price_data_source,
             "fundamentals_source": fundamentals_source,
             "news_source":         news_source,
-            "fallback_used":       (price_data_source == "fmp" or fundamentals_source == "fmp"),
+            "fallback_used":       (price_data_source == "fmp" or fundamentals_source == "fmp" or news_source == "fmp"),
             "fallback_reason":     "; ".join(_fallback_reason_parts) if _fallback_reason_parts else "",
         }
 

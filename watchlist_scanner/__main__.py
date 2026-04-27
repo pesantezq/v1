@@ -436,6 +436,7 @@ def main() -> None:
             signals_config=full_cfg.get("signals"),
             ranking_config=full_cfg.get("ranking"),
             scraped_intel_config=full_cfg.get("scraped_intel"),
+            data_sources_config=full_cfg.get("data_sources", {}),
         )
     except Exception as exc:
         logger.error("Watchlist scanner failed: %s", exc, exc_info=True)

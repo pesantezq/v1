@@ -16,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -563,3 +564,213 @@ class TestFmpDisabledConfig:
             fmp_client=None,
         )
         assert scanner._fmp_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# TestFmpNewsFallback — news_source tracking when AV news fails
+# ---------------------------------------------------------------------------
+
+_FMP_NEWS_RAW = [
+    {
+        "symbol": "AAPL",
+        "publishedDate": "2026-04-27 09:30:00",
+        "title": "Apple announces new product",
+        "text": "Apple reported strong quarterly results.",
+        "site": "bloomberg.com",
+        "url": "https://example.com/1",
+    }
+]
+
+
+def _make_fmp_with_news(
+    *,
+    articles: list | None = None,
+    fail: bool = False,
+) -> MagicMock:
+    """FMP mock pre-wired with get_stock_news."""
+    mock = _make_fmp_client()
+    if fail:
+        mock.get_stock_news.side_effect = Exception("FMP news failed")
+    else:
+        mock.get_stock_news.return_value = articles if articles is not None else _FMP_NEWS_RAW
+    return mock
+
+
+class TestFmpNewsFallback:
+    def _run_scanner(self, av, fmp, *, watchlist=None):
+        wl = watchlist or ["AAPL"]
+        scanner = WatchlistScanner(
+            watchlist=wl,
+            cache=_make_cache(),
+            av_client=av,
+            fmp_client=fmp,
+            data_sources={"fmp_enabled": True, "prefer_fmp_on_budget_exhausted": True},
+        )
+        return scanner.run(dry_run=False)
+
+    def test_av_budget_exceeded_fmp_news_used(self):
+        av  = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news()
+        result = self._run_scanner(av, fmp)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"fmp"}
+
+    def test_av_exception_fmp_news_used(self):
+        av  = _make_av_client()
+        av.get_news_sentiment.side_effect = Exception("invalid input")
+        fmp = _make_fmp_with_news()
+        result = self._run_scanner(av, fmp)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"fmp"}
+
+    def test_fmp_news_fails_news_source_missing(self):
+        av  = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news(fail=True)
+        result = self._run_scanner(av, fmp)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"missing"}
+
+    def test_fmp_disabled_av_fails_news_source_missing(self):
+        av = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news()
+        scanner = WatchlistScanner(
+            watchlist=["AAPL"],
+            cache=_make_cache(),
+            av_client=av,
+            fmp_client=fmp,
+            data_sources={"fmp_enabled": False},
+        )
+        result = scanner.run(dry_run=False)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"missing"}
+        fmp.get_stock_news.assert_not_called()
+
+    def test_fmp_news_fallback_sets_fallback_used(self):
+        av  = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news()
+        result = self._run_scanner(av, fmp)
+        # All rows should have fallback_used=True because news came from FMP
+        assert all(r["fallback_used"] for r in result["results"])
+
+    def test_scan_produces_all_results_after_news_fallback(self):
+        watchlist = ["AAPL", "MSFT"]
+        av  = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news(articles=[
+            {**_FMP_NEWS_RAW[0], "symbol": "AAPL"},
+            {**_FMP_NEWS_RAW[0], "symbol": "MSFT"},
+        ])
+        result = self._run_scanner(av, fmp, watchlist=watchlist)
+        assert len(result["results"]) == len(watchlist)
+
+    def test_av_success_fmp_news_not_called(self):
+        av  = _make_av_client()  # AV succeeds
+        fmp = _make_fmp_with_news()
+        result = self._run_scanner(av, fmp)
+        fmp.get_stock_news.assert_not_called()
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"alpha_vantage"}
+
+    def test_fmp_news_returns_empty_news_source_missing(self):
+        av  = _make_av_client(budget_exceed_news=True)
+        fmp = _make_fmp_with_news(articles=[])  # FMP returns empty list
+        result = self._run_scanner(av, fmp)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"missing"}
+
+    def test_no_fmp_client_av_fails_news_source_missing(self):
+        av = _make_av_client(budget_exceed_news=True)
+        scanner = WatchlistScanner(
+            watchlist=["AAPL"],
+            cache=_make_cache(),
+            av_client=av,
+            fmp_client=None,
+        )
+        result = scanner.run(dry_run=False)
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"missing"}
+
+
+# ---------------------------------------------------------------------------
+# TestFmpGetStockNewsNormalization — normalized article shape
+# ---------------------------------------------------------------------------
+
+class TestFmpGetStockNewsNormalization:
+    """
+    Tests the normalization logic of FMPClient.get_stock_news() by running
+    it on a patched _get_cached to bypass HTTP and budget logic.
+    """
+
+    def _make_client(self) -> Any:
+        from fmp_client import FMPClient
+        return FMPClient(api_key="test_key", cache_dir=Path(tempfile.mkdtemp()))
+
+    def _call_with_raw(self, raw, *, tickers=None) -> list:
+        from unittest.mock import patch
+        client = self._make_client()
+        with patch.object(client, '_get_cached', return_value=raw):
+            return client.get_stock_news(tickers or ["AAPL"])
+
+    def test_empty_tickers_returns_empty(self):
+        client = self._make_client()
+        assert client.get_stock_news([]) == []
+
+    def test_non_list_response_returns_empty(self):
+        result = self._call_with_raw({"error": "oops"})
+        assert result == []
+
+    def test_none_response_returns_empty(self):
+        result = self._call_with_raw(None)
+        assert result == []
+
+    def test_article_without_title_skipped(self):
+        raw = [{"symbol": "AAPL", "text": "no title", "site": "site.com",
+                "publishedDate": "2026-01-01"}]
+        result = self._call_with_raw(raw)
+        assert result == []
+
+    def test_title_mapped(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["title"] == "Apple announces new product"
+
+    def test_summary_mapped_from_text(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["summary"] == "Apple reported strong quarterly results."
+
+    def test_source_mapped_from_site(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["source"] == "bloomberg.com"
+
+    def test_time_published_mapped(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["time_published"] == "2026-04-27 09:30:00"
+
+    def test_sentiment_score_is_zero(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["overall_sentiment_score"] == 0.0
+
+    def test_sentiment_label_is_neutral(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["overall_sentiment_label"] == "Neutral"
+
+    def test_ticker_sentiment_ticker_uppercased(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        assert result[0]["ticker_sentiment"][0]["ticker"] == "AAPL"
+
+    def test_ticker_sentiment_empty_when_no_symbol(self):
+        raw = [{**_FMP_NEWS_RAW[0], "symbol": ""}]
+        result = self._call_with_raw(raw)
+        assert result[0]["ticker_sentiment"] == []
+
+    def test_required_keys_present(self):
+        result = self._call_with_raw(_FMP_NEWS_RAW)
+        for key in ("title", "summary", "source", "time_published",
+                    "overall_sentiment_score", "overall_sentiment_label",
+                    "ticker_sentiment"):
+            assert key in result[0], f"missing key: {key}"
+
+    def test_exception_in_get_cached_returns_empty(self):
+        from unittest.mock import patch
+        client = self._make_client()
+        with patch.object(client, '_get_cached', side_effect=Exception("network error")):
+            result = client.get_stock_news(["AAPL"])
+        assert result == []

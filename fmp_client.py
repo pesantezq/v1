@@ -480,3 +480,69 @@ class FMPClient:
                 )
                 break
         return result
+
+    def get_stock_news(
+        self,
+        tickers: List[str],
+        limit: int = 50,
+        ttl_hours: int = 4,
+    ) -> List[Dict]:
+        """
+        Fetch stock news articles for a list of tickers.
+
+        Uses /v3/stock_news?tickers={sym1,sym2,...}&limit={n}.
+        One API call for all tickers; cached for ttl_hours (default 4).
+
+        Returns list of article dicts normalized to the same shape as AV
+        NEWS_SENTIMENT articles so the scanner can consume them without
+        modification:
+            title, summary, source, time_published,
+            overall_sentiment_score (0.0 — FMP does not provide sentiment),
+            overall_sentiment_label ("Neutral"),
+            ticker_sentiment: [{ticker, relevance_score,
+                               ticker_sentiment_score, ticker_sentiment_label}]
+
+        Returns empty list on any error or budget exceeded without stale cache.
+        """
+        if not tickers:
+            return []
+
+        sym_str = ','.join(sorted(tickers))
+        cache_key = f"fmp_news_{sym_str[:60]}_{limit}"
+        try:
+            raw = self._get_cached(
+                cache_key,
+                'v3/stock_news',
+                ttl_seconds=ttl_hours * 3600,
+                params={'tickers': ','.join(tickers), 'limit': str(limit)},
+            )
+        except Exception as exc:
+            logger.warning(f"FMP get_stock_news failed: {exc}")
+            return []
+
+        if not isinstance(raw, list):
+            return []
+
+        normalized: List[Dict] = []
+        for art in raw:
+            if not isinstance(art, dict) or not art.get('title'):
+                continue
+            sym = str(art.get('symbol') or '')
+            normalized.append({
+                'title': art.get('title', ''),
+                'summary': art.get('text', ''),
+                'source': art.get('site', ''),
+                'time_published': art.get('publishedDate', ''),
+                'overall_sentiment_score': 0.0,
+                'overall_sentiment_label': 'Neutral',
+                'ticker_sentiment': [
+                    {
+                        'ticker': sym.upper(),
+                        'relevance_score': '0.5',
+                        'ticker_sentiment_score': '0.0',
+                        'ticker_sentiment_label': 'Neutral',
+                    }
+                ] if sym else [],
+            })
+        logger.debug(f"FMP get_stock_news: {len(normalized)} articles for {len(tickers)} tickers")
+        return normalized
