@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from decision_support import as_finite_float, normalize_confidence, normalize_strategy_type, read_value
+from watchlist_scanner.allocation_preview import _rank_multiplier as _policy_rank_multiplier
 
 
 DEFAULT_CONFIG = {
@@ -41,6 +42,13 @@ class AllocationSuggestion:
     deployable_cash: float
     capped_by: list[str] = field(default_factory=list)
     rationale: list[str] = field(default_factory=list)
+    # Advisory allocation policy metadata — never changes suggested_pct
+    allocation_policy_source: str = "default"
+    allocation_policy_candidate: str = "rank_aware"
+    rank_multiplier: float = 1.0
+    baseline_suggested_pct: float = 0.0
+    rank_aware_suggested_pct: float = 0.0
+    allocation_policy_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +60,12 @@ class AllocationSuggestion:
             "deployable_cash": round(self.deployable_cash, 2),
             "capped_by": list(self.capped_by),
             "rationale": list(self.rationale),
+            "allocation_policy_source": self.allocation_policy_source,
+            "allocation_policy_candidate": self.allocation_policy_candidate,
+            "rank_multiplier": round(self.rank_multiplier, 4),
+            "baseline_suggested_pct": round(self.baseline_suggested_pct, 4),
+            "rank_aware_suggested_pct": round(self.rank_aware_suggested_pct, 4),
+            "allocation_policy_reason": self.allocation_policy_reason,
         }
 
 
@@ -64,6 +78,7 @@ def suggest_allocation(
     current_sector_exposure: float = 0.0,
     context: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    approved_policy: dict[str, Any] | None = None,
 ) -> AllocationSuggestion:
     cfg = dict(DEFAULT_CONFIG)
     cfg.update(config or {})
@@ -154,6 +169,39 @@ def suggest_allocation(
         suggested_amount = 0.0
         rationale.append("no deployable cash is available after respecting the reserve")
 
+    # Advisory allocation policy metadata — does not change suggested_pct
+    baseline_suggested_pct = max(0.0, round(suggested_pct, 4))
+    rank_mult = 1.0
+    rank_aware_pct = baseline_suggested_pct
+    policy_source = "default"
+    policy_reason = "rank-aware allocation policy not active"
+
+    if approved_policy is not None and approved_policy.get("_valid") is True:
+        rank_score_raw = read_value(opportunity, "final_rank_score", None)
+        if rank_score_raw is not None:
+            rank_score = as_finite_float(rank_score_raw, default=None)
+            if rank_score is not None:
+                rank_mult, rank_label = _policy_rank_multiplier(rank_score)
+                raw_rank_aware = baseline_suggested_pct * rank_mult
+                rank_aware_pct = round(
+                    min(raw_rank_aware, max_position_cap), 4
+                )
+                policy_source = "approved_rank_aware"
+                policy_reason = (
+                    f"approved rank-aware policy active; {rank_label} score "
+                    f"({rank_score:.3f}) → ×{rank_mult:.2f} multiplier; "
+                    f"baseline {baseline_suggested_pct:.1%} → "
+                    f"rank-aware {rank_aware_pct:.1%} (advisory only)"
+                )
+            else:
+                policy_reason = (
+                    "approved policy active but final_rank_score is non-numeric"
+                )
+        else:
+            policy_reason = (
+                "approved policy active but opportunity has no final_rank_score"
+            )
+
     return AllocationSuggestion(
         symbol=symbol,
         strategy_type=strategy_type,
@@ -163,6 +211,12 @@ def suggest_allocation(
         deployable_cash=round(deployable_cash, 2),
         capped_by=_dedupe(capped_by),
         rationale=rationale,
+        allocation_policy_source=policy_source,
+        allocation_policy_candidate="rank_aware",
+        rank_multiplier=rank_mult,
+        baseline_suggested_pct=baseline_suggested_pct,
+        rank_aware_suggested_pct=rank_aware_pct,
+        allocation_policy_reason=policy_reason,
     )
 
 

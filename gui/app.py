@@ -2094,6 +2094,105 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
                 rule_rows.append({"Rule": r, "Status": "FAIL"})
             st.dataframe(_coerce_df(rule_rows), use_container_width=True, hide_index=True)
 
+    # ── Rank-Aware Advisory Sizing ────────────────────────────────────────────
+    st.subheader("Rank-Aware Advisory Sizing")
+    _render_interpretation(
+        "Shows how advisory sizing would be enriched when an approved rank-aware allocation "
+        "policy is active. The suggested_pct (actual sizing) is never changed — only advisory "
+        "metadata fields (rank_aware_suggested_pct, allocation_policy_source) are added. "
+        "No portfolio mutation, no alert-gating changes, no auto-trading."
+    )
+    st.markdown(
+        _badge("Advisory only — suggested_pct is unchanged", "warn"),
+        unsafe_allow_html=True,
+    )
+    _aap_live = _load_approved_allocation_policy()
+    _aap_loader_valid = (
+        isinstance(_aap_live, dict)
+        and _aap_live.get("activation_status") == "approved_not_live"
+        and _aap_live.get("applied_to_live") is not True
+        and _aap_live.get("rank_aware") is not None
+        and isinstance(_aap_live.get("delta"), dict)
+        and float((_aap_live.get("delta") or {}).get("efficiency_delta") or 0.0) > 0.0
+    )
+    if not _aap_live:
+        policy_src_label = "default"
+        policy_src_tone = "neutral"
+    elif _aap_loader_valid:
+        policy_src_label = "approved_rank_aware"
+        policy_src_tone = "good"
+    else:
+        policy_src_label = "default (policy invalid)"
+        policy_src_tone = "warn"
+
+    st.markdown(
+        _badge(f"Policy source: {policy_src_label}", policy_src_tone),
+        unsafe_allow_html=True,
+    )
+
+    if _aap_loader_valid and _aap_live:
+        _ra_meta = _aap_live.get("rank_aware") or {}
+        _b_meta = _aap_live.get("baseline") or {}
+        _d_meta = _aap_live.get("delta") or {}
+
+        advisory_cols = st.columns(3)
+        with advisory_cols[0]:
+            b_eff = _b_meta.get("capital_efficiency")
+            st.metric(
+                "Baseline Capital Efficiency",
+                f"{b_eff:.4f}" if b_eff is not None else "—",
+            )
+        with advisory_cols[1]:
+            ra_eff = _ra_meta.get("capital_efficiency")
+            st.metric(
+                "Rank-Aware Capital Efficiency",
+                f"{ra_eff:.4f}" if ra_eff is not None else "—",
+            )
+        with advisory_cols[2]:
+            eff_delta = _d_meta.get("efficiency_delta")
+            st.metric(
+                "Efficiency Delta",
+                f"{eff_delta:+.4f}" if eff_delta is not None else "—",
+            )
+
+        sizing_cols = st.columns(2)
+        with sizing_cols[0]:
+            b_alloc = _b_meta.get("total_allocated_pct")
+            st.metric(
+                "Baseline Allocated %",
+                f"{b_alloc:.1%}" if b_alloc is not None else "—",
+            )
+        with sizing_cols[1]:
+            ra_alloc = _ra_meta.get("total_allocated_pct")
+            st.metric(
+                "Rank-Aware Allocated %",
+                f"{ra_alloc:.1%}" if ra_alloc is not None else "—",
+            )
+
+        st.markdown("**Rank Multiplier Reference**")
+        st.dataframe(
+            _coerce_df([
+                {"Rank Label": "Strong", "Score Threshold": "≥ 0.75", "Multiplier": "×1.25"},
+                {"Rank Label": "Good", "Score Threshold": "≥ 0.55", "Multiplier": "×1.10"},
+                {"Rank Label": "Neutral", "Score Threshold": "≥ 0.35", "Multiplier": "×1.00"},
+                {"Rank Label": "Poor", "Score Threshold": "< 0.35", "Multiplier": "×0.75"},
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "When an approved policy is active, suggest_allocation() populates "
+            "allocation_policy_source='approved_rank_aware', rank_multiplier, "
+            "baseline_suggested_pct, and rank_aware_suggested_pct as advisory metadata. "
+            "The suggested_pct field is never modified."
+        )
+    else:
+        st.info(
+            "No valid approved allocation policy found. Advisory sizing will use "
+            "allocation_policy_source='default' with rank_aware_suggested_pct equal to "
+            "baseline_suggested_pct and rank_multiplier=1.0."
+        )
+
 
 def _render_recommendation_quality_tab(bundle: dict) -> None:
     quality = bundle["recommendation_quality_view"]
