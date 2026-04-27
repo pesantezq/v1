@@ -36,6 +36,7 @@ from gui_operator_data import (
 )
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
+from watchlist_scanner.approved_config_loader import load_approved_weights
 
 # -- Paths -------------------------------------------------------------------
 ROOT             = Path(__file__).parent.parent.resolve()
@@ -1777,13 +1778,36 @@ def _render_signal_enrichment_tab(perf_summary: dict | None) -> None:
         "Promote via: python -m watchlist_scanner.config_promotion --approve"
     )
     arc = _load_approved_ranking_config()
+    _arc_weights = load_approved_weights(
+        ROOT / "outputs" / "performance" / "approved_ranking_config.json"
+    )
+    _arc_weights_active = bool(_arc_weights and _arc_weights.get("_valid"))
     if not arc:
         st.info(
             "No approved config yet. Review config_proposal.json and run: "
             "`python -m watchlist_scanner.config_promotion --approve`"
         )
+        st.markdown(
+            _badge("Final rank weights: default (no approved config)", "neutral"),
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown(_badge("NOT APPLIED TO LIVE SCORING", "warn"), unsafe_allow_html=True)
+        if _arc_weights_active:
+            _cand = (_arc_weights or {}).get("recommended_candidate") or "approved"
+            st.markdown(
+                _badge(
+                    f"Final rank weights: approved ({_cand}) — affects ranking order only",
+                    "good",
+                ),
+                unsafe_allow_html=True,
+            )
+        else:
+            _reason = (_arc_weights or {}).get("reason", "config invalid")
+            st.markdown(
+                _badge(f"Final rank weights: default ({_reason})", "warn"),
+                unsafe_allow_html=True,
+            )
 
         meta_cols = st.columns(3)
         with meta_cols[0]:

@@ -49,6 +49,8 @@ def build_priority_explanation(signal: dict[str, Any]) -> str:
 def apply_priority_score(
     signal: dict[str, Any],
     ranking_config: dict[str, Any] | None = None,
+    *,
+    approved_weights_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = _ranking_cfg(ranking_config)
     signal_score = float(signal.get("signal_score") or 0.0)
@@ -81,13 +83,27 @@ def apply_priority_score(
     # final_rank_score: holistic ordering score that blends signal quality,
     # confidence, theme alignment, and portfolio fit.
     # Used as a secondary sort tiebreaker — does NOT replace priority_score.
+    # Uses approved weights from approved_ranking_config.json when valid;
+    # falls back to hardcoded defaults otherwise.
+    _using_approved = bool(
+        approved_weights_config and approved_weights_config.get("_valid") is True
+    )
+    if _using_approved:
+        _w = approved_weights_config["weights"]  # type: ignore[index]
+    else:
+        _w = {
+            "augmented_signal_score": 0.40,
+            "confidence_score": 0.25,
+            "theme_alignment_score": 0.15,
+            "portfolio_fit_score": 0.20,
+        }
     portfolio_fit_score = float(signal.get("portfolio_fit_score") or 0.5)
     theme_alignment_score = float(signal.get("theme_alignment_score") or 0.0)
     final_rank_score = round(
-        augmented_signal_score * 0.40
-        + confidence_score * 0.25
-        + theme_alignment_score * 0.15
-        + portfolio_fit_score * 0.20,
+        augmented_signal_score * _w["augmented_signal_score"]
+        + confidence_score * _w["confidence_score"]
+        + theme_alignment_score * _w["theme_alignment_score"]
+        + portfolio_fit_score * _w["portfolio_fit_score"],
         4,
     )
 
@@ -95,4 +111,16 @@ def apply_priority_score(
     signal["augmented_priority_score"] = augmented_priority_score
     signal["final_rank_score"] = final_rank_score
     signal["priority_explanation"] = build_priority_explanation(signal)
+    signal["final_rank_weights_source"] = "approved" if _using_approved else "default"
+    signal["final_rank_weights_candidate"] = (
+        approved_weights_config.get("recommended_candidate")  # type: ignore[union-attr]
+        if _using_approved
+        else "default"
+    )
+    signal["final_rank_weights_approved_at"] = (
+        approved_weights_config.get("approved_at")  # type: ignore[union-attr]
+        if _using_approved
+        else None
+    )
+    signal["final_rank_weight_config_valid"] = _using_approved
     return signal

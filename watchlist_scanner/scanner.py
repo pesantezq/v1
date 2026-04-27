@@ -32,6 +32,7 @@ import pandas as pd
 from watchlist_scanner.alpha_vantage_client import WatchlistAVClient, BudgetExceeded
 from watchlist_scanner.alert_filter import should_emit_alert
 from watchlist_scanner.alert_ranking import apply_priority_score
+from watchlist_scanner.approved_config_loader import load_approved_weights
 from watchlist_scanner.cache_manager import CacheManager
 from watchlist_scanner import theme_engine as te
 from watchlist_scanner.fundamentals_engine import (
@@ -292,6 +293,24 @@ class WatchlistScanner:
             len(self.watchlist), self._cache.calls_today, self._av._max_calls,
         )
 
+        # ── Step 0: Load approved ranking weights (optional, non-blocking) ────
+        # Reads approved_ranking_config.json if present and valid. Falls back to
+        # hardcoded defaults silently when absent; logs a warning when the file
+        # exists but fails validation.
+        _approved_path = self._root / "outputs" / "performance" / "approved_ranking_config.json"
+        _approved_weights_config = load_approved_weights(_approved_path)
+        if _approved_weights_config and _approved_weights_config.get("_valid"):
+            logger.info(
+                "Approved ranking weights active: candidate=%s, approved_at=%s",
+                _approved_weights_config.get("recommended_candidate"),
+                _approved_weights_config.get("approved_at"),
+            )
+        elif _approved_weights_config:
+            logger.warning(
+                "Approved ranking config found but invalid (%s) — using default weights",
+                _approved_weights_config.get("reason", "unknown reason"),
+            )
+
         # ── Step 1: Fetch news for the entire watchlist (1 API call) ─────────
         articles: list[dict] = []
         if not dry_run:
@@ -465,7 +484,7 @@ class WatchlistScanner:
             r["evidence_count"] = int(filter_decision.get("evidence_count", r.get("evidence_breadth", 0)))
             if not r["filter_allowed"]:
                 r["alert_priority"] = None
-            apply_priority_score(r, self._ranking_config)
+            apply_priority_score(r, self._ranking_config, approved_weights_config=_approved_weights_config)
 
         # Identify alerts and sort by priority_score (primary), trusted_signal_score
         # (secondary), then theme_alignment_score as a soft tiebreaker.
