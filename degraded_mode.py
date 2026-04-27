@@ -16,7 +16,18 @@ def infer_degraded_reason(
     fallback_used: bool = False,
     watchlist_source: str = "none",
     scan_status: str | None = None,
+    av_budget_exhausted: bool = False,
+    missing_data_ratio: float | None = None,
+    missing_data_threshold: float = 0.50,
 ) -> str | None:
+    """
+    Infer a degraded-mode reason from scan / API context.
+
+    New parameters (backward-compatible defaults):
+        av_budget_exhausted:   True when Alpha Vantage daily budget was hit.
+        missing_data_ratio:    Fraction of symbols with missing critical data.
+        missing_data_threshold: Ratio above which 'missing_critical_data' fires.
+    """
     err = (fmp_error or "").lower()
     if "circuit breaker" in err:
         return "circuit_breaker"
@@ -30,6 +41,13 @@ def infer_degraded_reason(
         return "budget_exhausted"
     if "http 5" in err:
         return "fmp_5xx"
+    if av_budget_exhausted:
+        return "av_budget_exhausted"
+    if (
+        missing_data_ratio is not None
+        and missing_data_ratio >= missing_data_threshold
+    ):
+        return "missing_critical_data"
     if scan_status == "cache_only":
         return "cache_only"
     if scan_status == "degraded":
@@ -87,8 +105,10 @@ def infer_confidence_penalty(
         penalty = 0.30
     elif degraded_reason in {"fmp_401", "fmp_403", "fmp_429", "fmp_5xx"}:
         penalty = 0.25
-    elif degraded_reason in {"cache_only", "budget_exhausted"}:
+    elif degraded_reason in {"cache_only", "budget_exhausted", "missing_critical_data"}:
         penalty = 0.20
+    elif degraded_reason == "av_budget_exhausted":
+        penalty = 0.15
     else:
         penalty = 0.15
     if stale_cache_days is not None and stale_cache_days > DEFAULT_STALE_DAYS:
@@ -168,3 +188,73 @@ def summarize_data_health(ctx: dict[str, Any]) -> str:
         f"fallback_depth={ctx.get('fallback_depth', 0)}, "
         f"latency={ctx.get('data_latency_ms', '(n/a)')}ms"
     )
+
+
+def check_scan_data_quality(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Compute a data-quality audit from a completed scan's results list.
+
+    Counts per-symbol data provenance and returns a summary dict that can
+    feed back into build_data_health_context via missing_data_ratio.
+
+    Returns:
+        {
+          "total":                   int,
+          "fresh_count":             int,
+          "cached_count":            int,
+          "fmp_fallback_count":      int,   # any source came from FMP
+          "missing_price_count":     int,
+          "missing_fundamentals_count": int,
+          "missing_data_ratio":      float, # fraction with missing price OR fundamentals
+          "fmp_fallback_ratio":      float,
+          "data_quality_assessment": "good" | "degraded" | "poor",
+        }
+    """
+    if not results:
+        return {
+            "total": 0,
+            "fresh_count": 0,
+            "cached_count": 0,
+            "fmp_fallback_count": 0,
+            "missing_price_count": 0,
+            "missing_fundamentals_count": 0,
+            "missing_data_ratio": 0.0,
+            "fmp_fallback_ratio": 0.0,
+            "data_quality_assessment": "good",
+        }
+
+    total = len(results)
+    fresh = sum(1 for r in results if r.get("data_quality") == "fresh")
+    cached = sum(1 for r in results if r.get("data_quality") in {"cached", "partial", "budget_skipped"})
+    fmp_fb = sum(1 for r in results if r.get("fallback_used"))
+    miss_price = sum(1 for r in results if r.get("price_data_source") == "missing")
+    miss_fund = sum(1 for r in results if r.get("fundamentals_source") in {"missing", None})
+
+    # A symbol is "critically missing" when BOTH price and fundamentals are absent
+    critical_missing = sum(
+        1 for r in results
+        if r.get("price_data_source") == "missing"
+        and r.get("fundamentals_source") in {"missing", None}
+    )
+
+    missing_ratio = round(critical_missing / total, 4) if total else 0.0
+    fmp_ratio = round(fmp_fb / total, 4) if total else 0.0
+
+    if missing_ratio >= 0.50 or fmp_ratio >= 0.80:
+        assessment = "poor"
+    elif missing_ratio >= 0.20 or cached / total >= 0.50:
+        assessment = "degraded"
+    else:
+        assessment = "good"
+
+    return {
+        "total":                      total,
+        "fresh_count":                fresh,
+        "cached_count":               cached,
+        "fmp_fallback_count":         fmp_fb,
+        "missing_price_count":        miss_price,
+        "missing_fundamentals_count": miss_fund,
+        "missing_data_ratio":         missing_ratio,
+        "fmp_fallback_ratio":         fmp_ratio,
+        "data_quality_assessment":    assessment,
+    }

@@ -39,6 +39,8 @@ from watchlist_scanner.fundamentals_engine import (
     parse_fmp_profile,
     parse_overview,
     fundamental_context_score,
+    derive_fundamentals_score,
+    derive_valuation_score,
 )
 
 try:
@@ -866,6 +868,17 @@ class WatchlistScanner:
                 "data_days":       tech.get("data_days"),
             },
             "score_breakdown": breakdown,
+
+            # ── FMP-enhanced fundamentals fields ──────────────────────────────
+            # fundamentals_score and valuation_score are 0-100 derived values.
+            # revenue_growth / earnings_growth / debt_ratio are None when the
+            # data source (AV free-tier or FMP free-tier profile) doesn't
+            # supply them — callers must handle None safely.
+            "fundamentals_score":  derive_fundamentals_score(fundamentals),
+            "valuation_score":     derive_valuation_score(fundamentals),
+            "revenue_growth":      fundamentals.get("revenue_growth"),
+            "earnings_growth":     fundamentals.get("earnings_growth"),
+            "debt_ratio":          fundamentals.get("debt_ratio"),
 
             # ── Data-source provenance ────────────────────────────────────────
             "price_data_source":   price_data_source,

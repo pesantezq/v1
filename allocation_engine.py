@@ -29,6 +29,11 @@ DEFAULT_CONFIG = {
     "sector_cap": 0.20,
     "cash_reserve_pct": 0.05,
     "min_position_pct": 0.01,
+    # Fundamentals-based sizing guard — applied before sector/cash caps.
+    # Positions where fundamentals_score (0-100) falls below the threshold
+    # are capped at low_fundamentals_cap regardless of confidence.
+    "low_fundamentals_threshold": 30.0,
+    "low_fundamentals_cap": 0.02,
 }
 
 
@@ -142,6 +147,29 @@ def suggest_allocation(
     deployable_cash = max(0.0, cash_available - reserve_target)
 
     capped_by: list[str] = []
+
+    # Fundamentals-based guard: cap weak-fundamental positions before other caps.
+    fund_score = _infer_fundamentals_score(opportunity)
+    low_fund_threshold = _config_float(
+        cfg, "low_fundamentals_threshold", DEFAULT_CONFIG["low_fundamentals_threshold"], minimum=0.0
+    )
+    low_fund_cap = _config_float(
+        cfg, "low_fundamentals_cap", DEFAULT_CONFIG["low_fundamentals_cap"], minimum=0.0
+    )
+    if (
+        fund_score is not None
+        and low_fund_threshold is not None
+        and low_fund_cap is not None
+        and fund_score < low_fund_threshold
+        and suggested_pct > low_fund_cap
+    ):
+        suggested_pct = low_fund_cap
+        capped_by.append("low_fundamentals_cap")
+        rationale.append(
+            f"fundamentals score {fund_score:.0f}/100 is below threshold "
+            f"({low_fund_threshold:.0f}) — position capped at {low_fund_cap:.1%}"
+        )
+
     max_position_cap = _config_float(cfg, "max_position_cap", DEFAULT_CONFIG["max_position_cap"], minimum=0.0)
     if suggested_pct > max_position_cap:
         suggested_pct = max_position_cap
@@ -267,3 +295,17 @@ def _dedupe(items: list[str]) -> list[str]:
             seen.add(item)
             output.append(item)
     return output
+
+
+def _infer_fundamentals_score(opportunity: Any) -> float | None:
+    """Read fundamentals_score from an opportunity dict; normalise to 0-100 scale."""
+    raw = read_value(opportunity, "fundamentals_score", None)
+    if raw is None:
+        return None
+    val = as_finite_float(raw, default=None)
+    if val is None:
+        return None
+    # Accept both 0-1 and 0-100 representations
+    if 0.0 <= val <= 1.0:
+        return val * 100.0
+    return val

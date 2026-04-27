@@ -92,6 +92,11 @@ def parse_overview(raw: dict[str, Any]) -> dict[str, Any]:
         "52w_low":              _f("52WeekLow"),
         "50dma":                _f("50DayMovingAverage"),
         "200dma":               _f("200DayMovingAverage"),
+        # Growth metrics available in AV OVERVIEW
+        "revenue_growth":       _f("QuarterlyRevenueGrowthYOY"),
+        "earnings_growth":      _f("QuarterlyEarningsGrowthYOY"),
+        # Not available in AV free-tier OVERVIEW
+        "debt_ratio":           None,
     }
 
 
@@ -213,7 +218,53 @@ def parse_fmp_profile(
         "52w_low":              _qf("yearLow"),
         "50dma":                _qf("priceAvg50"),
         "200dma":               _qf("priceAvg200"),
+        # Not available on FMP free-tier profile/quote endpoints
+        "revenue_growth":       None,
+        "earnings_growth":      None,
+        "debt_ratio":           None,
     }
+
+
+def derive_fundamentals_score(fundamentals: dict[str, Any]) -> float:
+    """
+    Normalized fundamentals quality score in [0, 100].
+
+    Re-scales fundamental_context_score() (which returns [0, 1]) to the
+    0-100 range used in signal output and allocation caps.
+    Returns 50.0 (neutral) for an empty or missing fundamentals dict.
+    """
+    if not fundamentals:
+        return 50.0
+    return round(fundamental_context_score(fundamentals) * 100, 1)
+
+
+def derive_valuation_score(fundamentals: dict[str, Any]) -> float:
+    """
+    PE-based valuation attractiveness score in [0, 100].
+
+    Scores based on PE attractiveness (higher = more attractive):
+      None / ≤0   → 50.0  neutral (no PE data)
+      <10         → 40.0  cheap but possibly distressed
+      10–20       → 90.0  very attractive growth+value zone
+      20–35       → 100.0 sweet-spot
+      35–50       → 60.0  growth premium, acceptable
+      50–80       → 30.0  expensive
+      >80         → 10.0  very expensive
+    """
+    pe = fundamentals.get("pe_ratio") if fundamentals else None
+    if pe is None or not isinstance(pe, (int, float)) or pe <= 0:
+        return 50.0
+    if pe < 10:
+        return 40.0
+    if pe <= 20:
+        return 90.0
+    if pe <= 35:
+        return 100.0
+    if pe <= 50:
+        return 60.0
+    if pe <= 80:
+        return 30.0
+    return 10.0
 
 
 def format_market_cap(mktcap: float | None) -> str:

@@ -82,12 +82,22 @@ class ScoringComponents:
     impact: int = 0            # 0-25: What's the downside?
     priority: int = 0          # 0-10: User preferences
     confidence: int = 100      # 0-100: Data quality
-    
+    # FMP-enhanced fundamentals components (default 0 — safe for existing callers)
+    fundamentals_strength: int = 0      # 0-20: Balance-sheet quality (ROE, margins, growth)
+    valuation_attractiveness: int = 0   # 0-15: PE / forward-PE / price-to-book
+    growth_momentum: int = 0            # 0-15: Revenue + earnings growth trajectory
+
     @property
     def raw_score(self) -> int:
         """Calculate raw score before confidence adjustment."""
-        return min(100, self.severity + self.persistence + self.impact + self.priority)
-    
+        base = self.severity + self.persistence + self.impact + self.priority
+        enhancements = (
+            self.fundamentals_strength
+            + self.valuation_attractiveness
+            + self.growth_momentum
+        )
+        return min(100, base + enhancements)
+
     @property
     def final_score(self) -> int:
         """Calculate final score with confidence adjustment."""
@@ -288,21 +298,160 @@ def calc_confidence(
     is_auto_imported: bool = True,
     has_manual_entries: bool = False,
     is_partial_period: bool = False,
-    missing_categories: int = 0
+    missing_categories: int = 0,
+    has_fundamentals: bool = True,
+    fundamentals_stale: bool = False,
 ) -> int:
-    """Calculate data confidence score."""
+    """
+    Calculate data confidence score.
+
+    New parameters (backward-compatible defaults):
+        has_fundamentals:   False → penalise; fundamentals unavailable
+        fundamentals_stale: True  → minor penalty for cached/stale data
+    """
     if is_auto_imported and not has_manual_entries and not is_partial_period:
-        return 100
-    
-    confidence = 100
-    
-    if has_manual_entries:
-        confidence = 70
-    
-    if is_partial_period or missing_categories > 0:
-        confidence = min(confidence, 40 + (10 * (5 - missing_categories)))
-    
-    return max(0, min(100, confidence))
+        base = 100
+    else:
+        base = 100
+        if has_manual_entries:
+            base = 70
+        if is_partial_period or missing_categories > 0:
+            base = min(base, 40 + (10 * (5 - missing_categories)))
+
+    if not has_fundamentals:
+        base = min(base, 60)
+    elif fundamentals_stale:
+        base = min(base, 80)
+
+    return max(0, min(100, base))
+
+
+# =============================================================================
+# FMP-ENHANCED SCORING COMPONENTS
+# =============================================================================
+
+def calc_fundamentals_strength(
+    profit_margin: Optional[float] = None,
+    roe: Optional[float] = None,
+    revenue_growth: Optional[float] = None,
+) -> int:
+    """
+    Fundamentals strength score (0–20).
+
+    Rewards companies with strong profitability, returns on equity, and
+    positive revenue growth.  Missing inputs default to neutral (0).
+    """
+    score = 0
+
+    # Profit margin contribution (0–8)
+    if profit_margin is not None:
+        if profit_margin >= 0.30:
+            score += 8
+        elif profit_margin >= 0.20:
+            score += 6
+        elif profit_margin >= 0.10:
+            score += 4
+        elif profit_margin >= 0.05:
+            score += 2
+        # negative margin → 0
+
+    # ROE contribution (0–6)
+    if roe is not None:
+        if roe >= 0.30:
+            score += 6
+        elif roe >= 0.20:
+            score += 4
+        elif roe >= 0.10:
+            score += 2
+
+    # Revenue growth contribution (0–6)
+    if revenue_growth is not None:
+        if revenue_growth >= 0.25:
+            score += 6
+        elif revenue_growth >= 0.10:
+            score += 4
+        elif revenue_growth >= 0.0:
+            score += 2
+        # negative growth → 0
+
+    return min(20, score)
+
+
+def calc_valuation_attractiveness(
+    pe: Optional[float] = None,
+    forward_pe: Optional[float] = None,
+    price_to_book: Optional[float] = None,
+) -> int:
+    """
+    Valuation attractiveness score (0–15).
+
+    Higher when PE / forward-PE sits in a reasonable growth-value zone.
+    Price-to-book adds a small supplementary signal.
+    """
+    score = 0
+
+    # PE contribution (0–10)
+    if pe is not None and pe > 0:
+        if pe <= 15:
+            score += 8    # value zone
+        elif pe <= 25:
+            score += 10   # sweet-spot
+        elif pe <= 35:
+            score += 7    # growth premium
+        elif pe <= 50:
+            score += 4
+        else:
+            score += 1
+
+    # Forward PE adds 0–3 if better than trailing PE
+    if forward_pe is not None and forward_pe > 0:
+        if pe is not None and forward_pe < pe * 0.9:
+            score += 3   # earnings expected to expand
+        elif forward_pe <= 20:
+            score += 1
+
+    # Price-to-book (0–2)
+    if price_to_book is not None and price_to_book > 0:
+        if price_to_book <= 3:
+            score += 2
+        elif price_to_book <= 5:
+            score += 1
+
+    return min(15, score)
+
+
+def calc_growth_momentum(
+    revenue_growth: Optional[float] = None,
+    earnings_growth: Optional[float] = None,
+) -> int:
+    """
+    Growth momentum score (0–15).
+
+    Rewards positive and accelerating revenue + earnings growth.
+    """
+    score = 0
+
+    # Revenue growth (0–8)
+    if revenue_growth is not None:
+        if revenue_growth >= 0.30:
+            score += 8
+        elif revenue_growth >= 0.20:
+            score += 6
+        elif revenue_growth >= 0.10:
+            score += 4
+        elif revenue_growth >= 0.0:
+            score += 2
+
+    # Earnings growth (0–7)
+    if earnings_growth is not None:
+        if earnings_growth >= 0.30:
+            score += 7
+        elif earnings_growth >= 0.15:
+            score += 5
+        elif earnings_growth >= 0.0:
+            score += 3
+
+    return min(15, score)
 
 
 # =============================================================================

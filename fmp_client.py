@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import urllib.error
@@ -546,3 +546,39 @@ class FMPClient:
             })
         logger.debug(f"FMP get_stock_news: {len(normalized)} articles for {len(tickers)} tickers")
         return normalized
+
+    def get_historical_prices(
+        self,
+        symbol: str,
+        years: int = 5,
+        ttl_days: int = 1,
+    ) -> List[Dict]:
+        """
+        Fetch daily historical OHLCV data for a single symbol.
+
+        Uses /v3/historical-price-full/{symbol}?from=YYYY-MM-DD.
+        1 API call per symbol; cached for ttl_days (default 1 day so
+        backtests always see fresh recent data without burning budget daily).
+
+        Returns list of dicts (newest-first order from FMP) with keys:
+            date, open, high, low, close, adjClose, volume,
+            unadjustedVolume, change, changePercent, vwap
+        Returns empty list on any error or when budget exceeded without cache.
+        """
+        if not symbol:
+            return []
+        from_date = (date.today() - timedelta(days=years * 365)).isoformat()
+        cache_key = f"hist_{symbol.upper()}_{years}y"
+        try:
+            data = self._get_cached(
+                cache_key,
+                f"v3/historical-price-full/{symbol.upper()}",
+                ttl_seconds=ttl_days * 86400,
+                params={"from": from_date},
+            )
+        except Exception as exc:
+            logger.warning(f"FMP get_historical_prices({symbol!r}) failed: {exc}")
+            return []
+        if isinstance(data, dict) and "historical" in data:
+            return data["historical"] or []
+        return []
