@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-28T16:34:23.185035",
+  "generated_at": "2026-04-28T17:15:54.599548",
   "windows": [
     1,
     3,
@@ -44,7 +44,7 @@
     ]
   },
   "regime_performance": {
-    "generated_at": "2026-04-28T16:34:23.185071",
+    "generated_at": "2026-04-28T17:15:54.599584",
     "primary_window_days": 3,
     "resolved_signals": 0,
     "by_regime": {},
@@ -55,7 +55,7 @@
     }
   },
   "theme_alignment_performance": {
-    "generated_at": "2026-04-28T16:34:23.185081",
+    "generated_at": "2026-04-28T17:15:54.599595",
     "primary_window_days": 3,
     "total": 0,
     "buckets": {
@@ -90,7 +90,7 @@
     }
   },
   "portfolio_fit_performance": {
-    "generated_at": "2026-04-28T16:34:23.185103",
+    "generated_at": "2026-04-28T17:15:54.599607",
     "primary_window_days": 3,
     "total": 0,
     "buckets": {
@@ -125,14 +125,14 @@
     }
   },
   "final_rank_performance": {
-    "generated_at": "2026-04-28T16:34:23.185110",
+    "generated_at": "2026-04-28T17:15:54.599615",
     "primary_window_days": 3,
     "total": 0,
     "scored": 0,
     "quartiles": {}
   },
   "theme_type_performance": {
-    "generated_at": "2026-04-28T16:34:23.185114",
+    "generated_at": "2026-04-28T17:15:54.599619",
     "primary_window_days": 3,
     "total": 0,
     "by_type": {
