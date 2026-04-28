@@ -82,6 +82,7 @@ class ScanResult:
 
     # Meta
     timestamp: Optional[str] = None
+    price_data_source: Optional[str] = None
 
     # Theme confirmation score (0.0–1.0).
     # Populated externally (e.g. via theme_signals arg to scan()) or by
@@ -115,6 +116,7 @@ class ScanResult:
             "year_low": self.year_low,
             "pct_from_year_high": self.pct_from_year_high,
             "timestamp": self.timestamp,
+            "price_data_source": self.price_data_source,
             "theme_support": self.theme_support,
         }
 
@@ -311,6 +313,7 @@ class UniversalScanner:
             year_low=year_low,
             pct_from_year_high=pct_from_yh,
             timestamp=timestamp,
+            price_data_source="fmp",
         )
 
 

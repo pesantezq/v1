@@ -16,6 +16,7 @@ Usage:
     symbols = [c['symbol'] for c in fmp.get_sp500_constituents()]
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -444,41 +445,95 @@ class FMPClient:
     def get_batch_quotes(
         self,
         symbols: List[str],
-        chunk_size: int = 100,
+        chunk_size: int = 50,
         ttl_hours: int = 1,
     ) -> Dict[str, Dict]:
         """
-        Batch quote data for a list of symbols.
+        Batch quote data for a list of symbols using /v3/quote/{symbols}.
 
-        Chunks the request to avoid URL-length limits.
+        Chunks the request into groups of chunk_size (default 50) to stay
+        within URL-length limits and plan-tier batch restrictions.
         Each chunk = 1 API call; results cached for ttl_hours (default 1).
 
+        Cache keys are deterministic (hashlib.md5) so stale-cache fallback
+        works correctly across process restarts.
+
         Returns: {symbol: quote_dict}
-        Quote dict keys include: price, priceAvg200, priceAvg50, marketCap,
-        pe, volume, …
+        Quote dict keys include: price, changesPercentage, priceAvg200,
+        priceAvg50, marketCap, volume, avgVolume, …
         """
         result: Dict[str, Dict] = {}
-        for i in range(0, len(symbols), chunk_size):
-            chunk = symbols[i:i + chunk_size]
+        if not symbols:
+            return result
+
+        chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+        logger.info(
+            "FMP get_batch_quotes: %d symbols, %d batch(es) of up to %d",
+            len(symbols), len(chunks), chunk_size,
+        )
+
+        for idx, chunk in enumerate(chunks):
             sym_str = ','.join(chunk)
-            # Stable cache key: hash of sorted symbol tuple
-            chunk_key = f"quotes_{hash(tuple(sorted(chunk))) & 0xFFFFFF:06x}"
+            # Deterministic cache key — stable across process restarts
+            chunk_hash = hashlib.md5(','.join(sorted(chunk)).encode()).hexdigest()[:8]
+            chunk_key = f"quotes_{chunk_hash}"
             try:
-                data = self._get_cached(
+                raw = self._get_cached(
                     chunk_key,
                     f'v3/quote/{sym_str}',
                     ttl_seconds=ttl_hours * 3600,
                 )
-                if isinstance(data, list):
-                    for q in data:
+                # A cached empty list is a stale failed response — retry once
+                # with a fresh API call so we don't keep returning no-data.
+                if isinstance(raw, list) and not raw and not self._counter.would_exceed(self._budget):
+                    logger.debug(
+                        "FMP batch %d/%d: cached empty response — retrying fresh fetch for %d symbols",
+                        idx + 1, len(chunks), len(chunk),
+                    )
+                    try:
+                        raw = self._raw_get(f'v3/quote/{sym_str}', {})
+                        if isinstance(raw, list) and raw:
+                            self._cache.set(chunk_key, raw)
+                    except Exception as _retry_exc:
+                        logger.warning(
+                            "FMP batch %d/%d: fresh-fetch retry failed: %s",
+                            idx + 1, len(chunks), _retry_exc,
+                        )
+
+                batch_prices: Dict[str, Dict] = {}
+                if isinstance(raw, list):
+                    for q in raw:
                         if isinstance(q, dict) and q.get('symbol'):
-                            result[q['symbol']] = q
+                            batch_prices[q['symbol']] = q
+
+                logger.info(
+                    "FMP batch %d/%d: %d/%d symbols returned price data",
+                    idx + 1, len(chunks), len(batch_prices), len(chunk),
+                )
+                missing = sorted(set(chunk) - set(batch_prices))
+                if missing:
+                    logger.debug(
+                        "FMP batch %d/%d: no price for: %s",
+                        idx + 1, len(chunks),
+                        ', '.join(missing[:20]) + ('...' if len(missing) > 20 else ''),
+                    )
+                result.update(batch_prices)
+
             except CallBudgetExceeded:
                 logger.warning(
-                    f"FMP budget hit during batch quotes — partial results "
-                    f"(stopped before chunk starting with {chunk[0]!r})"
+                    "FMP budget hit during batch quotes — "
+                    "stopped at batch %d/%d (starting with %r)",
+                    idx + 1, len(chunks), chunk[0],
                 )
                 break
+
+        n_with_price = len(result)
+        n_requested = len(set(symbols))
+        logger.info(
+            "FMP get_batch_quotes: %d/%d symbols have price data%s",
+            n_with_price, n_requested,
+            f" ({n_requested - n_with_price} missing)" if n_with_price < n_requested else "",
+        )
         return result
 
     def get_stock_news(
