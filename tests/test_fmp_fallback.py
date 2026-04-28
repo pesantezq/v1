@@ -786,3 +786,74 @@ class TestFmpGetStockNewsNormalization:
         with patch.object(client, '_get_cached', side_effect=Exception("network error")):
             result = client.get_stock_news(["AAPL"])
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# TestAVBudgetExhaustedFMPPrimary — regression: AV exhaustion must not block FMP
+# ---------------------------------------------------------------------------
+
+class TestAVBudgetExhaustedFMPPrimary:
+    """
+    Regression: when AV budget is exhausted the pipeline calls scanner.run(dry_run=True).
+    FMP is an independent provider and must still load quotes and serve as price source.
+    """
+
+    def test_dry_run_with_fmp_uses_fmp_price(self):
+        """dry_run=True + FMP available → price_data_source='fmp', price not None."""
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        av  = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, cache=_make_cache(), fmp=fmp)
+
+        result = scanner.run(dry_run=True)
+
+        rows = result.get("results", [])
+        assert len(rows) == 1
+        assert rows[0]["price_data_source"] == "fmp"
+        assert rows[0]["price"] is not None
+        assert rows[0]["price"] == pytest.approx(185.0)
+
+    def test_dry_run_with_fmp_not_cache_only(self):
+        """dry_run=True + FMP available → scan_status must not be 'cache_only'."""
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        av  = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, cache=_make_cache(), fmp=fmp)
+
+        result = scanner.run(dry_run=True)
+
+        status = result.get("scan_summary", {}).get("scan_status")
+        assert status != "cache_only", f"Expected ok or degraded, got {status!r}"
+
+    def test_dry_run_with_fmp_data_quality_not_all_cached(self):
+        """dry_run=True + FMP available → at least one result is not data_quality='cached'."""
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        av  = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, cache=_make_cache(), fmp=fmp)
+
+        result = scanner.run(dry_run=True)
+
+        qualities = {r["data_quality"] for r in result.get("results", [])}
+        assert "cached" not in qualities or "fresh" in qualities or "partial" in qualities, (
+            f"All results are cached despite FMP being available: {qualities}"
+        )
+
+    def test_dry_run_no_fmp_stays_cache_only(self):
+        """dry_run=True + no FMP → original cache-only behavior preserved."""
+        av  = _make_av_client(budget_exceed_ohlcv=True)
+        cache = _make_cache(stale_daily=None)
+        scanner = _make_scanner(av=av, cache=cache, fmp=None)
+
+        result = scanner.run(dry_run=True)
+
+        rows = result.get("results", [])
+        assert len(rows) == 1
+        assert rows[0]["price_data_source"] in ("cache", "missing")
+
+    def test_fmp_prefetch_called_even_when_dry_run(self):
+        """FMP get_batch_quotes must be called even when dry_run=True."""
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        av  = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, cache=_make_cache(), fmp=fmp)
+
+        scanner.run(dry_run=True)
+
+        fmp.get_batch_quotes.assert_called_once()

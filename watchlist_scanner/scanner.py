@@ -376,11 +376,13 @@ class WatchlistScanner:
             )
 
         # ── Step 0.5: Pre-fetch FMP batch data (1–2 FMP calls; uses FMP cache) ─
-        # Runs unconditionally when FMP is enabled so fallback data is ready
-        # before AV calls begin.  FMP client's own budget+TTL guards apply.
+        # Runs whenever FMP is enabled — even when dry_run=True (AV budget
+        # exhausted).  FMP is an independent provider; AV budget exhaustion
+        # must not prevent FMP quotes from being loaded.  FMP client's own
+        # budget+TTL guards apply.
         _fmp_quotes: dict[str, dict] = {}
         _fmp_profiles: dict[str, dict] = {}
-        if self._fmp_enabled and not dry_run:
+        if self._fmp_enabled:
             try:
                 raw_q = self._fmp.get_batch_quotes(self.watchlist, ttl_hours=1)
                 _fmp_quotes = raw_q or {}
@@ -782,19 +784,21 @@ class WatchlistScanner:
                     continue
             return pd.DataFrame(rows).set_index("date") if rows else None
 
-        if not dry_run:
-            # ── FMP primary: quote provides price, 1d-change, volume, sma50 ──
-            if fmp_quote and self._fmp_enabled:
-                _fmp_tech = _technicals_from_fmp_quote(fmp_quote, self._spike_factor)
-                if _fmp_tech:
-                    tech = _fmp_tech
-                    price_data_source = "fmp"
+        # ── FMP primary: always process if quote available (independent of dry_run) ──
+        # dry_run=True means AV budget is exhausted, NOT that FMP should be skipped.
+        if fmp_quote and self._fmp_enabled:
+            _fmp_tech = _technicals_from_fmp_quote(fmp_quote, self._spike_factor)
+            if _fmp_tech:
+                tech = _fmp_tech
+                price_data_source = "fmp"
 
+        _fmp_is_primary = price_data_source == "fmp"
+
+        if not dry_run:
             # ── AV OHLCV: supplemental (FMP primary) or fallback (FMP absent) ──
             # FMP primary: AV enriches with sma20, 5d-change, vol-avg20.
             # FMP absent/failed: AV is the live source for all technicals.
             # AV budget exhaustion is non-blocking when FMP already has price.
-            _fmp_is_primary = price_data_source == "fmp"
             try:
                 _av_df = self._av.get_daily_ohlcv(symbol, outputsize="compact")
                 if _av_df is not None:
@@ -823,8 +827,8 @@ class WatchlistScanner:
                     if _stale_df is not None:
                         tech = _compute_technicals(_stale_df, self._spike_factor)
                         price_data_source = "cache"
-        else:
-            # Dry-run: reconstruct df from fresh AV cache (no API calls)
+        elif not _fmp_is_primary:
+            # dry_run + no FMP primary: reconstruct from fresh AV cache (no API calls)
             cached_raw = self._cache.get(f"daily_{symbol}", CACHE_TTL_DAILY_SECONDS)
             if cached_raw:
                 df = _df_from_raw_av(cached_raw)
@@ -864,9 +868,7 @@ class WatchlistScanner:
         # cached:  no live price data (stale cache or missing)
         _has_live_price = price_data_source in ("fmp", "alpha_vantage")
         _has_live_fund  = ov_source == "fresh" or fundamentals_source == "fmp"
-        if dry_run:
-            data_quality = "cached"
-        elif _has_live_price and _has_live_fund:
+        if _has_live_price and _has_live_fund:
             data_quality = "fresh"
         elif _has_live_price:
             data_quality = "partial"
