@@ -31,7 +31,34 @@ import urllib.request
 logger = logging.getLogger('portfolio_automation.fmp_client')
 
 FMP_BASE_URL = "https://financialmodelingprep.com/api"
+FMP_STABLE_BASE_URL = "https://financialmodelingprep.com/stable"
 _DEFAULT_CACHE_DIR = Path("data/fmp_cache")
+
+
+def _extract_stable_quote(raw: Any) -> Optional[Dict]:
+    """
+    Normalise a raw stable/quote API response to a quote dict.
+
+    Accepts the list-wrapped response from the live API or a previously
+    cached value (list or bare dict).  Returns None for empty/invalid input.
+
+    Field normalisation applied:
+      changePercentage → changesPercentage  (alias added when v3 key absent)
+    """
+    if isinstance(raw, list):
+        if not raw:
+            return None
+        q = raw[0]
+    elif isinstance(raw, dict):
+        q = raw
+    else:
+        return None
+    if not isinstance(q, dict):
+        return None
+    normalized = dict(q)
+    if "changesPercentage" not in normalized and "changePercentage" in normalized:
+        normalized["changesPercentage"] = normalized["changePercentage"]
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -207,10 +234,16 @@ class FMPClient:
             time.sleep(0.5 - elapsed)
         self._last_call_ts = time.monotonic()
 
-    def _raw_get(self, endpoint: str, params: Dict[str, str]) -> Any:
+    def _raw_get(
+        self,
+        endpoint: str,
+        params: Dict[str, str],
+        *,
+        base_url: str = FMP_BASE_URL,
+    ) -> Any:
         """Make one HTTP GET with retry / exponential backoff."""
         params = {**params, 'apikey': self._api_key}
-        url = f"{FMP_BASE_URL}/{endpoint}?{urllib.parse.urlencode(params)}"
+        url = f"{base_url}/{endpoint}?{urllib.parse.urlencode(params)}"
         last_err: Optional[Exception] = None
 
         for attempt in range(self._retry_max):
@@ -229,15 +262,17 @@ class FMPClient:
                 if exc.code == 429:
                     wait = self._retry_base * (2 ** attempt)
                     logger.warning(
-                        f"FMP rate-limited (429); waiting {wait:.0f}s "
-                        f"(attempt {attempt + 1}/{self._retry_max})"
+                        "FMP rate-limited (429) for %s/%s; waiting %.0fs "
+                        "(attempt %d/%d)",
+                        base_url, endpoint, wait, attempt + 1, self._retry_max,
                     )
                     time.sleep(wait)
                     last_err = exc
                     continue
                 if exc.code in (401, 403):
                     raise FMPError(
-                        f"FMP authentication failed (HTTP {exc.code}). "
+                        f"FMP authentication failed (HTTP {exc.code}) "
+                        f"for {base_url}/{endpoint}. "
                         "Verify FMP_API_KEY in your .env file."
                     )
                 last_err = exc
@@ -249,7 +284,8 @@ class FMPClient:
                     time.sleep(self._retry_base * (2 ** attempt))
 
         raise FMPError(
-            f"FMP request failed after {self._retry_max} attempts: {last_err}"
+            f"FMP request failed after {self._retry_max} attempts "
+            f"for {base_url}/{endpoint}: {last_err}"
         )
 
     def _get_cached(
@@ -445,94 +481,128 @@ class FMPClient:
     def get_batch_quotes(
         self,
         symbols: List[str],
-        chunk_size: int = 50,
+        chunk_size: int = 50,  # kept for API compatibility; unused in stable path
         ttl_hours: int = 1,
     ) -> Dict[str, Dict]:
         """
-        Batch quote data for a list of symbols using /v3/quote/{symbols}.
+        Fetch quote data for a list of symbols using the FMP stable/quote endpoint.
 
-        Chunks the request into groups of chunk_size (default 50) to stay
-        within URL-length limits and plan-tier batch restrictions.
-        Each chunk = 1 API call; results cached for ttl_hours (default 1).
+        Calls ``stable/quote?symbol={sym}`` once per symbol — the stable API
+        does not support comma-separated batch requests.  Each symbol is cached
+        individually for ttl_hours (default 1).
 
-        Cache keys are deterministic (hashlib.md5) so stale-cache fallback
-        works correctly across process restarts.
+        When the daily budget would be exceeded, serves stale cached data for
+        each symbol that has a prior entry; symbols with no cache are skipped
+        rather than raising.
 
         Returns: {symbol: quote_dict}
-        Quote dict keys include: price, changesPercentage, priceAvg200,
-        priceAvg50, marketCap, volume, avgVolume, …
+        Quote dict keys include: price, changesPercentage (aliased from
+        changePercentage), priceAvg200, priceAvg50, marketCap, volume,
+        avgVolume, dayHigh, dayLow, yearHigh, yearLow, timestamp, …
         """
         result: Dict[str, Dict] = {}
         if not symbols:
             return result
 
-        chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+        unique_syms = list(dict.fromkeys(s.upper() for s in symbols if s))
+        ttl_seconds = ttl_hours * 3600
+        n_total = len(unique_syms)
+        n_cached = n_fetched = n_stale = n_missing = 0
+
         logger.info(
-            "FMP get_batch_quotes: %d symbols, %d batch(es) of up to %d",
-            len(symbols), len(chunks), chunk_size,
+            "FMP get_batch_quotes: %d symbols via stable/quote (per-symbol)",
+            n_total,
         )
 
-        for idx, chunk in enumerate(chunks):
-            sym_str = ','.join(chunk)
-            # Deterministic cache key — stable across process restarts
-            chunk_hash = hashlib.md5(','.join(sorted(chunk)).encode()).hexdigest()[:8]
-            chunk_key = f"quotes_{chunk_hash}"
+        for sym in unique_syms:
+            cache_key = f"quote_stable_{sym}"
+
+            # Fresh cache hit — skip network call entirely
+            cached = self._cache.get(cache_key, ttl_seconds)
+            if cached is not None:
+                quote = _extract_stable_quote(cached)
+                if quote:
+                    result[sym] = quote
+                    n_cached += 1
+                    logger.debug(
+                        "FMP stable/quote %s: cache hit (source=fresh_cache)", sym
+                    )
+                    continue
+
+            # Budget guard — serve stale rather than exceeding daily limit
+            if self._counter.would_exceed(self._budget):
+                stale = self._cache.get_stale(cache_key)
+                quote = _extract_stable_quote(stale) if stale is not None else None
+                if quote:
+                    result[sym] = quote
+                    n_stale += 1
+                    logger.debug(
+                        "FMP stable/quote %s: budget exceeded — "
+                        "using stale cache (endpoint=stable/quote, source=stale)",
+                        sym,
+                    )
+                else:
+                    n_missing += 1
+                    logger.debug(
+                        "FMP stable/quote %s: budget exceeded, no stale cache — "
+                        "skipping (endpoint=stable/quote)",
+                        sym,
+                    )
+                continue
+
+            # Live fetch
             try:
-                raw = self._get_cached(
-                    chunk_key,
-                    f'v3/quote/{sym_str}',
-                    ttl_seconds=ttl_hours * 3600,
+                raw = self._raw_get(
+                    "quote",
+                    {"symbol": sym},
+                    base_url=FMP_STABLE_BASE_URL,
                 )
-                # A cached empty list is a stale failed response — retry once
-                # with a fresh API call so we don't keep returning no-data.
-                if isinstance(raw, list) and not raw and not self._counter.would_exceed(self._budget):
+                self._cache.set(cache_key, raw)
+                quote = _extract_stable_quote(raw)
+                if quote:
+                    result[sym] = quote
+                    n_fetched += 1
                     logger.debug(
-                        "FMP batch %d/%d: cached empty response — retrying fresh fetch for %d symbols",
-                        idx + 1, len(chunks), len(chunk),
+                        "FMP stable/quote %s: price=%s "
+                        "(endpoint=stable/quote, source=fresh)",
+                        sym, quote.get("price"),
                     )
-                    try:
-                        raw = self._raw_get(f'v3/quote/{sym_str}', {})
-                        if isinstance(raw, list) and raw:
-                            self._cache.set(chunk_key, raw)
-                    except Exception as _retry_exc:
-                        logger.warning(
-                            "FMP batch %d/%d: fresh-fetch retry failed: %s",
-                            idx + 1, len(chunks), _retry_exc,
-                        )
-
-                batch_prices: Dict[str, Dict] = {}
-                if isinstance(raw, list):
-                    for q in raw:
-                        if isinstance(q, dict) and q.get('symbol'):
-                            batch_prices[q['symbol']] = q
-
-                logger.info(
-                    "FMP batch %d/%d: %d/%d symbols returned price data",
-                    idx + 1, len(chunks), len(batch_prices), len(chunk),
-                )
-                missing = sorted(set(chunk) - set(batch_prices))
-                if missing:
+                else:
+                    n_missing += 1
                     logger.debug(
-                        "FMP batch %d/%d: no price for: %s",
-                        idx + 1, len(chunks),
-                        ', '.join(missing[:20]) + ('...' if len(missing) > 20 else ''),
+                        "FMP stable/quote %s: empty response "
+                        "(endpoint=stable/quote, source=fresh)",
+                        sym,
                     )
-                result.update(batch_prices)
-
-            except CallBudgetExceeded:
+            except FMPError as exc:
+                stale = self._cache.get_stale(cache_key)
+                quote = _extract_stable_quote(stale) if stale is not None else None
+                if quote:
+                    result[sym] = quote
+                    n_stale += 1
+                    logger.warning(
+                        "FMP stable/quote %s: fetch failed — using stale cache "
+                        "(endpoint=stable/quote, error=%s, source=stale)",
+                        sym, exc,
+                    )
+                else:
+                    n_missing += 1
+                    logger.warning(
+                        "FMP stable/quote %s: fetch failed, no stale cache "
+                        "(endpoint=stable/quote, error=%s)",
+                        sym, exc,
+                    )
+            except Exception as exc:
+                n_missing += 1
                 logger.warning(
-                    "FMP budget hit during batch quotes — "
-                    "stopped at batch %d/%d (starting with %r)",
-                    idx + 1, len(chunks), chunk[0],
+                    "FMP stable/quote %s: unexpected error — %s", sym, exc
                 )
-                break
 
         n_with_price = len(result)
-        n_requested = len(set(symbols))
         logger.info(
-            "FMP get_batch_quotes: %d/%d symbols have price data%s",
-            n_with_price, n_requested,
-            f" ({n_requested - n_with_price} missing)" if n_with_price < n_requested else "",
+            "FMP get_batch_quotes: %d/%d symbols have price data "
+            "(cached=%d, fetched=%d, stale=%d, missing=%d)",
+            n_with_price, n_total, n_cached, n_fetched, n_stale, n_missing,
         )
         return result
 
