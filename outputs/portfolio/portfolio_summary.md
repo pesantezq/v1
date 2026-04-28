@@ -1,59 +1,55 @@
 # Portfolio Construction View
 
-Summary: **skewed**  
-Portfolio view: 20 actionable signals, 10.0% suggested, 8.0% normalized, 12 capped  
+Summary: **balanced**  
+Portfolio view: 0 actionable signals, 0.0% suggested, 0.0% normalized, 0 capped  
 Observe-only: **yes**  
-Suggested allocation: **10.0%**  
-Normalized allocation: **8.0%**  
-Capped positions: **12**  
-Sectors capped: **Unknown**  
+Suggested allocation: **0.0%**  
+Normalized allocation: **0.0%**  
+Capped positions: **0**  
+Sectors capped: **none**  
 
 ## Market Regime View
 
-- Market regime: risk_on (confidence 0.88) - broad uptrend with supportive breadth; leadership is reasonably distributed; average price change is positive
+- Market regime: risk_on (confidence 0.35) - mixed trend and breadth signals; leadership is reasonably distributed; data is degraded (cache_only); limited regime inputs available; regime held at risk_on (switch to neutral not confirmed: confidence 0.35 < floor 0.65; only 1 inputs < minimum 3)
 - Portfolio fit: aligned
-- Commentary: Current normalized allocations look broadly aligned with a constructive regime. Concentration warnings active: overconcentration_top_sector:Unknown:49.8%.
+- Commentary: Current normalized allocations look broadly aligned with a constructive regime.
 
 ## Concentration Warnings
 
-- overconcentration_top_sector:Unknown:49.8%
+- No concentration warnings.
 
 ## Exposure Summary
 
-- Top sector: Unknown (49.8%)
-- Top 3 ticker concentration: 18.8%
+- Top sector: Unknown (0.0%)
+- Top 3 ticker concentration: 0.0%
 
 ## Allocation By Sector
 
-- Unknown: 4.0%
-- TECHNOLOGY: 2.0%
-- FINANCIAL SERVICES: 1.0%
-- COMMUNICATION SERVICES: 0.5%
-- CONSUMER CYCLICAL: 0.5%
+- No actionable allocations.
 
 ## Ticker Allocations
 
 | Ticker | Conviction | Suggested | Normalized | Cap Reason |
 |--------|------------|-----------|------------|------------|
-| MSFT | starter | 0.5% | 0.5% | - |
-| AVGO | starter | 0.5% | 0.5% | - |
-| AAPL | starter | 0.5% | 0.5% | - |
-| PLTR | starter | 0.5% | 0.5% | - |
-| COIN | starter | 0.5% | 0.5% | - |
-| RIOT | starter | 0.5% | 0.5% | - |
-| META | starter | 0.5% | 0.5% | - |
-| TSLA | starter | 0.5% | 0.5% | - |
-| AMD | starter | 0.5% | 0.3% | sector_cap |
-| NVDA | starter | 0.5% | 0.3% | sector_cap |
-| MARA | starter | 0.5% | 0.3% | sector_cap |
-| XLK | starter | 0.5% | 0.3% | sector_cap |
-| IWM | starter | 0.5% | 0.3% | sector_cap |
-| GOOGL | starter | 0.5% | 0.3% | sector_cap |
-| NASA | starter | 0.5% | 0.3% | sector_cap |
-| QQQ | starter | 0.5% | 0.3% | sector_cap |
-| SPY | starter | 0.5% | 0.3% | sector_cap |
-| AMZN | starter | 0.5% | 0.3% | sector_cap |
-| CHAT | starter | 0.5% | 0.3% | sector_cap |
-| XLF | starter | 0.5% | 0.3% | sector_cap |
+| MSFT | observe | 0.0% | 0.0% | - |
+| GOOGL | observe | 0.0% | 0.0% | - |
+| NVDA | observe | 0.0% | 0.0% | - |
+| AAPL | observe | 0.0% | 0.0% | - |
+| META | observe | 0.0% | 0.0% | - |
+| AVGO | observe | 0.0% | 0.0% | - |
+| PLTR | observe | 0.0% | 0.0% | - |
+| AMZN | observe | 0.0% | 0.0% | - |
+| COIN | observe | 0.0% | 0.0% | - |
+| AMD | observe | 0.0% | 0.0% | - |
+| TSLA | observe | 0.0% | 0.0% | - |
+| SMCI | observe | 0.0% | 0.0% | - |
+| RIOT | observe | 0.0% | 0.0% | - |
+| MARA | observe | 0.0% | 0.0% | - |
+| QQQ | observe | 0.0% | 0.0% | - |
+| XLF | observe | 0.0% | 0.0% | - |
 | XLE | observe | 0.0% | 0.0% | - |
-| SMCI | defer | 0.0% | 0.0% | - |
+| SPY | observe | 0.0% | 0.0% | - |
+| NASA | observe | 0.0% | 0.0% | - |
+| XLK | observe | 0.0% | 0.0% | - |
+| IWM | observe | 0.0% | 0.0% | - |
+| CHAT | observe | 0.0% | 0.0% | - |

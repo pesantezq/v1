@@ -1,253 +1,38 @@
 {
-  "generated_at": "2026-04-28T09:04:36.298454",
+  "generated_at": "2026-04-28T16:34:23.185035",
   "windows": [
     1,
     3,
     7
   ],
   "primary_window_days": 3,
-  "tracked_signals": 339,
-  "resolved_signals": 123,
+  "tracked_signals": 0,
+  "resolved_signals": 0,
   "by_window": {
     "1d": {
-      "resolved_count": 156,
-      "avg_return_pct": 2.564,
-      "win_rate": 0.769
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
     },
     "3d": {
-      "resolved_count": 123,
-      "avg_return_pct": 3.201,
-      "win_rate": 0.78
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
     },
     "7d": {
-      "resolved_count": 72,
-      "avg_return_pct": 4.584,
-      "win_rate": 0.875
+      "resolved_count": 0,
+      "avg_return_pct": 0.0,
+      "win_rate": 0.0
     }
   },
-  "by_ticker": {
-    "XLE": {
-      "avg_return_pct": 0.649,
-      "win_rate": 0.571,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": -0.314,
-      "historical_performance_score": 0.568,
-      "signal_reliability": "mixed"
-    },
-    "NASA": {
-      "avg_return_pct": 4.116,
-      "win_rate": 0.714,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": -0.215,
-      "historical_performance_score": 0.803,
-      "signal_reliability": "strong"
-    },
-    "QQQ": {
-      "avg_return_pct": 2.364,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.881,
-      "signal_reliability": "strong"
-    },
-    "XLF": {
-      "avg_return_pct": 0.201,
-      "win_rate": 0.429,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": 0.314,
-      "historical_performance_score": 0.47,
-      "signal_reliability": "mixed"
-    },
-    "SPY": {
-      "avg_return_pct": 1.309,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.834,
-      "signal_reliability": "strong"
-    },
-    "IWM": {
-      "avg_return_pct": 4.523,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.979,
-      "signal_reliability": "strong"
-    },
-    "XLK": {
-      "avg_return_pct": 8.227,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 1.0,
-      "signal_reliability": "strong"
-    },
-    "MARA": {
-      "avg_return_pct": 3.384,
-      "win_rate": 0.714,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": -0.182,
-      "historical_performance_score": 0.77,
-      "signal_reliability": "strong"
-    },
-    "RIOT": {
-      "avg_return_pct": 3.101,
-      "win_rate": 0.714,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": -0.182,
-      "historical_performance_score": 0.757,
-      "signal_reliability": "strong"
-    },
-    "SMCI": {
-      "avg_return_pct": 3.278,
-      "win_rate": 1.0,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.923,
-      "signal_reliability": "strong"
-    },
-    "AMD": {
-      "avg_return_pct": 9.98,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": -0.34,
-      "historical_performance_score": 0.89,
-      "signal_reliability": "strong"
-    },
-    "PLTR": {
-      "avg_return_pct": 3.91,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.389,
-      "historical_performance_score": 0.841,
-      "signal_reliability": "strong"
-    },
-    "TSLA": {
-      "avg_return_pct": 1.814,
-      "win_rate": 0.6,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.634,
-      "historical_performance_score": 0.637,
-      "signal_reliability": "mixed"
-    },
-    "AMZN": {
-      "avg_return_pct": 1.416,
-      "win_rate": 0.4,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": -0.634,
-      "historical_performance_score": 0.509,
-      "signal_reliability": "mixed"
-    },
-    "COIN": {
-      "avg_return_pct": 5.958,
-      "win_rate": 0.6,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.634,
-      "historical_performance_score": 0.78,
-      "signal_reliability": "strong"
-    },
-    "NVDA": {
-      "avg_return_pct": 2.198,
-      "win_rate": 1.0,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.874,
-      "signal_reliability": "strong"
-    },
-    "AVGO": {
-      "avg_return_pct": 3.988,
-      "win_rate": 1.0,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.954,
-      "signal_reliability": "strong"
-    },
-    "AAPL": {
-      "avg_return_pct": 3.0,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.389,
-      "historical_performance_score": 0.8,
-      "signal_reliability": "strong"
-    },
-    "GOOGL": {
-      "avg_return_pct": 0.9,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.389,
-      "historical_performance_score": 0.706,
-      "signal_reliability": "strong"
-    },
-    "MSFT": {
-      "avg_return_pct": 3.23,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": -0.34,
-      "historical_performance_score": 0.81,
-      "signal_reliability": "strong"
-    },
-    "META": {
-      "avg_return_pct": 0.052,
-      "win_rate": 0.6,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": 0.04,
-      "historical_performance_score": 0.557,
-      "signal_reliability": "mixed"
-    }
-  },
-  "historically_strong_tickers": [
-    {
-      "ticker": "XLK",
-      "avg_return_pct": 8.227,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 1.0,
-      "signal_reliability": "strong"
-    },
-    {
-      "ticker": "IWM",
-      "avg_return_pct": 4.523,
-      "win_rate": 1.0,
-      "signal_count": 7,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.979,
-      "signal_reliability": "strong"
-    },
-    {
-      "ticker": "AVGO",
-      "avg_return_pct": 3.988,
-      "win_rate": 1.0,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.954,
-      "signal_reliability": "strong"
-    },
-    {
-      "ticker": "SMCI",
-      "avg_return_pct": 3.278,
-      "win_rate": 1.0,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": null,
-      "historical_performance_score": 0.923,
-      "signal_reliability": "strong"
-    },
-    {
-      "ticker": "AMD",
-      "avg_return_pct": 9.98,
-      "win_rate": 0.8,
-      "signal_count": 5,
-      "confidence_accuracy_correlation": -0.34,
-      "historical_performance_score": 0.89,
-      "signal_reliability": "strong"
-    }
-  ],
+  "by_ticker": {},
+  "historically_strong_tickers": [],
   "low_reliability_tickers": [],
   "global_metrics": {
-    "high_confidence_success_rate": 0.777,
+    "high_confidence_success_rate": null,
     "low_confidence_success_rate": null,
     "degraded_mode_success_rate": null,
-    "normal_mode_success_rate": 0.78
+    "normal_mode_success_rate": null
   },
   "future_activation": {
     "enabled": false,
@@ -259,64 +44,27 @@
     ]
   },
   "regime_performance": {
-    "generated_at": "2026-04-28T09:04:36.298454",
+    "generated_at": "2026-04-28T16:34:23.185071",
     "primary_window_days": 3,
-    "resolved_signals": 123,
-    "by_regime": {
-      "neutral": {
-        "total_signals": 123,
-        "win_rate": 0.78,
-        "avg_return_pct": 3.201,
-        "avg_signal_score": 0.215,
-        "avg_conviction_score": null,
-        "avg_holding_outcome_pct": 0.0,
-        "avg_regime_confidence": 0.0,
-        "conviction_bands": {
-          "unknown": {
-            "signal_count": 123,
-            "win_rate": 0.78,
-            "avg_return_pct": 3.201,
-            "avg_conviction_score": null,
-            "avg_holding_outcome_pct": 0.0
-          }
-        },
-        "best_conviction_band": "unknown",
-        "worst_conviction_band": "unknown",
-        "degraded_mode_success_rate": null,
-        "normal_mode_success_rate": 0.78,
-        "degraded_data_impact_note": "no degraded data in this regime sample"
-      }
-    },
+    "resolved_signals": 0,
+    "by_regime": {},
     "observability": {
-      "regime_vs_success_correlation": {
-        "neutral": 0.78
-      },
-      "degraded_mode_vs_regime_reliability": {
-        "neutral": {
-          "avg_regime_confidence": 0.0,
-          "degraded_mode_success_rate": null
-        }
-      },
-      "confidence_vs_outcome_within_regime": {
-        "neutral": {
-          "high": 0.777,
-          "medium": 1.0,
-          "low": null
-        }
-      }
+      "regime_vs_success_correlation": {},
+      "degraded_mode_vs_regime_reliability": {},
+      "confidence_vs_outcome_within_regime": {}
     }
   },
   "theme_alignment_performance": {
-    "generated_at": "2026-04-28T09:04:36.299454",
+    "generated_at": "2026-04-28T16:34:23.185081",
     "primary_window_days": 3,
-    "total": 339,
+    "total": 0,
     "buckets": {
       "none": {
-        "count": 339,
-        "resolved": 123,
-        "avg_return": 3.201,
-        "hit_rate": 0.78,
-        "low_sample_warning": false
+        "count": 0,
+        "resolved": 0,
+        "avg_return": null,
+        "hit_rate": null,
+        "low_sample_warning": true
       },
       "weak": {
         "count": 0,
@@ -342,9 +90,9 @@
     }
   },
   "portfolio_fit_performance": {
-    "generated_at": "2026-04-28T09:04:36.299454",
+    "generated_at": "2026-04-28T16:34:23.185103",
     "primary_window_days": 3,
-    "total": 339,
+    "total": 0,
     "buckets": {
       "poor": {
         "count": 0,
@@ -354,18 +102,18 @@
         "low_sample_warning": true
       },
       "neutral": {
-        "count": 207,
-        "resolved": 123,
-        "avg_return": 3.201,
-        "hit_rate": 0.78,
-        "low_sample_warning": false
-      },
-      "good": {
-        "count": 132,
+        "count": 0,
         "resolved": 0,
         "avg_return": null,
         "hit_rate": null,
-        "low_sample_warning": false
+        "low_sample_warning": true
+      },
+      "good": {
+        "count": 0,
+        "resolved": 0,
+        "avg_return": null,
+        "hit_rate": null,
+        "low_sample_warning": true
       },
       "strong": {
         "count": 0,
@@ -377,49 +125,16 @@
     }
   },
   "final_rank_performance": {
-    "generated_at": "2026-04-28T09:04:36.299454",
+    "generated_at": "2026-04-28T16:34:23.185110",
     "primary_window_days": 3,
-    "total": 339,
-    "scored": 150,
-    "quartiles": {
-      "Q1": {
-        "count": 37,
-        "resolved": 0,
-        "avg_final_rank_score": 0.4655,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
-      },
-      "Q2": {
-        "count": 37,
-        "resolved": 0,
-        "avg_final_rank_score": 0.4292,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
-      },
-      "Q3": {
-        "count": 37,
-        "resolved": 0,
-        "avg_final_rank_score": 0.3898,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
-      },
-      "Q4": {
-        "count": 39,
-        "resolved": 0,
-        "avg_final_rank_score": 0.3429,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
-      }
-    }
+    "total": 0,
+    "scored": 0,
+    "quartiles": {}
   },
   "theme_type_performance": {
-    "generated_at": "2026-04-28T09:04:36.299454",
+    "generated_at": "2026-04-28T16:34:23.185114",
     "primary_window_days": 3,
-    "total": 339,
+    "total": 0,
     "by_type": {
       "classified": {
         "count": 0,
@@ -436,11 +151,11 @@
         "low_sample_warning": true
       },
       "none": {
-        "count": 339,
-        "resolved": 123,
-        "avg_return": 3.201,
-        "hit_rate": 0.78,
-        "low_sample_warning": false
+        "count": 0,
+        "resolved": 0,
+        "avg_return": null,
+        "hit_rate": null,
+        "low_sample_warning": true
       }
     }
   }

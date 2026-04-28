@@ -270,8 +270,12 @@
       "model": "gpt-4o-mini"
     },
     "rss_feeds": [
-      "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
-      "https://feeds.marketwatch.com/marketwatch/topstories/"
+  	"https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+  	"https://www.cnbc.com/id/100003114/device/rss/rss.html",
+  	"https://feeds.bloomberg.com/markets/news.rss",
+  	"https://www.ft.com/?format=rss",
+  	"https://www.reutersagency.com/feed/?best-topics=business-finance",
+  	"https://seekingalpha.com/market_currents.xml"
     ],
     "max_items_per_run": 30,
     "ollama_model": "qwen2.5:7b-instruct",
