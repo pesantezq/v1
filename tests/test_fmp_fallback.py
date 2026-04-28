@@ -315,13 +315,23 @@ class TestScannerSourceTracking:
         assert result is not None
         return result
 
-    def test_av_success_price_source_is_av(self):
-        scanner = _make_scanner(av=_make_av_client())
+    def test_fmp_configured_price_source_is_fmp(self):
+        # When FMP client is configured and fmp_quote provided, FMP is primary.
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        scanner = _make_scanner(av=_make_av_client(), fmp=fmp)
         result = self._run_one(scanner)
+        assert result["price_data_source"] == "fmp"
+
+    def test_no_fmp_client_price_source_is_av(self):
+        # When no FMP client is configured, AV is the live source.
+        scanner = _make_scanner(av=_make_av_client(), fmp=None)
+        result = scanner._scan_symbol("AAPL", [], {}, "fresh", False, fmp_quote=None)
         assert result["price_data_source"] == "alpha_vantage"
 
-    def test_av_success_fallback_not_used(self):
-        scanner = _make_scanner(av=_make_av_client())
+    def test_fmp_primary_fallback_not_used(self):
+        # FMP primary + AV success = no stale cache = fallback_used False
+        fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        scanner = _make_scanner(av=_make_av_client(), fmp=fmp)
         result = self._run_one(scanner)
         assert result["fallback_used"] is False
         assert result["fallback_reason"] == ""
@@ -341,8 +351,8 @@ class TestScannerSourceTracking:
             news_source="alpha_vantage",
         )
         assert result["price_data_source"] == "fmp"
-        assert result["fallback_used"] is True
-        assert "budget" in result["fallback_reason"].lower()
+        # FMP is primary (not a fallback); stale cache was not used
+        assert result["fallback_used"] is False
 
     def test_av_returns_none_fmp_used(self):
         fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
@@ -362,7 +372,7 @@ class TestScannerSourceTracking:
         assert result["price_data_source"] == "fmp"
 
     def test_fmp_unavailable_falls_back_to_stale_cache(self):
-        # No FMP client; cache has stale AV data
+        # No FMP client; AV budget exhausted; stale AV cache is last resort
         stale_raw = {
             "Time Series (Daily)": {
                 "2026-04-25": {"4. close": "148.0", "1. open": "147.0",
@@ -385,7 +395,7 @@ class TestScannerSourceTracking:
             news_source="alpha_vantage",
         )
         assert result["price_data_source"] == "cache"
-        assert result["fallback_used"] is False  # cache is not FMP
+        assert result["fallback_used"] is True  # stale cache = degraded
 
     def test_all_sources_fail_marks_missing(self):
         cache = _make_cache(stale_daily=None)
@@ -427,14 +437,15 @@ class TestScannerSourceTracking:
         )
         assert result["news_source"] == "missing"
 
-    def test_fundamentals_source_fmp_sets_fallback_used(self):
+    def test_fundamentals_source_fmp_does_not_set_fallback(self):
+        # FMP fundamentals are live data — not a fallback (stale cache)
         scanner = _make_scanner()
         result = scanner._scan_symbol(
             "AAPL", [], {}, "budget_skipped", False,
             fundamentals_source="fmp",
         )
         assert result["fundamentals_source"] == "fmp"
-        assert result["fallback_used"] is True
+        assert result["fallback_used"] is False
 
     def test_fmp_price_contains_valid_data(self):
         fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
@@ -645,12 +656,13 @@ class TestFmpNewsFallback:
         assert news_sources == {"missing"}
         fmp.get_stock_news.assert_not_called()
 
-    def test_fmp_news_fallback_sets_fallback_used(self):
+    def test_fmp_news_fallback_news_source_is_fmp(self):
+        # FMP news is a live provider; fallback_used is about stale price cache
         av  = _make_av_client(budget_exceed_news=True)
         fmp = _make_fmp_with_news()
         result = self._run_scanner(av, fmp)
-        # All rows should have fallback_used=True because news came from FMP
-        assert all(r["fallback_used"] for r in result["results"])
+        news_sources = {r["news_source"] for r in result["results"]}
+        assert news_sources == {"fmp"}
 
     def test_scan_produces_all_results_after_news_fallback(self):
         watchlist = ["AAPL", "MSFT"]

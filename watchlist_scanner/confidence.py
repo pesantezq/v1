@@ -117,9 +117,9 @@ def _build_reasons(
 
     # 1. Provenance / freshness
     if data_quality == "fresh":
-        reasons.append("live price and technical data")
+        reasons.append("live price and fundamental data")
     elif data_quality == "partial":
-        reasons.append("cached overview fallback used")
+        reasons.append("live price; fundamentals from cache")
     elif data_quality == "budget_skipped":
         reasons.append("overview skipped due to API budget")
     elif data_quality == "cached":

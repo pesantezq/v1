@@ -398,6 +398,12 @@ class WatchlistScanner:
             except Exception as exc:
                 logger.warning("FMP batch-profiles pre-fetch failed (non-fatal): %s", exc)
 
+        logger.info(
+            "WatchlistScanner: FMP primary enabled=%s — %d quotes, %d profiles "
+            "loaded for %d watchlist symbols",
+            self._fmp_enabled, len(_fmp_quotes), len(_fmp_profiles), len(self.watchlist),
+        )
+
         # ── Step 0.6: Fresh-data rotation ─────────────────────────────────────
         # Randomly invalidates the OVERVIEW (7-day TTL) cache for a configurable
         # fraction of symbols so every run guarantees at least some fresh
@@ -577,11 +583,9 @@ class WatchlistScanner:
             except Exception as exc:
                 logger.warning("Error scanning %s: %s", symbol, exc)
 
-        # Stamp data_freshness based on whether OVERVIEW was freshly fetched.
+        # data_freshness mirrors data_quality for backward compat.
         for _r in results:
-            _r["data_freshness"] = (
-                "fresh" if overview_source.get(_r.get("ticker", "")) == "fresh" else "cached"
-            )
+            _r["data_freshness"] = "fresh" if _r.get("data_quality") == "fresh" else "cached"
 
         # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
         # Loads outputs/latest/theme_opportunities.json produced by theme_discovery.
@@ -686,35 +690,46 @@ class WatchlistScanner:
         _fallback_used = False
 
         # ── Step 6: Build scan quality summary ───────────────────────────────
-        quality_counts: dict[str, int] = {"fresh": 0, "cached": 0, "partial": 0, "budget_skipped": 0}
+        quality_counts: dict[str, int] = {"fresh": 0, "cached": 0, "partial": 0}
         for r in results:
             q = r.get("data_quality", "fresh")
             quality_counts[q] = quality_counts.get(q, 0) + 1
 
-        degraded = quality_counts["cached"] + quality_counts["partial"] + quality_counts["budget_skipped"]
-        scan_status = "ok" if degraded == 0 else ("degraded" if degraded < len(results) else "cache_only")
+        _n_live   = quality_counts["fresh"] + quality_counts["partial"]
+        _n_cached = quality_counts["cached"]
+        scan_status = "ok" if _n_cached == 0 else (
+            "cache_only" if _n_live == 0 else "degraded"
+        )
         scan_summary = {
             "scan_status":             scan_status,
             "symbols_fresh":           quality_counts["fresh"],
-            "symbols_cached":          quality_counts["cached"],
+            "symbols_cached":          _n_cached,
             "symbols_partial":         quality_counts["partial"],
-            "symbols_budget_skipped":  quality_counts["budget_skipped"],
+            "symbols_budget_skipped":  0,  # merged into partial/cached in FMP-primary model
             "alerts_watch_level":      n_watch_level,
             "signals_conf_suppressed": n_conf_suppressed,
             "fallback_alerts_used":    _fallback_used,
             "fallback_alert_count":    0,
             "fallback_trigger_stage":  None,
         }
-        if degraded:
+        if scan_status == "cache_only":
             logger.warning(
-                "Scan quality: %d fresh, %d cached, %d partial, %d budget_skipped",
-                quality_counts["fresh"], quality_counts["cached"],
-                quality_counts["partial"], quality_counts["budget_skipped"],
+                "Scan quality: 0 fresh, %d cached — status=cache_only", _n_cached
             )
+        elif scan_status == "degraded":
+            logger.warning(
+                "Scan quality: %d fresh, %d partial (live price), %d cached",
+                quality_counts["fresh"], quality_counts["partial"], _n_cached,
+            )
+        else:
+            logger.info("Scan quality: %d fresh", quality_counts["fresh"])
 
         logger.info(
-            "WatchlistScanner done: %d results, %d alerts (%d calls used today, status=%s)",
-            len(results), len(alerts), self._cache.calls_today, scan_status,
+            "WatchlistScanner done: %d results, %d alerts "
+            "(%d fresh, %d partial, %d cached; %d calls used; status=%s)",
+            len(results), len(alerts),
+            quality_counts["fresh"], quality_counts["partial"], _n_cached,
+            self._cache.calls_today, scan_status,
         )
 
         return {
@@ -745,7 +760,7 @@ class WatchlistScanner:
         # Fallback order: AV time-series → FMP batch quote → stale AV cache → missing
         df: Optional[pd.DataFrame] = None
         tech: dict[str, Any] = {}
-        price_data_source: str = "alpha_vantage"
+        price_data_source: str = "missing"
         _fallback_reason_parts: list[str] = []
 
         def _df_from_raw_av(raw: dict) -> Optional[pd.DataFrame]:
@@ -768,33 +783,46 @@ class WatchlistScanner:
             return pd.DataFrame(rows).set_index("date") if rows else None
 
         if not dry_run:
+            # ── FMP primary: quote provides price, 1d-change, volume, sma50 ──
+            if fmp_quote and self._fmp_enabled:
+                _fmp_tech = _technicals_from_fmp_quote(fmp_quote, self._spike_factor)
+                if _fmp_tech:
+                    tech = _fmp_tech
+                    price_data_source = "fmp"
+
+            # ── AV OHLCV: supplemental (FMP primary) or fallback (FMP absent) ──
+            # FMP primary: AV enriches with sma20, 5d-change, vol-avg20.
+            # FMP absent/failed: AV is the live source for all technicals.
+            # AV budget exhaustion is non-blocking when FMP already has price.
+            _fmp_is_primary = price_data_source == "fmp"
             try:
-                df = self._av.get_daily_ohlcv(symbol, outputsize="compact")
-                if df is None:
-                    price_data_source = "missing"
-            except BudgetExceeded:
-                df = None
-                _fallback_reason_parts.append("AV OHLCV budget exhausted")
-
-            # If AV returned None or raised BudgetExceeded: try FMP quote
-            if df is None and not tech:
-                if fmp_quote and self._fmp_enabled and (
-                    self._prefer_fmp_on_budget or price_data_source == "missing"
-                ):
-                    tech = _technicals_from_fmp_quote(fmp_quote, self._spike_factor)
-                    if tech:
-                        price_data_source = "fmp"
+                _av_df = self._av.get_daily_ohlcv(symbol, outputsize="compact")
+                if _av_df is not None:
+                    _av_tech = _compute_technicals(_av_df, self._spike_factor)
+                    if not _fmp_is_primary:
+                        tech = _av_tech
+                        price_data_source = "alpha_vantage"
                     else:
-                        price_data_source = "missing"
+                        # Merge time-series indicators FMP quote cannot provide
+                        for _k in ("price_change_5d", "sma20", "above_sma20",
+                                   "volume_avg20", "data_days"):
+                            if _av_tech.get(_k) is not None:
+                                tech[_k] = _av_tech[_k]
+            except BudgetExceeded:
+                if not _fmp_is_primary:
+                    _fallback_reason_parts.append("AV OHLCV budget exhausted")
+                # When FMP is primary, AV budget exhaustion is non-blocking
+            except Exception as _av_exc:
+                logger.debug("AV OHLCV failed for %s: %s", symbol, _av_exc)
 
-            # If still no data: try stale AV cache
-            if df is None and not tech:
+            # ── Stale AV cache (last resort when no live source available) ──
+            if not tech:
                 stale_raw = self._cache.get_stale(f"daily_{symbol}")
                 if stale_raw:
-                    df = _df_from_raw_av(stale_raw)
-                    price_data_source = "cache" if df is not None else "missing"
-                else:
-                    price_data_source = "missing"
+                    _stale_df = _df_from_raw_av(stale_raw)
+                    if _stale_df is not None:
+                        tech = _compute_technicals(_stale_df, self._spike_factor)
+                        price_data_source = "cache"
         else:
             # Dry-run: reconstruct df from fresh AV cache (no API calls)
             cached_raw = self._cache.get(f"daily_{symbol}", CACHE_TTL_DAILY_SECONDS)
@@ -802,9 +830,9 @@ class WatchlistScanner:
                 df = _df_from_raw_av(cached_raw)
             price_data_source = "cache" if df is not None else "missing"
 
-        # Compute technicals from df if not already populated via FMP quote path
-        if not tech:
-            tech = _compute_technicals(df, self._spike_factor) if df is not None else {}
+        # Compute technicals from df if not already populated
+        if not tech and df is not None:
+            tech = _compute_technicals(df, self._spike_factor)
 
         # --- Theme classification from ticker-specific articles ---------------
         headlines = [
@@ -831,18 +859,19 @@ class WatchlistScanner:
         )
 
         # --- Data quality label -----------------------------------------------
-        # fresh:          live data for all intended fields
-        # cached:         stale/cached OVERVIEW used (7-day TTL expired or forced)
-        # partial:        OHLCV ok but OVERVIEW was cached fallback
-        # budget_skipped: OVERVIEW not fetched due to budget; neutral score used
+        # fresh:   live price (FMP or AV) + live fundamentals (AV fresh or FMP profile)
+        # partial: live price data, fundamentals from cache only
+        # cached:  no live price data (stale cache or missing)
+        _has_live_price = price_data_source in ("fmp", "alpha_vantage")
+        _has_live_fund  = ov_source == "fresh" or fundamentals_source == "fmp"
         if dry_run:
             data_quality = "cached"
-        elif ov_source == "budget_skipped":
-            data_quality = "budget_skipped"
-        elif ov_source == "cached":
+        elif _has_live_price and _has_live_fund:
+            data_quality = "fresh"
+        elif _has_live_price:
             data_quality = "partial"
         else:
-            data_quality = "fresh"
+            data_quality = "cached"
 
         # --- Confidence scoring -----------------------------------------------
         # Measures trustworthiness of this result's data provenance/completeness.
@@ -922,7 +951,7 @@ class WatchlistScanner:
             "price_data_source":   price_data_source,
             "fundamentals_source": fundamentals_source,
             "news_source":         news_source,
-            "fallback_used":       (price_data_source == "fmp" or fundamentals_source == "fmp" or news_source == "fmp"),
+            "fallback_used":       price_data_source == "cache",
             "fallback_reason":     "; ".join(_fallback_reason_parts) if _fallback_reason_parts else "",
         }
 
@@ -1005,7 +1034,7 @@ class WatchlistScanner:
         elif breadth == 1:
             quality_tier = "thin"
 
-        if data_quality != "fresh":
+        if data_quality == "cached":
             if quality_tier == "broad":
                 quality_tier = "confirmed"
             elif quality_tier == "confirmed":
