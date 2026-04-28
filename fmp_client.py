@@ -34,6 +34,25 @@ FMP_BASE_URL = "https://financialmodelingprep.com/api"
 FMP_STABLE_BASE_URL = "https://financialmodelingprep.com/stable"
 _DEFAULT_CACHE_DIR = Path("data/fmp_cache")
 
+# ---------------------------------------------------------------------------
+# Stable API endpoint path constants  (base: FMP_STABLE_BASE_URL)
+# ---------------------------------------------------------------------------
+_EP_QUOTE = "quote"
+_EP_PROFILE = "profile"
+_EP_RATIOS = "ratios"
+_EP_HISTORICAL = "historical-price-eod/full"
+_EP_NEWS_STOCK = "news/stock"
+_EP_INCOME_STMT = "income-statement"
+_EP_KEY_METRICS = "key-metrics"
+
+# Legacy v3/v4 paths (base: FMP_BASE_URL) — kept for universe/portfolio pipeline
+_EP_V3_SP500 = "v3/sp500_constituent"
+_EP_V3_PROFILE_BATCH = "v3/profile"          # append /{sym1,sym2,...}
+_EP_V3_KEY_METRICS = "v3/key-metrics"        # append /{symbol}
+_EP_V3_FINANCIAL_GROWTH = "v3/financial-growth"  # append /{symbol}
+_EP_V4_PROFILE_ALL = "v4/profile/all"
+_EP_V4_KEY_METRICS_BULK = "v4/key-metrics-bulk"
+
 
 def _extract_stable_quote(raw: Any) -> Optional[Dict]:
     """
@@ -344,7 +363,7 @@ class FMPClient:
         """
         return self._get_cached(
             'sp500_constituents',
-            'v3/sp500_constituent',
+            _EP_V3_SP500,
             ttl_seconds=ttl_days * 86400,
         )
 
@@ -357,7 +376,7 @@ class FMPClient:
         """
         return self._get_cached(
             'bulk_profiles',
-            'v4/profile/all',
+            _EP_V4_PROFILE_ALL,
             ttl_seconds=ttl_days * 86400,
         )
 
@@ -371,7 +390,7 @@ class FMPClient:
         """
         return self._get_cached(
             'bulk_key_metrics',
-            'v4/key-metrics-bulk',
+            _EP_V4_KEY_METRICS_BULK,
             ttl_seconds=ttl_days * 86400,
             params={'period': 'annual'},
         )
@@ -413,7 +432,7 @@ class FMPClient:
             return _unwrap(stale) if stale is not None else None
 
         try:
-            raw = self._raw_get("profile", {"symbol": sym}, base_url=FMP_STABLE_BASE_URL)
+            raw = self._raw_get(_EP_PROFILE, {"symbol": sym}, base_url=FMP_STABLE_BASE_URL)
             self._cache.set(cache_key, raw)
             result = _unwrap(raw)
             logger.debug("FMP stable/profile %s: loaded (sector=%s)", sym,
@@ -495,7 +514,7 @@ class FMPClient:
 
         try:
             raw = self._raw_get(
-                "ratios",
+                _EP_RATIOS,
                 {"symbol": sym, "period": period, "limit": str(limit)},
                 base_url=FMP_STABLE_BASE_URL,
             )
@@ -549,7 +568,7 @@ class FMPClient:
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i:i + batch_size]
             sym_str = ','.join(batch)
-            data = self._raw_get(f'v3/profile/{sym_str}', {})
+            data = self._raw_get(f'{_EP_V3_PROFILE_BATCH}/{sym_str}', {})
             if isinstance(data, list):
                 all_profiles.extend(data)
 
@@ -560,48 +579,161 @@ class FMPClient:
         )
         return all_profiles
 
+    def get_key_metrics(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 1,
+        ttl_days: int = 30,
+    ) -> Optional[Dict]:
+        """
+        Fetch key financial metrics for a single symbol via stable/key-metrics.
+
+        Returns the most recent metrics dict. Key fields: returnOnEquity,
+        priceEarningsRatio, freeCashFlowYield, debtToEquity, revenueGrowth.
+        Returns None if unavailable.
+
+        Cached individually for ttl_days (default 30 — annual data is stable).
+        """
+        if not symbol:
+            return None
+        sym = symbol.upper()
+        cache_key = f"km_stable_{sym}_{period}"
+        ttl_seconds = ttl_days * 86400
+
+        def _unwrap(raw: Any) -> Optional[Dict]:
+            if isinstance(raw, list):
+                return raw[0] if raw and isinstance(raw[0], dict) else None
+            return raw if isinstance(raw, dict) else None
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return _unwrap(cached)
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+        try:
+            raw = self._raw_get(
+                _EP_KEY_METRICS,
+                {"symbol": sym, "period": period, "limit": str(limit)},
+                base_url=FMP_STABLE_BASE_URL,
+            )
+            self._cache.set(cache_key, raw)
+            result = _unwrap(raw)
+            logger.debug("FMP stable/key-metrics %s: roe=%s", sym,
+                         result.get("returnOnEquity") if result else "n/a")
+            return result
+        except (FMPError, Exception) as exc:
+            logger.warning("FMP get_key_metrics(%s) failed: %s", sym, exc)
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+    def get_income_statement(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 1,
+        ttl_days: int = 30,
+    ) -> Optional[Dict]:
+        """
+        Fetch income statement for a single symbol via stable/income-statement.
+
+        Returns the most recent income statement dict. Key fields: revenue,
+        grossProfit, netIncome, operatingIncome, eps, ebitda.
+        Returns None if unavailable.
+
+        Cached individually for ttl_days (default 30 — annual data is stable).
+        """
+        if not symbol:
+            return None
+        sym = symbol.upper()
+        cache_key = f"income_stmt_stable_{sym}_{period}"
+        ttl_seconds = ttl_days * 86400
+
+        def _unwrap(raw: Any) -> Optional[Dict]:
+            if isinstance(raw, list):
+                return raw[0] if raw and isinstance(raw[0], dict) else None
+            return raw if isinstance(raw, dict) else None
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return _unwrap(cached)
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+        try:
+            raw = self._raw_get(
+                _EP_INCOME_STMT,
+                {"symbol": sym, "period": period, "limit": str(limit)},
+                base_url=FMP_STABLE_BASE_URL,
+            )
+            self._cache.set(cache_key, raw)
+            result = _unwrap(raw)
+            logger.debug("FMP stable/income-statement %s: revenue=%s", sym,
+                         result.get("revenue") if result else "n/a")
+            return result
+        except (FMPError, Exception) as exc:
+            logger.warning("FMP get_income_statement(%s) failed: %s", sym, exc)
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
     def get_fundamentals_v3(
         self,
         symbols: List[str],
         ttl_days: int = 7,
     ) -> List[Dict]:
         """
-        Fetch per-ticker fundamentals using free-tier v3 endpoints.
+        Fetch per-ticker fundamentals, preferring stable endpoints.
 
-        For each symbol calls:
-          v3/key-metrics/{symbol}?limit=1&period=annual  → roe, peRatio, freeCashFlowYield
-          v3/financial-growth/{symbol}?limit=1           → revenueGrowth
+        For each symbol tries stable/key-metrics first (Starter plan supported).
+        Falls back to v3/key-metrics + v3/financial-growth when stable fails.
 
         Returns list of dicts with the same field names as get_bulk_key_metrics()
-        so the scanner can consume them without modification.
-
-        Budget: up to 2 calls per symbol (each cached individually for ttl_days).
+        so the portfolio pipeline can consume them without modification.
         """
         result: List[Dict] = []
         for symbol in symbols:
             row: Dict[str, Any] = {'symbol': symbol}
 
-            km_data = self._get_cached(
-                f'km_v3_{symbol}',
-                f'v3/key-metrics/{symbol}',
-                ttl_seconds=ttl_days * 86400,
-                params={'limit': '1', 'period': 'annual'},
-            )
-            if isinstance(km_data, list) and km_data:
-                km = km_data[0]
-                row['roe'] = km.get('roe')
-                row['peRatio'] = km.get('peRatio')
+            # Primary: stable/key-metrics
+            km = self.get_key_metrics(symbol, period="annual", ttl_days=ttl_days)
+            if km:
+                row['roe'] = km.get('returnOnEquity') or km.get('roe')
+                row['peRatio'] = km.get('priceEarningsRatio') or km.get('peRatio')
                 row['freeCashFlowYield'] = km.get('freeCashFlowYield')
+                row['revenueGrowth'] = km.get('revenueGrowth')
+            else:
+                # Fallback: v3 endpoints
+                try:
+                    km_data = self._get_cached(
+                        f'km_v3_{symbol}',
+                        f'{_EP_V3_KEY_METRICS}/{symbol}',
+                        ttl_seconds=ttl_days * 86400,
+                        params={'limit': '1', 'period': 'annual'},
+                    )
+                    if isinstance(km_data, list) and km_data:
+                        km_v3 = km_data[0]
+                        row['roe'] = km_v3.get('roe')
+                        row['peRatio'] = km_v3.get('peRatio')
+                        row['freeCashFlowYield'] = km_v3.get('freeCashFlowYield')
+                except Exception:
+                    pass
 
-            fg_data = self._get_cached(
-                f'fin_growth_v3_{symbol}',
-                f'v3/financial-growth/{symbol}',
-                ttl_seconds=ttl_days * 86400,
-                params={'limit': '1'},
-            )
-            if isinstance(fg_data, list) and fg_data:
-                fg = fg_data[0]
-                row['revenueGrowth'] = fg.get('revenueGrowth')
+                try:
+                    fg_data = self._get_cached(
+                        f'fin_growth_v3_{symbol}',
+                        f'{_EP_V3_FINANCIAL_GROWTH}/{symbol}',
+                        ttl_seconds=ttl_days * 86400,
+                        params={'limit': '1'},
+                    )
+                    if isinstance(fg_data, list) and fg_data:
+                        row['revenueGrowth'] = fg_data[0].get('revenueGrowth')
+                except Exception:
+                    pass
 
             result.append(row)
 
@@ -686,7 +818,7 @@ class FMPClient:
             # Live fetch
             try:
                 raw = self._raw_get(
-                    "quote",
+                    _EP_QUOTE,
                     {"symbol": sym},
                     base_url=FMP_STABLE_BASE_URL,
                 )
@@ -748,7 +880,7 @@ class FMPClient:
         """
         Fetch stock news articles for a list of tickers.
 
-        Uses /v3/stock_news?tickers={sym1,sym2,...}&limit={n}.
+        Uses stable/news/stock?tickers={sym1,sym2,...}&limit={n}.
         One API call for all tickers; cached for ttl_hours (default 4).
 
         Returns list of article dicts normalized to the same shape as AV
@@ -779,7 +911,7 @@ class FMPClient:
 
         try:
             raw = self._raw_get(
-                "news/stock",
+                _EP_NEWS_STOCK,
                 {"tickers": ','.join(tickers), "limit": str(limit)},
                 base_url=FMP_STABLE_BASE_URL,
             )
@@ -849,7 +981,7 @@ class FMPClient:
 
         try:
             raw = self._raw_get(
-                "historical-price-eod/full",
+                _EP_HISTORICAL,
                 {"symbol": sym, "from": from_date},
                 base_url=FMP_STABLE_BASE_URL,
             )
