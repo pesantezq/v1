@@ -1,80 +1,10 @@
 {
-  "generated_at": "2026-04-28T09:04:36.373483",
+  "generated_at": "2026-04-28T11:51:46.126775",
   "observe_only": true,
   "not_applied": true,
   "confidence_threshold": 0.5,
-  "candidate_count": 5,
-  "total_baseline_pct": 0.1,
-  "total_preview_pct": 0.06,
-  "opportunities": [
-    {
-      "ticker": "SMCI",
-      "final_rank_score": 0.4398,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
-      "capped_by": [],
-      "sector": "TECHNOLOGY",
-      "confidence_score": 0.8875,
-      "portfolio_fit_label": "neutral",
-      "reason": "Neutral rank score (0.440); portfolio fit: neutral"
-    },
-    {
-      "ticker": "AMD",
-      "final_rank_score": 0.433,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
-      "capped_by": [],
-      "sector": "UNKNOWN",
-      "confidence_score": 0.84,
-      "portfolio_fit_label": "neutral",
-      "reason": "Neutral rank score (0.433); portfolio fit: neutral"
-    },
-    {
-      "ticker": "NVDA",
-      "final_rank_score": 0.3926,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
-      "capped_by": [],
-      "sector": "UNKNOWN",
-      "confidence_score": 0.84,
-      "portfolio_fit_label": "neutral",
-      "reason": "Neutral rank score (0.393); portfolio fit: neutral"
-    },
-    {
-      "ticker": "MARA",
-      "final_rank_score": 0.3887,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.0,
-      "capped_by": [
-        "sector_cap"
-      ],
-      "sector": "UNKNOWN",
-      "confidence_score": 0.84,
-      "portfolio_fit_label": "neutral",
-      "reason": "Neutral rank score (0.389); portfolio fit: neutral; capped by sector_cap"
-    },
-    {
-      "ticker": "AMZN",
-      "final_rank_score": 0.3849,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.0,
-      "capped_by": [
-        "sector_cap"
-      ],
-      "sector": "UNKNOWN",
-      "confidence_score": 0.84,
-      "portfolio_fit_label": "neutral",
-      "reason": "Neutral rank score (0.385); portfolio fit: neutral; capped by sector_cap"
-    }
-  ]
+  "candidate_count": 0,
+  "total_baseline_pct": 0,
+  "total_preview_pct": 0.0,
+  "opportunities": []
 }

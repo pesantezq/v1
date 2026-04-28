@@ -57,6 +57,35 @@ Headlines:
 
 _RETRY_SUFFIX = "\n\nReturn ONLY valid JSON. No explanation, no markdown."
 
+# Compact prompt for OpenAI — returns name, confidence, and keywords.
+# The richer optional fields (rationale, evidence_items, direct_mentions) are
+# still accepted by _validate_themes when the model includes them.
+_OPENAI_PROMPT_TEMPLATE = """\
+You are a financial theme analyst. Analyze the following news headlines and identify \
+up to 5 durable, long-term investing themes that a growth-oriented stock investor \
+would care about. Focus on structural trends, not short-term noise.
+
+You MUST use names from this approved list (exact spelling):
+{canonical_list}
+
+Return ONLY valid JSON in exactly this format — no markdown, no explanation:
+{{
+  "themes": [
+    {{
+      "name": "theme name from approved list above",
+      "confidence": 0.85,
+      "keywords": ["keyword1", "keyword2", "keyword3"]
+    }}
+  ]
+}}
+
+confidence: 0.0 to 1.0 (how strongly the headlines support this theme)
+keywords: 2–5 key terms from the headlines that evidence this theme
+
+Headlines:
+{headlines}
+"""
+
 # Deterministic mock output used in testing_mode or when STOCKBOT_TESTING=1
 MOCK_THEMES: list[dict[str, Any]] = [
     {
@@ -128,7 +157,8 @@ class ThemeDetector:
         headlines_text = "\n".join(
             f"{i+1}. {h['title']}" for i, h in enumerate(headlines[:50])
         )
-        prompt = _PROMPT_TEMPLATE.format(
+        template = _OPENAI_PROMPT_TEMPLATE if self.provider == "openai" else _PROMPT_TEMPLATE
+        prompt = template.format(
             canonical_list=_CANONICAL_LIST,
             headlines=headlines_text,
         )
@@ -219,7 +249,13 @@ class ThemeDetector:
         return themes
 
     def _validate_themes(self, raw_themes: list[Any]) -> list[dict[str, Any]]:
-        """Sanitise and cap at 5 themes."""
+        """Sanitise and cap at 5 themes.
+
+        Accepts both the full format (rationale, evidence_items, direct_mentions)
+        and the compact OpenAI format (keywords only).  When evidence_items is
+        absent but keywords is present, keywords fill the evidence_items slot so
+        downstream consumers (ThemeStore, ThemeMapper) remain unaffected.
+        """
         result = []
         for item in raw_themes[:5]:
             if not isinstance(item, dict):
@@ -230,12 +266,16 @@ class ThemeDetector:
             confidence = float(item.get("confidence", 0.5))
             confidence = max(0.0, min(1.0, confidence))
             rationale = str(item.get("rationale", ""))[:200]
+            keywords = [str(k) for k in item.get("keywords", []) if k][:10]
             evidence = [str(e) for e in item.get("evidence_items", []) if e][:5]
+            if not evidence and keywords:
+                evidence = keywords[:5]
             mentions = [str(m).upper() for m in item.get("direct_mentions", []) if m][:10]
             result.append({
                 "name": name,
                 "confidence": confidence,
                 "rationale": rationale,
+                "keywords": keywords,
                 "evidence_items": evidence,
                 "direct_mentions": mentions,
             })

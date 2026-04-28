@@ -139,10 +139,16 @@ def _resolve_theme_task_context(
     )
     task_providers = te_cfg.get("task_providers", {}) if isinstance(te_cfg.get("task_providers"), dict) else {}
     task_name = f"theme_engine.{mode}"
+
+    # Nested llm block: {"provider": "openai", "model": "gpt-4o-mini"}
+    # Takes precedence over the legacy flat keys (openai_model, llm_provider) but
+    # still yields to task_providers.{mode} and CLI/env overrides.
+    llm_block: dict[str, Any] = te_cfg.get("llm", {}) if isinstance(te_cfg.get("llm"), dict) else {}
+
     provider_preference = resolve_task_provider(
         cli_provider=provider_override,
         task_provider=task_providers.get(mode),
-        fallback_task_provider=te_cfg.get("llm_provider"),
+        fallback_task_provider=llm_block.get("provider") or te_cfg.get("llm_provider"),
     )
     provider = provider_preference or resolve_provider(None, default="ollama")
     fallback_chain = [provider]
@@ -153,7 +159,11 @@ def _resolve_theme_task_context(
         )
         base_url = "(n/a)"
     elif provider == "openai":
-        model = os.environ.get("OPENAI_MODEL") or te_cfg.get("openai_model", "")
+        model = (
+            os.environ.get("OPENAI_MODEL")
+            or llm_block.get("model")
+            or te_cfg.get("openai_model", "")
+        )
         base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
     else:
         model = os.environ.get("OLLAMA_MODEL") or te_cfg.get("ollama_model", "gemma3:4b")

@@ -265,6 +265,10 @@
   },
   "theme_engine": {
     "enabled": true,
+    "llm": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
     "rss_feeds": [
       "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
       "https://feeds.marketwatch.com/marketwatch/topstories/"
