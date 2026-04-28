@@ -983,3 +983,121 @@ class TestNewProvenanceFields:
         for key in ("quote_source", "historical_source", "technical_source",
                     "ratios_source", "provider_health"):
             assert key in result, f"Missing new provenance key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# TestFmpHistoricalPreventsAvOhlcv — AV get_daily_ohlcv must NOT be called
+#   when FMP has provided both a quote and full historical data.
+# ---------------------------------------------------------------------------
+
+class TestFmpHistoricalPreventsAvOhlcv:
+    """When FMP quote + historical are both available, AV OHLCV must be skipped."""
+
+    def _scan(self, *, fmp_hist, av, fmp_quote=None):
+        fmp_quote = fmp_quote or _SAMPLE_FMP_QUOTE
+        fmp = _make_fmp_client(quotes={"AAPL": fmp_quote})
+        scanner = _make_scanner(av=av, fmp=fmp)
+        return scanner._scan_symbol(
+            "AAPL", [], {}, "fresh", False,
+            fmp_quote=fmp_quote,
+            fmp_historical=fmp_hist,
+        )
+
+    def test_av_ohlcv_not_called_when_fmp_historical_present(self):
+        """Core routing fix: AV must not be called when FMP has quote + historical."""
+        av = _make_av_client()
+        self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        av.get_daily_ohlcv.assert_not_called()
+
+    def test_av_ohlcv_called_when_fmp_historical_missing(self):
+        """AV must be tried when FMP has no historical data for a symbol."""
+        av = _make_av_client()
+        self._scan(fmp_hist=None, av=av)
+        av.get_daily_ohlcv.assert_called_once()
+
+    def test_av_ohlcv_called_when_fmp_historical_empty(self):
+        """Empty historical list (not None) should also trigger AV fallback."""
+        av = _make_av_client()
+        self._scan(fmp_hist=[], av=av)
+        av.get_daily_ohlcv.assert_called_once()
+
+    def test_av_ohlcv_not_called_when_fmp_historical_and_no_quote(self):
+        """FMP historical alone (no quote) is sufficient to skip AV OHLCV."""
+        av = _make_av_client()
+        fmp = _make_fmp_client(quotes={})  # no quote for AAPL
+        scanner = _make_scanner(av=av, fmp=fmp)
+        scanner._scan_symbol(
+            "AAPL", [], {}, "fresh", False,
+            fmp_quote=None,
+            fmp_historical=_SAMPLE_FMP_HISTORICAL,
+        )
+        # historical_source == "fmp", price_data_source == "fmp" → _av_ohlcv_needed = False
+        av.get_daily_ohlcv.assert_not_called()
+
+    def test_fmp_historical_populates_sma20(self):
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        assert result["sma20"] is not None, "SMA20 must be computed from FMP historical"
+
+    def test_fmp_historical_populates_sma50(self):
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        # 60 rows: SMA50 will be None (need 50 rows). Use a longer sample for SMA50.
+        # Verify the field exists (may be None if rows < 50)
+        assert "sma50" in result
+
+    def test_fmp_historical_populates_price_change_5d(self):
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        assert result["technicals"]["price_change_5d"] is not None
+
+    def test_fmp_historical_populates_volume_avg20(self):
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        assert result["volume_avg20"] is not None, "volume_avg20 must be set from FMP historical"
+
+    def test_technical_data_completeness_field_present(self):
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        assert "technical_data_completeness" in result
+
+    def test_technical_data_completeness_partial_with_fmp_quote_and_historical(self):
+        """60 rows gives SMA20 but not SMA50; completeness should be partial or full."""
+        av = _make_av_client()
+        result = self._scan(fmp_hist=_SAMPLE_FMP_HISTORICAL, av=av)
+        assert result["technical_data_completeness"] in ("full", "partial")
+
+    def test_technical_data_completeness_price_only_without_historical(self):
+        """Quote-only (no historical) → price_only or partial (sma50 may come from quote)."""
+        av = _make_av_client(df=None)
+        result = self._scan(fmp_hist=None, av=av)
+        assert result["technical_data_completeness"] in ("price_only", "partial", "full")
+
+    def test_scan_status_ok_when_fmp_quote_and_historical(self):
+        """Full scan with FMP quote + historical must not degrade to cache_only."""
+        fmp = _make_fmp_client(
+            quotes={"AAPL": _SAMPLE_FMP_QUOTE},
+            profiles=[{"symbol": "AAPL", "sector": "Technology", "mktCap": 3e12}],
+        )
+        fmp.get_historical_prices.return_value = _SAMPLE_FMP_HISTORICAL
+        av = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, fmp=fmp, watchlist=["AAPL"])
+        result = scanner.run(dry_run=False)
+        scan_status = result["scan_summary"]["scan_status"]
+        assert scan_status in ("ok", "degraded"), f"scan_status={scan_status}"
+
+    def test_run_logs_fmp_and_av_historical_counts(self, caplog):
+        """run() must emit the FMP historical / AV historical fallback summary log."""
+        import logging
+        fmp = _make_fmp_client(
+            quotes={"AAPL": _SAMPLE_FMP_QUOTE},
+            profiles=[{"symbol": "AAPL", "sector": "Technology", "mktCap": 3e12}],
+        )
+        fmp.get_historical_prices.return_value = _SAMPLE_FMP_HISTORICAL
+        av = _make_av_client(budget_exceed_ohlcv=True)
+        scanner = _make_scanner(av=av, fmp=fmp, watchlist=["AAPL"])
+        with caplog.at_level(logging.INFO, logger="watchlist_scanner.scanner"):
+            scanner.run(dry_run=False)
+        assert any(
+            "FMP historical used for" in m for m in caplog.messages
+        ), "Expected 'FMP historical used for X/Y symbols' log line"

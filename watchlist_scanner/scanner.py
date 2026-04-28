@@ -666,6 +666,15 @@ class WatchlistScanner:
         for _r in results:
             _r["data_freshness"] = "fresh" if _r.get("data_quality") == "fresh" else "cached"
 
+        # Log historical data routing summary
+        _n_fmp_hist = sum(1 for r in results if r.get("historical_source") == "fmp")
+        _n_av_hist  = sum(1 for r in results if r.get("historical_source") == "alpha_vantage")
+        _n_tot      = len(results)
+        logger.info(
+            "FMP historical used for %d/%d symbols — AV historical fallback used for %d",
+            _n_fmp_hist, _n_tot, _n_av_hist,
+        )
+
         # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
         # Loads outputs/latest/theme_opportunities.json produced by theme_discovery.
         # Also loads outputs/latest/theme_signals.json (LLM engine) for theme_strength_score.
@@ -903,11 +912,21 @@ class WatchlistScanner:
                         tech = _hist_tech
                         price_data_source = "fmp"
                     historical_source = "fmp"
+                    logger.debug(
+                        "Technical indicators computed from FMP for %s "
+                        "(sma20=%s, price_change_5d=%s, vol_avg20=%s)",
+                        symbol, tech.get("sma20"), tech.get("price_change_5d"),
+                        tech.get("volume_avg20"),
+                    )
 
         _fmp_is_primary = price_data_source == "fmp"
 
         # ── 3. AV OHLCV: fallback when FMP unavailable (non-dry_run only) ─────
-        if not dry_run:
+        # Skip entirely when FMP has provided both quote and full historical —
+        # all technicals (SMA20, 5d change, volume_avg20) are already populated.
+        _av_ohlcv_needed = not (_fmp_is_primary and historical_source == "fmp")
+
+        if not dry_run and _av_ohlcv_needed:
             try:
                 _av_df = self._av.get_daily_ohlcv(symbol, outputsize="compact")
                 if _av_df is not None:
@@ -951,6 +970,21 @@ class WatchlistScanner:
         # Compute technicals from df if not already populated
         if not tech and df is not None:
             tech = _compute_technicals(df, self._spike_factor)
+
+        # --- Technical data completeness label --------------------------------
+        _t_price   = tech.get("price") is not None
+        _t_sma20   = tech.get("sma20") is not None
+        _t_sma50   = tech.get("sma50") is not None
+        _t_5d      = tech.get("price_change_5d") is not None
+        _t_volavg  = tech.get("volume_avg20") is not None
+        if _t_price and _t_sma20 and _t_sma50 and _t_5d and _t_volavg:
+            technical_data_completeness: str = "full"
+        elif _t_price and (_t_sma20 or _t_5d):
+            technical_data_completeness = "partial"
+        elif _t_price:
+            technical_data_completeness = "price_only"
+        else:
+            technical_data_completeness = "missing"
 
         # --- Theme classification from ticker-specific articles ---------------
         headlines = [
@@ -1064,9 +1098,10 @@ class WatchlistScanner:
             "debt_ratio":          fundamentals.get("debt_ratio"),
 
             # ── Data-source provenance ────────────────────────────────────────
-            "price_data_source":   price_data_source,
-            "quote_source":        price_data_source,               # alias
-            "historical_source":   historical_source,
+            "price_data_source":           price_data_source,
+            "quote_source":                price_data_source,        # alias
+            "historical_source":           historical_source,
+            "technical_data_completeness": technical_data_completeness,
             "fundamentals_source": fundamentals_source,
             "ratios_source":       "fmp" if fundamentals_source == "fmp" else "missing",
             "news_source":         news_source,
