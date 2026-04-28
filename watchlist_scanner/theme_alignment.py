@@ -163,6 +163,81 @@ def compute_theme_alignment(matched_themes: list[dict]) -> dict[str, Any]:
     }
 
 
+def compute_theme_alignment_from_lm(symbol: str, lm_themes: list[dict]) -> dict[str, Any]:
+    """
+    Compute alignment fields from LLM theme_signals.json data.
+
+    Used when theme_opportunities.json is absent or yields no keyword-based match.
+    Matches symbol against themes[].tickers and derives alignment from LLM
+    confidence.  The formula weights confidence heavily since it is the primary
+    LLM quality signal; persistence_7d is normalised to [0, 1] over a 7-day window.
+
+    Formula:
+      raw_alignment = 0.70 * max_confidence
+                    + 0.20 * min(max_persistence_7d / 7, 1.0)
+                    + 0.10 * min(match_count / 3, 1.0)
+    """
+    matched = [t for t in lm_themes if symbol in (t.get("tickers") or [])]
+    if not matched:
+        return _empty_theme_fields()
+
+    matched.sort(key=lambda t: -float(t.get("confidence") or 0.0))
+    top = matched[0]
+    names = list(dict.fromkeys(str(t.get("name") or "") for t in matched))
+    count = len(matched)
+
+    max_confidence = max(float(t.get("confidence") or 0.0) for t in matched)
+    max_persistence_7d = max(int(t.get("persistence_7d") or 0) for t in matched)
+    persistence_component = min(max_persistence_7d / 7.0, 1.0)
+    breadth_component = min(count / 3.0, 1.0)
+    max_evidence = max(len(t.get("evidence_items") or []) for t in matched)
+
+    raw_alignment = (
+        0.70 * max_confidence
+        + 0.20 * persistence_component
+        + 0.10 * breadth_component
+    )
+    alignment_score = round(min(max(raw_alignment, 0.0), 1.0), 4)
+    top_name = str(top.get("name") or "")
+    top_confidence = round(float(top.get("confidence") or 0.0), 4)
+    top_persistence = round(min(int(top.get("persistence_7d") or 0) / 7.0, 1.0), 4)
+
+    return {
+        "theme_support_present": True,
+        "theme_match_count": count,
+        "theme_names": names,
+        "theme_types": ["llm"],
+        "theme_source_count": max_evidence,
+        "theme_max_score": round(max_confidence, 4),
+        "theme_max_confidence": round(max_confidence, 4),
+        "theme_max_persistence_score": round(persistence_component, 4),
+        "theme_max_acceleration_score": 0.0,
+        "theme_alignment_score": alignment_score,
+        "theme_alignment_label": _alignment_label(alignment_score),
+        "theme_top_name": top_name,
+        "theme_top_type": "llm",
+        "theme_top_score": top_confidence,
+        "theme_top_confidence": top_confidence,
+        "theme_top_persistence_score": top_persistence,
+        "theme_top_acceleration_score": 0.0,
+        "theme_reason": (
+            f"LLM-detected theme '{top_name}'"
+            if count == 1
+            else f"LLM-detected {count} themes; strongest: '{top_name}'"
+        ),
+        "theme_context": {
+            "names": names,
+            "types": ["llm"],
+            "alignment_score": alignment_score,
+            "strongest_component": round(max_confidence, 4),
+            "persistence_component": round(persistence_component, 4),
+            "acceleration_component": 0.0,
+            "breadth_component": round(breadth_component, 4),
+            "source": "theme_signals",
+        },
+    }
+
+
 def enrich_row_with_theme(
     row: dict[str, Any],
     themes: list[dict],
@@ -171,6 +246,10 @@ def enrich_row_with_theme(
 ) -> None:
     """
     Add theme alignment and boost fields to *row* in-place.
+
+    Alignment source priority:
+      1. Keyword themes from theme_opportunities.json (when present and ticker matched)
+      2. LLM themes from theme_signals.json (fallback when keyword themes absent/no match)
 
     Sets all theme_* explainability fields, theme_component, theme_strength_score,
     and augmented_signal_score.  When both theme_alignment_score and
@@ -183,7 +262,12 @@ def enrich_row_with_theme(
     try:
         symbol = str(row.get("ticker") or "")
         matched = match_symbol_themes(symbol, themes)
-        fields = compute_theme_alignment(matched)
+        if matched:
+            fields = compute_theme_alignment(matched)
+        else:
+            # theme_opportunities.json absent or no keyword match for this ticker —
+            # fall back to LLM themes from theme_signals.json
+            fields = compute_theme_alignment_from_lm(symbol, lm_themes or [])
         row.update(fields)
 
         signal_score = float(row.get("signal_score") or 0.0)

@@ -408,5 +408,139 @@ class TestComputeThemeStrength(unittest.TestCase):
         self.assertAlmostEqual(_compute_theme_strength("CRWD", lm), 0.70)
 
 
+# ---------------------------------------------------------------------------
+# TestLMFallbackAlignment — theme_signals.json used when keyword themes absent
+# ---------------------------------------------------------------------------
+
+class TestLMFallbackAlignment(unittest.TestCase):
+    """
+    Verify that alignment and strength are correctly populated from theme_signals.json
+    when theme_opportunities.json is missing (empty keyword themes list).
+    This is the scenario described in the bug report: VPS has theme_signals.json
+    with tickers but no theme_opportunities.json, resulting in alignment=0.
+    """
+
+    def _enrich_lm_only(self, row: dict, lm_themes: list) -> dict:
+        """Enrich with empty keyword themes — simulates missing theme_opportunities.json."""
+        enrich_row_with_theme(row, themes=[], lm_themes=lm_themes)
+        return row
+
+    # -- alignment populated from theme_signals.json -------------------------
+
+    def test_lm_ticker_overlap_produces_nonzero_alignment(self):
+        """theme_alignment_score > 0 when symbol appears in theme_signals.json tickers."""
+        lm = [_lm_theme("Cloud Infrastructure", 0.85, ["MSFT", "AMZN", "GOOGL"])]
+        row = _make_row("MSFT")
+        self._enrich_lm_only(row, lm)
+        self.assertGreater(row["theme_alignment_score"], 0.0)
+
+    def test_lm_alignment_score_proportional_to_confidence(self):
+        """Higher LLM confidence → higher alignment_score (both above threshold)."""
+        lm_high = [_lm_theme("Cloud Infrastructure", 0.90, ["MSFT"])]
+        lm_low  = [_lm_theme("Cloud Infrastructure", 0.50, ["MSFT"])]
+        row_high = _make_row("MSFT")
+        row_low  = _make_row("MSFT")
+        self._enrich_lm_only(row_high, lm_high)
+        self._enrich_lm_only(row_low, lm_low)
+        self.assertGreater(row_high["theme_alignment_score"], row_low["theme_alignment_score"])
+
+    def test_lm_alignment_matches_formula(self):
+        """theme_alignment_score = clamp(0.70*conf + 0.20*persist_norm + 0.10*breadth)."""
+        conf = 0.82
+        lm = [{"name": "Energy Transition", "confidence": conf, "tickers": ["XOM"], "persistence_7d": 7}]
+        row = _make_row("XOM")
+        self._enrich_lm_only(row, lm)
+        persist_norm = min(7 / 7.0, 1.0)
+        breadth = min(1 / 3.0, 1.0)
+        expected = round(min(0.70 * conf + 0.20 * persist_norm + 0.10 * breadth, 1.0), 4)
+        self.assertAlmostEqual(row["theme_alignment_score"], expected, places=4)
+
+    def test_lm_alignment_none_when_ticker_absent(self):
+        """alignment_score stays 0 when the symbol is not in any LLM theme tickers."""
+        lm = [_lm_theme("Cloud Infrastructure", 0.90, ["AMZN", "GOOGL"])]
+        row = _make_row("MSFT")
+        self._enrich_lm_only(row, lm)
+        self.assertEqual(row["theme_alignment_score"], 0.0)
+        self.assertFalse(row["theme_support_present"])
+
+    # -- theme_strength_score from LLM confidence ----------------------------
+
+    def test_theme_strength_score_populated_from_lm_confidence(self):
+        """theme_strength_score equals max LLM confidence for the matched ticker."""
+        lm = [
+            _lm_theme("Cloud Infrastructure", 0.85, ["MSFT", "GOOGL"]),
+            _lm_theme("AI Infrastructure",    0.72, ["MSFT"]),
+        ]
+        row = _make_row("MSFT")
+        self._enrich_lm_only(row, lm)
+        self.assertAlmostEqual(row["theme_strength_score"], 0.85, places=4)
+
+    def test_theme_strength_score_always_set_as_float(self):
+        """theme_strength_score is always a float, never None."""
+        for lm in ([], [_lm_theme("X", 0.7, ["OTHER"])]):
+            row = _make_row("MSFT")
+            self._enrich_lm_only(row, lm)
+            self.assertIsInstance(row["theme_strength_score"], float)
+
+    # -- boost with LLM-derived alignment ------------------------------------
+
+    def test_boost_applies_when_lm_provides_both_alignment_and_strength(self):
+        """Boost fires when LLM themes supply both alignment≥0.6 and strength≥0.6."""
+        # confidence=0.90 → alignment ≈ 0.70*0.90 = 0.63 ≥ 0.6, strength=0.90 ≥ 0.6
+        lm = [_lm_theme("Cloud Infrastructure", 0.90, ["MSFT"])]
+        row = _make_row("MSFT", signal_score=0.70, confidence_score=0.80)
+        orig_signal = row["signal_score"]
+        self._enrich_lm_only(row, lm)
+        self.assertTrue(row["theme_boost_applied"])
+        self.assertGreater(row["signal_score"], orig_signal)
+
+    def test_boost_not_applied_when_lm_confidence_too_low(self):
+        """No boost when LLM confidence < 0.6 (strength below threshold)."""
+        # alignment from 0.50 conf: 0.70*0.50 = 0.35 < 0.6, so neither threshold met
+        lm = [_lm_theme("Cloud Infrastructure", 0.50, ["MSFT"])]
+        row = _make_row("MSFT", signal_score=0.70, confidence_score=0.80)
+        orig_signal = row["signal_score"]
+        self._enrich_lm_only(row, lm)
+        self.assertFalse(row["theme_boost_applied"])
+        self.assertAlmostEqual(row["signal_score"], orig_signal, places=4)
+
+    # -- missing keyword file does not disable alignment ---------------------
+
+    def test_missing_keyword_themes_does_not_disable_alignment(self):
+        """Empty keyword themes list + valid LLM themes → alignment populated, not 0."""
+        lm = [_lm_theme("Energy Transition", 0.78, ["XOM", "CVX"])]
+        for ticker in ("XOM", "CVX"):
+            row = _make_row(ticker)
+            enrich_row_with_theme(row, themes=[], lm_themes=lm)
+            self.assertGreater(
+                row["theme_alignment_score"], 0.0,
+                f"{ticker}: expected alignment>0 from LLM fallback, got 0",
+            )
+
+    def test_keyword_themes_take_precedence_over_lm_when_present(self):
+        """When keyword themes match the symbol, they are used; LLM is not."""
+        disc = [_discovery_theme("Semiconductor", 1.0, 1.0, ["NVDA"])]
+        disc[0]["persistence_score"] = 0.0
+        disc[0]["acceleration_score"] = 0.0
+        # Keyword match: strongest_component = 1.0*1.0 = 1.0 → alignment driven by keyword
+        lm = [_lm_theme("Cloud Infrastructure", 0.50, ["NVDA"])]
+        row = _make_row("NVDA")
+        enrich_row_with_theme(row, themes=disc, lm_themes=lm)
+        # theme_types should reflect keyword ("sector"), not LLM
+        self.assertNotIn("llm", row.get("theme_types", []))
+        # alignment comes from keyword formula, not 0.70*0.50 = 0.35
+        self.assertGreater(row["theme_alignment_score"], 0.35)
+
+    def test_lm_fallback_sets_theme_top_name(self):
+        """theme_top_name is populated from the highest-confidence LLM theme."""
+        lm = [
+            _lm_theme("Energy Transition",    0.78, ["XOM"]),
+            _lm_theme("Cloud Infrastructure", 0.65, ["XOM"]),
+        ]
+        row = _make_row("XOM")
+        self._enrich_lm_only(row, lm)
+        self.assertEqual(row["theme_top_name"], "Energy Transition")
+
+
 if __name__ == "__main__":
     unittest.main()
