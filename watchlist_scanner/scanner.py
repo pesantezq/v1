@@ -149,7 +149,7 @@ def _compute_technicals(df: pd.DataFrame, spike_factor: float = VOLUME_SPIKE_FAC
 # ---------------------------------------------------------------------------
 
 def _compute_avg_sentiment(articles: list[dict]) -> float:
-    """Compute average overall_sentiment_score from AV news articles."""
+    """Compute average overall_sentiment_score from news articles."""
     scores = []
     for art in articles:
         try:
@@ -426,7 +426,7 @@ class WatchlistScanner:
         # Pre-fetches (all use FMP's internal cache + budget guards):
         #   quotes      — stable/quote, TTL = FMP_QUOTE_TTL_MINUTES (default 15 min)
         #   profiles    — stable/profile per symbol, TTL = FMP_PROFILE_TTL_DAYS (7 days)
-        #   historical  — v3/historical-price-full per symbol, TTL = 1 day
+        #   historical  — stable/historical-price-eod/full per symbol, TTL = 1 day
         #   ratios      — stable/ratios per symbol, TTL = FMP_FUNDAMENTALS_TTL_DAYS (30 days)
         _fmp_quotes:    dict[str, dict] = {}
         _fmp_profiles:  dict[str, dict] = {}

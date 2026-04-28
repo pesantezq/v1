@@ -44,6 +44,13 @@ _EP_HISTORICAL = "historical-price-eod/full"
 _EP_NEWS_STOCK = "news/stock"
 _EP_INCOME_STMT = "income-statement"
 _EP_KEY_METRICS = "key-metrics"
+_EP_BALANCE_SHEET = "balance-sheet-statement"
+_EP_CASHFLOW_STMT = "cashflow-statement"
+_EP_FIN_GROWTH = "financial-statement-growth"
+_EP_RATINGS_SNAPSHOT = "ratings-snapshot"
+_EP_HISTORICAL_RATINGS = "historical-ratings"
+_EP_AVAILABLE_SECTORS = "available-sectors"
+_EP_AVAILABLE_INDUSTRIES = "available-industries"
 
 # Legacy v3/v4 paths (base: FMP_BASE_URL) — kept for universe/portfolio pipeline
 _EP_V3_SP500 = "v3/sp500_constituent"

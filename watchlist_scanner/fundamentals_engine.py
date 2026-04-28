@@ -168,7 +168,7 @@ def parse_fmp_profile(
     quote: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Map an FMP v3/profile response (+ optional batch-quote row) to the same
+    Map an FMP stable/profile response (+ optional batch-quote row) to the same
     schema as parse_overview() so the rest of the pipeline needs no changes.
 
     Fields that are not available on the FMP free-tier profile endpoint are
