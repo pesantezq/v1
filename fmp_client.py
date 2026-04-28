@@ -814,29 +814,50 @@ class FMPClient:
         """
         Fetch daily historical OHLCV data for a single symbol.
 
-        Uses /v3/historical-price-full/{symbol}?from=YYYY-MM-DD.
-        1 API call per symbol; cached for ttl_days (default 1 day so
-        backtests always see fresh recent data without burning budget daily).
+        Uses stable/historical-price-eod/full?symbol=X&from=YYYY-MM-DD.
+        1 API call per symbol; cached for ttl_days (default 1 day).
 
         Returns list of dicts (newest-first order from FMP) with keys:
-            date, open, high, low, close, adjClose, volume,
-            unadjustedVolume, change, changePercent, vwap
+            date, open, high, low, close, adjClose, volume, change, changePercent
         Returns empty list on any error or when budget exceeded without cache.
         """
         if not symbol:
             return []
+        sym = symbol.upper()
         from_date = (date.today() - timedelta(days=years * 365)).isoformat()
-        cache_key = f"hist_{symbol.upper()}_{years}y"
+        cache_key = f"hist_stable_{sym}_{years}y"
+        ttl_seconds = ttl_days * 86400
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached if isinstance(cached, list) else []
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
+
         try:
-            data = self._get_cached(
-                cache_key,
-                f"v3/historical-price-full/{symbol.upper()}",
-                ttl_seconds=ttl_days * 86400,
-                params={"from": from_date},
+            raw = self._raw_get(
+                "historical-price-eod/full",
+                {"symbol": sym, "from": from_date},
+                base_url=FMP_STABLE_BASE_URL,
             )
         except Exception as exc:
             logger.warning(f"FMP get_historical_prices({symbol!r}) failed: {exc}")
-            return []
-        if isinstance(data, dict) and "historical" in data:
-            return data["historical"] or []
-        return []
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
+
+        # stable endpoint returns list directly; v3 wraps in {"historical": [...]}
+        if isinstance(raw, list):
+            rows = raw
+        elif isinstance(raw, dict) and "historical" in raw:
+            rows = raw["historical"] or []
+        else:
+            rows = []
+
+        self._cache.set(cache_key, rows)
+        logger.debug(
+            "FMP stable/historical-price-eod/full %s: %d rows (from %s)",
+            sym, len(rows), from_date,
+        )
+        return rows
