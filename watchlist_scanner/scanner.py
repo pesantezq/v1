@@ -66,7 +66,7 @@ from watchlist_scanner.config import (
     EXCEPTIONAL_SIGNAL_SCORE,
 )
 from watchlist_scanner.models import AlertDecision, WatchlistRow, WatchlistScanResult
-from watchlist_scanner.theme_alignment import load_theme_opportunities, enrich_row_with_theme
+from watchlist_scanner.theme_alignment import load_theme_opportunities, load_theme_signals, enrich_row_with_theme
 from watchlist_scanner.portfolio_fit import load_portfolio_snapshot, enrich_row_with_portfolio_fit
 
 logger = logging.getLogger("watchlist_scanner.scanner")
@@ -585,17 +585,21 @@ class WatchlistScanner:
 
         # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
         # Loads outputs/latest/theme_opportunities.json produced by theme_discovery.
-        # Adds theme_* explainability fields + augmented_signal_score to every row.
-        # When theme artifact is absent or empty, rows are untouched except for
-        # safe defaults (theme_alignment_score=0, augmented_signal_score=signal_score).
+        # Also loads outputs/latest/theme_signals.json (LLM engine) for theme_strength_score.
+        # Adds theme_* explainability fields, augmented_signal_score, and theme boost
+        # to every row.  When theme artifacts are absent or empty, rows receive safe
+        # defaults (theme_alignment_score=0, theme_strength_score=0, no boost).
         _theme_opps = load_theme_opportunities(self._root)
+        _lm_themes = load_theme_signals(self._root)
         if _theme_opps:
             logger.info(
                 "Theme alignment: %d theme(s) loaded — enriching %d result(s)",
                 len(_theme_opps), len(results),
             )
+        if _lm_themes:
+            logger.info("Theme strength: %d LLM theme(s) loaded", len(_lm_themes))
         for r in results:
-            enrich_row_with_theme(r, _theme_opps)
+            enrich_row_with_theme(r, _theme_opps, lm_themes=_lm_themes)
 
         # ── Step 4c: Portfolio fit enrichment (additive, non-blocking) ──
         # Loads outputs/portfolio/portfolio_snapshot.json to evaluate how well

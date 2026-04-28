@@ -1,7 +1,8 @@
 """
 Theme alignment: loads discovered-theme artifacts and computes per-symbol theme signals.
 
-Read-only enrichment layer. Never modifies core signal scores.
+Read-only enrichment layer (except for theme boost which intentionally modifies signal
+inputs when both alignment and LLM strength thresholds are met).
 All public functions are safe to call when the theme artifact is absent or malformed.
 """
 from __future__ import annotations
@@ -16,6 +17,8 @@ logger = logging.getLogger("watchlist_scanner.theme_alignment")
 _THEME_WEIGHT_DEFAULT: float = 0.15
 _LABEL_STRONG: float = 0.65
 _LABEL_MODERATE: float = 0.35
+_BOOST_ALIGNMENT_THRESHOLD: float = 0.6
+_BOOST_STRENGTH_THRESHOLD: float = 0.6
 
 
 def load_theme_opportunities(root: Path | str) -> list[dict]:
@@ -25,6 +28,28 @@ def load_theme_opportunities(root: Path | str) -> list[dict]:
     Returns empty list when file is absent, malformed, or has no themes.
     """
     path = Path(root) / "outputs" / "latest" / "theme_opportunities.json"
+    if not path.exists():
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("theme_alignment: could not load %s — %s", path, exc)
+        return []
+    themes = data.get("themes")
+    if not isinstance(themes, list):
+        return []
+    return [t for t in themes if isinstance(t, dict)]
+
+
+def load_theme_signals(root: Path | str) -> list[dict]:
+    """
+    Load outputs/latest/theme_signals.json relative to *root*.
+
+    Returns enriched LLM-detected themes (with 'tickers' from ThemeMapper).
+    Returns empty list when file is absent, malformed, stale, or has no themes.
+    """
+    path = Path(root) / "outputs" / "latest" / "theme_signals.json"
     if not path.exists():
         return []
     try:
@@ -142,13 +167,16 @@ def enrich_row_with_theme(
     row: dict[str, Any],
     themes: list[dict],
     theme_weight: float = _THEME_WEIGHT_DEFAULT,
+    lm_themes: list[dict] | None = None,
 ) -> None:
     """
-    Add theme alignment fields to *row* in-place.
+    Add theme alignment and boost fields to *row* in-place.
 
-    Sets all theme_* explainability fields, theme_component, and
-    augmented_signal_score = signal_score + (theme_alignment_score * theme_weight),
-    capped at 1.0. When no themes match, augmented_signal_score == signal_score.
+    Sets all theme_* explainability fields, theme_component, theme_strength_score,
+    and augmented_signal_score.  When both theme_alignment_score and
+    theme_strength_score meet their thresholds (≥0.6 each), applies a
+    multiplicative boost to signal_score and confidence_score before computing
+    augmented_signal_score, and records theme_boost_applied/theme_boost_factor.
 
     Never raises — all errors are silently logged.
     """
@@ -161,6 +189,29 @@ def enrich_row_with_theme(
         signal_score = float(row.get("signal_score") or 0.0)
         theme_component = round(fields["theme_alignment_score"] * theme_weight, 4)
         row["theme_component"] = theme_component
+
+        # Compute LLM theme strength from theme_signals.json
+        theme_strength_score = _compute_theme_strength(symbol, lm_themes or [])
+        row["theme_strength_score"] = round(theme_strength_score, 4)
+
+        # Apply boost when both alignment and LLM strength pass thresholds
+        alignment_score = fields["theme_alignment_score"]
+        if (
+            alignment_score >= _BOOST_ALIGNMENT_THRESHOLD
+            and theme_strength_score >= _BOOST_STRENGTH_THRESHOLD
+        ):
+            boost_factor = round(1.0 + 0.15 * theme_strength_score, 4)
+            conf_factor = round(1.0 + 0.10 * theme_strength_score, 4)
+            signal_score = round(min(signal_score * boost_factor, 1.0), 4)
+            confidence_score = float(row.get("confidence_score") or 0.0)
+            row["signal_score"] = signal_score
+            row["confidence_score"] = round(min(confidence_score * conf_factor, 1.0), 4)
+            row["theme_boost_applied"] = True
+            row["theme_boost_factor"] = boost_factor
+        else:
+            row["theme_boost_applied"] = False
+            row["theme_boost_factor"] = 1.0
+
         row["augmented_signal_score"] = round(min(signal_score + theme_component, 1.0), 4)
     except Exception as exc:
         logger.warning("theme_alignment: error enriching %s — %s", row.get("ticker"), exc)
@@ -170,6 +221,17 @@ def enrich_row_with_theme(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+def _compute_theme_strength(symbol: str, lm_themes: list[dict]) -> float:
+    """Return max LLM confidence among themes whose 'tickers' list contains *symbol*."""
+    best = 0.0
+    for t in lm_themes:
+        if symbol in (t.get("tickers") or []):
+            conf = float(t.get("confidence") or 0.0)
+            if conf > best:
+                best = conf
+    return best
+
 
 def _alignment_label(score: float) -> str:
     if score <= 0.0:
@@ -211,3 +273,6 @@ def _apply_empty_fallback(row: dict[str, Any]) -> None:
     signal_score = float(row.get("signal_score") or 0.0)
     row.setdefault("theme_component", 0.0)
     row.setdefault("augmented_signal_score", round(signal_score, 4))
+    row.setdefault("theme_strength_score", 0.0)
+    row.setdefault("theme_boost_applied", False)
+    row.setdefault("theme_boost_factor", 1.0)
