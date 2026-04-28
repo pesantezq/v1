@@ -19,7 +19,14 @@ Use this before merging any change that touches scoring, ranking, allocation, st
 
 ## 3. Endpoint Validation
 
+**FMP COMPLIANCE (MANDATORY)**
+- [ ] `python -m fmp_endpoint_compliance` → RESULT: COMPLIANT
+- [ ] `pytest tests/ -k fmp` → 100% PASS
+- [ ] No new endpoints bypass registry
+- [ ] No v3 endpoints added without explicit approval
+
 - Run `python -m unittest tests.test_fmp_endpoint_compliance -v`
+- Run `python -m unittest tests.test_fmp_endpoint_registry_compliance -v`
 - Run `python -m unittest tests.test_fmp_fallback -v`
 - Run `python -m unittest tests.test_fmp_batch_quotes_stable -v`
 - If FMP wiring changed, confirm stable endpoints were not regressed back to incompatible legacy paths.

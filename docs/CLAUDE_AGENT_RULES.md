@@ -15,6 +15,15 @@ This repository is designed for analysis and decision support. AI agents must pr
 - Do not break GUI or artifact contracts.
 - Prefer additive, diff-friendly changes.
 
+## FMP Data Rules (Hard Constraint)
+
+- Only use endpoints defined in `fmp_endpoint_registry.py` — it is the source of truth.
+- All new endpoints must be added to the registry before being used in code.
+- Never use `/v3/` or `/v4/` endpoints in the daily scanner path without explicit user approval.
+- All endpoint changes must pass `python -m fmp_endpoint_compliance` → RESULT: COMPLIANT.
+- Starter plan compatibility is mandatory — `starter_safe: True` required for any daily scanner endpoint.
+- The stable base URL (`FMP_STABLE_BASE_URL`) must be used for all core endpoints; `FMP_BASE_URL` is legacy/universe only.
+
 ## Protected Semantics
 
 - `signal_score`
