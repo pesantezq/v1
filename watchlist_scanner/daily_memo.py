@@ -9,11 +9,12 @@ Writes:
   outputs/latest/daily_memo.md   — Markdown
 
 CLI:
-  python -m watchlist_scanner.daily_memo           # generate only
-  python -m watchlist_scanner.daily_memo --send    # generate + email
-  python -m watchlist_scanner.daily_memo --dry-run # print, no files written
+  python -m watchlist_scanner.daily_memo              # generate only
+  python -m watchlist_scanner.daily_memo --send       # generate + email
+  python -m watchlist_scanner.daily_memo --dry-run    # print, no files written
+  python -m watchlist_scanner.daily_memo --test-email # verify SMTP config only
 
-Email env vars (all required for --send):
+Email env vars (all required for --send / --test-email):
   SMTP_SERVER, SMTP_PORT (default 587), EMAIL_USER, EMAIL_PASS, EMAIL_TO
 """
 from __future__ import annotations
@@ -492,14 +493,24 @@ def generate_daily_memo(
 # Email sender
 # ---------------------------------------------------------------------------
 
-def send_email(memo_text: str, *, subject: str | None = None) -> bool:
+_SMTP_TIMEOUT: int = 15  # seconds per connection attempt
+
+
+def send_email(
+    memo_text: str,
+    *,
+    subject: str | None = None,
+    max_attempts: int = 3,
+) -> bool:
     """
     Send memo_text via SMTP using environment variables.
 
     Required env vars: SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO
     Optional env var:  SMTP_PORT (default 587)
 
+    Retries up to max_attempts times on transient failures.
     Returns True on success, False on any failure (never raises).
+    Credentials are never written to logs.
     """
     server   = os.environ.get("SMTP_SERVER", "").strip()
     port_str = os.environ.get("SMTP_PORT", "587").strip()
@@ -538,18 +549,40 @@ def send_email(memo_text: str, *, subject: str | None = None) -> bool:
     msg["To"]      = to_addr
     msg.attach(MIMEText(memo_text, "plain", "utf-8"))
 
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(server, port) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=context)
-            smtp.login(user, password)
-            smtp.sendmail(user, to_addr, msg.as_string())
-        logger.info("daily_memo: email sent to %s via %s:%s", to_addr, server, port)
-        return True
-    except Exception as exc:
-        logger.warning("daily_memo: send_email failed — %s", exc)
-        return False
+    for attempt in range(1, max_attempts + 1):
+        try:
+            context = ssl.create_default_context()
+            with smtplib.SMTP(server, port, timeout=_SMTP_TIMEOUT) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=context)
+                smtp.login(user, password)
+                smtp.sendmail(user, to_addr, msg.as_string())
+            logger.info("daily_memo: email sent to %s via %s:%s", to_addr, server, port)
+            return True
+        except Exception as exc:
+            exc_type = type(exc).__name__
+            if attempt < max_attempts:
+                logger.warning(
+                    "daily_memo: send attempt %d/%d failed (%s) — retrying",
+                    attempt, max_attempts, exc_type,
+                )
+            else:
+                logger.warning(
+                    "daily_memo: send_email failed after %d attempt(s) — %s",
+                    max_attempts, exc_type,
+                )
+    return False
+
+
+def send_test_email() -> bool:
+    """
+    Send a simple test message to verify SMTP configuration.
+    Does not require a pipeline run or generated memo.
+    Returns True on success, False on any failure (never raises).
+    """
+    subject = "Test Email — Investment System"
+    body    = "Email system is working correctly."
+    return send_email(body, subject=subject)
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +617,23 @@ def _main() -> None:
             "Requires SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO env vars."
         ),
     )
+    parser.add_argument(
+        "--test-email",
+        action="store_true",
+        help=(
+            "Send a simple test email to verify SMTP configuration. "
+            "Does not generate the memo or require a pipeline run."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.test_email:
+        ok = send_test_email()
+        if ok:
+            print("Test email sent successfully.")
+        else:
+            print("Test email failed — check SMTP env vars and logs.")
+        return
 
     memo_txt, _ = generate_daily_memo(
         root=args.root,

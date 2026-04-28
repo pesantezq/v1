@@ -13,11 +13,16 @@ Covers:
   - send_email fails gracefully when env vars missing
   - generate_daily_memo write_files=False doesn't create files
   - generate_daily_memo write_files=True creates both files
+  - send_email retry: succeeds on second attempt, exhausts all attempts
+  - send_test_email: delegates to send_email with correct subject
+  - Pipeline step: continues and reports failure when email send fails
 """
 from __future__ import annotations
 
+import smtplib
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,6 +34,7 @@ from watchlist_scanner.daily_memo import (
     generate_daily_memo,
     get_subject,
     send_email,
+    send_test_email,
 )
 
 
@@ -487,3 +493,175 @@ class TestGenerateDailyMemo:
         assert "TSLA" in txt
         assert "EV" in txt
         assert "TSLA" in md
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by email retry / test-email tests
+# ---------------------------------------------------------------------------
+
+def _set_smtp_env(monkeypatch) -> None:
+    monkeypatch.setenv("SMTP_SERVER", "smtp.test.local")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("EMAIL_USER", "user@test.local")
+    monkeypatch.setenv("EMAIL_PASS", "secret")
+    monkeypatch.setenv("EMAIL_TO", "to@test.local")
+
+
+class _FakeSMTP:
+    """Context-manager SMTP stub that records calls and can be made to fail once."""
+
+    def __init__(self, *, fail_attempts: int = 0):
+        self._fail_remaining = fail_attempts
+        self.login_calls = 0
+        self.send_calls = 0
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def ehlo(self): pass
+    def starttls(self, **kw): pass
+
+    def login(self, *args):
+        self.login_calls += 1
+        if self._fail_remaining > 0:
+            self._fail_remaining -= 1
+            raise smtplib.SMTPException("transient error")
+
+    def sendmail(self, *args):
+        self.send_calls += 1
+
+
+# ---------------------------------------------------------------------------
+# TestSendEmailRetry
+# ---------------------------------------------------------------------------
+
+class TestSendEmailRetry:
+    def test_succeeds_on_first_attempt(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=0)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text", max_attempts=3)
+        assert result is True
+        assert stub.send_calls == 1
+
+    def test_succeeds_on_second_attempt(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=1)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text", max_attempts=3)
+        assert result is True
+        assert stub.login_calls == 2
+        assert stub.send_calls == 1
+
+    def test_returns_false_after_all_attempts_exhausted(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=5)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text", max_attempts=3)
+        assert result is False
+        assert stub.login_calls == 3
+        assert stub.send_calls == 0
+
+    def test_max_attempts_one_fails_fast(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=1)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text", max_attempts=1)
+        assert result is False
+        assert stub.login_calls == 1
+
+    def test_credentials_not_logged_on_auth_error(self, monkeypatch, caplog):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=5)
+        with patch("smtplib.SMTP", stub):
+            import logging
+            with caplog.at_level(logging.WARNING):
+                send_email("memo text", max_attempts=2)
+        for record in caplog.records:
+            assert "secret" not in record.message
+            assert "EMAIL_PASS" not in record.message
+
+
+# ---------------------------------------------------------------------------
+# TestSendTestEmail
+# ---------------------------------------------------------------------------
+
+class TestSendTestEmail:
+    def test_returns_false_when_env_missing(self, monkeypatch):
+        for var in ("SMTP_SERVER", "EMAIL_USER", "EMAIL_PASS", "EMAIL_TO"):
+            monkeypatch.delenv(var, raising=False)
+        assert send_test_email() is False
+
+    def test_uses_correct_subject(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        captured: list[str] = []
+
+        def _fake_send(text, *, subject=None, max_attempts=3):
+            captured.append(subject or "")
+            return True
+
+        with patch("watchlist_scanner.daily_memo.send_email", side_effect=_fake_send):
+            send_test_email()
+
+        assert captured[0] == "Test Email — Investment System"
+
+    def test_sends_non_empty_body(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        captured: list[str] = []
+
+        def _fake_send(text, *, subject=None, max_attempts=3):
+            captured.append(text)
+            return True
+
+        with patch("watchlist_scanner.daily_memo.send_email", side_effect=_fake_send):
+            send_test_email()
+
+        assert len(captured[0]) > 0
+
+    def test_succeeds_with_valid_smtp(self, monkeypatch):
+        _set_smtp_env(monkeypatch)
+        stub = _FakeSMTP(fail_attempts=0)
+        with patch("smtplib.SMTP", stub):
+            assert send_test_email() is True
+
+
+# ---------------------------------------------------------------------------
+# TestPipelineEmailSafety
+# ---------------------------------------------------------------------------
+
+class TestPipelineEmailSafety:
+    def test_step_daily_memo_continues_on_email_failure(self):
+        """_step_daily_memo must not raise when send_email returns False."""
+        import run_daily_pipeline as p
+
+        with patch("watchlist_scanner.daily_memo.generate_daily_memo", return_value=("memo text", "# md")), \
+             patch("watchlist_scanner.daily_memo.send_email", return_value=False):
+            notes = p._step_daily_memo(send_email_flag=True)
+
+        assert "memo written" in notes
+        assert "send failed" in notes
+
+    def test_step_daily_memo_reports_success_on_send(self):
+        import run_daily_pipeline as p
+
+        with patch("watchlist_scanner.daily_memo.generate_daily_memo", return_value=("memo text", "# md")), \
+             patch("watchlist_scanner.daily_memo.send_email", return_value=True):
+            notes = p._step_daily_memo(send_email_flag=True)
+
+        assert "memo written" in notes
+        assert "sent" in notes
+
+    def test_step_daily_memo_no_email_when_flag_false(self):
+        import run_daily_pipeline as p
+
+        with patch("watchlist_scanner.daily_memo.generate_daily_memo", return_value=("memo text", "# md")), \
+             patch("watchlist_scanner.daily_memo.send_email") as mock_send:
+            p._step_daily_memo(send_email_flag=False)
+
+        mock_send.assert_not_called()
