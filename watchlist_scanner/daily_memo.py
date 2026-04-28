@@ -15,7 +15,9 @@ CLI:
   python -m watchlist_scanner.daily_memo --test-email # verify SMTP config only
 
 Email env vars (all required for --send / --test-email):
-  SMTP_SERVER, SMTP_PORT (default 587), EMAIL_USER, EMAIL_PASS, EMAIL_TO
+  Preferred: SMTP_SERVER, SMTP_PORT (default 587), EMAIL_USER, EMAIL_PASS, EMAIL_TO
+  Also accepted for backward compatibility: SMTP_HOST, EMAIL_SENDER,
+  EMAIL_PASSWORD, EMAIL_RECIPIENT
 """
 from __future__ import annotations
 
@@ -496,6 +498,41 @@ def generate_daily_memo(
 _SMTP_TIMEOUT: int = 15  # seconds per connection attempt
 
 
+def _load_email_env() -> None:
+    """Best-effort load of a local .env without overriding real env vars."""
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except Exception:
+        return
+
+    candidates: list[Path] = []
+
+    found = find_dotenv(usecwd=True)
+    if found:
+        candidates.append(Path(found))
+
+    repo_env = Path(__file__).resolve().parents[1] / ".env"
+    if repo_env.exists():
+        candidates.append(repo_env)
+
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        load_dotenv(resolved, override=False)
+
+
+def _get_env_value(*names: str) -> str:
+    """Return the first non-empty environment variable value from names."""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def send_email(
     memo_text: str,
     *,
@@ -507,16 +544,20 @@ def send_email(
 
     Required env vars: SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO
     Optional env var:  SMTP_PORT (default 587)
+    Backward-compatible aliases: SMTP_HOST, EMAIL_SENDER, EMAIL_PASSWORD,
+    EMAIL_RECIPIENT
 
     Retries up to max_attempts times on transient failures.
     Returns True on success, False on any failure (never raises).
     Credentials are never written to logs.
     """
-    server   = os.environ.get("SMTP_SERVER", "").strip()
-    port_str = os.environ.get("SMTP_PORT", "587").strip()
-    user     = os.environ.get("EMAIL_USER", "").strip()
-    password = os.environ.get("EMAIL_PASS", "").strip()
-    to_addr  = os.environ.get("EMAIL_TO", "").strip()
+    _load_email_env()
+
+    server   = _get_env_value("SMTP_SERVER", "SMTP_HOST")
+    port_str = _get_env_value("SMTP_PORT") or "587"
+    user     = _get_env_value("EMAIL_USER", "EMAIL_SENDER")
+    password = _get_env_value("EMAIL_PASS", "EMAIL_PASSWORD")
+    to_addr  = _get_env_value("EMAIL_TO", "EMAIL_RECIPIENT")
 
     missing = [
         name for name, val in [
@@ -614,7 +655,8 @@ def _main() -> None:
         action="store_true",
         help=(
             "Send memo via email after generating. "
-            "Requires SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO env vars."
+            "Requires SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO env vars "
+            "(legacy aliases also accepted)."
         ),
     )
     parser.add_argument(

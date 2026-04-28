@@ -602,6 +602,22 @@ class TestThemeStore(unittest.TestCase):
         self.assertEqual(data["degraded_reason"], "cache_only")
         self.assertEqual(data["data_sources_used"], ["cache"])
 
+    def test_empty_theme_run_retains_previous_theme_snapshot(self):
+        store = self._store()
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-03")
+
+        store.save_signals([], [], "2026-03-04")
+
+        theme_data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        candidate_data = json.loads((self.output_dir / "watch_candidates.json").read_text())
+        self.assertEqual(theme_data["run_date"], "2026-03-04")
+        self.assertEqual(theme_data["theme_source"], "stale")
+        self.assertTrue(theme_data["no_update"])
+        self.assertEqual(theme_data["themes"][0]["name"], "AI Infrastructure")
+        self.assertEqual(candidate_data["theme_source"], "stale")
+        self.assertTrue(candidate_data["no_update"])
+        self.assertEqual(candidate_data["watch_candidates"][0]["ticker"], "NVDA")
+
     def test_get_recent_signals_returns_rows(self):
         from datetime import date
         today = date.today().isoformat()

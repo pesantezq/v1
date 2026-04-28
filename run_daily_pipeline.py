@@ -456,7 +456,10 @@ def _main() -> None:
     )
     parser.add_argument(
         "--send-email", action="store_true",
-        help="Send daily memo via email. Requires SMTP_SERVER, EMAIL_USER, EMAIL_PASS, EMAIL_TO env vars.",
+        help=(
+            "Send daily memo via email. Requires SMTP_SERVER, EMAIL_USER, "
+            "EMAIL_PASS, EMAIL_TO env vars (legacy aliases also accepted)."
+        ),
     )
     parser.add_argument(
         "--debug", action="store_true",

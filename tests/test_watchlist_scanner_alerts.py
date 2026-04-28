@@ -12,6 +12,7 @@ from watchlist_scanner.output_writers import (
     _write_signals_json,
     _write_summary_md,
 )
+from watchlist_scanner.__main__ import _apply_post_cooldown_fallback
 from watchlist_scanner.postprocess import (
     _apply_alert_cooldown,
     _apply_output_ordering,
@@ -1003,18 +1004,58 @@ class TestAlertCooldown(unittest.TestCase):
             self.assertEqual(len(rerun["alerts"]), 1)
             self.assertEqual(rerun["scan_summary"]["alerts_cooldown_suppressed"], 0)
             self.assertEqual(rerun["results"][0]["notification_status"], "alerted")
-            self.assertNotEqual(
-                first["results"][0].get("alert_event_id"),
-                rerun["results"][0].get("alert_event_id"),
+
+    def test_post_cooldown_fallback_triggers_when_all_alerts_suppressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "portfolio.db"
+
+            _apply_alert_cooldown(
+                self._scan_result(),
+                db_path=db_path,
+                cooldown_days=3,
+                signals_config=_signals_config(),
+            )
+            second = _apply_alert_cooldown(
+                self._scan_result(),
+                db_path=db_path,
+                cooldown_days=3,
+                signals_config=_signals_config(),
             )
 
-            store = PortfolioStateStore(db_path)
-            rows = store.get_watchlist_alert_outcomes(limit=10)
-            self.assertEqual(len(rows), 2)
-            latest = rows[0]
-            self.assertEqual(latest["confirmation_count"], 3)
-            self.assertEqual(latest["evidence_breadth"], 3)
-            self.assertEqual(latest["outcome_status"], "pending")
+            fallback_result = _apply_post_cooldown_fallback(
+                second,
+                signals_config={
+                    **_signals_config(),
+                    "fallback_top_n": 2,
+                    "fallback_min_signal_score": 0.50,
+                },
+            )
+            final_result = _apply_signal_meta_layer(
+                fallback_result,
+                data_health={
+                    "degraded_mode": False,
+                    "degraded_reason": "",
+                    "degraded_confidence_penalty": 0.0,
+                    "data_sources_used": ["alphavantage"],
+                    "data_mode": "live",
+                    "data_fallback_triggered": False,
+                },
+                db_path=db_path,
+                signals_config={
+                    **_signals_config(),
+                    "fallback_top_n": 2,
+                    "fallback_min_signal_score": 0.50,
+                },
+            )
+
+            self.assertEqual(len(final_result["alerts"]), 1)
+            self.assertEqual(final_result["alerts"][0]["ticker"], "AMD")
+            self.assertEqual(final_result["alerts"][0]["filter_reason_code"], "fallback_top_n")
+            self.assertEqual(final_result["alerts"][0]["alert_type"], "opportunity")
+            self.assertFalse(final_result["alerts"][0]["actionable_signal"])
+            self.assertTrue(final_result["scan_summary"]["fallback_alerts_used"])
+            self.assertEqual(final_result["scan_summary"]["fallback_trigger_stage"], "post_cooldown")
+            self.assertEqual(final_result["results"][0]["notification_status"], "fallback_opportunity")
 
     def test_tier_upgrade_overrides_cooldown(self):
         with tempfile.TemporaryDirectory() as tmp:

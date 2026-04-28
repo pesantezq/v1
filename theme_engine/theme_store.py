@@ -109,11 +109,9 @@ class ThemeStore:
             "degraded_reason": (metadata or {}).get("degraded_reason"),
             "data_sources_used": list((metadata or {}).get("data_sources_used", ["rss", "sp500_cache"])),
             "themes": themes,
+            "theme_source": "fresh",
+            "no_update": False,
         }
-        signals_path.write_text(
-            json.dumps(signals_payload, indent=2, default=str),
-            encoding="utf-8",
-        )
 
         candidates_path = self.output_dir / "watch_candidates.json"
         candidates_payload = {
@@ -124,7 +122,46 @@ class ThemeStore:
             "degraded_reason": (metadata or {}).get("degraded_reason"),
             "data_sources_used": list((metadata or {}).get("data_sources_used", ["rss", "sp500_cache"])),
             "watch_candidates": watch_candidates,
+            "theme_source": "fresh",
+            "no_update": False,
         }
+
+        if not themes:
+            existing_signals = self._safe_read_json(signals_path)
+            existing_candidates = self._safe_read_json(candidates_path)
+            existing_theme_rows = existing_signals.get("themes") or []
+            if isinstance(existing_theme_rows, list) and existing_theme_rows:
+                signals_payload = {
+                    **existing_signals,
+                    "generated_at": now_iso,
+                    "run_date": run_date,
+                    "data_mode": (metadata or {}).get("data_mode", existing_signals.get("data_mode", "live")),
+                    "degraded_mode": bool((metadata or {}).get("degraded_mode", existing_signals.get("degraded_mode", False))),
+                    "degraded_reason": (metadata or {}).get("degraded_reason", existing_signals.get("degraded_reason")),
+                    "data_sources_used": list((metadata or {}).get("data_sources_used", existing_signals.get("data_sources_used", ["rss", "sp500_cache"]))),
+                    "theme_source": "stale",
+                    "no_update": True,
+                    "last_checked_at": now_iso,
+                    "themes": existing_theme_rows,
+                }
+                candidates_payload = {
+                    **existing_candidates,
+                    "generated_at": now_iso,
+                    "run_date": run_date,
+                    "data_mode": (metadata or {}).get("data_mode", existing_candidates.get("data_mode", signals_payload["data_mode"])),
+                    "degraded_mode": bool((metadata or {}).get("degraded_mode", existing_candidates.get("degraded_mode", signals_payload["degraded_mode"]))),
+                    "degraded_reason": (metadata or {}).get("degraded_reason", existing_candidates.get("degraded_reason", signals_payload["degraded_reason"])),
+                    "data_sources_used": list((metadata or {}).get("data_sources_used", existing_candidates.get("data_sources_used", signals_payload["data_sources_used"]))),
+                    "theme_source": "stale",
+                    "no_update": True,
+                    "last_checked_at": now_iso,
+                    "watch_candidates": list(existing_candidates.get("watch_candidates") or watch_candidates),
+                }
+
+        signals_path.write_text(
+            json.dumps(signals_payload, indent=2, default=str),
+            encoding="utf-8",
+        )
         candidates_path.write_text(
             json.dumps(candidates_payload, indent=2, default=str),
             encoding="utf-8",
@@ -197,3 +234,12 @@ class ThemeStore:
             conn.commit()
         finally:
             conn.close()
+
+    def _safe_read_json(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}

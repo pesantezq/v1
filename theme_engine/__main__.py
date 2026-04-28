@@ -22,7 +22,6 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -64,12 +63,33 @@ def _load_sp500_from_cache(root: str) -> list[str]:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as tmp:
-        json.dump(payload, tmp, indent=2)
-        tmp.write("\n")
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, path)
+    rendered = json.dumps(payload, indent=2) + "\n"
+    tmp_path = path.with_name(
+        f"{path.stem}.{os.getpid()}.{int(time.time() * 1000)}.tmp"
+    )
+    try:
+        tmp_path.write_text(rendered, encoding="utf-8")
+
+        # On Windows, a just-written temp file can remain transiently locked.
+        for attempt in range(3):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                if attempt == 2:
+                    break
+                time.sleep(0.1 * (attempt + 1))
+        # Some Windows setups allow direct overwrite of an in-use file but
+        # reject rename-overwrite semantics. Fall back to an explicit write.
+        path.write_text(rendered, encoding="utf-8")
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _current_timestamp() -> str:

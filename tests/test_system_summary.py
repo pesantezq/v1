@@ -719,6 +719,25 @@ class TestBuildSystemDecisionSummary:
         summary = build_system_decision_summary(arts2, _all_flags(), previous_summary=prev)
         assert summary["changes"]["previous_available"] is True
 
+    def test_top_theme_falls_back_to_previous_summary_when_current_empty(self):
+        previous_summary = {
+            "top_theme": {
+                "name": "AI Infrastructure",
+                "type": "classified",
+                "score": 0.91,
+                "persistence": 0.6,
+                "acceleration": 0.2,
+                "tickers": ["NVDA"],
+            }
+        }
+        summary = build_system_decision_summary(
+            _full_artifacts(themes={"themes": []}),
+            _all_flags(),
+            previous_summary=previous_summary,
+        )
+        assert summary["top_theme"]["name"] == "AI Infrastructure"
+        assert summary["top_theme"]["theme_source"] == "stale"
+
 
 # ---------------------------------------------------------------------------
 # TestGenerateSystemDecisionSummary
@@ -776,6 +795,49 @@ class TestGenerateSystemDecisionSummary:
         ]
         for key in required_keys:
             assert key in data, f"Missing key: {key}"
+
+    def test_previous_summary_theme_used_when_current_theme_files_empty(self, tmp_path):
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-04-27T12:00:00",
+                    "top_theme": {
+                        "name": "AI Infrastructure",
+                        "type": "classified",
+                        "score": 0.9,
+                        "persistence": 0.5,
+                        "acceleration": 0.1,
+                        "tickers": ["NVDA"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (out_dir / "theme_opportunities.json").write_text(json.dumps({"themes": []}), encoding="utf-8")
+        (out_dir / "theme_signals.json").write_text(json.dumps({"themes": []}), encoding="utf-8")
+
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+
+        assert result["top_theme"]["name"] == "AI Infrastructure"
+        assert result["top_theme"]["theme_source"] == "stale"
+
+    def test_history_theme_used_when_latest_and_previous_summary_are_empty(self, tmp_path):
+        latest_dir = tmp_path / "outputs" / "latest"
+        history_dir = tmp_path / "outputs" / "history" / "2026-04-26"
+        latest_dir.mkdir(parents=True)
+        history_dir.mkdir(parents=True)
+        (latest_dir / "theme_signals.json").write_text(json.dumps({"themes": []}), encoding="utf-8")
+        (history_dir / "theme_signals.json").write_text(
+            json.dumps(_engine_themes(_engine_theme("Semicap Equipment", confidence=0.88))),
+            encoding="utf-8",
+        )
+
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+
+        assert result["top_theme"]["name"] == "Semicap Equipment"
+        assert result["top_theme"]["theme_source"] == "stale"
 
 
 # ---------------------------------------------------------------------------

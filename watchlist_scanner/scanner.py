@@ -679,37 +679,7 @@ class WatchlistScanner:
             )
 
         # ── Top-N fallback: surface best-ranked results when no alerts pass ────
-        # Prevents fully-silent runs by injecting the top-ranked signals as
-        # "opportunity" watch-level entries.  Distinct from regular alerts —
-        # marked with alert_type="opportunity" and filter_reason_code="fallback_top_n".
-        _fallback_top_n = int(self._signals_config.get("fallback_top_n", 3))
-        _fallback_min_signal = float(self._signals_config.get("fallback_min_signal_score", 0.25))
         _fallback_used = False
-        if not alerts and _fallback_top_n > 0 and results:
-            _candidates = [
-                r for r in results
-                if float(r.get("signal_score") or 0.0) >= _fallback_min_signal
-            ]
-            _candidates.sort(
-                key=lambda x: (
-                    x.get("priority_score", 0.0),
-                    x.get("final_rank_score", 0.0),
-                ),
-                reverse=True,
-            )
-            for _r in _candidates[:_fallback_top_n]:
-                _r["alert_priority"] = "watch"
-                _r["alert_type"] = "opportunity"
-                _r["alert_reason"] = "top-ranked fallback"
-                _r["filter_allowed"] = True
-                _r["filter_reason_code"] = "fallback_top_n"
-                alerts.append(_r)
-            _fallback_used = bool(alerts)
-            if _fallback_used:
-                logger.info(
-                    "No qualifying alerts — surfaced %d top-ranked fallback opportunit%s",
-                    len(alerts), "y" if len(alerts) == 1 else "ies",
-                )
 
         # ── Step 6: Build scan quality summary ───────────────────────────────
         quality_counts: dict[str, int] = {"fresh": 0, "cached": 0, "partial": 0, "budget_skipped": 0}
@@ -728,7 +698,8 @@ class WatchlistScanner:
             "alerts_watch_level":      n_watch_level,
             "signals_conf_suppressed": n_conf_suppressed,
             "fallback_alerts_used":    _fallback_used,
-            "fallback_alert_count":    len(alerts) if _fallback_used else 0,
+            "fallback_alert_count":    0,
+            "fallback_trigger_stage":  None,
         }
         if degraded:
             logger.warning(

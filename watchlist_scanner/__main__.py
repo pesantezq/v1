@@ -58,6 +58,64 @@ def _load_prior_regime(portfolio_out: Path) -> dict | None:
     return None
 
 
+def _apply_post_cooldown_fallback(
+    scan_result: WatchlistScanResult,
+    signals_config: dict | None = None,
+) -> WatchlistScanResult:
+    """Surface fallback opportunities only after cooldown suppression is final."""
+    alerts = list(scan_result.get("alerts") or [])
+    if alerts:
+        return scan_result
+
+    cfg = signals_config or {}
+    fallback_top_n = int(cfg.get("fallback_top_n", 3))
+    fallback_min_signal = float(cfg.get("fallback_min_signal_score", 0.25))
+    if fallback_top_n <= 0:
+        return scan_result
+
+    results = list(scan_result.get("results") or [])
+    candidates = [
+        row for row in results
+        if float(row.get("signal_score") or 0.0) >= fallback_min_signal
+    ]
+    if not candidates:
+        return scan_result
+
+    candidates.sort(
+        key=lambda row: (
+            row.get("priority_score", 0.0),
+            row.get("final_rank_score", 0.0),
+        ),
+        reverse=True,
+    )
+    fallback_alerts: list[dict] = []
+    for row in candidates[:fallback_top_n]:
+        row["alert_priority"] = "watch"
+        row["alert_type"] = "opportunity"
+        row["alert_reason"] = "top-ranked fallback"
+        row["filter_allowed"] = True
+        row["filter_reason_code"] = "fallback_top_n"
+        row["notification_status"] = "fallback_opportunity"
+        row["notification_reason"] = "fallback opportunity surfaced after cooldown"
+        fallback_alerts.append(row)
+
+    if not fallback_alerts:
+        return scan_result
+
+    summary = scan_result.setdefault("scan_summary", {})
+    summary["fallback_alerts_used"] = True
+    summary["fallback_alert_count"] = len(fallback_alerts)
+    summary["fallback_trigger_stage"] = "post_cooldown"
+    summary["alerts_watch_level"] = max(int(summary.get("alerts_watch_level") or 0), len(fallback_alerts))
+    scan_result["alerts"] = fallback_alerts
+    logger.info(
+        "Post-cooldown fallback surfaced %d top-ranked opportunit%s",
+        len(fallback_alerts),
+        "y" if len(fallback_alerts) == 1 else "ies",
+    )
+    return scan_result
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -99,6 +157,8 @@ def run(
     cache_dir = config.get("cache_dir", "data/watchlist_cache")
     static_watchlist = config.get("watchlist", DEFAULT_WATCHLIST)
     max_calls  = int(config.get("max_daily_calls", MAX_DAILY_CALLS))
+    manual_dry_run = bool(dry_run)
+    cache_only_mode = manual_dry_run
     if signals_config is None:
         signals_config = config.get("signals") or None
 
@@ -115,7 +175,7 @@ def run(
                 "Falling back to dry-run / cache only.",
                 _shared_budget.status_line(),
             )
-            dry_run = True
+            cache_only_mode = True
     except Exception:
         pass
 
@@ -125,7 +185,7 @@ def run(
             "Returning cached results only.",
             cache.calls_today, max_calls,
         )
-        dry_run = True
+        cache_only_mode = True
 
     # —— Extended watchlist: load active symbols (budget-aware) ————————————————
     ew_cfg = extended_watchlist_config or {}
@@ -147,7 +207,7 @@ def run(
             # Heuristic: need at least len(static) + 5 calls to include extras.
             calls_used = cache.calls_today
             budget_headroom = max_calls - calls_used - len(static_watchlist) - 5
-            if budget_headroom > 0 and not dry_run:
+            if budget_headroom > 0 and not cache_only_mode:
                 extended_tickers = [e["symbol"] for e in active_entries]
                 if extended_tickers:
                     logger.info(
@@ -197,7 +257,7 @@ def run(
         data_sources=_ds_cfg,
     )
 
-    result = scanner.run(dry_run=dry_run)
+    result = scanner.run(dry_run=cache_only_mode)
 
     # —— Tag results with watchlist_source and record outcomes —————————————————————
     extended_upper = {t.upper() for t in extended_tickers}
@@ -236,7 +296,7 @@ def run(
             _si_bundles = run_scraped_intel(
                 symbols=watchlist,
                 config=_si_cfg,
-                dry_run=dry_run,
+                dry_run=cache_only_mode,
             )
             # Attach scraped_intel dict to each result row (new key only)
             for r in result.get("results", []):
@@ -249,7 +309,7 @@ def run(
                 "adapters": _si_cfg.get("adapters", []),
             }
             # Optional training export
-            if _si_cfg.get("export_enabled", False) and not dry_run:
+            if _si_cfg.get("export_enabled", False) and not manual_dry_run:
                 export_training_rows(
                     scan_results=result.get("results", []),
                     bundles=_si_bundles,
@@ -282,6 +342,10 @@ def run(
         result,
         db_path=ew_cfg.get("db_path", "data/portfolio.db"),
         cooldown_days=int(config.get("alert_cooldown_days", 3)),
+        signals_config=signals_config,
+    )
+    result = _apply_post_cooldown_fallback(
+        result,
         signals_config=signals_config,
     )
     scan_status = ((result.get("scan_summary") or {}).get("scan_status")) or "ok"
@@ -336,7 +400,7 @@ def run(
         db_path=ew_cfg.get("db_path", "data/portfolio.db"),
         cache_dir=cache_dir,
         output_dir=performance_output_dir,
-        dry_run=dry_run,
+        dry_run=manual_dry_run,
         feedback_config=config.get("performance_feedback", {}),
     )
     apply_conviction_layer(
@@ -370,16 +434,15 @@ def run(
     # Write outputs unless dry_run
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    if not dry_run:
-        portfolio_out = out.parent / "portfolio"
-        portfolio_out.mkdir(parents=True, exist_ok=True)
-        _write_signals_json(out, result)
-        _write_alerts_csv(out, result.get("alerts", []))
-        _write_summary_md(out, result)
-        _write_portfolio_snapshot_json(portfolio_out, result.get("portfolio_construction") or {})
-        _write_portfolio_summary_md(portfolio_out, result.get("portfolio_construction") or {})
-    else:
-        logger.info("Dry-run: skipping output writes")
+    portfolio_out = out.parent / "portfolio"
+    portfolio_out.mkdir(parents=True, exist_ok=True)
+    _write_signals_json(out, result)
+    _write_alerts_csv(out, result.get("alerts", []))
+    _write_summary_md(out, result)
+    _write_portfolio_snapshot_json(portfolio_out, result.get("portfolio_construction") or {})
+    _write_portfolio_summary_md(portfolio_out, result.get("portfolio_construction") or {})
+    if manual_dry_run:
+        logger.info("Dry-run: wrote cache-only outputs")
 
     return result
 

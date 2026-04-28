@@ -413,6 +413,42 @@ class TestSendEmail:
         assert result is False  # fails gracefully
 
 
+    def test_accepts_legacy_env_aliases(self, monkeypatch):
+        monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
+        monkeypatch.setenv("SMTP_PORT", "587")
+        monkeypatch.setenv("EMAIL_SENDER", "user@test.local")
+        monkeypatch.setenv("EMAIL_PASSWORD", "secret")
+        monkeypatch.setenv("EMAIL_RECIPIENT", "to@test.local")
+        stub = _FakeSMTP(fail_attempts=0)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text")
+        assert result is True
+
+    def test_loads_env_from_cwd_dotenv(self, monkeypatch, tmp_path):
+        for var in (
+            "SMTP_SERVER", "SMTP_HOST", "SMTP_PORT", "EMAIL_USER", "EMAIL_SENDER",
+            "EMAIL_PASS", "EMAIL_PASSWORD", "EMAIL_TO", "EMAIL_RECIPIENT",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        (tmp_path / ".env").write_text(
+            "\n".join([
+                "SMTP_SERVER=smtp.test.local",
+                "SMTP_PORT=587",
+                "EMAIL_USER=user@test.local",
+                "EMAIL_PASS=secret",
+                "EMAIL_TO=to@test.local",
+            ]),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        stub = _FakeSMTP(fail_attempts=0)
+        with patch("smtplib.SMTP", stub):
+            result = send_email("memo text")
+        assert result is True
+
+
 # ---------------------------------------------------------------------------
 # TestGenerateDailyMemo
 # ---------------------------------------------------------------------------

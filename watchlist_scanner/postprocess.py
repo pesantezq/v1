@@ -298,6 +298,12 @@ def _apply_signal_meta_layer(
         ticker = str(alert.get("ticker") or "").upper()
         state = state_by_ticker.get(ticker)
         _annotate_signal_meta(alert, data_health=data_health, prior_state=state)
+        if alert.get("alert_type") == "opportunity":
+            alert["actionable_signal"] = False
+            alert["action_suppressed"] = False
+            alert["action_suppression_reason"] = ""
+            kept_alerts.append(alert)
+            continue
         decision = _confidence_action_decision(
             alert,
             data_health=data_health,
@@ -319,6 +325,13 @@ def _apply_signal_meta_layer(
             row["actionable_signal"] = False
             row["cooldown_active"] = True
             row["cooldown_reason"] = str(row.get("notification_reason") or "")
+            continue
+        if row.get("notification_status") == "fallback_opportunity":
+            row["actionable_signal"] = False
+            row["action_suppressed"] = False
+            row["action_suppression_reason"] = ""
+            row["cooldown_active"] = False
+            row["cooldown_reason"] = ""
             continue
         if ticker in suppressed_by_ticker:
             row["actionable_signal"] = False

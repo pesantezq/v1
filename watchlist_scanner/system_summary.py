@@ -157,7 +157,66 @@ def _merge_theme_sources(
         if name not in by_name or norm["score"] > by_name[name]["score"]:
             by_name[name] = norm
 
-    return {"themes": list(by_name.values())}
+    theme_source = "stale"
+    if _theme_payload_is_fresh(discovery) or _theme_payload_is_fresh(engine):
+        theme_source = "fresh"
+
+    return {
+        "themes": list(by_name.values()),
+        "theme_source": theme_source,
+    }
+
+
+def _theme_payload_is_fresh(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if not isinstance(payload.get("themes"), list) or not payload.get("themes"):
+        return False
+    return not bool(payload.get("no_update")) and str(payload.get("theme_source") or "fresh") != "stale"
+
+
+def _resolve_last_valid_theme(
+    themes: dict[str, Any],
+    artifact_last_valid_theme: dict[str, Any] | None = None,
+    previous_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    current_top_theme = compute_top_theme(themes)
+    if current_top_theme:
+        current_top_theme["theme_source"] = str(themes.get("theme_source") or "fresh")
+        return current_top_theme
+
+    last_valid_theme = dict(artifact_last_valid_theme or {})
+    if last_valid_theme.get("name"):
+        last_valid_theme["theme_source"] = "stale"
+        return last_valid_theme
+
+    previous_top_theme = dict((previous_summary or {}).get("top_theme") or {})
+    if previous_top_theme.get("name"):
+        previous_top_theme["theme_source"] = "stale"
+        return previous_top_theme
+
+    return {}
+
+
+def _load_last_valid_theme(root: Path) -> dict[str, Any]:
+    history_root = root / "outputs" / "history"
+    if not history_root.exists():
+        return {}
+
+    history_dirs = sorted(
+        [path for path in history_root.iterdir() if path.is_dir()],
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    for day_dir in history_dirs:
+        discovery = _safe_load(day_dir / "theme_opportunities.json")
+        engine = _safe_load(day_dir / "theme_signals.json")
+        merged = _merge_theme_sources(discovery, engine)
+        top_theme = compute_top_theme(merged)
+        if top_theme.get("name"):
+            top_theme["theme_source"] = "stale"
+            return top_theme
+    return {}
 
 
 def _load_artifacts(root: Path) -> dict[str, Any]:
@@ -167,9 +226,11 @@ def _load_artifacts(root: Path) -> dict[str, Any]:
     """
     discovery_themes = _safe_load(root.joinpath(*_THEMES_DISCOVERY_REL))
     engine_themes    = _safe_load(root.joinpath(*_THEMES_ENGINE_REL))
+    merged_themes = _merge_theme_sources(discovery_themes, engine_themes)
     return {
         "signals":          _safe_load(root.joinpath(*_SIGNALS_REL)),
-        "themes":           _merge_theme_sources(discovery_themes, engine_themes),
+        "themes":           merged_themes,
+        "last_valid_theme": _load_last_valid_theme(root),
         "portfolio":        _safe_load(root.joinpath(*_PORTFOLIO_REL)),
         "ranking_config":   _safe_load(root.joinpath(*_RANKING_CONFIG_REL)),
         "alloc_policy":     _safe_load(root.joinpath(*_ALLOC_POLICY_REL)),
@@ -557,13 +618,18 @@ def build_system_decision_summary(
     """
     signals          = dict(artifacts.get("signals") or {})
     themes           = dict(artifacts.get("themes") or {})
+    last_valid_theme = dict(artifacts.get("last_valid_theme") or {})
     ranking_config   = dict(artifacts.get("ranking_config") or {})
     alloc_policy     = dict(artifacts.get("alloc_policy") or {})
     alloc_preview    = dict(artifacts.get("alloc_preview") or {})
     alloc_simulation = dict(artifacts.get("alloc_simulation") or {})
     weight_tuning    = dict(artifacts.get("weight_tuning") or {})
 
-    top_theme       = compute_top_theme(themes)
+    top_theme       = _resolve_last_valid_theme(
+        themes,
+        artifact_last_valid_theme=last_valid_theme,
+        previous_summary=previous_summary,
+    )
     top_opportunity = compute_top_opportunity(signals)
     best_fit        = compute_best_portfolio_fit(signals)
     system_state    = compute_system_state(ranking_config, alloc_policy, alloc_simulation, alloc_preview)
