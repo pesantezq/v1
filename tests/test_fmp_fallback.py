@@ -108,9 +108,13 @@ def _make_fmp_client(
     else:
         mock.get_batch_quotes.return_value = quotes or {}
     if profiles_fail:
-        mock.get_batch_profiles_v3.side_effect = Exception("FMP profiles failed")
+        mock.get_batch_profiles.side_effect = Exception("FMP profiles failed")
     else:
-        mock.get_batch_profiles_v3.return_value = profiles or []
+        mock.get_batch_profiles.return_value = profiles or []
+    # Safe defaults for new methods (override per test as needed)
+    mock.get_stock_news.return_value = []       # no FMP news by default
+    mock.get_historical_prices.return_value = [] # no historical by default
+    mock.get_ratios.return_value = None          # no ratios by default
     return mock
 
 
@@ -674,13 +678,15 @@ class TestFmpNewsFallback:
         result = self._run_scanner(av, fmp, watchlist=watchlist)
         assert len(result["results"]) == len(watchlist)
 
-    def test_av_success_fmp_news_not_called(self):
-        av  = _make_av_client()  # AV succeeds
-        fmp = _make_fmp_with_news()
+    def test_fmp_news_primary_av_news_not_called(self):
+        """FMP news is the primary provider; when FMP returns articles, AV is not called."""
+        av  = _make_av_client()  # AV would succeed but should not be consulted
+        fmp = _make_fmp_with_news()  # FMP returns articles
         result = self._run_scanner(av, fmp)
-        fmp.get_stock_news.assert_not_called()
+        # FMP is primary → AV news should never be called
+        av.get_news_sentiment.assert_not_called()
         news_sources = {r["news_source"] for r in result["results"]}
-        assert news_sources == {"alpha_vantage"}
+        assert news_sources == {"fmp"}
 
     def test_fmp_news_returns_empty_news_source_missing(self):
         av  = _make_av_client(budget_exceed_news=True)
@@ -849,7 +855,7 @@ class TestAVBudgetExhaustedFMPPrimary:
         assert rows[0]["price_data_source"] in ("cache", "missing")
 
     def test_fmp_prefetch_called_even_when_dry_run(self):
-        """FMP get_batch_quotes must be called even when dry_run=True."""
+        """FMP get_batch_quotes and get_batch_profiles must be called even when dry_run=True."""
         fmp = _make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
         av  = _make_av_client(budget_exceed_ohlcv=True)
         scanner = _make_scanner(av=av, cache=_make_cache(), fmp=fmp)
@@ -857,3 +863,119 @@ class TestAVBudgetExhaustedFMPPrimary:
         scanner.run(dry_run=True)
 
         fmp.get_batch_quotes.assert_called_once()
+        fmp.get_batch_profiles.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestNewProvenanceFields — historical_source, quote_source, technical_source,
+#                           ratios_source, provider_health in result
+# ---------------------------------------------------------------------------
+
+_SAMPLE_FMP_HISTORICAL = [
+    {
+        "date": f"2026-0{max(1, 4 - i // 30):01d}-{max(1, 28 - i % 28):02d}",
+        "open": 183.0 + i * 0.1,
+        "high": 185.0 + i * 0.1,
+        "low":  182.0 + i * 0.1,
+        "close": 184.0 + i * 0.1,
+        "adjClose": 184.0 + i * 0.1,
+        "volume": 50_000_000,
+    }
+    for i in range(60)  # 60 days so SMA20 is computable
+]
+
+
+class TestNewProvenanceFields:
+    """Verify new data-source provenance fields added in the FMP-primary rebuild."""
+
+    def _scan_one(self, fmp_quote=None, fmp_historical=None) -> dict:
+        fmp = _make_fmp_client(quotes={"AAPL": fmp_quote} if fmp_quote else {})
+        scanner = _make_scanner(av=_make_av_client(), fmp=fmp)
+        result = scanner._scan_symbol(
+            "AAPL", [], {}, "fresh", False,
+            fmp_quote=fmp_quote,
+            fmp_historical=fmp_historical,
+        )
+        assert result is not None
+        return result
+
+    def test_quote_source_alias_equals_price_data_source(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE)
+        assert result["quote_source"] == result["price_data_source"]
+
+    def test_historical_source_fmp_when_historical_provided(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=_SAMPLE_FMP_HISTORICAL)
+        assert result["historical_source"] == "fmp"
+
+    def test_historical_source_missing_when_no_historical(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=None)
+        assert result["historical_source"] in ("missing", "alpha_vantage")
+
+    def test_technical_source_fmp_quote_plus_historical(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=_SAMPLE_FMP_HISTORICAL)
+        assert result["technical_source"] == "fmp_quote+historical"
+
+    def test_technical_source_fmp_quote_only_when_no_historical(self):
+        scanner = _make_scanner(av=_make_av_client(df=None), fmp=_make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE}))
+        result = scanner._scan_symbol(
+            "AAPL", [], {}, "fresh", False,
+            fmp_quote=_SAMPLE_FMP_QUOTE,
+            fmp_historical=None,
+        )
+        assert result is not None
+        assert result["technical_source"] == "fmp_quote"
+
+    def test_ratios_source_fmp_when_fundamentals_source_fmp(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE)
+        result_with_fmp_fund = _make_scanner(
+            av=_make_av_client(), fmp=_make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE})
+        )._scan_symbol("AAPL", [], {}, "fresh", False,
+                       fmp_quote=_SAMPLE_FMP_QUOTE, fundamentals_source="fmp")
+        assert result_with_fmp_fund is not None
+        assert result_with_fmp_fund["ratios_source"] == "fmp"
+
+    def test_ratios_source_missing_when_no_fmp_fundamentals(self):
+        result = _make_scanner(av=_make_av_client(), fmp=None)._scan_symbol(
+            "AAPL", [], {}, "fresh", False, fmp_quote=None, fundamentals_source="alpha_vantage"
+        )
+        assert result is not None
+        assert result["ratios_source"] == "missing"
+
+    def test_provider_health_fmp_primary(self):
+        result = _make_scanner(av=_make_av_client(), fmp=_make_fmp_client(quotes={"AAPL": _SAMPLE_FMP_QUOTE}))._scan_symbol(
+            "AAPL", [], {}, "fresh", False,
+            fmp_quote=_SAMPLE_FMP_QUOTE, fundamentals_source="fmp"
+        )
+        assert result is not None
+        assert result["provider_health"] == "fmp_primary"
+
+    def test_provider_health_cache_only_when_both_missing(self):
+        result = _make_scanner(av=_make_av_client(budget_exceed_ohlcv=True), fmp=None, cache=_make_cache(stale_daily=None))._scan_symbol(
+            "AAPL", [], {}, "fresh", False, fmp_quote=None
+        )
+        assert result is not None
+        assert result["provider_health"] == "cache_only"
+
+    def test_fmp_historical_enriches_sma20(self):
+        """FMP historical data must populate sma20 when 20+ days are provided."""
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=_SAMPLE_FMP_HISTORICAL)
+        assert result["sma20"] is not None
+
+    def test_fmp_historical_enriches_price_change_5d(self):
+        """FMP historical data must populate price_change_5d when 6+ days are provided."""
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=_SAMPLE_FMP_HISTORICAL)
+        assert result["technicals"]["price_change_5d"] is not None
+
+    def test_above_sma20_recomputed_with_fmp_price(self):
+        """above_sma20 must be based on the FMP quote price, not the historical close."""
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE, fmp_historical=_SAMPLE_FMP_HISTORICAL)
+        sma20 = result["sma20"]
+        price = result["price"]
+        if sma20 is not None and price is not None:
+            assert result["above_sma20"] == (price > sma20)
+
+    def test_all_new_provenance_keys_present(self):
+        result = self._scan_one(fmp_quote=_SAMPLE_FMP_QUOTE)
+        for key in ("quote_source", "historical_source", "technical_source",
+                    "ratios_source", "provider_health"):
+            assert key in result, f"Missing new provenance key: {key}"

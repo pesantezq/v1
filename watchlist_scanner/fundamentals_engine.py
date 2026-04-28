@@ -225,6 +225,54 @@ def parse_fmp_profile(
     }
 
 
+def parse_fmp_fundamentals_bundle(
+    profile: dict[str, Any],
+    quote: dict[str, Any] | None = None,
+    ratios: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Parse FMP profile + enrichment data into the fundamentals schema.
+
+    Extends parse_fmp_profile() with profit_margin, revenue_growth,
+    earnings_growth, debt_ratio, and dividend_yield sourced from the
+    stable/ratios endpoint.  All extra fields fall back to None when
+    ratios is absent or a field is missing.
+    """
+    base = parse_fmp_profile(profile, quote)
+    if not base:
+        return {}
+
+    r = ratios or {}
+
+    pm = _safe_float(r.get("netProfitMargin"))
+    if pm is not None:
+        base["profit_margin"] = pm
+
+    rev_growth = _safe_float(r.get("revenueGrowth"))
+    if rev_growth is not None:
+        base["revenue_growth"] = rev_growth
+
+    earn_growth = _safe_float(r.get("epsGrowth")) or _safe_float(r.get("earningsGrowth"))
+    if earn_growth is not None:
+        base["earnings_growth"] = earn_growth
+
+    debt = _safe_float(r.get("debtEquityRatio")) or _safe_float(r.get("debtToEquity"))
+    if debt is not None:
+        base["debt_ratio"] = debt
+
+    div_yield = _safe_float(r.get("dividendYield"))
+    if div_yield is not None:
+        base["dividend_yield"] = div_yield
+
+    # PE from ratios (priceEarningsRatio) fills gap when quote lacks it
+    if base.get("pe_ratio") is None:
+        pe_r = _safe_float(r.get("priceEarningsRatio")) or _safe_float(r.get("peRatio"))
+        if pe_r is not None:
+            base["pe_ratio"] = pe_r
+
+    return base
+
+
 def derive_fundamentals_score(fundamentals: dict[str, Any]) -> float:
     """
     Normalized fundamentals quality score in [0, 100].

@@ -376,6 +376,139 @@ class FMPClient:
             params={'period': 'annual'},
         )
 
+    def get_profile(
+        self,
+        symbol: str,
+        ttl_days: int = 7,
+    ) -> Optional[Dict]:
+        """
+        Fetch company profile for a single symbol via stable/profile endpoint.
+
+        GET https://financialmodelingprep.com/stable/profile?symbol=AAPL
+
+        Returns dict with keys: symbol, companyName, sector, industry, mktCap,
+        beta, price, description, exchange, country, and more.
+        Returns None if not available, on error, or when budget exceeded with
+        no cached data.
+
+        Cached individually per symbol for ttl_days (default 7).
+        """
+        if not symbol:
+            return None
+        sym = symbol.upper()
+        cache_key = f"profile_stable_{sym}"
+        ttl_seconds = ttl_days * 86400
+
+        def _unwrap(raw: Any) -> Optional[Dict]:
+            if isinstance(raw, list):
+                return raw[0] if raw and isinstance(raw[0], dict) else None
+            return raw if isinstance(raw, dict) else None
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return _unwrap(cached)
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+        try:
+            raw = self._raw_get("profile", {"symbol": sym}, base_url=FMP_STABLE_BASE_URL)
+            self._cache.set(cache_key, raw)
+            result = _unwrap(raw)
+            logger.debug("FMP stable/profile %s: loaded (sector=%s)", sym,
+                         result.get("sector") if result else "n/a")
+            return result
+        except (FMPError, Exception) as exc:
+            logger.warning("FMP get_profile(%s) failed: %s", sym, exc)
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+    def get_batch_profiles(
+        self,
+        symbols: List[str],
+        ttl_days: int = 7,
+    ) -> List[Dict]:
+        """
+        Fetch company profiles for a list of symbols via stable/profile endpoint.
+
+        Calls ``stable/profile?symbol={sym}`` once per symbol — the stable API
+        does not support comma-separated batch requests.  Each symbol is cached
+        individually for ttl_days (default 7).
+
+        Returns list of profile dicts. Missing symbols are silently skipped.
+        """
+        if not symbols:
+            return []
+        unique_syms = list(dict.fromkeys(s.upper() for s in symbols if s))
+        result: List[Dict] = []
+        n_missing = 0
+
+        for sym in unique_syms:
+            profile = self.get_profile(sym, ttl_days=ttl_days)
+            if profile:
+                result.append(profile)
+            else:
+                n_missing += 1
+                logger.debug("FMP get_batch_profiles: %s not available", sym)
+
+        logger.info(
+            "FMP get_batch_profiles: %d/%d profiles loaded (missing=%d, endpoint=stable/profile)",
+            len(result), len(unique_syms), n_missing,
+        )
+        return result
+
+    def get_ratios(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 1,
+        ttl_days: int = 30,
+    ) -> Optional[Dict]:
+        """
+        Fetch financial ratios for a single symbol via stable/ratios endpoint.
+
+        Returns the most recent ratios dict. Key fields: netProfitMargin,
+        grossProfitMargin, returnOnEquity, debtEquityRatio, dividendYield,
+        priceEarningsRatio.  Returns None if unavailable.
+
+        Cached individually for ttl_days (default 30 — annual data is stable).
+        """
+        if not symbol:
+            return None
+        sym = symbol.upper()
+        cache_key = f"ratios_stable_{sym}_{period}"
+        ttl_seconds = ttl_days * 86400
+
+        def _unwrap(raw: Any) -> Optional[Dict]:
+            if isinstance(raw, list):
+                return raw[0] if raw and isinstance(raw[0], dict) else None
+            return raw if isinstance(raw, dict) else None
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return _unwrap(cached)
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+        try:
+            raw = self._raw_get(
+                "ratios",
+                {"symbol": sym, "period": period, "limit": str(limit)},
+                base_url=FMP_STABLE_BASE_URL,
+            )
+            self._cache.set(cache_key, raw)
+            result = _unwrap(raw)
+            logger.debug("FMP stable/ratios %s: netProfitMargin=%s", sym,
+                         result.get("netProfitMargin") if result else "n/a")
+            return result
+        except (FMPError, Exception) as exc:
+            logger.warning("FMP get_ratios(%s) failed: %s", sym, exc)
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
     def get_batch_profiles_v3(
         self,
         symbols: List[str],

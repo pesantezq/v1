@@ -43,6 +43,15 @@ EXCEPTIONAL_SIGNAL_SCORE: float = 0.85  # passes even at low confidence (if >= M
 # Alert cooldown — repeat unchanged alerts suppressed for this many days
 ALERT_COOLDOWN_DAYS: int = 3
 
+# FMP data source TTLs
+# Tune these for the FMP plan capacity (300 calls/min).
+# Multiple runs per day re-use cached data within these windows.
+FMP_QUOTE_TTL_MINUTES: int = 15          # live quote — refresh up to 4x/hour
+FMP_NEWS_TTL_MINUTES: int = 30           # news/sentiment — refresh every 30 min
+FMP_HISTORICAL_TTL_HOURS: int = 6        # daily OHLCV — fresh once per session
+FMP_PROFILE_TTL_DAYS: int = 7            # company profile — refreshed weekly
+FMP_FUNDAMENTALS_TTL_DAYS: int = 30      # annual ratios — refreshed monthly
+
 # Output / cache directories
 DEFAULT_CACHE_DIR: str = "data/watchlist_cache"
 DEFAULT_OUTPUT_DIR: str = "outputs/latest"
