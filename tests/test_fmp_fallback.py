@@ -725,7 +725,11 @@ class TestFmpGetStockNewsNormalization:
     def _call_with_raw(self, raw, *, tickers=None) -> list:
         from unittest.mock import patch
         client = self._make_client()
-        with patch.object(client, '_get_cached', return_value=raw):
+        # get_stock_news now uses inline caching; mock cache-miss + network call
+        with patch.object(client._cache, 'get', return_value=None), \
+             patch.object(client._counter, 'would_exceed', return_value=False), \
+             patch.object(client._cache, 'set'), \
+             patch.object(client, '_raw_get', return_value=raw):
             return client.get_stock_news(tickers or ["AAPL"])
 
     def test_empty_tickers_returns_empty(self):

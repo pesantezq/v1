@@ -767,16 +767,26 @@ class FMPClient:
 
         sym_str = ','.join(sorted(tickers))
         cache_key = f"fmp_news_{sym_str[:60]}_{limit}"
+        ttl_seconds = ttl_hours * 3600
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached if isinstance(cached, list) else []
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
+
         try:
-            raw = self._get_cached(
-                cache_key,
-                'v3/stock_news',
-                ttl_seconds=ttl_hours * 3600,
-                params={'tickers': ','.join(tickers), 'limit': str(limit)},
+            raw = self._raw_get(
+                "news/stock",
+                {"tickers": ','.join(tickers), "limit": str(limit)},
+                base_url=FMP_STABLE_BASE_URL,
             )
         except Exception as exc:
             logger.warning(f"FMP get_stock_news failed: {exc}")
-            return []
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
 
         if not isinstance(raw, list):
             return []
@@ -802,6 +812,7 @@ class FMPClient:
                     }
                 ] if sym else [],
             })
+        self._cache.set(cache_key, normalized)
         logger.debug(f"FMP get_stock_news: {len(normalized)} articles for {len(tickers)} tickers")
         return normalized
 
