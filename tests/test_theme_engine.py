@@ -643,6 +643,123 @@ class TestThemeStore(unittest.TestCase):
         persistence = store.compute_persistence("Non Existent Theme", days=7)
         self.assertEqual(persistence, 0)
 
+    # -- Theme persistence: SQLite fallback ----------------------------------
+
+    def test_empty_run_falls_back_to_sqlite_when_json_missing(self):
+        """SQLite has themes but theme_signals.json does not yet exist → stale preserved."""
+        store = self._store()
+        # Seed SQLite directly via a fresh save
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-03")
+        # Delete the JSON file to simulate a fresh deploy / file reset
+        (self.output_dir / "theme_signals.json").unlink()
+        (self.output_dir / "watch_candidates.json").unlink()
+
+        # Empty run — JSON gone, but SQLite has the 2026-03-03 themes
+        store.save_signals([], [], "2026-03-04")
+
+        data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        self.assertEqual(data["theme_source"], "stale")
+        self.assertTrue(data["no_update"])
+        self.assertEqual(data["run_date"], "2026-03-04")
+        self.assertEqual(data["themes"][0]["name"], "AI Infrastructure")
+
+    def test_empty_run_falls_back_to_sqlite_when_json_has_empty_themes(self):
+        """JSON exists but has [] themes (e.g. first-run cold start) → SQLite fallback fires."""
+        store = self._store()
+        # Seed SQLite from a valid save (populates SQLite AND creates output_dir)
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-01")
+
+        # Overwrite the JSON with an empty-themes payload (cold-start simulation)
+        (self.output_dir / "theme_signals.json").write_text(
+            '{"themes": [], "theme_source": "fresh", "no_update": false}',
+            encoding="utf-8",
+        )
+        (self.output_dir / "watch_candidates.json").write_text(
+            '{"watch_candidates": [], "theme_source": "fresh", "no_update": false}',
+            encoding="utf-8",
+        )
+
+        # Empty run — JSON is empty, SQLite has 2026-03-01 themes
+        store.save_signals([], [], "2026-03-04")
+
+        data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        self.assertEqual(data["theme_source"], "stale")
+        self.assertTrue(data["no_update"])
+        self.assertGreater(len(data["themes"]), 0)
+        self.assertEqual(data["themes"][0]["name"], "AI Infrastructure")
+
+    def test_stale_theme_marked_correctly(self):
+        """When save_signals() triggers stale logic the file has the right flags."""
+        store = self._store()
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-03")
+        store.save_signals([], [], "2026-03-05")
+
+        data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        self.assertEqual(data["theme_source"], "stale")
+        self.assertTrue(data["no_update"])
+        self.assertIn("last_checked_at", data)
+        self.assertEqual(data["run_date"], "2026-03-05")
+        # Themes must be the ones from the last valid run, not empty
+        self.assertGreater(len(data["themes"]), 0)
+
+    def test_consecutive_empty_runs_retain_last_valid_theme(self):
+        """Multiple back-to-back empty runs never overwrite stale themes with blank."""
+        store = self._store()
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-03")
+
+        for d in ("2026-03-04", "2026-03-05", "2026-03-06"):
+            store.save_signals([], [], d)
+
+        data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        self.assertEqual(data["theme_source"], "stale")
+        self.assertEqual(data["run_date"], "2026-03-06")
+        self.assertGreater(len(data["themes"]), 0)
+        self.assertEqual(data["themes"][0]["name"], "AI Infrastructure")
+
+    def test_get_last_valid_themes_returns_empty_when_db_has_no_rows(self):
+        store = self._store()
+        result = store.get_last_valid_themes()
+        self.assertEqual(result, [])
+
+    def test_get_last_valid_themes_returns_most_recent_run(self):
+        """Most-recent run_date's themes are returned, not older ones."""
+        from datetime import date, timedelta
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        store = self._store()
+
+        older_theme = [{
+            "name": "Cybersecurity",
+            "confidence": 0.75,
+            "rationale": "Older",
+            "evidence_items": [],
+            "direct_mentions": [],
+            "tickers": [],
+            "persistence_7d": 0,
+        }]
+        store.save_signals(older_theme, [], yesterday)
+        store.save_signals(self._sample_themes(), [], today)
+
+        result = store.get_last_valid_themes()
+        names = [t["name"] for t in result]
+        self.assertIn("AI Infrastructure", names)
+        self.assertNotIn("Cybersecurity", names)
+
+    def test_get_last_valid_themes_returns_empty_when_db_missing(self):
+        """No DB file at all → returns [] without raising."""
+        store = self._store()
+        store.db_path = self.tmp / "nonexistent.db"
+        result = store.get_last_valid_themes()
+        self.assertEqual(result, [])
+
+    def test_fresh_run_writes_fresh_source(self):
+        """A run that produces themes must write theme_source='fresh', no_update=False."""
+        store = self._store()
+        store.save_signals(self._sample_themes(), self._sample_candidates(), "2026-03-03")
+        data = json.loads((self.output_dir / "theme_signals.json").read_text())
+        self.assertEqual(data["theme_source"], "fresh")
+        self.assertFalse(data["no_update"])
+
 
 # ---------------------------------------------------------------------------
 # TestApplyThemeBoosts

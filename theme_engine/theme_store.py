@@ -62,6 +62,12 @@ class ThemeStore:
     ) -> None:
         """Persist themes to SQLite and write JSON output files.
 
+        When new themes is empty the method preserves the last valid theme
+        snapshot so that top_theme never regresses to blank.  Resolution order:
+          1. themes from current theme_signals.json (previous fresh/stale run)
+          2. themes from SQLite (survives file resets and fresh deploys)
+          3. nothing — writes an empty-themes file only on a genuine cold start
+
         Args:
             themes:           Enriched theme list (with tickers, persistence_7d).
             watch_candidates: Flat ticker list from mapper.
@@ -72,7 +78,8 @@ class ThemeStore:
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # Write to SQLite (replace any existing rows for this run_date + theme_name)
+        # Write to SQLite (only for fresh themes — stale runs must not overwrite
+        # real records with an empty payload)
         conn = sqlite3.connect(str(self.db_path))
         try:
             for theme in themes:
@@ -101,7 +108,7 @@ class ThemeStore:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         signals_path = self.output_dir / "theme_signals.json"
-        signals_payload = {
+        signals_payload: dict[str, Any] = {
             "generated_at": now_iso,
             "run_date": run_date,
             "data_mode": (metadata or {}).get("data_mode", "live"),
@@ -114,7 +121,7 @@ class ThemeStore:
         }
 
         candidates_path = self.output_dir / "watch_candidates.json"
-        candidates_payload = {
+        candidates_payload: dict[str, Any] = {
             "generated_at": now_iso,
             "run_date": run_date,
             "data_mode": (metadata or {}).get("data_mode", "live"),
@@ -129,7 +136,18 @@ class ThemeStore:
         if not themes:
             existing_signals = self._safe_read_json(signals_path)
             existing_candidates = self._safe_read_json(candidates_path)
-            existing_theme_rows = existing_signals.get("themes") or []
+            existing_theme_rows: list[dict[str, Any]] = existing_signals.get("themes") or []
+
+            # Primary fallback: on-disk JSON from the previous run.
+            # Secondary fallback: SQLite DB — survives file resets and fresh
+            # deployments where no theme_signals.json has been written yet.
+            if not existing_theme_rows:
+                existing_theme_rows = self.get_last_valid_themes()
+                logger.debug(
+                    "ThemeStore: no themes in JSON; SQLite fallback returned %d theme(s)",
+                    len(existing_theme_rows),
+                )
+
             if isinstance(existing_theme_rows, list) and existing_theme_rows:
                 signals_payload = {
                     **existing_signals,
@@ -158,6 +176,7 @@ class ThemeStore:
                     "watch_candidates": list(existing_candidates.get("watch_candidates") or watch_candidates),
                 }
 
+        theme_source_label = signals_payload.get("theme_source", "fresh")
         signals_path.write_text(
             json.dumps(signals_payload, indent=2, default=str),
             encoding="utf-8",
@@ -168,10 +187,11 @@ class ThemeStore:
         )
 
         logger.info(
-            "ThemeStore: saved %d themes + %d candidates to %s",
+            "ThemeStore: saved %d themes + %d candidates to %s (source=%s)",
             len(themes),
             len(watch_candidates),
             self.output_dir,
+            theme_source_label,
         )
 
     def get_recent_signals(self, days: int = 7) -> list[dict[str, Any]]:
@@ -219,6 +239,42 @@ class ThemeStore:
             )
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+        finally:
+            conn.close()
+
+    def get_last_valid_themes(self) -> list[dict[str, Any]]:
+        """Return theme records from the most recent run that produced themes.
+
+        Queries SQLite directly, bypassing theme_signals.json.  Used as a
+        secondary fallback inside save_signals() when the JSON file is absent
+        or contains no themes (e.g. after a fresh deploy or file reset).
+
+        Returns [] if the database has never recorded any themes.
+        """
+        if not self.db_path.exists():
+            return []
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            cursor = conn.execute(
+                """
+                SELECT theme_name, confidence, rationale,
+                       evidence_items, direct_mentions
+                FROM theme_signals
+                WHERE run_date = (SELECT MAX(run_date) FROM theme_signals)
+                ORDER BY confidence DESC
+                """
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "name": r[0],
+                    "confidence": float(r[1]),
+                    "rationale": r[2] or "",
+                    "evidence_items": json.loads(r[3] or "[]"),
+                    "direct_mentions": json.loads(r[4] or "[]"),
+                }
+                for r in rows
+            ]
         finally:
             conn.close()
 

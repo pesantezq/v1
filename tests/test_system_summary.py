@@ -839,6 +839,75 @@ class TestGenerateSystemDecisionSummary:
         assert result["top_theme"]["name"] == "Semicap Equipment"
         assert result["top_theme"]["theme_source"] == "stale"
 
+    def test_stale_theme_signals_json_produces_populated_top_theme(self, tmp_path):
+        """theme_signals.json with no_update=True/stale themes populates top_theme."""
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+        stale_payload = {
+            **_engine_themes(_engine_theme("Defense", confidence=0.82, persistence_7d=2)),
+            "theme_source": "stale",
+            "no_update": True,
+            "last_checked_at": "2026-04-28T09:00:00+00:00",
+        }
+        (out_dir / "theme_signals.json").write_text(
+            json.dumps(stale_payload), encoding="utf-8"
+        )
+
+        result = generate_system_decision_summary(root=tmp_path, write_files=False)
+
+        assert result["top_theme"]["name"] == "Defense"
+        assert result["top_theme"]["theme_source"] == "stale"
+
+    def test_top_theme_never_empty_when_any_fallback_has_valid_theme(self, tmp_path):
+        """Verify all three fallback tiers work: stale JSON > history > previous summary."""
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True)
+
+        # Tier 1: stale theme_signals.json
+        stale = {
+            **_engine_themes(_engine_theme("Energy Transition", confidence=0.78)),
+            "theme_source": "stale",
+            "no_update": True,
+        }
+        (out_dir / "theme_signals.json").write_text(json.dumps(stale), encoding="utf-8")
+        r1 = generate_system_decision_summary(root=tmp_path, write_files=False)
+        assert r1["top_theme"]["name"] == "Energy Transition"
+
+        # Tier 2: empty theme_signals.json, previous summary has top_theme
+        (out_dir / "theme_signals.json").write_text(json.dumps({"themes": []}), encoding="utf-8")
+        prev_summary = {
+            "generated_at": "2026-04-27T09:00:00",
+            "top_theme": {
+                "name": "Healthcare Innovation",
+                "type": "classified",
+                "score": 0.77,
+                "persistence": 0.4,
+                "acceleration": 0.0,
+                "tickers": [],
+            },
+        }
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(prev_summary), encoding="utf-8"
+        )
+        r2 = generate_system_decision_summary(root=tmp_path, write_files=False)
+        assert r2["top_theme"]["name"] == "Healthcare Innovation"
+        assert r2["top_theme"]["theme_source"] == "stale"
+
+        # Tier 3: empty latest + empty previous summary, but history dir exists
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps({"generated_at": "2026-04-27T09:00:00", "top_theme": {}}),
+            encoding="utf-8",
+        )
+        hist_dir = tmp_path / "outputs" / "history" / "2026-04-25"
+        hist_dir.mkdir(parents=True)
+        (hist_dir / "theme_signals.json").write_text(
+            json.dumps(_engine_themes(_engine_theme("Industrial Automation", confidence=0.71))),
+            encoding="utf-8",
+        )
+        r3 = generate_system_decision_summary(root=tmp_path, write_files=False)
+        assert r3["top_theme"]["name"] == "Industrial Automation"
+        assert r3["top_theme"]["theme_source"] == "stale"
+
 
 # ---------------------------------------------------------------------------
 # TestNormalizeThemeRecord — unit tests for _normalize_theme_record
