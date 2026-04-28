@@ -194,6 +194,9 @@ def build_daily_memo(summary: dict[str, Any]) -> str:
     a(_LINE)
     a("  TOP OPPORTUNITY")
     a(_LINE)
+    if dh.get("fallback_alerts_used"):
+        a("  Note: No strong alerts this run — showing top-ranked fallback opportunities.")
+        a("")
     if to:
         rank  = _flt(to.get("final_rank_score"))
         conf  = _flt(to.get("confidence"))
@@ -355,6 +358,9 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
 
     # Top Opportunity
     a("## Top Opportunity")
+    if dh.get("fallback_alerts_used"):
+        a("> **Note:** No strong alerts this run — showing top-ranked fallback opportunities.")
+        a("")
     if to:
         rank = _flt(to.get("final_rank_score"))
         conf = _flt(to.get("confidence"))

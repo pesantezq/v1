@@ -455,6 +455,10 @@ def compute_data_health(
     eligible_count = sum(1 for s in all_sigs if s.get("filter_allowed"))
     missing = [name for name, exists in artifact_flags.items() if not exists]
 
+    scan_summary = signals.get("scan_summary") or {}
+    fallback_alerts_used = bool(scan_summary.get("fallback_alerts_used", False))
+    fallback_alert_count = int(scan_summary.get("fallback_alert_count", 0))
+
     return {
         "degraded_mode":         degraded_mode,
         "data_mode":             data_mode,
@@ -464,6 +468,8 @@ def compute_data_health(
         "missing_artifact_count":len(missing),
         "all_artifacts_present": len(missing) == 0,
         "artifact_flags":        dict(artifact_flags),
+        "fallback_alerts_used":  fallback_alerts_used,
+        "fallback_alert_count":  fallback_alert_count,
     }
 
 

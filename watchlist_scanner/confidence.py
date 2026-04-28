@@ -31,8 +31,11 @@ FRESHNESS_SCORES: dict[str, float] = {
     "fresh":          1.00,
     "partial":        0.85,
     "budget_skipped": 0.72,
-    "cached":         0.55,
+    "cached":         0.62,  # raised from 0.55 — cached data still holds meaningful signal
 }
+
+# Minimum confidence floor — prevents extreme suppression from thin-data runs.
+CONFIDENCE_FLOOR: float = 0.30
 
 # Enrichment budget factor from overview fetch provenance (ov_source)
 BUDGET_SCORES: dict[str, float] = {
@@ -202,7 +205,7 @@ def compute_confidence(
             + budget       * w["budget"]
         )
 
-    score = round(max(0.0, min(1.0, score)), 4)
+    score = round(max(CONFIDENCE_FLOOR, min(1.0, score)), 4)
 
     if score >= HIGH_THRESHOLD:
         band = "high"

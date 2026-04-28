@@ -102,6 +102,16 @@ class CacheManager:
         """Return True if a valid (non-expired) cache entry exists."""
         return self.get(key, ttl_seconds) is not None
 
+    def delete(self, key: str) -> None:
+        """Remove a cache entry so the next access triggers a fresh fetch."""
+        p = self._path(key)
+        try:
+            if p.exists():
+                p.unlink()
+                logger.debug("Cache invalidated for %r", key)
+        except OSError as exc:
+            logger.warning("Cache delete failed for %r: %s", key, exc)
+
     # ── Daily call counter ─────────────────────────────────────────────────
 
     def _load_counter(self) -> dict:

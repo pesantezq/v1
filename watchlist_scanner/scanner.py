@@ -398,6 +398,25 @@ class WatchlistScanner:
             except Exception as exc:
                 logger.warning("FMP batch-profiles pre-fetch failed (non-fatal): %s", exc)
 
+        # ── Step 0.6: Fresh-data rotation ─────────────────────────────────────
+        # Randomly invalidates the OVERVIEW (7-day TTL) cache for a configurable
+        # fraction of symbols so every run guarantees at least some fresh
+        # fundamentals, keeping confidence scores from bottoming out on cache-only
+        # runs.  fresh_scan_fraction=0.25 → ~25% of symbols get a forced refresh.
+        import random as _random
+        _fresh_scan_fraction = float(self._signals_config.get("fresh_scan_fraction", 0.25))
+        _fresh_symbols: set[str] = set()
+        if _fresh_scan_fraction > 0 and not dry_run:
+            n_fresh = max(1, round(len(self.watchlist) * _fresh_scan_fraction))
+            _fresh_symbols = set(_random.sample(self.watchlist, min(n_fresh, len(self.watchlist))))
+            for _sym in _fresh_symbols:
+                self._cache.delete(f"overview_{_sym}")
+            logger.info(
+                "Fresh rotation: invalidated OVERVIEW cache for %d/%d symbol(s) — %s",
+                len(_fresh_symbols), len(self.watchlist),
+                ", ".join(sorted(_fresh_symbols)[:5]) + ("..." if len(_fresh_symbols) > 5 else ""),
+            )
+
         # ── Step 1: Fetch news for the entire watchlist (1 API call) ─────────
         # Fallback order: AV NEWS_SENTIMENT → FMP stock_news → missing
         news_source: str = "alpha_vantage"
@@ -460,7 +479,10 @@ class WatchlistScanner:
 
         if not dry_run:
             budget_exhausted = False
-            for symbol in self.watchlist:
+            # Process fresh-rotation symbols first so they consume budget before
+            # it exhausts, guaranteeing they get live data when budget allows.
+            _overview_order = sorted(self.watchlist, key=lambda s: (s not in _fresh_symbols))
+            for symbol in _overview_order:
                 cache_key = f"overview_{symbol}"
                 if budget_exhausted:
                     stale = self._cache.get_stale(cache_key)
@@ -554,6 +576,12 @@ class WatchlistScanner:
                 break
             except Exception as exc:
                 logger.warning("Error scanning %s: %s", symbol, exc)
+
+        # Stamp data_freshness based on whether OVERVIEW was freshly fetched.
+        for _r in results:
+            _r["data_freshness"] = (
+                "fresh" if overview_source.get(_r.get("ticker", "")) == "fresh" else "cached"
+            )
 
         # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
         # Loads outputs/latest/theme_opportunities.json produced by theme_discovery.
@@ -650,6 +678,39 @@ class WatchlistScanner:
                 n_conf_suppressed,
             )
 
+        # ── Top-N fallback: surface best-ranked results when no alerts pass ────
+        # Prevents fully-silent runs by injecting the top-ranked signals as
+        # "opportunity" watch-level entries.  Distinct from regular alerts —
+        # marked with alert_type="opportunity" and filter_reason_code="fallback_top_n".
+        _fallback_top_n = int(self._signals_config.get("fallback_top_n", 3))
+        _fallback_min_signal = float(self._signals_config.get("fallback_min_signal_score", 0.25))
+        _fallback_used = False
+        if not alerts and _fallback_top_n > 0 and results:
+            _candidates = [
+                r for r in results
+                if float(r.get("signal_score") or 0.0) >= _fallback_min_signal
+            ]
+            _candidates.sort(
+                key=lambda x: (
+                    x.get("priority_score", 0.0),
+                    x.get("final_rank_score", 0.0),
+                ),
+                reverse=True,
+            )
+            for _r in _candidates[:_fallback_top_n]:
+                _r["alert_priority"] = "watch"
+                _r["alert_type"] = "opportunity"
+                _r["alert_reason"] = "top-ranked fallback"
+                _r["filter_allowed"] = True
+                _r["filter_reason_code"] = "fallback_top_n"
+                alerts.append(_r)
+            _fallback_used = bool(alerts)
+            if _fallback_used:
+                logger.info(
+                    "No qualifying alerts — surfaced %d top-ranked fallback opportunit%s",
+                    len(alerts), "y" if len(alerts) == 1 else "ies",
+                )
+
         # ── Step 6: Build scan quality summary ───────────────────────────────
         quality_counts: dict[str, int] = {"fresh": 0, "cached": 0, "partial": 0, "budget_skipped": 0}
         for r in results:
@@ -666,6 +727,8 @@ class WatchlistScanner:
             "symbols_budget_skipped":  quality_counts["budget_skipped"],
             "alerts_watch_level":      n_watch_level,
             "signals_conf_suppressed": n_conf_suppressed,
+            "fallback_alerts_used":    _fallback_used,
+            "fallback_alert_count":    len(alerts) if _fallback_used else 0,
         }
         if degraded:
             logger.warning(
