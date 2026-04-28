@@ -1,0 +1,8 @@
+# StockBot — example crontab entry
+# Install with: scripts/install_cron.sh
+# Or paste manually: crontab -e
+#
+# Runs the daily pipeline at 09:00 server time every day.
+# Adjust the hour (9) to match your preferred local market time.
+
+0 9 * * * cd /opt/stockbot && /opt/stockbot/scripts/server_run_pipeline.sh >> /opt/stockbot/logs/cron.log 2>&1
