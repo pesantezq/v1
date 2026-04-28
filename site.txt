@@ -1,0 +1,69 @@
+
+A. Root causes (confirmed)
+
+theme_engine/theme_store.py was overwriting outputs/latest/theme_signals.json with an empty themes list when RSS produced no new items, so a repeated run could erase the last valid theme snapshot.
+watchlist_scanner/system_summary.py only trusted current latest theme artifacts plus the previous summary. If latest theme artifacts were empty, top_theme could become empty even when a prior valid theme still existed.
+watchlist_scanner/scanner.py was running fallback before cooldown, so cooldown could remove all alerts afterward and leave nothing.
+watchlist_scanner/postprocess.py was also dropping post-cooldown fallback opportunities from final alerts, so even when fallback was added later in the flow it could disappear from the persisted output.
+watchlist_scanner/__main__.py dry-run output writing needed to persist the refreshed watchlist artifact so the requested validation command checked the current run instead of stale files.
+B. Files changed
+
+theme_engine/theme_store.py
+watchlist_scanner/system_summary.py
+watchlist_scanner/scanner.py
+watchlist_scanner/main.py
+watchlist_scanner/postprocess.py
+tests/test_theme_engine.py
+tests/test_system_summary.py
+tests/test_watchlist_scanner_alerts.py
+C. New logic flow (before vs after)
+
+Before:
+
+Theme run with no new RSS wrote empty latest theme artifacts.
+system_summary could emit top_theme = {}.
+Scanner fallback ran before cooldown.
+Cooldown could remove all alerts after fallback selection.
+Postprocess could suppress/drop fallback opportunities from final alerts.
+After:
+
+If a theme run produces no themes, ThemeStore.save_signals() preserves the prior latest theme snapshot and marks it no_update=True with theme_source="stale".
+system_summary resolves top_theme in this order:
+current non-empty theme data
+most recent non-empty historical theme snapshot
+previous system_decision_summary.json
+top_theme now carries theme_source: "fresh" or "stale".
+Scanner no longer injects fallback before cooldown.
+Final flow is now:
+alerts after filters
+alerts after cooldown
+if none remain, run fallback top-N using the existing minimum signal threshold
+scan_summary now includes:
+fallback_alerts_used
+fallback_alert_count
+fallback_trigger_stage = "post_cooldown"
+Postprocess preserves fallback opportunities in final outputs as advisory opportunities rather than dropping them.
+D. Validation results
+
+Focused regression tests:
+
+.venv\Scripts\python.exe -m pytest tests\test_theme_engine.py tests\test_system_summary.py tests\test_watchlist_scanner_alerts.py -q
+Result: 215 passed, 1 skipped
+Requested pipeline validation:
+
+.venv\Scripts\python.exe run_daily_pipeline.py --dry-run
+Result: exit 0
+Key outcome:
+theme_discovery ok
+watchlist_scan ok
+system_summary ok
+daily_memo ok
+top_theme=AI Infrastructure
+watchlist_scan ... 22 signals, 3 alerts
+Requested artifact assertions:
+
+.venv\Scripts\python.exe -c "import json; s=json.load(open('outputs/latest/system_decision_summary.json')); assert s['top_theme'].get('name'); print('Top theme OK:', s['top_theme'])"
+Passed:
+Top theme OK: {'name': 'AI Infrastructure', ..., 'theme_source': 'stale'}
+.venv\Scripts\python.exe -c "import json; d=json.load(open('outputs/latest/watchlist_signals.json')); ss=d.get('scan_summary', {}); assert len(d['alerts']) > 0 or ss.get('fallback_alerts_used'); print('Alerts OK')"
+Passed:
