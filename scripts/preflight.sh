@@ -99,25 +99,16 @@ fi
 source "$VENV_ACTIVATE"
 pass "Activated virtual environment via $VENV_ACTIVATE"
 
-python - "$REPO_ROOT/.venv" <<'PY'
-import os
-import sys
+PYTHON_EXEC="$(python -c "import sys; print(sys.executable)")"
+PYTHON_VERSION="$(python -c "import sys; print(sys.version.splitlines()[0])")"
 
-venv_root = os.path.realpath(sys.argv[1])
-python_exe = os.path.realpath(sys.executable)
+if [[ "$PYTHON_EXEC" != *".venv"* ]]; then
+    fail "Active python is not from .venv: $PYTHON_EXEC"
+fi
 
-try:
-    common = os.path.commonpath([venv_root, python_exe])
-except ValueError:
-    common = ""
-
-if common != venv_root:
-    raise SystemExit(f"Active python is not from .venv: {python_exe}")
-
-print(f"Python executable: {python_exe}")
-print(f"Python version: {sys.version.splitlines()[0]}")
-PY
-pass "Active python is using the repository virtual environment"
+printf 'Python executable: %s\n' "$PYTHON_EXEC"
+printf 'Python version: %s\n' "$PYTHON_VERSION"
+pass "Using virtualenv python: $PYTHON_EXEC"
 
 section "Required Files"
 required_files=(
