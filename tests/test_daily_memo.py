@@ -884,6 +884,35 @@ class TestBuildDailyMemoFull:
         assert "outputs/latest/watchlist_signals.json (watchlist scanner)" in result
         assert "outputs/latest/theme_signals.json (theme engine)" in result
 
+    def test_system_data_health_uses_defaulting_and_optional_wording(self):
+        degraded = _full_summary(
+            data_health={
+                "degraded_mode": True,
+                "data_mode": "live",
+                "missing_artifact_count": 0,
+                "missing_artifact_details": [],
+                "defaulting_artifact_details": [
+                    {
+                        "artifact": "approved_ranking_config",
+                        "path": "outputs/performance/approved_ranking_config.json",
+                        "producer_step": "ranking config promotion",
+                    }
+                ],
+                "optional_artifact_details": [
+                    {
+                        "artifact": "theme_opportunities",
+                        "path": "outputs/latest/theme_opportunities.json",
+                        "producer_step": "theme discovery",
+                    }
+                ],
+            }
+        )
+        result = build_daily_memo(degraded)
+        assert "Defaulting because artifacts are not present" in result
+        assert "outputs/performance/approved_ranking_config.json (ranking config promotion)" in result
+        assert "Optional artifacts not present" in result
+        assert "outputs/latest/theme_opportunities.json (theme discovery)" in result
+
 
 class TestBuildDailyMemoMd:
     def test_returns_string(self):

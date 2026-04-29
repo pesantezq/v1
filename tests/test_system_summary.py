@@ -518,8 +518,9 @@ class TestComputeDataHealth:
         flags["theme_opportunities"] = False
         result = compute_data_health({}, flags)
         assert "watchlist_signals" in result["missing_artifacts"]
-        assert "theme_opportunities" in result["missing_artifacts"]
-        assert result["missing_artifact_count"] == 2
+        assert "theme_opportunities" not in result["missing_artifacts"]
+        assert result["optional_artifact_details"][0]["artifact"] == "theme_opportunities"
+        assert result["missing_artifact_count"] == 1
 
     def test_missing_artifact_details_include_path_and_producer(self):
         flags = _all_flags(True)
@@ -536,6 +537,32 @@ class TestComputeDataHealth:
         result = compute_data_health({}, flags)
         assert result["missing_artifact_count"] == 0
         assert result["missing_artifacts"] == []
+
+    def test_theme_opportunities_optional_when_theme_signals_exists(self):
+        flags = _all_flags(True)
+        flags["theme_opportunities"] = False
+        flags["theme_signals"] = True
+        result = compute_data_health({}, flags)
+        assert result["missing_artifact_count"] == 0
+        assert result["missing_artifacts"] == []
+        assert result["optional_artifact_details"][0]["artifact"] == "theme_opportunities"
+        assert result["optional_artifact_details"][0]["severity"] == "optional_missing"
+
+    def test_approved_ranking_config_defaulting_when_absent(self):
+        flags = _all_flags(True)
+        flags["approved_ranking_config"] = False
+        result = compute_data_health({}, flags)
+        assert result["missing_artifact_count"] == 0
+        assert result["defaulting_artifact_details"][0]["artifact"] == "approved_ranking_config"
+        assert result["defaulting_artifact_details"][0]["severity"] == "defaulting"
+
+    def test_approved_allocation_policy_defaulting_when_absent(self):
+        flags = _all_flags(True)
+        flags["approved_allocation_policy"] = False
+        result = compute_data_health({}, flags)
+        assert result["missing_artifact_count"] == 0
+        assert result["defaulting_artifact_details"][0]["artifact"] == "approved_allocation_policy"
+        assert result["defaulting_artifact_details"][0]["severity"] == "defaulting"
 
     def test_all_present_no_missing(self):
         result = compute_data_health({}, _all_flags(True))
@@ -676,10 +703,42 @@ class TestRenderMarkdown:
                     "producer_step": "watchlist scanner",
                 }
             ],
+            "defaulting_artifact_details": [],
+            "optional_artifact_details": [],
         }
         md = render_markdown(summary)
         assert "outputs/latest/watchlist_signals.json" in md
         assert "producer: watchlist scanner" in md
+
+    def test_data_health_lists_defaulting_and_optional_artifacts(self):
+        summary = self._full_summary()
+        summary["data_health"] = {
+            "degraded_mode": False,
+            "data_mode": "live",
+            "total_signals": 0,
+            "eligible_signals": 0,
+            "missing_artifacts": [],
+            "missing_artifact_details": [],
+            "defaulting_artifact_details": [
+                {
+                    "artifact": "approved_ranking_config",
+                    "path": "outputs/performance/approved_ranking_config.json",
+                    "producer_step": "ranking config promotion",
+                }
+            ],
+            "optional_artifact_details": [
+                {
+                    "artifact": "theme_opportunities",
+                    "path": "outputs/latest/theme_opportunities.json",
+                    "producer_step": "theme discovery",
+                }
+            ],
+        }
+        md = render_markdown(summary)
+        assert "Defaulting artifacts not present" in md
+        assert "outputs/performance/approved_ranking_config.json" in md
+        assert "Optional artifacts not present" in md
+        assert "outputs/latest/theme_opportunities.json" in md
 
     def test_contains_changes_section(self):
         md = render_markdown(self._full_summary())
@@ -832,6 +891,28 @@ class TestGenerateSystemDecisionSummary:
         assert "missing required artifacts" in joined
         assert "outputs/latest/watchlist_signals.json" in joined
         assert "watchlist scanner" in joined
+
+    def test_defaulting_and_optional_artifacts_logged_separately(self, tmp_path, caplog):
+        caplog.set_level("WARNING")
+        latest = tmp_path / "outputs" / "latest"
+        perf = tmp_path / "outputs" / "performance"
+        latest.mkdir(parents=True, exist_ok=True)
+        perf.mkdir(parents=True, exist_ok=True)
+        (latest / "watchlist_signals.json").write_text(json.dumps({"results": []}), encoding="utf-8")
+        (latest / "theme_signals.json").write_text(json.dumps({"themes": []}), encoding="utf-8")
+        (tmp_path / "outputs" / "portfolio").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "outputs" / "portfolio" / "portfolio_snapshot.json").write_text(json.dumps({}), encoding="utf-8")
+        (perf / "allocation_policy_preview.json").write_text(json.dumps({}), encoding="utf-8")
+        (perf / "allocation_policy_simulation.json").write_text(json.dumps({}), encoding="utf-8")
+        (perf / "weight_tuning_suggestions.json").write_text(json.dumps({}), encoding="utf-8")
+
+        generate_system_decision_summary(root=tmp_path, write_files=False)
+        joined = " ".join(record.getMessage() for record in caplog.records)
+        assert "defaulting artifacts not present" in joined
+        assert "approved_ranking_config.json" in joined
+        assert "approved_allocation_policy.json" in joined
+        assert "optional artifacts not present" in joined
+        assert "theme_opportunities.json" in joined
 
     def test_json_schema_valid(self, tmp_path):
         generate_system_decision_summary(root=tmp_path, write_files=True)

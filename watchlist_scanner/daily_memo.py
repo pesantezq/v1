@@ -204,9 +204,18 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
     data_mode = str(data_health.get("data_mode") or "").strip()
     missing_count = int(data_health.get("missing_artifact_count") or 0)
     missing_details = data_health.get("missing_artifact_details") or []
+    defaulting_details = data_health.get("defaulting_artifact_details") or []
+    optional_details = data_health.get("optional_artifact_details") or []
     fallback_used = bool(data_health.get("fallback_alerts_used", False))
 
-    if not degraded and data_mode in ("", "live") and missing_count <= 0 and not fallback_used:
+    if (
+        not degraded
+        and data_mode in ("", "live")
+        and missing_count <= 0
+        and not defaulting_details
+        and not optional_details
+        and not fallback_used
+    ):
         return []
 
     items: list[str] = []
@@ -220,10 +229,22 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
                 f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
                 for item in missing_details
             )
-            items.append(f"Missing artifacts: {rendered}.")
+            items.append(f"Required artifacts missing: {rendered}.")
         else:
             items.append(f"{missing_count} required artifacts were missing during summary generation.")
-    elif fallback_used:
+    if defaulting_details:
+        rendered = "; ".join(
+            f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
+            for item in defaulting_details
+        )
+        items.append(f"Defaulting because artifacts are not present: {rendered}.")
+    if optional_details:
+        rendered = "; ".join(
+            f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
+            for item in optional_details
+        )
+        items.append(f"Optional artifacts not present: {rendered}.")
+    if fallback_used and len(items) < 3:
         items.append("Fallback alerts were used because stronger live signals were unavailable.")
     return items[:3]
 

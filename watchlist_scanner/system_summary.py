@@ -324,8 +324,9 @@ def _artifact_flags(root: Path) -> dict[str, bool]:
     }
 
 
-def _missing_artifact_details(root: Path, artifact_flags: dict[str, bool]) -> list[dict[str, str]]:
-    """Return missing file-backed artifacts with path and producer metadata."""
+def _artifact_health_details(root: Path, artifact_flags: dict[str, bool]) -> list[dict[str, str]]:
+    """Return missing file-backed artifacts with path, producer, and severity metadata."""
+    has_theme_signals = bool(artifact_flags.get("theme_signals"))
     details: list[dict[str, str]] = []
     for name, exists in artifact_flags.items():
         if exists:
@@ -334,12 +335,18 @@ def _missing_artifact_details(root: Path, artifact_flags: dict[str, bool]) -> li
         if not spec.get("file_backed", False):
             continue
         path_parts = spec.get("path_parts") or ()
+        severity = "required_missing"
+        if name == "theme_opportunities" and has_theme_signals:
+            severity = "optional_missing"
+        elif name in {"approved_ranking_config", "approved_allocation_policy"}:
+            severity = "defaulting"
         details.append(
             {
                 "artifact": name,
                 "path": str(Path(*path_parts)).replace("\\", "/"),
                 "producer_step": str(spec.get("producer_step") or "unknown step"),
                 "producer_module": str(spec.get("producer_module") or ""),
+                "severity": severity,
             }
         )
     return details
@@ -604,7 +611,10 @@ def compute_data_health(
 
     eligible_count = sum(1 for s in all_sigs if s.get("filter_allowed"))
     summary_root = root or Path(".")
-    missing_details = _missing_artifact_details(summary_root, artifact_flags)
+    artifact_details = _artifact_health_details(summary_root, artifact_flags)
+    missing_details = [item for item in artifact_details if item.get("severity") == "required_missing"]
+    defaulting_details = [item for item in artifact_details if item.get("severity") == "defaulting"]
+    optional_details = [item for item in artifact_details if item.get("severity") == "optional_missing"]
     missing = [item["artifact"] for item in missing_details]
 
     scan_summary = signals.get("scan_summary") or {}
@@ -618,6 +628,8 @@ def compute_data_health(
         "eligible_signals":      eligible_count,
         "missing_artifacts":     missing,
         "missing_artifact_details": missing_details,
+        "defaulting_artifact_details": defaulting_details,
+        "optional_artifact_details": optional_details,
         "missing_artifact_count":len(missing),
         "all_artifacts_present": len(missing) == 0,
         "artifact_flags":        dict(artifact_flags),
@@ -924,8 +936,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Signals: {dh.get('total_signals', 0)} total  "
         f"·  {dh.get('eligible_signals', 0)} alert-eligible"
     )
-    missing = dh.get("missing_artifacts") or []
     missing_details = dh.get("missing_artifact_details") or []
+    defaulting_details = dh.get("defaulting_artifact_details") or []
+    optional_details = dh.get("optional_artifact_details") or []
     if missing_details:
         lines.append(f"- Missing artifacts ({len(missing_details)}):")
         for item in missing_details:
@@ -933,8 +946,22 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 f"  - {item.get('path', 'unknown path')}  "
                 f"(producer: {item.get('producer_step', 'unknown step')})"
             )
-    else:
+    elif not defaulting_details and not optional_details:
         lines.append("- All expected artifacts present")
+    if defaulting_details:
+        lines.append(f"- Defaulting artifacts not present ({len(defaulting_details)}):")
+        for item in defaulting_details:
+            lines.append(
+                f"  - {item.get('path', 'unknown path')}  "
+                f"(producer: {item.get('producer_step', 'unknown step')})"
+            )
+    if optional_details:
+        lines.append(f"- Optional artifacts not present ({len(optional_details)}):")
+        for item in optional_details:
+            lines.append(
+                f"  - {item.get('path', 'unknown path')}  "
+                f"(producer: {item.get('producer_step', 'unknown step')})"
+            )
     lines.append("")
 
     # ── Changes Since Last Run ──
@@ -993,13 +1020,32 @@ def generate_system_decision_summary(
     )
     markdown      = render_markdown(summary)
 
-    missing_details = (summary.get("data_health") or {}).get("missing_artifact_details") or []
+    data_health = summary.get("data_health") or {}
+    missing_details = data_health.get("missing_artifact_details") or []
+    defaulting_details = data_health.get("defaulting_artifact_details") or []
+    optional_details = data_health.get("optional_artifact_details") or []
     if missing_details:
         logger.warning(
             "system_summary: missing required artifacts: %s",
             "; ".join(
                 f"{item.get('path')} <- {item.get('producer_step')}"
                 for item in missing_details
+            ),
+        )
+    if defaulting_details:
+        logger.warning(
+            "system_summary: defaulting artifacts not present: %s",
+            "; ".join(
+                f"{item.get('path')} <- {item.get('producer_step')}"
+                for item in defaulting_details
+            ),
+        )
+    if optional_details:
+        logger.warning(
+            "system_summary: optional artifacts not present: %s",
+            "; ".join(
+                f"{item.get('path')} <- {item.get('producer_step')}"
+                for item in optional_details
             ),
         )
 
