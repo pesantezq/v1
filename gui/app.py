@@ -2646,6 +2646,150 @@ def _render_decision_performance_section(bundle: dict) -> None:
             )
 
 
+_TRIAGE_BUCKET_BADGE: dict[str, str] = {
+    "critical_action": ":red[🔴 critical]",
+    "action_candidate": ":orange[🟠 action candidate]",
+    "monitor": ":blue[🔵 monitor]",
+    "ignore_for_now": ":gray[⚪ ignore]",
+}
+
+_TRIAGE_SEVERITY_BADGE: dict[str, str] = {
+    "critical": ":red[critical]",
+    "high": ":orange[high]",
+    "medium": ":blue[medium]",
+    "low": ":gray[low]",
+}
+
+
+def _render_decision_triage_section(bundle: dict) -> None:
+    data = bundle.get("decision_triage") or {}
+
+    st.markdown("### Decision Triage")
+
+    if not data.get("available"):
+        st.caption(data.get("summary_line") or "Decision triage artifact not available yet.")
+        return
+
+    counts = data.get("bucket_counts") or {}
+    critical_n = counts.get("critical_action", 0)
+    action_n = counts.get("action_candidate", 0)
+    monitor_n = counts.get("monitor", 0)
+    ignore_n = counts.get("ignore_for_now", 0)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Critical Action", critical_n)
+    col2.metric("Action Candidate", action_n)
+    col3.metric("Monitor", monitor_n)
+    col4.metric("Ignore For Now", ignore_n)
+
+    st.caption(
+        f"{data.get('total_decisions', 0)} decisions triaged. "
+        "Observe-only — no recomputation occurs here. "
+        "Source: `outputs/latest/decision_triage.json`."
+    )
+
+    # Top 3 actions
+    top_actions = (data.get("top_actions") or [])[:3]
+    if top_actions:
+        st.markdown("**Top Actions Today**")
+        for row in top_actions:
+            bucket = str(row.get("triage_bucket") or "monitor").lower()
+            severity = str(row.get("severity") or "low").lower()
+            bucket_badge = _TRIAGE_BUCKET_BADGE.get(bucket, f":gray[{bucket}]")
+            severity_badge = _TRIAGE_SEVERITY_BADGE.get(severity, f":gray[{severity}]")
+            st.markdown(
+                f"**{row.get('decision')} {row.get('symbol')}** | "
+                f"{bucket_badge} | severity: {severity_badge}"
+            )
+            st.write(row.get("reason") or "—")
+            next_act = row.get("next_action") or ""
+            if next_act:
+                st.caption(f"Next: {next_act}")
+            watch = row.get("watch_next") or []
+            if watch:
+                st.caption(f"Watch next: {'; '.join(str(w) for w in watch)}")
+            st.markdown("---")
+
+    buckets_data = data.get("buckets") or {}
+
+    # Grouped sections: critical + action as tabs if both present, else flat
+    critical_rows = buckets_data.get("critical_action") or []
+    action_rows = buckets_data.get("action_candidate") or []
+    monitor_rows = buckets_data.get("monitor") or []
+
+    tab_labels = []
+    if critical_rows:
+        tab_labels.append(f"Critical ({len(critical_rows)})")
+    if action_rows:
+        tab_labels.append(f"Action ({len(action_rows)})")
+    if monitor_rows:
+        tab_labels.append(f"Monitor ({len(monitor_rows)})")
+
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        tab_idx = 0
+
+        if critical_rows:
+            with tabs[tab_idx]:
+                for row in critical_rows:
+                    sev = str(row.get("severity") or "critical").lower()
+                    st.markdown(
+                        f"**{row.get('decision')} {row.get('symbol')}** | "
+                        f"rank #{row.get('triage_rank')} | "
+                        f"{_TRIAGE_SEVERITY_BADGE.get(sev, sev)}"
+                    )
+                    st.write(row.get("reason") or "—")
+                    st.caption(f"Next: {row.get('next_action') or '—'}")
+                    v_status = row.get("validation_status") or "—"
+                    priority = row.get("priority")
+                    p_str = f"{priority:.3f}" if priority is not None else "—"
+                    st.caption(f"Validation: {v_status} | Priority: {p_str}")
+                    rf = row.get("risk_flags") or []
+                    if rf:
+                        st.caption(f"Risk flags: {', '.join(str(f) for f in rf)}")
+                    st.markdown("---")
+            tab_idx += 1
+
+        if action_rows:
+            with tabs[tab_idx]:
+                for row in action_rows:
+                    sev = str(row.get("severity") or "high").lower()
+                    st.markdown(
+                        f"**{row.get('decision')} {row.get('symbol')}** | "
+                        f"rank #{row.get('triage_rank')} | "
+                        f"{_TRIAGE_SEVERITY_BADGE.get(sev, sev)}"
+                    )
+                    st.write(row.get("reason") or "—")
+                    st.caption(f"Next: {row.get('next_action') or '—'}")
+                    v_status = row.get("validation_status") or "—"
+                    priority = row.get("priority")
+                    p_str = f"{priority:.3f}" if priority is not None else "—"
+                    st.caption(f"Validation: {v_status} | Priority: {p_str}")
+                    st.markdown("---")
+            tab_idx += 1
+
+        if monitor_rows:
+            with tabs[tab_idx]:
+                table_rows = []
+                for row in monitor_rows:
+                    priority = row.get("priority")
+                    table_rows.append({
+                        "Decision": row.get("decision", "—"),
+                        "Symbol": row.get("symbol", "—"),
+                        "Reason": (row.get("reason") or "")[:80],
+                        "Validation": row.get("validation_status", "—"),
+                        "Priority": f"{priority:.3f}" if priority is not None else "—",
+                    })
+                st.dataframe(
+                    _coerce_df(
+                        table_rows,
+                        columns=["Decision", "Symbol", "Reason", "Validation", "Priority"],
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+
+
 _VALIDATION_STATUS_BADGE: dict[str, str] = {
     "aligned": ":green[✓ aligned]",
     "caution": ":orange[⚠ caution]",
@@ -4215,6 +4359,8 @@ def page_decision_center() -> None:
             st.rerun()
 
     _render_decision_brief_summary(bundle)
+    st.divider()
+    _render_decision_triage_section(bundle)
     st.divider()
     _render_ai_validation_section(bundle)
     st.divider()

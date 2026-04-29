@@ -108,6 +108,13 @@ except ImportError:
     _run_outcome_tracker = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.decision_triage import (
+        run_triage as _run_triage,
+    )
+except ImportError:
+    _run_triage = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -2036,6 +2043,25 @@ def run_portfolio_update(
                 except Exception as _ot_err:
                     logger.warning(
                         "OUTCOME TRACKER: non-fatal error — %s", _ot_err, exc_info=True
+                    )
+
+            # ── Decision triage ────────────────────────────────────────────────
+            if _run_triage is not None:
+                try:
+                    _triage_root = _decision_explainer_root_from_output_dir(output_dir)
+                    _triage_payload, _ = _run_triage(_triage_root)
+                    logger.info(
+                        "DECISION TRIAGE: decision_triage.json + .md written"
+                        " (total=%d critical=%d action=%d monitor=%d ignore=%d)",
+                        _triage_payload.get("total_decisions", 0),
+                        (_triage_payload.get("bucket_counts") or {}).get("critical_action", 0),
+                        (_triage_payload.get("bucket_counts") or {}).get("action_candidate", 0),
+                        (_triage_payload.get("bucket_counts") or {}).get("monitor", 0),
+                        (_triage_payload.get("bucket_counts") or {}).get("ignore_for_now", 0),
+                    )
+                except Exception as _triage_err:
+                    logger.warning(
+                        "DECISION TRIAGE: non-fatal error — %s", _triage_err, exc_info=True
                     )
 
             # ── Scanner outputs ────────────────────────────────────────────────

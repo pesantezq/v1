@@ -34,6 +34,7 @@ SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_s
 DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanations.json")
 AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_validation.json")
 DECISION_OUTCOME_SUMMARY_RELATIVE_PATH = ("outputs", "policy", "decision_outcome_summary.json")
+DECISION_TRIAGE_RELATIVE_PATH = ("outputs", "latest", "decision_triage.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1342,6 +1343,39 @@ def load_decision_outcome_summary(root: Path | str) -> dict[str, Any]:
     return payload
 
 
+def load_decision_triage(root: Path | str) -> dict[str, Any]:
+    _empty_buckets = {
+        "critical_action": [],
+        "action_candidate": [],
+        "monitor": [],
+        "ignore_for_now": [],
+    }
+    _empty_counts = {k: 0 for k in _empty_buckets}
+    _empty: dict[str, Any] = {
+        "available": False,
+        "total_decisions": 0,
+        "bucket_counts": _empty_counts,
+        "top_actions": [],
+        "buckets": _empty_buckets,
+        "summary_line": "Decision triage artifact not available yet.",
+    }
+    path = Path(root).joinpath(*DECISION_TRIAGE_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "Decision triage file could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "Decision triage file is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault(
+        "summary_line",
+        f"{payload.get('total_decisions', 0)} decisions triaged.",
+    )
+    return payload
+
+
 def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not data.get("available"):
         return []
@@ -1517,6 +1551,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "decision_explanations": load_decision_explanations(root_path),
         "ai_decision_validation": load_ai_decision_validation(root_path),
         "decision_outcome_summary": load_decision_outcome_summary(root_path),
+        "decision_triage": load_decision_triage(root_path),
     }
 
 
