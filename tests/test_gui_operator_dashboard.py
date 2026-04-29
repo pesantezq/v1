@@ -559,7 +559,8 @@ class TestGuiOperatorDashboard(unittest.TestCase):
     def test_existing_gui_extension_path_is_reused(self):
         app_source = (Path(__file__).parent.parent / "gui" / "app.py").read_text(encoding="utf-8")
 
-        self.assertIn("from gui_operator_data import load_operator_dashboard_data", app_source)
+        self.assertIn("from gui_operator_data import (", app_source)
+        self.assertIn("load_operator_dashboard_data", app_source)
         self.assertIn('["Overview", "Advanced"]', app_source)
         self.assertIn('if   page == "Dashboard":    page_dashboard()', app_source)
         self.assertIn('st.title("Operator Dashboard")', app_source)

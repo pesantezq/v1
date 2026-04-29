@@ -6,6 +6,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from watchlist_scanner.daily_memo import (
+    _build_memo_top_insight,
+    _capital_action_summary,
+    _change_items,
+    _health_items,
+    _risk_focus_items,
+    _top_decision_rows,
+)
+
 
 CORE_ARTIFACTS = {
     "run_summary": ("outputs", "latest", "scraped_intel_run_summary.json"),
@@ -19,6 +28,9 @@ CORE_ARTIFACTS = {
     "recommendation_outcomes": ("outputs", "policy", "recommendation_outcomes.json"),
     "regime_performance": ("outputs", "regime", "regime_performance.json"),
 }
+
+DECISION_PLAN_RELATIVE_PATH = ("outputs", "latest", "decision_plan.json")
+SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_summary.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1090,11 +1102,74 @@ def _normalize_health(
     }
 
 
+def _normalize_decision_brief(
+    *,
+    decision_plan: dict[str, Any],
+    system_summary: dict[str, Any],
+) -> dict[str, Any]:
+    summary = dict(system_summary or {})
+    if decision_plan:
+        summary["_decision_plan"] = decision_plan
+
+    top_rows = _top_decision_rows(summary, limit=5)
+    capital_counts, capital_total = _capital_action_summary(top_rows)
+    risk_items = _risk_focus_items(top_rows)[:3]
+    change_items = _change_items(_safe_dict(summary.get("changes")))[:3]
+    health_items = _health_items(_safe_dict(summary.get("data_health")))[:3]
+
+    formatted_rows = []
+    for row in top_rows:
+        formatted_rows.append(
+            {
+                "decision": str(row.get("decision") or "-"),
+                "symbol": str(row.get("symbol") or "-"),
+                "priority": _coerce_float(row.get("priority")),
+                "source": str(row.get("source") or "-"),
+                "urgency": str(row.get("urgency") or "-"),
+                "reason": str(row.get("reason") or "").strip() or "No decision rationale provided.",
+                "risk_flags": [str(flag) for flag in _safe_list(row.get("risk_flags")) if str(flag).strip()],
+                "raw": row,
+            }
+        )
+
+    return {
+        "available": bool(decision_plan),
+        "path": "/".join(DECISION_PLAN_RELATIVE_PATH),
+        "top_insight": _build_memo_top_insight(
+            _safe_dict(summary.get("top_theme")),
+            _safe_dict(summary.get("top_opportunity")),
+            top_rows,
+        ),
+        "top_decisions": formatted_rows,
+        "capital_actions": {
+            "sell": capital_counts.get("SELL", 0),
+            "scale": capital_counts.get("SCALE", 0),
+            "buy": capital_counts.get("BUY", 0),
+            "total_recommended_capital": capital_total,
+        },
+        "risk_focus": risk_items,
+        "what_changed": change_items,
+        "system_data_health": health_items,
+        "summary_line": "Decision plan unavailable." if not decision_plan else "",
+        "full_decisions": _safe_list(decision_plan.get("decisions")) if decision_plan else [],
+        "observe_only": _coerce_bool(decision_plan.get("observe_only")) if decision_plan else True,
+        "output_target": {
+            "label": "Decision Plan",
+            "scope": "Latest",
+            "file_name": "decision_plan.json",
+            "path": "outputs/latest/decision_plan.json",
+            "relative_path": "outputs/latest/decision_plan.json",
+        },
+    }
+
+
 def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
     root_path = Path(root)
     now = datetime.now()
 
     run_summary = _safe_json(root_path.joinpath(*CORE_ARTIFACTS["run_summary"]))
+    system_decision_summary = _safe_json(root_path.joinpath(*SYSTEM_DECISION_SUMMARY_RELATIVE_PATH))
+    decision_plan = _safe_json(root_path.joinpath(*DECISION_PLAN_RELATIVE_PATH))
     agent_bundle = _safe_json(root_path.joinpath(*CORE_ARTIFACTS["agent_bundle"]))
     agent_llm_metadata = _safe_json(root_path.joinpath(*CORE_ARTIFACTS["agent_llm_metadata"]))
     theme_llm_metadata = _safe_json(root_path.joinpath(*CORE_ARTIFACTS["theme_engine_llm_metadata"]))
@@ -1188,6 +1263,10 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "weekly_review": weekly_review,
         "health": health,
         "provider_snapshot": provider_snapshot,
+        "decision_brief": _normalize_decision_brief(
+            decision_plan=decision_plan,
+            system_summary=system_decision_summary,
+        ),
     }
 
 

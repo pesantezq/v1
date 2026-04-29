@@ -2507,6 +2507,70 @@ def _render_weekly_review_tab(bundle: dict) -> None:
 # DECISION INTELLIGENCE TABS
 # ============================================================================
 
+def _render_decision_brief_summary(bundle: dict) -> None:
+    brief = bundle.get("decision_brief") or {}
+
+    st.markdown("### Decision Summary")
+    st.caption("Compact observe-only brief derived from `decision_plan.json` and system summary artifacts.")
+
+    if not brief.get("available"):
+        st.info(brief.get("summary_line") or "Decision plan unavailable.")
+        return
+
+    st.markdown("**Top Insight**")
+    st.write(brief.get("top_insight") or "No top insight available.")
+
+    top_decisions = brief.get("top_decisions") or []
+    st.markdown("**Top Decisions**")
+    if top_decisions:
+        for idx, row in enumerate(top_decisions[:5], 1):
+            line = (
+                f"{idx}. {row.get('decision', '-')} {row.get('symbol', '-')} | "
+                f"pri {float(row.get('priority', 0.0)):.3f} | "
+                f"{row.get('source', '-')} | {row.get('urgency', '-')}"
+            )
+            st.markdown(f"- {line}")
+            detail = str(row.get("reason") or "").strip() or "No decision rationale provided."
+            flags = row.get("risk_flags") or []
+            if flags:
+                detail += f" Risk: {', '.join(str(flag) for flag in flags)}."
+            st.caption(detail)
+    else:
+        st.caption("No ranked decisions available.")
+
+    capital = brief.get("capital_actions") or {}
+    st.markdown("**Capital Actions**")
+    capital_line = (
+        f"SELL={int(capital.get('sell', 0))}, "
+        f"SCALE={int(capital.get('scale', 0))}, "
+        f"BUY={int(capital.get('buy', 0))}"
+    )
+    if capital.get("total_recommended_capital") is not None:
+        capital_line += f" | Total recommended capital: {_fmt_usd(capital.get('total_recommended_capital'))}"
+    st.write(capital_line)
+
+    st.markdown("**Risk Focus**")
+    for item in (brief.get("risk_focus") or [])[:3]:
+        st.markdown(f"- {item}")
+
+    st.markdown("**What Changed**")
+    for item in (brief.get("what_changed") or [])[:3]:
+        st.markdown(f"- {item}")
+
+    health_items = brief.get("system_data_health") or []
+    if health_items:
+        st.markdown("**System / Data Health**")
+        for item in health_items[:3]:
+            st.markdown(f"- {item}")
+
+    with st.expander("Full Decision Plan Queue", expanded=False):
+        full_rows = brief.get("full_decisions") or []
+        if not full_rows:
+            st.caption("No decision-plan rows available.")
+        else:
+            st.dataframe(_coerce_df(full_rows), width="stretch", hide_index=True)
+
+
 def _render_decision_center_tab(bundle: dict, mc: dict) -> None:
     st.subheader("Portfolio Decision Center")
     _render_mc_freshness(mc)
@@ -2514,6 +2578,8 @@ def _render_decision_center_tab(bundle: dict, mc: dict) -> None:
         "Actionable decisions from the last run. Shows WHY each action was recommended — "
         "score, confidence, strategy type, and full rationale."
     )
+    _render_decision_brief_summary(bundle)
+    st.divider()
 
     decision_layer = mc.get("decision_layer") or {}
 
