@@ -40,6 +40,7 @@ sudo bash deploy/install_systemd.sh
 What it does:
 
 - creates `/opt/stockbot/logs` if missing
+- ensures `scripts/run_daily.sh`, `scripts/verify_run.sh`, and `deploy/install_systemd.sh` are executable
 - installs `stockbot-daily.service`
 - installs `stockbot-daily.timer`
 - runs `systemctl daemon-reload`
