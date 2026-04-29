@@ -87,6 +87,13 @@ from degraded_mode import (
 import json as _json
 
 try:
+    from portfolio_automation.decision_explainer import (
+        generate_decision_explanations,
+    )
+except ImportError:
+    generate_decision_explanations = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -152,6 +159,81 @@ def _clear_conditional_output_artifacts(output_dir: Path, logger_obj) -> None:
                 logger_obj.debug("Cleared stale conditional artifact: %s", path)
         except Exception as exc:
             logger_obj.warning("Failed to clear stale artifact %s (non-fatal): %s", path, exc)
+
+
+def _decision_explainer_root_from_output_dir(output_dir: Path) -> Path:
+    """Infer project root for additive explanation outputs from outputs/latest."""
+    if output_dir.name == "latest" and output_dir.parent.name == "outputs":
+        return output_dir.parent.parent
+    return Path(".")
+
+
+def _write_decision_engine_outputs(
+    output_dir: Path,
+    result: dict[str, Any],
+    run_mode: str,
+    logger_obj,
+    *,
+    explainer_root: Optional[Path] = None,
+) -> None:
+    """
+    Write additive decision-plan artifacts, then trigger the additive explainer.
+
+    All failures are intentionally non-fatal so explanation output can never
+    block the main advisory pipeline.
+    """
+    try:
+        _dp_list = result.get('decision_plan') or []
+        _dp_summary = result.get('decision_plan_summary') or ''
+        _dp_json_path = output_dir / 'decision_plan.json'
+        _dp_json_path.write_text(
+            _json.dumps(
+                {
+                    'generated_at': datetime.now().isoformat(),
+                    'run_mode': run_mode,
+                    'observe_only': True,
+                    'total_decisions': len(_dp_list),
+                    'decisions': _dp_list,
+                },
+                indent=2,
+                default=str,
+            ),
+            encoding='utf-8',
+        )
+        (output_dir / 'decision_plan.md').write_text(
+            _dp_summary, encoding='utf-8'
+        )
+        logger_obj.info(
+            "DECISION ENGINE: decision_plan.json + decision_plan.md written"
+            " (%d decisions)", len(_dp_list),
+        )
+    except Exception as _dp_write_err:
+        logger_obj.warning(
+            "DECISION ENGINE: output write failed (non-fatal): %s",
+            _dp_write_err,
+        )
+        return
+
+    if generate_decision_explanations is None:
+        logger_obj.warning(
+            "DECISION EXPLAINER: module unavailable; skipping additive explanations"
+            " (non-fatal)"
+        )
+        return
+
+    try:
+        _explainer_root = explainer_root or _decision_explainer_root_from_output_dir(output_dir)
+        _explanation_payload, _ = generate_decision_explanations(_explainer_root)
+        logger_obj.info(
+            "DECISION EXPLAINER: decision_explanations.json +"
+            " decision_explanations.md written (%d explanations)",
+            len((_explanation_payload or {}).get('explanations') or []),
+        )
+    except Exception as _explainer_err:
+        logger_obj.warning(
+            "DECISION EXPLAINER: output write failed (non-fatal): %s",
+            _explainer_err,
+        )
 
 
 def _annotate_scanner_candidates_for_data_mode(
@@ -1894,36 +1976,12 @@ def run_portfolio_update(
             logger.info(f"ML analysis prompt saved: {ml_prompt_path}")
 
             # ── Decision engine outputs ───────────────────────────────────────
-            try:
-                _dp_list = result.get('decision_plan') or []
-                _dp_summary = result.get('decision_plan_summary') or ''
-                _dp_json_path = output_dir / 'decision_plan.json'
-                _dp_json_path.write_text(
-                    _json.dumps(
-                        {
-                            'generated_at': datetime.now().isoformat(),
-                            'run_mode': run_mode,
-                            'observe_only': True,
-                            'total_decisions': len(_dp_list),
-                            'decisions': _dp_list,
-                        },
-                        indent=2,
-                        default=str,
-                    ),
-                    encoding='utf-8',
-                )
-                (output_dir / 'decision_plan.md').write_text(
-                    _dp_summary, encoding='utf-8'
-                )
-                logger.info(
-                    "DECISION ENGINE: decision_plan.json + decision_plan.md written"
-                    " (%d decisions)", len(_dp_list),
-                )
-            except Exception as _dp_write_err:
-                logger.warning(
-                    "DECISION ENGINE: output write failed (non-fatal): %s",
-                    _dp_write_err,
-                )
+            _write_decision_engine_outputs(
+                output_dir,
+                result,
+                run_mode,
+                logger,
+            )
 
             # ── Scanner outputs ────────────────────────────────────────────────
             if scanner_candidates:

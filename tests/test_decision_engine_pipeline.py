@@ -8,6 +8,7 @@ All tests use plain dicts / lightweight stubs — no main.py invocation needed.
 """
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from main import (
     _adj_to_de_dict,
     _finance_rec_to_de_dict,
     _market_opps_from_coverage,
+    _write_decision_engine_outputs,
 )
 
 # Decision engine public API
@@ -522,6 +524,114 @@ class TestSerialiserRoundTrip(unittest.TestCase):
         self.assertIn(SOURCE_WATCHLIST, sources_present)
         self.assertIn(SOURCE_MARKET, sources_present)
         self.assertIn(SOURCE_FINANCE, sources_present)
+
+
+class TestDecisionExplainerPipelineHook(unittest.TestCase):
+    def _result_payload(self) -> dict[str, Any]:
+        return {
+            "decision_plan": [
+                {
+                    "symbol": "QLD",
+                    "decision": "SELL",
+                    "priority": 0.95,
+                    "urgency": "critical",
+                    "source": "structural",
+                    "reason": "Reduce total leveraged exposure 17.8% to below 15% cap.",
+                    "risk_flags": ["leverage_breach"],
+                    "confidence": 0.91,
+                    "current_pct": 0.178,
+                    "cap_pct": 0.15,
+                    "inputs_used": {"violation_type": "leverage"},
+                },
+                {
+                    "symbol": "VFH",
+                    "decision": "SCALE",
+                    "priority": 0.55,
+                    "urgency": "low",
+                    "source": "portfolio",
+                    "reason": "Underweight contribution target.",
+                    "risk_flags": [],
+                    "confidence": 0.82,
+                    "inputs_used": {},
+                },
+            ],
+            "decision_plan_summary": "Decision plan summary for test.",
+        }
+
+    def test_explainer_called_after_decision_plan_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "outputs" / "latest"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger = MagicMock()
+
+            def _fake_explainer(explainer_root: Path):
+                self.assertEqual(root, Path(explainer_root))
+                self.assertTrue((output_dir / "decision_plan.json").exists())
+                self.assertTrue((output_dir / "decision_plan.md").exists())
+                return (
+                    {
+                        "available": True,
+                        "explanations": [{"symbol": "QLD"}],
+                    },
+                    "# Decision Explanations\n",
+                )
+
+            with patch("main.generate_decision_explanations", side_effect=_fake_explainer) as mocked:
+                _write_decision_engine_outputs(
+                    output_dir,
+                    self._result_payload(),
+                    "daily",
+                    logger,
+                    explainer_root=root,
+                )
+
+            self.assertEqual(1, mocked.call_count)
+            self.assertTrue((output_dir / "decision_plan.json").exists())
+
+    def test_explainer_failure_does_not_fail_pipeline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "outputs" / "latest"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger = MagicMock()
+
+            with patch("main.generate_decision_explanations", side_effect=RuntimeError("boom")):
+                _write_decision_engine_outputs(
+                    output_dir,
+                    self._result_payload(),
+                    "daily",
+                    logger,
+                    explainer_root=root,
+                )
+
+            self.assertTrue((output_dir / "decision_plan.json").exists())
+            self.assertTrue((output_dir / "decision_plan.md").exists())
+            logger.warning.assert_any_call(
+                "DECISION EXPLAINER: output write failed (non-fatal): %s",
+                unittest.mock.ANY,
+            )
+
+    def test_explanation_artifacts_created_when_plan_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "outputs" / "latest"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger = MagicMock()
+
+            _write_decision_engine_outputs(
+                output_dir,
+                self._result_payload(),
+                "daily",
+                logger,
+                explainer_root=root,
+            )
+
+            self.assertTrue((output_dir / "decision_explanations.json").exists())
+            self.assertTrue((output_dir / "decision_explanations.md").exists())
+            payload = json.loads((output_dir / "decision_explanations.json").read_text(encoding="utf-8"))
+            self.assertTrue(payload["available"])
+            self.assertGreater(len(payload["explanations"]), 0)
 
 
 if __name__ == "__main__":
