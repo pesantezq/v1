@@ -16,6 +16,7 @@ from portfolio_automation.decision_engine import (
     DECISION_SCALE,
     DECISION_SELL,
     DECISION_WAIT,
+    SOURCE_FINANCE,
     SOURCE_MARKET,
     SOURCE_PORTFOLIO,
     SOURCE_STRUCTURAL,
@@ -26,6 +27,7 @@ from portfolio_automation.decision_engine import (
     URGENCY_MEDIUM,
     apply_decision_overrides,
     build_decision_plan,
+    consolidate_decisions,
     decision_from_market_opportunity,
     decision_from_portfolio_adjustment,
     decision_from_structural_violation,
@@ -777,6 +779,168 @@ class TestLeveragedViolationResolution(unittest.TestCase):
         non_avoid = [d for d in plan if d["decision"] != DECISION_AVOID]
         priorities = [d["priority"] for d in non_avoid]
         self.assertEqual(priorities, sorted(priorities, reverse=True))
+
+
+class TestConsolidateDecisions(unittest.TestCase):
+    """
+    Case 13: consolidate_decisions reduces duplicate per-symbol records to one
+    canonical decision, merging flags/reasons from all sources.
+    """
+
+    # --- helpers to build raw decision records directly ---
+
+    @staticmethod
+    def _sell(symbol: str, source: str, priority: float = 0.88) -> dict:
+        return {
+            "symbol": symbol, "decision": DECISION_SELL,
+            "source": source, "priority": priority,
+            "urgency": "high", "reason": f"{source} SELL for {symbol}",
+            "risk_flags": [f"{source}_flag"], "inputs_used": {f"{source}_key": 1},
+            "recommended_action": "", "recommended_amount": None,
+            "recommended_allocation_pct": None, "confidence": 0.9,
+        }
+
+    @staticmethod
+    def _hold(symbol: str, source: str, priority: float = 0.55) -> dict:
+        return {
+            "symbol": symbol, "decision": DECISION_HOLD,
+            "source": source, "priority": priority,
+            "urgency": "low", "reason": f"{source} HOLD for {symbol}",
+            "risk_flags": [f"{source}_hold_flag"], "inputs_used": {f"{source}_hold_key": 2},
+            "recommended_action": "", "recommended_amount": None,
+            "recommended_allocation_pct": None, "confidence": 0.9,
+        }
+
+    @staticmethod
+    def _buy(symbol: str, source: str, priority: float = 0.60) -> dict:
+        return {
+            "symbol": symbol, "decision": DECISION_BUY,
+            "source": source, "priority": priority,
+            "urgency": "medium", "reason": f"{source} BUY for {symbol}",
+            "risk_flags": [], "inputs_used": {},
+            "recommended_action": "", "recommended_amount": None,
+            "recommended_allocation_pct": None, "confidence": 0.8,
+        }
+
+    @staticmethod
+    def _scale(symbol: str, source: str, priority: float = 0.65) -> dict:
+        return {
+            "symbol": symbol, "decision": DECISION_SCALE,
+            "source": source, "priority": priority,
+            "urgency": "medium", "reason": f"{source} SCALE for {symbol}",
+            "risk_flags": ["scale_flag"], "inputs_used": {},
+            "recommended_action": "", "recommended_amount": None,
+            "recommended_allocation_pct": None, "confidence": 0.85,
+        }
+
+    def test_structural_and_portfolio_sell_collapses_to_one_sell(self):
+        """Requirement 1: two SELLs for same symbol → exactly one SELL remains."""
+        decisions = [
+            self._sell("QLD", SOURCE_STRUCTURAL, priority=0.95),
+            self._sell("QLD", SOURCE_PORTFOLIO, priority=0.87),
+        ]
+        result = consolidate_decisions(decisions)
+        qld = [d for d in result if d["symbol"] == "QLD"]
+        self.assertEqual(len(qld), 1)
+        self.assertEqual(qld[0]["decision"], DECISION_SELL)
+
+    def test_structural_sell_overrides_portfolio_hold(self):
+        """Requirement 2: structural SELL beats portfolio HOLD for same symbol."""
+        decisions = [
+            self._sell("QQQ", SOURCE_STRUCTURAL, priority=0.88),
+            self._hold("QQQ", SOURCE_PORTFOLIO, priority=0.80),
+        ]
+        result = consolidate_decisions(decisions)
+        qqq = [d for d in result if d["symbol"] == "QQQ"]
+        self.assertEqual(len(qqq), 1)
+        self.assertEqual(qqq[0]["decision"], DECISION_SELL)
+        self.assertEqual(qqq[0]["source"], SOURCE_STRUCTURAL)
+
+    def test_portfolio_sell_overrides_market_buy(self):
+        """Requirement 3: portfolio SELL outranks market BUY for same symbol."""
+        decisions = [
+            self._sell("VFH", SOURCE_PORTFOLIO, priority=0.70),
+            self._buy("VFH", SOURCE_MARKET, priority=0.62),
+        ]
+        result = consolidate_decisions(decisions)
+        vfh = [d for d in result if d["symbol"] == "VFH"]
+        self.assertEqual(len(vfh), 1)
+        self.assertEqual(vfh[0]["decision"], DECISION_SELL)
+        self.assertEqual(vfh[0]["source"], SOURCE_PORTFOLIO)
+
+    def test_scale_beats_buy_within_same_source(self):
+        """Requirement 4: SCALE outranks BUY when source precedence is equal."""
+        decisions = [
+            self._buy("MSFT", SOURCE_WATCHLIST, priority=0.60),
+            self._scale("MSFT", SOURCE_WATCHLIST, priority=0.58),
+        ]
+        result = consolidate_decisions(decisions)
+        msft = [d for d in result if d["symbol"] == "MSFT"]
+        self.assertEqual(len(msft), 1)
+        self.assertEqual(msft[0]["decision"], DECISION_SCALE)
+
+    def test_risk_flags_and_reasons_are_merged(self):
+        """Requirement 5: risk_flags union and reasons from all sources are preserved."""
+        d1 = self._sell("QLD", SOURCE_STRUCTURAL, priority=0.95)
+        d1["risk_flags"] = ["leverage_breach"]
+        d1["reason"] = "Structural leverage breach."
+        d2 = self._sell("QLD", SOURCE_PORTFOLIO, priority=0.87)
+        d2["risk_flags"] = ["leveraged_exposure"]
+        d2["reason"] = "Portfolio sell — leveraged ETF."
+        result = consolidate_decisions([d1, d2])
+        qld = result[0]
+        self.assertIn("leverage_breach", qld["risk_flags"])
+        self.assertIn("leveraged_exposure", qld["risk_flags"])
+        self.assertIn("Structural leverage breach", qld["reason"])
+        self.assertIn("Portfolio sell", qld["reason"])
+
+    def test_output_has_unique_symbols(self):
+        """Requirement 6: no symbol appears more than once in the output."""
+        decisions = [
+            self._sell("QLD", SOURCE_STRUCTURAL),
+            self._sell("QLD", SOURCE_PORTFOLIO),
+            self._hold("VFH", SOURCE_PORTFOLIO),
+            self._buy("VFH", SOURCE_MARKET),
+            self._buy("NVDA", SOURCE_WATCHLIST),
+        ]
+        result = consolidate_decisions(decisions)
+        symbols = [d["symbol"] for d in result]
+        self.assertEqual(len(symbols), len(set(symbols)))
+
+    def test_output_sorted_by_priority_after_consolidation(self):
+        """Requirement 7: rank_decisions ordering is preserved end-to-end."""
+        plan = build_decision_plan(
+            structural_violations=[_concentration_violation("QQQ")],
+            portfolio_adjustments=[
+                _portfolio_adjustment("QQQ", adjustment_mode="NO_ACTION"),
+                _portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY"),
+            ],
+            market_opportunities=[_underweight_opportunity("VFH")],
+            portfolio_context=_ctx(),
+        )
+        symbols = [d["symbol"] for d in plan]
+        self.assertEqual(len(symbols), len(set(symbols)), "symbols must be unique")
+        non_avoid = [d for d in plan if d["decision"] != DECISION_AVOID]
+        priorities = [d["priority"] for d in non_avoid]
+        self.assertEqual(priorities, sorted(priorities, reverse=True))
+
+    def test_generic_portfolio_symbol_not_deduplicated(self):
+        """PORTFOLIO/UNKNOWN symbols are exempt — multiple aggregate records kept."""
+        decisions = [
+            self._sell("PORTFOLIO", SOURCE_STRUCTURAL, priority=0.95),
+            self._sell("PORTFOLIO", SOURCE_STRUCTURAL, priority=0.88),
+        ]
+        result = consolidate_decisions(decisions)
+        portfolio_records = [d for d in result if d["symbol"] == "PORTFOLIO"]
+        self.assertEqual(len(portfolio_records), 2)
+
+    def test_no_mutation_of_input_list(self):
+        """consolidate_decisions must not mutate its input."""
+        d1 = self._sell("QLD", SOURCE_STRUCTURAL)
+        d2 = self._hold("QLD", SOURCE_PORTFOLIO)
+        original_flags_d1 = list(d1["risk_flags"])
+        consolidate_decisions([d1, d2])
+        self.assertEqual(d1["risk_flags"], original_flags_d1)
 
 
 if __name__ == "__main__":

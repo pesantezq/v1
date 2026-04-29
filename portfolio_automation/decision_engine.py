@@ -71,6 +71,17 @@ _DECISION_RANK: dict[str, int] = {
 }
 _RANK_TO_DECISION: dict[int, str] = {v: k for k, v in _DECISION_RANK.items()}
 
+# Decision precedence for consolidation (winner selection when two sources conflict).
+# SCALE > BUY: scaling an existing position reflects stronger conviction than opening new.
+_CONSOLIDATION_DECISION_RANK: dict[str, int] = {
+    DECISION_AVOID: 0,
+    DECISION_WAIT: 1,
+    DECISION_HOLD: 2,
+    DECISION_BUY: 3,
+    DECISION_SCALE: 4,
+    DECISION_SELL: 5,
+}
+
 # Maximum priority score each source type may produce.
 # Structural always outranks opportunity signals.
 _SOURCE_PRIORITY_CEILING: dict[str, float] = {
@@ -91,6 +102,15 @@ _VIOLATION_PRIORITY: dict[str, float] = {
 # Symbols that represent a portfolio-aggregate placeholder rather than a real ticker.
 # Used to detect generic violations that need resolving to specific holdings.
 _GENERIC_SYMBOLS: frozenset = frozenset({"PORTFOLIO", "UNKNOWN", ""})
+
+# Source precedence for consolidation — higher value wins when symbols conflict.
+_SOURCE_PRECEDENCE: dict[str, int] = {
+    SOURCE_STRUCTURAL: 5,
+    SOURCE_PORTFOLIO: 4,
+    SOURCE_FINANCE: 3,
+    SOURCE_WATCHLIST: 2,
+    SOURCE_MARKET: 1,
+}
 
 # Finance action_level → urgency + priority band.
 _FINANCE_URGENCY: dict[str, tuple[str, float]] = {
@@ -751,6 +771,75 @@ def _suppress_structural_hold_conflicts(decisions: list) -> list:
     ]
 
 
+def consolidate_decisions(decisions: list) -> list:
+    """
+    Reduce multiple decisions for the same symbol to one canonical record.
+
+    Winner selection (in priority order):
+      1. Highest source precedence (structural > portfolio > finance > watchlist > market)
+      2. Within same source precedence: highest decision strength (_DECISION_RANK)
+      3. Final tiebreak: highest priority score
+
+    Merge from all losers into the winner:
+      - risk_flags  : union, insertion-order deduped
+      - reason      : unique non-empty reasons joined with  ' | '
+      - inputs_used : shallow merge; winner's keys take precedence
+
+    Generic symbols (PORTFOLIO, UNKNOWN) are excluded from deduplication —
+    multiple aggregate violations are kept as distinct records.
+    """
+    generic: list = []
+    by_symbol: dict = {}
+
+    for d in decisions:
+        sym = d.get("symbol", "")
+        if sym in _GENERIC_SYMBOLS:
+            generic.append(d)
+        else:
+            by_symbol.setdefault(sym, []).append(d)
+
+    consolidated: list = list(generic)
+
+    for sym, group in by_symbol.items():
+        if len(group) == 1:
+            consolidated.append(group[0])
+            continue
+
+        # Sort: highest source precedence → highest decision strength → highest priority
+        def _winner_key(r: dict) -> tuple:
+            return (
+                _SOURCE_PRECEDENCE.get(r.get("source", ""), 0),
+                _CONSOLIDATION_DECISION_RANK.get(r.get("decision", DECISION_HOLD), 2),
+                r.get("priority", 0.0),
+            )
+
+        ranked = sorted(group, key=_winner_key, reverse=True)
+        winner = dict(ranked[0])
+        winner["risk_flags"] = list(ranked[0].get("risk_flags") or [])
+
+        merged_reasons: list = []
+        if winner.get("reason"):
+            merged_reasons.append(winner["reason"])
+        merged_inputs: dict = dict(winner.get("inputs_used") or {})
+
+        for other in ranked[1:]:
+            for flag in (other.get("risk_flags") or []):
+                if flag not in winner["risk_flags"]:
+                    winner["risk_flags"].append(flag)
+            reason = other.get("reason", "")
+            if reason and reason not in merged_reasons:
+                merged_reasons.append(reason)
+            for k, v in (other.get("inputs_used") or {}).items():
+                if k not in merged_inputs:
+                    merged_inputs[k] = v
+
+        winner["reason"] = " | ".join(merged_reasons) if len(merged_reasons) > 1 else (merged_reasons[0] if merged_reasons else "")
+        winner["inputs_used"] = merged_inputs
+        consolidated.append(winner)
+
+    return consolidated
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -818,6 +907,9 @@ def build_decision_plan(
 
     # Drop portfolio HOLDs that contradict an active structural SELL on the same symbol.
     all_decisions = _suppress_structural_hold_conflicts(all_decisions)
+
+    # One decision per symbol — merge duplicates by source/decision precedence.
+    all_decisions = consolidate_decisions(all_decisions)
 
     return rank_decisions(all_decisions)
 
