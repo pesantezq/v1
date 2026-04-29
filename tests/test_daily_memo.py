@@ -118,6 +118,87 @@ def _full_summary(**overrides) -> dict:
     return base
 
 
+def _decision_plan_payload() -> dict:
+    return {
+        "generated_at": "2026-04-27T09:15:23",
+        "run_mode": "daily",
+        "observe_only": True,
+        "total_decisions": 5,
+        "decisions": [
+            {
+                "symbol": "QLD",
+                "decision": "SELL",
+                "priority": 0.95,
+                "urgency": "critical",
+                "source": "structural",
+                "recommended_action": "Reduce QLD position.",
+                "recommended_amount": 1500.0,
+                "recommended_allocation_pct": 0.15,
+                "reason": "Structural leverage violation on QLD.",
+                "risk_flags": ["leverage_breach"],
+                "confidence": 1.0,
+                "inputs_used": {"violation_type": "leverage"},
+            },
+            {
+                "symbol": "QQQ",
+                "decision": "SELL",
+                "priority": 0.88,
+                "urgency": "high",
+                "source": "structural",
+                "recommended_action": "Trim QQQ concentration.",
+                "recommended_amount": 1000.0,
+                "recommended_allocation_pct": 0.40,
+                "reason": "Structural concentration violation on QQQ.",
+                "risk_flags": ["concentration_breach"],
+                "confidence": 1.0,
+                "inputs_used": {"violation_type": "concentration"},
+            },
+            {
+                "symbol": "VFH",
+                "decision": "SCALE",
+                "priority": 0.55,
+                "urgency": "low",
+                "source": "portfolio",
+                "recommended_action": "Add to VFH.",
+                "recommended_amount": 500.0,
+                "recommended_allocation_pct": 0.03,
+                "reason": "Underweight contribution target.",
+                "risk_flags": [],
+                "confidence": 0.9,
+                "inputs_used": {},
+            },
+            {
+                "symbol": "FANG",
+                "decision": "WAIT",
+                "priority": 0.55,
+                "urgency": "medium",
+                "source": "market",
+                "recommended_action": "Stand by on FANG.",
+                "recommended_amount": None,
+                "recommended_allocation_pct": None,
+                "reason": "Opportunity exists but confidence is not yet strong enough.",
+                "risk_flags": ["low_confidence"],
+                "confidence": 0.55,
+                "inputs_used": {},
+            },
+            {
+                "symbol": "XLRE",
+                "decision": "WAIT",
+                "priority": 0.55,
+                "urgency": "medium",
+                "source": "market",
+                "recommended_action": "Stand by on XLRE.",
+                "recommended_amount": None,
+                "recommended_allocation_pct": None,
+                "reason": "Opportunity exists but confidence is not yet strong enough.",
+                "risk_flags": [],
+                "confidence": 0.55,
+                "inputs_used": {},
+            },
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # TestGetSubject
 # ---------------------------------------------------------------------------
@@ -309,6 +390,39 @@ class TestBuildDailyMemoFull:
         result = build_daily_memo(_full_summary(changes=ch))
         assert "No previous" in result
 
+    def test_decision_engine_sections_present_when_plan_attached(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "TOP DECISIONS" in result
+        assert "CAPITAL ACTIONS" in result
+        assert "RISK FOCUS" in result
+
+    def test_structural_decisions_appear_first_in_top_decisions(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        top_idx = result.index("TOP DECISIONS")
+        qld_idx = result.index("QLD", top_idx)
+        qqq_idx = result.index("QQQ", top_idx)
+        vfh_idx = result.index("VFH", top_idx)
+        assert qld_idx < vfh_idx
+        assert qqq_idx < vfh_idx
+
+    def test_risk_focus_mentions_structural_risks(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "Concentration risk is active" in result
+        assert "Leverage risk is active" in result
+
+    def test_capital_actions_summarize_total_amount(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "Total recommended capital amount:" in result
+        assert "$3,000.00" in result
+
 
 # ---------------------------------------------------------------------------
 # TestBuildDailyMemoMd
@@ -375,6 +489,14 @@ class TestBuildDailyMemoMd:
         result = build_daily_memo_md(s)
         assert "DEGRADED" in result
 
+    def test_decision_plan_sections_present(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo_md(summary)
+        assert "## Top Decisions" in result
+        assert "## Capital Actions" in result
+        assert "## Risk Focus" in result
+
 
 # ---------------------------------------------------------------------------
 # TestSendEmail
@@ -382,9 +504,13 @@ class TestBuildDailyMemoMd:
 
 class TestSendEmail:
     def test_returns_false_when_env_vars_missing(self, monkeypatch):
-        for var in ("SMTP_SERVER", "EMAIL_USER", "EMAIL_PASS", "EMAIL_TO"):
+        for var in (
+            "SMTP_SERVER", "SMTP_HOST", "EMAIL_USER", "EMAIL_SENDER",
+            "EMAIL_PASS", "EMAIL_PASSWORD", "EMAIL_TO", "EMAIL_RECIPIENT",
+        ):
             monkeypatch.delenv(var, raising=False)
-        result = send_email("memo text")
+        with patch("watchlist_scanner.daily_memo._load_email_env", return_value=None):
+            result = send_email("memo text")
         assert result is False
 
     def test_returns_false_when_server_missing(self, monkeypatch):
@@ -406,10 +532,14 @@ class TestSendEmail:
 
     def test_subject_extracted_from_memo_text(self, monkeypatch):
         # env vars missing → returns False, but subject extraction must not crash
-        for var in ("SMTP_SERVER", "EMAIL_USER", "EMAIL_PASS", "EMAIL_TO"):
+        for var in (
+            "SMTP_SERVER", "SMTP_HOST", "EMAIL_USER", "EMAIL_SENDER",
+            "EMAIL_PASS", "EMAIL_PASSWORD", "EMAIL_TO", "EMAIL_RECIPIENT",
+        ):
             monkeypatch.delenv(var, raising=False)
         memo = "Subject: Daily Investment Memo — 2026-04-27\n\nBody."
-        result = send_email(memo)
+        with patch("watchlist_scanner.daily_memo._load_email_env", return_value=None):
+            result = send_email(memo)
         assert result is False  # fails gracefully
 
 
@@ -498,6 +628,59 @@ class TestGenerateDailyMemo:
         txt, md = generate_daily_memo(root=tmp_path, write_files=False)
         assert "Advisory only" in txt
         assert "# Daily Investment Memo" in md
+
+    def test_missing_decision_plan_file_shows_unavailable(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Decision plan unavailable." in txt
+        assert "_Decision plan unavailable._" in md
+
+    def test_valid_decision_plan_file_is_rendered(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+        (out_dir / "decision_plan.json").write_text(
+            json.dumps(_decision_plan_payload()), encoding="utf-8"
+        )
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "TOP DECISIONS" in txt
+        assert "QLD" in txt
+        assert "QQQ" in txt
+        assert "Risk Flags: leverage_breach" in txt
+        assert "## Top Decisions" in md
+        assert "Structural decisions lead the plan" in md
+
+    def test_structural_decisions_render_before_other_actions(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+        (out_dir / "decision_plan.json").write_text(
+            json.dumps(_decision_plan_payload()), encoding="utf-8"
+        )
+
+        txt, _ = generate_daily_memo(root=tmp_path, write_files=False)
+        top_idx = txt.index("TOP DECISIONS")
+        qld_idx = txt.index("QLD", top_idx)
+        qqq_idx = txt.index("QQQ", top_idx)
+        vfh_idx = txt.index("VFH", top_idx)
+        assert qld_idx < vfh_idx
+        assert qqq_idx < vfh_idx
 
     def test_real_summary_written_then_read(self, tmp_path):
         import json
@@ -630,9 +813,13 @@ class TestSendEmailRetry:
 
 class TestSendTestEmail:
     def test_returns_false_when_env_missing(self, monkeypatch):
-        for var in ("SMTP_SERVER", "EMAIL_USER", "EMAIL_PASS", "EMAIL_TO"):
+        for var in (
+            "SMTP_SERVER", "SMTP_HOST", "EMAIL_USER", "EMAIL_SENDER",
+            "EMAIL_PASS", "EMAIL_PASSWORD", "EMAIL_TO", "EMAIL_RECIPIENT",
+        ):
             monkeypatch.delenv(var, raising=False)
-        assert send_test_email() is False
+        with patch("watchlist_scanner.daily_memo._load_email_env", return_value=None):
+            assert send_test_email() is False
 
     def test_uses_correct_subject(self, monkeypatch):
         _set_smtp_env(monkeypatch)

@@ -36,6 +36,7 @@ from typing import Any
 logger = logging.getLogger("watchlist_scanner.daily_memo")
 
 _SUMMARY_JSON_REL = ("outputs", "latest", "system_decision_summary.json")
+_DECISION_PLAN_JSON_REL = ("outputs", "latest", "decision_plan.json")
 _MEMO_TXT_REL     = ("outputs", "latest", "daily_memo.txt")
 _MEMO_MD_REL      = ("outputs", "latest", "daily_memo.md")
 
@@ -82,6 +83,39 @@ def _fmt_delta(val: Any, places: int = 4) -> str:
 def _label(val: Any) -> str:
     """Normalise a snake_case label to Title Case."""
     return str(val or "—").replace("_", " ").title()
+
+
+# ---------------------------------------------------------------------------
+# Decision plan helpers
+# ---------------------------------------------------------------------------
+
+def _decision_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return the attached decision-plan payload if present."""
+    raw = summary.get("_decision_plan") or summary.get("decision_plan") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _decision_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return decision rows from an attached decision-plan payload."""
+    payload = _decision_payload(summary)
+    rows = payload.get("decisions") or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _fmt_money(val: Any) -> str:
+    try:
+        return f"${float(val):,.2f}"
+    except (TypeError, ValueError):
+        return "â€”"
+
+
+def _decision_reason(row: dict[str, Any]) -> str:
+    reason = str(row.get("reason") or "").strip()
+    return reason if reason else "No decision rationale provided."
+
+
+def _top_structural_decisions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in rows if str(r.get("source") or "") == "structural"]
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +177,7 @@ def build_daily_memo(summary: dict[str, Any]) -> str:
     ss = dict(summary.get("system_state") or {})
     dh = dict(summary.get("data_health") or {})
     ch = dict(summary.get("changes") or {})
+    dp_rows = _decision_rows(summary)
 
     lines: list[str] = []
     a = lines.append
@@ -257,6 +292,91 @@ def build_daily_memo(summary: dict[str, Any]) -> str:
     a("")
 
     # ── POLICY STATUS ────────────────────────────────────────────────────────
+    # Decision Engine: Top Decisions
+    a(_LINE)
+    a("  TOP DECISIONS")
+    a(_LINE)
+    if dp_rows:
+        for idx, row in enumerate(dp_rows[:5], 1):
+            decision = str(row.get("decision") or "â€”")
+            symbol = str(row.get("symbol") or "â€”")
+            priority = _flt(row.get("priority"))
+            source = str(row.get("source") or "â€”")
+            urgency = str(row.get("urgency") or "â€”")
+            a(
+                f"  {idx}. {decision:<6} {symbol:<8} "
+                f"pri={priority:.3f}  src={source}  urgency={urgency}"
+            )
+            a(f"     Reason: {_decision_reason(row)}")
+            flags = row.get("risk_flags") or []
+            if flags:
+                a(f"     Risk Flags: {', '.join(str(f) for f in flags)}")
+    else:
+        a("  Decision plan unavailable.")
+    a("")
+
+    # Decision Engine: Capital Actions
+    a(_LINE)
+    a("  CAPITAL ACTIONS")
+    a(_LINE)
+    capital_rows = [
+        r for r in dp_rows
+        if str(r.get("decision") or "") in {"SELL", "SCALE", "BUY"}
+    ]
+    if capital_rows:
+        action_counts = {"SELL": 0, "SCALE": 0, "BUY": 0}
+        total_amount = 0.0
+        amount_count = 0
+        for row in capital_rows:
+            action = str(row.get("decision") or "")
+            action_counts[action] = action_counts.get(action, 0) + 1
+            amount = row.get("recommended_amount")
+            try:
+                total_amount += float(amount)
+                amount_count += 1
+            except (TypeError, ValueError):
+                pass
+        a(
+            "  Actions: "
+            f"SELL={action_counts.get('SELL', 0)}, "
+            f"SCALE={action_counts.get('SCALE', 0)}, "
+            f"BUY={action_counts.get('BUY', 0)}"
+        )
+        if amount_count > 0:
+            a(f"  Total recommended capital amount: {_fmt_money(total_amount)}")
+        top_actions = [
+            f"{r.get('decision', 'â€”')} {r.get('symbol', 'â€”')}"
+            for r in capital_rows[:5]
+        ]
+        a(f"  Top actions: {', '.join(top_actions)}")
+    else:
+        a("  No capital actions in the current decision plan.")
+    a("")
+
+    # Decision Engine: Risk Focus
+    a(_LINE)
+    a("  RISK FOCUS")
+    a(_LINE)
+    structural_rows = _top_structural_decisions(dp_rows)
+    if structural_rows:
+        top_structural = ", ".join(
+            f"{r.get('symbol', 'â€”')} ({r.get('decision', 'â€”')})"
+            for r in structural_rows[:3]
+        )
+        a(f"  Structural decisions lead the plan: {top_structural}")
+        violation_types: list[str] = []
+        for row in structural_rows:
+            vtype = str((row.get('inputs_used') or {}).get('violation_type') or '').strip()
+            if vtype and vtype not in violation_types:
+                violation_types.append(vtype)
+        if "concentration" in violation_types:
+            a("  Concentration risk is active and should be reviewed first.")
+        if "leverage" in violation_types:
+            a("  Leverage risk is active and should be reduced first.")
+    else:
+        a("  No structural decisions at the top of the current plan.")
+    a("")
+
     a(_LINE)
     a("  POLICY STATUS")
     a(_LINE)
@@ -318,6 +438,7 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
     ss = dict(summary.get("system_state") or {})
     dh = dict(summary.get("data_health") or {})
     ch = dict(summary.get("changes") or {})
+    dp_rows = _decision_rows(summary)
 
     lines: list[str] = []
     a = lines.append
@@ -416,6 +537,79 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
         a("_No capital preview data available._")
     a("")
 
+    # Top Decisions
+    a("## Top Decisions")
+    if dp_rows:
+        for row in dp_rows[:5]:
+            decision = str(row.get("decision") or "â€”")
+            symbol = str(row.get("symbol") or "â€”")
+            priority = _flt(row.get("priority"))
+            source = str(row.get("source") or "â€”")
+            urgency = str(row.get("urgency") or "â€”")
+            a(
+                f"- **{decision}** `{symbol}` Â· priority `{priority:.3f}` "
+                f"Â· source `{source}` Â· urgency `{urgency}`"
+            )
+            a(f"  - Reason: {_decision_reason(row)}")
+            flags = row.get("risk_flags") or []
+            if flags:
+                a(f"  - Risk flags: {', '.join(str(f) for f in flags)}")
+    else:
+        a("_Decision plan unavailable._")
+    a("")
+
+    # Capital Actions
+    a("## Capital Actions")
+    capital_rows = [
+        r for r in dp_rows
+        if str(r.get("decision") or "") in {"SELL", "SCALE", "BUY"}
+    ]
+    if capital_rows:
+        action_counts = {"SELL": 0, "SCALE": 0, "BUY": 0}
+        total_amount = 0.0
+        amount_count = 0
+        for row in capital_rows:
+            action = str(row.get("decision") or "")
+            action_counts[action] = action_counts.get(action, 0) + 1
+            amount = row.get("recommended_amount")
+            try:
+                total_amount += float(amount)
+                amount_count += 1
+            except (TypeError, ValueError):
+                pass
+        a(
+            f"- SELL: {action_counts.get('SELL', 0)}  "
+            f"Â· SCALE: {action_counts.get('SCALE', 0)}  "
+            f"Â· BUY: {action_counts.get('BUY', 0)}"
+        )
+        if amount_count > 0:
+            a(f"- Total recommended capital amount: {_fmt_money(total_amount)}")
+    else:
+        a("_No capital actions in the current decision plan._")
+    a("")
+
+    # Risk Focus
+    a("## Risk Focus")
+    structural_rows = _top_structural_decisions(dp_rows)
+    if structural_rows:
+        top_structural = ", ".join(
+            f"`{r.get('symbol', 'â€”')}` ({r.get('decision', 'â€”')})"
+            for r in structural_rows[:3]
+        )
+        a(f"- Structural decisions lead the plan: {top_structural}")
+        violation_types: list[str] = []
+        for row in structural_rows:
+            vtype = str((row.get("inputs_used") or {}).get("violation_type") or "").strip()
+            if vtype and vtype not in violation_types:
+                violation_types.append(vtype)
+        if "concentration" in violation_types:
+            a("- Concentration risk is active and should be reviewed first.")
+        if "leverage" in violation_types:
+            a("- Leverage risk is active and should be reduced first.")
+    else:
+        a("_No structural decisions at the top of the current plan._")
+    a("")
+
     # Policy Status
     a("## Policy Status")
     ws  = _label(ss.get("ranking_weights_source") or "default")
@@ -470,12 +664,17 @@ def generate_daily_memo(
     root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
 
     summary = _safe_load(root_path.joinpath(*_SUMMARY_JSON_REL))
+    decision_plan = _safe_load(root_path.joinpath(*_DECISION_PLAN_JSON_REL))
     if not summary:
         logger.warning(
             "daily_memo: system_decision_summary.json not found at %s — "
             "generating empty memo. Run `python -m watchlist_scanner.system_summary` first.",
             root_path.joinpath(*_SUMMARY_JSON_REL),
         )
+
+    if decision_plan:
+        summary = dict(summary)
+        summary["_decision_plan"] = decision_plan
 
     memo_txt = build_daily_memo(summary)
     memo_md  = build_daily_memo_md(summary)
