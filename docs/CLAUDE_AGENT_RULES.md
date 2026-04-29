@@ -17,12 +17,15 @@ This repository is designed for analysis and decision support. AI agents must pr
 
 ## FMP Data Rules (Hard Constraint)
 
-- Only use endpoints defined in `fmp_endpoint_registry.py` — it is the source of truth.
+- Only use endpoints defined in `fmp_endpoint_registry.py` because it is the source of truth.
 - All new endpoints must be added to the registry before being used in code.
 - Never use `/v3/` or `/v4/` endpoints in the daily scanner path without explicit user approval.
-- All endpoint changes must pass `python -m fmp_endpoint_compliance` → RESULT: COMPLIANT.
-- Starter plan compatibility is mandatory — `starter_safe: True` required for any daily scanner endpoint.
-- The stable base URL (`FMP_STABLE_BASE_URL`) must be used for all core endpoints; `FMP_BASE_URL` is legacy/universe only.
+- All endpoint changes must pass `python -m fmp_endpoint_compliance` → `RESULT: COMPLIANT`.
+- Preflight is mandatory before production daily runs: `bash scripts/preflight.sh`.
+- FMP-focused tests must pass before pipeline execution: `python -m pytest tests/ -k fmp -v`.
+- No endpoint changes may bypass the registry, even temporarily.
+- Starter plan compatibility is mandatory. `starter_safe: True` is required for any daily scanner endpoint.
+- The stable base URL (`FMP_STABLE_BASE_URL`) must be used for all core endpoints. `FMP_BASE_URL` is legacy or universe-only.
 
 ## Protected Semantics
 
@@ -37,7 +40,7 @@ This repository is designed for analysis and decision support. AI agents must pr
 - `final_rank_score`
   Ordering score.
 - `recommendation_score`
-  Policy/profile recommendation score.
+  Policy or profile recommendation score.
 
 These scores may be improved, but their meanings must remain explicit and separate.
 
@@ -67,7 +70,7 @@ These scores may be improved, but their meanings must remain explicit and separa
 - Name exact files and functions before changing behavior.
 - Prefer the narrowest module that fixes the issue.
 - Preserve backward compatibility in artifacts and state.
-- Lower certainty when data is stale or incomplete; do not fabricate conviction.
+- Lower certainty when data is stale or incomplete. Do not fabricate conviction.
 
 ## Required Validation Before Finishing
 
@@ -75,6 +78,8 @@ These scores may be improved, but their meanings must remain explicit and separa
 - Validate the relevant artifact contracts.
 - Check SQLite migrations if state changed.
 - Confirm the docs describe actual behavior, not intended future behavior.
+- For production-run changes, validate `bash scripts/preflight.sh`.
+- Keep `scripts/run_daily_safe.sh` as the required cron wrapper for daily production runs.
 
 ## Communication Rules For AI Agents
 

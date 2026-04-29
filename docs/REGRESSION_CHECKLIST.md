@@ -1,6 +1,14 @@
 # Regression Checklist
 
-Use this before merging any change that touches scoring, ranking, allocation, state, FMP wiring, or output artifacts.
+Use this before merging any change that touches scoring, ranking, allocation, state, FMP wiring, output artifacts, or production automation.
+
+## 0. Production Preflight Gate
+
+- `bash scripts/preflight.sh` is mandatory before production daily runs
+- `python -m fmp_endpoint_compliance` must still emit `RESULT: COMPLIANT`
+- `python -m pytest tests/ -k fmp -v` must pass before any production pipeline execution
+- no FMP endpoint changes may bypass `fmp_endpoint_registry.py`
+- production daily automation should use `bash scripts/run_daily_safe.sh`, not a direct `python main.py` cron entry
 
 ## 1. Compile And Import Checks
 
@@ -20,8 +28,8 @@ Use this before merging any change that touches scoring, ranking, allocation, st
 ## 3. Endpoint Validation
 
 **FMP COMPLIANCE (MANDATORY)**
-- [ ] `python -m fmp_endpoint_compliance` → RESULT: COMPLIANT
-- [ ] `pytest tests/ -k fmp` → 100% PASS
+- [ ] `python -m fmp_endpoint_compliance` → `RESULT: COMPLIANT`
+- [ ] `python -m pytest tests/ -k fmp -v` → 100% PASS
 - [ ] No new endpoints bypass registry
 - [ ] No v3 endpoints added without explicit approval
 
@@ -36,6 +44,7 @@ Use this before merging any change that touches scoring, ranking, allocation, st
 - Run `python -m watchlist_scanner --dry-run`
 - Run `python run_daily_pipeline.py --dry-run`
 - If `main.py` behavior changed, run `python main.py --run-mode daily --dry-run`
+- For production safety checks, run `DRY_RUN_MODE=1 bash scripts/run_daily_safe.sh`
 
 ## 5. Artifact Validation
 

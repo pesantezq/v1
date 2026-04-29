@@ -2,6 +2,8 @@
 
 ## Primary Entry Points
 
+- `bash scripts/preflight.sh`
+- `bash scripts/run_daily_safe.sh`
 - `python main.py --run-mode daily`
 - `python main.py --run-mode weekly`
 - `python main.py --run-mode monthly`
@@ -15,6 +17,14 @@
 
 Command:
 `python main.py --run-mode daily`
+
+Production gate:
+
+- run `bash scripts/preflight.sh` first
+- production cron should call `bash scripts/run_daily_safe.sh`
+- FMP compliance must remain `RESULT: COMPLIANT`
+- FMP-focused tests must pass before the daily pipeline is allowed to run
+- no endpoint changes may bypass `fmp_endpoint_registry.py`
 
 Typical outcomes:
 
@@ -40,6 +50,22 @@ Stages:
 7. policy activation check
 8. system summary
 9. daily memo
+
+### Daily safe wrapper
+
+Command:
+`bash scripts/run_daily_safe.sh`
+
+Wrapper behavior:
+
+- auto-detects repo root
+- activates `.venv`
+- loads `.env` when present
+- runs preflight before pipeline execution
+- writes logs to `logs/daily_safe_YYYY-MM-DD.log`
+- can use `DRY_RUN_MODE=1` to call `python main.py --run-mode daily --dry-run`
+- `DRY_RUN_MODE=1` follows the current application dry-run behavior, which may still emit cache-only watchlist artifacts
+- for a strictly preflight-only validation, run `bash scripts/preflight.sh` without the wrapper
 
 ## Weekly
 
@@ -111,10 +137,12 @@ Symptoms:
 
 - broader-market scanner unavailable
 - FMP fallback disabled
+- preflight fails before the daily run starts
 
 Fix:
 
 - add `FMP_API_KEY` to `.env`
+- rerun `bash scripts/preflight.sh`
 
 ### Missing `ALPHA_VANTAGE_API_KEY`
 
@@ -127,7 +155,20 @@ Fix:
 - add `ALPHA_VANTAGE_API_KEY` to `.env`
 - use `--dry-run` only when cache is intentionally being reused
 
-### FMP circuit breaker open
+### FMP Compliance Failure
+
+Symptoms:
+
+- `python -m fmp_endpoint_compliance` is non-compliant
+- wrapper stops before the daily run
+
+Fix:
+
+- inspect registry coverage before touching the daily pipeline
+- restore compliant endpoint usage
+- do not bypass the registry with direct URLs
+
+### FMP Circuit Breaker Open
 
 Symptoms:
 
@@ -136,10 +177,10 @@ Symptoms:
 Fix:
 
 - inspect `subsystem_health` in SQLite
-- correct the credential/provider issue
-- clear/reset the subsystem row only after root cause is fixed
+- correct the credential or provider issue
+- clear or reset the subsystem row only after root cause is fixed
 
-### Budget exhaustion
+### Budget Exhaustion
 
 Symptoms:
 
@@ -154,18 +195,18 @@ Fix:
 - warm caches with fuller runs
 - reduce requested universe breadth if needed
 
-### Missing recommendation history
+### Missing Recommendation History
 
 Symptoms:
 
-- `recommendation_evaluation.json` has zeros/empty dicts
+- `recommendation_evaluation.json` has zeros or empty dicts
 
 Fix:
 
 - run `main.py` enough times to produce scored recommendation history
 - do not treat this as a pipeline error
 
-### GUI missing data
+### GUI Missing Data
 
 Symptoms:
 
@@ -181,4 +222,5 @@ Fix:
 
 - `outputs/latest` is the current working set.
 - `outputs/history/YYYY-MM-DD` is the archived daily snapshot after successful `main.py` runs.
-- SQLite is persistent system memory; deleting it resets cooldowns, evaluation state, and subsystem health.
+- SQLite is persistent system memory. Deleting it resets cooldowns, evaluation state, and subsystem health.
+- For VPS automation, prefer `bash scripts/run_daily_safe.sh` over direct cron calls to `python main.py`.
