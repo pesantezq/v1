@@ -12,6 +12,9 @@ from gui_operator_data import (
     load_operator_dashboard_data,
     _normalize_decision_brief,
     _compact_decision_reason,
+    load_decision_explanations,
+    _ai_validation_badge,
+    _get_insight_cards,
 )
 
 
@@ -442,6 +445,175 @@ class TestCompactDecisionReason(unittest.TestCase):
         compact = _compact_decision_reason({"reason": long_reason})
         self.assertLess(len(compact), len(long_reason))
         self.assertLessEqual(len(compact), 80)
+
+
+_EXPLANATIONS_REL = "outputs/latest/decision_explanations.json"
+
+
+def _make_expl(symbol="QLD", action="SELL", validation="caution", risks=None, watch=None) -> dict:
+    return {
+        "decision_id": f"1-{symbol}-{action}-structural",
+        "symbol": symbol,
+        "action": action,
+        "priority": 0.95,
+        "urgency": "critical",
+        "source": "structural",
+        "concise_explanation": "Leverage exceeds cap.",
+        "risks": risks if risks is not None else ["leverage_breach"],
+        "what_to_watch_next": watch if watch is not None else ["Leverage after trim."],
+        "explanation_basis": ["source:structural"],
+        "ai_validation": validation,
+    }
+
+
+def _make_explanations_payload(explanations=None, available=True) -> dict:
+    rows = explanations or []
+    return {
+        "generated_at": "2026-04-29T08:00:00",
+        "available": available,
+        "observe_only": True,
+        "summary_line": f"{len(rows)} explanations generated.",
+        "explanations": rows,
+    }
+
+
+class TestAIInsightCards(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_explanations(self, payload: dict) -> None:
+        path = self.root / _EXPLANATIONS_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # load correctly
+    # ------------------------------------------------------------------
+
+    def test_explanations_load_correctly(self):
+        payload = _make_explanations_payload([_make_expl()])
+        self._write_explanations(payload)
+        result = load_decision_explanations(self.root)
+        self.assertTrue(result["available"])
+        self.assertEqual(1, len(result["explanations"]))
+        self.assertEqual("QLD", result["explanations"][0]["symbol"])
+
+    def test_explanations_in_bundle(self):
+        payload = _make_explanations_payload([_make_expl()])
+        self._write_explanations(payload)
+        bundle = load_operator_dashboard_data(self.root)
+        self.assertIn("decision_explanations", bundle)
+        self.assertTrue(bundle["decision_explanations"]["available"])
+
+    # ------------------------------------------------------------------
+    # missing file handled
+    # ------------------------------------------------------------------
+
+    def test_missing_file_returns_unavailable(self):
+        result = load_decision_explanations(self.root)
+        self.assertFalse(result["available"])
+        self.assertIn("No AI explanations available", result["summary_line"])
+        self.assertEqual([], result["explanations"])
+
+    def test_missing_file_does_not_raise(self):
+        try:
+            load_decision_explanations(self.root)
+        except Exception as exc:
+            self.fail(f"load_decision_explanations raised unexpectedly: {exc}")
+
+    # ------------------------------------------------------------------
+    # malformed file handled
+    # ------------------------------------------------------------------
+
+    def test_malformed_json_returns_unavailable(self):
+        path = self.root / _EXPLANATIONS_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{bad json", encoding="utf-8")
+        result = load_decision_explanations(self.root)
+        self.assertFalse(result["available"])
+        self.assertEqual([], result["explanations"])
+
+    def test_malformed_non_dict_returns_unavailable(self):
+        path = self.root / _EXPLANATIONS_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+        result = load_decision_explanations(self.root)
+        self.assertFalse(result["available"])
+
+    # ------------------------------------------------------------------
+    # available=False in payload passes through
+    # ------------------------------------------------------------------
+
+    def test_available_false_in_payload_returns_unavailable(self):
+        payload = _make_explanations_payload([_make_expl()], available=False)
+        self._write_explanations(payload)
+        result = load_decision_explanations(self.root)
+        self.assertFalse(result["available"])
+        self.assertEqual([], result["explanations"])
+
+    # ------------------------------------------------------------------
+    # max 5 cards enforced
+    # ------------------------------------------------------------------
+
+    def test_max_5_cards_enforced(self):
+        rows = [_make_expl(symbol=str(i)) for i in range(7)]
+        self._write_explanations(_make_explanations_payload(rows))
+        result = load_decision_explanations(self.root)
+        cards = _get_insight_cards(result)
+        self.assertEqual(5, len(cards))
+
+    def test_get_insight_cards_returns_empty_when_unavailable(self):
+        result = load_decision_explanations(self.root)  # file missing → unavailable
+        self.assertEqual([], _get_insight_cards(result))
+
+    # ------------------------------------------------------------------
+    # risks capped at 3 in render slice
+    # ------------------------------------------------------------------
+
+    def test_risks_capped_at_3(self):
+        expl = _make_expl(risks=["a", "b", "c", "d", "e"])
+        self._write_explanations(_make_explanations_payload([expl]))
+        result = load_decision_explanations(self.root)
+        cards = _get_insight_cards(result)
+        rendered_risks = (cards[0].get("risks") or [])[:3]
+        self.assertEqual(3, len(rendered_risks))
+        self.assertEqual(["a", "b", "c"], rendered_risks)
+
+    # ------------------------------------------------------------------
+    # watch_next capped at 3 in render slice
+    # ------------------------------------------------------------------
+
+    def test_watch_next_capped_at_3(self):
+        expl = _make_expl(watch=["w1", "w2", "w3", "w4"])
+        self._write_explanations(_make_explanations_payload([expl]))
+        result = load_decision_explanations(self.root)
+        cards = _get_insight_cards(result)
+        rendered_watch = (cards[0].get("what_to_watch_next") or [])[:3]
+        self.assertEqual(3, len(rendered_watch))
+
+    # ------------------------------------------------------------------
+    # badge mapping
+    # ------------------------------------------------------------------
+
+    def test_badge_boost(self):
+        self.assertEqual("↑ boost", _ai_validation_badge("boost"))
+
+    def test_badge_neutral(self):
+        self.assertEqual("• neutral", _ai_validation_badge("neutral"))
+
+    def test_badge_caution(self):
+        self.assertEqual("⚠ caution", _ai_validation_badge("caution"))
+
+    def test_badge_unknown_defaults_to_neutral(self):
+        self.assertEqual("• neutral", _ai_validation_badge("unknown_label"))
+
+    def test_badge_case_insensitive(self):
+        self.assertEqual("↑ boost", _ai_validation_badge("BOOST"))
+        self.assertEqual("⚠ caution", _ai_validation_badge("Caution"))
 
 
 if __name__ == "__main__":

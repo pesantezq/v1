@@ -31,6 +31,7 @@ CORE_ARTIFACTS = {
 
 DECISION_PLAN_RELATIVE_PATH = ("outputs", "latest", "decision_plan.json")
 SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_summary.json")
+DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanations.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1231,6 +1232,42 @@ def _compact_decision_reason(row: dict[str, Any], max_len: int = 80) -> str:
     return _cap_sentence(deduped)
 
 
+_AI_BADGE_MAP: dict[str, str] = {
+    "boost": "↑ boost",
+    "neutral": "• neutral",
+    "caution": "⚠ caution",
+}
+
+
+def _ai_validation_badge(label: str) -> str:
+    return _AI_BADGE_MAP.get(str(label).lower().strip(), "• neutral")
+
+
+def load_decision_explanations(root: Path | str) -> dict[str, Any]:
+    path = Path(root).joinpath(*DECISION_EXPLANATIONS_RELATIVE_PATH)
+    if not path.exists():
+        return {"available": False, "explanations": [], "summary_line": "No AI explanations available."}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {"available": False, "explanations": [], "summary_line": "AI explanation file could not be read."}
+    if not isinstance(payload, dict):
+        return {"available": False, "explanations": [], "summary_line": "AI explanation file is malformed."}
+    if not payload.get("available"):
+        return {
+            "available": False,
+            "explanations": [],
+            "summary_line": payload.get("summary_line") or "No AI explanations available.",
+        }
+    return payload
+
+
+def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(data, dict) or not data.get("available"):
+        return []
+    return (data.get("explanations") or [])[:5]
+
+
 def _normalize_decision_brief(
     *,
     decision_plan: dict[str, Any],
@@ -1397,6 +1434,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
             decision_plan=decision_plan,
             system_summary=system_decision_summary,
         ),
+        "decision_explanations": load_decision_explanations(root_path),
     }
 
 

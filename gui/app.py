@@ -34,6 +34,8 @@ from gui_operator_data import (
     load_profit_attribution,
     load_rotation_events,
     _compact_decision_reason,
+    _ai_validation_badge,
+    _get_insight_cards,
 )
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
@@ -2533,6 +2535,45 @@ def _format_decision_queue_rows(raw_rows: list[dict]) -> list[dict]:
     return formatted
 
 
+def _render_ai_insight_cards(bundle: dict) -> None:
+    data = bundle.get("decision_explanations") or {}
+    cards = _get_insight_cards(data)
+
+    st.markdown("### AI Insights")
+
+    if not cards:
+        msg = data.get("summary_line") or "No AI explanations available."
+        st.caption(msg)
+        return
+
+    for row in cards:
+        action = row.get("action") or "UNKNOWN"
+        symbol = row.get("symbol") or "UNKNOWN"
+        validation = str(row.get("ai_validation") or "neutral").lower().strip()
+        badge = _ai_validation_badge(validation)
+        if validation == "boost":
+            badge_md = f":green[{badge}]"
+        elif validation == "caution":
+            badge_md = f":orange[{badge}]"
+        else:
+            badge_md = badge
+
+        st.markdown(f"**{action} {symbol}** | {badge_md}")
+        st.write(row.get("concise_explanation") or "No explanation available.")
+
+        risks = (row.get("risks") or [])[:3]
+        if risks:
+            st.caption(f"Risks: {', '.join(risks)}")
+
+        watch_items = (row.get("what_to_watch_next") or [])[:3]
+        if watch_items:
+            st.caption("Watch next:")
+            for item in watch_items:
+                st.caption(f"  - {item}")
+
+        st.markdown("---")
+
+
 def _render_decision_brief_summary(bundle: dict) -> None:
     brief = bundle.get("decision_brief") or {}
 
@@ -2599,6 +2640,8 @@ def _render_decision_brief_summary(bundle: dict) -> None:
         for item in health_items:
             st.markdown(f"- {item}")
 
+    st.divider()
+    _render_ai_insight_cards(bundle)
     st.divider()
     with st.expander("Full Decision Plan Queue", expanded=False):
         full_rows = brief.get("full_decisions") or []
