@@ -1200,7 +1200,14 @@ class WatchlistScanner:
         elif breadth == 1:
             quality_tier = "thin"
 
-        if data_quality == "cached":
+        if data_quality == "partial":
+            if quality_tier == "broad":
+                quality_tier = "confirmed"
+            elif quality_tier == "confirmed":
+                quality_tier = "thin"
+            elif quality_tier == "thin":
+                quality_tier = "none"
+        elif data_quality == "cached":
             if quality_tier == "broad":
                 quality_tier = "confirmed"
             elif quality_tier == "confirmed":
