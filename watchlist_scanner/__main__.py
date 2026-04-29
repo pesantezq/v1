@@ -432,17 +432,18 @@ def run(
         result["portfolio_construction"]["market_regime"] = regime
 
     # Write outputs unless dry_run
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    portfolio_out = out.parent / "portfolio"
-    portfolio_out.mkdir(parents=True, exist_ok=True)
-    _write_signals_json(out, result)
-    _write_alerts_csv(out, result.get("alerts", []))
-    _write_summary_md(out, result)
-    _write_portfolio_snapshot_json(portfolio_out, result.get("portfolio_construction") or {})
-    _write_portfolio_summary_md(portfolio_out, result.get("portfolio_construction") or {})
-    if manual_dry_run:
-        logger.info("Dry-run: wrote cache-only outputs")
+    if not manual_dry_run:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        portfolio_out = out.parent / "portfolio"
+        portfolio_out.mkdir(parents=True, exist_ok=True)
+        _write_signals_json(out, result)
+        _write_alerts_csv(out, result.get("alerts", []))
+        _write_summary_md(out, result)
+        _write_portfolio_snapshot_json(portfolio_out, result.get("portfolio_construction") or {})
+        _write_portfolio_summary_md(portfolio_out, result.get("portfolio_construction") or {})
+    else:
+        logger.info("Dry-run: output writes skipped")
 
     return result
 
