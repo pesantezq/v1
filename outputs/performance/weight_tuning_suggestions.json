@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-04-28T17:45:00.097409",
+  "generated_at": "2026-04-28T20:55:27.389575",
   "observe_only": true,
   "primary_window_days": 3,
-  "total_rows": 0,
+  "total_rows": 44,
   "resolved_rows": 0,
   "current_weights": {
     "augmented_signal_score": 0.4,

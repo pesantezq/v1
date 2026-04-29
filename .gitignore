@@ -41,3 +41,5 @@ Thumbs.db
 
 # Pip dependency artefact left in root by some install commands
 =1.35.0
+outputs/portfolio/portfolio_snapshot.json
+outputs/portfolio/portfolio_summary.md
