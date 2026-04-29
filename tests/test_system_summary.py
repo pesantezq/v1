@@ -28,6 +28,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from watchlist_scanner.system_summary import (
+    _default_root,
     _merge_theme_sources,
     _normalize_theme_record,
     build_system_decision_summary,
@@ -780,6 +781,10 @@ class TestBuildSystemDecisionSummary:
 # ---------------------------------------------------------------------------
 
 class TestGenerateSystemDecisionSummary:
+    def test_default_root_points_to_repo_root(self):
+        expected = Path(__file__).resolve().parents[1]
+        assert _default_root() == expected
+
     def test_dry_run_returns_dict(self, tmp_path):
         result = generate_system_decision_summary(root=tmp_path, write_files=False)
         assert isinstance(result, dict)

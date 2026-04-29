@@ -119,6 +119,11 @@ _ARTIFACT_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
+def _default_root() -> Path:
+    """Return the repository root when the module is run directly."""
+    return Path(__file__).resolve().parents[1]
+
+
 # ---------------------------------------------------------------------------
 # Safe loaders
 # ---------------------------------------------------------------------------
@@ -963,7 +968,7 @@ def generate_system_decision_summary(
 
     write_files=False is useful for testing or dry-run inspection.
     """
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    root_path = Path(root) if root is not None else _default_root()
 
     json_path = root_path.joinpath(*_SUMMARY_JSON_REL)
     md_path   = root_path.joinpath(*_SUMMARY_MD_REL)
