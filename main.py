@@ -27,7 +27,7 @@ import time
 import traceback
 from datetime import datetime, date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Local imports
 from utils import (
@@ -165,6 +165,89 @@ def _annotate_scanner_candidates_for_data_mode(
         row["degraded_reason"] = data_health.get("degraded_reason")
         row["degraded_confidence_penalty"] = data_health.get("degraded_confidence_penalty", 0.0)
     return candidates
+
+
+def _adj_to_de_dict(adj: Any) -> dict:
+    """Convert a PortfolioAdjustment to a plain dict for the decision engine."""
+    try:
+        return {
+            'symbol': adj.symbol,
+            'title': adj.title,
+            'recommendation_type': (
+                adj.recommendation_type.value if adj.recommendation_type else 'hold'
+            ),
+            'action_level': (
+                adj.action_level.value if adj.action_level else 'MONITOR'
+            ),
+            'is_leveraged': bool(adj.is_leveraged),
+            'amount': adj.amount,
+            'drift': adj.drift,
+            'do': adj.do,
+            'why': adj.why,
+        }
+    except Exception:
+        return {}
+
+
+def _finance_rec_to_de_dict(rec: Any) -> dict:
+    """Convert a FinanceRecommendation to a plain dict for the decision engine."""
+    try:
+        return {
+            'id': rec.id,
+            'title': rec.title,
+            'action': rec.action,
+            'action_level': (
+                rec.action_level.value if rec.action_level else 'MONITOR'
+            ),
+            'impact_area': (
+                rec.impact_area.value if rec.impact_area else ''
+            ),
+            'trigger': rec.trigger,
+        }
+    except Exception:
+        return {}
+
+
+def _market_opps_from_coverage(market_coverage: dict) -> list:
+    """Extract advisory market opportunities from a market_coverage result dict."""
+    opps: list[dict] = []
+
+    for candidate in (market_coverage.get('promoted') or []):
+        if not isinstance(candidate, dict):
+            continue
+        symbol = candidate.get('symbol') or ''
+        if not symbol:
+            continue
+        reasons = candidate.get('reasons') or []
+        opps.append({
+            'symbol': symbol,
+            'opportunity_type': 'rebalance_target',
+            'suggested_pct': None,
+            'suggested_amount': None,
+            'reason': (', '.join(reasons) if reasons else
+                       f"Promoted {candidate.get('label', '')} candidate."),
+        })
+
+    for action in ((market_coverage.get('decision_layer') or {}).get('actions') or []):
+        if not isinstance(action, dict):
+            continue
+        symbol = action.get('symbol') or ''
+        if not symbol:
+            continue
+        opp_type = (
+            'underweight_target'
+            if str(action.get('action_type', '')).lower() == 'buy'
+            else 'rebalance_target'
+        )
+        opps.append({
+            'symbol': symbol,
+            'opportunity_type': opp_type,
+            'suggested_pct': action.get('suggested_pct'),
+            'suggested_amount': action.get('amount'),
+            'reason': action.get('reason') or f"Market action: {symbol}.",
+        })
+
+    return opps
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -375,6 +458,8 @@ def run_portfolio_update(
         'degraded_mode': False,
         'degraded_reason': None,
         'data_mode': 'live',
+        'decision_plan': [],
+        'decision_plan_summary': '',
     }
     # Local variables initialised here so they're always defined
     contribution_plan = []
@@ -1613,7 +1698,88 @@ def run_portfolio_update(
                 print(f"   {rec.action_level.value} | {rec.impact_area.value}")
                 print(f"   → {rec.action}")
             print("\n" + "=" * 50)
-        
+
+        # =====================
+        # 5g. DECISION ENGINE (observe-only advisory layer)
+        # =====================
+        # Unifies all source artifacts into a single ranked advisory plan.
+        # Never modifies upstream outputs or existing recommendation logic.
+        try:
+            from portfolio_automation.decision_engine import (
+                build_decision_plan as _build_decision_plan,
+                summarize_decision_plan as _summarize_decision_plan,
+            )
+
+            _de_violations: list = (result.get('guardrails') or {}).get('violations', [])
+
+            _de_adjustments: list = [
+                d for d in (
+                    _adj_to_de_dict(adj) for adj in (portfolio_adjustments or [])
+                ) if d
+            ]
+
+            _de_finance_recs: list = [
+                d for d in (
+                    _finance_rec_to_de_dict(rec) for rec in (scored_recommendations or [])
+                ) if d
+            ]
+
+            _de_watchlist: list = (
+                [r for r in _ws_result.get('results', []) if isinstance(r, dict)]
+                if isinstance(_ws_result, dict) else []
+            )
+
+            _de_market_opps: list = _market_opps_from_coverage(
+                result.get('market_coverage') or {}
+            )
+
+            _de_portfolio_ctx: dict = {
+                'total_portfolio_value': summary.total_portfolio_value,
+                'cash': config.cash_available,
+                'current_holdings': {
+                    h.symbol: {'value': h.market_value, 'pct': h.actual_weight}
+                    for h in (holdings or [])
+                    if h.market_value is not None
+                },
+                'degraded_mode': result.get('degraded_mode', False),
+                'data_mode': result.get('data_mode', 'live'),
+                'drawdown_regime': drawdown_regime,
+                'active_structural_violations': _de_violations,
+            }
+
+            _decision_plan: list = _build_decision_plan(
+                structural_violations=_de_violations,
+                portfolio_adjustments=_de_adjustments,
+                watchlist_signals=_de_watchlist,
+                market_opportunities=_de_market_opps,
+                finance_recommendations=_de_finance_recs,
+                portfolio_context=_de_portfolio_ctx,
+            )
+            _decision_plan_summary: str = _summarize_decision_plan(
+                _decision_plan, _de_portfolio_ctx
+            )
+
+            result['decision_plan'] = _decision_plan
+            result['decision_plan_summary'] = _decision_plan_summary
+
+            logger.info(
+                "DECISION ENGINE: %d decisions generated (observe-only)",
+                len(_decision_plan),
+            )
+            for _dp_i, _dp_d in enumerate(_decision_plan[:3], 1):
+                logger.info(
+                    "  #%d %s %s [%s] pri=%.3f src=%s flags=%s",
+                    _dp_i,
+                    _dp_d.get('symbol', '?'),
+                    _dp_d.get('decision', '?'),
+                    _dp_d.get('urgency', '?'),
+                    _dp_d.get('priority', 0.0),
+                    _dp_d.get('source', '?'),
+                    _dp_d.get('risk_flags', []),
+                )
+        except Exception as _de_err:
+            logger.warning("DECISION ENGINE: non-fatal error — %s", _de_err, exc_info=True)
+
         # =====================
         # 6. OUTPUT TO CONSOLE
         # =====================
@@ -1723,6 +1889,38 @@ def run_portfolio_update(
             with open(ml_prompt_path, 'w', encoding='utf-8') as f:
                 f.write(get_historical_analysis_prompt())
             logger.info(f"ML analysis prompt saved: {ml_prompt_path}")
+
+            # ── Decision engine outputs ───────────────────────────────────────
+            try:
+                _dp_list = result.get('decision_plan') or []
+                _dp_summary = result.get('decision_plan_summary') or ''
+                _dp_json_path = output_dir / 'decision_plan.json'
+                _dp_json_path.write_text(
+                    _json.dumps(
+                        {
+                            'generated_at': datetime.now().isoformat(),
+                            'run_mode': run_mode,
+                            'observe_only': True,
+                            'total_decisions': len(_dp_list),
+                            'decisions': _dp_list,
+                        },
+                        indent=2,
+                        default=str,
+                    ),
+                    encoding='utf-8',
+                )
+                (output_dir / 'decision_plan.md').write_text(
+                    _dp_summary, encoding='utf-8'
+                )
+                logger.info(
+                    "DECISION ENGINE: decision_plan.json + decision_plan.md written"
+                    " (%d decisions)", len(_dp_list),
+                )
+            except Exception as _dp_write_err:
+                logger.warning(
+                    "DECISION ENGINE: output write failed (non-fatal): %s",
+                    _dp_write_err,
+                )
 
             # ── Scanner outputs ────────────────────────────────────────────────
             if scanner_candidates:
