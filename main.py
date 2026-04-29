@@ -115,6 +115,13 @@ except ImportError:
     _run_triage = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.confidence_calibration import (
+        run_calibration as _run_calibration,
+    )
+except ImportError:
+    _run_calibration = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -2062,6 +2069,30 @@ def run_portfolio_update(
                 except Exception as _triage_err:
                     logger.warning(
                         "DECISION TRIAGE: non-fatal error — %s", _triage_err, exc_info=True
+                    )
+
+            # ── Confidence calibration ─────────────────────────────────────────
+            if _run_calibration is not None:
+                try:
+                    _cal_root = _decision_explainer_root_from_output_dir(output_dir)
+                    _cal_payload, _ = _run_calibration(_cal_root)
+                    if _cal_payload.get("insufficient_data"):
+                        logger.info(
+                            "CONFIDENCE CALIBRATION: skipped — %s",
+                            _cal_payload.get("summary_line", "insufficient data"),
+                        )
+                    else:
+                        logger.info(
+                            "CONFIDENCE CALIBRATION: confidence_calibration.json + .md written"
+                            " (resolved=%d hit_rate=%s)",
+                            _cal_payload.get("total_resolved", 0),
+                            f"{_cal_payload['overall_hit_rate']:.0%}"
+                            if _cal_payload.get("overall_hit_rate") is not None
+                            else "n/a",
+                        )
+                except Exception as _cal_err:
+                    logger.warning(
+                        "CONFIDENCE CALIBRATION: non-fatal error — %s", _cal_err, exc_info=True
                     )
 
             # ── Scanner outputs ────────────────────────────────────────────────

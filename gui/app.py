@@ -2575,6 +2575,89 @@ def _render_ai_insight_cards(bundle: dict) -> None:
         st.markdown("---")
 
 
+def _render_system_confidence_section(bundle: dict) -> None:
+    data = bundle.get("confidence_calibration") or {}
+
+    st.markdown("### System Confidence")
+
+    if not data.get("available"):
+        msg = data.get("summary_line") or "Confidence calibration artifact not available yet."
+        st.caption(msg)
+        return
+
+    if data.get("insufficient_data"):
+        st.caption(data.get("summary_line") or "Insufficient resolved data for calibration.")
+        return
+
+    total = data.get("total_resolved", 0)
+    overall_hr = data.get("overall_hit_rate")
+    overall_ret = data.get("overall_avg_return")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Resolved Decisions", total)
+    col2.metric("Overall Hit Rate", f"{overall_hr:.0%}" if overall_hr is not None else "—")
+    col3.metric("Avg Return", f"{overall_ret:+.2%}" if overall_ret is not None else "—")
+
+    st.caption(
+        "Retrospective calibration — observe-only. "
+        "Source: `outputs/policy/confidence_calibration.json`."
+    )
+
+    # Confidence bucket table
+    conf_buckets = data.get("confidence_buckets") or {}
+    bucket_rows = []
+    for key in ("low", "medium", "high"):
+        stats = conf_buckets.get(key) or {}
+        if stats.get("count", 0) > 0:
+            hr = stats.get("hit_rate")
+            ar = stats.get("avg_return")
+            bucket_rows.append({
+                "Confidence": key.capitalize(),
+                "Count": stats.get("count", 0),
+                "Hit Rate": f"{hr:.0%}" if hr is not None else "—",
+                "Avg Return": f"{ar:+.2%}" if ar is not None else "—",
+            })
+    if bucket_rows:
+        st.markdown("**Confidence Buckets**")
+        st.dataframe(
+            _coerce_df(bucket_rows, columns=["Confidence", "Count", "Hit Rate", "Avg Return"]),
+            hide_index=True,
+            width="stretch",
+        )
+
+    # Validation status table
+    val_analysis = data.get("validation_analysis") or {}
+    val_rows = []
+    for key in sorted(val_analysis):
+        stats = val_analysis[key] or {}
+        if stats.get("count", 0) > 0:
+            hr = stats.get("hit_rate")
+            ar = stats.get("avg_return")
+            val_rows.append({
+                "Validation Status": key.replace("_", " ").title(),
+                "Count": stats.get("count", 0),
+                "Hit Rate": f"{hr:.0%}" if hr is not None else "—",
+                "Avg Return": f"{ar:+.2%}" if ar is not None else "—",
+            })
+    if val_rows:
+        st.markdown("**Validation Status**")
+        st.dataframe(
+            _coerce_df(
+                val_rows,
+                columns=["Validation Status", "Count", "Hit Rate", "Avg Return"],
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    # Key insights
+    insights = (data.get("insights") or [])[:3]
+    if insights:
+        st.markdown("**Key Insights**")
+        for insight in insights:
+            st.info(insight)
+
+
 def _render_decision_performance_section(bundle: dict) -> None:
     data = bundle.get("decision_outcome_summary") or {}
 
@@ -4363,6 +4446,8 @@ def page_decision_center() -> None:
     _render_decision_triage_section(bundle)
     st.divider()
     _render_ai_validation_section(bundle)
+    st.divider()
+    _render_system_confidence_section(bundle)
     st.divider()
     _render_decision_performance_section(bundle)
 

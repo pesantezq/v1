@@ -35,6 +35,7 @@ DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanatio
 AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_validation.json")
 DECISION_OUTCOME_SUMMARY_RELATIVE_PATH = ("outputs", "policy", "decision_outcome_summary.json")
 DECISION_TRIAGE_RELATIVE_PATH = ("outputs", "latest", "decision_triage.json")
+CONFIDENCE_CALIBRATION_RELATIVE_PATH = ("outputs", "policy", "confidence_calibration.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1376,6 +1377,36 @@ def load_decision_triage(root: Path | str) -> dict[str, Any]:
     return payload
 
 
+def load_confidence_calibration(root: Path | str) -> dict[str, Any]:
+    _empty: dict[str, Any] = {
+        "available": False,
+        "insufficient_data": True,
+        "total_resolved": 0,
+        "overall_hit_rate": None,
+        "overall_avg_return": None,
+        "confidence_buckets": {},
+        "validation_analysis": {},
+        "decision_analysis": {},
+        "insights": [],
+        "summary_line": "Confidence calibration artifact not available yet.",
+    }
+    path = Path(root).joinpath(*CONFIDENCE_CALIBRATION_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "Confidence calibration file could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "Confidence calibration file is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault(
+        "summary_line",
+        f"{payload.get('total_resolved', 0)} resolved decisions analyzed.",
+    )
+    return payload
+
+
 def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not data.get("available"):
         return []
@@ -1552,6 +1583,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "ai_decision_validation": load_ai_decision_validation(root_path),
         "decision_outcome_summary": load_decision_outcome_summary(root_path),
         "decision_triage": load_decision_triage(root_path),
+        "confidence_calibration": load_confidence_calibration(root_path),
     }
 
 
