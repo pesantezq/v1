@@ -2507,36 +2507,64 @@ def _render_weekly_review_tab(bundle: dict) -> None:
 # DECISION INTELLIGENCE TABS
 # ============================================================================
 
+def _format_decision_queue_rows(raw_rows: list[dict]) -> list[dict]:
+    formatted = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        flags = [str(f) for f in (row.get("risk_flags") or []) if str(f).strip()]
+        amount = row.get("recommended_amount")
+        capital_str = _fmt_usd(amount) if amount is not None else "-"
+        try:
+            priority_str = f"{float(row.get('priority', 0)):.3f}"
+        except (TypeError, ValueError):
+            priority_str = "-"
+        formatted.append({
+            "Action":      str(row.get("decision") or "-"),
+            "Symbol":      str(row.get("symbol") or "-"),
+            "Source":      str(row.get("source") or "-"),
+            "Priority":    priority_str,
+            "Urgency":     str(row.get("urgency") or "-"),
+            "Reason":      str(row.get("reason") or "No rationale provided.")[:100],
+            "Risk Flags":  ", ".join(flags) if flags else "-",
+            "Capital":     capital_str,
+        })
+    return formatted
+
+
 def _render_decision_brief_summary(bundle: dict) -> None:
     brief = bundle.get("decision_brief") or {}
 
+    st.info("Observe-only decision plan. No trades are executed.")
     st.markdown("### Decision Summary")
-    st.caption("Compact observe-only brief derived from `decision_plan.json` and system summary artifacts.")
+    st.caption("Compact brief derived from `decision_plan.json` and system summary artifacts. Read-only.")
 
     if not brief.get("available"):
-        st.info(brief.get("summary_line") or "Decision plan unavailable.")
+        st.warning(brief.get("summary_line") or "Decision plan unavailable.")
+        st.caption(f"Expected at: `{brief.get('path', 'outputs/latest/decision_plan.json')}`")
+        return
+
+    top_decisions = brief.get("top_decisions") or []
+    if not top_decisions:
+        st.info("No actions required. Decision plan is present but contains no ranked decisions.")
         return
 
     st.markdown("**Top Insight**")
     st.write(brief.get("top_insight") or "No top insight available.")
 
-    top_decisions = brief.get("top_decisions") or []
-    st.markdown("**Top Decisions**")
-    if top_decisions:
-        for idx, row in enumerate(top_decisions[:5], 1):
-            line = (
-                f"{idx}. {row.get('decision', '-')} {row.get('symbol', '-')} | "
-                f"pri {float(row.get('priority', 0.0)):.3f} | "
-                f"{row.get('source', '-')} | {row.get('urgency', '-')}"
-            )
-            st.markdown(f"- {line}")
-            detail = str(row.get("reason") or "").strip() or "No decision rationale provided."
-            flags = row.get("risk_flags") or []
-            if flags:
-                detail += f" Risk: {', '.join(str(flag) for flag in flags)}."
-            st.caption(detail)
-    else:
-        st.caption("No ranked decisions available.")
+    st.markdown("**Top Decisions** *(max 5)*")
+    for idx, row in enumerate(top_decisions[:5], 1):
+        line = (
+            f"{idx}. **{row.get('decision', '-')}** `{row.get('symbol', '-')}` "
+            f"| pri `{float(row.get('priority', 0.0)):.3f}` "
+            f"| {row.get('source', '-')} | {row.get('urgency', '-')}"
+        )
+        st.markdown(line)
+        detail = str(row.get("reason") or "").strip() or "No decision rationale provided."
+        flags = row.get("risk_flags") or []
+        if flags:
+            detail += f" Risk: {', '.join(str(flag) for flag in flags)}."
+        st.caption(f"  {detail}")
 
     capital = brief.get("capital_actions") or {}
     st.markdown("**Capital Actions**")
@@ -2546,29 +2574,47 @@ def _render_decision_brief_summary(bundle: dict) -> None:
         f"BUY={int(capital.get('buy', 0))}"
     )
     if capital.get("total_recommended_capital") is not None:
-        capital_line += f" | Total recommended capital: {_fmt_usd(capital.get('total_recommended_capital'))}"
+        capital_line += f" | Total: {_fmt_usd(capital.get('total_recommended_capital'))}"
     st.write(capital_line)
 
-    st.markdown("**Risk Focus**")
-    for item in (brief.get("risk_focus") or [])[:3]:
-        st.markdown(f"- {item}")
+    st.markdown("**Risk Focus** *(max 3)*")
+    risk_items = (brief.get("risk_focus") or [])[:3]
+    if risk_items:
+        for item in risk_items:
+            st.markdown(f"- {item}")
+    else:
+        st.caption("No risk items flagged.")
 
-    st.markdown("**What Changed**")
-    for item in (brief.get("what_changed") or [])[:3]:
-        st.markdown(f"- {item}")
+    st.markdown("**What Changed** *(max 3)*")
+    change_items = (brief.get("what_changed") or [])[:3]
+    if change_items:
+        for item in change_items:
+            st.markdown(f"- {item}")
+    else:
+        st.caption("No changes recorded.")
 
-    health_items = brief.get("system_data_health") or []
+    health_items = (brief.get("system_data_health") or [])[:3]
     if health_items:
         st.markdown("**System / Data Health**")
-        for item in health_items[:3]:
+        for item in health_items:
             st.markdown(f"- {item}")
 
+    st.divider()
     with st.expander("Full Decision Plan Queue", expanded=False):
         full_rows = brief.get("full_decisions") or []
         if not full_rows:
             st.caption("No decision-plan rows available.")
         else:
-            st.dataframe(_coerce_df(full_rows), width="stretch", hide_index=True)
+            formatted = _format_decision_queue_rows(full_rows)
+            st.dataframe(
+                _coerce_df(
+                    formatted,
+                    columns=["Action", "Symbol", "Source", "Priority", "Urgency", "Reason", "Risk Flags", "Capital"],
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(f"{len(full_rows)} total decision(s) in the plan.")
 
 
 def _render_decision_center_tab(bundle: dict, mc: dict) -> None:
@@ -3973,6 +4019,29 @@ def _zip_latest_outputs() -> bytes:
 
 
 # ============================================================================
+# PAGE: DECISION CENTER
+# ============================================================================
+
+def page_decision_center() -> None:
+    _operator_dashboard_css()
+    bundle = load_operator_dashboard_data(ROOT)
+
+    title_col, action_col = st.columns([5, 1])
+    with title_col:
+        st.title("Decision Center")
+        st.caption(
+            "Observe-only advisory decision plan. "
+            "All decisions are derived from `outputs/latest/decision_plan.json`. "
+            "No recomputation occurs here and no trades are executed."
+        )
+    with action_col:
+        if st.button("Refresh", width="stretch", key="dc_refresh"):
+            st.rerun()
+
+    _render_decision_brief_summary(bundle)
+
+
+# ============================================================================
 # SIDEBAR
 # ============================================================================
 
@@ -3984,7 +4053,7 @@ st.sidebar.title("StockBot")
 st.sidebar.caption("Operator Dashboard")
 
 PAGES = [
-    "Dashboard", "Run Controls", "Outputs",
+    "Dashboard", "Decision Center", "Run Controls", "Outputs",
     "Watchlist", "Run History", "API Health",
     "Config Editor", "Prompts", "Logs", "Diagnostics",
 ]
@@ -5575,13 +5644,14 @@ def page_diagnostics() -> None:
 # ROUTER
 # ============================================================================
 
-if   page == "Dashboard":    page_dashboard()
-elif page == "Run Controls": page_run_controls()
-elif page == "Outputs":      page_outputs()
-elif page == "Watchlist":    page_watchlist_manager()
-elif page == "Run History":  page_run_history()
-elif page == "API Health":   page_api_health()
-elif page == "Config Editor":page_config_editor()
-elif page == "Prompts":      page_prompts()
-elif page == "Logs":         page_logs()
-elif page == "Diagnostics":  page_diagnostics()
+if   page == "Dashboard":        page_dashboard()
+elif page == "Decision Center":  page_decision_center()
+elif page == "Run Controls":     page_run_controls()
+elif page == "Outputs":          page_outputs()
+elif page == "Watchlist":        page_watchlist_manager()
+elif page == "Run History":      page_run_history()
+elif page == "API Health":       page_api_health()
+elif page == "Config Editor":    page_config_editor()
+elif page == "Prompts":          page_prompts()
+elif page == "Logs":             page_logs()
+elif page == "Diagnostics":      page_diagnostics()
