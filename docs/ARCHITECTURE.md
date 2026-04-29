@@ -13,6 +13,12 @@ Two analysis paths are active:
 2. `main.py` + `scanner/candidate_scanner.py` + `digest_builder.py`
    Produces portfolio snapshots, scored finance recommendations, broader-market candidate outputs, policy evaluation inputs, and human/AI memo artifacts.
 
+Decision Engine status:
+
+- `portfolio_automation/decision_engine.py` is implemented and tested
+- pipeline integration is not live yet
+- approved next step is observe-only additive wiring
+
 ## End-To-End Flow
 
 ```text
@@ -48,6 +54,16 @@ GUI (gui/app.py)
     |
     +--> reads JSON/CSV/Markdown artifacts only
     +--> reads SQLite state for status/history views
+```
+
+Decision Engine target flow:
+
+```text
+Data sources
+    -> scanner / market coverage / theme engine
+    -> scoring / conviction / allocation
+    -> Decision Engine
+    -> recommendations / GUI / AI explanation / daily memo
 ```
 
 ## Watchlist Pipeline
@@ -104,6 +120,7 @@ Prices + holdings + retirement data
     -> watchlist scanner
     -> legacy buy/sell/hold recommendations
     -> scored finance recommendations
+    -> Decision Engine (implemented, pending observe-only integration)
     -> recommendation history + evaluation inputs
     -> outputs/latest + SQLite snapshot + outputs/history/YYYY-MM-DD
 ```
@@ -124,10 +141,26 @@ Key modules:
   Legacy rules-based buy/sell/hold recommendation layer.
 - `finance_analyzer.py` + `scoring.py`
   0-100 finance recommendation scoring and scored output export.
+- `portfolio_automation/decision_engine.py`
+  Central advisory unification layer that converts structural violations, portfolio adjustments, finance recommendations, watchlist signals, and market opportunities into one ranked observe-only decision plan.
 - `policy_evaluator/*`
   Recommendation history, evaluation, outcome attribution, and report writing.
 - `agent/bundle_builder.py`
   Consolidates artifacts into an AI-oriented bundle for downstream agent use.
+
+## Decision Engine Integration Direction
+
+Approved observe-only integration plan:
+
+- call `build_decision_plan(...)` only after portfolio adjustments, finance recommendations, watchlist signals, and market opportunities already exist
+- emit new additive artifacts:
+  - `outputs/latest/decision_plan.json`
+  - `outputs/latest/decision_plan.md`
+- log the top 3 ranked decisions
+- leave existing recommendation behavior unchanged
+- leave existing output schemas unchanged
+
+This is intentionally additive. The Decision Engine is not yet the source of truth for downstream consumers.
 
 ## State And Memory
 
@@ -171,3 +204,9 @@ These boundaries are intentional and should not be collapsed:
 - SQLite tables are append/update state, not a replacement for output artifacts.
 - Theme/news enrichment is additive evidence only.
 - Derived metrics may be added, but base score names and meanings must remain intact.
+- The Decision Engine must remain advisory only.
+  It may unify and rank actions, but it must not execute trades or bypass structural guardrails.
+
+## Next Implementation Step
+
+Wire the Decision Engine into the daily portfolio path as an additive observe-only artifact generator, then validate that the new decision-plan outputs appear without changing existing recommendation or GUI contracts.
