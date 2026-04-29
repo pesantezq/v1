@@ -43,7 +43,8 @@ from portfolio_automation.decision_engine import (
 
 def _make_adj(
     symbol="VTI",
-    rec_type="sell",
+    rec_type="PORTFOLIO_ADJUSTMENT",
+    adjustment_mode="SELL_TO_REBALANCE",
     action_level="ACTION_REQUIRED",
     is_leveraged=False,
     amount=1000.0,
@@ -57,6 +58,7 @@ def _make_adj(
     obj.symbol = symbol
     obj.title = title
     obj.recommendation_type = SimpleNamespace(value=rec_type)
+    obj.adjustment_mode = SimpleNamespace(value=adjustment_mode)
     obj.action_level = SimpleNamespace(value=action_level)
     obj.is_leveraged = is_leveraged
     obj.amount = amount
@@ -93,11 +95,18 @@ def _make_finance_rec(
 class TestAdjToDeDict(unittest.TestCase):
 
     def test_maps_all_required_fields(self):
-        adj = _make_adj(symbol="TQQQ", rec_type="sell", is_leveraged=True, amount=500.0)
+        adj = _make_adj(
+            symbol="TQQQ",
+            rec_type="PORTFOLIO_ADJUSTMENT",
+            adjustment_mode="SELL_TO_REBALANCE",
+            is_leveraged=True,
+            amount=500.0,
+        )
         d = _adj_to_de_dict(adj)
 
         self.assertEqual(d["symbol"], "TQQQ")
-        self.assertEqual(d["recommendation_type"], "sell")
+        self.assertEqual(d["recommendation_type"], "PORTFOLIO_ADJUSTMENT")
+        self.assertEqual(d["adjustment_mode"], "SELL_TO_REBALANCE")
         self.assertEqual(d["action_level"], "ACTION_REQUIRED")
         self.assertTrue(d["is_leveraged"])
         self.assertEqual(d["amount"], 500.0)

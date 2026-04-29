@@ -27,6 +27,7 @@ from portfolio_automation.decision_engine import (
     apply_decision_overrides,
     build_decision_plan,
     decision_from_market_opportunity,
+    decision_from_portfolio_adjustment,
     decision_from_structural_violation,
     decision_from_watchlist_signal,
     rank_decisions,
@@ -109,6 +110,28 @@ def _weak_conviction_signal(ticker: str = "JUNK") -> dict:
         "confidence_score": 0.70,
         "effective_score": 0.40,
         "data_mode": "live",
+    }
+
+
+def _portfolio_adjustment(
+    symbol: str = "VFH",
+    adjustment_mode: str = "CONTRIBUTE_ONLY",
+    action_level: str = "MONITOR",
+    is_leveraged: bool = False,
+    amount: float = 1000.0,
+    drift: float = -0.03,
+) -> dict:
+    return {
+        "symbol": symbol,
+        "title": f"{symbol} portfolio adjustment",
+        "recommendation_type": "PORTFOLIO_ADJUSTMENT",
+        "adjustment_mode": adjustment_mode,
+        "action_level": action_level,
+        "is_leveraged": is_leveraged,
+        "amount": amount,
+        "drift": drift,
+        "do": f"Direct contributions to {symbol}.",
+        "why": f"{symbol} is underweight vs target.",
     }
 
 
@@ -569,6 +592,76 @@ class TestPriorityOrdering(unittest.TestCase):
         market = decision_from_market_opportunity(_underweight_opportunity())
         watch = decision_from_watchlist_signal(_weak_conviction_signal())
         self.assertGreater(market["priority"], watch["priority"])
+
+
+class TestPortfolioAdjustmentDecisionMapping(unittest.TestCase):
+    """
+    Case 12: decision_from_portfolio_adjustment uses adjustment_mode (the execution
+    intent) to map decisions, not recommendation_type (the category label).
+    """
+
+    def test_contribute_only_underweight_new_position_is_buy(self):
+        """Requirement 1: CONTRIBUTE_ONLY for a symbol not held maps to BUY."""
+        adj = _portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY")
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_BUY)
+        self.assertEqual(d["source"], SOURCE_PORTFOLIO)
+
+    def test_contribute_only_zero_amount_still_maps_to_buy(self):
+        """Requirement 2: Zero-share / zero-amount underweight target maps to BUY."""
+        adj = _portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY", amount=0.0)
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_BUY)
+
+    def test_contribute_only_existing_holding_maps_to_scale(self):
+        """Requirement 3: Existing underweight holding with CONTRIBUTE_ONLY maps to SCALE."""
+        ctx = _ctx(current_holdings={"VFH": {"value": 500.0, "pct": 0.01}})
+        adj = _portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY")
+        d = decision_from_portfolio_adjustment(adj, ctx)
+        self.assertEqual(d["decision"], DECISION_SCALE)
+
+    def test_no_action_within_band_remains_hold(self):
+        """Requirement 4: NO_ACTION adjustment maps to HOLD regardless of drift."""
+        adj = _portfolio_adjustment("VFH", adjustment_mode="NO_ACTION", drift=0.01)
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_HOLD)
+
+    def test_sell_to_rebalance_maps_to_sell(self):
+        adj = _portfolio_adjustment("QQQ", adjustment_mode="SELL_TO_REBALANCE", drift=0.08)
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_SELL)
+
+    def test_trim_leverage_first_maps_to_sell(self):
+        adj = _portfolio_adjustment("QLD", adjustment_mode="TRIM_LEVERAGE_FIRST", is_leveraged=True)
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_SELL)
+
+    def test_use_cash_excess_new_position_is_buy(self):
+        adj = _portfolio_adjustment("VFH", adjustment_mode="USE_CASH_EXCESS")
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["decision"], DECISION_BUY)
+
+    def test_inputs_used_contains_adjustment_mode(self):
+        adj = _portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY")
+        d = decision_from_portfolio_adjustment(adj, _ctx())
+        self.assertEqual(d["inputs_used"]["adjustment_mode"], "CONTRIBUTE_ONLY")
+
+    def test_structural_sell_suppression_still_works_with_new_mapping(self):
+        """Portfolio HOLD from NO_ACTION is still suppressed by structural SELL."""
+        plan = build_decision_plan(
+            structural_violations=[_concentration_violation("QQQ")],
+            portfolio_adjustments=[
+                _portfolio_adjustment("QQQ", adjustment_mode="NO_ACTION", drift=0.0)
+            ],
+            portfolio_context=_ctx(),
+        )
+        qqq_portfolio_holds = [
+            d for d in plan
+            if d.get("symbol") == "QQQ"
+            and d.get("source") == SOURCE_PORTFOLIO
+            and d.get("decision") == DECISION_HOLD
+        ]
+        self.assertEqual(len(qqq_portfolio_holds), 0)
 
 
 class TestLeveragedViolationResolution(unittest.TestCase):

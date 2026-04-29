@@ -271,8 +271,10 @@ def decision_from_portfolio_adjustment(
     """
     portfolio_context = portfolio_context or {}
 
+    portfolio_context = portfolio_context or {}
+
     symbol = _safe_str(adjustment, "symbol", "PORTFOLIO")
-    rec_type = _safe_str(adjustment, "recommendation_type", "hold").lower()
+    adj_mode = _safe_str(adjustment, "adjustment_mode", "NO_ACTION").upper()
     action_level = _safe_str(adjustment, "action_level", "MONITOR")
     is_leveraged = _safe_bool(adjustment, "is_leveraged")
     amount = _safe_float(adjustment, "amount")
@@ -281,11 +283,16 @@ def decision_from_portfolio_adjustment(
     do_str = _safe_str(adjustment, "do", "Review and act if warranted.")
     why_str = _safe_str(adjustment, "why", "")
 
-    # Decision mapping
-    if rec_type in ("sell", "trim"):
+    is_existing = _is_existing_holding(symbol, portfolio_context)
+
+    # Decision mapping driven by adjustment_mode (the execution intent):
+    #   CONTRIBUTE_ONLY / USE_CASH_EXCESS → capital deployment (BUY or SCALE)
+    #   SELL_TO_REBALANCE / TRIM_LEVERAGE_FIRST → reduce position
+    #   NO_ACTION / unknown → hold current position
+    if adj_mode in ("SELL_TO_REBALANCE", "TRIM_LEVERAGE_FIRST"):
         decision = DECISION_SELL
-    elif rec_type in ("buy", "add"):
-        decision = DECISION_BUY
+    elif adj_mode in ("CONTRIBUTE_ONLY", "USE_CASH_EXCESS"):
+        decision = DECISION_SCALE if is_existing else DECISION_BUY
     else:
         decision = DECISION_HOLD
 
@@ -312,7 +319,7 @@ def decision_from_portfolio_adjustment(
         priority = 0.38
 
     drift_str = f" (drift {drift:+.1%})" if drift else ""
-    reason = f"{title}{drift_str}. {why_str}".strip().rstrip(".")  + "."
+    reason = f"{title}{drift_str}. {why_str}".strip().rstrip(".") + "."
 
     return {
         "symbol": symbol,
@@ -327,10 +334,11 @@ def decision_from_portfolio_adjustment(
         "risk_flags": (["leveraged_exposure"] if is_leveraged else []),
         "confidence": 0.90,
         "inputs_used": {
-            "recommendation_type": rec_type,
+            "adjustment_mode": adj_mode,
             "action_level": action_level,
             "is_leveraged": is_leveraged,
             "drift": drift,
+            "is_existing_holding": is_existing,
         },
     }
 

@@ -176,6 +176,9 @@ def _adj_to_de_dict(adj: Any) -> dict:
             'recommendation_type': (
                 adj.recommendation_type.value if adj.recommendation_type else 'hold'
             ),
+            'adjustment_mode': (
+                adj.adjustment_mode.value if adj.adjustment_mode else 'NO_ACTION'
+            ),
             'action_level': (
                 adj.action_level.value if adj.action_level else 'MONITOR'
             ),
