@@ -1,63 +1,65 @@
 # Roadmap
 
-## Completed: Decision Engine Foundation
+## Completed: Decision Engine Foundation + Observe-Only Integration
 
 What was built:
 
 - `portfolio_automation/decision_engine.py`
-- `portfolio_automation/__init__.py`
+- observe-only integration in `main.py`
+- `outputs/latest/decision_plan.json`
+- `outputs/latest/decision_plan.md`
 - `tests/test_decision_engine.py`
+- `tests/test_decision_engine_pipeline.py`
+
+What was completed inside this phase:
+
+- module implemented
+- pipeline tests added
+- additive pipeline artifacts added
+- consolidation and symbol-level dedup completed
+- validated final output shape established
 
 Why it matters:
 
-- it creates one normalized advisory layer across structural violations, portfolio adjustments, finance recommendations, watchlist signals, and market opportunities
-- it preserves structural guardrails as first-class ranked decisions
-- it gives future GUI, memo, and AI explanation layers one unified decision surface instead of multiple disconnected outputs
+- the system now has one central observe-only action-plan layer
+- structural guardrails, portfolio actions, finance guidance, watchlist signals, and market opportunities can be compared in one ranked list
+- conflict resolution is explicit instead of being left to downstream readers
+- existing recommendation behavior and existing schemas remain unchanged
 
 Current status:
 
-- module complete
-- tests complete
-- implemented and tested, pending observe-only pipeline integration
+- implemented
+- tested
+- wired into the daily pipeline in observe-only mode
+- additive only, not a replacement for the current recommendation stack
 
-## Next Phase: Observe-Only Pipeline Integration
+## What "Observe-Only" Means Here
 
-Approved direction:
+- Decision Engine artifacts are written in parallel with existing outputs
+- current recommendation logic is still the operational source of advice
+- no trade execution behavior is introduced
+- existing consumers are not forced to adopt the decision plan yet
 
-- call `build_decision_plan` after the existing recommendation inputs already exist
-- emit additive-only artifacts:
-  - `outputs/latest/decision_plan.json`
-  - `outputs/latest/decision_plan.md`
-- log the top 3 decisions
-- do not change current recommendation behavior
-- do not change current output schemas
-
-Success criteria for this phase:
-
-- the daily run completes without regression
-- the decision plan is present as a new additive artifact
-- existing consumers continue to work unchanged
-
-## Later Phases
+## Next
 
 ### GUI Decision Center
 
-- surface ranked decisions in one operator view
-- show source, urgency, risk flags, and evidence trail
-- keep the display observe-only
+- surface the ranked decision plan in one operator-facing panel
+- show source, priority, urgency, risk flags, and merged reasons
+- preserve the observe-only boundary
 
 ### AI Explanation Layer
 
-- generate plain-language explanations from the normalized decision records
-- preserve source attribution and guardrail authority
-- avoid replacing the underlying rule outputs
+- generate concise explanations from consolidated decision records
+- preserve source attribution and structural authority
+- use decision-plan artifacts as an additive explanation source
 
-### Policy Feedback Tuning
+### Policy Feedback Loop Using Decision Outcomes
 
-- compare decision-plan outcomes against later recommendation history
-- evaluate downgrade rules and priority ordering
-- tune only after observe-only behavior is stable and measured
+- measure how consolidated decisions perform over time
+- compare decision-plan outcomes with later recommendation history
+- tune precedence, suppression, and downgrade rules only after outcome evidence exists
 
 ## Next Implementation Step
 
-Integrate the Decision Engine into the daily run as an additive observe-only layer and validate the new artifacts before expanding GUI or AI-facing surfaces.
+Use the now-live observe-only decision-plan artifacts as the input contract for a GUI Decision Center and for explanation-layer prototypes, without changing the current recommendation engine behavior.

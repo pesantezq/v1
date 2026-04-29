@@ -1,59 +1,42 @@
 # Decision Engine
 
-Status: implemented and tested, pending observe-only pipeline integration.
+Status: implemented, tested, and wired observe-only in the daily pipeline.
 
 ## Purpose
 
-The Decision Engine is the central advisory unification layer for the Portfolio Automation System. It takes already-produced signals and recommendations from multiple subsystems and turns them into one ranked operator-facing action plan.
+The Decision Engine is the unified advisory decision layer for the Portfolio Automation System. It converts multiple existing recommendation and signal streams into one ranked, observe-only action plan for operators, downstream UI, memo generation, and future explanation layers.
 
-It is advisory only. It does not place trades, call a broker, or change portfolio state by itself.
-
-## Why It Exists
-
-Before this module, the system could produce several parallel recommendation streams:
-
-- structural guardrail violations
-- portfolio adjustments
-- scored finance recommendations
-- watchlist scanner signals
-- market opportunity suggestions
-
-Those streams were individually useful, but they were not normalized into one comparable decision list. `portfolio_automation/decision_engine.py` solves that by:
-
-- translating heterogeneous source records into one decision record shape
-- enforcing consistent decision labels such as `BUY`, `SELL`, `SCALE`, `HOLD`, `WAIT`, and `AVOID`
-- preserving structural guardrails as the highest-priority advisory constraint
-- applying portfolio-level overrides in one place for non-authoritative opportunity decisions
-- producing a ranked plan plus a readable summary
+It is advisory only. It never executes trades, places orders, or changes the behavior of existing recommendation systems.
 
 ## Current State
-
-Current implementation status:
 
 | Item | Status |
 | --- | --- |
 | `portfolio_automation/decision_engine.py` | Implemented |
-| `portfolio_automation/__init__.py` | Present |
+| `main.py` observe-only integration | Live |
+| `outputs/latest/decision_plan.json` | Written by pipeline |
+| `outputs/latest/decision_plan.md` | Written by pipeline |
 | `tests/test_decision_engine.py` | Present |
-| Unit tests collected | 39 |
-| Pipeline wiring | Not yet live |
-| Output artifacts `decision_plan.json` / `decision_plan.md` | Approved next step, not yet emitted |
+| `tests/test_decision_engine_pipeline.py` | Present |
+| Existing recommendation behavior | Unchanged |
+| Existing output schemas | Preserved |
 
-This means the module is ready for observe-only adoption, but should not be described as already live in daily pipeline outputs.
+The Decision Engine is now the central observe-only action-plan layer. It adds a consolidated decision view without replacing or mutating the existing recommendation outputs.
 
-## Input Sources
+## Inputs
 
-The engine accepts five source families:
+The engine builds its plan from these sources:
 
-| Source | Input shape | Converter | Notes |
-| --- | --- | --- | --- |
-| Structural violations | guardrail breach dicts | `decision_from_structural_violation` | Highest authority; produces `SELL` |
-| Portfolio adjustments | portfolio adjustment dicts | `decision_from_portfolio_adjustment` | Existing rules-based portfolio advice |
-| Watchlist signals | watchlist scanner signal dicts | `decision_from_watchlist_signal` | Uses conviction, signal, confidence, and holding context |
-| Market opportunities | broader market opportunity dicts | `decision_from_market_opportunity` | Used for underweight or contribution-style deployment ideas |
-| Finance recommendations | scored finance recommendation dicts | `decision_from_finance_recommendation` | Non-trade financial guidance normalized into the same plan |
+| Source | Input | Notes |
+| --- | --- | --- |
+| Structural violations | guardrail violation dicts | Highest authority; used for structural `SELL` decisions |
+| Portfolio adjustments | portfolio adjustment dicts | Existing portfolio advice normalized into decision records |
+| Finance recommendations | scored finance recommendation dicts | Financial guidance normalized into the same plan |
+| Watchlist signals | watchlist scanner result rows | Uses conviction, confidence, cooldown, and holding context |
+| Market opportunities | broader market opportunity rows | Opportunity layer for contribution or underweight deployment ideas |
+| Portfolio context | context dict | Includes holdings, cash, degraded mode, drawdown regime, and active structural violations |
 
-Portfolio context is passed separately into all relevant functions. Current context fields used include:
+Current context fields used include:
 
 - `total_portfolio_value`
 - `cash`
@@ -63,237 +46,197 @@ Portfolio context is passed separately into all relevant functions. Current cont
 - `drawdown_regime`
 - `active_structural_violations`
 
-## Core Functions
+## Outputs
 
-| Function | Responsibility |
-| --- | --- |
-| `decision_from_structural_violation` | Converts structural guardrail breaches into authoritative `SELL` decisions |
-| `decision_from_portfolio_adjustment` | Converts portfolio adjustment records into normalized advisory decisions |
-| `decision_from_watchlist_signal` | Converts watchlist scanner output into `BUY`, `SCALE`, `WAIT`, `HOLD`, or `AVOID` |
-| `decision_from_market_opportunity` | Converts underweight or contribution opportunities into `BUY` or `SCALE` |
-| `decision_from_finance_recommendation` | Converts finance recommendations into normalized advisory decisions |
-| `apply_decision_overrides` | Applies degraded-data, drawdown, and guardrail-conflict caps to non-authoritative decisions |
-| `build_decision_plan` | Orchestrates all inputs into one ranked list |
-| `rank_decisions` | Applies final priority ordering and tiebreaks |
-| `summarize_decision_plan` | Produces operator-readable summary text |
+The observe-only pipeline writes:
 
-## Output Schema
+- `outputs/latest/decision_plan.json`
+- `outputs/latest/decision_plan.md`
 
-The current module-level output is a ranked `list[dict]` of decision records.
+`decision_plan.json` is the machine-readable artifact. `decision_plan.md` is the operator-readable summary.
 
-### Decision Record Fields
+### Artifact Shape
+
+Current top-level JSON shape:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `symbol` | `str` | Symbol or logical identifier for the decision |
+| `generated_at` | `str` | ISO timestamp for artifact generation |
+| `run_mode` | `str` | Pipeline run mode such as `daily` |
+| `observe_only` | `bool` | Always `true` for this integration |
+| `total_decisions` | `int` | Number of consolidated decision records |
+| `decisions` | `list[dict]` | Ranked decision records |
+
+### Decision Record Schema
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `symbol` | `str` | Ticker or logical identifier |
 | `decision` | `str` | One of `BUY`, `SELL`, `SCALE`, `HOLD`, `WAIT`, `AVOID` |
 | `priority` | `float` | Ranking score used for ordering |
 | `urgency` | `str` | One of `critical`, `high`, `medium`, `low` |
-| `source` | `str` | One of `structural`, `portfolio`, `watchlist`, `market`, `finance` |
-| `recommended_action` | `str` | Operator-facing action text |
+| `source` | `str` | One of `structural`, `portfolio`, `finance`, `watchlist`, `market` |
+| `recommended_action` | `str` | Operator-facing suggested action |
 | `recommended_amount` | `float \| null` | Suggested dollar amount when available |
 | `recommended_allocation_pct` | `float \| null` | Suggested allocation percentage when available |
-| `reason` | `str` | Human-readable rationale |
-| `risk_flags` | `list[str]` | Risk or downgrade flags such as `low_confidence` or `guardrail_conflict` |
-| `confidence` | `float` | Advisory confidence for the decision record |
-| `inputs_used` | `dict` | Source-specific normalized inputs used to make the decision |
+| `reason` | `str` | Consolidated human-readable rationale |
+| `risk_flags` | `list[str]` | Merged risk or downgrade flags |
+| `confidence` | `float` | Advisory confidence value |
+| `inputs_used` | `dict` | Safely merged source-specific inputs used to produce the record |
 
-### Summary Output
+## Decision Types
 
-`summarize_decision_plan` returns a plain-text summary string. It is designed for operators, logs, memo inclusion, and future Markdown artifact generation.
+The Decision Engine uses a closed decision set:
 
-## Decision Priority Model
+| Decision | Meaning |
+| --- | --- |
+| `BUY` | Open or add a new position when rules permit |
+| `SELL` | Reduce or exit because structural or portfolio rules require it |
+| `SCALE` | Add to an existing holding rather than opening a new one |
+| `HOLD` | Do not act now; maintain current position |
+| `WAIT` | Opportunity exists but current evidence or guardrails do not permit action |
+| `AVOID` | Opportunity is too weak to act on |
 
-The engine ranks decisions by priority descending, then by decision strength. `AVOID` decisions always trail actionable records even if their raw source score is non-trivial.
+## Source Precedence
 
-### Source Priority Ceilings
+When multiple sources produce decisions for the same symbol, the engine uses source precedence first.
 
-| Source | Ceiling |
+| Source | Precedence |
 | --- | ---: |
-| Structural | `1.00` |
-| Portfolio | `0.90` |
-| Finance | `0.80` |
-| Market | `0.65` |
-| Watchlist | `0.65` |
+| `structural` | 5 |
+| `portfolio` | 4 |
+| `finance` | 3 |
+| `watchlist` | 2 |
+| `market` | 1 |
 
-### Structural Anchors
+Structural decisions dominate lower-source decisions by design.
 
-| Violation type | Typical priority | Urgency |
-| --- | ---: | --- |
-| `leverage` | `0.95` | `critical` |
-| `concentration` | `0.88` | `high` |
-| `drift` | `0.76` | `high` |
+## Decision Precedence
 
-## Structural Violation Authority
+Within the same source precedence bucket, consolidation uses decision strength to choose the winner.
 
-Structural `SELL` decisions are authoritative. This is a core invariant of the module.
+| Decision | Precedence |
+| --- | ---: |
+| `SELL` | 5 |
+| `SCALE` | 4 |
+| `BUY` | 3 |
+| `HOLD` | 2 |
+| `WAIT` | 1 |
+| `AVOID` | 0 |
 
-Actual current behavior:
+This means `SCALE` wins over `BUY` during consolidation because scaling an existing position represents stronger conviction than opening a new one.
 
-- `decision_from_structural_violation` always emits `SELL`
-- `apply_decision_overrides` never downgrades `SELL`
-- `build_decision_plan` does not route structural violations through override capping
+## Consolidation Rules
 
-This means degraded data mode, bear drawdown regime, and similar safety caps do not weaken a structural `SELL`.
+The Decision Engine now consolidates duplicate symbol-level decisions into one final record per symbol.
+
+Current consolidation behavior:
+
+- one final decision per symbol
+- duplicate symbol decisions are consolidated
+- generic symbols such as `PORTFOLIO` and `UNKNOWN` are skipped from symbol-level dedupe
+- winner selection uses:
+  1. source precedence
+  2. decision precedence
+  3. higher priority score
+- `risk_flags` are merged with insertion-order dedupe
+- `reason` values are joined when multiple non-empty reasons exist
+- `inputs_used` are merged safely, with winner keys preserved
+
+Conflict cleanup before consolidation:
+
+- portfolio `HOLD` decisions that contradict an active structural `SELL` on the same specific symbol are suppressed
+- structural leverage breaches are resolved to specific leveraged holdings when possible
+
+Validated examples from current behavior:
+
+- structural leverage breach maps to `QLD`
+- structural concentration breach maps to `QQQ`
+- conflicting portfolio `HOLD` and structural `SELL` duplicates are suppressed or consolidated
+
+## Structural Authority Rules
+
+Structural decisions are authoritative.
+
+Actual current rules:
+
+- structural violations normalize to `SELL`
+- structural `SELL` decisions are never downgraded by override logic
+- structural decisions outrank all lower-source decisions
+- a structural `SELL` on a symbol suppresses contradictory portfolio `HOLD` on that same symbol
+
+This keeps guardrail enforcement visible even when opportunity-oriented sources disagree.
 
 ## Override Behavior
 
-`apply_decision_overrides` applies safety caps in this order:
+`apply_decision_overrides` applies safety caps to non-authoritative opportunity decisions.
+
+Current override rules:
 
 1. `degraded_mode=True` or `data_mode="fallback"` caps `BUY` and `SCALE` to `WAIT`
 2. `drawdown_regime in {"bear", "severe"}` caps non-structural `BUY` and `SCALE` to `HOLD`
-3. symbol conflict with `active_structural_violations` caps `BUY` and `SCALE` to `HOLD`
+3. active structural conflict on the same symbol caps `BUY` and `SCALE` to `HOLD`
+4. watchlist cooldown and low-confidence handling already map upstream signal decisions to `WAIT` or `HOLD`
 
 Important invariants:
 
-- `SELL` is never downgraded
-- overrides return a modified copy and do not mutate the original record
-- `risk_flags` capture why the downgrade happened
+- structural `SELL` is never downgraded
+- overrides do not mutate the original input record
+- downgrade reasons appear in `risk_flags`
 
-## Source-Specific Decision Mapping
+## Example Top Decision Output
 
-### Structural Violations
+Validated top decision output from the integrated observe-only pipeline:
 
-- always normalize to `SELL`
-- severity determines urgency and base priority
-- intended to surface guardrail-first action
+```text
+SELL   QLD    pri=0.950 src=structural urgency=critical
+SELL   QQQ    pri=0.880 src=structural urgency=high
+SCALE  VFH    pri=0.550 src=portfolio urgency=low
+WAIT   FANG   pri=0.550 src=market urgency=medium
+WAIT   XLRE   pri=0.550 src=market urgency=medium
+```
 
-### Portfolio Adjustments
+Expected interpretation:
 
-Current mapping:
-
-- `sell` or `trim` -> `SELL`
-- `buy` or `add` -> `BUY`
-- otherwise -> `HOLD`
-
-Current orchestration detail:
-
-- portfolio adjustments are treated as pre-evaluated advisory outputs inside `build_decision_plan`
-- they are not currently passed through `apply_decision_overrides`
-
-### Watchlist Signals
-
-Current watchlist mapping uses:
-
-- `conviction_band`
-- `conviction_score`
-- `signal_score`
-- `confidence_score`
-- `effective_score`
-- existing-holding context
-- cooldown state
-
-Typical outcomes:
-
-- sub-starter conviction -> `AVOID`
-- low confidence -> `WAIT` for new names, `HOLD` for existing holdings
-- cooldown active -> `WAIT` or `HOLD`
-- high conviction existing holding -> `SCALE`
-- high conviction new opportunity -> `BUY`
-
-### Market Opportunities
-
-Current market mapping:
-
-- new symbol opportunity -> `BUY`
-- existing holding opportunity -> `SCALE`
-- priority depends on `opportunity_type`
-
-### Finance Recommendations
-
-Current finance mapping is text-guided:
-
-- action contains `sell` or `reduce` -> `SELL`
-- action contains `buy` or `add` -> `BUY`
-- otherwise -> `HOLD`
-
-This keeps finance recommendations visible in the unified plan without pretending they are trade execution instructions.
+- structural `SELL` decisions appear first
+- underweight contribution targets can surface as `SCALE` or `BUY`
+- lower-conviction or constrained market opportunities remain `WAIT`
 
 ## Testing Coverage
 
-`tests/test_decision_engine.py` currently collects 39 tests.
+Current test coverage is split across:
 
-Covered areas include:
+- `tests/test_decision_engine.py`
+  Core conversion, ranking, override, and summary behavior
+- `tests/test_decision_engine_pipeline.py`
+  Pipeline integration, schema isolation, serialisability, additive-output behavior, and regression checks
 
-- structural violations outrank watchlist buys
-- leverage breaches become `critical` `SELL`
-- underweight market opportunities become `BUY`
-- low-confidence watchlist signals cap to `WAIT` or `HOLD`
-- degraded or fallback data downgrades non-authoritative opportunity decisions
-- structural `SELL` is not downgraded
-- existing holding plus strong conviction becomes `SCALE`
-- weak conviction becomes `AVOID`
-- ranking sorts by priority and keeps `AVOID` trailing
-- missing optional fields do not crash converters
-- summary rendering surfaces symbols, decisions, urgency, degraded state, and risk flags
-- override layer does not mutate original inputs
-- source-level priority ordering stays intact
+Validated behaviors covered by tests include:
 
-Test command:
+- structural decisions outrank watchlist and market opportunities
+- leverage and concentration structural mapping resolve to expected symbols
+- additive `decision_plan` output does not mutate existing upstream artifacts
+- output records use the closed decision schema
+- the plan is JSON-serialisable
+- duplicate and conflicting symbol-level decisions are handled by consolidation and suppression logic
 
-```bash
-python3 -m pytest tests/test_decision_engine.py -q
-```
+## Safety Statement
 
-## Example Output
+The Decision Engine is observe-only and additive-only.
 
-Example decision record:
+It does:
 
-```json
-{
-  "symbol": "NVDA",
-  "decision": "BUY",
-  "priority": 0.5506,
-  "urgency": "high",
-  "source": "watchlist",
-  "recommended_action": "Open NVDA position.",
-  "recommended_amount": 2000.0,
-  "recommended_allocation_pct": 0.04,
-  "reason": "Band=high conviction, conviction=0.88, signal=0.82, confidence=0.91.",
-  "risk_flags": [],
-  "confidence": 0.88,
-  "inputs_used": {
-    "conviction_band": "high_conviction",
-    "conviction_score": 0.88,
-    "signal_score": 0.82,
-    "confidence_score": 0.91,
-    "effective_score": 0.85,
-    "sizing_multiplier": 1.0,
-    "cooldown_active": false,
-    "data_mode": "live",
-    "is_existing_holding": false
-  }
-}
-```
+- unify advisory signals into one ranked plan
+- write new decision-plan artifacts
+- log top decisions for visibility
 
-Example summary usage:
+It does not:
 
-```python
-plan = build_decision_plan(...)
-summary_text = summarize_decision_plan(plan, portfolio_context)
-```
-
-## Future Integration Path
-
-Approved next integration direction:
-
-- add `outputs/latest/decision_plan.json`
-- add `outputs/latest/decision_plan.md`
-- do not change existing recommendation behavior yet
-- do not change existing output schemas
-- call `build_decision_plan` only after portfolio adjustments, finance recommendations, watchlist signals, and market opportunities already exist
-- log the top 3 decisions during the run
-- treat the decision plan as additive only until validated
-
-Recommended observe-only wiring sequence:
-
-1. gather existing source outputs in `main.py` after portfolio adjustments, finance recommendations, watchlist signals, and market opportunities are available
-2. call `build_decision_plan(...)`
-3. serialize the ranked records to `decision_plan.json`
-4. serialize `summarize_decision_plan(...)` to `decision_plan.md`
-5. log the top three ranked decisions
-6. leave all current recommendation artifacts untouched
+- execute trades
+- override existing recommendation behavior
+- rewrite current output contracts
+- bypass structural guardrails
 
 ## Next Implementation Step
 
-Wire `build_decision_plan` into the daily pipeline as an additive observe-only artifact producer, then validate that `decision_plan.json` and `decision_plan.md` appear without changing any existing recommendation or GUI contracts.
+Build the next consumer layers on top of the existing observe-only artifacts: a GUI Decision Center, an AI explanation layer, and later a decision-outcome feedback loop.
