@@ -21,9 +21,31 @@ STATUS_INSUFFICIENT = "insufficient_context"
 _MAX_DECISIONS = 5
 _MAX_WATCH_ITEMS = 3
 
-_DEPLOY_KEYWORDS = frozenset({"deploy", "buy", "invest", "purchase", "scale", "add"})
+_DEPLOY_KEYWORDS = frozenset({"deploy", "buy", "invest", "purchase", "scale", "add", "open"})
 _DEGRADED_FLAGS = frozenset({"degraded_data", "degraded_mode", "cache_only", "fallback"})
 _GUARDRAIL_FLAGS = frozenset({"leverage_breach", "concentration_breach"})
+
+# Phrases that negate a deploy keyword — "do not deploy" is not a contradiction
+# even though it contains "deploy".  Checked before _DEPLOY_KEYWORDS.
+_NO_DEPLOY_PATTERNS = (
+    "do not deploy",
+    "do not buy",
+    "do not invest",
+    "do not purchase",
+    "do not scale",
+    "do not add",
+    "do not open",
+    "don't deploy",
+    "don't buy",
+    "don't invest",
+    "don't purchase",
+    "don't scale",
+    "stand by",
+    "hold off",
+    "until conditions",
+    "no action",
+    "no new position",
+)
 
 _RULE_LABELS: dict[str, str] = {
     "structural_sell_guardrail_violation": "Structural SELL — guardrail violation confirmed",
@@ -51,6 +73,10 @@ def _safe_str(v: Any) -> str:
 
 def _capital_action_deploys(capital_action: str) -> bool:
     lowered = capital_action.lower()
+    # Negation/hold language takes precedence: "do not deploy" is not a contradiction
+    # even though it contains the keyword "deploy".
+    if any(pat in lowered for pat in _NO_DEPLOY_PATTERNS):
+        return False
     return any(kw in lowered for kw in _DEPLOY_KEYWORDS)
 
 

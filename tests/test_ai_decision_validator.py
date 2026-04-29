@@ -221,6 +221,70 @@ class TestDeterministicStatusRules(unittest.TestCase):
         result = validate_single_decision(row)
         self.assertEqual(STATUS_CONTRADICTION, result["validation_status"])
 
+    # ------------------------------------------------------------------
+    # contradiction — NOT flagged (negation / hold language)
+    # ------------------------------------------------------------------
+
+    def test_wait_do_not_deploy_not_contradiction(self):
+        row = _wait_row(capital_action="Stand by — do not deploy capital until conditions improve.")
+        result = validate_single_decision(row)
+        self.assertNotEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_do_not_buy_not_contradiction(self):
+        row = _wait_row(capital_action="do not buy at this time")
+        result = validate_single_decision(row)
+        self.assertNotEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_stand_by_not_contradiction(self):
+        row = _wait_row(capital_action="stand by")
+        result = validate_single_decision(row)
+        self.assertNotEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_until_conditions_not_contradiction(self):
+        row = _wait_row(capital_action="hold until conditions improve")
+        result = validate_single_decision(row)
+        self.assertNotEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_pure_wait_phrase_not_contradiction(self):
+        row = _wait_row(capital_action="wait for a better entry point")
+        result = validate_single_decision(row)
+        self.assertNotEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_do_not_deploy_capital_not_contradiction(self):
+        # Full realistic string from the issue report
+        row = _wait_row(
+            capital_action="Stand by — do not deploy capital until conditions improve."
+        )
+        result = validate_single_decision(row)
+        self.assertEqual(STATUS_CAUTION, result["validation_status"])
+        self.assertEqual([], result["contradictions"])
+
+    # ------------------------------------------------------------------
+    # contradiction — still flagged (positive deploy language)
+    # ------------------------------------------------------------------
+
+    def test_wait_deploy_amount_contradiction(self):
+        row = _wait_row(capital_action="deploy $500")
+        result = validate_single_decision(row)
+        self.assertEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_wait_buy_shares_contradiction(self):
+        row = _wait_row(capital_action="buy shares now")
+        result = validate_single_decision(row)
+        self.assertEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_hold_open_new_position_contradiction(self):
+        row = _wait_row(capital_action="open new position")
+        row["decision"] = "HOLD"
+        result = validate_single_decision(row)
+        self.assertEqual(STATUS_CONTRADICTION, result["validation_status"])
+
+    def test_avoid_scale_position_contradiction(self):
+        row = _wait_row(capital_action="scale position now")
+        row["decision"] = "AVOID"
+        result = validate_single_decision(row)
+        self.assertEqual(STATUS_CONTRADICTION, result["validation_status"])
+
     def test_missing_structured_reason_insufficient_context(self):
         row = _no_structured_reason_row()
         result = validate_single_decision(row)
