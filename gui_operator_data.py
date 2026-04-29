@@ -1103,40 +1103,132 @@ def _normalize_health(
 
 
 _STRUCTURAL_PREFIX_RE = re.compile(r"^STRUCTURAL:\s*", re.IGNORECASE)
+_WHITESPACE_RE = re.compile(r"\s+")
+_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+_SUFFIX_COUNT_RE = re.compile(r"\s*\.\.\.\(\+\d+[^)]*\)")
 
 
-def _compact_decision_reason(row: dict[str, Any]) -> str:
+def _compact_decision_reason(row: dict[str, Any], max_len: int = 80) -> str:
     """
     Return a compact, single-sentence reason for the Decision Center compact summary.
 
-    Priority:
-      1. ``short_reason`` field if the plan provides one.
-      2. First pipe-delimited segment of ``reason``, stripped of leading
-         ``STRUCTURAL:`` meta-label, truncated to the first sentence.
-      3. Hard cap at 120 characters.
+    This is presentation-only compression. It must never mutate the source
+    decision row or recompute the decision itself.
     """
-    short = str(row.get("short_reason") or "").strip()
-    if short:
-        return short[:120]
+    def _normalize(text: str) -> str:
+        return _WHITESPACE_RE.sub(" ", text).strip()
 
+    def _first_segment(text: str) -> str:
+        return _normalize(text.split("|")[0])
+
+    def _first_sentence(text: str) -> str:
+        match = re.match(r"^(.+?[.!?])(?:\s|$)", text)
+        return match.group(1).strip() if match else text.strip()
+
+    def _strip_prefixes(text: str) -> str:
+        cleaned = _STRUCTURAL_PREFIX_RE.sub("", text).strip()
+        cleaned = re.sub(r"^(structural|portfolio|market|finance|watchlist)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = _SUFFIX_COUNT_RE.sub("", cleaned).strip()
+        return cleaned.strip()
+
+    def _format_pct(value: Any) -> str | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= number <= 1:
+            number *= 100.0
+        rendered = f"{number:.1f}".rstrip("0").rstrip(".")
+        return f"{rendered}%"
+
+    def _extract_pct_pair(text: str, inputs_used: dict[str, Any]) -> tuple[str, str] | None:
+        current = (
+            _format_pct(row.get("current_pct"))
+            or _format_pct(inputs_used.get("current_pct"))
+            or _format_pct(inputs_used.get("current"))
+        )
+        cap = (
+            _format_pct(row.get("cap_pct"))
+            or _format_pct(inputs_used.get("cap_pct"))
+            or _format_pct(inputs_used.get("cap"))
+        )
+        if current and cap:
+            return current, cap
+
+        percents = _PERCENT_RE.findall(text)
+        if len(percents) >= 2:
+            return f"{percents[0]}%", f"{percents[1]}%"
+        return None
+
+    def _cap_sentence(text: str) -> str:
+        text = _normalize(text)
+        if not text:
+            return "No rationale provided."
+        text = text.rstrip(" ,;:")
+        if not re.search(r"[.!?]$", text):
+            text += "."
+        if len(text) <= max_len:
+            return text
+
+        body = text.rstrip(".!?")
+        words = body.split()
+        kept: list[str] = []
+        for word in words:
+            candidate_body = " ".join([*kept, word])
+            candidate = candidate_body + "."
+            if len(candidate) > max_len:
+                break
+            kept.append(word)
+        if kept:
+            return " ".join(kept).rstrip(" ,;:") + "."
+        return text[: max_len - 1].rstrip(" ,;:.") + "."
+
+    inputs_used = row.get("inputs_used") if isinstance(row.get("inputs_used"), dict) else {}
+    risk_flags = {str(flag).lower() for flag in (row.get("risk_flags") or [])}
+    source = str(row.get("source") or "").lower()
+    short = str(row.get("short_reason") or "").strip()
     reason = str(row.get("reason") or "").strip()
-    if not reason:
+    source_text = short or reason
+    if not source_text:
         return "No rationale provided."
 
-    # Take only the first pipe-delimited segment
-    segment = reason.split("|")[0].strip()
+    segment = _strip_prefixes(_first_segment(source_text))
+    sentence = _strip_prefixes(_first_sentence(segment))
+    lowered = sentence.lower()
+    violation_type = str(inputs_used.get("violation_type") or "").lower()
 
-    # Strip leading STRUCTURAL: meta-label
-    segment = _STRUCTURAL_PREFIX_RE.sub("", segment).strip()
+    is_structural = source == "structural"
+    if is_structural and (
+        violation_type == "leverage"
+        or "leverage_breach" in risk_flags
+        or "leverage" in lowered
+    ):
+        pct_pair = _extract_pct_pair(reason or segment, inputs_used)
+        if pct_pair:
+            return _cap_sentence(f"Leverage exceeds cap ({pct_pair[0]} vs {pct_pair[1]})")
+        return "Leverage exceeds cap."
 
-    # First sentence only (ends at . ! or ?)
-    match = re.match(r"^(.+?[.!?])(?:\s|$)", segment)
-    if match:
-        first = match.group(1).strip()
-        if len(first) <= 120:
-            return first
+    if is_structural and (
+        violation_type == "concentration"
+        or "concentration_breach" in risk_flags
+        or "concentration" in lowered
+    ):
+        pct_pair = _extract_pct_pair(reason or segment, inputs_used)
+        if pct_pair:
+            return _cap_sentence(f"Concentration exceeds cap ({pct_pair[0]} vs {pct_pair[1]})")
+        return "Concentration exceeds cap."
 
-    return segment[:120]
+    if any(token in lowered for token in ("rebalance", "drift", "underweight", "overweight")):
+        return "Drift exceeds rebalance threshold."
+
+    if "relative strength" in lowered or re.search(r"\brs\b", lowered):
+        return "Relative strength near highs."
+
+    if any(token in lowered for token in ("momentum", "breakout", "near highs", "market signal")):
+        return "Momentum breakout near highs."
+
+    deduped = re.sub(r"\b(\w+)(?:\s+\1\b)+", r"\1", sentence, flags=re.IGNORECASE)
+    return _cap_sentence(deduped)
 
 
 def _normalize_decision_brief(
@@ -1164,6 +1256,7 @@ def _normalize_decision_brief(
                 "source": str(row.get("source") or "-"),
                 "urgency": str(row.get("urgency") or "-"),
                 "reason": str(row.get("reason") or "").strip() or "No decision rationale provided.",
+                "compact_reason": _compact_decision_reason(row),
                 "risk_flags": [str(flag) for flag in _safe_list(row.get("risk_flags")) if str(flag).strip()],
                 "raw": row,
             }

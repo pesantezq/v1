@@ -2564,7 +2564,7 @@ def _render_decision_brief_summary(bundle: dict) -> None:
             f" | {row.get('source', '-')} | {row.get('urgency', '-')} | pri {pri}"
         )
         st.markdown(header)
-        st.caption(f"  {_compact_decision_reason(row.get('raw') or row)}")
+        st.caption(f"  {row.get('compact_reason') or _compact_decision_reason(row)}")
 
     capital = brief.get("capital_actions") or {}
     st.markdown("**Capital Actions**")

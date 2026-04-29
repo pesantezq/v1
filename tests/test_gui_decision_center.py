@@ -229,6 +229,33 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         capital = bundle["decision_brief"]["capital_actions"]
         self.assertEqual(1, capital["scale"])
 
+    def test_top_decision_summary_uses_compact_reason_not_raw_structural_text(self):
+        decisions = _six_decisions()
+        decisions[0]["reason"] = (
+            "STRUCTURAL: Reduce total leveraged exposure 18.0% to below 15% cap. "
+            "This second sentence should never appear in the summary."
+        )
+        decisions[0]["current_pct"] = 0.18
+        decisions[0]["cap_pct"] = 0.15
+        decisions[1]["reason"] = (
+            "STRUCTURAL: Current concentration is 48% vs 40% cap. "
+            "This detail should also stay out of the compact summary."
+        )
+        self._write(_DECISION_PLAN_REL, _make_plan(decisions))
+        bundle = load_operator_dashboard_data(self.root)
+        top = bundle["decision_brief"]["top_decisions"]
+
+        qld_row = next(r for r in top if r["symbol"] == "QLD")
+        qqq_row = next(r for r in top if r["symbol"] == "QQQ")
+        vfh_row = next(r for r in top if r["symbol"] == "VFH")
+
+        self.assertEqual("Leverage exceeds cap (18% vs 15%).", qld_row["compact_reason"])
+        self.assertEqual("Concentration exceeds cap (48% vs 40%).", qqq_row["compact_reason"])
+        self.assertEqual("Drift exceeds rebalance threshold.", vfh_row["compact_reason"])
+        self.assertNotIn("Structural leverage violation", qld_row["compact_reason"])
+        self.assertNotIn("Reduce total leveraged exposure", qld_row["compact_reason"])
+        self.assertNotIn("This second sentence", qld_row["compact_reason"])
+
     # ------------------------------------------------------------------
     # empty decision plan
     # ------------------------------------------------------------------
@@ -262,58 +289,77 @@ class TestCompactDecisionReason(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_short_reason_preferred_over_reason(self):
-        row = {"short_reason": "Leverage too high.", "reason": "STRUCTURAL: Long text. | More text."}
-        self.assertEqual("Leverage too high.", _compact_decision_reason(row))
+        row = {"short_reason": "Leverage exceeds cap.", "reason": "STRUCTURAL: Long text. | More text."}
+        self.assertEqual("Leverage exceeds cap.", _compact_decision_reason(row))
 
-    def test_short_reason_capped_at_120(self):
-        row = {"short_reason": "X" * 200}
+    def test_short_reason_capped_at_80(self):
+        row = {"short_reason": "This is a very long custom reason that should be capped cleanly at a word boundary without broken formatting"}
         result = _compact_decision_reason(row)
-        self.assertLessEqual(len(result), 120)
+        self.assertLessEqual(len(result), 80)
+        self.assertTrue(result.endswith("."))
 
     # ------------------------------------------------------------------
-    # STRUCTURAL: prefix stripped
+    # mapped structural reasons
     # ------------------------------------------------------------------
 
-    def test_structural_prefix_stripped(self):
-        row = {"reason": "STRUCTURAL: Leverage exceeds cap. More detail follows."}
-        result = _compact_decision_reason(row)
-        self.assertFalse(result.startswith("STRUCTURAL:"))
-        self.assertFalse(result.lower().startswith("structural:"))
+    def test_leverage_case_formats_correctly(self):
+        row = {
+            "source": "structural",
+            "reason": "STRUCTURAL: Reduce total leveraged exposure 18.0% to below 15% cap.",
+            "risk_flags": ["leverage_breach"],
+            "inputs_used": {"violation_type": "leverage", "current_pct": 0.18, "cap_pct": 0.15},
+        }
+        self.assertEqual("Leverage exceeds cap (18% vs 15%).", _compact_decision_reason(row))
 
-    def test_structural_prefix_case_insensitive(self):
-        row = {"reason": "structural: Concentration too high. Detail."}
-        result = _compact_decision_reason(row)
-        self.assertFalse(result.lower().startswith("structural:"))
+    def test_concentration_case_formats_correctly(self):
+        row = {
+            "source": "structural",
+            "reason": "structural: Current concentration is 48% vs 40% cap. Detail.",
+            "risk_flags": ["concentration_breach"],
+            "inputs_used": {"violation_type": "concentration"},
+        }
+        self.assertEqual("Concentration exceeds cap (48% vs 40%).", _compact_decision_reason(row))
 
     # ------------------------------------------------------------------
-    # pipe-separated reason — only first segment used
+    # portfolio / market mappings
     # ------------------------------------------------------------------
 
-    def test_pipe_segment_only_first_used(self):
-        row = {"reason": "First segment info. | STRUCTURAL: Second segment should be hidden."}
-        result = _compact_decision_reason(row)
-        self.assertNotIn("STRUCTURAL:", result)
-        self.assertNotIn("Second segment", result)
-
-    def test_pipe_segment_without_structural(self):
+    def test_rebalance_case_formats_correctly(self):
         row = {"reason": "Underweight position. Rebalance needed. | Extra detail."}
-        result = _compact_decision_reason(row)
-        self.assertNotIn("Extra detail", result)
+        self.assertEqual("Drift exceeds rebalance threshold.", _compact_decision_reason(row))
+
+    def test_momentum_case_formats_correctly(self):
+        row = {"reason": "Momentum breakout setup near highs with improving breadth."}
+        self.assertEqual("Momentum breakout near highs.", _compact_decision_reason(row))
+
+    def test_relative_strength_case_formats_correctly(self):
+        row = {"reason": "RS signal is strong and relative strength remains near highs."}
+        self.assertEqual("Relative strength near highs.", _compact_decision_reason(row))
 
     # ------------------------------------------------------------------
-    # max length
+    # compact safety rules
     # ------------------------------------------------------------------
 
-    def test_result_never_exceeds_120_chars(self):
+    def test_result_never_exceeds_80_chars(self):
         row = {"reason": ("Leverage very high. " * 20)}
-        self.assertLessEqual(len(_compact_decision_reason(row)), 120)
+        self.assertLessEqual(len(_compact_decision_reason(row)), 80)
 
-    def test_result_never_exceeds_120_chars_no_period(self):
+    def test_result_never_exceeds_80_chars_no_period(self):
         row = {"reason": "A" * 200}
-        self.assertLessEqual(len(_compact_decision_reason(row)), 120)
+        result = _compact_decision_reason(row)
+        self.assertLessEqual(len(result), 80)
+        self.assertTrue(result.endswith("."))
+
+    def test_word_boundary_cap_no_mid_word_cut(self):
+        long_sentence = "Leverage exceeds cap and requires immediate action to " + "reduce " * 12 + "exposure."
+        row = {"reason": long_sentence}
+        result = _compact_decision_reason(row)
+        self.assertLessEqual(len(result), 80)
+        self.assertNotIn("...", result)
+        self.assertTrue(result.endswith("."))
 
     # ------------------------------------------------------------------
-    # first sentence only
+    # fallback cleanup
     # ------------------------------------------------------------------
 
     def test_first_sentence_returned(self):
@@ -325,6 +371,16 @@ class TestCompactDecisionReason(unittest.TestCase):
         row = {"reason": "Is leverage too high? Yes it is."}
         result = _compact_decision_reason(row)
         self.assertEqual("Is leverage too high?", result)
+
+    def test_pipe_segment_only_first_used(self):
+        row = {"reason": "First segment info. | STRUCTURAL: Second segment should be hidden."}
+        result = _compact_decision_reason(row)
+        self.assertEqual("First segment info.", result)
+
+    def test_no_broken_suffix_marker(self):
+        row = {"reason": "STRUCTURAL: Leverage exceeds cap ...(+2 more details) and should be cleaned."}
+        result = _compact_decision_reason(row)
+        self.assertNotIn("...(+2", result)
 
     # ------------------------------------------------------------------
     # empty / missing reason
@@ -382,9 +438,10 @@ class TestCompactDecisionReason(unittest.TestCase):
             d["reason"] for d in brief["full_decisions"] if d.get("symbol") == "QLD"
         )
         self.assertEqual(long_reason, full_reason)
-        # compact version must be shorter
+        # compact version must be shorter and cleanly capped
         compact = _compact_decision_reason({"reason": long_reason})
         self.assertLess(len(compact), len(long_reason))
+        self.assertLessEqual(len(compact), 80)
 
 
 if __name__ == "__main__":
