@@ -22,6 +22,43 @@ Backward-compatible additions are preferred. Renames, removals, and meaning chan
 - Additive nested fields are allowed.
 - If data is missing, keep the artifact and degrade values to empty/null/defaults instead of deleting the contract.
 
+## Artifact Health Severity
+
+System summary, memo, and GUI health messaging should use severity-aware wording, not vague missing-artifact counts.
+
+### `critical_missing`
+
+- A truly required pipeline artifact is absent.
+- It must count toward `missing_artifact_count`.
+- It requires investigation because the expected producer step did not deliver a required output.
+- Health messages should name the exact file path and producer step.
+
+### `defaulting`
+
+- A policy/config artifact is absent, but the system has a safe default behavior.
+- It must not count toward `missing_artifact_count`.
+- Current examples:
+  - `outputs/performance/approved_ranking_config.json`
+  - `outputs/performance/approved_allocation_policy.json`
+- Expected meanings:
+  - ranking weights source = `default`
+  - allocation policy = `not_approved` / observe-only
+- Health messages should say `defaulting` or equivalent, not `required artifact missing`.
+
+### `optional_missing`
+
+- A non-critical artifact is absent, but a valid fallback exists.
+- It must not count toward `missing_artifact_count`.
+- Current example:
+  - `outputs/latest/theme_opportunities.json` when `outputs/latest/theme_signals.json` exists
+- Health messages should say `optional artifact not present` or equivalent.
+
+### Contract Rule
+
+- `missing_artifact_count` is reserved for `critical_missing` only.
+- Severity-aware detail lists may be additive fields.
+- Downstream consumers must preserve exact artifact path and producer-step visibility.
+
 ## Current Stable JSON Artifacts
 
 ### `outputs/latest/watchlist_signals.json`
@@ -249,6 +286,15 @@ Required top-level fields:
 - `policy_insight`
 - `data_health`
 - `changes`
+
+Expected `data_health` behavior:
+
+- `missing_artifacts`, `missing_artifact_details`, and `missing_artifact_count`
+  Reserved for `critical_missing` artifacts only.
+- `defaulting_artifact_details`
+  Artifacts absent but safe defaults are active.
+- `optional_artifact_details`
+  Artifacts absent but a valid fallback source exists.
 
 ### `outputs/latest/decision_plan.json`
 

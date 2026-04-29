@@ -65,6 +65,11 @@ Check these invariants:
 - `portfolio_snapshot.json` still has `rows`
 - `policy_recommendation.json` still has `recommendation.recommended_policy`, `recommendation.recommended_profile`, `recommendation.recommendation_score`
 - empty-data runs degrade to empty/null/default values rather than contract breakage
+- system-summary artifact health uses severity-aware wording
+- `defaulting` and `optional_missing` must not inflate `missing_artifact_count`
+- missing-artifact messages must name the exact file path and producer step
+- `approved_ranking_config.json` and `approved_allocation_policy.json` absent state should read as `defaulting`, not critical missing
+- `theme_opportunities.json` absent while `theme_signals.json` exists should read as `optional_missing`, not critical missing
 
 ## 6. Scoring And Ranking Integrity
 

@@ -52,6 +52,21 @@ Explicitly state what did not change.
 
 List affected artifacts, tests, and GUI surfaces.
 
+### Artifact Health Severity
+
+If artifact health behavior changes, record whether the change affects:
+
+- `critical_missing`
+- `defaulting`
+- `optional_missing`
+
+Explicitly note:
+
+- which artifacts changed severity
+- whether `missing_artifact_count` changed
+- whether GUI/memo/system-summary wording changed
+- which producer step owns the artifact
+
 ---
 
 ## FMP Stable Baseline (v1.0)
@@ -147,4 +162,64 @@ AI agents and maintainers need a stable source of truth before making behavior c
 - documentation consumers
 - AI coding agents
 - future regression review
+
+---
+
+## Artifact Health Severity Model
+
+### Date
+
+2026-04-29
+
+### Area
+
+output_contract
+
+### Files / Functions
+
+- `watchlist_scanner/system_summary.py` — `compute_data_health`, artifact-health classification, dry-run logging
+- `watchlist_scanner/daily_memo.py` — `_health_items`
+- `gui_operator_data.py` / `gui/app.py` — inherited health wording via shared summary data
+- `tests/test_system_summary.py`
+- `tests/test_daily_memo.py`
+- `tests/test_gui_decision_center.py`
+- `docs/OUTPUT_ARTIFACT_CONTRACTS.md`
+- `docs/REGRESSION_CHECKLIST.md`
+- `docs/CLAUDE_AGENT_RULES.md`
+
+### Decision
+
+Refined artifact health reporting into three severities:
+
+- `critical_missing`
+  True required pipeline artifact is absent.
+- `defaulting`
+  Policy/config artifact is absent but safe default behavior is active.
+- `optional_missing`
+  Non-critical artifact is absent but a fallback source exists.
+
+Current non-critical examples:
+
+- `outputs/performance/approved_ranking_config.json` → `defaulting`
+- `outputs/performance/approved_allocation_policy.json` → `defaulting`
+- `outputs/latest/theme_opportunities.json` when `theme_signals.json` exists → `optional_missing`
+
+### Why
+
+The prior wording made expected absent policy artifacts look like broken required outputs. That inflated `missing_artifact_count` and created noisy, misleading health warnings in system summary, memo, and GUI.
+
+### Invariants Preserved
+
+- No scoring changes
+- No decision or allocation behavior changes
+- No observe-only behavior changes
+- No artifact path changes
+- `decision_plan.json` remains the Decision Center source of truth
+
+### Downstream Impact
+
+- `missing_artifact_count` now reflects only truly required artifacts
+- system-summary dry-run logging is severity-aware
+- memo and GUI health wording can distinguish required missing vs defaulting vs optional absence
+- regression tests now guard against non-critical artifacts inflating critical missing counts
 

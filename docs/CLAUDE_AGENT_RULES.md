@@ -55,6 +55,25 @@ These scores may be improved, but their meanings must remain explicit and separa
 - Improve degraded-mode handling
 - Improve alert fatigue controls without hiding materially strong signals
 
+## Artifact Health Rules
+
+- Preserve the system-summary artifact health severity model.
+- Use `critical_missing` only for truly required pipeline artifacts.
+- Use `defaulting` when a policy/config artifact is absent but safe defaults are active.
+- Use `optional_missing` when a non-critical artifact is absent and a valid fallback exists.
+- Do not inflate `missing_artifact_count` with `defaulting` or `optional_missing` states.
+- Health messaging in GUI, memo, and system summary must name exact artifact paths and producer steps.
+- Do not revert to vague `N required artifacts were missing` wording when severity-aware detail exists.
+
+Current expected non-critical examples:
+
+- `outputs/performance/approved_ranking_config.json`
+  Treat as `defaulting`; ranking weights source remains `default`.
+- `outputs/performance/approved_allocation_policy.json`
+  Treat as `defaulting`; allocation policy remains `not_approved` / observe-only.
+- `outputs/latest/theme_opportunities.json` when `theme_signals.json` exists
+  Treat as `optional_missing`.
+
 ## Disallowed AI Behaviors Without Explicit User Approval
 
 - Changing ranking semantics in a protected area
