@@ -1,0 +1,11 @@
+[Unit]
+Description=Run StockBot daily at 06:30
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=5min
+Unit=stockbot-daily.service
+
+[Install]
+WantedBy=timers.target

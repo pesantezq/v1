@@ -1,0 +1,12 @@
+[Unit]
+Description=StockBot Daily Portfolio Run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/stockbot
+ExecStart=/opt/stockbot/scripts/run_daily.sh
+
+[Install]
+WantedBy=multi-user.target
