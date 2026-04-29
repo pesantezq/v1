@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-04-28T19:27:49.058014",
+  "generated_at": "2026-04-28T20:55:27.363766",
   "windows": [
     1,
     3,
     7
   ],
   "primary_window_days": 3,
-  "tracked_signals": 0,
+  "tracked_signals": 44,
   "resolved_signals": 0,
   "by_window": {
     "1d": {
@@ -44,7 +44,7 @@
     ]
   },
   "regime_performance": {
-    "generated_at": "2026-04-28T19:27:49.058049",
+    "generated_at": "2026-04-28T20:55:27.363813",
     "primary_window_days": 3,
     "resolved_signals": 0,
     "by_regime": {},
@@ -55,16 +55,16 @@
     }
   },
   "theme_alignment_performance": {
-    "generated_at": "2026-04-28T19:27:49.058059",
+    "generated_at": "2026-04-28T20:55:27.363835",
     "primary_window_days": 3,
-    "total": 0,
+    "total": 44,
     "buckets": {
       "none": {
-        "count": 0,
+        "count": 44,
         "resolved": 0,
         "avg_return": null,
         "hit_rate": null,
-        "low_sample_warning": true
+        "low_sample_warning": false
       },
       "weak": {
         "count": 0,
@@ -90,9 +90,9 @@
     }
   },
   "portfolio_fit_performance": {
-    "generated_at": "2026-04-28T19:27:49.058072",
+    "generated_at": "2026-04-28T20:55:27.363873",
     "primary_window_days": 3,
-    "total": 0,
+    "total": 44,
     "buckets": {
       "poor": {
         "count": 0,
@@ -109,11 +109,11 @@
         "low_sample_warning": true
       },
       "good": {
-        "count": 0,
+        "count": 44,
         "resolved": 0,
         "avg_return": null,
         "hit_rate": null,
-        "low_sample_warning": true
+        "low_sample_warning": false
       },
       "strong": {
         "count": 0,
@@ -125,16 +125,49 @@
     }
   },
   "final_rank_performance": {
-    "generated_at": "2026-04-28T19:27:49.058118",
+    "generated_at": "2026-04-28T20:55:27.363926",
     "primary_window_days": 3,
-    "total": 0,
-    "scored": 0,
-    "quartiles": {}
+    "total": 44,
+    "scored": 44,
+    "quartiles": {
+      "Q1": {
+        "count": 11,
+        "resolved": 0,
+        "avg_final_rank_score": 0.4977,
+        "avg_return": null,
+        "direction_correct_rate": null,
+        "low_sample_warning": true
+      },
+      "Q2": {
+        "count": 11,
+        "resolved": 0,
+        "avg_final_rank_score": 0.4556,
+        "avg_return": null,
+        "direction_correct_rate": null,
+        "low_sample_warning": true
+      },
+      "Q3": {
+        "count": 11,
+        "resolved": 0,
+        "avg_final_rank_score": 0.4277,
+        "avg_return": null,
+        "direction_correct_rate": null,
+        "low_sample_warning": true
+      },
+      "Q4": {
+        "count": 11,
+        "resolved": 0,
+        "avg_final_rank_score": 0.3513,
+        "avg_return": null,
+        "direction_correct_rate": null,
+        "low_sample_warning": true
+      }
+    }
   },
   "theme_type_performance": {
-    "generated_at": "2026-04-28T19:27:49.058123",
+    "generated_at": "2026-04-28T20:55:27.363938",
     "primary_window_days": 3,
-    "total": 0,
+    "total": 44,
     "by_type": {
       "classified": {
         "count": 0,
@@ -151,11 +184,11 @@
         "low_sample_warning": true
       },
       "none": {
-        "count": 0,
+        "count": 44,
         "resolved": 0,
         "avg_return": null,
         "hit_rate": null,
-        "low_sample_warning": true
+        "low_sample_warning": false
       }
     }
   }
