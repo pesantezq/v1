@@ -57,6 +57,8 @@ The observe-only pipeline writes:
 
 The daily memo/reporting layer now also consumes `decision_plan.json` as an additive downstream input. This does not change the Decision Engine plan shape or any upstream recommendation behavior.
 
+The GUI Decision Center now also consumes `decision_plan.json` and `system_decision_summary.json` through the operator-data layer. This remains read-only and does not recompute decisions.
+
 ### Artifact Shape
 
 Current top-level JSON shape:
@@ -228,7 +230,7 @@ Downstream memo coverage also validates that:
 - missing `decision_plan.json` degrades to a visible "Decision plan unavailable" message
 - structural decisions appear first in memo rendering
 - capital actions and structural risk focus render without changing existing memo sections
-- total memo test coverage passed at `84` tests in `tests/test_daily_memo.py`
+- total memo test coverage passed at `55` tests in `tests/test_daily_memo.py`
 
 ## Daily Memo Integration
 
@@ -245,12 +247,60 @@ Current downstream memo behavior:
 
 The memo layer adds these Decision Engine summaries:
 
+- `Top Insight`
+  One or two short sentences only.
 - `Top Decisions`
   Top 5 ranked actions with decision, symbol, priority, source, urgency, plain-English reason, and risk flags.
 - `Capital Actions`
   SELL / SCALE / BUY summary and total recommended capital when the plan provides amounts.
 - `Risk Focus`
   Structural decisions first, with concentration and leverage highlighted when present.
+- `What Changed`
+  Maximum 3 bullets.
+- `System / Data Health`
+  Only when degraded or fallback conditions are active.
+
+## GUI Decision Center Integration
+
+Current downstream GUI behavior:
+
+| Item | Behavior |
+| --- | --- |
+| Input artifacts | `outputs/latest/decision_plan.json`, `outputs/latest/system_decision_summary.json` |
+| Reader | `gui_operator_data.py` |
+| Renderer | `gui/app.py` Decision Center |
+| Decision recomputation | None |
+| Missing file behavior | GUI remains available and shows `Decision plan unavailable.` in the compact brief |
+| Full detail | Remains available below the summary in tables / expanders |
+
+The GUI compact brief mirrors the memo contract:
+
+- `Top Insight`
+- `Top Decisions`
+  Maximum 5.
+- `Capital Actions`
+  Grouped summary only.
+- `Risk Focus`
+  Maximum 3.
+- `What Changed`
+  Maximum 3.
+- `System / Data Health`
+  Only when degraded or fallback conditions are active.
+
+Validated VPS checks for the GUI compact brief:
+
+- compile check passed
+- GUI/operator-data + memo tests passed: `74 passed`
+- daily pipeline preserved idempotent behavior
+- required artifacts existed:
+  - `outputs/latest/decision_plan.json`
+  - `outputs/latest/system_decision_summary.json`
+- compact brief contract returned:
+  - `available: True`
+  - `top_decisions: 5`
+  - `risk_focus: 3`
+  - `what_changed: 3`
+  - `health_items: 1`
 
 ## Safety Statement
 
@@ -271,4 +321,4 @@ It does not:
 
 ## Next Implementation Step
 
-Reuse the same decision-plan helper layer now used by the daily memo in a future GUI Decision Center so memo, GUI, and explanation consumers stay contract-aligned and observe-only.
+Reuse the shared compact contract for future AI explanation and operator-summary surfaces so memo, GUI, and explanation consumers stay contract-aligned and observe-only.

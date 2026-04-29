@@ -29,7 +29,8 @@ Practical benefits:
 - structural risks are visible in the same report as opportunities
 - capital actions are easier to review without opening raw JSON
 - memo consumers can see the top observe-only actions without changing recommendation behavior
-- future GUI and explanation layers can align to the same plan summary contract
+- the GUI Decision Center can align to the same compact plan-summary contract
+- future explanation layers can build on the same read-only presentation rules
 
 ## Input Artifact Contract
 
@@ -96,6 +97,31 @@ Memo constraints:
 - do not list low-priority or suppressed items beyond the top ranked set
 - prefer grouping over long enumerations
 - full detail remains in JSON artifacts and GUI surfaces
+
+## Relationship To GUI Decision Center
+
+The GUI Decision Center now mirrors the same compact presentation contract.
+
+Shared contract elements:
+
+- `Top Insight`
+- `Top Decisions`
+  Maximum 5.
+- `Capital Actions`
+  Grouped summary only.
+- `Risk Focus`
+  Maximum 3.
+- `What Changed`
+  Maximum 3.
+- `System / Data Health`
+  Only when degraded or fallback conditions are active.
+
+Boundary rules remain the same:
+
+- both memo and GUI are read-only consumers of artifacts
+- neither surface recomputes decisions
+- neither surface executes trades
+- full detail remains available in `decision_plan.json` and in GUI expanders / tables
 
 ### Top Decisions
 
@@ -185,9 +211,20 @@ Validation result:
 
 - `55` tests passed
 
+Related GUI/operator-data validation on VPS:
+
+- compile check passed
+- GUI/operator-data + memo tests passed: `74 passed`
+- compact GUI brief returned:
+  - `available: True`
+  - `top_decisions: 5`
+  - `risk_focus: 3`
+  - `what_changed: 3`
+  - `health_items: 1`
+
 ## Recommended Extension
 
-The next clean extension is to reuse the same decision-plan helper layer for a future GUI Decision Center.
+The next clean extension is to reuse the same decision-plan helper layer for future explanation and dashboard surfaces beyond the memo and current GUI Decision Center.
 
 That keeps:
 
@@ -199,4 +236,4 @@ aligned to the same observe-only decision-plan contract and fallback behavior.
 
 ## Next Implementation Step
 
-Promote the current memo helper logic into a shared read-only presentation helper for Decision Engine consumers so the memo and future GUI Decision Center stay consistent without duplicating formatting or missing-file handling.
+Promote the current compact helper logic into a clearly shared read-only presentation helper for memo, GUI, and future explanation consumers so the contract stays consistent without duplicating truncation or fallback rules.

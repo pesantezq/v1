@@ -77,6 +77,17 @@ outputs/latest/system_decision_summary.json
     -> operator email / human review surfaces
 ```
 
+GUI Decision Center consumption flow:
+
+```text
+outputs/latest/system_decision_summary.json
+    + outputs/latest/decision_plan.json
+    -> gui_operator_data.py
+    -> gui/app.py Decision Center
+    -> compact decision brief
+    -> full queue / detailed tables / expanders
+```
+
 ## Watchlist Pipeline
 
 Primary entry point: `watchlist_scanner/__main__.py:run`
@@ -183,22 +194,56 @@ Current behavior:
 - `watchlist_scanner/daily_memo.py` safely reads `outputs/latest/decision_plan.json`
 - `generate_daily_memo(...)` attaches the decision plan only when the artifact is present
 - missing `decision_plan.json` does not fail memo generation
-- existing memo sections remain intact
+- the memo renders a compact decision brief instead of a verbose data dump
 - existing recommendation logic and output schemas remain unchanged
 
 New memo sections sourced from the decision plan:
 
+- `Top Insight`
+  One or two short sentences only.
 - `Top Decisions`
   Top 5 ranked decision records with action, symbol, priority, source, urgency, plain-English reason, and risk flags.
 - `Capital Actions`
   SELL / SCALE / BUY summary plus total recommended capital amount when decision records include amounts.
 - `Risk Focus`
   Structural decisions first, with concentration and leverage risks highlighted when present.
+- `What Changed`
+  Maximum 3 bullets.
+- `System / Data Health`
+  Only when degraded or fallback conditions are active.
+
+## GUI Decision Center Integration
+
+The GUI Decision Center now mirrors the compact daily-memo contract before showing detailed tables.
+
+Current behavior:
+
+- `gui_operator_data.py` reads:
+  - `outputs/latest/decision_plan.json`
+  - `outputs/latest/system_decision_summary.json`
+- the GUI remains artifact-driven and read-only
+- no decision recomputation happens in the GUI
+- the compact summary appears before detailed action tables
+- the full decision queue remains available below the summary in a dedicated expander/table
+
+Compact GUI summary contract:
+
+- `Top Insight`
+- `Top Decisions`
+  Maximum 5.
+- `Capital Actions`
+  Grouped summary only.
+- `Risk Focus`
+  Maximum 3.
+- `What Changed`
+  Maximum 3.
+- `System / Data Health`
+  Only when degraded or fallback conditions are active.
 
 Architectural impact:
 
-- the Decision Engine is now consumed by both artifact readers and operator-facing memo generation
-- the memo layer remains read-only and observe-only
+- the Decision Engine is now consumed by both operator-facing memo generation and GUI summary rendering
+- both memo and GUI remain read-only and observe-only
 - downstream consumers should reuse the same decision-plan helper layer where possible so memo, GUI, and explanation surfaces stay consistent
 
 ## State And Memory
@@ -250,4 +295,4 @@ These boundaries are intentional and should not be collapsed:
 
 ## Next Implementation Step
 
-Reuse the daily-memo decision-plan helper layer in a future GUI Decision Center so memo, GUI, and explanation consumers present the same ranked actions, risk focus, and missing-artifact fallback behavior.
+Build the next explanation-layer consumers on top of the now-shared compact contract so memo, GUI, and future AI summary surfaces stay aligned without recomputing decisions.
