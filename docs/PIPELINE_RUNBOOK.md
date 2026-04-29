@@ -129,6 +129,52 @@ After a healthy full run, expect at least:
 - `outputs/performance/performance_summary.json`
 - `outputs/latest/system_decision_summary.json`
 
+## Same-Day Rerun After Code Deployment
+
+### When to use this
+
+Use `bash scripts/rerun_today_safe.sh` when:
+
+- You deployed a code fix mid-day and `outputs/latest` artifacts are stale.
+- The daily pipeline already ran once today, recorded `status='completed'` in `run_history`, and will refuse to run again because the idempotency guard treats today's run as done.
+- You need a fresh run of `main.py --run-mode daily` with the new code, same calendar day.
+
+### When NOT to use this
+
+Do NOT use this script when:
+
+- The pipeline failed partway through — `status='failed'` already means it will retry on the next scheduled run. Use `bash scripts/run_daily_safe.sh` directly.
+- You want to re-run only the watchlist scanner — use `python -m watchlist_scanner` instead.
+- You want a dry run — use `DRY_RUN_MODE=1 bash scripts/run_daily_safe.sh`.
+- You are not sure why the previous run produced stale output — investigate the logs first.
+
+### Why SQLite run_history is the idempotency source
+
+`main.py` checks `run_history` before executing. If a row for today's `run_id` (`YYYY-MM-DD_daily`) exists with `status='completed'`, the pipeline exits early to prevent double-runs, double-archiving, and duplicate state writes.
+
+`rerun_today_safe.sh` resets exactly that one row to `status='failed'` — the minimum change that unlocks a re-run. It does not touch any other rows, does not delete the database, and does not remove `outputs/` or `outputs/history/`. After the re-run completes, `main.py` writes the row back to `status='completed'` with a fresh `completed_at`.
+
+### What the script does step by step
+
+1. Detects repo root and activates `.venv`.
+2. Looks up today's `run_history` row and prints it — if the row does not exist, exits without changes.
+3. Requires you to type `rerun` exactly to confirm (any other input aborts with no changes).
+4. Runs `UPDATE run_history SET status='failed', completed_at=NULL WHERE run_id='YYYY-MM-DD_daily'`.
+5. Runs `bash scripts/preflight.sh` — FMP compliance check, FMP test suite, API key validation.
+6. Runs `python main.py --run-mode daily`.
+7. Verifies `outputs/latest/decision_plan.json` exists and that the first decision row contains `decision_reason` and `decision_reason_structured`.
+8. Prints the final `run_history` row so you can confirm `status='completed'`.
+
+### Command
+
+```bash
+bash scripts/rerun_today_safe.sh
+```
+
+Logs are written to `logs/rerun_YYYY-MM-DD_HHMMSS.log`.
+
+---
+
 ## Common Failures And Fixes
 
 ### Missing `FMP_API_KEY`
