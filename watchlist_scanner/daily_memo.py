@@ -118,6 +118,131 @@ def _top_structural_decisions(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     return [r for r in rows if str(r.get("source") or "") == "structural"]
 
 
+def _top_decision_rows(summary: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
+    rows = []
+    for row in _decision_rows(summary):
+        if bool(row.get("suppressed")):
+            continue
+        rows.append(row)
+    rows.sort(key=lambda r: _flt(r.get("priority")), reverse=True)
+    return rows[:limit]
+
+
+def _capital_action_summary(rows: list[dict[str, Any]]) -> tuple[dict[str, int], float | None]:
+    counts = {"SELL": 0, "SCALE": 0, "BUY": 0}
+    total_amount = 0.0
+    amount_count = 0
+
+    for row in rows:
+        decision = str(row.get("decision") or "")
+        if decision not in counts:
+            continue
+        counts[decision] += 1
+        try:
+            total_amount += float(row.get("recommended_amount"))
+            amount_count += 1
+        except (TypeError, ValueError):
+            pass
+
+    return counts, (total_amount if amount_count > 0 else None)
+
+
+def _risk_focus_items(rows: list[dict[str, Any]]) -> list[str]:
+    items: list[str] = []
+    structural_rows = _top_structural_decisions(rows)
+
+    if structural_rows:
+        lead = ", ".join(
+            f"{str(r.get('symbol') or '-')} ({str(r.get('decision') or '-')})"
+            for r in structural_rows[:3]
+        )
+        items.append(f"Structural decisions lead the plan: {lead}.")
+
+        violation_types: list[str] = []
+        for row in structural_rows:
+            inputs_used = row.get("inputs_used") or {}
+            vtype = str(inputs_used.get("violation_type") or "").strip().lower()
+            if vtype and vtype not in violation_types:
+                violation_types.append(vtype)
+
+        if "concentration" in violation_types:
+            items.append("Concentration risk is active and should be reviewed first.")
+        if "leverage" in violation_types:
+            items.append("Leverage risk is active and should be reduced first.")
+    else:
+        risk_symbols = [
+            str(r.get("symbol") or "-")
+            for r in rows
+            if r.get("risk_flags")
+        ]
+        if risk_symbols:
+            lead = ", ".join(risk_symbols[:3])
+            items.append(f"Risk flags remain active in the top decisions: {lead}.")
+        else:
+            items.append("No structural risk actions lead the current decision set.")
+
+    return items[:3]
+
+
+def _change_items(changes: dict[str, Any]) -> list[str]:
+    raw_items = [str(c).strip() for c in (changes.get("changes") or []) if str(c).strip()]
+    if raw_items:
+        return raw_items[:3]
+
+    summary_line = str(changes.get("summary_line") or "").strip()
+    if summary_line:
+        return [summary_line]
+
+    if not changes.get("previous_available", True):
+        return ["No previous summary is available for comparison."]
+
+    return ["No material changes recorded."]
+
+
+def _health_items(data_health: dict[str, Any]) -> list[str]:
+    degraded = bool(data_health.get("degraded_mode", False))
+    data_mode = str(data_health.get("data_mode") or "").strip()
+    missing_count = int(data_health.get("missing_artifact_count") or 0)
+    fallback_used = bool(data_health.get("fallback_alerts_used", False))
+
+    if not degraded and data_mode in ("", "live") and missing_count <= 0 and not fallback_used:
+        return []
+
+    items: list[str] = []
+    if degraded:
+        items.append("Degraded mode is active; treat all memo actions as lower-certainty.")
+    if data_mode and data_mode not in ("live",):
+        items.append(f"Data mode is {data_mode}.")
+    if missing_count > 0:
+        items.append(f"{missing_count} required artifacts were missing during summary generation.")
+    elif fallback_used:
+        items.append("Fallback alerts were used because stronger live signals were unavailable.")
+    return items[:3]
+
+
+def _build_memo_top_insight(
+    top_theme: dict[str, Any],
+    top_opportunity: dict[str, Any],
+    decision_rows: list[dict[str, Any]],
+) -> str:
+    structural_rows = _top_structural_decisions(decision_rows)
+    if structural_rows:
+        symbols = ", ".join(str(r.get("symbol") or "-") for r in structural_rows[:2])
+        first = f"Structural risk is the top priority today, led by {symbols}."
+    else:
+        first = _build_top_insight(top_theme, top_opportunity)
+
+    theme_name = str(top_theme.get("name") or "").strip()
+    ticker = str(top_opportunity.get("ticker") or "").strip()
+    if theme_name and ticker:
+        return f"{first} {ticker} remains the lead opportunity inside the {theme_name} theme."
+    if theme_name:
+        return f"{first} {theme_name} remains the dominant theme."
+    if ticker and not structural_rows:
+        return f"{first} {ticker} remains the lead opportunity."
+    return first
+
+
 # ---------------------------------------------------------------------------
 # Subject line
 # ---------------------------------------------------------------------------
@@ -639,6 +764,198 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
     a("")
 
     # Footer
+    a("---")
+    a(f"_Advisory only — no trades executed. Generated: {gen_display}_")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Compact memo builders
+# ---------------------------------------------------------------------------
+
+def build_daily_memo(summary: dict[str, Any]) -> str:
+    """
+    Build a compact, decision-focused plain-text memo.
+
+    The memo is intentionally brief. Full detail remains in JSON artifacts and
+    GUI surfaces.
+    """
+    gen_at      = str(summary.get("generated_at") or "")
+    gen_display = gen_at[:19].replace("T", " ") if gen_at else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str    = gen_at[:10] if gen_at else datetime.now().strftime("%Y-%m-%d")
+
+    tt = dict(summary.get("top_theme") or {})
+    to = dict(summary.get("top_opportunity") or {})
+    dh = dict(summary.get("data_health") or {})
+    ch = dict(summary.get("changes") or {})
+    top_rows = _top_decision_rows(summary, limit=5)
+    capital_counts, capital_total = _capital_action_summary(top_rows)
+    risk_items = _risk_focus_items(top_rows)
+    change_items = _change_items(ch)
+    health_items = _health_items(dh)
+
+    lines: list[str] = []
+    a = lines.append
+
+    a(f"Subject: {get_subject(summary)}")
+    a("")
+    a(_SEP)
+    a("  DAILY INVESTMENT MEMO")
+    a(f"  {date_str}")
+    a(_SEP)
+    a("")
+
+    a(_LINE)
+    a("  TOP INSIGHT")
+    a(_LINE)
+    a(f"  {_build_memo_top_insight(tt, to, top_rows)}")
+    a("")
+
+    a(_LINE)
+    a("  TOP DECISIONS")
+    a(_LINE)
+    if top_rows:
+        for idx, row in enumerate(top_rows, 1):
+            decision = str(row.get("decision") or "-")
+            symbol = str(row.get("symbol") or "-")
+            priority = _flt(row.get("priority"))
+            source = str(row.get("source") or "-")
+            urgency = str(row.get("urgency") or "-")
+            a(f"  {idx}. {decision} {symbol} | pri {priority:.3f} | {source} | {urgency}")
+            reason = _decision_reason(row)
+            flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
+            if flags:
+                a(f"     {reason} Risk: {', '.join(flags)}.")
+            else:
+                a(f"     {reason}")
+    else:
+        a("  Decision plan unavailable.")
+    a("")
+
+    a(_LINE)
+    a("  CAPITAL ACTIONS")
+    a(_LINE)
+    a(
+        "  "
+        f"SELL={capital_counts.get('SELL', 0)}, "
+        f"SCALE={capital_counts.get('SCALE', 0)}, "
+        f"BUY={capital_counts.get('BUY', 0)}"
+    )
+    if capital_total is not None:
+        a(f"  Total recommended capital: {_fmt_money(capital_total)}")
+    a("")
+
+    a(_LINE)
+    a("  RISK FOCUS")
+    a(_LINE)
+    for item in risk_items[:3]:
+        a(f"  - {item}")
+    a("")
+
+    a(_LINE)
+    a("  WHAT CHANGED")
+    a(_LINE)
+    for item in change_items[:3]:
+        a(f"  - {item}")
+    a("")
+
+    if health_items:
+        a(_LINE)
+        a("  SYSTEM / DATA HEALTH")
+        a(_LINE)
+        for item in health_items[:3]:
+            a(f"  - {item}")
+        a("")
+
+    a(_LINE)
+    a("  Advisory only — no trades executed.")
+    a(f"  Generated: {gen_display}")
+    a(_SEP)
+
+    return "\n".join(lines)
+
+
+def build_daily_memo_md(summary: dict[str, Any]) -> str:
+    """
+    Build a compact, decision-focused Markdown memo.
+
+    The memo is intentionally brief. Full detail remains in JSON artifacts and
+    GUI surfaces.
+    """
+    gen_at      = str(summary.get("generated_at") or "")
+    gen_display = gen_at[:19].replace("T", " ") if gen_at else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str    = gen_at[:10] if gen_at else datetime.now().strftime("%Y-%m-%d")
+
+    tt = dict(summary.get("top_theme") or {})
+    to = dict(summary.get("top_opportunity") or {})
+    dh = dict(summary.get("data_health") or {})
+    ch = dict(summary.get("changes") or {})
+    top_rows = _top_decision_rows(summary, limit=5)
+    capital_counts, capital_total = _capital_action_summary(top_rows)
+    risk_items = _risk_focus_items(top_rows)
+    change_items = _change_items(ch)
+    health_items = _health_items(dh)
+
+    lines: list[str] = []
+    a = lines.append
+
+    a(f"# {get_subject(summary)}")
+    a("")
+    a(f"**Date:** {date_str}  ")
+    a(f"**Generated:** {gen_display}")
+    a("")
+
+    a("## Top Insight")
+    a("")
+    a(f"> {_build_memo_top_insight(tt, to, top_rows)}")
+    a("")
+
+    a("## Top Decisions")
+    if top_rows:
+        for row in top_rows:
+            decision = str(row.get("decision") or "-")
+            symbol = str(row.get("symbol") or "-")
+            priority = _flt(row.get("priority"))
+            source = str(row.get("source") or "-")
+            urgency = str(row.get("urgency") or "-")
+            a(f"- **{decision}** `{symbol}` | priority `{priority:.3f}` | source `{source}` | urgency `{urgency}`")
+            reason = _decision_reason(row)
+            flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
+            if flags:
+                a(f"  - {reason} Risk: {', '.join(flags)}.")
+            else:
+                a(f"  - {reason}")
+    else:
+        a("_Decision plan unavailable._")
+    a("")
+
+    a("## Capital Actions")
+    a(
+        f"- SELL: {capital_counts.get('SELL', 0)} | "
+        f"SCALE: {capital_counts.get('SCALE', 0)} | "
+        f"BUY: {capital_counts.get('BUY', 0)}"
+    )
+    if capital_total is not None:
+        a(f"- Total recommended capital: {_fmt_money(capital_total)}")
+    a("")
+
+    a("## Risk Focus")
+    for item in risk_items[:3]:
+        a(f"- {item}")
+    a("")
+
+    a("## What Changed")
+    for item in change_items[:3]:
+        a(f"- {item}")
+    a("")
+
+    if health_items:
+        a("## System / Data Health")
+        for item in health_items[:3]:
+            a(f"- {item}")
+        a("")
+
     a("---")
     a(f"_Advisory only — no trades executed. Generated: {gen_display}_")
 

@@ -67,6 +67,16 @@ Data sources
     -> GUI / AI explanation / daily memo
 ```
 
+Daily memo consumption flow:
+
+```text
+outputs/latest/system_decision_summary.json
+    + outputs/latest/decision_plan.json (optional, additive)
+    -> watchlist_scanner/daily_memo.py
+    -> daily_memo.txt / daily_memo.md
+    -> operator email / human review surfaces
+```
+
 ## Watchlist Pipeline
 
 Primary entry point: `watchlist_scanner/__main__.py:run`
@@ -164,6 +174,33 @@ Current integrated behavior:
 
 The Decision Engine is now the central observe-only action-plan layer, but it is still intentionally additive. It does not replace current recommendation outputs or change execution behavior.
 
+## Daily Memo Integration
+
+The daily memo/reporting layer now consumes Decision Engine output as an additive downstream reader.
+
+Current behavior:
+
+- `watchlist_scanner/daily_memo.py` safely reads `outputs/latest/decision_plan.json`
+- `generate_daily_memo(...)` attaches the decision plan only when the artifact is present
+- missing `decision_plan.json` does not fail memo generation
+- existing memo sections remain intact
+- existing recommendation logic and output schemas remain unchanged
+
+New memo sections sourced from the decision plan:
+
+- `Top Decisions`
+  Top 5 ranked decision records with action, symbol, priority, source, urgency, plain-English reason, and risk flags.
+- `Capital Actions`
+  SELL / SCALE / BUY summary plus total recommended capital amount when decision records include amounts.
+- `Risk Focus`
+  Structural decisions first, with concentration and leverage risks highlighted when present.
+
+Architectural impact:
+
+- the Decision Engine is now consumed by both artifact readers and operator-facing memo generation
+- the memo layer remains read-only and observe-only
+- downstream consumers should reuse the same decision-plan helper layer where possible so memo, GUI, and explanation surfaces stay consistent
+
 ## State And Memory
 
 System memory is split across:
@@ -213,4 +250,4 @@ These boundaries are intentional and should not be collapsed:
 
 ## Next Implementation Step
 
-Use the now-live decision-plan artifacts as inputs for GUI Decision Center and AI explanation work, while preserving the observe-only and additive-only boundaries.
+Reuse the daily-memo decision-plan helper layer in a future GUI Decision Center so memo, GUI, and explanation consumers present the same ranked actions, risk focus, and missing-artifact fallback behavior.

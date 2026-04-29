@@ -55,6 +55,8 @@ The observe-only pipeline writes:
 
 `decision_plan.json` is the machine-readable artifact. `decision_plan.md` is the operator-readable summary.
 
+The daily memo/reporting layer now also consumes `decision_plan.json` as an additive downstream input. This does not change the Decision Engine plan shape or any upstream recommendation behavior.
+
 ### Artifact Shape
 
 Current top-level JSON shape:
@@ -220,6 +222,36 @@ Validated behaviors covered by tests include:
 - the plan is JSON-serialisable
 - duplicate and conflicting symbol-level decisions are handled by consolidation and suppression logic
 
+Downstream memo coverage also validates that:
+
+- `watchlist_scanner/daily_memo.py` reads `decision_plan.json` safely
+- missing `decision_plan.json` degrades to a visible "Decision plan unavailable" message
+- structural decisions appear first in memo rendering
+- capital actions and structural risk focus render without changing existing memo sections
+- total memo test coverage passed at `84` tests in `tests/test_daily_memo.py`
+
+## Daily Memo Integration
+
+Current downstream memo behavior:
+
+| Item | Behavior |
+| --- | --- |
+| Input artifact | `outputs/latest/decision_plan.json` |
+| Reader | `watchlist_scanner/daily_memo.py` |
+| Attach point | `generate_daily_memo(...)` attaches the plan only when present |
+| Missing file behavior | Memo generation continues and shows `Decision plan unavailable.` |
+| Existing memo sections | Preserved |
+| Existing recommendation behavior | Unchanged |
+
+The memo layer adds these Decision Engine summaries:
+
+- `Top Decisions`
+  Top 5 ranked actions with decision, symbol, priority, source, urgency, plain-English reason, and risk flags.
+- `Capital Actions`
+  SELL / SCALE / BUY summary and total recommended capital when the plan provides amounts.
+- `Risk Focus`
+  Structural decisions first, with concentration and leverage highlighted when present.
+
 ## Safety Statement
 
 The Decision Engine is observe-only and additive-only.
@@ -239,4 +271,4 @@ It does not:
 
 ## Next Implementation Step
 
-Build the next consumer layers on top of the existing observe-only artifacts: a GUI Decision Center, an AI explanation layer, and later a decision-outcome feedback loop.
+Reuse the same decision-plan helper layer now used by the daily memo in a future GUI Decision Center so memo, GUI, and explanation consumers stay contract-aligned and observe-only.

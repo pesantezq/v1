@@ -715,6 +715,331 @@ class TestGenerateDailyMemo:
 
 
 # ---------------------------------------------------------------------------
+# Compact memo contract overrides
+# ---------------------------------------------------------------------------
+
+class TestBuildDailyMemoEmpty:
+    def test_empty_dict_does_not_crash(self):
+        result = build_daily_memo({})
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_empty_dict_contains_subject_line(self):
+        result = build_daily_memo({})
+        assert "Subject:" in result
+
+    def test_empty_dict_contains_compact_sections(self):
+        result = build_daily_memo({})
+        for section in (
+            "TOP INSIGHT",
+            "TOP DECISIONS",
+            "CAPITAL ACTIONS",
+            "RISK FOCUS",
+            "WHAT CHANGED",
+        ):
+            assert section in result, f"Missing section: {section}"
+
+    def test_empty_dict_omits_degraded_health_section(self):
+        result = build_daily_memo({})
+        assert "SYSTEM / DATA HEALTH" not in result
+
+    def test_empty_dict_omits_legacy_verbose_sections(self):
+        result = build_daily_memo({})
+        for section in (
+            "TOP THEME",
+            "TOP OPPORTUNITY",
+            "PORTFOLIO INSIGHT",
+            "CAPITAL PREVIEW",
+            "POLICY STATUS",
+            "CHANGES SINCE LAST RUN",
+        ):
+            assert section not in result
+
+
+class TestBuildDailyMemoFull:
+    def test_subject_line_present(self):
+        result = build_daily_memo(_full_summary())
+        assert "Subject: Daily Investment Memo" in result
+
+    def test_top_insight_stays_short_and_mentions_theme_and_ticker(self):
+        result = build_daily_memo(_full_summary())
+        assert "AI" in result
+        assert "NVDA" in result
+
+    def test_score_breakdowns_are_not_dumped(self):
+        result = build_daily_memo(_full_summary())
+        assert "0.821" not in result
+        assert "0.913" not in result
+        assert "0.856" not in result
+
+    def test_footer_contains_advisory_note(self):
+        result = build_daily_memo(_full_summary())
+        assert "Advisory only" in result
+        assert "no trades executed" in result
+
+    def test_decision_engine_sections_present_when_plan_attached(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "TOP DECISIONS" in result
+        assert "CAPITAL ACTIONS" in result
+        assert "RISK FOCUS" in result
+
+    def test_top_decisions_are_limited_to_five(self):
+        payload = _decision_plan_payload()
+        payload["decisions"].append(
+            {
+                "symbol": "XLE",
+                "decision": "BUY",
+                "priority": 0.10,
+                "urgency": "low",
+                "source": "market",
+                "reason": "Low-priority tail item.",
+                "risk_flags": [],
+                "inputs_used": {},
+            }
+        )
+        summary = _full_summary()
+        summary["_decision_plan"] = payload
+        result = build_daily_memo(summary)
+        assert "XLRE" in result
+        assert "XLE" not in result
+
+    def test_structural_decisions_appear_first_in_top_decisions(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        top_idx = result.index("TOP DECISIONS")
+        qld_idx = result.index("QLD", top_idx)
+        qqq_idx = result.index("QQQ", top_idx)
+        vfh_idx = result.index("VFH", top_idx)
+        assert qld_idx < vfh_idx
+        assert qqq_idx < vfh_idx
+
+    def test_risk_focus_mentions_structural_risks(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "Concentration risk is active" in result
+        assert "Leverage risk is active" in result
+
+    def test_capital_actions_are_grouped_without_listing_top_actions(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo(summary)
+        assert "SELL=2, SCALE=1, BUY=0" in result
+        assert "Total recommended capital: $3,000.00" in result
+        assert "Top actions:" not in result
+
+    def test_what_changed_is_limited_to_three_bullets(self):
+        summary = _full_summary(
+            changes={
+                "previous_available": True,
+                "changes": ["one", "two", "three", "four"],
+                "summary_line": "4 changes detected.",
+            }
+        )
+        result = build_daily_memo(summary)
+        assert "  - one" in result
+        assert "  - two" in result
+        assert "  - three" in result
+        assert "  - four" not in result
+
+    def test_system_data_health_only_shown_when_degraded(self):
+        degraded = _full_summary(
+            data_health={
+                "degraded_mode": True,
+                "data_mode": "cache_only",
+                "missing_artifact_count": 2,
+            }
+        )
+        result = build_daily_memo(degraded)
+        assert "SYSTEM / DATA HEALTH" in result
+        assert "Degraded mode is active" in result
+
+        normal = build_daily_memo(_full_summary())
+        assert "SYSTEM / DATA HEALTH" not in normal
+
+
+class TestBuildDailyMemoMd:
+    def test_returns_string(self):
+        assert isinstance(build_daily_memo_md({}), str)
+
+    def test_title_heading_present(self):
+        result = build_daily_memo_md(_full_summary())
+        assert "# Daily Investment Memo" in result
+
+    def test_compact_headings_present(self):
+        result = build_daily_memo_md(_full_summary())
+        for section in (
+            "## Top Insight",
+            "## Top Decisions",
+            "## Capital Actions",
+            "## Risk Focus",
+            "## What Changed",
+        ):
+            assert section in result
+
+    def test_legacy_verbose_headings_absent(self):
+        result = build_daily_memo_md(_full_summary())
+        for section in (
+            "## Top Theme",
+            "## Top Opportunity",
+            "## Portfolio Insight",
+            "## Capital Preview",
+            "## Policy Status",
+            "## Changes Since Last Run",
+        ):
+            assert section not in result
+
+    def test_decision_plan_sections_present(self):
+        summary = _full_summary()
+        summary["_decision_plan"] = _decision_plan_payload()
+        result = build_daily_memo_md(summary)
+        assert "## Top Decisions" in result
+        assert "## Capital Actions" in result
+        assert "## Risk Focus" in result
+
+    def test_degraded_health_section_only_when_needed(self):
+        degraded = _full_summary(
+            data_health={
+                "degraded_mode": True,
+                "data_mode": "fallback",
+            }
+        )
+        result = build_daily_memo_md(degraded)
+        assert "## System / Data Health" in result
+
+        normal = build_daily_memo_md(_full_summary())
+        assert "## System / Data Health" not in normal
+
+
+class TestGenerateDailyMemo:
+    def test_dry_run_returns_tuple(self, tmp_path):
+        result = generate_daily_memo(root=tmp_path, write_files=False)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_dry_run_returns_strings(self, tmp_path):
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert isinstance(txt, str)
+        assert isinstance(md, str)
+
+    def test_dry_run_writes_no_files(self, tmp_path):
+        generate_daily_memo(root=tmp_path, write_files=False)
+        assert not (tmp_path / "outputs" / "latest" / "daily_memo.txt").exists()
+        assert not (tmp_path / "outputs" / "latest" / "daily_memo.md").exists()
+
+    def test_write_mode_creates_both_files(self, tmp_path):
+        generate_daily_memo(root=tmp_path, write_files=True)
+        assert (tmp_path / "outputs" / "latest" / "daily_memo.txt").exists()
+        assert (tmp_path / "outputs" / "latest" / "daily_memo.md").exists()
+
+    def test_txt_file_contains_compact_sections(self, tmp_path):
+        generate_daily_memo(root=tmp_path, write_files=True)
+        txt = (tmp_path / "outputs" / "latest" / "daily_memo.txt").read_text(encoding="utf-8")
+        assert "TOP INSIGHT" in txt
+        assert "TOP DECISIONS" in txt
+        assert "CAPITAL ACTIONS" in txt
+        assert "TOP THEME" not in txt
+
+    def test_md_file_contains_headings(self, tmp_path):
+        generate_daily_memo(root=tmp_path, write_files=True)
+        md = (tmp_path / "outputs" / "latest" / "daily_memo.md").read_text(encoding="utf-8")
+        assert "# Daily Investment Memo" in md
+        assert "## Top Decisions" in md
+
+    def test_missing_summary_file_handled_gracefully(self, tmp_path):
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Advisory only" in txt
+        assert "# Daily Investment Memo" in md
+
+    def test_missing_decision_plan_file_shows_unavailable(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Decision plan unavailable." in txt
+        assert "_Decision plan unavailable._" in md
+
+    def test_valid_decision_plan_file_is_rendered(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+        (out_dir / "decision_plan.json").write_text(
+            json.dumps(_decision_plan_payload()), encoding="utf-8"
+        )
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "TOP DECISIONS" in txt
+        assert "QLD" in txt
+        assert "QQQ" in txt
+        assert "Risk: leverage_breach." in txt
+        assert "## Top Decisions" in md
+        assert "Structural decisions lead the plan" in md
+
+    def test_structural_decisions_render_before_other_actions(self, tmp_path):
+        import json
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(_full_summary()), encoding="utf-8"
+        )
+        (out_dir / "decision_plan.json").write_text(
+            json.dumps(_decision_plan_payload()), encoding="utf-8"
+        )
+
+        txt, _ = generate_daily_memo(root=tmp_path, write_files=False)
+        top_idx = txt.index("TOP DECISIONS")
+        qld_idx = txt.index("QLD", top_idx)
+        qqq_idx = txt.index("QQQ", top_idx)
+        vfh_idx = txt.index("VFH", top_idx)
+        assert qld_idx < vfh_idx
+        assert qqq_idx < vfh_idx
+
+    def test_real_summary_written_then_read(self, tmp_path):
+        import json
+        from watchlist_scanner.system_summary import build_system_decision_summary
+
+        artifacts = {
+            "signals": {"results": [{"ticker": "TSLA", "filter_allowed": True,
+                                     "final_rank_score": 0.88, "confidence_score": 0.75,
+                                     "portfolio_fit_score": 0.80, "portfolio_fit_label": "strong",
+                                     "theme_alignment_label": "aligned", "rank_multiplier": 1.1,
+                                     "conviction_band": "high_conviction"}]},
+            "themes": {"themes": [{"name": "EV", "type": "classified", "score": 0.75,
+                                   "persistence": 0.6, "acceleration": 0.1, "tickers": ["TSLA"]}]},
+        }
+        flags = {k: False for k in (
+            "watchlist_signals", "theme_opportunities", "portfolio_snapshot",
+            "approved_ranking_config", "approved_allocation_policy",
+            "allocation_preview", "allocation_simulation", "weight_tuning_suggestions",
+        )}
+        summary = build_system_decision_summary(artifacts, flags)
+
+        out_dir = tmp_path / "outputs" / "latest"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "system_decision_summary.json").write_text(
+            json.dumps(summary), encoding="utf-8"
+        )
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "TSLA" in txt
+        assert "EV" in txt
+        assert "TSLA" in md
+
+
+# ---------------------------------------------------------------------------
 # Helpers shared by email retry / test-email tests
 # ---------------------------------------------------------------------------
 
