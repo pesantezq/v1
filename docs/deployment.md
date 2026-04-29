@@ -27,7 +27,7 @@ The wrapper uses the repository virtualenv directly at `/opt/stockbot/.venv/bin/
 | `scripts/verify_run.sh` | Local health check for decision-plan outputs and logs |
 | `deploy/install_systemd.sh` | Idempotent installer for service and timer |
 | `deploy/stockbot-daily.service` | systemd oneshot service |
-| `deploy/stockbot-daily.timer` | systemd timer scheduled for 06:30 daily |
+| `deploy/stockbot-daily.timer` | systemd timer scheduled for 06:30 daily in `America/New_York` |
 
 ## Install
 
@@ -45,6 +45,12 @@ What it does:
 - installs `stockbot-daily.timer`
 - runs `systemctl daemon-reload`
 - enables and starts the timer
+
+Timer behavior:
+
+- the timer is pinned to `America/New_York`
+- this means it runs at `06:30` Eastern time even if the server itself is configured for UTC
+- for example, on April 29, 2026, `06:30 America/New_York` equals `10:30 UTC`
 
 ## Test
 
@@ -87,7 +93,7 @@ systemctl disable --now stockbot-daily.timer
 - `run_daily.sh` uses absolute paths only.
 - The wrapper calls the virtualenv interpreter directly and does not source `activate`.
 - `decision_plan.json`, `decision_plan.md`, and `data/last_success.json` are included in the verification check.
-- The timer is configured for `06:30` daily with `Persistent=true` and `RandomizedDelaySec=5min`.
+- The timer is configured for `06:30 America/New_York` daily with `Persistent=true` and `RandomizedDelaySec=5min`.
 
 ## Next Implementation Step
 

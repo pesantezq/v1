@@ -1,8 +1,8 @@
 [Unit]
-Description=Run StockBot daily at 06:30
+Description=Run StockBot daily at 06:30 America/New_York
 
 [Timer]
-OnCalendar=*-*-* 06:30:00
+OnCalendar=*-*-* 06:30:00 America/New_York
 Persistent=true
 RandomizedDelaySec=5min
 Unit=stockbot-daily.service
