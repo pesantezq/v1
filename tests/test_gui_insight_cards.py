@@ -96,6 +96,25 @@ class TestGuiInsightCards(unittest.TestCase):
         self.assertEqual("unknown", cards[0]["strategy"])
         self.assertEqual("unknown", cards[0]["band"])
 
+    def test_splits_long_why_into_bullets(self):
+        row = _structured_row(
+            decision_reason_structured={
+                **_structured_row()["decision_reason_structured"],
+                "why": [
+                    "First sentence is here. Second sentence is here. Third sentence is here."
+                ],
+            }
+        )
+        cards = build_insight_card_models([row])
+        self.assertEqual(
+            [
+                "First sentence is here.",
+                "Second sentence is here.",
+                "Third sentence is here.",
+            ],
+            cards[0]["why"],
+        )
+
     def test_handles_empty_list(self):
         self.assertEqual([], build_insight_card_models([]))
 

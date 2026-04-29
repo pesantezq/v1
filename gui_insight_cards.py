@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 import streamlit as st
@@ -58,13 +59,45 @@ def _dedup_strings(values: list[Any]) -> list[str]:
     return out
 
 
+def _split_reason_lines(*parts: Any, limit: int = 3) -> list[str]:
+    out: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        text = text.replace(" | ", "|")
+        segments = [seg.strip() for seg in text.split("|") if seg.strip()]
+        if not segments:
+            segments = [text]
+        for segment in segments:
+            normalized = re.sub(r"\s+", " ", segment).strip()
+            if not normalized:
+                continue
+            subparts = [
+                item.strip()
+                for item in re.split(r"(?<=[.!?;])\s+", normalized)
+                if item.strip()
+            ]
+            if not subparts:
+                subparts = [normalized]
+            for item in subparts:
+                if item not in out:
+                    out.append(item)
+                if len(out) >= limit:
+                    return out
+    return out[:limit]
+
+
 def _fallback_why(row: dict[str, Any]) -> list[str]:
-    reason = str(
-        row.get("decision_reason")
-        or row.get("reason")
-        or "No structured insight available."
-    ).strip()
-    return [reason] if reason else ["No structured insight available."]
+    for candidate in (
+        row.get("decision_reason"),
+        row.get("reason"),
+        "No structured insight available.",
+    ):
+        lines = _split_reason_lines(candidate, limit=3)
+        if lines:
+            return lines
+    return ["No structured insight available."]
 
 
 def build_insight_card_models(
@@ -117,6 +150,7 @@ def build_insight_card_models(
         )
         tags = _dedup_strings([*list(risk_flags), *list(override_flags)])
 
+        why = _split_reason_lines(*why, limit=3) if why else []
         if not why:
             why = _fallback_why(row)
 

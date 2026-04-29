@@ -500,6 +500,43 @@ class TestStructuredDecisionFields(unittest.TestCase):
         self.assertEqual(structured["strategy"], "compounder")
         self.assertGreater(len(structured["why"]), 0)
 
+    def test_structural_decision_uses_structural_guardrail_fallbacks(self):
+        plan = build_decision_plan(
+            structural_violations=[_concentration_violation("QQQ")],
+            portfolio_context=_ctx(),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        self.assertEqual(structured["strategy"], "structural")
+        self.assertEqual(structured["band"], "guardrail")
+
+    def test_portfolio_decision_uses_portfolio_rebalance_fallbacks(self):
+        plan = build_decision_plan(
+            portfolio_adjustments=[_portfolio_adjustment("VFH", adjustment_mode="CONTRIBUTE_ONLY", drift=-0.15)],
+            portfolio_context=_ctx(),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        self.assertEqual(structured["strategy"], "portfolio")
+        self.assertEqual(structured["band"], "rebalance")
+
+    def test_market_wait_uses_market_watch_fallbacks(self):
+        plan = build_decision_plan(
+            market_opportunities=[{
+                "symbol": "FANG",
+                "opportunity_type": "rebalance_target",
+                "reason": "Relative strength near highs.",
+                "urgency": "medium",
+            }],
+            portfolio_context=_ctx(
+                degraded_mode=True,
+                data_mode="fallback",
+                active_structural_violations=[],
+            ),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        self.assertEqual(plan[0]["decision"], DECISION_WAIT)
+        self.assertEqual(structured["strategy"], "market")
+        self.assertEqual(structured["band"], "watch")
+
     def test_confidence_is_min_of_confidence_and_conviction(self):
         plan = build_decision_plan(
             watchlist_signals=[_high_conviction_signal("NVDA")],

@@ -261,6 +261,8 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         self.assertIn("outputs/performance/approved_ranking_config.json (ranking config promotion)", joined)
         self.assertIn("Optional artifacts not present", joined)
         self.assertIn("outputs/latest/theme_opportunities.json (theme discovery)", joined)
+        self.assertNotIn("required artifacts were missing", joined.lower())
+        self.assertNotIn("Required artifacts missing", joined)
 
     # ------------------------------------------------------------------
     # GUI does NOT recompute decisions

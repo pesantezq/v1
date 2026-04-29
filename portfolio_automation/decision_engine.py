@@ -17,6 +17,7 @@ Design:
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Optional
 
 import decision_engine as structured_decision_engine
@@ -293,6 +294,36 @@ def _allocation_payload(
     }
 
 
+def _split_explainability_lines(*parts: Any, limit: int = 3) -> list[str]:
+    """Split longer rationale text into short stable bullet lines."""
+    out: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        text = text.replace(" | ", "|")
+        segments = [seg.strip() for seg in text.split("|") if seg.strip()]
+        if not segments:
+            segments = [text]
+        for segment in segments:
+            normalized = re.sub(r"\s+", " ", segment).strip()
+            if not normalized:
+                continue
+            subparts = [
+                item.strip()
+                for item in re.split(r"(?<=[.!?;])\s+", normalized)
+                if item.strip()
+            ]
+            if not subparts:
+                subparts = [normalized]
+            for item in subparts:
+                if item not in out:
+                    out.append(item)
+                if len(out) >= limit:
+                    return out
+    return out[:limit]
+
+
 def _structured_reason_strategy(record: dict) -> str:
     """Map record source / inputs to a stable structured strategy label."""
     source = _safe_str(record, "source", "unknown")
@@ -306,11 +337,20 @@ def _structured_reason_strategy(record: dict) -> str:
         return "portfolio"
     if source == SOURCE_STRUCTURAL:
         return "structural"
+    if source == SOURCE_MARKET:
+        return "market"
     return "unknown"
 
 
 def _structured_reason_band(record: dict) -> str:
     """Return a stable conviction band label for structured explainability."""
+    source = _safe_str(record, "source", "unknown")
+    if source == SOURCE_STRUCTURAL:
+        return "guardrail"
+    if source == SOURCE_PORTFOLIO:
+        return "rebalance"
+    if source == SOURCE_MARKET:
+        return "watch"
     band = _safe_str(record.get("inputs_used") or {}, "conviction_band", "unknown").lower()
     if band in _BAND_RANK:
         return band
@@ -393,8 +433,16 @@ def _structured_reason_why(record: dict) -> list[str]:
 
     action_text = _safe_str(record, "recommended_action")
     if action_text:
-        why.append(action_text.rstrip(".") + ".")
-    return why[:3]
+        why.extend(_split_explainability_lines(action_text, limit=2))
+    if not why:
+        why.extend(
+            _split_explainability_lines(
+                record.get("decision_reason"),
+                record.get("reason"),
+                limit=3,
+            )
+        )
+    return _dedup_flags(why)[:3]
 
 
 def _structured_reason_what_would_change(record: dict) -> list[str]:
