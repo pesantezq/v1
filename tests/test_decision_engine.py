@@ -17,6 +17,7 @@ from portfolio_automation.decision_engine import (
     DECISION_SELL,
     DECISION_WAIT,
     SOURCE_MARKET,
+    SOURCE_PORTFOLIO,
     SOURCE_STRUCTURAL,
     SOURCE_WATCHLIST,
     URGENCY_CRITICAL,
@@ -568,6 +569,121 @@ class TestPriorityOrdering(unittest.TestCase):
         market = decision_from_market_opportunity(_underweight_opportunity())
         watch = decision_from_watchlist_signal(_weak_conviction_signal())
         self.assertGreater(market["priority"], watch["priority"])
+
+
+class TestLeveragedViolationResolution(unittest.TestCase):
+    """
+    Case 11: Leverage violations with generic PORTFOLIO symbol resolve to specific
+    leveraged holding symbols, and structural SELLs suppress conflicting portfolio HOLDs.
+    """
+
+    @staticmethod
+    def _portfolio_leverage_violation() -> dict:
+        """Aggregate leverage violation as produced by guardrails.py — symbol=PORTFOLIO."""
+        return {
+            "symbol": "PORTFOLIO",
+            "violation_type": "leverage",
+            "current_pct": 0.18,
+            "cap_pct": 0.15,
+            "required_action": "Reduce total leveraged exposure 18.0% to below 15% cap",
+        }
+
+    @staticmethod
+    def _qld_leveraged_adjustment() -> dict:
+        return {
+            "symbol": "QLD",
+            "recommendation_type": "sell",
+            "action_level": "ACTION_REQUIRED",
+            "is_leveraged": True,
+            "amount": 1000.0,
+            "drift": 0.05,
+            "title": "QLD leveraged ETF trim",
+            "do": "Trim QLD to restore leverage cap compliance",
+            "why": "Total leveraged exposure exceeds cap",
+        }
+
+    @staticmethod
+    def _qld_hold_adjustment() -> dict:
+        """Portfolio HOLD for QLD — should be suppressed when structural SELL exists."""
+        return {
+            "symbol": "QLD",
+            "recommendation_type": "hold",
+            "action_level": "MONITOR",
+            "is_leveraged": True,
+            "amount": 0.0,
+            "drift": 0.02,
+            "title": "QLD — hold",
+            "do": "Hold QLD.",
+            "why": "Within tolerance.",
+        }
+
+    def test_leverage_violation_maps_to_leveraged_symbol_not_portfolio(self):
+        """Requirement 1: generic leverage breach resolves to QLD, not PORTFOLIO."""
+        plan = build_decision_plan(
+            structural_violations=[self._portfolio_leverage_violation()],
+            portfolio_adjustments=[self._qld_leveraged_adjustment()],
+            portfolio_context=_ctx(),
+        )
+        structural_sells = [
+            d for d in plan
+            if d["source"] == SOURCE_STRUCTURAL and d["decision"] == DECISION_SELL
+        ]
+        self.assertGreaterEqual(len(structural_sells), 1)
+        symbols = {d["symbol"] for d in structural_sells}
+        self.assertIn("QLD", symbols)
+        self.assertNotIn("PORTFOLIO", symbols)
+
+    def test_structural_sell_suppresses_portfolio_hold_for_same_symbol(self):
+        """Requirement 2: structural SELL on QLD must remove portfolio HOLD for QLD."""
+        plan = build_decision_plan(
+            structural_violations=[self._portfolio_leverage_violation()],
+            portfolio_adjustments=[self._qld_hold_adjustment()],
+            portfolio_context=_ctx(),
+        )
+        qld_portfolio_holds = [
+            d for d in plan
+            if d.get("symbol") == "QLD"
+            and d.get("source") == SOURCE_PORTFOLIO
+            and d.get("decision") == DECISION_HOLD
+        ]
+        self.assertEqual(len(qld_portfolio_holds), 0)
+
+    def test_concentration_sell_still_maps_to_specific_symbol(self):
+        """Requirement 3: QQQ concentration SELL is unaffected by the resolution logic."""
+        plan = build_decision_plan(
+            structural_violations=[_concentration_violation("QQQ")],
+            portfolio_context=_ctx(),
+        )
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(plan[0]["symbol"], "QQQ")
+        self.assertEqual(plan[0]["decision"], DECISION_SELL)
+        self.assertEqual(plan[0]["source"], SOURCE_STRUCTURAL)
+
+    def test_generic_portfolio_fallback_when_no_leveraged_adjustments(self):
+        """Requirement 4: PORTFOLIO symbol is preserved when no leveraged holdings found."""
+        plan = build_decision_plan(
+            structural_violations=[self._portfolio_leverage_violation()],
+            portfolio_adjustments=[],
+            portfolio_context=_ctx(),
+        )
+        structural_sells = [d for d in plan if d["source"] == SOURCE_STRUCTURAL]
+        self.assertEqual(len(structural_sells), 1)
+        self.assertEqual(structural_sells[0]["symbol"], "PORTFOLIO")
+
+    def test_decisions_remain_sorted_by_priority_after_resolution(self):
+        """Requirement 5: priority ordering is preserved after violation resolution."""
+        plan = build_decision_plan(
+            structural_violations=[
+                self._portfolio_leverage_violation(),
+                _concentration_violation("QQQ"),
+            ],
+            portfolio_adjustments=[self._qld_leveraged_adjustment()],
+            market_opportunities=[_underweight_opportunity("VFH")],
+            portfolio_context=_ctx(),
+        )
+        non_avoid = [d for d in plan if d["decision"] != DECISION_AVOID]
+        priorities = [d["priority"] for d in non_avoid]
+        self.assertEqual(priorities, sorted(priorities, reverse=True))
 
 
 if __name__ == "__main__":

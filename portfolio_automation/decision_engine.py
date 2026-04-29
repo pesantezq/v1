@@ -88,6 +88,10 @@ _VIOLATION_PRIORITY: dict[str, float] = {
     "drift": 0.76,
 }
 
+# Symbols that represent a portfolio-aggregate placeholder rather than a real ticker.
+# Used to detect generic violations that need resolving to specific holdings.
+_GENERIC_SYMBOLS: frozenset = frozenset({"PORTFOLIO", "UNKNOWN", ""})
+
 # Finance action_level → urgency + priority band.
 _FINANCE_URGENCY: dict[str, tuple[str, float]] = {
     "ACTION_REQUIRED": (URGENCY_CRITICAL, 0.78),
@@ -665,6 +669,81 @@ def apply_decision_overrides(
 
 
 # ---------------------------------------------------------------------------
+# Violation resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_leverage_violations(
+    violations: list,
+    portfolio_adjustments: list,
+) -> list:
+    """
+    Expand generic leverage violations (symbol='PORTFOLIO') to per-holding decisions.
+
+    guardrails.py reports leverage as an aggregate check with symbol='PORTFOLIO'.
+    When leveraged holding symbols are available from portfolio_adjustments, substitute
+    them so each leveraged holding gets its own SELL decision.
+
+    Non-leverage violations pass through unchanged. Falls back to the generic
+    'PORTFOLIO' symbol when no leveraged holdings can be identified.
+    """
+    leveraged_symbols: list = [
+        _safe_str(a, "symbol")
+        for a in portfolio_adjustments
+        if isinstance(a, dict)
+        and _safe_bool(a, "is_leveraged")
+        and _safe_str(a, "symbol") not in _GENERIC_SYMBOLS
+    ]
+
+    result: list = []
+    for v in violations:
+        if not isinstance(v, dict):
+            continue
+        if _safe_str(v, "violation_type") != "leverage":
+            result.append(v)
+            continue
+        symbol = _safe_str(v, "symbol")
+        if symbol not in _GENERIC_SYMBOLS:
+            # Already has a specific ticker — use as-is.
+            result.append(v)
+            continue
+        if not leveraged_symbols:
+            # No leveraged holdings identifiable — keep generic placeholder.
+            result.append(v)
+            continue
+        for lev_sym in leveraged_symbols:
+            result.append({**v, "symbol": lev_sym})
+    return result
+
+
+def _suppress_structural_hold_conflicts(decisions: list) -> list:
+    """
+    Remove portfolio HOLD decisions that contradict an active structural SELL.
+
+    A portfolio HOLD and a structural SELL on the same specific symbol are
+    contradictory — the structural SELL is authoritative. Generic symbols
+    (PORTFOLIO, UNKNOWN) are excluded to avoid over-suppression.
+    """
+    structural_sell_symbols: set = {
+        d["symbol"]
+        for d in decisions
+        if d.get("source") == SOURCE_STRUCTURAL
+        and d.get("decision") == DECISION_SELL
+        and d.get("symbol") not in _GENERIC_SYMBOLS
+    }
+    if not structural_sell_symbols:
+        return decisions
+    return [
+        d for d in decisions
+        if not (
+            d.get("source") == SOURCE_PORTFOLIO
+            and d.get("decision") == DECISION_HOLD
+            and d.get("symbol") in structural_sell_symbols
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -689,10 +768,16 @@ def build_decision_plan(
     """
     portfolio_context = portfolio_context or {}
 
+    # Expand generic leverage violations (symbol='PORTFOLIO') to specific holdings.
+    resolved_violations = _resolve_leverage_violations(
+        structural_violations or [],
+        portfolio_adjustments or [],
+    )
+
     all_decisions: list[dict] = []
 
     # --- Authoritative sources (no overrides applied) ---
-    for v in structural_violations or []:
+    for v in resolved_violations:
         if isinstance(v, dict):
             all_decisions.append(
                 decision_from_structural_violation(v, portfolio_context)
@@ -722,6 +807,9 @@ def build_decision_plan(
             d = decision_from_finance_recommendation(rec, portfolio_context)
             d = apply_decision_overrides(d, portfolio_context)
             all_decisions.append(d)
+
+    # Drop portfolio HOLDs that contradict an active structural SELL on the same symbol.
+    all_decisions = _suppress_structural_hold_conflicts(all_decisions)
 
     return rank_decisions(all_decisions)
 
