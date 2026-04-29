@@ -214,13 +214,15 @@ New memo sections sourced from the decision plan:
 
 ## GUI Decision Center Integration
 
-The GUI Decision Center now mirrors the compact daily-memo contract before showing detailed tables.
+The GUI Decision Center v1 is now implemented and mirrors the compact daily-memo contract before showing detailed tables.
 
 Current behavior:
 
 - `gui_operator_data.py` reads:
   - `outputs/latest/decision_plan.json`
   - `outputs/latest/system_decision_summary.json`
+- the page starts with an observe-only banner:
+  - `Observe-only decision plan. No trades are executed.`
 - the GUI remains artifact-driven and read-only
 - no decision recomputation happens in the GUI
 - the compact summary appears before detailed action tables
@@ -239,6 +241,21 @@ Compact GUI summary contract:
   Maximum 3.
 - `System / Data Health`
   Only when degraded or fallback conditions are active.
+
+Top decision rows render as:
+
+- `ACTION SYMBOL | source | urgency | pri X.XXX`
+- followed by one short human-readable reason
+
+Reason formatting is intentionally compact:
+
+- leverage breach -> `Leverage exceeds cap (current vs cap).`
+- concentration breach -> `Concentration exceeds cap (current vs cap).`
+- rebalance or drift -> `Drift exceeds rebalance threshold.`
+- relative strength -> `Relative strength near highs.`
+- momentum or breakout -> `Momentum breakout near highs.`
+
+Long raw reasons are preserved in the full queue below the summary and are not dumped into the compact header block.
 
 Architectural impact:
 
@@ -295,4 +312,4 @@ These boundaries are intentional and should not be collapsed:
 
 ## Next Implementation Step
 
-Build the next explanation-layer consumers on top of the now-shared compact contract so memo, GUI, and future AI summary surfaces stay aligned without recomputing decisions.
+GUI Decision Center v1 is complete. Build the next AI Explanation Layer on top of `decision_plan.json` and the shared compact contract so memo, GUI, and future AI summary surfaces stay aligned without recomputing decisions.

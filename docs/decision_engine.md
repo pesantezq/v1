@@ -287,6 +287,24 @@ The GUI compact brief mirrors the memo contract:
 - `System / Data Health`
   Only when degraded or fallback conditions are active.
 
+Final GUI v1 presentation details:
+
+- the page starts with `Observe-only decision plan. No trades are executed.`
+- each top row renders as `ACTION SYMBOL | source | urgency | pri X.XXX`
+- compact reasons are formatted for scanability instead of dumping raw structural text
+
+Current compact reason mappings used by downstream GUI consumers:
+
+| Pattern | Rendered reason |
+| --- | --- |
+| leverage breach | `Leverage exceeds cap (current vs cap).` |
+| concentration breach | `Concentration exceeds cap (current vs cap).` |
+| rebalance / drift | `Drift exceeds rebalance threshold.` |
+| relative strength | `Relative strength near highs.` |
+| momentum / breakout | `Momentum breakout near highs.` |
+
+The full decision queue remains available below the summary so long raw reasons and complete detail are still preserved for inspection.
+
 Validated VPS checks for the GUI compact brief:
 
 - compile check passed
@@ -301,6 +319,10 @@ Validated VPS checks for the GUI compact brief:
   - `risk_focus: 3`
   - `what_changed: 3`
   - `health_items: 1`
+- visual review confirmed:
+  - compact summary appears first
+  - full decision queue remains available below it
+  - summary rows stay capped and scan-friendly
 
 ## Safety Statement
 
@@ -321,4 +343,4 @@ It does not:
 
 ## Next Implementation Step
 
-Reuse the shared compact contract for future AI explanation and operator-summary surfaces so memo, GUI, and explanation consumers stay contract-aligned and observe-only.
+GUI Decision Center v1 is complete. Build the next AI Explanation Layer from `decision_plan.json` so memo, GUI, and explanation consumers stay contract-aligned and observe-only.

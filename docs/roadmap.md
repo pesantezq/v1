@@ -42,11 +42,22 @@ Current status:
 
 ## Next
 
-### GUI Decision Center
+### Completed: GUI Decision Center v1
 
-- surface the ranked decision plan in one operator-facing panel
-- show source, priority, urgency, risk flags, and merged reasons
-- preserve the observe-only boundary
+- implemented as a read-only Streamlit Decision Center
+- consumes `outputs/latest/decision_plan.json`
+- consumes `outputs/latest/system_decision_summary.json` when available
+- shows an observe-only banner
+- renders a compact summary first:
+  - `Top Insight`
+  - `Top Decisions` capped at `5`
+  - `Capital Actions`
+  - `Risk Focus` capped at `3`
+  - `What Changed` capped at `3`
+  - `System / Data Health` only when degraded or fallback context exists
+- preserves full decision detail below the summary in the full queue
+- uses short human-readable reasons instead of dumping raw long structural text
+- preserves the observe-only and artifact-driven boundary
 
 ### AI Explanation Layer
 
@@ -62,4 +73,4 @@ Current status:
 
 ## Next Implementation Step
 
-Use the now-live observe-only decision-plan artifacts as the input contract for a GUI Decision Center and for explanation-layer prototypes, without changing the current recommendation engine behavior.
+Use the now-live observe-only decision-plan artifacts as the input contract for the next AI Explanation Layer, without changing the current recommendation engine behavior.

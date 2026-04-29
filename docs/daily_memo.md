@@ -122,6 +122,7 @@ Boundary rules remain the same:
 - neither surface recomputes decisions
 - neither surface executes trades
 - full detail remains available in `decision_plan.json` and in GUI expanders / tables
+- the GUI now renders top rows in `ACTION SYMBOL | source | urgency | pri X.XXX` format with short human-readable reasons
 
 ### Top Decisions
 
@@ -134,6 +135,14 @@ Shows the top 5 decision rows, including:
 - urgency
 - plain-English reason
 - risk flags when present
+
+The GUI uses the same compact intent but with a more scan-oriented reason formatter, including:
+
+- `Leverage exceeds cap (current vs cap).`
+- `Concentration exceeds cap (current vs cap).`
+- `Drift exceeds rebalance threshold.`
+- `Relative strength near highs.`
+- `Momentum breakout near highs.`
 
 ### Capital Actions
 
@@ -221,10 +230,14 @@ Related GUI/operator-data validation on VPS:
   - `risk_focus: 3`
   - `what_changed: 3`
   - `health_items: 1`
+- visual review confirmed:
+  - compact summary appears first
+  - full decision queue remains available below it
+  - summary rows stay capped and scan-friendly
 
 ## Recommended Extension
 
-The next clean extension is to reuse the same decision-plan helper layer for future explanation and dashboard surfaces beyond the memo and current GUI Decision Center.
+GUI Decision Center v1 is now complete. The next clean extension is the AI Explanation Layer as another read-only consumer of `decision_plan.json`.
 
 That keeps:
 
@@ -236,4 +249,4 @@ aligned to the same observe-only decision-plan contract and fallback behavior.
 
 ## Next Implementation Step
 
-Promote the current compact helper logic into a clearly shared read-only presentation helper for memo, GUI, and future explanation consumers so the contract stays consistent without duplicating truncation or fallback rules.
+Keep the current compact helper logic aligned across memo, GUI, and the future AI Explanation Layer so the contract stays consistent without drifting into verbose or recomputed summaries.
