@@ -33,6 +33,7 @@ DECISION_PLAN_RELATIVE_PATH = ("outputs", "latest", "decision_plan.json")
 SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_summary.json")
 DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanations.json")
 AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_validation.json")
+DECISION_OUTCOME_SUMMARY_RELATIVE_PATH = ("outputs", "policy", "decision_outcome_summary.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1314,6 +1315,33 @@ def load_ai_decision_validation(root: Path | str) -> dict[str, Any]:
     return payload
 
 
+def load_decision_outcome_summary(root: Path | str) -> dict[str, Any]:
+    _empty: dict[str, Any] = {
+        "available": False,
+        "total_decisions": 0,
+        "resolved": 0,
+        "unresolved": 0,
+        "hit_rate": None,
+        "avg_return_pct": None,
+        "by_decision": {},
+        "by_validation_status": {},
+        "last_10_resolved": [],
+        "summary_line": "No decision performance data yet.",
+    }
+    path = Path(root).joinpath(*DECISION_OUTCOME_SUMMARY_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "Decision performance file could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "Decision performance file is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault("summary_line", f"{payload.get('resolved', 0)} resolved decisions.")
+    return payload
+
+
 def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not data.get("available"):
         return []
@@ -1488,6 +1516,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         ),
         "decision_explanations": load_decision_explanations(root_path),
         "ai_decision_validation": load_ai_decision_validation(root_path),
+        "decision_outcome_summary": load_decision_outcome_summary(root_path),
     }
 
 

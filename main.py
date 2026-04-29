@@ -101,6 +101,13 @@ except ImportError:
     _run_ai_validation = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.decision_outcome_tracker import (
+        run_outcome_tracker as _run_outcome_tracker,
+    )
+except ImportError:
+    _run_outcome_tracker = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -2014,6 +2021,22 @@ def run_portfolio_update(
                 run_mode,
                 logger,
             )
+
+            # ── Decision outcome tracker ──────────────────────────────────────
+            if _run_outcome_tracker is not None:
+                try:
+                    _ot_root = _decision_explainer_root_from_output_dir(output_dir)
+                    _ot_summary, _ = _run_outcome_tracker(_ot_root)
+                    logger.info(
+                        "OUTCOME TRACKER: tracked (total=%d resolved=%d hit_rate=%s)",
+                        _ot_summary.get('total_decisions', 0),
+                        _ot_summary.get('resolved', 0),
+                        f"{_ot_summary['hit_rate']:.0%}" if _ot_summary.get('hit_rate') is not None else "n/a",
+                    )
+                except Exception as _ot_err:
+                    logger.warning(
+                        "OUTCOME TRACKER: non-fatal error — %s", _ot_err, exc_info=True
+                    )
 
             # ── Scanner outputs ────────────────────────────────────────────────
             if scanner_candidates:

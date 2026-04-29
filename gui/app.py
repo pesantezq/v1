@@ -2575,6 +2575,77 @@ def _render_ai_insight_cards(bundle: dict) -> None:
         st.markdown("---")
 
 
+def _render_decision_performance_section(bundle: dict) -> None:
+    data = bundle.get("decision_outcome_summary") or {}
+
+    st.markdown("### Decision Performance")
+
+    if not data.get("available"):
+        st.caption(data.get("summary_line") or "No decision performance data yet.")
+        return
+
+    total = data.get("total_decisions", 0)
+    resolved = data.get("resolved", 0)
+    hit_rate = data.get("hit_rate")
+    avg_return = data.get("avg_return_pct")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Tracked", total)
+    col2.metric("Resolved", resolved)
+    col3.metric("Hit Rate", f"{hit_rate:.0%}" if hit_rate is not None else "—")
+    col4.metric("Avg Return", f"{avg_return:+.2%}" if avg_return is not None else "—")
+
+    st.caption(
+        "Observe-only. Tracks historical decision accuracy. "
+        "Source: `outputs/policy/decision_outcome_summary.json`."
+    )
+
+    by_decision = data.get("by_decision") or {}
+    if by_decision:
+        st.markdown("**By Decision Type**")
+        table_rows = []
+        for dec, stats in sorted(by_decision.items()):
+            hr = stats.get("hit_rate")
+            ar = stats.get("avg_return_pct")
+            table_rows.append({
+                "Decision": dec,
+                "Count": stats.get("count", 0),
+                "Resolved": stats.get("resolved", 0),
+                "Hit Rate": f"{hr:.0%}" if hr is not None else "—",
+                "Avg Return": f"{ar:+.2%}" if ar is not None else "—",
+            })
+        st.dataframe(
+            _coerce_df(table_rows, columns=["Decision", "Count", "Resolved", "Hit Rate", "Avg Return"]),
+            hide_index=True,
+            width="stretch",
+        )
+
+    last_10 = data.get("last_10_resolved") or []
+    if last_10:
+        with st.expander("Last 10 Resolved Decisions", expanded=False):
+            formatted = []
+            for row in last_10[:10]:
+                rp = row.get("return_pct")
+                dc = row.get("direction_correct")
+                formatted.append({
+                    "Date": row.get("date", "—"),
+                    "Symbol": row.get("symbol", "—"),
+                    "Decision": row.get("decision", "—"),
+                    "Days": row.get("days_elapsed", "—"),
+                    "Return": f"{rp:+.2%}" if rp is not None else "—",
+                    "Correct": "✓" if dc is True else ("✗" if dc is False else "—"),
+                    "Validation": row.get("validation_status", "—"),
+                })
+            st.dataframe(
+                _coerce_df(
+                    formatted,
+                    columns=["Date", "Symbol", "Decision", "Days", "Return", "Correct", "Validation"],
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+
+
 _VALIDATION_STATUS_BADGE: dict[str, str] = {
     "aligned": ":green[✓ aligned]",
     "caution": ":orange[⚠ caution]",
@@ -4146,6 +4217,8 @@ def page_decision_center() -> None:
     _render_decision_brief_summary(bundle)
     st.divider()
     _render_ai_validation_section(bundle)
+    st.divider()
+    _render_decision_performance_section(bundle)
 
 
 # ============================================================================
