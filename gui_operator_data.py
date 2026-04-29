@@ -32,6 +32,7 @@ CORE_ARTIFACTS = {
 DECISION_PLAN_RELATIVE_PATH = ("outputs", "latest", "decision_plan.json")
 SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_summary.json")
 DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanations.json")
+AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_validation.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1262,6 +1263,57 @@ def load_decision_explanations(root: Path | str) -> dict[str, Any]:
     return payload
 
 
+def load_ai_decision_validation(root: Path | str) -> dict[str, Any]:
+    path = Path(root).joinpath(*AI_DECISION_VALIDATION_RELATIVE_PATH)
+    if not path.exists():
+        return {
+            "available": False,
+            "validations": [],
+            "summary_line": "AI validation artifact not available yet.",
+            "total_validated": 0,
+            "aligned_count": 0,
+            "caution_count": 0,
+            "contradiction_count": 0,
+            "insufficient_context_count": 0,
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {
+            "available": False,
+            "validations": [],
+            "summary_line": "AI validation file could not be read.",
+            "total_validated": 0,
+            "aligned_count": 0,
+            "caution_count": 0,
+            "contradiction_count": 0,
+            "insufficient_context_count": 0,
+        }
+    if not isinstance(payload, dict):
+        return {
+            "available": False,
+            "validations": [],
+            "summary_line": "AI validation file is malformed.",
+            "total_validated": 0,
+            "aligned_count": 0,
+            "caution_count": 0,
+            "contradiction_count": 0,
+            "insufficient_context_count": 0,
+        }
+    if not payload.get("available"):
+        return {
+            "available": False,
+            "validations": [],
+            "summary_line": payload.get("summary_line") or "AI validation artifact not available yet.",
+            "total_validated": 0,
+            "aligned_count": 0,
+            "caution_count": 0,
+            "contradiction_count": 0,
+            "insufficient_context_count": 0,
+        }
+    return payload
+
+
 def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(data, dict) or not data.get("available"):
         return []
@@ -1435,6 +1487,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
             system_summary=system_decision_summary,
         ),
         "decision_explanations": load_decision_explanations(root_path),
+        "ai_decision_validation": load_ai_decision_validation(root_path),
     }
 
 

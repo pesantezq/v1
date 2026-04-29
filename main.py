@@ -94,6 +94,13 @@ except ImportError:
     generate_decision_explanations = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.ai_decision_validator import (
+        run_ai_validation as _run_ai_validation,
+    )
+except ImportError:
+    _run_ai_validation = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -233,6 +240,31 @@ def _write_decision_engine_outputs(
         logger_obj.warning(
             "DECISION EXPLAINER: output write failed (non-fatal): %s",
             _explainer_err,
+        )
+
+    if _run_ai_validation is None:
+        logger_obj.warning(
+            "AI VALIDATOR: module unavailable; skipping ai_decision_validation (non-fatal)"
+        )
+        return
+
+    try:
+        _validator_root = explainer_root or _decision_explainer_root_from_output_dir(output_dir)
+        _use_llm = bool(int(os.environ.get("AI_VALIDATOR_USE_LLM", "0")))
+        _validation_payload, _ = _run_ai_validation(_validator_root, use_llm=_use_llm)
+        logger_obj.info(
+            "AI VALIDATOR: ai_decision_validation.json + .md written"
+            " (%d validated, aligned=%d caution=%d contradiction=%d insufficient=%d)",
+            _validation_payload.get('total_validated', 0),
+            _validation_payload.get('aligned_count', 0),
+            _validation_payload.get('caution_count', 0),
+            _validation_payload.get('contradiction_count', 0),
+            _validation_payload.get('insufficient_context_count', 0),
+        )
+    except Exception as _validator_err:
+        logger_obj.warning(
+            "AI VALIDATOR: output write failed (non-fatal): %s",
+            _validator_err,
         )
 
 

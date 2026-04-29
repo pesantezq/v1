@@ -2575,6 +2575,64 @@ def _render_ai_insight_cards(bundle: dict) -> None:
         st.markdown("---")
 
 
+_VALIDATION_STATUS_BADGE: dict[str, str] = {
+    "aligned": ":green[✓ aligned]",
+    "caution": ":orange[⚠ caution]",
+    "contradiction": ":red[✗ contradiction]",
+    "insufficient_context": ":gray[? insufficient context]",
+}
+
+
+def _render_ai_validation_section(bundle: dict) -> None:
+    data = bundle.get("ai_decision_validation") or {}
+
+    st.markdown("### AI Validation")
+
+    if not data.get("available"):
+        st.caption(data.get("summary_line") or "AI validation artifact not available yet.")
+        return
+
+    total = data.get("total_validated", 0)
+    aligned = data.get("aligned_count", 0)
+    caution = data.get("caution_count", 0)
+    contradiction = data.get("contradiction_count", 0)
+    insufficient = data.get("insufficient_context_count", 0)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Aligned", aligned)
+    col2.metric("Caution", caution)
+    col3.metric("Contradiction", contradiction)
+    col4.metric("Insufficient", insufficient)
+
+    st.caption(
+        f"Validated {total} decision(s). "
+        f"AI used: {data.get('ai_used', False)}. "
+        "Observe-only — no recomputation occurs here."
+    )
+
+    validations = (data.get("validations") or [])[:5]
+    if not validations:
+        return
+
+    for record in validations:
+        status = str(record.get("validation_status") or "caution").lower().strip()
+        badge_md = _VALIDATION_STATUS_BADGE.get(status, f":gray[{status}]")
+        decision = record.get("decision") or "-"
+        symbol = record.get("symbol") or "-"
+        st.markdown(f"**{decision} {symbol}** | {badge_md}")
+        st.write(record.get("plain_english_summary") or "No summary available.")
+        contradictions = record.get("contradictions") or []
+        if contradictions:
+            st.caption(f"Conflict: {'; '.join(contradictions)}")
+        watch = record.get("watch_next") or []
+        if watch:
+            st.caption(f"Watch next: {'; '.join(watch)}")
+        rule = record.get("rule_alignment") or ""
+        if rule:
+            st.caption(f"Rule: {rule}")
+        st.markdown("---")
+
+
 def _render_decision_brief_summary(bundle: dict) -> None:
     brief = bundle.get("decision_brief") or {}
 
@@ -4086,6 +4144,8 @@ def page_decision_center() -> None:
             st.rerun()
 
     _render_decision_brief_summary(bundle)
+    st.divider()
+    _render_ai_validation_section(bundle)
 
 
 # ============================================================================
