@@ -360,6 +360,102 @@ class TestWeakConvictionNewOpportunityIsAvoid(unittest.TestCase):
         self.assertEqual(d["decision"], DECISION_AVOID)
 
 
+class TestStructuredDecisionFields(unittest.TestCase):
+    """Structured engine fields are emitted additively in the live plan."""
+
+    def test_backward_compatible_fields_still_exist(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        row = plan[0]
+        for key in (
+            "decision",
+            "priority",
+            "urgency",
+            "source",
+            "recommended_action",
+            "recommended_amount",
+            "recommended_allocation_pct",
+            "reason",
+            "risk_flags",
+            "confidence",
+            "inputs_used",
+        ):
+            self.assertIn(key, row)
+
+    def test_structured_fields_exist(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        row = plan[0]
+        for key in (
+            "decision_type",
+            "priority_score",
+            "capital_action",
+            "decision_reason",
+            "override_flags",
+            "allocation",
+        ):
+            self.assertIn(key, row)
+
+    def test_confidence_is_min_of_confidence_and_conviction(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        self.assertEqual(plan[0]["confidence"], 0.88)
+
+    def test_cooldown_override_cannot_strengthen_decision(self):
+        baseline = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )[0]
+        cooled = build_decision_plan(
+            watchlist_signals=[{**_high_conviction_signal("NVDA"), "cooldown_active": True}],
+            portfolio_context=_ctx(),
+        )[0]
+
+        decision_rank = {
+            DECISION_AVOID: 0,
+            DECISION_WAIT: 1,
+            DECISION_HOLD: 2,
+            DECISION_SCALE: 3,
+            DECISION_BUY: 4,
+            DECISION_SELL: 5,
+        }
+        self.assertLessEqual(
+            decision_rank[cooled["decision"]],
+            decision_rank[baseline["decision"]],
+        )
+        self.assertIn("cooldown_active", cooled["override_flags"])
+
+    def test_degraded_override_cannot_strengthen_decision(self):
+        baseline = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )[0]
+        degraded = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(degraded_mode=True),
+        )[0]
+
+        decision_rank = {
+            DECISION_AVOID: 0,
+            DECISION_WAIT: 1,
+            DECISION_HOLD: 2,
+            DECISION_SCALE: 3,
+            DECISION_BUY: 4,
+            DECISION_SELL: 5,
+        }
+        self.assertLessEqual(
+            decision_rank[degraded["decision"]],
+            decision_rank[baseline["decision"]],
+        )
+        self.assertIn("degraded_data", degraded["override_flags"])
+
+
 class TestFinalDecisionsSortByPriorityDescending(unittest.TestCase):
     """
     Case 8: rank_decisions must return records sorted by priority descending,

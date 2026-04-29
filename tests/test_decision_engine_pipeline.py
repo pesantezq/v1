@@ -348,6 +348,8 @@ class TestDecisionPlanOutputSchema(unittest.TestCase):
         "symbol", "decision", "priority", "urgency", "source",
         "recommended_action", "recommended_amount", "recommended_allocation_pct",
         "reason", "risk_flags", "confidence", "inputs_used",
+        "decision_type", "priority_score", "capital_action",
+        "decision_reason", "override_flags", "allocation",
     }
     _VALID_DECISIONS = {"BUY", "SELL", "SCALE", "HOLD", "WAIT", "AVOID"}
     _VALID_URGENCIES = {"critical", "high", "medium", "low"}
@@ -407,6 +409,16 @@ class TestDecisionPlanOutputSchema(unittest.TestCase):
         for record in plan:
             self.assertIsInstance(record["inputs_used"], dict)
 
+    def test_override_flags_is_list(self):
+        plan = self._plan_from_structural()
+        for record in plan:
+            self.assertIsInstance(record["override_flags"], list)
+
+    def test_allocation_is_dict(self):
+        plan = self._plan_from_structural()
+        for record in plan:
+            self.assertIsInstance(record["allocation"], dict)
+
     def test_plan_is_json_serialisable(self):
         plan = self._plan_from_structural()
         payload = {
@@ -428,6 +440,62 @@ class TestDecisionPlanOutputSchema(unittest.TestCase):
         summary = summarize_decision_plan(plan, {})
         self.assertIsInstance(summary, str)
         self.assertGreater(len(summary), 50)
+
+
+class TestDecisionPlanWriterSchema(unittest.TestCase):
+    def test_written_json_preserves_legacy_and_structured_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "outputs" / "latest"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            logger = MagicMock()
+
+            plan = build_decision_plan(
+                watchlist_signals=[{
+                    "ticker": "NVDA",
+                    "conviction_band": "high_conviction",
+                    "conviction_score": 0.88,
+                    "signal_score": 0.82,
+                    "confidence_score": 0.91,
+                    "effective_score": 0.85,
+                    "sizing_multiplier": 1.0,
+                    "suggested_allocation": 0.04,
+                    "data_mode": "live",
+                }],
+                portfolio_context={
+                    "total_portfolio_value": 50_000,
+                    "cash": 5_000,
+                    "current_holdings": {},
+                    "degraded_mode": False,
+                    "data_mode": "live",
+                    "drawdown_regime": "neutral",
+                    "active_structural_violations": [],
+                },
+            )
+
+            _write_decision_engine_outputs(
+                output_dir,
+                {
+                    "decision_plan": plan,
+                    "decision_plan_summary": "Decision plan summary for schema test.",
+                },
+                "daily",
+                logger,
+                explainer_root=root,
+            )
+
+            payload = json.loads(
+                (output_dir / "decision_plan.json").read_text(encoding="utf-8")
+            )
+            row = payload["decisions"][0]
+            self.assertIn("recommended_action", row)
+            self.assertIn("reason", row)
+            self.assertIn("decision_type", row)
+            self.assertIn("priority_score", row)
+            self.assertIn("capital_action", row)
+            self.assertIn("decision_reason", row)
+            self.assertIn("override_flags", row)
+            self.assertIn("allocation", row)
 
 
 # ---------------------------------------------------------------------------

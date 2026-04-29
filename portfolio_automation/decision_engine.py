@@ -19,6 +19,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
+import decision_engine as structured_decision_engine
+
 # ---------------------------------------------------------------------------
 # Closed-set constants
 # ---------------------------------------------------------------------------
@@ -127,6 +129,18 @@ _MARKET_OPP_PRIORITY: dict[str, float] = {
     "rebalance_target": 0.55,
 }
 
+_OVERRIDE_FLAG_NAMES: frozenset[str] = frozenset(
+    {
+        "cooldown_active",
+        "degraded_data",
+        "drawdown_regime",
+        "guardrail_conflict",
+        "low_confidence",
+        "sector_overexposed",
+        "weak_signal",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Defensive field-access helpers
 # ---------------------------------------------------------------------------
@@ -200,6 +214,199 @@ def _dedup_flags(flags: list[str]) -> list[str]:
             seen.add(f)
             out.append(f)
     return out
+
+
+def _current_position_pct(symbol: str, portfolio_context: dict) -> float:
+    """Return current holding pct from portfolio context, defaulting to 0.0."""
+    holdings = portfolio_context.get("current_holdings") or {}
+    row = holdings.get(symbol) if isinstance(holdings, dict) else None
+    if isinstance(row, dict):
+        return _safe_float(row, "pct")
+    return 0.0
+
+
+def _available_cash_pct(portfolio_context: dict) -> float:
+    """Return available cash as a share of portfolio, defaulting safely to 1.0."""
+    total_value = _safe_float(portfolio_context, "total_portfolio_value")
+    cash = _safe_float(portfolio_context, "cash")
+    if total_value <= 0:
+        return 1.0
+    return round(min(max(cash / total_value, 0.0), 1.0), 4)
+
+
+def _build_legacy_capital_action(record: dict, allocation_pct: float = 0.0) -> str:
+    """Build a compact capital action string while preserving advisory-only behavior."""
+    decision = _safe_str(record, "decision", DECISION_HOLD)
+    symbol = _safe_str(record, "symbol", "position")
+    amount = record.get("recommended_amount")
+    if isinstance(amount, (int, float)) and amount:
+        amount_str = f"${amount:,.0f}"
+    else:
+        amount_str = ""
+
+    if decision == DECISION_SELL:
+        if amount_str:
+            return f"Reduce {symbol} exposure — trim about {amount_str}."
+        return f"Reduce {symbol} exposure — restore compliance."
+
+    if decision == DECISION_BUY:
+        if amount_str:
+            return f"Open new position — deploy about {amount_str}."
+        return structured_decision_engine.build_capital_action(
+            decision, float(allocation_pct or 0.0)
+        )
+
+    if decision == DECISION_SCALE:
+        if amount_str:
+            return f"Scale existing position — add about {amount_str}."
+        return structured_decision_engine.build_capital_action(
+            decision, float(allocation_pct or 0.0)
+        )
+
+    if decision in (
+        DECISION_HOLD,
+        DECISION_WAIT,
+        DECISION_AVOID,
+    ):
+        return structured_decision_engine.build_capital_action(
+            decision, float(allocation_pct or 0.0)
+        )
+
+    return _safe_str(record, "recommended_action", "Review manually.")
+
+
+def _allocation_payload(
+    record: dict,
+    portfolio_context: dict,
+    *,
+    engine_allocation_pct: Optional[float] = None,
+) -> dict[str, Any]:
+    """Return additive structured allocation metadata for the plan consumer layer."""
+    return {
+        "recommended_allocation_pct": record.get("recommended_allocation_pct"),
+        "recommended_amount": record.get("recommended_amount"),
+        "engine_allocation_pct": engine_allocation_pct,
+        "current_position_pct": _current_position_pct(
+            _safe_str(record, "symbol"), portfolio_context
+        ),
+        "available_cash_pct": _available_cash_pct(portfolio_context),
+    }
+
+
+def _watchlist_decision_input(
+    record: dict,
+    portfolio_context: dict,
+) -> structured_decision_engine.DecisionInput:
+    """Rebuild a structured DecisionInput from a watchlist plan record."""
+    inputs_used = record.get("inputs_used") or {}
+    symbol = _safe_str(record, "symbol", "UNKNOWN")
+    return structured_decision_engine.DecisionInput(
+        symbol=symbol,
+        strategy_type=_safe_str(inputs_used, "strategy_type", "compounder") or "compounder",
+        data_mode=(
+            _safe_str(inputs_used, "data_mode")
+            or _safe_str(portfolio_context, "data_mode", "live")
+            or "live"
+        ),
+        signal_score=_safe_float(inputs_used, "signal_score"),
+        confidence_score=_safe_float(inputs_used, "confidence_score"),
+        effective_score=_safe_float(
+            inputs_used, "effective_score", _safe_float(inputs_used, "signal_score")
+        ),
+        conviction_score=_safe_float(inputs_used, "conviction_score"),
+        conviction_band=_safe_str(inputs_used, "conviction_band", "defer") or "defer",
+        sizing_multiplier=_safe_float(inputs_used, "sizing_multiplier", 0.0),
+        suggested_allocation_pct=_safe_float(record, "recommended_allocation_pct"),
+        degraded_mode=_safe_bool(portfolio_context, "degraded_mode"),
+        cooldown_active=_safe_bool(inputs_used, "cooldown_active"),
+        current_position_pct=_current_position_pct(symbol, portfolio_context),
+        sector_exposure_pct=0.0,
+        available_cash_pct=_available_cash_pct(portfolio_context),
+        sector_cap=_safe_float(portfolio_context, "sector_cap", 0.20) or 0.20,
+    )
+
+
+def _finalize_decision_record(
+    decision_record: dict,
+    portfolio_context: dict,
+) -> dict:
+    """
+    Attach structured decision-engine fields without breaking legacy plan fields.
+
+    The legacy plan schema remains the source consumed by the existing GUI/memo.
+    New additive fields expose structured decision-engine outputs for downstream
+    consumers that want stronger contracts.
+    """
+    record = dict(decision_record)
+    record["risk_flags"] = list(decision_record.get("risk_flags") or [])
+
+    priority_score = float(record.get("priority") or 0.0)
+    confidence = round(float(record.get("confidence") or 0.0), 4)
+    capital_action = _build_legacy_capital_action(
+        record, _safe_float(record, "recommended_allocation_pct")
+    )
+    decision_reason = _safe_str(record, "reason", "")
+    override_flags = _dedup_flags(
+        [flag for flag in record["risk_flags"] if flag in _OVERRIDE_FLAG_NAMES]
+    )
+    allocation = _allocation_payload(record, portfolio_context)
+
+    if record.get("source") == SOURCE_WATCHLIST:
+        try:
+            decision_input = _watchlist_decision_input(record, portfolio_context)
+            risk_flags = structured_decision_engine.evaluate_risk_flags(decision_input)
+            base_decision = structured_decision_engine._base_decision(decision_input)
+            overridden_decision = structured_decision_engine.apply_overrides(
+                base_decision, decision_input, risk_flags
+            )
+            engine_allocation_pct = structured_decision_engine.compute_allocation(
+                overridden_decision, decision_input, risk_flags
+            )
+            priority_score = structured_decision_engine.compute_priority(decision_input)
+            confidence = round(
+                min(decision_input.confidence_score, decision_input.conviction_score),
+                4,
+            )
+            action_allocation_pct = (
+                _safe_float(record, "recommended_allocation_pct")
+                or engine_allocation_pct
+            )
+            capital_action = _build_legacy_capital_action(record, action_allocation_pct)
+            decision_reason = structured_decision_engine.build_decision_reason(
+                _safe_str(record, "decision", overridden_decision),
+                decision_input,
+                risk_flags,
+                action_allocation_pct,
+            )
+            override_flags = _dedup_flags(
+                [flag for flag in risk_flags if flag in _OVERRIDE_FLAG_NAMES]
+                + [
+                    flag
+                    for flag in record["risk_flags"]
+                    if flag in _OVERRIDE_FLAG_NAMES
+                ]
+            )
+            allocation = _allocation_payload(
+                record,
+                portfolio_context,
+                engine_allocation_pct=engine_allocation_pct,
+            )
+        except Exception:
+            # Preserve the legacy record if additive structured enrichment fails.
+            pass
+
+    record["decision_type"] = _safe_str(record, "decision")
+    record["priority_score"] = round(priority_score, 4)
+    record["confidence"] = confidence
+    record["capital_action"] = capital_action
+    record["decision_reason"] = (
+        decision_reason
+        or capital_action
+        or _safe_str(record, "recommended_action", "Review manually.")
+    )
+    record["override_flags"] = override_flags
+    record["allocation"] = allocation
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +697,15 @@ def decision_from_watchlist_signal(
         "risk_flags": risk_flags,
         "confidence": round(min(conviction_score, confidence_score), 4),
         "inputs_used": {
+            "strategy_type": _safe_str(signal, "strategy_type", "compounder") or "compounder",
             "conviction_band": conviction_band,
             "conviction_score": conviction_score,
             "signal_score": signal_score,
             "confidence_score": confidence_score,
             "effective_score": effective_score,
             "sizing_multiplier": sizing_multiplier,
+            "suggested_allocation_pct": suggested_pct or None,
+            "suggested_amount": suggested_amount or None,
             "cooldown_active": cooldown_active,
             "data_mode": data_mode,
             "is_existing_holding": is_existing,
@@ -911,7 +1121,11 @@ def build_decision_plan(
     # One decision per symbol — merge duplicates by source/decision precedence.
     all_decisions = consolidate_decisions(all_decisions)
 
-    return rank_decisions(all_decisions)
+    ranked = rank_decisions(all_decisions)
+    return [
+        _finalize_decision_record(record, portfolio_context)
+        for record in ranked
+    ]
 
 
 def rank_decisions(decisions: list[dict]) -> list[dict]:
