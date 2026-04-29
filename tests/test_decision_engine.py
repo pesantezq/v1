@@ -10,6 +10,7 @@ no file I/O, no mocking required.
 import unittest
 
 from portfolio_automation.decision_engine import (
+    _finalize_decision_record,
     DECISION_AVOID,
     DECISION_BUY,
     DECISION_HOLD,
@@ -395,10 +396,109 @@ class TestStructuredDecisionFields(unittest.TestCase):
             "priority_score",
             "capital_action",
             "decision_reason",
+            "decision_reason_structured",
             "override_flags",
             "allocation",
         ):
             self.assertIn(key, row)
+
+    def test_decision_reason_structured_is_dict_with_required_keys(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        self.assertIsInstance(structured, dict)
+        for key in (
+            "decision",
+            "decision_type",
+            "band",
+            "strategy",
+            "drivers",
+            "allocation",
+            "risk_flags",
+            "override_flags",
+            "why",
+            "what_would_change",
+            "watch_next",
+        ):
+            self.assertIn(key, structured)
+
+    def test_structured_reason_numeric_fields_present(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        for key in (
+            "conviction_score",
+            "signal_score",
+            "confidence_score",
+            "effective_score",
+            "priority_score",
+        ):
+            self.assertIsInstance(structured["drivers"][key], float)
+        for key in (
+            "recommended_allocation_pct",
+            "recommended_amount",
+            "current_position_pct",
+            "available_cash_pct",
+        ):
+            self.assertIsInstance(structured["allocation"][key], float)
+
+    def test_structured_reason_lists_present(self):
+        plan = build_decision_plan(
+            watchlist_signals=[_high_conviction_signal("NVDA")],
+            portfolio_context=_ctx(),
+        )
+        structured = plan[0]["decision_reason_structured"]
+        self.assertIsInstance(structured["risk_flags"], list)
+        self.assertIsInstance(structured["override_flags"], list)
+        self.assertIsInstance(structured["why"], list)
+        self.assertIsInstance(structured["what_would_change"], list)
+        self.assertIsInstance(structured["watch_next"], list)
+
+    def test_structured_reason_does_not_require_parsing_legacy_string(self):
+        raw = {
+            "symbol": "NVDA",
+            "decision": "BUY",
+            "priority": 0.5623,
+            "urgency": "high",
+            "source": SOURCE_WATCHLIST,
+            "recommended_action": "Open NVDA position.",
+            "recommended_amount": 2000.0,
+            "recommended_allocation_pct": 0.04,
+            "reason": "",
+            "risk_flags": [],
+            "confidence": 0.88,
+            "inputs_used": {
+                "strategy_type": "compounder",
+                "conviction_band": "high_conviction",
+                "conviction_score": 0.88,
+                "signal_score": 0.82,
+                "confidence_score": 0.91,
+                "effective_score": 0.85,
+                "sizing_multiplier": 1.0,
+                "suggested_allocation_pct": 0.04,
+                "cooldown_active": False,
+                "data_mode": "live",
+                "is_existing_holding": False,
+            },
+        }
+        row = _finalize_decision_record(
+            raw,
+            _ctx(
+                total_portfolio_value=50_000,
+                cash=5_000,
+                current_holdings={},
+                degraded_mode=False,
+                data_mode="live",
+            ),
+        )
+        structured = row["decision_reason_structured"]
+        self.assertEqual(structured["decision"], "BUY")
+        self.assertEqual(structured["strategy"], "compounder")
+        self.assertGreater(len(structured["why"]), 0)
 
     def test_confidence_is_min_of_confidence_and_conviction(self):
         plan = build_decision_plan(

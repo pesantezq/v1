@@ -1,58 +1,59 @@
 # Portfolio Construction View
 
-Summary: **overweight financial services**  
-Portfolio view: 2 actionable signals, 1.0% suggested, 1.0% normalized, 0 capped  
+Summary: **skewed**  
+Portfolio view: 21 actionable signals, 13.0% suggested, 9.7% normalized, 21 capped  
 Observe-only: **yes**  
-Suggested allocation: **1.0%**  
-Normalized allocation: **1.0%**  
-Capped positions: **0**  
-Sectors capped: **none**  
+Suggested allocation: **13.0%**  
+Normalized allocation: **9.7%**  
+Capped positions: **21**  
+Sectors capped: **TECHNOLOGY**  
 
 ## Market Regime View
 
-- Market regime: risk_on (confidence 0.71) - broad uptrend with supportive breadth; leadership is concentrated in one sector; data is degraded (cache_only)
-- Portfolio fit: stretched
-- Commentary: Portfolio view looks more concentrated than a broad risk-on regime would usually justify. Concentration warnings active: overconcentration_top_sector:FINANCIAL SERVICES:50.0%, top3_ticker_concentration:100.0%.
+- Market regime: risk_on (confidence 0.85) - broad uptrend with supportive breadth; leadership is reasonably distributed
+- Portfolio fit: aligned
+- Commentary: Current normalized allocations look broadly aligned with a constructive regime. Concentration warnings active: overconcentration_top_sector:TECHNOLOGY:41.2%.
 
 ## Concentration Warnings
 
-- overconcentration_top_sector:FINANCIAL SERVICES:50.0%
-- top3_ticker_concentration:100.0%
-- degraded_mode_exposure_risk
+- overconcentration_top_sector:TECHNOLOGY:41.2%
 
 ## Exposure Summary
 
-- Top sector: FINANCIAL SERVICES (50.0%)
-- Top 3 ticker concentration: 100.0%
+- Top sector: TECHNOLOGY (41.2%)
+- Top 3 ticker concentration: 23.0%
 
 ## Allocation By Sector
 
-- FINANCIAL SERVICES: 0.5%
-- Unknown: 0.5%
+- TECHNOLOGY: 4.0%
+- Unknown: 2.7%
+- COMMUNICATION SERVICES: 1.1%
+- FINANCIAL SERVICES: 1.1%
+- CONSUMER CYCLICAL: 0.8%
 
 ## Ticker Allocations
 
 | Ticker | Conviction | Suggested | Normalized | Cap Reason |
 |--------|------------|-----------|------------|------------|
-| RIOT | starter | 0.5% | 0.5% | - |
-| IWM | starter | 0.5% | 0.5% | - |
-| XLK | observe | 0.0% | 0.0% | - |
-| MARA | observe | 0.0% | 0.0% | - |
-| AVGO | observe | 0.0% | 0.0% | - |
-| NASA | observe | 0.0% | 0.0% | - |
-| MSFT | observe | 0.0% | 0.0% | - |
-| QQQ | observe | 0.0% | 0.0% | - |
-| SPY | observe | 0.0% | 0.0% | - |
-| AAPL | observe | 0.0% | 0.0% | - |
-| PLTR | observe | 0.0% | 0.0% | - |
-| SMCI | observe | 0.0% | 0.0% | - |
-| COIN | observe | 0.0% | 0.0% | - |
-| META | observe | 0.0% | 0.0% | - |
-| XLF | observe | 0.0% | 0.0% | - |
-| CHAT | observe | 0.0% | 0.0% | - |
-| AMD | observe | 0.0% | 0.0% | - |
-| NVDA | observe | 0.0% | 0.0% | - |
-| GOOGL | observe | 0.0% | 0.0% | - |
+| GOOGL | normal | 1.0% | 0.8% | total_allocation_cap |
+| NVDA | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
+| AMD | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
+| AVGO | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
+| MSFT | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
+| META | starter | 0.5% | 0.4% | total_allocation_cap |
+| MARA | starter | 0.5% | 0.4% | total_allocation_cap |
+| AMZN | starter | 0.5% | 0.4% | total_allocation_cap |
+| COIN | starter | 0.5% | 0.4% | total_allocation_cap |
+| RIOT | starter | 0.5% | 0.4% | total_allocation_cap |
+| XLK | starter | 0.5% | 0.4% | total_allocation_cap |
+| IWM | starter | 0.5% | 0.4% | total_allocation_cap |
+| QQQ | starter | 0.5% | 0.4% | total_allocation_cap |
+| NASA | starter | 0.5% | 0.4% | total_allocation_cap |
+| SPY | starter | 0.5% | 0.4% | total_allocation_cap |
+| TSLA | starter | 0.5% | 0.4% | total_allocation_cap |
+| XLF | starter | 0.5% | 0.4% | total_allocation_cap |
+| CHAT | starter | 0.5% | 0.4% | total_allocation_cap |
+| SMCI | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
+| AAPL | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
+| PLTR | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
 | XLE | observe | 0.0% | 0.0% | - |
-| TSLA | observe | 0.0% | 0.0% | - |
-| AMZN | observe | 0.0% | 0.0% | - |

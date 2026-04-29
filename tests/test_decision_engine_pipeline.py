@@ -349,7 +349,7 @@ class TestDecisionPlanOutputSchema(unittest.TestCase):
         "recommended_action", "recommended_amount", "recommended_allocation_pct",
         "reason", "risk_flags", "confidence", "inputs_used",
         "decision_type", "priority_score", "capital_action",
-        "decision_reason", "override_flags", "allocation",
+        "decision_reason", "decision_reason_structured", "override_flags", "allocation",
     }
     _VALID_DECISIONS = {"BUY", "SELL", "SCALE", "HOLD", "WAIT", "AVOID"}
     _VALID_URGENCIES = {"critical", "high", "medium", "low"}
@@ -418,6 +418,80 @@ class TestDecisionPlanOutputSchema(unittest.TestCase):
         plan = self._plan_from_structural()
         for record in plan:
             self.assertIsInstance(record["allocation"], dict)
+
+    def test_decision_reason_structured_is_dict(self):
+        plan = self._plan_from_structural()
+        for record in plan:
+            self.assertIsInstance(record["decision_reason_structured"], dict)
+
+    def test_decision_reason_structured_required_keys_present(self):
+        plan = build_decision_plan(
+            watchlist_signals=[{
+                "ticker": "NVDA",
+                "conviction_band": "high_conviction",
+                "conviction_score": 0.88,
+                "signal_score": 0.82,
+                "confidence_score": 0.91,
+                "effective_score": 0.85,
+                "sizing_multiplier": 1.0,
+                "suggested_allocation": 0.04,
+            }],
+            portfolio_context={
+                "total_portfolio_value": 50_000,
+                "cash": 5_000,
+                "current_holdings": {},
+            },
+        )
+        row = plan[0]["decision_reason_structured"]
+        for key in (
+            "decision",
+            "decision_type",
+            "band",
+            "strategy",
+            "drivers",
+            "allocation",
+            "risk_flags",
+            "override_flags",
+            "why",
+            "what_would_change",
+            "watch_next",
+        ):
+            self.assertIn(key, row)
+
+    def test_structured_drivers_and_allocation_are_numeric(self):
+        plan = build_decision_plan(
+            watchlist_signals=[{
+                "ticker": "NVDA",
+                "conviction_band": "high_conviction",
+                "conviction_score": 0.88,
+                "signal_score": 0.82,
+                "confidence_score": 0.91,
+                "effective_score": 0.85,
+                "sizing_multiplier": 1.0,
+                "suggested_allocation": 0.04,
+            }],
+            portfolio_context={
+                "total_portfolio_value": 50_000,
+                "cash": 5_000,
+                "current_holdings": {},
+            },
+        )
+        row = plan[0]["decision_reason_structured"]
+        for key in (
+            "conviction_score",
+            "signal_score",
+            "confidence_score",
+            "effective_score",
+            "priority_score",
+        ):
+            self.assertIsInstance(row["drivers"][key], float)
+        for key in (
+            "recommended_allocation_pct",
+            "recommended_amount",
+            "current_position_pct",
+            "available_cash_pct",
+        ):
+            self.assertIsInstance(row["allocation"][key], float)
 
     def test_plan_is_json_serialisable(self):
         plan = self._plan_from_structural()
@@ -494,6 +568,7 @@ class TestDecisionPlanWriterSchema(unittest.TestCase):
             self.assertIn("priority_score", row)
             self.assertIn("capital_action", row)
             self.assertIn("decision_reason", row)
+            self.assertIn("decision_reason_structured", row)
             self.assertIn("override_flags", row)
             self.assertIn("allocation", row)
 

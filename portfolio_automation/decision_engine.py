@@ -293,6 +293,197 @@ def _allocation_payload(
     }
 
 
+def _structured_reason_strategy(record: dict) -> str:
+    """Map record source / inputs to a stable structured strategy label."""
+    source = _safe_str(record, "source", "unknown")
+    inputs_used = record.get("inputs_used") or {}
+    if source == SOURCE_WATCHLIST:
+        strategy = _safe_str(inputs_used, "strategy_type", "unknown").lower()
+        if strategy in {"compounder", "momentum"}:
+            return strategy
+        return "unknown"
+    if source == SOURCE_PORTFOLIO:
+        return "portfolio"
+    if source == SOURCE_STRUCTURAL:
+        return "structural"
+    return "unknown"
+
+
+def _structured_reason_band(record: dict) -> str:
+    """Return a stable conviction band label for structured explainability."""
+    band = _safe_str(record.get("inputs_used") or {}, "conviction_band", "unknown").lower()
+    if band in _BAND_RANK:
+        return band
+    return "unknown"
+
+
+def _structured_reason_drivers(
+    record: dict,
+    *,
+    priority_score: float,
+) -> dict[str, float]:
+    """Return numeric driver fields without parsing free-form strings."""
+    inputs_used = record.get("inputs_used") or {}
+    return {
+        "conviction_score": round(_safe_float(inputs_used, "conviction_score"), 4),
+        "signal_score": round(_safe_float(inputs_used, "signal_score"), 4),
+        "confidence_score": round(_safe_float(inputs_used, "confidence_score"), 4),
+        "effective_score": round(_safe_float(inputs_used, "effective_score"), 4),
+        "priority_score": round(float(priority_score or 0.0), 4),
+    }
+
+
+def _structured_reason_allocation(
+    record: dict,
+    portfolio_context: dict,
+) -> dict[str, float]:
+    """Return stable numeric allocation facts for structured explainability."""
+    amount = record.get("recommended_amount")
+    return {
+        "recommended_allocation_pct": round(
+            _safe_float(record, "recommended_allocation_pct"), 4
+        ),
+        "recommended_amount": round(float(amount), 2)
+        if isinstance(amount, (int, float))
+        else 0.0,
+        "current_position_pct": round(
+            _current_position_pct(_safe_str(record, "symbol"), portfolio_context), 4
+        ),
+        "available_cash_pct": round(_available_cash_pct(portfolio_context), 4),
+    }
+
+
+def _structured_reason_why(record: dict) -> list[str]:
+    """Return short factual bullets describing the emitted decision."""
+    why: list[str] = []
+    source = _safe_str(record, "source", "unknown")
+    inputs_used = record.get("inputs_used") or {}
+    decision = _safe_str(record, "decision", DECISION_HOLD)
+
+    if source == SOURCE_STRUCTURAL:
+        vtype = _safe_str(inputs_used, "violation_type", "structural")
+        current_pct = _safe_float(inputs_used, "current_pct")
+        cap_pct = _safe_float(inputs_used, "cap_pct")
+        why.append(f"Structural {vtype} breach requires {decision.lower()} action.")
+        if current_pct or cap_pct:
+            why.append(f"Current exposure {current_pct:.1%} vs cap {cap_pct:.1%}.")
+    elif source == SOURCE_WATCHLIST:
+        band = _structured_reason_band(record)
+        drivers = _structured_reason_drivers(record, priority_score=_safe_float(record, "priority_score", _safe_float(record, "priority")))
+        why.append(f"Conviction band is {band}.")
+        why.append(
+            "Signal/conviction/confidence="
+            f"{drivers['signal_score']:.2f}/{drivers['conviction_score']:.2f}/{drivers['confidence_score']:.2f}."
+        )
+    elif source == SOURCE_PORTFOLIO:
+        drift = _safe_float(inputs_used, "drift")
+        mode = _safe_str(inputs_used, "adjustment_mode", "unknown")
+        why.append(f"Portfolio adjustment mode is {mode.lower()}.")
+        if drift:
+            why.append(f"Portfolio drift is {drift:+.1%}.")
+    elif source == SOURCE_MARKET:
+        opp_type = _safe_str(inputs_used, "opportunity_type", "market")
+        why.append(f"Market opportunity type is {opp_type.replace('_', ' ')}.")
+    elif source == SOURCE_FINANCE:
+        action_level = _safe_str(inputs_used, "action_level", "monitor").lower()
+        impact_area = _safe_str(inputs_used, "impact_area", "")
+        why.append(f"Finance recommendation level is {action_level}.")
+        if impact_area:
+            why.append(f"Impact area is {impact_area.lower()}.")
+
+    action_text = _safe_str(record, "recommended_action")
+    if action_text:
+        why.append(action_text.rstrip(".") + ".")
+    return why[:3]
+
+
+def _structured_reason_what_would_change(record: dict) -> list[str]:
+    """Return short threshold-style bullets for what could change the decision."""
+    inputs_used = record.get("inputs_used") or {}
+    source = _safe_str(record, "source", "unknown")
+    risk_flags = list(record.get("risk_flags") or [])
+    out: list[str] = []
+
+    if "cooldown_active" in risk_flags:
+        out.append("Cooldown expiry would remove the cooldown cap.")
+    if "degraded_data" in risk_flags or "fallback_data" in risk_flags:
+        out.append("Fresh live data would remove the degraded-data cap.")
+    if "low_confidence" in risk_flags:
+        out.append(f"Confidence at or above {_CONFIDENCE_FLOOR:.0%} would relax the low-confidence cap.")
+    if "weak_signal" in risk_flags:
+        out.append("A stronger signal score would permit a more actionable decision.")
+    if "guardrail_conflict" in risk_flags:
+        out.append("Clearing the active structural conflict would reopen actionability.")
+    if "sector_overexposed" in risk_flags:
+        out.append("Lower sector exposure would restore fuller sizing.")
+
+    if source == SOURCE_STRUCTURAL:
+        vtype = _safe_str(inputs_used, "violation_type", "structural")
+        out.append(f"Restoring {vtype} compliance would remove the structural sell.")
+    elif source == SOURCE_PORTFOLIO:
+        mode = _safe_str(inputs_used, "adjustment_mode", "")
+        if mode in {"CONTRIBUTE_ONLY", "USE_CASH_EXCESS"}:
+            out.append("Reaching the target weight would reduce the need to add capital.")
+        elif mode in {"SELL_TO_REBALANCE", "TRIM_LEVERAGE_FIRST"}:
+            out.append("Returning inside the rebalance band would reduce the trim urgency.")
+    elif source == SOURCE_WATCHLIST and not out:
+        band = _structured_reason_band(record)
+        if band in {"observe", "defer", "starter"}:
+            out.append("A higher conviction band would support a more actionable decision.")
+
+    return _dedup_flags(out)[:3]
+
+
+def _structured_reason_watch_next(record: dict) -> list[str]:
+    """Return practical next-run checks for operators and downstream consumers."""
+    inputs_used = record.get("inputs_used") or {}
+    source = _safe_str(record, "source", "unknown")
+    out: list[str] = []
+
+    if source == SOURCE_STRUCTURAL:
+        vtype = _safe_str(inputs_used, "violation_type", "structural")
+        out.append(f"Recheck {vtype} exposure on the next run.")
+        out.append("Confirm the holding is back inside guardrail limits.")
+    elif source == SOURCE_WATCHLIST:
+        out.append("Recheck conviction and confidence on the next scan.")
+        out.append("Confirm the signal still supports the current action.")
+    elif source == SOURCE_PORTFOLIO:
+        out.append("Recheck drift versus the target band.")
+        out.append("Confirm cash and position sizing still support the adjustment.")
+    elif source == SOURCE_MARKET:
+        out.append("Recheck whether the opportunity remains above the action threshold.")
+        out.append("Confirm no structural conflict appears before acting.")
+    elif source == SOURCE_FINANCE:
+        out.append("Recheck the finance trigger on the next evaluation cycle.")
+
+    if "degraded_data" in (record.get("risk_flags") or []):
+        out.append("Confirm live data has recovered before trusting stronger actions.")
+    return _dedup_flags(out)[:3]
+
+
+def _decision_reason_structured(
+    record: dict,
+    portfolio_context: dict,
+    *,
+    priority_score: float,
+    override_flags: list[str],
+) -> dict[str, Any]:
+    """Build additive structured explainability from stable source fields only."""
+    return {
+        "decision": _safe_str(record, "decision", DECISION_HOLD),
+        "decision_type": _safe_str(record, "decision_type", _safe_str(record, "decision", DECISION_HOLD)),
+        "band": _structured_reason_band(record),
+        "strategy": _structured_reason_strategy(record),
+        "drivers": _structured_reason_drivers(record, priority_score=priority_score),
+        "allocation": _structured_reason_allocation(record, portfolio_context),
+        "risk_flags": list(record.get("risk_flags") or []),
+        "override_flags": list(override_flags or []),
+        "why": _structured_reason_why(record),
+        "what_would_change": _structured_reason_what_would_change(record),
+        "watch_next": _structured_reason_watch_next(record),
+    }
+
+
 def _watchlist_decision_input(
     record: dict,
     portfolio_context: dict,
@@ -406,6 +597,12 @@ def _finalize_decision_record(
     )
     record["override_flags"] = override_flags
     record["allocation"] = allocation
+    record["decision_reason_structured"] = _decision_reason_structured(
+        record,
+        portfolio_context,
+        priority_score=record["priority_score"],
+        override_flags=override_flags,
+    )
     return record
 
 
