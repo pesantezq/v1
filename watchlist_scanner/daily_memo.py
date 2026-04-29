@@ -203,6 +203,7 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
     degraded = bool(data_health.get("degraded_mode", False))
     data_mode = str(data_health.get("data_mode") or "").strip()
     missing_count = int(data_health.get("missing_artifact_count") or 0)
+    missing_details = data_health.get("missing_artifact_details") or []
     fallback_used = bool(data_health.get("fallback_alerts_used", False))
 
     if not degraded and data_mode in ("", "live") and missing_count <= 0 and not fallback_used:
@@ -214,7 +215,14 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
     if data_mode and data_mode not in ("live",):
         items.append(f"Data mode is {data_mode}.")
     if missing_count > 0:
-        items.append(f"{missing_count} required artifacts were missing during summary generation.")
+        if missing_details:
+            rendered = "; ".join(
+                f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
+                for item in missing_details
+            )
+            items.append(f"Missing artifacts: {rendered}.")
+        else:
+            items.append(f"{missing_count} required artifacts were missing during summary generation.")
     elif fallback_used:
         items.append("Fallback alerts were used because stronger live signals were unavailable.")
     return items[:3]

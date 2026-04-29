@@ -520,6 +520,22 @@ class TestComputeDataHealth:
         assert "theme_opportunities" in result["missing_artifacts"]
         assert result["missing_artifact_count"] == 2
 
+    def test_missing_artifact_details_include_path_and_producer(self):
+        flags = _all_flags(True)
+        flags["watchlist_signals"] = False
+        result = compute_data_health({}, flags)
+        details = result["missing_artifact_details"]
+        assert len(details) == 1
+        assert details[0]["path"] == "outputs/latest/watchlist_signals.json"
+        assert details[0]["producer_step"] == "watchlist scanner"
+
+    def test_derived_theme_flag_not_counted_as_missing_file(self):
+        flags = _all_flags(True)
+        flags["theme_data_available"] = False
+        result = compute_data_health({}, flags)
+        assert result["missing_artifact_count"] == 0
+        assert result["missing_artifacts"] == []
+
     def test_all_present_no_missing(self):
         result = compute_data_health({}, _all_flags(True))
         assert result["all_artifacts_present"] is True
@@ -643,6 +659,26 @@ class TestRenderMarkdown:
     def test_contains_data_health_section(self):
         md = render_markdown(self._full_summary())
         assert "## Data Health" in md
+
+    def test_data_health_lists_missing_artifact_paths_and_producers(self):
+        summary = self._full_summary()
+        summary["data_health"] = {
+            "degraded_mode": False,
+            "data_mode": "live",
+            "total_signals": 0,
+            "eligible_signals": 0,
+            "missing_artifacts": ["watchlist_signals"],
+            "missing_artifact_details": [
+                {
+                    "artifact": "watchlist_signals",
+                    "path": "outputs/latest/watchlist_signals.json",
+                    "producer_step": "watchlist scanner",
+                }
+            ],
+        }
+        md = render_markdown(summary)
+        assert "outputs/latest/watchlist_signals.json" in md
+        assert "producer: watchlist scanner" in md
 
     def test_contains_changes_section(self):
         md = render_markdown(self._full_summary())
@@ -783,6 +819,14 @@ class TestGenerateSystemDecisionSummary:
         # All artifact files missing — should not crash
         result = generate_system_decision_summary(root=tmp_path, write_files=False)
         assert isinstance(result, dict)
+
+    def test_missing_artifacts_logged_with_paths_and_producers(self, tmp_path, caplog):
+        caplog.set_level("WARNING")
+        generate_system_decision_summary(root=tmp_path, write_files=False)
+        joined = " ".join(record.getMessage() for record in caplog.records)
+        assert "missing required artifacts" in joined
+        assert "outputs/latest/watchlist_signals.json" in joined
+        assert "watchlist scanner" in joined
 
     def test_json_schema_valid(self, tmp_path):
         generate_system_decision_summary(root=tmp_path, write_files=True)

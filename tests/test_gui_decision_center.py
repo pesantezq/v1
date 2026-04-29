@@ -203,6 +203,33 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         bundle = load_operator_dashboard_data(self.root)
         self.assertGreater(len(bundle["decision_brief"]["system_data_health"]), 0)
 
+    def test_system_health_reports_missing_artifact_paths_and_producers(self):
+        self._write(_SYSTEM_SUMMARY_REL, _make_summary(
+            data_health={
+                "degraded_mode": True,
+                "data_mode": "fallback",
+                "missing_artifact_count": 2,
+                "fallback_alerts_used": False,
+                "missing_artifact_details": [
+                    {
+                        "artifact": "watchlist_signals",
+                        "path": "outputs/latest/watchlist_signals.json",
+                        "producer_step": "watchlist scanner",
+                    },
+                    {
+                        "artifact": "theme_signals",
+                        "path": "outputs/latest/theme_signals.json",
+                        "producer_step": "theme engine",
+                    },
+                ],
+            }
+        ))
+        self._write(_DECISION_PLAN_REL, _make_plan(_six_decisions()))
+        bundle = load_operator_dashboard_data(self.root)
+        joined = " ".join(bundle["decision_brief"]["system_data_health"])
+        self.assertIn("outputs/latest/watchlist_signals.json (watchlist scanner)", joined)
+        self.assertIn("outputs/latest/theme_signals.json (theme engine)", joined)
+
     # ------------------------------------------------------------------
     # GUI does NOT recompute decisions
     # ------------------------------------------------------------------

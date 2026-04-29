@@ -57,6 +57,67 @@ _WEIGHT_TUNING_REL    = ("outputs", "performance", "weight_tuning_suggestions.js
 _SUMMARY_JSON_REL     = ("outputs", "latest", "system_decision_summary.json")
 _SUMMARY_MD_REL       = ("outputs", "latest", "system_decision_summary.md")
 
+_ARTIFACT_SPECS: dict[str, dict[str, Any]] = {
+    "watchlist_signals": {
+        "path_parts": _SIGNALS_REL,
+        "producer_step": "watchlist scanner",
+        "producer_module": "python -m watchlist_scanner",
+        "file_backed": True,
+    },
+    "theme_opportunities": {
+        "path_parts": _THEMES_DISCOVERY_REL,
+        "producer_step": "theme discovery",
+        "producer_module": "python -m theme_discovery",
+        "file_backed": True,
+    },
+    "theme_signals": {
+        "path_parts": _THEMES_ENGINE_REL,
+        "producer_step": "theme engine",
+        "producer_module": "python -m theme_engine --mode daily",
+        "file_backed": True,
+    },
+    "theme_data_available": {
+        "file_backed": False,
+        "derived_from": ["theme_opportunities", "theme_signals"],
+    },
+    "portfolio_snapshot": {
+        "path_parts": _PORTFOLIO_REL,
+        "producer_step": "watchlist scanner portfolio construction",
+        "producer_module": "python -m watchlist_scanner",
+        "file_backed": True,
+    },
+    "approved_ranking_config": {
+        "path_parts": _RANKING_CONFIG_REL,
+        "producer_step": "ranking config promotion",
+        "producer_module": "python -m watchlist_scanner.config_promotion",
+        "file_backed": True,
+    },
+    "approved_allocation_policy": {
+        "path_parts": _ALLOC_POLICY_REL,
+        "producer_step": "allocation policy activation",
+        "producer_module": "python -m watchlist_scanner.allocation_policy_activation",
+        "file_backed": True,
+    },
+    "allocation_preview": {
+        "path_parts": _ALLOC_PREVIEW_REL,
+        "producer_step": "allocation preview",
+        "producer_module": "python -m watchlist_scanner.allocation_preview",
+        "file_backed": True,
+    },
+    "allocation_simulation": {
+        "path_parts": _ALLOC_SIMULATION_REL,
+        "producer_step": "allocation policy simulation",
+        "producer_module": "python -m watchlist_scanner.allocation_policy_simulation",
+        "file_backed": True,
+    },
+    "weight_tuning_suggestions": {
+        "path_parts": _WEIGHT_TUNING_REL,
+        "producer_step": "weight tuning",
+        "producer_module": "python -m watchlist_scanner.weight_tuning",
+        "file_backed": True,
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Safe loaders
@@ -256,6 +317,27 @@ def _artifact_flags(root: Path) -> dict[str, bool]:
         "allocation_simulation":     root.joinpath(*_ALLOC_SIMULATION_REL).exists(),
         "weight_tuning_suggestions": root.joinpath(*_WEIGHT_TUNING_REL).exists(),
     }
+
+
+def _missing_artifact_details(root: Path, artifact_flags: dict[str, bool]) -> list[dict[str, str]]:
+    """Return missing file-backed artifacts with path and producer metadata."""
+    details: list[dict[str, str]] = []
+    for name, exists in artifact_flags.items():
+        if exists:
+            continue
+        spec = _ARTIFACT_SPECS.get(name) or {}
+        if not spec.get("file_backed", False):
+            continue
+        path_parts = spec.get("path_parts") or ()
+        details.append(
+            {
+                "artifact": name,
+                "path": str(Path(*path_parts)).replace("\\", "/"),
+                "producer_step": str(spec.get("producer_step") or "unknown step"),
+                "producer_module": str(spec.get("producer_module") or ""),
+            }
+        )
+    return details
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +589,8 @@ def compute_policy_insight(
 def compute_data_health(
     signals: dict[str, Any],
     artifact_flags: dict[str, bool],
+    *,
+    root: Path | None = None,
 ) -> dict[str, Any]:
     """Report data coverage, degraded mode, and missing artifact flags."""
     all_sigs = _signal_list(signals)
@@ -514,7 +598,9 @@ def compute_data_health(
     data_mode     = str(signals.get("data_mode") or "unknown")
 
     eligible_count = sum(1 for s in all_sigs if s.get("filter_allowed"))
-    missing = [name for name, exists in artifact_flags.items() if not exists]
+    summary_root = root or Path(".")
+    missing_details = _missing_artifact_details(summary_root, artifact_flags)
+    missing = [item["artifact"] for item in missing_details]
 
     scan_summary = signals.get("scan_summary") or {}
     fallback_alerts_used = bool(scan_summary.get("fallback_alerts_used", False))
@@ -526,6 +612,7 @@ def compute_data_health(
         "total_signals":         len(all_sigs),
         "eligible_signals":      eligible_count,
         "missing_artifacts":     missing,
+        "missing_artifact_details": missing_details,
         "missing_artifact_count":len(missing),
         "all_artifacts_present": len(missing) == 0,
         "artifact_flags":        dict(artifact_flags),
@@ -608,6 +695,7 @@ def build_system_decision_summary(
     artifacts: dict[str, Any],
     artifact_flags: dict[str, bool],
     *,
+    root: Path | None = None,
     previous_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
@@ -635,7 +723,7 @@ def build_system_decision_summary(
     system_state    = compute_system_state(ranking_config, alloc_policy, alloc_simulation, alloc_preview)
     capital_preview = compute_capital_preview(alloc_preview, alloc_simulation)
     policy_insight  = compute_policy_insight(weight_tuning, ranking_config, alloc_simulation)
-    data_health     = compute_data_health(signals, artifact_flags)
+    data_health     = compute_data_health(signals, artifact_flags, root=root)
 
     now_iso = datetime.now().isoformat()
     summary: dict[str, Any] = {
@@ -832,8 +920,14 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"·  {dh.get('eligible_signals', 0)} alert-eligible"
     )
     missing = dh.get("missing_artifacts") or []
-    if missing:
-        lines.append(f"- Missing artifacts ({len(missing)}): {', '.join(missing)}")
+    missing_details = dh.get("missing_artifact_details") or []
+    if missing_details:
+        lines.append(f"- Missing artifacts ({len(missing_details)}):")
+        for item in missing_details:
+            lines.append(
+                f"  - {item.get('path', 'unknown path')}  "
+                f"(producer: {item.get('producer_step', 'unknown step')})"
+            )
     else:
         lines.append("- All expected artifacts present")
     lines.append("")
@@ -886,8 +980,23 @@ def generate_system_decision_summary(
 
     artifacts     = _load_artifacts(root_path)
     flags         = _artifact_flags(root_path)
-    summary       = build_system_decision_summary(artifacts, flags, previous_summary=previous_summary)
+    summary       = build_system_decision_summary(
+        artifacts,
+        flags,
+        root=root_path,
+        previous_summary=previous_summary,
+    )
     markdown      = render_markdown(summary)
+
+    missing_details = (summary.get("data_health") or {}).get("missing_artifact_details") or []
+    if missing_details:
+        logger.warning(
+            "system_summary: missing required artifacts: %s",
+            "; ".join(
+                f"{item.get('path')} <- {item.get('producer_step')}"
+                for item in missing_details
+            ),
+        )
 
     if write_files:
         out_dir = json_path.parent

@@ -860,6 +860,30 @@ class TestBuildDailyMemoFull:
         normal = build_daily_memo(_full_summary())
         assert "SYSTEM / DATA HEALTH" not in normal
 
+    def test_system_data_health_lists_missing_artifact_paths_and_producers(self):
+        degraded = _full_summary(
+            data_health={
+                "degraded_mode": True,
+                "data_mode": "cache_only",
+                "missing_artifact_count": 2,
+                "missing_artifact_details": [
+                    {
+                        "artifact": "watchlist_signals",
+                        "path": "outputs/latest/watchlist_signals.json",
+                        "producer_step": "watchlist scanner",
+                    },
+                    {
+                        "artifact": "theme_signals",
+                        "path": "outputs/latest/theme_signals.json",
+                        "producer_step": "theme engine",
+                    },
+                ],
+            }
+        )
+        result = build_daily_memo(degraded)
+        assert "outputs/latest/watchlist_signals.json (watchlist scanner)" in result
+        assert "outputs/latest/theme_signals.json (theme engine)" in result
+
 
 class TestBuildDailyMemoMd:
     def test_returns_string(self):
