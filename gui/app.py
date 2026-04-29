@@ -37,6 +37,7 @@ from gui_operator_data import (
     _ai_validation_badge,
     _get_insight_cards,
 )
+from gui_insight_cards import render_insight_cards
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
 from watchlist_scanner.approved_config_loader import load_approved_weights
@@ -2606,6 +2607,9 @@ def _render_decision_brief_summary(bundle: dict) -> None:
         )
         st.markdown(header)
         st.caption(f"  {row.get('compact_reason') or _compact_decision_reason(row)}")
+
+    st.markdown("**Insight Cards**")
+    render_insight_cards([row.get("raw") or row for row in top_decisions[:5]])
 
     capital = brief.get("capital_actions") or {}
     st.markdown("**Capital Actions**")
