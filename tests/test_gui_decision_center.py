@@ -8,7 +8,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from gui_operator_data import load_operator_dashboard_data, _normalize_decision_brief
+from gui_operator_data import (
+    load_operator_dashboard_data,
+    _normalize_decision_brief,
+    _compact_decision_reason,
+)
 
 
 _DECISION_PLAN_REL = "outputs/latest/decision_plan.json"
@@ -248,6 +252,139 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         brief = _normalize_decision_brief(decision_plan=plan, system_summary={})
         symbols = [r["symbol"] for r in brief["top_decisions"]]
         self.assertNotIn("QLD", symbols)
+
+
+class TestCompactDecisionReason(unittest.TestCase):
+    """Unit tests for _compact_decision_reason — pure function, no Streamlit."""
+
+    # ------------------------------------------------------------------
+    # short_reason preferred
+    # ------------------------------------------------------------------
+
+    def test_short_reason_preferred_over_reason(self):
+        row = {"short_reason": "Leverage too high.", "reason": "STRUCTURAL: Long text. | More text."}
+        self.assertEqual("Leverage too high.", _compact_decision_reason(row))
+
+    def test_short_reason_capped_at_120(self):
+        row = {"short_reason": "X" * 200}
+        result = _compact_decision_reason(row)
+        self.assertLessEqual(len(result), 120)
+
+    # ------------------------------------------------------------------
+    # STRUCTURAL: prefix stripped
+    # ------------------------------------------------------------------
+
+    def test_structural_prefix_stripped(self):
+        row = {"reason": "STRUCTURAL: Leverage exceeds cap. More detail follows."}
+        result = _compact_decision_reason(row)
+        self.assertFalse(result.startswith("STRUCTURAL:"))
+        self.assertFalse(result.lower().startswith("structural:"))
+
+    def test_structural_prefix_case_insensitive(self):
+        row = {"reason": "structural: Concentration too high. Detail."}
+        result = _compact_decision_reason(row)
+        self.assertFalse(result.lower().startswith("structural:"))
+
+    # ------------------------------------------------------------------
+    # pipe-separated reason — only first segment used
+    # ------------------------------------------------------------------
+
+    def test_pipe_segment_only_first_used(self):
+        row = {"reason": "First segment info. | STRUCTURAL: Second segment should be hidden."}
+        result = _compact_decision_reason(row)
+        self.assertNotIn("STRUCTURAL:", result)
+        self.assertNotIn("Second segment", result)
+
+    def test_pipe_segment_without_structural(self):
+        row = {"reason": "Underweight position. Rebalance needed. | Extra detail."}
+        result = _compact_decision_reason(row)
+        self.assertNotIn("Extra detail", result)
+
+    # ------------------------------------------------------------------
+    # max length
+    # ------------------------------------------------------------------
+
+    def test_result_never_exceeds_120_chars(self):
+        row = {"reason": ("Leverage very high. " * 20)}
+        self.assertLessEqual(len(_compact_decision_reason(row)), 120)
+
+    def test_result_never_exceeds_120_chars_no_period(self):
+        row = {"reason": "A" * 200}
+        self.assertLessEqual(len(_compact_decision_reason(row)), 120)
+
+    # ------------------------------------------------------------------
+    # first sentence only
+    # ------------------------------------------------------------------
+
+    def test_first_sentence_returned(self):
+        row = {"reason": "Leverage exceeds cap. This second sentence should not appear."}
+        result = _compact_decision_reason(row)
+        self.assertEqual("Leverage exceeds cap.", result)
+
+    def test_first_sentence_question_mark(self):
+        row = {"reason": "Is leverage too high? Yes it is."}
+        result = _compact_decision_reason(row)
+        self.assertEqual("Is leverage too high?", result)
+
+    # ------------------------------------------------------------------
+    # empty / missing reason
+    # ------------------------------------------------------------------
+
+    def test_empty_reason_returns_placeholder(self):
+        self.assertEqual("No rationale provided.", _compact_decision_reason({}))
+
+    def test_none_reason_returns_placeholder(self):
+        self.assertEqual("No rationale provided.", _compact_decision_reason({"reason": None}))
+
+    # ------------------------------------------------------------------
+    # top decision header fields present (data layer)
+    # ------------------------------------------------------------------
+
+    def test_top_decision_rows_have_required_header_fields(self):
+        """Every field needed for ACTION SYMBOL | source | urgency | pri is present."""
+        import tempfile, json
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "outputs" / "latest" / "decision_plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text(json.dumps(_make_plan(_six_decisions())), encoding="utf-8")
+            bundle = load_operator_dashboard_data(root)
+        for row in bundle["decision_brief"]["top_decisions"]:
+            self.assertIn("decision", row)
+            self.assertIn("symbol", row)
+            self.assertIn("source", row)
+            self.assertIn("urgency", row)
+            self.assertIn("priority", row)
+
+    def test_top_decisions_still_capped_at_five(self):
+        """Compact reason changes must not affect the 5-decision cap."""
+        import tempfile, json
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan_path = root / "outputs" / "latest" / "decision_plan.json"
+            plan_path.parent.mkdir(parents=True)
+            plan_path.write_text(json.dumps(_make_plan(_six_decisions())), encoding="utf-8")
+            bundle = load_operator_dashboard_data(root)
+        self.assertEqual(5, len(bundle["decision_brief"]["top_decisions"]))
+
+    def test_full_decisions_contain_untruncated_reason(self):
+        """Long reasons must survive intact in the full queue."""
+        long_reason = "Leverage exceeds cap. " * 10
+        decisions = _six_decisions()
+        decisions[0]["reason"] = long_reason
+        brief = _normalize_decision_brief(
+            decision_plan=_make_plan(decisions),
+            system_summary={},
+        )
+        full_reason = next(
+            d["reason"] for d in brief["full_decisions"] if d.get("symbol") == "QLD"
+        )
+        self.assertEqual(long_reason, full_reason)
+        # compact version must be shorter
+        compact = _compact_decision_reason({"reason": long_reason})
+        self.assertLess(len(compact), len(long_reason))
 
 
 if __name__ == "__main__":

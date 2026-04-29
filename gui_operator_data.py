@@ -1102,6 +1102,43 @@ def _normalize_health(
     }
 
 
+_STRUCTURAL_PREFIX_RE = re.compile(r"^STRUCTURAL:\s*", re.IGNORECASE)
+
+
+def _compact_decision_reason(row: dict[str, Any]) -> str:
+    """
+    Return a compact, single-sentence reason for the Decision Center compact summary.
+
+    Priority:
+      1. ``short_reason`` field if the plan provides one.
+      2. First pipe-delimited segment of ``reason``, stripped of leading
+         ``STRUCTURAL:`` meta-label, truncated to the first sentence.
+      3. Hard cap at 120 characters.
+    """
+    short = str(row.get("short_reason") or "").strip()
+    if short:
+        return short[:120]
+
+    reason = str(row.get("reason") or "").strip()
+    if not reason:
+        return "No rationale provided."
+
+    # Take only the first pipe-delimited segment
+    segment = reason.split("|")[0].strip()
+
+    # Strip leading STRUCTURAL: meta-label
+    segment = _STRUCTURAL_PREFIX_RE.sub("", segment).strip()
+
+    # First sentence only (ends at . ! or ?)
+    match = re.match(r"^(.+?[.!?])(?:\s|$)", segment)
+    if match:
+        first = match.group(1).strip()
+        if len(first) <= 120:
+            return first
+
+    return segment[:120]
+
+
 def _normalize_decision_brief(
     *,
     decision_plan: dict[str, Any],

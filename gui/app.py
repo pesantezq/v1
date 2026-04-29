@@ -33,6 +33,7 @@ from gui_operator_data import (
     load_operator_dashboard_data,
     load_profit_attribution,
     load_rotation_events,
+    _compact_decision_reason,
 )
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
@@ -2554,17 +2555,16 @@ def _render_decision_brief_summary(bundle: dict) -> None:
 
     st.markdown("**Top Decisions** *(max 5)*")
     for idx, row in enumerate(top_decisions[:5], 1):
-        line = (
-            f"{idx}. **{row.get('decision', '-')}** `{row.get('symbol', '-')}` "
-            f"| pri `{float(row.get('priority', 0.0)):.3f}` "
-            f"| {row.get('source', '-')} | {row.get('urgency', '-')}"
+        try:
+            pri = f"{float(row.get('priority', 0.0)):.3f}"
+        except (TypeError, ValueError):
+            pri = "-"
+        header = (
+            f"{idx}. **{row.get('decision', '-')} {row.get('symbol', '-')}**"
+            f" | {row.get('source', '-')} | {row.get('urgency', '-')} | pri {pri}"
         )
-        st.markdown(line)
-        detail = str(row.get("reason") or "").strip() or "No decision rationale provided."
-        flags = row.get("risk_flags") or []
-        if flags:
-            detail += f" Risk: {', '.join(str(flag) for flag in flags)}."
-        st.caption(f"  {detail}")
+        st.markdown(header)
+        st.caption(f"  {_compact_decision_reason(row.get('raw') or row)}")
 
     capital = brief.get("capital_actions") or {}
     st.markdown("**Capital Actions**")
