@@ -250,6 +250,77 @@ Required top-level fields:
 - `data_health`
 - `changes`
 
+### `outputs/latest/decision_plan.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `run_mode`
+- `observe_only`
+- `total_decisions`
+- `decisions`
+
+Required decision row fields:
+
+- `symbol`
+- `decision`
+- `priority`
+- `urgency`
+- `source`
+- `recommended_action`
+- `recommended_amount`
+- `recommended_allocation_pct`
+- `reason`
+- `risk_flags`
+- `confidence`
+- `inputs_used`
+
+Contract notes:
+
+- this is the decision source of truth for downstream consumers
+- downstream layers must not mutate this file
+- downstream layers must not recompute decision order or actions
+
+### `outputs/latest/decision_explanations.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `available`
+- `observe_only`
+- `summary_line`
+- `source_artifacts`
+- `explanations`
+
+Required explanation row fields:
+
+- `decision_id`
+- `symbol`
+- `action`
+- `priority`
+- `urgency`
+- `source`
+- `source_attribution`
+- `concise_explanation`
+- `risks`
+- `what_to_watch_next`
+- `explanation_basis`
+- `ai_validation`
+
+Contract notes:
+
+- additive downstream artifact only
+- must not feed back into decision generation
+- must preserve input decision order for the top explanation set
+- `explanations` is capped at `5`
+- `risks` is capped at `3`
+- `what_to_watch_next` is capped at `3`
+- `ai_validation` is a closed set:
+  - `boost`
+  - `neutral`
+  - `caution`
+- missing or malformed `decision_plan.json` should degrade to an available artifact with an empty explanation list and a clear status line, not a pipeline failure
+
 ### `outputs/latest/market_opportunities.json`
 
 Required top-level fields:

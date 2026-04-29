@@ -16,8 +16,12 @@ It is advisory only. It never executes trades, places orders, or changes the beh
 | `main.py` observe-only integration | Live |
 | `outputs/latest/decision_plan.json` | Written by pipeline |
 | `outputs/latest/decision_plan.md` | Written by pipeline |
+| `portfolio_automation/decision_explainer.py` | Implemented |
+| `outputs/latest/decision_explanations.json` | Written by pipeline |
+| `outputs/latest/decision_explanations.md` | Written by pipeline |
 | `tests/test_decision_engine.py` | Present |
 | `tests/test_decision_engine_pipeline.py` | Present |
+| `tests/test_decision_explainer.py` | Present |
 | Existing recommendation behavior | Unchanged |
 | Existing output schemas | Preserved |
 
@@ -52,12 +56,18 @@ The observe-only pipeline writes:
 
 - `outputs/latest/decision_plan.json`
 - `outputs/latest/decision_plan.md`
+- `outputs/latest/decision_explanations.json`
+- `outputs/latest/decision_explanations.md`
 
 `decision_plan.json` is the machine-readable artifact. `decision_plan.md` is the operator-readable summary.
+
+`decision_explanations.json` is the additive machine-readable explanation layer. `decision_explanations.md` is the compact operator-readable explanation summary.
 
 The daily memo/reporting layer now also consumes `decision_plan.json` as an additive downstream input. This does not change the Decision Engine plan shape or any upstream recommendation behavior.
 
 The GUI Decision Center now also consumes `decision_plan.json` and `system_decision_summary.json` through the operator-data layer. This remains read-only and does not recompute decisions.
+
+The explanation layer now consumes `decision_plan.json` after it is written. It remains downstream only and does not feed back into any decision or ranking logic.
 
 ### Artifact Shape
 
@@ -341,6 +351,69 @@ It does not:
 - rewrite current output contracts
 - bypass structural guardrails
 
+## AI Explanation Layer Integration
+
+Current explanation-layer behavior:
+
+| Item | Behavior |
+| --- | --- |
+| Input artifacts | `outputs/latest/decision_plan.json`, `outputs/latest/system_decision_summary.json` |
+| Reader | `portfolio_automation/decision_explainer.py` |
+| Trigger point | after `decision_plan.json` / `decision_plan.md` are written |
+| Logic type | deterministic only |
+| External calls | none |
+| Failure mode | non-fatal |
+| Feedback into decisions | none |
+
+Current explanation JSON contract:
+
+| Field | Meaning |
+| --- | --- |
+| `generated_at` | explanation generation timestamp |
+| `available` | whether the explanation layer had a usable decision plan |
+| `observe_only` | always `true` |
+| `summary_line` | short generation status line |
+| `source_artifacts` | artifact paths used as sources |
+| `explanations` | compact explanation rows |
+
+Current explanation row contract:
+
+| Field | Meaning |
+| --- | --- |
+| `decision_id` | stable explanation row identifier |
+| `symbol` | ticker or identifier |
+| `action` | unchanged decision action from the plan |
+| `priority` | unchanged priority from the plan |
+| `urgency` | unchanged urgency from the plan |
+| `source` | unchanged source from the plan |
+| `source_attribution` | human-readable source label |
+| `concise_explanation` | one short explanation sentence |
+| `risks` | max `3` risk items |
+| `what_to_watch_next` | max `3` follow-up checks |
+| `explanation_basis` | compact deterministic basis list |
+| `ai_validation` | one of `boost`, `neutral`, `caution` |
+
+Current behavior guarantees:
+
+- max `5` explanations
+- no mutation of `decision_plan.json`
+- no change to decision order, action, urgency, source, or priority
+- graceful handling of missing or malformed decision-plan artifacts
+- no live LLM calls in v1
+
+Validated live explanation output on VPS:
+
+```text
+available: True
+observe_only: True
+count: 5
+SELL QLD | caution | Leverage exceeds cap (17.8% vs 15%).
+SELL QQQ | caution | Concentration exceeds cap (55.2% vs 40%).
+SCALE VFH | boost | Drift exceeds rebalance threshold.
+WAIT FANG | caution | Relative strength near highs.
+WAIT XLRE | caution | Relative strength near highs.
+```
+
 ## Next Implementation Step
 
-GUI Decision Center v1 is complete. Build the next AI Explanation Layer from `decision_plan.json` so memo, GUI, and explanation consumers stay contract-aligned and observe-only.
+The explanation layer is now live. The next step is to decide which read-only downstream surface should consume `decision_explanations.*` first without duplicating decision logic in GUI or memo layers.

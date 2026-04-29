@@ -61,9 +61,26 @@ Current status:
 
 ### AI Explanation Layer
 
-- generate concise explanations from consolidated decision records
-- preserve source attribution and structural authority
-- use decision-plan artifacts as an additive explanation source
+Completed:
+
+- implemented `portfolio_automation/decision_explainer.py`
+- wired it into the pipeline after `decision_plan.json` is written
+- writes:
+  - `outputs/latest/decision_explanations.json`
+  - `outputs/latest/decision_explanations.md`
+- uses deterministic logic only in v1
+- preserves source attribution and structural authority
+- remains additive and read-only
+
+Validated:
+
+- compile checks passed
+- `tests/test_decision_explainer.py`: `6 passed`
+- `tests/test_decision_engine_pipeline.py`: `42 passed`
+- VPS artifact check confirmed:
+  - `available: True`
+  - `observe_only: True`
+  - `count: 5`
 
 ### Policy Feedback Loop Using Decision Outcomes
 
@@ -73,4 +90,4 @@ Current status:
 
 ## Next Implementation Step
 
-Use the now-live observe-only decision-plan artifacts as the input contract for the next AI Explanation Layer, without changing the current recommendation engine behavior.
+Decide which read-only downstream surface should consume `decision_explanations.*` first, while keeping `decision_plan.json` as the decision source of truth and preserving additive-only behavior.

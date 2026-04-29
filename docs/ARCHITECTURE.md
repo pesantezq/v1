@@ -18,6 +18,7 @@ Decision Engine status:
 - `portfolio_automation/decision_engine.py` is implemented and tested
 - pipeline integration in `main.py` is live in observe-only mode
 - `decision_plan.json` and `decision_plan.md` are additive artifacts
+- `portfolio_automation/decision_explainer.py` is implemented and wired as an additive downstream consumer
 
 ## End-To-End Flow
 
@@ -64,7 +65,19 @@ Data sources
     -> scoring / conviction / allocation
     -> Decision Engine
     -> decision_plan artifacts
-    -> GUI / AI explanation / daily memo
+    -> AI Explanation Layer
+    -> decision_explanations artifacts
+    -> GUI / daily memo / future explanation consumers
+```
+
+AI Explanation Layer flow:
+
+```text
+outputs/latest/decision_plan.json
+    + outputs/latest/system_decision_summary.json (optional)
+    -> portfolio_automation/decision_explainer.py
+    -> outputs/latest/decision_explanations.json
+    -> outputs/latest/decision_explanations.md
 ```
 
 Daily memo consumption flow:
@@ -179,11 +192,48 @@ Current integrated behavior:
 - emit additive artifacts:
   - `outputs/latest/decision_plan.json`
   - `outputs/latest/decision_plan.md`
+- after the decision plan is written, call the additive explainer
+- emit explanation artifacts:
+  - `outputs/latest/decision_explanations.json`
+  - `outputs/latest/decision_explanations.md`
 - log the top 3 ranked decisions
 - leave existing recommendation behavior unchanged
 - leave existing output schemas unchanged
 
 The Decision Engine is now the central observe-only action-plan layer, but it is still intentionally additive. It does not replace current recommendation outputs or change execution behavior.
+
+## AI Explanation Layer
+
+Current integrated behavior:
+
+- `portfolio_automation/decision_explainer.py` reads artifacts only
+- it uses deterministic logic only in v1
+- it does not call an LLM or any external API
+- it does not mutate `decision_plan.json`
+- failures are non-fatal and must not block the pipeline
+
+Current explanation outputs:
+
+- `outputs/latest/decision_explanations.json`
+- `outputs/latest/decision_explanations.md`
+
+Compact contract:
+
+- maximum `5` explanations
+- maximum `3` risks per explanation
+- maximum `3` `what_to_watch_next` items
+- concise explanation sentence only
+- include `explanation_basis`
+- include deterministic `ai_validation`:
+  - `boost`
+  - `neutral`
+  - `caution`
+
+Architectural role:
+
+- explanation is a downstream reader of the decision plan
+- it does not feed back into ranking, scoring, or recommendations
+- it is safe for future GUI and memo consumers because it is additive and read-only
 
 ## Daily Memo Integration
 
@@ -312,4 +362,4 @@ These boundaries are intentional and should not be collapsed:
 
 ## Next Implementation Step
 
-GUI Decision Center v1 is complete. Build the next AI Explanation Layer on top of `decision_plan.json` and the shared compact contract so memo, GUI, and future AI summary surfaces stay aligned without recomputing decisions.
+Decision Engine, GUI Decision Center v1, and the AI Explanation Layer are now live. The next step is to decide which downstream surface should consume `decision_explanations.*` first while preserving read-only, artifact-driven behavior.
