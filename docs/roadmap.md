@@ -54,6 +54,35 @@ No live scoring, allocation, or recommendation behavior changed.
 Additive and backward-compatible. 56 tests added.
 See `docs/SIGNAL_REGISTRY.md`.
 
+### Step 5 — AI Cost Budget Wrapper (Complete)
+
+Observe-only AI usage tracking and cost guardrail layer added at
+`portfolio_automation/ai_budget.py`.
+
+Tracks token usage and estimated cost across all optional AI/LLM calls.
+Enforces configurable daily and monthly limits in opt-in hard mode.
+Default behavior is `observe_only=True` — never blocks, only records.
+
+Key components:
+- `AIBudgetConfig` — enable/disable, observe_only, daily/monthly limits
+- `AIUsageEvent` — per-call record with timestamp, tokens, cost, allowed flag
+- `AIBudgetSummary` — aggregated daily/monthly totals with warning/blocked status
+- `estimate_ai_cost()` — static pricing table covering Anthropic, OpenAI, Ollama/local
+- `check_ai_budget()` — returns AIUsageEvent; warns at threshold, blocks when
+  `observe_only=False` and limit exceeded
+- `with_ai_budget` — context manager; raises `AIBudgetExceeded` only when not observe_only
+- `record_ai_usage_event()` — appends to `outputs/policy/ai_usage_events.jsonl` (POLICY)
+- `load_recent_ai_usage_events()` — tolerates missing file and malformed lines
+- `write_ai_budget_summary()` — writes JSON + Markdown to `outputs/latest/` (LATEST)
+
+Pricing coverage: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7,
+gpt-4o-mini, gpt-4o, and all Ollama/local models ($0). Unknown models annotated
+with `unknown_pricing: true` in event metadata, cost estimated as $0.00.
+
+Pipeline integration: non-blocking summary write after all AI call sections.
+No existing AI call behavior changed. 62 tests added.
+See `docs/AI_BUDGET.md`.
+
 ### Step 4 — Data Quality Monitor (Complete)
 
 Observe-only data quality layer added at `portfolio_automation/data_quality_monitor.py`.
@@ -171,6 +200,53 @@ Validated:
 - compare decision-plan outcomes with later recommendation history
 - tune precedence, suppression, and downgrade rules only after outcome evidence exists
 
-## Next Implementation Step
+---
 
-Decide which read-only downstream surface should consume `decision_explanations.*` first, while keeping `decision_plan.json` as the decision source of truth and preserving additive-only behavior.
+## Phase 0 Complete
+
+All Phase 0 Infrastructure & Data Governance steps are complete:
+
+1. user_id schema migration
+2. Data governance namespace utilities
+3. Historical replay namespace enforcement
+4. Config-driven signal registry
+5. Data quality monitor
+6. AI cost budget wrapper
+
+The system now has:
+- Namespace-governed output writes across all new layers
+- A typed signal catalog with governance rules enforced at load
+- Observe-only data quality visibility before scoring
+- Observe-only AI cost tracking with optional hard enforcement
+
+---
+
+## Post-Phase-0 Next Steps
+
+### Confidence Calibration Feedback Loop
+
+- Wire resolved AI decision validation outcomes into calibration data
+- Track prediction accuracy per signal category and decision type
+- Tune confidence floors in `signal_registry.yaml` after evidence accumulates
+- Gate calibration updates at 20 resolved decisions (existing rule)
+
+### Discovery Engine Foundation
+
+- Define discovery pipeline that consumes `discovery_only` signals from the registry
+- Route `STRONG_MOVE_UP`, `VOLUME_SPIKE`, `BREAKOUT_PROXY` through a separate
+  corroboration step before they become actionable candidates
+- Keep discovery artifacts in `OutputNamespace.SANDBOX` until corroboration passes
+
+### GUI Data Quality + AI Budget Panels
+
+- Add a Data Quality card to the GUI Decision Center's System/Data Health section
+  consuming `outputs/latest/data_quality_report.json`
+- Add an AI Budget card consuming `outputs/latest/ai_budget_summary.json`
+- Both panels are read-only; no new decision logic introduced
+
+### Instrument AI Call Sites
+
+- Add `record_ai_usage_event` calls after each LLM call in
+  `decision_explainer.py` and `ai_decision_validator.py`
+- Use actual token counts from API responses (not estimates)
+- Gate with `with_ai_budget` context manager when hard enforcement is desired

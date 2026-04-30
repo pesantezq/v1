@@ -2151,6 +2151,21 @@ def run_portfolio_update(
                         "PERFORMANCE ATTRIBUTION: non-fatal error — %s", _pa_err, exc_info=True
                     )
 
+            # ── AI Budget Summary (observe-only) ─────────────────────────────
+            try:
+                from portfolio_automation.ai_budget import (
+                    load_recent_ai_usage_events as _load_ai_events,
+                    write_ai_budget_summary as _write_ai_budget,
+                )
+                # TODO: instrument AI call sites (decision_explainer, ai_decision_validator)
+                # to call record_ai_usage_event() so events accumulate in the JSONL log.
+                _ai_events = _load_ai_events()
+                if not dry_run:
+                    _ai_budget_summary = _write_ai_budget(_ai_events)
+                    logger.info("AI BUDGET: %s", _ai_budget_summary.summary_line)
+            except Exception as _ab_err:
+                logger.warning("AI BUDGET: non-fatal error — %s", _ab_err)
+
             # ── Scanner outputs ────────────────────────────────────────────────
             if scanner_candidates:
                 # candidates_top20.csv
