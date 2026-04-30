@@ -222,7 +222,7 @@ If Claude recommends something not in `project_state.yaml:next_official_step`:
 
 1. Check whether it is a sensible addition or a premature skip.
 2. If sensible: update `next_official_step` in `project_state.yaml` and then create the task packet.
-3. If premature (e.g., Discovery Engine before Calibration): ignore it and proceed with the authorized next step.
+3. If premature (e.g., Discovery Engine before run-mode governance separation): ignore it and proceed with the authorized next step.
 4. Never let Claude's recommendation automatically become the next task.
 
 ---

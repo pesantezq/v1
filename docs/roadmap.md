@@ -275,8 +275,16 @@ See `docs/CONFIDENCE_CALIBRATION.md`.
 
 ## Post-Phase-0 Next Steps
 
+### Run-Mode Governance / Operating-Mode Separation
+
+- Separate live daily, replay, calibration, and research operating modes more explicitly
+- Keep observe-only guarantees visible at the run-mode boundary
+- Prevent future replay or discovery work from drifting into live decision semantics
+- Keep this step ahead of Discovery Engine implementation
+
 ### Discovery Engine Foundation
 
+- Status: not started
 - Define discovery pipeline that consumes `discovery_only` signals from the registry
 - Route `STRONG_MOVE_UP`, `VOLUME_SPIKE`, `BREAKOUT_PROXY` through a separate
   corroboration step before they become actionable candidates
@@ -284,6 +292,7 @@ See `docs/CONFIDENCE_CALIBRATION.md`.
 
 ### GUI Data Quality + AI Budget Panels
 
+- Status: pending
 - Add a Data Quality card to the GUI Decision Center's System/Data Health section
   consuming `outputs/latest/data_quality_report.json`
 - Add an AI Budget card consuming `outputs/latest/ai_budget_summary.json`

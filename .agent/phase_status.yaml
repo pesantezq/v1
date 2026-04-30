@@ -80,17 +80,30 @@ agent_orchestration_layer:
 
 post_phase_0:
   confidence_calibration_feedback_loop:
-    status: not_started
+    status: complete
     priority: high
-    description: Wire resolved AI decision validation outcomes into calibration data; tune signal confidence floors after evidence accumulates
+    description: Enhanced confidence calibration feedback loop with stable 5-bucket LATEST artifact output and per-signal analysis
     gate: requires 20 resolved decisions (calibration is already gated at 20)
     prerequisite: phase_0_complete
+    files:
+      - portfolio_automation/confidence_calibration.py
+      - tests/test_pa_confidence_calibration.py
+      - docs/CONFIDENCE_CALIBRATION.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+    tests: 72 passing
+
+  run_mode_governance_operating_mode_separation:
+    status: not_started
+    priority: high
+    description: Separate run-mode governance and operating-mode boundaries for live, replay, calibration, and research paths
+    prerequisite: confidence_calibration_feedback_loop_complete
 
   discovery_engine_foundation:
     status: not_started
     priority: medium
     description: Define discovery pipeline consuming discovery_only signals; route corroboration step before signals become actionable
-    note: DO NOT START until confidence_calibration_feedback_loop is complete or explicitly prioritized
+    note: DO NOT START until run_mode_governance_operating_mode_separation is complete or explicitly prioritized
     warning: PREMATURE_DISCOVERY_IS_FORBIDDEN — do not begin implementation without explicit user approval
 
   gui_data_quality_and_ai_budget_panels:

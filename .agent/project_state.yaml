@@ -12,8 +12,8 @@ ai_role: context_explanation_validation_orchestration_only
 # Phase / Step tracking
 # ---------------------------------------------------------------------------
 
-current_phase: post_phase_0_orchestration
-current_step: agent_orchestration_layer
+current_phase: post_phase_0_governance
+current_step: run_mode_governance_operating_mode_separation
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -23,13 +23,13 @@ completed_steps:
   - phase_0_data_quality_monitor
   - phase_0_ai_cost_budget_wrapper
   - agent_orchestration_layer
+  - confidence_calibration_feedback_loop
 
 next_official_step:
-  primary: confidence_calibration_feedback_loop
+  primary: run_mode_governance_operating_mode_separation
   secondary:
-    - discovery_engine_foundation
     - gui_data_quality_and_ai_budget_panels
-    - instrument_ai_call_sites_with_budget_recording
+    - instrument_ai_call_sites
 
 deferred_steps:
   - auto_trading
