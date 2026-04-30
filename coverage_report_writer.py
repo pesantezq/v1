@@ -25,6 +25,7 @@ from coverage_evaluator import CoverageEvalResult
 
 logger = logging.getLogger("portfolio_automation.coverage_report_writer")
 
+# TODO(v2-data-governance): migrate direct output writes to data_governance safe writers.
 _DEFAULT_POLICY_DIR = Path("outputs/policy")
 
 

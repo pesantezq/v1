@@ -1,5 +1,23 @@
 # Roadmap
 
+## Phase 0 — Infrastructure & Data Governance (In Progress)
+
+### Step 1 — user_id Schema Migration (Complete)
+
+`user_id TEXT NOT NULL DEFAULT 'owner'` added to `run_history` and `snapshots`.
+Migration file at `portfolio_automation/migrations/001_add_user_id.py`. Deployed to VPS.
+Single-user behavior unchanged. Groundwork for future multi-user scope.
+
+### Step 2 — Data Governance Namespace Utilities (Complete)
+
+Data governance namespace utilities added at `portfolio_automation/data_governance.py`.
+Defines `OutputNamespace` enum (LIVE, HISTORICAL, SANDBOX, POLICY, PORTFOLIO, LATEST, USER),
+`DataGovernanceError`, `safe_write_text`, `safe_write_json`, `validate_output_path`, and helpers.
+Existing outputs remain fully backward-compatible; future modules should use namespace-aware writes.
+See `docs/DATA_GOVERNANCE.md`.
+
+---
+
 ## Completed: Decision Engine Foundation + Observe-Only Integration
 
 What was built:

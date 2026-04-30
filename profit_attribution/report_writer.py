@@ -28,6 +28,7 @@ from profit_attribution.models import (
 
 logger = logging.getLogger("profit_attribution.report_writer")
 
+# TODO(v2-data-governance): migrate direct output writes to data_governance safe writers.
 _DEFAULT_POLICY_DIR = Path("outputs/policy")
 
 

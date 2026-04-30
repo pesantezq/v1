@@ -22,6 +22,7 @@ from typing import Any
 
 logger = logging.getLogger("stockbot.portfolio_automation.historical_replay.runner")
 
+# TODO(v2-data-governance): migrate direct output writes to data_governance safe writers.
 _DEFAULT_OUTPUT_DIR = Path("outputs") / "backtest"
 _DEFAULT_DAYS = 90
 _DEFAULT_WINDOWS = (1, 3, 7)

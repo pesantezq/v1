@@ -20,6 +20,7 @@ from policy_evaluator.outcome_attributor import OutcomeResult
 
 logger = logging.getLogger("policy_evaluator.outcome_writer")
 
+# TODO(v2-data-governance): migrate direct output writes to data_governance safe writers.
 _POLICY_DIR = Path("outputs/policy")
 
 
