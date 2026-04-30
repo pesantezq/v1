@@ -87,7 +87,8 @@ class PortfolioStateStore:
             mode         TEXT NOT NULL,
             status       TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
             started_at   TEXT NOT NULL,
-            completed_at TEXT
+            completed_at TEXT,
+            user_id      TEXT NOT NULL DEFAULT 'owner'
         );
 
         CREATE TABLE IF NOT EXISTS snapshots (
@@ -97,7 +98,8 @@ class PortfolioStateStore:
             cash             REAL,
             max_drift        REAL,
             drawdown_regime  TEXT,
-            recorded_at      TEXT NOT NULL
+            recorded_at      TEXT NOT NULL,
+            user_id          TEXT NOT NULL DEFAULT 'owner'
         );
 
         CREATE TABLE IF NOT EXISTS email_history (
@@ -286,6 +288,29 @@ class PortfolioStateStore:
         finally:
             conn.close()
 
+        # ── Schema migration: add user_id to run_history and snapshots ──────────
+        # Migration 001 handles existing DBs; this block covers DBs that are
+        # started fresh from older code and never had migration 001 applied.
+        # Index creation is guarded — CREATE INDEX on a missing column would fail.
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            for table in ("run_history", "snapshots"):
+                cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if "user_id" not in cols:
+                    conn.execute(
+                        f"ALTER TABLE {table} "
+                        "ADD COLUMN user_id TEXT NOT NULL DEFAULT 'owner'"
+                    )
+                    conn.commit()
+                    logger.info("%s: migrated — added user_id column", table)
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{table}_user_id "
+                    f"ON {table}(user_id)"
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
         conn = sqlite3.connect(str(self.db_path))
         try:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(watchlist_alert_outcomes)")}
@@ -371,7 +396,7 @@ class PortfolioStateStore:
     # run_history
     # ------------------------------------------------------------------
 
-    def start_run(self, run_id: str, mode: str) -> bool:
+    def start_run(self, run_id: str, mode: str, user_id: str = "owner") -> bool:
         """
         Insert a new run_history row with status='running'.
 
@@ -380,17 +405,18 @@ class PortfolioStateStore:
         should call check_run_status() to decide how to proceed.
 
         Args:
-            run_id: Unique identifier, format '{YYYY-MM-DD}_{mode}'.
-            mode:   Run mode string ('daily', 'weekly', 'monthly').
+            run_id:  Unique identifier, format '{YYYY-MM-DD}_{mode}'.
+            mode:    Run mode string ('daily', 'weekly', 'monthly').
+            user_id: Owner of this run (default 'owner' for single-user deployments).
         """
         now = datetime.now().isoformat()
         run_date = now[:10]
         try:
             with self._connect() as conn:
                 conn.execute(
-                    "INSERT INTO run_history (run_id, run_date, mode, status, started_at) "
-                    "VALUES (?, ?, ?, 'running', ?)",
-                    (run_id, run_date, mode, now)
+                    "INSERT INTO run_history (run_id, run_date, mode, status, started_at, user_id) "
+                    "VALUES (?, ?, ?, 'running', ?, ?)",
+                    (run_id, run_date, mode, now, user_id)
                 )
             logger.debug(f"Started run {run_id} in state store")
             return True
@@ -413,8 +439,10 @@ class PortfolioStateStore:
         """
         Return the run_history row for run_id as a dict, or None if not found.
 
-        Dict keys: run_id, run_date, mode, status, started_at, completed_at.
+        Dict keys: run_id, run_date, mode, status, started_at, completed_at, user_id.
         """
+        # TODO(v2-user-scope): review aggregate query behavior for multi-user support
+        # run_id is a global PK ({date}_{mode}) so no user_id filter is needed here.
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM run_history WHERE run_id = ?", (run_id,)
@@ -491,6 +519,7 @@ class PortfolioStateStore:
         cash: float,
         max_drift: float,
         drawdown_regime: str = "normal",
+        user_id: str = "owner",
     ) -> None:
         """
         Insert a portfolio snapshot row tied to run_id.
@@ -504,14 +533,15 @@ class PortfolioStateStore:
             cash:             Available cash in dollars.
             max_drift:        Maximum drift fraction across all holdings.
             drawdown_regime:  Current regime label ('normal', 'modest_dip', etc.).
+            user_id:          Owner of this snapshot (default 'owner').
         """
         now = datetime.now().isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO snapshots "
-                "(run_id, total_value, cash, max_drift, drawdown_regime, recorded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, total_value, cash, max_drift, drawdown_regime, now)
+                "(run_id, total_value, cash, max_drift, drawdown_regime, recorded_at, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (run_id, total_value, cash, max_drift, drawdown_regime, now, user_id)
             )
         logger.debug(f"Recorded snapshot for run {run_id}: ${total_value:,.2f}")
 
@@ -519,6 +549,7 @@ class PortfolioStateStore:
         self,
         mode: Optional[str] = None,
         n: int = 2,
+        user_id: str = "owner",
     ) -> List[Dict[str, Any]]:
         """
         Return the last *n* completed-run portfolio snapshots, newest first.
@@ -527,8 +558,9 @@ class PortfolioStateStore:
         Used by the digest builder to populate the "What Changed" section.
 
         Args:
-            mode: Filter to this run mode ('daily', 'weekly', 'monthly'); None = all.
-            n:    Maximum rows to return (default 2).
+            mode:    Filter to this run mode ('daily', 'weekly', 'monthly'); None = all.
+            n:       Maximum rows to return (default 2).
+            user_id: Scope results to this user (default 'owner').
 
         Returns:
             List of dicts: total_value, cash, max_drift, drawdown_regime,
@@ -539,9 +571,9 @@ class PortfolioStateStore:
             "       s.recorded_at, r.run_date, r.mode "
             "FROM snapshots s "
             "JOIN run_history r ON s.run_id = r.run_id "
-            "WHERE r.status = 'completed' "
+            "WHERE r.status = 'completed' AND s.user_id = ? "
         )
-        params: list = []
+        params: list = [user_id]
         if mode is not None:
             query += "AND r.mode = ? "
             params.append(mode)
@@ -700,13 +732,16 @@ class PortfolioStateStore:
     # run heartbeat
     # ------------------------------------------------------------------
 
-    def get_last_successful_run(self, mode: str) -> Optional[Dict[str, Any]]:
+    def get_last_successful_run(
+        self, mode: str, user_id: str = "owner"
+    ) -> Optional[Dict[str, Any]]:
         """Return the most recent completed run_history row for mode, or None."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM run_history WHERE mode=? AND status='completed' "
+                "SELECT * FROM run_history "
+                "WHERE mode=? AND status='completed' AND user_id=? "
                 "ORDER BY completed_at DESC LIMIT 1",
-                (mode,),
+                (mode, user_id),
             ).fetchone()
         return dict(row) if row else None
 

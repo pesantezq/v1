@@ -357,6 +357,9 @@ def load_portfolio_snapshots(
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
         try:
+            # TODO(v2-user-scope): review aggregate query behavior for multi-user support
+            # This aggregates all snapshots across users; add WHERE user_id=? when
+            # multi-user attribution is needed.
             rows = conn.execute(
                 """
                 SELECT run_id, total_value, recorded_at
