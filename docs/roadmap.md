@@ -16,6 +16,44 @@ Defines `OutputNamespace` enum (LIVE, HISTORICAL, SANDBOX, POLICY, PORTFOLIO, LA
 Existing outputs remain fully backward-compatible; future modules should use namespace-aware writes.
 See `docs/DATA_GOVERNANCE.md`.
 
+### Step 2b — Historical Replay Namespace Enforcement (Complete)
+
+Historical Replay is now the first real consumer of the data governance layer.
+`replay_reports.py` and `replay_runner.py` use `safe_write_json` / `safe_write_text`
+with `OutputNamespace.HISTORICAL` for all file writes.
+A live-path guard (`_assert_safe_replay_output_dir`) rejects any attempt to write to
+`outputs/latest`, `outputs/policy`, `outputs/portfolio`, or other live namespaces.
+All artifact paths remain identical (`outputs/backtest/`). 41 governance tests added.
+Backward-compatible: existing replay command and existing tests unchanged.
+
+### Step 3 — Config-driven Signal Registry (Complete)
+
+Signal definitions centralized in `config/signal_registry.yaml` and
+`portfolio_automation/signal_registry.py`.
+
+Defines 10 known signal IDs seeded from the codebase:
+- `STRONG_MOVE_UP`, `STRONG_MOVE_DOWN`, `VOLUME_SPIKE`, `BREAKOUT_PROXY`,
+  `VOLATILITY_EXPANSION` — from `event_detection.py` EventType enum
+- `LEVERAGE_VIOLATION`, `CONCENTRATION_VIOLATION`, `DRIFT_VIOLATION` — from
+  `portfolio_automation/decision_engine.py` violation_type strings
+- `PORTFOLIO_DRIFT` — finance advisory recommendation id
+- `HISTORICAL_MOMENTUM_PROXY` — from `replay_decision_simulator.py` STRATEGY_NAME
+
+`SignalRegistry` provides: `get`, `require`, `all`, `enabled`, `by_category`,
+`by_source_domain`, `is_actionable`, `is_discovery_only`, `requires_corroboration`,
+`validate_signal_id`, and `annotate_signal`.
+
+Governance enforced at load time:
+- `actionable` and `discovery_only` cannot both be `true`
+- `discovery_only: true` requires `requires_corroboration: true`
+- `default_weight` must be in `[0.0, 1.0]`
+- Duplicate `signal_id` rejected
+- Unknown signals are unconditionally non-actionable
+
+No live scoring, allocation, or recommendation behavior changed.
+Additive and backward-compatible. 50 tests added.
+See `docs/SIGNAL_REGISTRY.md`.
+
 ---
 
 ## Completed: Decision Engine Foundation + Observe-Only Integration

@@ -167,6 +167,64 @@ component. Slashes, null bytes, and traversal sequences are rejected with
 
 ---
 
+---
+
+## Historical Replay Integration
+
+Historical Replay is the first real consumer of the data governance layer (Phase 0 Step 2b).
+
+### Canonical path
+
+All Historical Replay outputs go to `outputs/backtest/` — the `HISTORICAL` namespace.
+
+### What was migrated
+
+| File | Change |
+|------|--------|
+| `portfolio_automation/historical_replay/replay_reports.py` | `write_calibration` and `write_attribution` now use `safe_write_json` / `safe_write_text` with `OutputNamespace.HISTORICAL` |
+| `portfolio_automation/historical_replay/replay_runner.py` | JSONL write replaced with `safe_write_text(OutputNamespace.HISTORICAL, ...)` |
+
+### Hard rules enforced
+
+1. **Historical replay must never write to live, latest, policy, portfolio, or users paths.**
+   `_assert_safe_replay_output_dir()` raises `DataGovernanceError` if the `output_dir`
+   contains any of: `latest`, `live`, `policy`, `portfolio`, `users`, `sandbox`.
+
+2. **The governance module validates path containment.**
+   `safe_write_json` and `safe_write_text` call `validate_output_path(HISTORICAL, ...)` internally,
+   which resolves paths to absolute form and confirms they fall under `outputs/backtest/`.
+
+3. **Historical replay outputs are isolated from live artifacts.**
+   A write to `outputs/policy/` or `outputs/latest/` from a replay writer is impossible
+   without explicitly defeating both the live-path guard and the namespace validator.
+
+### Backward compatibility
+
+Existing callers pass `output_dir = .../<base>/backtest`. The writers derive
+`base_dir = output_dir.parent` and call governance with `base_dir`. Because
+`safe_write_json(HISTORICAL, filename, payload, base_dir=<base>)` produces
+`<base>/backtest/<filename>`, all artifact paths remain identical to before the migration.
+
+### Artifact filenames (unchanged)
+
+```
+outputs/backtest/decision_outcomes_historical.jsonl
+outputs/backtest/historical_calibration.json
+outputs/backtest/historical_calibration.md
+outputs/backtest/historical_performance_attribution.json
+outputs/backtest/historical_performance_attribution.md
+```
+
+### Tests
+
+```bash
+python -m pytest -q tests/historical_replay/test_replay_data_governance.py
+# 41 tests covering: path isolation, filename preservation,
+# live-path rejection, governance function invocation, full run integrity
+```
+
+---
+
 ## Module Location
 
 ```

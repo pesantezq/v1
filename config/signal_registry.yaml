@@ -1,0 +1,178 @@
+# Signal Registry — config-driven catalog of known signal types.
+#
+# Rules:
+#   - signal_id must be unique across all entries
+#   - actionable and discovery_only cannot both be true
+#   - discovery_only: true implies requires_corroboration: true
+#   - default_weight must be in [0.0, 1.0]
+#   - disabled signals load but are excluded from enabled()
+#
+# To add a new signal: append an entry below, run the tests, and document
+# the signal in docs/SIGNAL_REGISTRY.md.
+
+signals:
+
+  # ── Event Detection signals (event_detection.py EventType enum) ──────────
+
+  - signal_id: STRONG_MOVE_UP
+    display_name: Strong Move Up
+    category: price_action
+    source_domain: scanner
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.45
+    confidence_floor: 0.50
+    description: >
+      Daily price change >= strong_move_pct threshold (default 3%). Emitted by
+      event_detection.py EventType.STRONG_MOVE_UP. Signals significant upward
+      price momentum within the day.
+    enabled: true
+
+  - signal_id: STRONG_MOVE_DOWN
+    display_name: Strong Move Down
+    category: price_action
+    source_domain: scanner
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.45
+    confidence_floor: 0.50
+    description: >
+      Daily price change <= -strong_move_pct threshold (default -3%). Emitted by
+      event_detection.py EventType.STRONG_MOVE_DOWN. Signals significant
+      downward price momentum within the day.
+    enabled: true
+
+  - signal_id: VOLUME_SPIKE
+    display_name: Volume Spike
+    category: volume
+    source_domain: scanner
+    actionable: false
+    discovery_only: false
+    requires_corroboration: true
+    default_weight: 0.25
+    confidence_floor: null
+    description: >
+      Relative volume >= volume_spike_factor threshold (default 2.0x 20-day
+      average). Emitted by event_detection.py EventType.VOLUME_SPIKE. Volume
+      alone is not actionable; requires corroboration with a price-action signal.
+    enabled: true
+
+  - signal_id: BREAKOUT_PROXY
+    display_name: Breakout Proxy
+    category: price_action
+    source_domain: scanner
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.50
+    confidence_floor: 0.55
+    description: >
+      Price within breakout_proximity_pct of 52-week high with >= 1.0% daily
+      upward pressure and volume confirmation. Emitted by event_detection.py
+      EventType.BREAKOUT_PROXY. Strongest near-term bullish event signal.
+    enabled: true
+
+  - signal_id: VOLATILITY_EXPANSION
+    display_name: Volatility Expansion
+    category: price_action
+    source_domain: scanner
+    actionable: false
+    discovery_only: true
+    requires_corroboration: true
+    default_weight: 0.15
+    confidence_floor: null
+    description: >
+      Intraday range (high-low)/price >= volatility_expansion_pct threshold
+      (default 4%). Emitted by event_detection.py EventType.VOLATILITY_EXPANSION.
+      Direction is ambiguous; discovery and alert use only — not actionable
+      without corroboration from a directional signal.
+    enabled: true
+
+  # ── Portfolio structural violation signals (decision_engine.py) ──────────
+  # These map to violation_type strings used inside build_structural_decisions().
+
+  - signal_id: LEVERAGE_VIOLATION
+    display_name: Leverage Violation
+    category: portfolio_risk
+    source_domain: portfolio
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.95
+    confidence_floor: 0.70
+    description: >
+      Portfolio leverage ratio exceeds the configured safety threshold. Maps to
+      violation_type="leverage" in portfolio_automation/decision_engine.py.
+      Highest-priority structural violation; triggers CRITICAL urgency action.
+    enabled: true
+
+  - signal_id: CONCENTRATION_VIOLATION
+    display_name: Concentration Violation
+    category: portfolio_risk
+    source_domain: portfolio
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.88
+    confidence_floor: 0.65
+    description: >
+      Single-position concentration exceeds the configured band. Maps to
+      violation_type="concentration" in portfolio_automation/decision_engine.py.
+      Triggers HIGH urgency structural rebalance action.
+    enabled: true
+
+  - signal_id: DRIFT_VIOLATION
+    display_name: Portfolio Drift Violation
+    category: portfolio_risk
+    source_domain: portfolio
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.76
+    confidence_floor: 0.60
+    description: >
+      Portfolio weights have drifted from target allocations beyond the configured
+      rebalance band. Maps to violation_type="drift" in
+      portfolio_automation/decision_engine.py. Triggers HIGH urgency rebalance
+      recommendation.
+    enabled: true
+
+  # ── Finance / portfolio advisory signals ─────────────────────────────────
+
+  - signal_id: PORTFOLIO_DRIFT
+    display_name: Portfolio Drift Advisory
+    category: portfolio_risk
+    source_domain: portfolio
+    actionable: true
+    discovery_only: false
+    requires_corroboration: false
+    default_weight: 0.70
+    confidence_floor: null
+    description: >
+      Finance-layer advisory identifying that portfolio weights are approaching
+      the rebalance threshold. Used as a finance recommendation id="PORTFOLIO_DRIFT"
+      in portfolio_automation/decision_engine.py. Distinct from DRIFT_VIOLATION:
+      this is a pre-threshold advisory, not a hard structural constraint breach.
+    enabled: true
+
+  # ── Historical Replay signals ─────────────────────────────────────────────
+
+  - signal_id: HISTORICAL_MOMENTUM_PROXY
+    display_name: Historical Momentum Proxy
+    category: replay_only
+    source_domain: historical_replay
+    actionable: false
+    discovery_only: true
+    requires_corroboration: true
+    default_weight: 0.10
+    confidence_floor: null
+    description: >
+      Deterministic momentum proxy rule used by historical replay v1 for
+      calibration only. Defined in
+      portfolio_automation/historical_replay/replay_decision_simulator.py as
+      STRATEGY_NAME = "historical_momentum_proxy". Not a live signal; generates
+      outcome samples for confidence calibration feedback only. Must never
+      influence live decisions.
+    enabled: true

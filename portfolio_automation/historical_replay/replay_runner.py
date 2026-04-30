@@ -20,20 +20,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from portfolio_automation.data_governance import OutputNamespace, safe_write_text
+
 logger = logging.getLogger("stockbot.portfolio_automation.historical_replay.runner")
 
-# TODO(v2-data-governance): migrate direct output writes to data_governance safe writers.
 _DEFAULT_OUTPUT_DIR = Path("outputs") / "backtest"
 _DEFAULT_DAYS = 90
 _DEFAULT_WINDOWS = (1, 3, 7)
 
 
-def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(json.dumps(r, default=str) for r in rows) + ("\n" if rows else ""),
-        encoding="utf-8",
-    )
+def _base_dir_from_output_dir(output_dir: Path) -> Path:
+    """Derive governance base_dir from an output_dir that is expected to end in 'backtest'."""
+    if output_dir.name == "backtest":
+        return output_dir.parent
+    return output_dir
 
 
 def _load_fmp_client() -> Any:
@@ -160,8 +160,21 @@ def run_replay(
     output_files: list[str] = []
 
     if not dry_run:
-        jsonl_path = out_dir / "decision_outcomes_historical.jsonl"
-        _write_jsonl(jsonl_path, resolved_rows)
+        # All writes go through the data governance layer (OutputNamespace.HISTORICAL).
+        # _base_dir_from_output_dir derives the governance base_dir from out_dir
+        # so that artifacts land in out_dir (which is .../<base>/backtest/).
+        _base = _base_dir_from_output_dir(out_dir)
+
+        jsonl_content = (
+            "\n".join(json.dumps(r, default=str) for r in resolved_rows)
+            + ("\n" if resolved_rows else "")
+        )
+        jsonl_path = safe_write_text(
+            OutputNamespace.HISTORICAL,
+            "decision_outcomes_historical.jsonl",
+            jsonl_content,
+            base_dir=str(_base),
+        )
         output_files.append(str(jsonl_path))
 
         j, m = write_calibration(cal_payload, out_dir)

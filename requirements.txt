@@ -21,3 +21,6 @@ feedparser>=6.0.0
 
 # Streamlit GUI
 streamlit>=1.35.0
+
+# YAML config parsing (signal_registry.yaml and future config files)
+pyyaml>=6.0

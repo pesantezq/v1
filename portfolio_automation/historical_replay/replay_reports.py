@@ -4,18 +4,60 @@ Historical replay calibration and performance attribution reports.
 All reports are clearly labelled as historical replay only.
 Live decision_outcomes.jsonl is never read or modified here.
 Outputs go to outputs/backtest/, not outputs/policy/.
+
+Data governance: all file I/O uses OutputNamespace.HISTORICAL via the
+portfolio_automation.data_governance safe writers. A live-path guard
+rejects any output_dir that points inside outputs/latest, outputs/live,
+outputs/policy, outputs/portfolio, or outputs/users.
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from portfolio_automation.data_governance import (
+    DataGovernanceError,
+    OutputNamespace,
+    safe_write_json,
+    safe_write_text,
+)
+
 logger = logging.getLogger("stockbot.portfolio_automation.historical_replay.reports")
 
 _HISTORICAL_SOURCE = "historical_replay"
+
+# Subdirectory names that belong to live output namespaces.
+# Historical replay must never write to any of these.
+_BLOCKED_LIVE_DIRS: frozenset[str] = frozenset({
+    "latest", "live", "policy", "portfolio", "users", "sandbox",
+})
+
+
+def _assert_safe_replay_output_dir(output_dir: Path) -> None:
+    """Raise DataGovernanceError if output_dir touches a live namespace directory."""
+    for part in output_dir.parts:
+        if part in _BLOCKED_LIVE_DIRS:
+            raise DataGovernanceError(
+                f"Historical replay output_dir {str(output_dir)!r} contains "
+                f"live-namespace segment '{part}'. "
+                "Replay must only write to outputs/backtest/."
+            )
+
+
+def _base_dir_from_output_dir(output_dir: Path) -> Path:
+    """
+    Derive the data-governance base_dir from output_dir.
+
+    Convention: output_dir is expected to be .../backtest.
+    Its parent is the base_dir that the governance layer prepends 'backtest' to.
+    If output_dir.name is not 'backtest', treat output_dir itself as base_dir
+    so that governance still writes to output_dir/backtest/.
+    """
+    if output_dir.name == "backtest":
+        return output_dir.parent
+    return output_dir
 
 
 # ---------------------------------------------------------------------------
@@ -313,25 +355,35 @@ def render_attribution_md(payload: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# File I/O
+# File I/O — governance-aware writers
 # ---------------------------------------------------------------------------
-
-
-def _safe_json_write(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
 def write_calibration(
     payload: dict[str, Any],
     output_dir: Path,
 ) -> tuple[Path, Path]:
-    """Write historical_calibration.json + .md. Returns (json_path, md_path)."""
-    json_path = output_dir / "historical_calibration.json"
-    md_path = output_dir / "historical_calibration.md"
-    _safe_json_write(json_path, payload)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(render_calibration_md(payload), encoding="utf-8")
+    """
+    Write historical_calibration.json + .md under output_dir.
+
+    Uses OutputNamespace.HISTORICAL via safe_write_json / safe_write_text.
+    Raises DataGovernanceError if output_dir is inside a live namespace.
+    Returns (json_path, md_path).
+    """
+    _assert_safe_replay_output_dir(output_dir)
+    base = _base_dir_from_output_dir(output_dir)
+    json_path = safe_write_json(
+        OutputNamespace.HISTORICAL,
+        "historical_calibration.json",
+        payload,
+        base_dir=str(base),
+    )
+    md_path = safe_write_text(
+        OutputNamespace.HISTORICAL,
+        "historical_calibration.md",
+        render_calibration_md(payload),
+        base_dir=str(base),
+    )
     return json_path, md_path
 
 
@@ -339,10 +391,25 @@ def write_attribution(
     payload: dict[str, Any],
     output_dir: Path,
 ) -> tuple[Path, Path]:
-    """Write historical_performance_attribution.json + .md. Returns (json_path, md_path)."""
-    json_path = output_dir / "historical_performance_attribution.json"
-    md_path = output_dir / "historical_performance_attribution.md"
-    _safe_json_write(json_path, payload)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(render_attribution_md(payload), encoding="utf-8")
+    """
+    Write historical_performance_attribution.json + .md under output_dir.
+
+    Uses OutputNamespace.HISTORICAL via safe_write_json / safe_write_text.
+    Raises DataGovernanceError if output_dir is inside a live namespace.
+    Returns (json_path, md_path).
+    """
+    _assert_safe_replay_output_dir(output_dir)
+    base = _base_dir_from_output_dir(output_dir)
+    json_path = safe_write_json(
+        OutputNamespace.HISTORICAL,
+        "historical_performance_attribution.json",
+        payload,
+        base_dir=str(base),
+    )
+    md_path = safe_write_text(
+        OutputNamespace.HISTORICAL,
+        "historical_performance_attribution.md",
+        render_attribution_md(payload),
+        base_dir=str(base),
+    )
     return json_path, md_path
