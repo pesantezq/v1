@@ -417,3 +417,52 @@ Future agents need a stable model of where reasoning ends, where validation begi
 - stronger explainability and QA surfaces
 - better long-term maintainability for future AI agents
 
+---
+
+## Historical Replay / Backtest Calibration Design
+
+### Date
+
+2026-04-30
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `docs/HISTORICAL_REPLAY_BACKTEST.md`
+- `docs/ARCHITECTURE.md`
+- `docs/FEEDBACK_LOOP.md`
+- `docs/FMP_COMPLIANCE.md`
+- `docs/CHANGELOG_DECISIONS.md`
+- proposed module: `portfolio_automation/historical_decision_replay.py`
+
+### Decision
+
+Added the design-only milestone for an offline historical replay / backtest calibration path that will use approved FMP historical EOD data to generate source-tagged replay outcome records for calibration and attribution.
+
+Planned source flags:
+
+- live rows: `source = "live"`
+- replay rows: `source = "historical_replay"`
+
+### Why
+
+Live resolved decision history is still sparse. Historical replay is planned to accelerate confidence calibration and performance attribution without changing live decision logic.
+
+### Invariants Preserved
+
+- observe-only operation
+- no trading or broker actions
+- no scoring changes
+- no threshold changes
+- no automatic promotion to live policy
+- status is design only, not implemented
+
+### Downstream Impact
+
+- future replay outputs should remain separate or source-aware
+- future calibration, attribution, and triage metrics must distinguish live vs replay results
+- architecture now documents replay as an offline path, not part of the live daily pipeline
+

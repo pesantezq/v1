@@ -143,6 +143,37 @@ Summary JSON fields:
 - `best_decision`
 - `worst_decision`
 
+## Live vs Historical Replay
+
+Planned replay calibration should extend the feedback loop, not replace it.
+
+Required source-aware rules:
+
+- live rows stay `source = "live"`
+- replay rows use `source = "historical_replay"`
+- do not blend live and replay outcomes into one metric without source-aware reporting
+
+Why this matters:
+
+- live conditions include real timing, state, and degraded-mode behavior
+- replay conditions are useful, but reconstructed
+- replay can accelerate calibration sooner than waiting for live history alone
+- replay cannot perfectly reproduce live execution conditions
+
+Recommended source-aware analysis:
+
+- `live_hit_rate`
+- `historical_hit_rate`
+- `combined_hit_rate`
+- by decision
+- by strategy
+- by validation status
+- by triage bucket
+
+Guardrail:
+
+- avoid overfitting thresholds or confidence behavior to backtest results alone
+
 ## GUI Integration
 
 The GUI consumes `decision_outcome_summary.json` in the `Decision Performance` section.

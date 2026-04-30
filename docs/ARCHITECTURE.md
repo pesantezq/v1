@@ -81,6 +81,7 @@ System boundaries:
 - rules-first decision generation
 - AI is limited to explanation and validation only
 - feedback loop is a learning layer, not an execution layer
+- offline replay is evaluation only, not execution
 
 AI Explanation Layer flow:
 
@@ -116,6 +117,22 @@ outputs/latest/decision_plan.json
     -> outputs/policy/decision_outcome_summary.md
     -> GUI "Decision Performance" section
 ```
+
+Offline Historical Replay / Backtest Calibration flow (planned):
+
+```text
+FMP historical prices
+    -> portfolio_automation/historical_decision_replay.py
+    -> historical decision_outcomes
+    -> calibration / attribution summaries
+```
+
+Offline replay boundaries:
+
+- separate from the daily live pipeline
+- source-tagged
+- observe-only
+- used to evaluate reliability, not execute trades
 
 Daily memo consumption flow:
 
@@ -337,6 +354,7 @@ Architectural role:
 - supports hit rate, average return, and direction-correct measurement
 - does not feed back into same-run decisions
 - enables later calibration and optimization work
+- planned historical replay should remain an offline extension of this layer, not part of the live daily path
 
 ## Daily Memo Integration
 
