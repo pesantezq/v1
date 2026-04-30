@@ -273,14 +273,39 @@ See `docs/CONFIDENCE_CALIBRATION.md`.
 
 ---
 
+## Run Mode Governance / Operating Mode Separation (Complete)
+
+Centralized run-mode governance added at `portfolio_automation/run_mode_governance.py`.
+
+Two-lane operating model enforced:
+- **Official Lane**: `DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW` — write `outputs/latest/`, `outputs/policy/`, `outputs/portfolio/`
+- **Research Lane**: `DISCOVERY`, `BACKTEST`, `HISTORICAL_REPLAY` — sandbox/simulation only
+
+Key additions:
+- `RunMode` enum with 6 canonical modes
+- `RunModePolicy` dataclass (frozen) — per-mode permission set
+- `RunModeContext` dataclass — active mode + resolved policy + approval state
+- `RunModeViolation` exception
+- `normalize_run_mode()` — canonical + legacy alias resolution (`weekly` → WEEKLY_REVIEW, `monthly` → WEEKLY_REVIEW)
+- `validate_output_write()` — soft namespace permission check (returns bool)
+- `assert_can_write_namespace()` — hard namespace enforcement (raises)
+- `assert_can_update_portfolio_state()` — approval-gated portfolio mutation guard
+- `assert_can_update_watchlist()` — approval-gated watchlist mutation guard
+- `assert_can_emit_recommendation()` — recommendation emission guard
+- `is_official_mode()` / `is_research_only_mode()` — lane detection
+- `create_run_mode_context()` — convenience factory
+- `can_execute_trades=False` enforced for every mode
+- Non-blocking integration in `main.py` — normalizes + logs active mode and lane
+
+Artifacts: no output files (pure in-memory governance layer)
+Tests: `tests/test_run_mode_governance.py` — 132 passed
+Docs: `docs/RUN_MODE_GOVERNANCE.md`
+
+No live scoring, allocation, recommendation, or output schema changed.
+
+---
+
 ## Post-Phase-0 Next Steps
-
-### Run-Mode Governance / Operating-Mode Separation
-
-- Separate live daily, replay, calibration, and research operating modes more explicitly
-- Keep observe-only guarantees visible at the run-mode boundary
-- Prevent future replay or discovery work from drifting into live decision semantics
-- Keep this step ahead of Discovery Engine implementation
 
 ### Discovery Engine Foundation
 

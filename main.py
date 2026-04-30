@@ -2628,6 +2628,27 @@ def main() -> int:
     logger.info(f"PORTFOLIO AUTOMATION SYSTEM  [run_mode={args.run_mode}]")
     logger.info("=" * 60)
 
+    # ── Run mode governance — normalize and log active mode (non-blocking) ────
+    try:
+        from portfolio_automation.run_mode_governance import (
+            normalize_run_mode as _normalize_run_mode,
+            create_run_mode_context as _create_run_mode_context,
+            is_official_mode as _is_official_mode,
+        )
+        _active_run_mode = _normalize_run_mode(args.run_mode)
+        _run_mode_ctx = _create_run_mode_context(_active_run_mode)
+        logger.info(
+            "RUN MODE GOVERNANCE: mode=%s lane=%s "
+            "can_write_latest=%s can_emit_recommendations=%s can_execute_trades=%s",
+            _active_run_mode.value,
+            "official" if _is_official_mode(_active_run_mode) else "research",
+            _run_mode_ctx.policy.can_write_latest,
+            _run_mode_ctx.policy.can_emit_recommendations,
+            _run_mode_ctx.policy.can_execute_trades,
+        )
+    except Exception as _rmg_err:
+        logger.debug("Run mode governance logging skipped (non-fatal): %s", _rmg_err)
+
     # ── Run lock: exit cleanly if another run is already in progress ──────────
     lock_file = Path("data/run.lock")
     if not acquire_run_lock(lock_file):

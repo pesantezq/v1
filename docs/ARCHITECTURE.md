@@ -2,6 +2,23 @@
 
 Last verified against code on 2026-04-30.
 
+## Run Mode Governance
+
+`portfolio_automation/run_mode_governance.py` centralizes run-mode declarations
+and enforces a two-lane operating boundary:
+
+- **Official Lane** (`DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW`) — produces
+  authoritative portfolio artifacts; writes to `outputs/latest/`, `outputs/policy/`,
+  and `outputs/portfolio/`.
+- **Research Lane** (`DISCOVERY`, `BACKTEST`, `HISTORICAL_REPLAY`) — sandbox/
+  simulation only; never writes official outputs, never emits official recommendations.
+
+`can_execute_trades` is `False` for every mode — the system is advisory-only.
+`MANUAL_UPDATE` requires `approved=True` to mutate official portfolio state or watchlists.
+Legacy CLI aliases `weekly` and `monthly` both map to `WEEKLY_REVIEW`.
+
+See `docs/RUN_MODE_GOVERNANCE.md`.
+
 ## Agent Orchestration Layer
 
 A repo-native orchestration structure is in `.agent/`, `CLAUDE.md`, `AGENTS.md`,

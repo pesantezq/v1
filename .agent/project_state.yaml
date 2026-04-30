@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: run_mode_governance_operating_mode_separation
+current_step: discovery_engine_foundation
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -24,12 +24,32 @@ completed_steps:
   - phase_0_ai_cost_budget_wrapper
   - agent_orchestration_layer
   - confidence_calibration_feedback_loop
+  - run_mode_governance_operating_mode_separation
 
 next_official_step:
-  primary: run_mode_governance_operating_mode_separation
+  primary: discovery_engine_foundation
   secondary:
     - gui_data_quality_and_ai_budget_panels
     - instrument_ai_call_sites
+
+# ---------------------------------------------------------------------------
+# Two-lane operating model (added by run_mode_governance step)
+# ---------------------------------------------------------------------------
+
+two_lane_operating_model:
+  official_lane:
+    modes: [daily, manual_update, weekly_review]
+    description: Produces authoritative portfolio artifacts
+    allowed_namespaces: [latest, policy, portfolio, user]
+  research_lane:
+    modes: [discovery, backtest, historical_replay]
+    description: Sandbox/simulation only — never official artifacts
+    allowed_namespaces: [sandbox, historical/backtest]
+  invariants:
+    - can_execute_trades_is_always_false
+    - manual_update_requires_approved_true_for_state_mutations
+    - discovery_cannot_write_latest_or_emit_recommendations
+    - backtest_and_historical_replay_write_backtest_namespace_only
 
 deferred_steps:
   - auto_trading

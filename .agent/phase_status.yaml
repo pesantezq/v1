@@ -94,10 +94,17 @@ post_phase_0:
     tests: 72 passing
 
   run_mode_governance_operating_mode_separation:
-    status: not_started
+    status: complete
     priority: high
-    description: Separate run-mode governance and operating-mode boundaries for live, replay, calibration, and research paths
+    description: Two-lane run-mode governance with 6 canonical modes, namespace permission enforcement, and approval gates
     prerequisite: confidence_calibration_feedback_loop_complete
+    files:
+      - portfolio_automation/run_mode_governance.py
+      - tests/test_run_mode_governance.py
+      - docs/RUN_MODE_GOVERNANCE.md
+      - docs/ARCHITECTURE.md
+      - docs/roadmap.md
+    tests: 132 passed
 
   discovery_engine_foundation:
     status: not_started
