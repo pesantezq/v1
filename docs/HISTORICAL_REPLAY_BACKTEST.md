@@ -1,14 +1,17 @@
 # Historical Replay / Backtest Calibration
 
-Design status: planned only. Not implemented as of 2026-04-30.
+Implementation status: **v1 implemented as of 2026-04-30**.
 
 ## Purpose
 
-Accelerate calibration and attribution when live resolved decision history is still sparse.
+Accelerate confidence calibration and performance attribution when live resolved
+decision history is still sparse (< 20 resolved decisions).
 
 ## What This Is
 
-An offline historical replay path that uses approved FMP historical end-of-day data to reconstruct prior decision dates, replay the existing decision logic, and generate source-tagged historical outcome records for evaluation.
+An offline historical replay path that uses approved FMP historical end-of-day
+data to generate proxy decision rows, resolve outcomes across 1d/3d/7d windows,
+and produce source-tagged historical calibration and attribution reports.
 
 ## What This Is Not
 
@@ -18,130 +21,151 @@ An offline historical replay path that uses approved FMP historical end-of-day d
 - not blind ML training
 - not automatic policy promotion
 - not a replacement for live outcome history
+- not the live decision engine — v1 uses a proxy momentum rule, not exact replay
 
-## Why This Exists
+## Subsystem Location
 
-Current live history is still limited. Confidence calibration, decision performance attribution, and triage analysis need at least 20 resolved decisions before they become directionally useful.
+```
+portfolio_automation/historical_replay/
+    __init__.py
+    replay_data_loader.py        — universe loading + FMP price normalization
+    replay_decision_simulator.py — momentum proxy decision generation
+    replay_outcome_resolver.py   — forward-price outcome resolution
+    replay_reports.py            — calibration + attribution JSON/MD writers
+    replay_runner.py             — CLI orchestrator
+```
 
-Historical replay is intended to:
+## CLI Usage
 
-- accelerate confidence calibration
-- accelerate performance attribution
-- give future agents a larger evaluation sample
-- stay strictly downstream from live decision generation
+```bash
+# Full 90-day replay for config holdings
+python -m portfolio_automation.historical_replay.replay_runner --days 90
 
-## Proposed Module
+# Dry run (no files written)
+python -m portfolio_automation.historical_replay.replay_runner --days 90 --dry-run
 
-- `portfolio_automation/historical_decision_replay.py`
-
-Expected role:
-
-- offline only
-- deterministic only
-- no LLM calls
-- no trading or broker actions
-- no scoring changes
-- no threshold changes
-
-## Data Sources
-
-Approved initial data source:
-
-- FMP stable historical EOD prices via the approved historical EOD endpoint
-
-Initial replay universe:
-
-- current holdings
-- active watchlist universe
-
-Initial data constraints:
-
-- end-of-day only
-- no premium endpoints unless explicitly enabled and documented
-- no intraday assumptions
+# Override symbols and output directory
+python -m portfolio_automation.historical_replay.replay_runner \
+    --days 90 \
+    --symbols AAPL,MSFT,NVDA \
+    --output-dir outputs/backtest \
+    --window-days 1,3,7
+```
 
 ## Replay Flow
 
 ```text
-FMP historical EOD prices
-    -> reconstruct past scanner inputs
-    -> replay decision logic for historical dates
-    -> generate historical decision rows
-    -> resolve 1d / 3d / 7d outcomes
-    -> write backtest-tagged decision outcome records
-    -> feed calibration / attribution summaries
+FMP stable historical EOD prices
+    -> replay_data_loader.py (normalize, oldest-first)
+    -> replay_decision_simulator.py (proxy momentum rule)
+    -> replay_outcome_resolver.py (resolve 1d/3d/7d forward)
+    -> outputs/backtest/decision_outcomes_historical.jsonl
+    -> replay_reports.py
+    -> outputs/backtest/historical_calibration.json + .md
+    -> outputs/backtest/historical_performance_attribution.json + .md
 ```
-
-Required source flags:
-
-- live rows must remain `source = "live"`
-- replay rows must use `source = "historical_replay"`
 
 ## Output Artifacts
 
-Recommended replay artifacts:
+All replay outputs write to `outputs/backtest/`, never `outputs/policy/`:
 
-- `outputs/policy/historical_decision_outcomes.jsonl`
-- `outputs/policy/historical_decision_outcome_summary.json`
-- `outputs/policy/historical_decision_outcome_summary.md`
+| File | Description |
+|------|-------------|
+| `outputs/backtest/decision_outcomes_historical.jsonl` | All replay decision rows (source="historical_replay") |
+| `outputs/backtest/historical_calibration.json` | Hit-rate and return by confidence bucket, decision type, strategy |
+| `outputs/backtest/historical_calibration.md` | Human-readable calibration report |
+| `outputs/backtest/historical_performance_attribution.json` | Overall attribution + best/worst decisions |
+| `outputs/backtest/historical_performance_attribution.md` | Human-readable attribution report |
 
-Downstream summaries that should become source-aware:
+## Source Tagging
 
-- `outputs/policy/confidence_calibration.json`
-- `outputs/policy/decision_performance_attribution.json`
-- `outputs/policy/decision_triage.json`
+Live and replay rows are always separated by their `source` field:
 
-Recommended source-aware metrics:
+| Source | File | Written by |
+|--------|------|------------|
+| `"live"` | `outputs/policy/decision_outcomes.jsonl` | decision_outcome_tracker.py |
+| `"historical_replay"` | `outputs/backtest/decision_outcomes_historical.jsonl` | replay_runner.py |
 
-- `live_hit_rate`
-- `historical_hit_rate`
-- `combined_hit_rate`
-- `by_decision`
-- `by_strategy`
-- `by_validation_status`
-- `by_triage_bucket`
+Reports must never silently mix live and replay metrics.
 
-## Separation From Live History
+## Proxy Decision Rules (v1)
 
-Live and replay rows must not be mixed blindly.
+The v1 simulator uses a simple deterministic momentum rule.
+This is NOT the live decision engine.
 
-Required rules:
+```
+5d_return = (close[i] - close[i-5]) / close[i-5]
+sma20     = average(close[i-19 : i+1])
 
-- keep live and replay rows source-tagged
-- do not overwrite live `decision_outcomes.jsonl`
-- do not publish combined metrics without explicit source-aware breakdowns
-- treat live metrics as the primary production signal
-- treat replay metrics as calibration support only
+if 5d_return > +3% and close > sma20   → BUY
+if 5d_return < -3% and is_holding      → SELL
+if 5d_return < -3% and not is_holding  → WAIT
+else                                    → WAIT
+```
+
+Each row includes `lookback_features` with `return_5d`, `sma20`, `above_sma20`.
+
+## Outcome Resolution
+
+Outcomes are resolved using the longest available forward window:
+
+- Prefer 7d → fallback to 3d → fallback to 1d
+- `BUY` / `SCALE`: correct when forward return > 0
+- `SELL` / `AVOID`: correct when forward return < 0
+- `WAIT`: correct when `abs(forward_return) < 3%`
+- `HOLD`: neutral, excluded from hit-rate
+
+## FMP Endpoint Usage
+
+Uses only the approved stable historical EOD endpoint:
+
+- `FMPClient.get_historical_prices(symbol, years=N)` →
+  `stable/historical-price-eod/full?symbol=X&from=YYYY-MM-DD`
+- No premium endpoints
+- Respects existing FMPClient caching and budget guardrails
 
 ## Safety Rules
 
 - observe-only only
-- replay is offline only
+- replay is offline only; never called from `main.py`
 - no execution behavior
 - no policy auto-promotion from replay results
 - no scoring changes inside replay
 - no threshold tuning during replay generation
-- no backtest result should silently alter live recommendation behavior
+- no backtest result silently alters live recommendation behavior
+- `outputs/policy/decision_outcomes.jsonl` is never read or modified
 
-## Initial Implementation Scope
+## Tests
 
-- 90 trading days
-- holdings + active watchlist universe
-- FMP historical EOD only
+```bash
+pytest -q tests/test_historical_replay.py
+```
+
+37 tests covering:
+- source tag integrity
+- live JSONL isolation
+- output path separation
+- missing data graceful handling
+- BUY / SELL / WAIT momentum signal generation
+- 1d / 3d / 7d resolution windows
+- WAIT threshold logic
+- markdown rendering
+- CLI dry-run no-write guarantee
 - no LLM calls
-- no broker actions
-- no scoring changes
-- no threshold changes
-- no automatic promotion to live policy
+- no premium FMP endpoint calls
+
+## Limitations (v1)
+
+- Proxy momentum rule does not replicate live decision engine logic
+- No FMP api fetch quality differences vs live (caching may differ)
+- Calendar-day offset for forward resolution (not strict trading-day offset)
+- No GUI integration in v1
 
 ## Future Extensions
 
-- longer replay windows after the 90-day baseline
-- source-aware comparison of live vs replay calibration quality
-- strategy-specific replay slices
-- replay-aware attribution by validation status and triage bucket
-- explicit operator reports showing where replay and live outcomes diverge
-
-## Next Implementation Step
-
-Implement `portfolio_automation/historical_decision_replay.py` as a fully offline writer of source-tagged replay artifacts without changing the live daily pipeline.
+- GUI read-only integration under a "Backtest" tab
+- Source-aware comparison view: live hit-rate vs historical hit-rate
+- Longer replay windows (180d, 1y)
+- Strategy-specific replay slices
+- Replay-aware attribution by validation status and triage bucket
+- Operator reports showing live vs replay divergence

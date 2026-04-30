@@ -16,18 +16,21 @@ The daily scanner path must continue to use approved stable endpoints only.
 
 ## Historical Replay Rule
 
-Planned historical replay should use the approved stable historical EOD endpoint only.
+Historical Replay v1 is implemented. It uses only the approved stable historical EOD endpoint.
 
-Expected endpoint family:
+Approved endpoint:
 
-- stable historical EOD endpoint used by current FMP policy for end-of-day price history
+- `FMPClient.get_historical_prices(symbol, years=N)` →
+  `stable/historical-price-eod/full?symbol=X&from=YYYY-MM-DD`
+- Registered in `fmp_endpoint_registry.py` as `historical_prices` (P0, Starter-plan safe)
 
-Historical replay constraints:
+Historical replay constraints (enforced):
 
-- no premium endpoints unless explicitly enabled and documented
+- no premium endpoints
 - no ad hoc endpoint additions
 - no bypassing `fmp_endpoint_registry.py`
-- no live-vs-replay endpoint drift without documentation
+- uses existing FMPClient caching and budget guardrails
+- replay runs offline and separately from the daily live pipeline
 
 ## Registry Rule
 
@@ -59,6 +62,7 @@ Recommended operational rule:
 - no undocumented fallback endpoint
 - no endpoint changes that silently change scanner or replay semantics
 
-## Next Implementation Step
+## Implementation Status
 
-When `portfolio_automation/historical_decision_replay.py` is implemented, document its exact approved endpoint usage here and in `docs/DATA_AND_FMP_ENDPOINTS.md` in the same change.
+Historical Replay v1 is implemented at `portfolio_automation/historical_replay/`.
+Endpoint usage is documented above and consistent with the registry.

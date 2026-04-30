@@ -1,17 +1,19 @@
 # Architecture
 
-Last verified against code on 2026-04-29.
+Last verified against code on 2026-04-30.
 
 ## Purpose
 
 This repository is an advisory-only portfolio analysis system. It produces rankings, alerts, sizing suggestions, policy recommendations, evaluation artifacts, and GUI-ready outputs. It does not place trades or invoke any broker API.
 
-Two analysis paths are active:
+Three analysis paths are active:
 
 1. `watchlist_scanner/*`
    Produces watchlist alerts, conviction/sizing overlays, portfolio-construction previews, regime summaries, and performance feedback.
 2. `main.py` + `scanner/candidate_scanner.py` + `digest_builder.py`
    Produces portfolio snapshots, scored finance recommendations, broader-market candidate outputs, policy evaluation inputs, and human/AI memo artifacts.
+3. `portfolio_automation/historical_replay/*` (offline, operator-triggered)
+   Produces source-tagged historical replay decisions, outcome resolution, and calibration/attribution reports under `outputs/backtest/`. Never called from `main.py`.
 
 Decision Engine status:
 
@@ -118,14 +120,26 @@ outputs/latest/decision_plan.json
     -> GUI "Decision Performance" section
 ```
 
-Offline Historical Replay / Backtest Calibration flow (planned):
+Offline Historical Replay / Backtest Calibration flow (implemented v1):
 
 ```text
-FMP historical prices
-    -> portfolio_automation/historical_decision_replay.py
-    -> historical decision_outcomes
-    -> calibration / attribution summaries
+FMP stable historical EOD prices
+    -> portfolio_automation/historical_replay/replay_data_loader.py
+    -> portfolio_automation/historical_replay/replay_decision_simulator.py
+    -> portfolio_automation/historical_replay/replay_outcome_resolver.py
+    -> outputs/backtest/decision_outcomes_historical.jsonl  (source="historical_replay")
+    -> portfolio_automation/historical_replay/replay_reports.py
+    -> outputs/backtest/historical_calibration.json + .md
+    -> outputs/backtest/historical_performance_attribution.json + .md
 ```
+
+Offline replay boundaries:
+
+- separate from the daily live pipeline (never called from main.py)
+- operator-triggered via CLI only
+- source-tagged: all rows carry source="historical_replay"
+- observe-only; no policy auto-promotion
+- outputs/policy/decision_outcomes.jsonl is never read or modified
 
 Offline replay boundaries:
 
@@ -483,4 +497,4 @@ These boundaries are intentional and should not be collapsed:
 
 ## Next Implementation Step
 
-Decision Engine, GUI Decision Center v1, and the AI Explanation Layer are now live. The next step is to decide which downstream surface should consume `decision_explanations.*` first while preserving read-only, artifact-driven behavior.
+All advisory layers, the GUI Decision Center v1, and Historical Replay v1 are now live. Potential next steps: GUI read-only integration of `outputs/backtest/` under a Backtest tab, or source-aware comparison of live vs historical hit-rates in the calibration report.

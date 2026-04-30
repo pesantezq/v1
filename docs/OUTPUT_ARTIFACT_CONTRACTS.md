@@ -1,6 +1,6 @@
 # Output Artifact Contracts
 
-Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, and `portfolio_automation/decision_outcome_tracker.py`.
+Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, and `portfolio_automation/historical_replay/replay_reports.py`.
 
 ## Contract Policy
 
@@ -561,3 +561,67 @@ Required top-level fields:
 - Keep old fields intact.
 - Document meaning changes explicitly.
 - Update GUI/tests in the same change if a consumer depends on new fields.
+
+## Backtest / Historical Replay Artifacts
+
+All replay artifacts are written to `outputs/backtest/` only. They are produced by
+`portfolio_automation/historical_replay/replay_runner.py` and never mixed into
+the live `outputs/policy/` directory.
+
+### `outputs/backtest/decision_outcomes_historical.jsonl`
+
+JSONL; one row per replay decision. All rows have `source="historical_replay"`.
+
+Required row fields:
+
+- `source` — always `"historical_replay"`
+- `run_id` — `"historical_YYYY-MM-DD"`
+- `date` — ISO date of simulated decision
+- `symbol`
+- `decision` — `BUY | SELL | WAIT | HOLD | SCALE | AVOID`
+- `strategy` — `"historical_momentum_proxy"` in v1
+- `band` — `"replay"` in v1
+- `confidence` — float 0–1
+- `price_at_decision` — float
+- `priority` — float (0.0 in v1)
+- `validation_status` — `"historical_replay"` in v1
+- `reason` — plain-text explanation
+- `lookback_features` — `{return_5d, sma20, above_sma20}`
+- `resolved` — bool
+- `resolved_at` — ISO date or null
+- `days_elapsed` — int or null
+- `price_at_resolution` — float or null
+- `return_pct` — float or null
+- `direction_correct` — bool or null
+- `window_days` — 1 | 3 | 7 or null
+- `outcome_price` — float or null
+
+### `outputs/backtest/historical_calibration.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `source` — `"historical_replay"`
+- `observe_only` — always `true`
+- `total_resolved`
+- `overall_hit_rate`
+- `overall_avg_return`
+- `by_confidence_bucket` — `{low, medium, high, unknown}` each with `{count, hit_rate, avg_return}`
+- `by_decision` — keyed by decision type
+- `by_strategy` — keyed by strategy name
+
+### `outputs/backtest/historical_performance_attribution.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `source` — `"historical_replay"`
+- `observe_only` — always `true`
+- `total_decisions`
+- `resolved_decisions`
+- `hit_rate`
+- `avg_return`
+- `by_decision`
+- `by_strategy`
+- `best_decision` — `{symbol, date, decision, return_pct, direction_correct}` or null
+- `worst_decision` — same shape or null

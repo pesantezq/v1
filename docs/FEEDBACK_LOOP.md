@@ -145,7 +145,7 @@ Summary JSON fields:
 
 ## Live vs Historical Replay
 
-Planned replay calibration should extend the feedback loop, not replace it.
+Historical Replay v1 is implemented and extends the feedback loop without replacing it.
 
 Required source-aware rules:
 
@@ -211,6 +211,18 @@ None of that changes the live advisory decision path today.
 - no same-run feedback into ranking or allocation
 - tracker failure is non-fatal
 
-## Next Implementation Step
+## Historical Replay Subsystem
 
-Use the tracked outcome history for later calibration and optimization work, but keep the feedback loop analytically downstream from live decision generation.
+Historical Replay v1 is implemented at `portfolio_automation/historical_replay/`.
+
+It runs offline (operator-triggered, never from `main.py`) and writes to
+`outputs/backtest/`, not `outputs/policy/`.
+
+Source separation:
+
+| Source | File | Written by |
+|--------|------|------------|
+| `"live"` | `outputs/policy/decision_outcomes.jsonl` | decision_outcome_tracker.py |
+| `"historical_replay"` | `outputs/backtest/decision_outcomes_historical.jsonl` | replay_runner.py |
+
+See `docs/HISTORICAL_REPLAY_BACKTEST.md` for full documentation.
