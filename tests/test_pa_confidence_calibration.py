@@ -17,8 +17,23 @@ from portfolio_automation.confidence_calibration import (
     CALIBRATION_MD_RELATIVE_PATH,
     CONF_LOW_MAX,
     CONF_MED_MAX,
+    CONFIDENCE_BUCKETS_5,
+    LATEST_CALIBRATION_JSON_RELATIVE_PATH,
+    LATEST_CALIBRATION_MD_RELATIVE_PATH,
     MIN_RESOLVED_ROWS,
     OUTCOMES_JSONL_RELATIVE_PATH,
+    _OVERCONFIDENT_GAP,
+    _UNDERCONFIDENT_GAP,
+    _MIN_SIGNAL_RESOLVED,
+    CalibrationBucket,
+    ConfidenceCalibrationSummary,
+    SignalCalibrationResult,
+    _compute_bucket_5,
+    _compute_calibration_buckets_5,
+    _compute_signal_result,
+    _extract_dq_context,
+    _normalize_confidence,
+    _summary_to_dict,
     _confidence_bucket,
     _group_stats,
     build_calibration,
@@ -26,9 +41,13 @@ from portfolio_automation.confidence_calibration import (
     compute_decision_analysis,
     compute_validation_analysis,
     compute_overall,
+    evaluate_confidence_calibration,
     generate_insights,
+    load_data_quality_report,
+    load_decision_outcomes,
     render_calibration_md,
     run_calibration,
+    write_confidence_calibration_report,
 )
 from gui_operator_data import load_confidence_calibration
 
@@ -654,3 +673,466 @@ class TestGuiDataLayer:
             run_calibration(tmp)
             result = load_confidence_calibration(tmp)
             assert result["insufficient_data"] is True
+
+
+# ---------------------------------------------------------------------------
+# Class 12: _normalize_confidence
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeConfidence:
+    def test_value_below_one_unchanged(self):
+        assert _normalize_confidence(0.75) == pytest.approx(0.75)
+
+    def test_value_at_one_unchanged(self):
+        assert _normalize_confidence(1.0) == pytest.approx(1.0)
+
+    def test_value_above_one_divided_by_100(self):
+        assert _normalize_confidence(75.0) == pytest.approx(0.75)
+
+    def test_zero_unchanged(self):
+        assert _normalize_confidence(0.0) == pytest.approx(0.0)
+
+    def test_100_becomes_one(self):
+        assert _normalize_confidence(100.0) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Class 13: 5-bucket assignment
+# ---------------------------------------------------------------------------
+
+
+class TestBucket5Assignment:
+    def test_very_low_at_zero(self):
+        assert _compute_bucket_5(0.0) == "very_low"
+
+    def test_very_low_just_below_0_25(self):
+        assert _compute_bucket_5(0.249) == "very_low"
+
+    def test_low_at_0_25(self):
+        assert _compute_bucket_5(0.25) == "low"
+
+    def test_low_just_below_0_50(self):
+        assert _compute_bucket_5(0.499) == "low"
+
+    def test_medium_at_0_50(self):
+        assert _compute_bucket_5(0.50) == "medium"
+
+    def test_medium_just_below_0_70(self):
+        assert _compute_bucket_5(0.699) == "medium"
+
+    def test_high_at_0_70(self):
+        assert _compute_bucket_5(0.70) == "high"
+
+    def test_high_just_below_0_85(self):
+        assert _compute_bucket_5(0.849) == "high"
+
+    def test_very_high_at_0_85(self):
+        assert _compute_bucket_5(0.85) == "very_high"
+
+    def test_very_high_at_one(self):
+        assert _compute_bucket_5(1.0) == "very_high"
+
+    def test_none_returns_unknown(self):
+        assert _compute_bucket_5(None) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Class 14: load_decision_outcomes / load_data_quality_report
+# ---------------------------------------------------------------------------
+
+
+class TestLoaders:
+    def test_load_decision_outcomes_empty_when_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = load_decision_outcomes(Path(td))
+            assert result == []
+
+    def test_load_decision_outcomes_returns_all_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            rows = _make_rows(10) + [_unresolved_row()]
+            _write_jsonl(tmp, rows)
+            result = load_decision_outcomes(tmp)
+            assert len(result) == 11
+
+    def test_load_data_quality_report_empty_when_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            assert load_data_quality_report(Path(td)) == {}
+
+    def test_load_data_quality_report_returns_dict(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = tmp / "outputs" / "latest"
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "data_quality_report.json").write_text(
+                json.dumps({"issues": [], "degraded_mode": False}), encoding="utf-8"
+            )
+            result = load_data_quality_report(tmp)
+            assert isinstance(result, dict)
+            assert "issues" in result
+
+    def test_load_data_quality_report_empty_on_malformed_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = tmp / "outputs" / "latest"
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "data_quality_report.json").write_text("{bad}", encoding="utf-8")
+            assert load_data_quality_report(tmp) == {}
+
+    def test_load_data_quality_report_empty_on_non_dict(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = tmp / "outputs" / "latest"
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "data_quality_report.json").write_text("[]", encoding="utf-8")
+            assert load_data_quality_report(tmp) == {}
+
+
+# ---------------------------------------------------------------------------
+# Class 15: evaluate_confidence_calibration
+# ---------------------------------------------------------------------------
+
+
+def _resolved_row_with_source(
+    source: str = "MOMENTUM_SIGNAL",
+    confidence: float = 0.80,
+    direction_correct: bool | None = True,
+) -> dict[str, Any]:
+    return {
+        "decision": "BUY",
+        "confidence": confidence,
+        "validation_status": "aligned",
+        "return_pct": 0.05,
+        "direction_correct": direction_correct,
+        "source": source,
+        "resolved": True,
+    }
+
+
+def _make_rows_with_source(n: int, source: str, **kwargs) -> list[dict[str, Any]]:
+    return [_resolved_row_with_source(source=source, **kwargs) for _ in range(n)]
+
+
+class TestEvaluateConfidenceCalibration:
+    def test_insufficient_data_returns_available_true(self):
+        summary = evaluate_confidence_calibration([])
+        assert summary.available is True
+        assert summary.insufficient_data is True
+        assert summary.observe_only is True
+
+    def test_insufficient_data_below_min(self):
+        rows = [_resolved_row() for _ in range(5)]
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.insufficient_data is True
+        assert "5" in summary.summary_line
+
+    def test_sufficient_data_available_not_insufficient(self):
+        rows = _sufficient_dataset()
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.available is True
+        assert summary.insufficient_data is False
+
+    def test_observe_only_always_true(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        assert summary.observe_only is True
+
+    def test_total_resolved_count(self):
+        rows = _sufficient_dataset()
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.total_resolved == len(rows)
+
+    def test_overall_hit_rate_computed(self):
+        rows = _make_rows(20, direction_correct=True)
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.overall_hit_rate == pytest.approx(1.0)
+
+    def test_overall_calibration_gap_computed(self):
+        rows = _make_rows(20, confidence=0.90, direction_correct=True)
+        summary = evaluate_confidence_calibration(rows)
+        # avg_conf=0.90, hit_rate=1.0 → gap = 0.90 - 1.0 = -0.10
+        assert summary.overall_calibration_gap is not None
+        assert abs(summary.overall_calibration_gap - (-0.10)) < 0.01
+
+    def test_five_buckets_returned(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        assert len(summary.buckets_5) == 5
+
+    def test_bucket_labels_match_constants(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        labels = [b.label for b in summary.buckets_5]
+        for label, _, _ in CONFIDENCE_BUCKETS_5:
+            assert label in labels
+
+    def test_overconfident_signal_result(self):
+        from unittest.mock import MagicMock
+        mock_registry = MagicMock()
+        mock_registry.validate_signal_id.return_value = True
+        mock_registry.is_discovery_only.return_value = False
+
+        rows = _make_rows_with_source(20, source="SIG_A", confidence=0.95, direction_correct=False)
+        summary = evaluate_confidence_calibration(
+            rows, registry=mock_registry, min_resolved=10, min_signal_resolved=5
+        )
+        sig = next((s for s in summary.signal_results if s.signal_id == "SIG_A"), None)
+        assert sig is not None
+        assert sig.overconfident is True
+        assert sig.suggested_review is True
+
+    def test_underconfident_signal_result(self):
+        from unittest.mock import MagicMock
+        mock_registry = MagicMock()
+        mock_registry.validate_signal_id.return_value = True
+        mock_registry.is_discovery_only.return_value = False
+
+        rows = _make_rows_with_source(20, source="SIG_B", confidence=0.10, direction_correct=True)
+        summary = evaluate_confidence_calibration(
+            rows, registry=mock_registry, min_resolved=10, min_signal_resolved=5
+        )
+        sig = next((s for s in summary.signal_results if s.signal_id == "SIG_B"), None)
+        assert sig is not None
+        assert sig.underconfident is True
+        assert sig.suggested_review is True
+
+    def test_discovery_only_signal_no_suggested_review(self):
+        from unittest.mock import MagicMock
+        mock_registry = MagicMock()
+        mock_registry.validate_signal_id.return_value = True
+        mock_registry.is_discovery_only.return_value = True
+
+        rows = _make_rows_with_source(20, source="DISCOVERY_SIG", confidence=0.95, direction_correct=False)
+        summary = evaluate_confidence_calibration(
+            rows, registry=mock_registry, min_resolved=10, min_signal_resolved=5
+        )
+        sig = next((s for s in summary.signal_results if s.signal_id == "DISCOVERY_SIG"), None)
+        assert sig is not None
+        assert sig.discovery_only is True
+        assert sig.suggested_review is False
+
+    def test_unknown_signal_treated_as_discovery_only(self):
+        rows = _make_rows_with_source(20, source="UNKNOWN_SIG", confidence=0.95, direction_correct=False)
+        summary = evaluate_confidence_calibration(
+            rows, registry=None, min_resolved=10, min_signal_resolved=5
+        )
+        sig = next((s for s in summary.signal_results if s.signal_id == "UNKNOWN_SIG"), None)
+        assert sig is not None
+        assert sig.discovery_only is True
+        assert sig.suggested_review is False
+
+    def test_signals_below_min_resolved_excluded(self):
+        rows = _make_rows_with_source(3, source="RARE_SIG")
+        extra = _make_rows(17)
+        summary = evaluate_confidence_calibration(
+            rows + extra, min_resolved=15, min_signal_resolved=5
+        )
+        assert not any(s.signal_id == "RARE_SIG" for s in summary.signal_results)
+
+    def test_dq_warnings_included_from_report(self):
+        dq = {"issues": [{"severity": "warning", "message": "Stale price detected"}]}
+        summary = evaluate_confidence_calibration(
+            _sufficient_dataset(), dq_report=dq
+        )
+        assert any("Stale" in w for w in summary.dq_warnings)
+
+    def test_dq_warnings_empty_without_report(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        assert summary.dq_warnings == []
+
+    def test_summary_line_contains_count(self):
+        rows = _sufficient_dataset()
+        summary = evaluate_confidence_calibration(rows)
+        assert str(len(rows)) in summary.summary_line
+
+    def test_custom_min_resolved(self):
+        rows = _make_rows(5)
+        summary = evaluate_confidence_calibration(rows, min_resolved=3)
+        assert summary.insufficient_data is False
+
+
+# ---------------------------------------------------------------------------
+# Class 16: _extract_dq_context
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDqContext:
+    def test_empty_report_returns_empty(self):
+        assert _extract_dq_context({}) == []
+
+    def test_critical_issue_included(self):
+        dq = {"issues": [{"severity": "critical", "message": "Missing price"}]}
+        result = _extract_dq_context(dq)
+        assert any("CRITICAL" in w for w in result)
+
+    def test_warning_issue_included(self):
+        dq = {"issues": [{"severity": "warning", "message": "Stale data"}]}
+        result = _extract_dq_context(dq)
+        assert any("WARNING" in w for w in result)
+
+    def test_info_issue_excluded(self):
+        dq = {"issues": [{"severity": "info", "message": "Just info"}]}
+        result = _extract_dq_context(dq)
+        assert result == []
+
+    def test_degraded_mode_adds_warning(self):
+        dq = {"degraded_mode": True, "issues": []}
+        result = _extract_dq_context(dq)
+        assert any("degraded" in w.lower() for w in result)
+
+    def test_capped_at_10(self):
+        issues = [{"severity": "warning", "message": f"issue {i}"} for i in range(15)]
+        result = _extract_dq_context({"issues": issues})
+        assert len(result) <= 10
+
+
+# ---------------------------------------------------------------------------
+# Class 17: _summary_to_dict schema
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryToDict:
+    def _make_summary(self) -> ConfidenceCalibrationSummary:
+        rows = _sufficient_dataset()
+        return evaluate_confidence_calibration(rows)
+
+    def test_required_keys_present(self):
+        d = _summary_to_dict(self._make_summary())
+        required = {
+            "generated_at", "observe_only", "available", "insufficient_data",
+            "total_resolved", "min_required", "overall_hit_rate",
+            "overall_average_confidence", "overall_calibration_gap",
+            "buckets_5", "signal_results", "dq_warnings", "summary_line",
+        }
+        assert required.issubset(set(d.keys()))
+
+    def test_observe_only_true(self):
+        assert _summary_to_dict(self._make_summary())["observe_only"] is True
+
+    def test_buckets_5_is_list(self):
+        assert isinstance(_summary_to_dict(self._make_summary())["buckets_5"], list)
+
+    def test_signal_results_is_list(self):
+        assert isinstance(_summary_to_dict(self._make_summary())["signal_results"], list)
+
+    def test_bucket_has_required_keys(self):
+        d = _summary_to_dict(self._make_summary())
+        if d["buckets_5"]:
+            b = d["buckets_5"][0]
+            assert "label" in b and "count" in b and "hit_rate" in b
+
+    def test_serialisable_to_json(self):
+        d = _summary_to_dict(self._make_summary())
+        assert json.dumps(d)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Class 18: write_confidence_calibration_report — LATEST artifacts
+# ---------------------------------------------------------------------------
+
+
+class TestLatestArtifacts:
+    def test_writes_json_to_latest(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            assert tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).exists()
+
+    def test_writes_md_to_latest(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            assert tmp.joinpath(*LATEST_CALIBRATION_MD_RELATIVE_PATH).exists()
+
+    def test_json_artifact_is_valid(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            data = json.loads(
+                tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).read_text()
+            )
+            assert isinstance(data, dict)
+            assert "buckets_5" in data
+            assert "observe_only" in data
+
+    def test_json_observe_only_true(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            data = json.loads(
+                tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).read_text()
+            )
+            assert data["observe_only"] is True
+
+    def test_md_contains_enhanced_header(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            md = tmp.joinpath(*LATEST_CALIBRATION_MD_RELATIVE_PATH).read_text()
+            assert "Enhanced" in md or "Calibration" in md
+
+    def test_md_ends_with_newline(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            write_confidence_calibration_report(tmp)
+            md = tmp.joinpath(*LATEST_CALIBRATION_MD_RELATIVE_PATH).read_text()
+            assert md.endswith("\n")
+
+    def test_returns_summary_object(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            result = write_confidence_calibration_report(tmp)
+            assert isinstance(result, ConfidenceCalibrationSummary)
+
+    def test_insufficient_data_still_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _make_rows(3))
+            write_confidence_calibration_report(tmp)
+            assert tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).exists()
+
+    def test_missing_outcomes_still_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            summary = write_confidence_calibration_report(Path(td))
+            assert summary.insufficient_data is True
+
+
+# ---------------------------------------------------------------------------
+# Class 19: run_calibration also writes to LATEST
+# ---------------------------------------------------------------------------
+
+
+class TestRunCalibrationLatestWrite:
+    def test_run_calibration_writes_latest_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            run_calibration(tmp)
+            assert tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).exists()
+
+    def test_run_calibration_writes_latest_md(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            run_calibration(tmp)
+            assert tmp.joinpath(*LATEST_CALIBRATION_MD_RELATIVE_PATH).exists()
+
+    def test_run_calibration_still_writes_policy(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            run_calibration(tmp)
+            assert tmp.joinpath(*CALIBRATION_JSON_RELATIVE_PATH).exists()
+            assert tmp.joinpath(*CALIBRATION_MD_RELATIVE_PATH).exists()
+
+    def test_run_calibration_write_false_skips_latest(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _sufficient_dataset())
+            run_calibration(tmp, write_files=False)
+            assert not tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).exists()

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ logger = logging.getLogger("stockbot.portfolio_automation.confidence_calibration
 OUTCOMES_JSONL_RELATIVE_PATH = ("outputs", "policy", "decision_outcomes.jsonl")
 CALIBRATION_JSON_RELATIVE_PATH = ("outputs", "policy", "confidence_calibration.json")
 CALIBRATION_MD_RELATIVE_PATH = ("outputs", "policy", "confidence_calibration.md")
+LATEST_CALIBRATION_JSON_RELATIVE_PATH = ("outputs", "latest", "confidence_calibration.json")
+LATEST_CALIBRATION_MD_RELATIVE_PATH = ("outputs", "latest", "confidence_calibration.md")
+DQ_REPORT_RELATIVE_PATH = ("outputs", "latest", "data_quality_report.json")
 
 # ---------------------------------------------------------------------------
 # Thresholds
@@ -28,6 +32,21 @@ CONF_MED_MAX = 0.7           # [0.4, 0.7)  → medium; [0.7, 1.0] → high
 _CALIBRATED_DELTA = 0.05     # high_hr - low_hr must exceed this to call calibrated
 _PREDICTIVE_DELTA = 0.05     # aligned_hr - caution_hr must exceed this
 _POOR_RATE = 0.40            # below this = poor performance
+
+# Enhanced calibration thresholds
+_OVERCONFIDENT_GAP = 0.15    # avg_confidence - hit_rate > 0.15 → overconfident
+_UNDERCONFIDENT_GAP = -0.15  # avg_confidence - hit_rate < -0.15 → underconfident
+_MIN_SIGNAL_RESOLVED = 5     # min resolved rows per signal to include in per-signal analysis
+
+# 5-bucket system: (label, lower_inclusive, upper_exclusive)
+# Upper bound of very_high is 1.01 so that confidence=1.0 is included
+CONFIDENCE_BUCKETS_5 = (
+    ("very_low",  0.00, 0.25),
+    ("low",       0.25, 0.50),
+    ("medium",    0.50, 0.70),
+    ("high",      0.70, 0.85),
+    ("very_high", 0.85, 1.01),
+)
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -424,7 +443,446 @@ def _safe_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Enhanced calibration dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CalibrationBucket:
+    label: str
+    lower: float
+    upper: float
+    count: int = 0
+    correct: int = 0
+    total_confidence: float = 0.0
+
+    @property
+    def hit_rate(self) -> float | None:
+        return self.correct / self.count if self.count else None
+
+    @property
+    def average_confidence(self) -> float | None:
+        return self.total_confidence / self.count if self.count else None
+
+    @property
+    def calibration_gap(self) -> float | None:
+        ac = self.average_confidence
+        hr = self.hit_rate
+        if ac is None or hr is None:
+            return None
+        return ac - hr
+
+
+@dataclass
+class SignalCalibrationResult:
+    signal_id: str
+    known_in_registry: bool
+    discovery_only: bool
+    count: int
+    hit_rate: float | None
+    average_confidence: float | None
+    calibration_gap: float | None
+    overconfident: bool
+    underconfident: bool
+    suggested_review: bool
+    note: str
+
+
+@dataclass
+class ConfidenceCalibrationSummary:
+    generated_at: str
+    observe_only: bool
+    available: bool
+    insufficient_data: bool
+    total_resolved: int
+    min_required: int
+    overall_hit_rate: float | None
+    overall_average_confidence: float | None
+    overall_calibration_gap: float | None
+    buckets_5: list[CalibrationBucket]
+    signal_results: list[SignalCalibrationResult]
+    dq_warnings: list[str]
+    summary_line: str
+
+
+# ---------------------------------------------------------------------------
+# Enhanced calibration helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_confidence(v: float) -> float:
+    return v / 100.0 if v > 1.0 else v
+
+
+def _compute_bucket_5(confidence: float | None) -> str:
+    if confidence is None:
+        return "unknown"
+    for label, lower, upper in CONFIDENCE_BUCKETS_5:
+        if lower <= confidence < upper:
+            return label
+    return "very_high"  # fallback for conf >= 1.01 edge case
+
+
+def _compute_calibration_buckets_5(rows: list[dict[str, Any]]) -> list[CalibrationBucket]:
+    buckets: dict[str, CalibrationBucket] = {
+        label: CalibrationBucket(label, lower, upper)
+        for label, lower, upper in CONFIDENCE_BUCKETS_5
+    }
+    for row in rows:
+        conf_raw = _safe_float(row.get("confidence"))
+        if conf_raw is None:
+            continue
+        conf = _normalize_confidence(conf_raw)
+        label = _compute_bucket_5(conf)
+        if label not in buckets:
+            continue
+        b = buckets[label]
+        b.count += 1
+        b.total_confidence += conf
+        if row.get("direction_correct") is True:
+            b.correct += 1
+    return list(buckets.values())
+
+
+def _compute_signal_result(
+    signal_id: str,
+    rows: list[dict[str, Any]],
+    registry: Any | None,
+) -> SignalCalibrationResult:
+    known = registry is not None and registry.validate_signal_id(signal_id)
+    discovery_only = (registry is None) or registry.is_discovery_only(signal_id)
+
+    judgeables = [r for r in rows if r.get("direction_correct") is not None]
+    correct = sum(1 for r in judgeables if r.get("direction_correct") is True)
+    hit_rate = correct / len(judgeables) if judgeables else None
+
+    confs = [
+        _normalize_confidence(c)
+        for r in rows
+        if (c := _safe_float(r.get("confidence"))) is not None
+    ]
+    avg_conf = sum(confs) / len(confs) if confs else None
+
+    gap = (avg_conf - hit_rate) if (avg_conf is not None and hit_rate is not None) else None
+
+    overconfident = gap is not None and gap > _OVERCONFIDENT_GAP
+    underconfident = gap is not None and gap < _UNDERCONFIDENT_GAP
+    suggested_review = (not discovery_only) and (overconfident or underconfident)
+
+    if discovery_only:
+        note = "Discovery-only signal: observe mode only, not eligible for tuning."
+    elif overconfident:
+        note = f"Overconfident by {gap:.2f} — consider lowering confidence floor."
+    elif underconfident:
+        note = f"Underconfident by {abs(gap):.2f} — consider raising confidence floor."
+    else:
+        note = "Within calibration tolerance."
+
+    return SignalCalibrationResult(
+        signal_id=signal_id,
+        known_in_registry=known,
+        discovery_only=discovery_only,
+        count=len(rows),
+        hit_rate=hit_rate,
+        average_confidence=avg_conf,
+        calibration_gap=gap,
+        overconfident=overconfident,
+        underconfident=underconfident,
+        suggested_review=suggested_review,
+        note=note,
+    )
+
+
+def _extract_dq_context(dq_report: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if not dq_report:
+        return warnings
+    for issue in dq_report.get("issues", []):
+        if isinstance(issue, dict):
+            sev = issue.get("severity", "")
+            msg = issue.get("message", "") or issue.get("issue_type", "")
+            if sev in ("critical", "warning") and msg:
+                warnings.append(f"[{sev.upper()}] {msg}")
+    if dq_report.get("degraded_mode"):
+        warnings.append("[WARNING] System in degraded mode during data collection.")
+    return warnings[:10]
+
+
+def _summary_to_dict(summary: ConfidenceCalibrationSummary) -> dict[str, Any]:
+    return {
+        "generated_at": summary.generated_at,
+        "observe_only": summary.observe_only,
+        "available": summary.available,
+        "insufficient_data": summary.insufficient_data,
+        "total_resolved": summary.total_resolved,
+        "min_required": summary.min_required,
+        "overall_hit_rate": summary.overall_hit_rate,
+        "overall_average_confidence": summary.overall_average_confidence,
+        "overall_calibration_gap": summary.overall_calibration_gap,
+        "buckets_5": [
+            {
+                "label": b.label,
+                "lower": b.lower,
+                "upper": b.upper,
+                "count": b.count,
+                "hit_rate": b.hit_rate,
+                "average_confidence": b.average_confidence,
+                "calibration_gap": b.calibration_gap,
+            }
+            for b in summary.buckets_5
+        ],
+        "signal_results": [
+            {
+                "signal_id": s.signal_id,
+                "known_in_registry": s.known_in_registry,
+                "discovery_only": s.discovery_only,
+                "count": s.count,
+                "hit_rate": s.hit_rate,
+                "average_confidence": s.average_confidence,
+                "calibration_gap": s.calibration_gap,
+                "overconfident": s.overconfident,
+                "underconfident": s.underconfident,
+                "suggested_review": s.suggested_review,
+                "note": s.note,
+            }
+            for s in summary.signal_results
+        ],
+        "dq_warnings": summary.dq_warnings,
+        "summary_line": summary.summary_line,
+    }
+
+
+def _build_enhanced_markdown(summary: ConfidenceCalibrationSummary) -> str:
+    lines: list[str] = [
+        "# System Confidence Calibration (Enhanced)",
+        "",
+        "> **Observe-only advisory system. No trades are executed.**",
+        "> **Calibration is retrospective and for operator awareness only.**",
+        "",
+        f"Generated: {summary.generated_at}",
+        f"Total resolved: {summary.total_resolved}",
+        "",
+    ]
+
+    if summary.insufficient_data:
+        lines += [
+            f"> Insufficient data: {summary.total_resolved} resolved decisions "
+            f"(minimum {summary.min_required} required).",
+            "",
+            "---",
+            "*Observe-only. No trades are executed by this system.*",
+        ]
+        return "\n".join(lines).strip() + "\n"
+
+    gap_str = f"{summary.overall_calibration_gap:+.3f}" if summary.overall_calibration_gap is not None else "—"
+    hr_str = f"{summary.overall_hit_rate:.0%}" if summary.overall_hit_rate is not None else "—"
+    conf_str = f"{summary.overall_average_confidence:.0%}" if summary.overall_average_confidence is not None else "—"
+
+    lines += [
+        "## Overall Calibration",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| Overall hit rate | {hr_str} |",
+        f"| Average confidence | {conf_str} |",
+        f"| Calibration gap | {gap_str} |",
+        "",
+        "## 5-Bucket Confidence Analysis",
+        "",
+        "| Bucket | Count | Hit Rate | Avg Confidence | Gap |",
+        "|--------|-------|----------|----------------|-----|",
+    ]
+    for b in summary.buckets_5:
+        hr = f"{b.hit_rate:.0%}" if b.hit_rate is not None else "—"
+        ac = f"{b.average_confidence:.0%}" if b.average_confidence is not None else "—"
+        g = f"{b.calibration_gap:+.3f}" if b.calibration_gap is not None else "—"
+        lines.append(f"| {b.label} | {b.count} | {hr} | {ac} | {g} |")
+    lines.append("")
+
+    if summary.signal_results:
+        lines += [
+            "## Per-Signal Calibration",
+            "",
+            "| Signal | Count | Hit Rate | Gap | Review? | Note |",
+            "|--------|-------|----------|-----|---------|------|",
+        ]
+        for s in summary.signal_results:
+            hr = f"{s.hit_rate:.0%}" if s.hit_rate is not None else "—"
+            g = f"{s.calibration_gap:+.3f}" if s.calibration_gap is not None else "—"
+            review = "Yes" if s.suggested_review else "No"
+            lines.append(f"| {s.signal_id} | {s.count} | {hr} | {g} | {review} | {s.note} |")
+        lines.append("")
+
+    if summary.dq_warnings:
+        lines += ["## Data Quality Context", ""]
+        for w in summary.dq_warnings:
+            lines.append(f"- {w}")
+        lines.append("")
+
+    lines += ["---", "*Observe-only. No trades are executed by this system.*"]
+    return "\n".join(lines).strip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# New public functions — enhanced calibration layer
+# ---------------------------------------------------------------------------
+
+
+def load_decision_outcomes(root: Path | str | None = None) -> list[dict[str, Any]]:
+    root_path = Path(root) if root is not None else Path(".")
+    return _load_jsonl(root_path.joinpath(*OUTCOMES_JSONL_RELATIVE_PATH))
+
+
+def load_data_quality_report(root: Path | str | None = None) -> dict[str, Any]:
+    root_path = Path(root) if root is not None else Path(".")
+    path = root_path.joinpath(*DQ_REPORT_RELATIVE_PATH)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def evaluate_confidence_calibration(
+    resolved: list[dict[str, Any]],
+    dq_report: dict[str, Any] | None = None,
+    registry: Any | None = None,
+    min_resolved: int = MIN_RESOLVED_ROWS,
+    min_signal_resolved: int = _MIN_SIGNAL_RESOLVED,
+) -> ConfidenceCalibrationSummary:
+    """
+    Pure evaluation — no file I/O. Returns ConfidenceCalibrationSummary.
+    Non-fatal: callers should wrap in try/except for pipeline safety.
+    """
+    total = len(resolved)
+    ts = datetime.now(timezone.utc).isoformat()
+    dq = dq_report or {}
+
+    if total < min_resolved:
+        return ConfidenceCalibrationSummary(
+            generated_at=ts,
+            observe_only=True,
+            available=True,
+            insufficient_data=True,
+            total_resolved=total,
+            min_required=min_resolved,
+            overall_hit_rate=None,
+            overall_average_confidence=None,
+            overall_calibration_gap=None,
+            buckets_5=[],
+            signal_results=[],
+            dq_warnings=_extract_dq_context(dq),
+            summary_line=(
+                f"Insufficient data: {total} resolved decisions "
+                f"(minimum {min_resolved} required)."
+            ),
+        )
+
+    judgeables = [r for r in resolved if r.get("direction_correct") is not None]
+    correct = sum(1 for r in judgeables if r.get("direction_correct") is True)
+    hit_rate = correct / len(judgeables) if judgeables else None
+
+    confs = [
+        _normalize_confidence(c)
+        for r in resolved
+        if (c := _safe_float(r.get("confidence"))) is not None
+    ]
+    avg_conf = sum(confs) / len(confs) if confs else None
+    gap = (avg_conf - hit_rate) if (avg_conf is not None and hit_rate is not None) else None
+
+    buckets_5 = _compute_calibration_buckets_5(resolved)
+
+    signal_groups: dict[str, list[dict[str, Any]]] = {}
+    for row in resolved:
+        sid = _safe_str(row.get("source") or "")
+        if not sid or sid == "unknown":
+            continue
+        signal_groups.setdefault(sid, []).append(row)
+
+    signal_results = [
+        _compute_signal_result(sid, rows, registry)
+        for sid, rows in sorted(signal_groups.items())
+        if len(rows) >= min_signal_resolved
+    ]
+
+    hr_str = f"{hit_rate:.0%}" if hit_rate is not None else "—"
+    return ConfidenceCalibrationSummary(
+        generated_at=ts,
+        observe_only=True,
+        available=True,
+        insufficient_data=False,
+        total_resolved=total,
+        min_required=min_resolved,
+        overall_hit_rate=hit_rate,
+        overall_average_confidence=avg_conf,
+        overall_calibration_gap=gap,
+        buckets_5=buckets_5,
+        signal_results=signal_results,
+        dq_warnings=_extract_dq_context(dq),
+        summary_line=f"{total} resolved decisions. Overall hit rate: {hr_str}.",
+    )
+
+
+def write_confidence_calibration_report(
+    root: Path | str | None = None,
+    *,
+    min_resolved: int = MIN_RESOLVED_ROWS,
+    min_signal_resolved: int = _MIN_SIGNAL_RESOLVED,
+) -> ConfidenceCalibrationSummary:
+    """
+    Load outcomes + DQ report, evaluate, write enhanced artifacts to outputs/latest/.
+    Non-fatal: callers should wrap in try/except for pipeline safety.
+    """
+    from portfolio_automation.data_governance import (
+        OutputNamespace,
+        safe_write_json,
+        safe_write_text,
+    )
+
+    root_path = Path(root) if root is not None else Path(".")
+    base_dir = str(root_path / "outputs")
+
+    all_rows = load_decision_outcomes(root_path)
+    resolved = [r for r in all_rows if r.get("resolved") is True]
+    dq_report = load_data_quality_report(root_path)
+
+    registry = None
+    try:
+        from portfolio_automation.signal_registry import load_signal_registry
+        registry = load_signal_registry()
+    except Exception:
+        pass
+
+    summary = evaluate_confidence_calibration(
+        resolved,
+        dq_report=dq_report,
+        registry=registry,
+        min_resolved=min_resolved,
+        min_signal_resolved=min_signal_resolved,
+    )
+
+    payload = _summary_to_dict(summary)
+    safe_write_json(
+        OutputNamespace.LATEST,
+        "confidence_calibration.json",
+        payload,
+        base_dir=base_dir,
+    )
+    markdown = _build_enhanced_markdown(summary)
+    safe_write_text(
+        OutputNamespace.LATEST,
+        "confidence_calibration.md",
+        markdown,
+        base_dir=base_dir,
+    )
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Public entry point (legacy — POLICY write; also triggers LATEST write)
 # ---------------------------------------------------------------------------
 
 
@@ -480,11 +938,17 @@ def run_calibration(
     markdown = render_calibration_md(payload)
 
     if write_files:
+        # POLICY write — backward-compatible; GUI reads from here
         json_path = root_path.joinpath(*CALIBRATION_JSON_RELATIVE_PATH)
         md_path = root_path.joinpath(*CALIBRATION_MD_RELATIVE_PATH)
         _safe_json_write(json_path, payload)
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(markdown, encoding="utf-8")
+        # LATEST write — enhanced report; non-blocking
+        try:
+            write_confidence_calibration_report(root_path, min_resolved=min_resolved)
+        except Exception as _err:
+            logger.warning("confidence_calibration: LATEST write non-fatal — %s", _err)
 
     return payload, markdown
 

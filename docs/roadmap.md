@@ -245,14 +245,35 @@ No portfolio runtime behavior changed. No output artifact schemas changed. Tests
 
 ---
 
+## Confidence Calibration Feedback Loop (Complete)
+
+Enhanced the existing `portfolio_automation/confidence_calibration.py` with per-signal and 5-bucket analysis, data quality integration, and LATEST namespace artifact writes.
+
+Key additions:
+- `evaluate_confidence_calibration()` — pure evaluation returning `ConfidenceCalibrationSummary` dataclass
+- `write_confidence_calibration_report()` — loads outcomes + DQ report, evaluates, writes to `outputs/latest/`
+- 5-bucket confidence system: very_low/low/medium/high/very_high
+- Per-signal calibration grouped by `source` field; excludes signals with fewer than 5 resolved rows
+- `discovery_only` signals always have `suggested_review=False`; no automatic registry edits
+- `calibration_gap = average_confidence - hit_rate`; overconfident when gap > 0.15, underconfident when gap < -0.15
+- Data quality warnings surfaced from `outputs/latest/data_quality_report.json`
+- Signal registry consulted for `is_discovery_only` check; unknown signals treated as discovery-only
+- POLICY write (legacy) unchanged; LATEST write added non-blocking via data governance layer
+- `run_calibration()` still triggers both writes when `write_files=True`
+- 65 new tests added (136 total); all pass
+
+Artifacts:
+- `outputs/latest/confidence_calibration.json` — enhanced report with `buckets_5`, `signal_results`, `dq_warnings`
+- `outputs/latest/confidence_calibration.md` — human-readable enhanced calibration report
+- `outputs/policy/confidence_calibration.json` — legacy report (GUI reads this)
+- `outputs/policy/confidence_calibration.md` — legacy markdown
+
+No live scoring, allocation, recommendation, or registry values changed.
+See `docs/CONFIDENCE_CALIBRATION.md`.
+
+---
+
 ## Post-Phase-0 Next Steps
-
-### Confidence Calibration Feedback Loop
-
-- Wire resolved AI decision validation outcomes into calibration data
-- Track prediction accuracy per signal category and decision type
-- Tune confidence floors in `signal_registry.yaml` after evidence accumulates
-- Gate calibration updates at 20 resolved decisions (existing rule)
 
 ### Discovery Engine Foundation
 
