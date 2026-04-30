@@ -49,3 +49,74 @@ This repo is an advisory-only portfolio automation system. It produces analysis,
 - `docs/PIPELINE_RUNBOOK.md`
 - `docs/REGRESSION_CHECKLIST.md`
 - `docs/CLAUDE_AGENT_RULES.md`
+
+---
+
+## Agent Orchestration Context
+
+This repo uses a repo-native orchestration layer in `.agent/`. Read these before starting any feature:
+
+```bash
+python scripts/agent_context_check.py   # prints current phase, step, next steps
+cat .agent/project_state.yaml           # full machine-readable project state
+cat .agent/phase_status.yaml            # per-step roadmap status
+```
+
+## Roadmap Discipline
+
+- Implement only the step explicitly requested by the user.
+- Do not recommend Discovery Engine as the next step if a named roadmap step (e.g., Confidence Calibration, GUI panels) is still pending.
+- The authoritative next step is `next_official_step` in `.agent/project_state.yaml`.
+- If you are unsure whether a step is in scope, ask before implementing.
+
+## Observe-Only Default
+
+- All new observability layers must set `observe_only: true` as a hardcoded field in output artifacts.
+- Do not remove or make `observe_only` conditional unless explicitly approved.
+- Non-blocking pipeline integration: wrap all new calls in `try/except`.
+
+## Output Namespace Rules
+
+- Use `OutputNamespace` from `portfolio_automation/data_governance.py` for all file writes.
+- Live pipeline artifacts → `OutputNamespace.LATEST` (`outputs/latest/`)
+- Budget/governance/audit artifacts → `OutputNamespace.POLICY` (`outputs/policy/`)
+- Replay artifacts → `OutputNamespace.HISTORICAL` (`outputs/backtest/`) — never from live pipeline
+- Never write to namespaces outside the module's declared purpose.
+
+## VPS Warning
+
+Claude runs locally. Claude does not have access to the production VPS.
+
+- Do not claim tests passed on VPS — they ran locally only.
+- Return VPS validation commands for the user to run manually.
+- Format VPS commands clearly as a copyable block at the end of the final report.
+- Use `.agent/task_templates/vps_validation_prompt.md` as the template for VPS commands.
+
+## Test Requirements
+
+- Add tests for every new module in `tests/`.
+- Run targeted tests before the full suite.
+- Full suite ignores known GUI health tests:
+  ```
+  python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py
+  ```
+
+## Final Report Format
+
+End every implementation task with this report:
+
+```
+## Final Report
+
+Files created: [list]
+Files modified: [list]
+Behavior implemented: [description]
+Artifacts written: [paths + namespaces]
+Tests added: [file + count]
+Test commands run: [commands]
+Test results: [pass/fail summary]
+Assumptions: [list]
+Risks: [list or none]
+VPS validation commands: [copyable block]
+Recommended next step: [from .agent/project_state.yaml:next_official_step]
+```

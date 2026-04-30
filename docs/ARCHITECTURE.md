@@ -2,6 +2,14 @@
 
 Last verified against code on 2026-04-30.
 
+## Agent Orchestration Layer
+
+A repo-native orchestration structure is in `.agent/`, `CLAUDE.md`, `AGENTS.md`,
+`.claude/agents/`, `.claude/skills/`, and `.agents/skills/`. It provides
+machine-readable project state, task templates, checklists, and role-specific
+instructions for Claude, Codex, and GPT. See `docs/AGENT_OPERATING_MODEL.md`
+and `docs/AI_COLLABORATION_RUNBOOK.md`.
+
 ## Purpose
 
 This repository is an advisory-only portfolio analysis system. It produces rankings, alerts, sizing suggestions, policy recommendations, evaluation artifacts, and GUI-ready outputs. It does not place trades or invoke any broker API.

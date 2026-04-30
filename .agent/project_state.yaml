@@ -1,0 +1,166 @@
+# Agent Orchestration — Project State
+# Machine-readable source of truth for Claude, Codex, and GPT context.
+# Update this file whenever a step is completed or scope changes.
+# Last updated: 2026-04-30
+
+project_name: portfolio_automation_system
+mode: advisory_only
+no_auto_trading: true
+ai_role: context_explanation_validation_orchestration_only
+
+# ---------------------------------------------------------------------------
+# Phase / Step tracking
+# ---------------------------------------------------------------------------
+
+current_phase: post_phase_0_orchestration
+current_step: agent_orchestration_layer
+
+completed_steps:
+  - phase_0_user_id_schema_migration
+  - phase_0_data_governance_namespacing
+  - phase_0_historical_replay_namespace_enforcement
+  - phase_0_signal_registry
+  - phase_0_data_quality_monitor
+  - phase_0_ai_cost_budget_wrapper
+  - agent_orchestration_layer
+
+next_official_step:
+  primary: confidence_calibration_feedback_loop
+  secondary:
+    - discovery_engine_foundation
+    - gui_data_quality_and_ai_budget_panels
+    - instrument_ai_call_sites_with_budget_recording
+
+deferred_steps:
+  - auto_trading
+  - billing
+  - multi_tenant_auth
+  - redis_event_bus
+  - full_discovery_promotion_engine
+  - external_customer_productization
+  - broker_api_integration
+
+# ---------------------------------------------------------------------------
+# Hard boundaries
+# ---------------------------------------------------------------------------
+
+forbidden_changes:
+  - changing_scoring_behavior_without_explicit_approval
+  - changing_allocation_behavior_without_explicit_approval
+  - changing_recommendation_behavior_without_explicit_approval
+  - breaking_output_artifact_schemas
+  - writing_live_namespace_outputs_from_replay_context
+  - introducing_auto_execution_or_trading
+  - calling_broker_apis
+  - silently_removing_observe_only_flags
+  - recomputing_decisions_outside_decision_engine
+  - changing_signal_score_semantics_without_approval
+  - changing_confidence_score_semantics_without_approval
+  - changing_conviction_score_semantics_without_approval
+  - bypassing_fmp_registry_compliance_rules
+
+# ---------------------------------------------------------------------------
+# Test requirements
+# ---------------------------------------------------------------------------
+
+required_test_policy:
+  every_new_module_requires_tests: true
+  compile_check_before_submit: true
+  targeted_tests_before_full_suite: true
+  full_suite_command: python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py
+  compile_command: python -m py_compile <changed_files>
+
+# ---------------------------------------------------------------------------
+# Output namespace policy
+# ---------------------------------------------------------------------------
+
+output_namespace_policy:
+  source: portfolio_automation/data_governance.py
+  namespaces:
+    LATEST: outputs/latest/        # live per-run operator artifacts
+    HISTORICAL: outputs/backtest/  # replay artifacts only; never written by live pipeline
+    POLICY: outputs/policy/        # budget, governance, audit artifacts
+    SANDBOX: outputs/sandbox/      # exploratory; not consumed by GUI or decisions
+    PORTFOLIO: outputs/portfolio/  # portfolio snapshots
+  rules:
+    - replay_must_never_write_to_latest_or_policy
+    - all_writes_use_safe_write_json_or_safe_write_text
+    - new_modules_must_use_namespace_aware_writes
+    - observe_only_true_hardcoded_in_all_new_artifacts
+
+# ---------------------------------------------------------------------------
+# Role split
+# ---------------------------------------------------------------------------
+
+role_split:
+  gpt:
+    - architecture_design
+    - roadmap_control
+    - prompt_generation
+    - scope_gatekeeping
+    - task_packet_creation
+    - agent_orchestration_decisions
+  claude:
+    - feature_implementation
+    - module_creation
+    - test_creation
+    - local_code_changes
+    - observe_only_integration
+    - final_report_generation
+  codex:
+    - documentation_updates
+    - code_review
+    - regression_review
+    - artifact_contract_audit
+    - cleanup_recommendations
+    - changelog_maintenance
+  user:
+    - vps_deployment_and_validation
+    - production_artifact_verification
+    - roadmap_approval
+    - scope_decisions
+
+# ---------------------------------------------------------------------------
+# Deployment context
+# ---------------------------------------------------------------------------
+
+deployment_context:
+  claude_runs_locally: true
+  claude_does_not_run_on_vps: true
+  vps_validation_is_manual: true
+  vps_commands_must_be_returned_for_user_to_run: true
+  production_environment: linux_vps_with_systemd_timer
+  virtualenv_required: true
+  python_version: "3.11+"
+  database: sqlite_via_state_store
+  output_dir: outputs/
+  config_files:
+    - config/config.json
+    - config/signal_registry.yaml
+    - .env
+
+# ---------------------------------------------------------------------------
+# Post-feature workflow
+# ---------------------------------------------------------------------------
+
+post_feature_workflow:
+  step_1: claude_returns_final_report
+  step_2: user_runs_vps_validation_commands
+  step_3: codex_updates_docs_if_needed
+  step_4: codex_reviews_diff_if_needed
+  step_5: gpt_updates_project_state_yaml
+  step_6: next_step_selected_from_next_official_step
+
+# ---------------------------------------------------------------------------
+# Protected score semantics
+# ---------------------------------------------------------------------------
+
+protected_semantics:
+  fields:
+    - signal_score
+    - confidence_score
+    - effective_score
+    - conviction_score
+    - final_rank_score
+    - recommendation_score
+  note: Do not change semantics of these fields without explicit user approval.

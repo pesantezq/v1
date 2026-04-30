@@ -1,0 +1,133 @@
+# Agent Orchestration — Phase Status
+# Structured roadmap status for agent context.
+# Last updated: 2026-04-30
+
+# ---------------------------------------------------------------------------
+# Phase 0 — Infrastructure & Data Governance
+# ---------------------------------------------------------------------------
+
+phase_0:
+  name: Infrastructure and Data Governance
+  status: complete
+  steps:
+    user_id_schema_migration:
+      status: complete
+      description: user_id TEXT NOT NULL DEFAULT 'owner' added to run_history and snapshots
+      files: [portfolio_automation/migrations/001_add_user_id.py]
+    data_governance_namespacing:
+      status: complete
+      description: OutputNamespace enum, safe_write_json, safe_write_text, validate_output_path
+      files: [portfolio_automation/data_governance.py, docs/DATA_GOVERNANCE.md]
+    historical_replay_namespace_enforcement:
+      status: complete
+      description: replay_reports.py and replay_runner.py use safe_write_json with HISTORICAL namespace
+      files: [portfolio_automation/historical_replay/replay_reports.py, portfolio_automation/historical_replay/replay_runner.py]
+    signal_registry:
+      status: complete
+      description: Config-driven signal catalog in YAML with governance rules enforced at load time
+      files: [config/signal_registry.yaml, portfolio_automation/signal_registry.py, tests/test_signal_registry.py, docs/SIGNAL_REGISTRY.md]
+      tests: 56 passed
+    data_quality_monitor:
+      status: complete
+      description: Observe-only 13-issue-type data quality layer writing to LATEST namespace
+      files: [portfolio_automation/data_quality_monitor.py, tests/test_data_quality_monitor.py, docs/DATA_QUALITY_MONITOR.md]
+      tests: 87 passed
+    ai_cost_budget_wrapper:
+      status: complete
+      description: AI usage tracking, cost estimation, POLICY event log, LATEST summary artifacts
+      files: [portfolio_automation/ai_budget.py, tests/test_ai_budget.py, docs/AI_BUDGET.md]
+      tests: 62 passed
+
+# ---------------------------------------------------------------------------
+# Agent Orchestration Layer (current)
+# ---------------------------------------------------------------------------
+
+agent_orchestration_layer:
+  status: complete
+  description: Repo-native orchestration structure for Claude, Codex, and GPT collaboration
+  files:
+    - .agent/project_state.yaml
+    - .agent/phase_status.yaml
+    - .agent/task_templates/claude_feature_prompt.md
+    - .agent/task_templates/codex_docs_prompt.md
+    - .agent/task_templates/codex_review_prompt.md
+    - .agent/task_templates/vps_validation_prompt.md
+    - .agent/task_templates/final_report_template.md
+    - .agent/checklists/feature_acceptance_checklist.md
+    - .agent/checklists/regression_checklist.md
+    - .agent/checklists/artifact_contract_checklist.md
+    - .agent/checklists/deployment_validation_checklist.md
+    - .agent/checklists/roadmap_drift_checklist.md
+    - AGENTS.md
+    - CLAUDE.md (updated)
+    - docs/AGENT_OPERATING_MODEL.md
+    - docs/AI_COLLABORATION_RUNBOOK.md
+    - .claude/agents/portfolio-architect.md
+    - .claude/agents/portfolio-test-reviewer.md
+    - .claude/agents/portfolio-doc-writer.md
+    - .claude/skills/portfolio-feature/SKILL.md
+    - .claude/skills/portfolio-docs/SKILL.md
+    - .claude/skills/portfolio-vps-validation/SKILL.md
+    - .agents/skills/portfolio-review/SKILL.md
+    - .agents/skills/portfolio-docs/SKILL.md
+    - .agents/skills/portfolio-task-packet/SKILL.md
+    - scripts/agent_context_check.py
+    - tests/test_agent_context_check.py
+
+# ---------------------------------------------------------------------------
+# Post-Phase-0 Roadmap (not started unless noted)
+# ---------------------------------------------------------------------------
+
+post_phase_0:
+  confidence_calibration_feedback_loop:
+    status: not_started
+    priority: high
+    description: Wire resolved AI decision validation outcomes into calibration data; tune signal confidence floors after evidence accumulates
+    gate: requires 20 resolved decisions (calibration is already gated at 20)
+    prerequisite: phase_0_complete
+
+  discovery_engine_foundation:
+    status: not_started
+    priority: medium
+    description: Define discovery pipeline consuming discovery_only signals; route corroboration step before signals become actionable
+    note: DO NOT START until confidence_calibration_feedback_loop is complete or explicitly prioritized
+    warning: PREMATURE_DISCOVERY_IS_FORBIDDEN — do not begin implementation without explicit user approval
+
+  gui_data_quality_and_ai_budget_panels:
+    status: not_started
+    priority: medium
+    description: Read-only GUI cards consuming data_quality_report.json and ai_budget_summary.json
+    prerequisite: phase_0_complete
+
+  instrument_ai_call_sites:
+    status: not_started
+    priority: low
+    description: Add record_ai_usage_event calls in decision_explainer.py and ai_decision_validator.py using real token counts from API responses
+    prerequisite: ai_cost_budget_wrapper_complete
+
+# ---------------------------------------------------------------------------
+# Permanently deferred (out of scope)
+# ---------------------------------------------------------------------------
+
+permanently_deferred:
+  auto_trading:
+    status: out_of_scope
+    reason: System is advisory-only; auto-trading violates core constraint
+  broker_api_integration:
+    status: out_of_scope
+    reason: Same as auto_trading
+  billing:
+    status: out_of_scope
+    reason: Single-operator system; no customer billing model
+  multi_tenant_auth:
+    status: out_of_scope
+    reason: Single-user system; user_id migration is foundation only
+  redis_event_bus:
+    status: out_of_scope
+    reason: Not required for current architecture; adds operational complexity
+  full_discovery_promotion_engine:
+    status: deferred
+    reason: Discovery signals exist but promotion to actionable candidates requires calibration foundation first
+  external_customer_productization:
+    status: out_of_scope
+    reason: Personal system; no external product plans

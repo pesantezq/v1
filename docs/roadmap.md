@@ -221,6 +221,30 @@ The system now has:
 
 ---
 
+## Agent Orchestration Layer (Complete)
+
+Repo-native orchestration structure created so Claude, Codex, and GPT can work
+from the same project state, rules, roadmap, task templates, checklists, and handoff format.
+
+Key files created:
+- `.agent/project_state.yaml` — machine-readable source of truth for current phase, step, forbidden changes, role split, namespace policy
+- `.agent/phase_status.yaml` — per-step roadmap status with prerequisites and notes
+- `AGENTS.md` — Codex operating instructions
+- `CLAUDE.md` (updated) — Claude operating instructions with orchestration context, VPS warning, final report format
+- `docs/AGENT_OPERATING_MODEL.md` — role definitions and collaboration workflow
+- `docs/AI_COLLABORATION_RUNBOOK.md` — how-to guide for starting features, prompting agents, VPS validation
+- `.agent/task_templates/` — 5 reusable prompt templates (claude_feature, codex_docs, codex_review, vps_validation, final_report)
+- `.agent/checklists/` — 5 validation checklists (feature_acceptance, regression, artifact_contract, deployment_validation, roadmap_drift)
+- `.claude/agents/` — 3 Claude project subagents (portfolio-architect, portfolio-test-reviewer, portfolio-doc-writer)
+- `.claude/skills/` — 3 Claude skills (portfolio-feature, portfolio-docs, portfolio-vps-validation)
+- `.agents/skills/` — 3 Codex skills (portfolio-review, portfolio-docs, portfolio-task-packet)
+- `scripts/agent_context_check.py` — lightweight context summary tool
+- `tests/test_agent_context_check.py` — validation tests for the above
+
+No portfolio runtime behavior changed. No output artifact schemas changed. Tests added.
+
+---
+
 ## Post-Phase-0 Next Steps
 
 ### Confidence Calibration Feedback Loop
