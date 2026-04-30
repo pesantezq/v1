@@ -1592,6 +1592,31 @@ def run_portfolio_update(
             except Exception as _sum_err:
                 logger.debug("SCANNER: run summary generation failed (non-fatal): %s", _sum_err)
 
+        # ── Data Quality Monitor (observe-only) ──────────────────────────────
+        try:
+            from portfolio_automation.data_quality_monitor import (
+                evaluate_data_quality as _eval_dq,
+                write_data_quality_report as _write_dq,
+            )
+            _dq_records: list = []
+            if isinstance(_ws_result, dict):
+                _dq_records = [
+                    r for r in _ws_result.get("results", [])
+                    if isinstance(r, dict)
+                ]
+            _dq_summary = _eval_dq(_dq_records)
+            if not dry_run:
+                _write_dq(_dq_summary)
+            logger.info(
+                "DATA QUALITY: %s (healthy=%d warning=%d critical=%d)",
+                _dq_summary.summary_line,
+                _dq_summary.healthy_symbols,
+                _dq_summary.warning_symbols,
+                _dq_summary.critical_symbols,
+            )
+        except Exception as _dq_err:
+            logger.warning("DATA QUALITY MONITOR: non-fatal error — %s", _dq_err)
+
         # =====================
         # 5. GENERATE RECOMMENDATIONS
         # =====================

@@ -51,8 +51,35 @@ Governance enforced at load time:
 - Unknown signals are unconditionally non-actionable
 
 No live scoring, allocation, or recommendation behavior changed.
-Additive and backward-compatible. 50 tests added.
+Additive and backward-compatible. 56 tests added.
 See `docs/SIGNAL_REGISTRY.md`.
+
+### Step 4 — Data Quality Monitor (Complete)
+
+Observe-only data quality layer added at `portfolio_automation/data_quality_monitor.py`.
+
+Detects 13 issue types across two severity levels (critical, warning) and one
+informational level, evaluated per-symbol and in aggregate:
+- `MISSING_PRICE` (critical), `STALE_PRICE` (warning), `CACHE_ONLY` (warning)
+- `FALLBACK_USED` (warning), `MISSING_FUNDAMENTALS` (warning)
+- `MISSING_NEWS` (info), `MIXED_SOURCE` (info), `SOURCE_ERROR` (warning)
+- `UNKNOWN_SOURCE` (warning), `EXCESSIVE_FALLBACK_RATE` (warning)
+- `EXCESSIVE_MISSING_PRICE_RATE` (critical), `DEGRADED_MODE` (warning)
+- `INSUFFICIENT_DATA` (info)
+
+Configurable thresholds via `DataQualityConfig` (stale_quote_minutes=1440,
+max_fallback_rate_warning=0.30, max_missing_price_rate_critical=0.10).
+
+Artifacts written via `OutputNamespace.LATEST`:
+- `outputs/latest/data_quality_report.json`
+- `outputs/latest/data_quality_report.md`
+
+Pipeline integration: non-blocking call after watchlist scanner completes;
+exceptions caught as warnings so the pipeline always continues.
+
+No scoring, allocation, recommendation, or confidence behavior changed.
+Additive and backward-compatible. Tests added.
+See `docs/DATA_QUALITY_MONITOR.md`.
 
 ---
 
