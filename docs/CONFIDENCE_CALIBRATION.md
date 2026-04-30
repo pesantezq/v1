@@ -32,6 +32,35 @@ Only rows with `"resolved": true` are included in analysis.
 
 Both write paths coexist. The GUI reads from POLICY. LATEST carries the enhanced 5-bucket and per-signal analysis.
 
+## Artifact Contract — `outputs/latest/confidence_calibration.json`
+
+The JSON schema is stable regardless of data availability:
+
+| Field | Type | Always present |
+|-------|------|----------------|
+| `generated_at` | ISO timestamp string | Yes |
+| `observe_only` | `true` | Yes |
+| `available` | bool | Yes |
+| `insufficient_data` | bool | Yes |
+| `total_resolved` | int | Yes |
+| `min_required` | int | Yes |
+| `overall_hit_rate` | float or null | Yes |
+| `overall_average_confidence` | float or null | Yes |
+| `overall_calibration_gap` | float or null | Yes |
+| `buckets_5` | array of 5 objects | **Always — even when `insufficient_data=true`** |
+| `signal_results` | array | Yes (may be empty) |
+| `dq_warnings` | array | Yes (may be empty) |
+| `summary_line` | string | Yes |
+
+### `buckets_5` contract
+
+`buckets_5` always contains exactly 5 bucket objects in this order:
+`very_low`, `low`, `medium`, `high`, `very_high`.
+
+Each bucket object always has these keys: `label`, `lower`, `upper`, `count`, `hit_rate`, `average_confidence`, `calibration_gap`.
+
+When `insufficient_data=true`, `count` will be 0 or low and `hit_rate`/`average_confidence`/`calibration_gap` will be `null` for empty buckets. **The schema shape does not change.** Consumers can always iterate all 5 buckets without a null-check on the array itself.
+
 ## Metrics
 
 ### Overall Calibration Gap

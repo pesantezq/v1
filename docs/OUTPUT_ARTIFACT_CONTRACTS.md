@@ -625,3 +625,45 @@ Required top-level fields:
 - `by_strategy`
 - `best_decision` — `{symbol, date, decision, return_pct, direction_correct}` or null
 - `worst_decision` — same shape or null
+
+### `outputs/latest/confidence_calibration.json`
+
+Enhanced confidence calibration report. Written by `write_confidence_calibration_report()` on every pipeline run.
+
+Required top-level fields:
+
+- `generated_at` — ISO timestamp string
+- `observe_only` — always `true`
+- `available` — bool
+- `insufficient_data` — bool; `true` when fewer than `min_required` resolved decisions exist
+- `total_resolved` — int
+- `min_required` — int (default 20)
+- `overall_hit_rate` — float or null
+- `overall_average_confidence` — float or null
+- `overall_calibration_gap` — float or null (`average_confidence - hit_rate`)
+- `buckets_5` — **always an array of exactly 5 objects** regardless of `insufficient_data`; each has `{label, lower, upper, count, hit_rate, average_confidence, calibration_gap}`; labels are `very_low`, `low`, `medium`, `high`, `very_high`
+- `signal_results` — array; may be empty; each has `{signal_id, known_in_registry, discovery_only, count, hit_rate, average_confidence, calibration_gap, overconfident, underconfident, suggested_review, note}`
+- `dq_warnings` — array of strings; data quality warnings from `data_quality_report.json`
+- `summary_line` — human-readable string
+
+**Schema-stability guarantee:** `buckets_5` always has 5 entries. `insufficient_data=true` affects metric values (nulls, zeros), not the schema shape. Consumers may iterate all 5 buckets unconditionally.
+
+### `outputs/policy/confidence_calibration.json`
+
+Legacy confidence calibration report. Read by the GUI operator data layer. Written by `run_calibration()` on every pipeline run.
+
+Required top-level fields:
+
+- `generated_at` — ISO timestamp string
+- `observe_only` — always `true`
+- `available` — bool
+- `insufficient_data` — bool
+- `total_resolved` — int
+- `min_required` — int
+- `overall_hit_rate` — float or null
+- `overall_avg_return` — float or null
+- `confidence_buckets` — 3-bucket dict `{low, medium, high, unknown}` each with `{count, hit_rate, avg_return}`; may be empty dict when `insufficient_data=true`
+- `validation_analysis` — dict keyed by validation status; may be empty
+- `decision_analysis` — dict keyed by decision type; may be empty
+- `insights` — array of strings (max 5); may be empty
+- `summary_line` — human-readable string

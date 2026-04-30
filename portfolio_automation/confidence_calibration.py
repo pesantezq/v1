@@ -771,7 +771,7 @@ def evaluate_confidence_calibration(
             overall_hit_rate=None,
             overall_average_confidence=None,
             overall_calibration_gap=None,
-            buckets_5=[],
+            buckets_5=_compute_calibration_buckets_5(resolved),
             signal_results=[],
             dq_warnings=_extract_dq_context(dq),
             summary_line=(

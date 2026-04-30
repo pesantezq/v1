@@ -1136,3 +1136,122 @@ class TestRunCalibrationLatestWrite:
             _write_jsonl(tmp, _sufficient_dataset())
             run_calibration(tmp, write_files=False)
             assert not tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).exists()
+
+
+# ---------------------------------------------------------------------------
+# Class 20: buckets_5 always-5 contract
+# ---------------------------------------------------------------------------
+
+
+_EXPECTED_BUCKET_LABELS = {"very_low", "low", "medium", "high", "very_high"}
+
+
+class TestBuckets5AlwaysPresent:
+    def test_insufficient_data_returns_5_buckets(self):
+        rows = _make_rows(3)
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.insufficient_data is True
+        assert len(summary.buckets_5) == 5
+
+    def test_empty_outcomes_returns_5_buckets(self):
+        summary = evaluate_confidence_calibration([])
+        assert len(summary.buckets_5) == 5
+
+    def test_all_5_labels_present_when_insufficient(self):
+        summary = evaluate_confidence_calibration(_make_rows(1))
+        labels = {b.label for b in summary.buckets_5}
+        assert labels == _EXPECTED_BUCKET_LABELS
+
+    def test_one_resolved_returns_5_buckets_and_correct_summary(self):
+        rows = [_resolved_row(confidence=0.80, direction_correct=True)]
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.insufficient_data is True
+        assert summary.total_resolved == 1
+        assert "1" in summary.summary_line
+        assert len(summary.buckets_5) == 5
+
+    def test_one_resolved_lands_in_correct_bucket(self):
+        rows = [_resolved_row(confidence=0.80, direction_correct=True)]
+        summary = evaluate_confidence_calibration(rows)
+        high = next(b for b in summary.buckets_5 if b.label == "high")
+        assert high.count == 1
+        other_counts = [b.count for b in summary.buckets_5 if b.label != "high"]
+        assert all(c == 0 for c in other_counts)
+
+    def test_zero_to_one_confidence_buckets_correctly(self):
+        rows = [
+            _resolved_row(confidence=0.10),   # very_low
+            _resolved_row(confidence=0.35),   # low
+            _resolved_row(confidence=0.60),   # medium
+            _resolved_row(confidence=0.75),   # high
+            _resolved_row(confidence=0.90),   # very_high
+        ]
+        summary = evaluate_confidence_calibration(rows, min_resolved=1)
+        by_label = {b.label: b for b in summary.buckets_5}
+        assert by_label["very_low"].count == 1
+        assert by_label["low"].count == 1
+        assert by_label["medium"].count == 1
+        assert by_label["high"].count == 1
+        assert by_label["very_high"].count == 1
+
+    def test_zero_to_100_confidence_normalised_and_bucketed(self):
+        rows = [
+            _resolved_row(confidence=80.0),   # normalised → 0.80 → high
+        ]
+        summary = evaluate_confidence_calibration(rows, min_resolved=1)
+        high = next(b for b in summary.buckets_5 if b.label == "high")
+        assert high.count == 1
+
+    def test_confidence_1_0_in_very_high(self):
+        rows = [_resolved_row(confidence=1.0)]
+        summary = evaluate_confidence_calibration(rows, min_resolved=1)
+        very_high = next(b for b in summary.buckets_5 if b.label == "very_high")
+        assert very_high.count == 1
+
+    def test_sufficient_data_still_returns_5_buckets(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        assert summary.insufficient_data is False
+        assert len(summary.buckets_5) == 5
+
+    def test_sufficient_data_all_5_labels_present(self):
+        summary = evaluate_confidence_calibration(_sufficient_dataset())
+        labels = {b.label for b in summary.buckets_5}
+        assert labels == _EXPECTED_BUCKET_LABELS
+
+    def test_json_artifact_has_5_buckets_when_insufficient(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            _write_jsonl(tmp, _make_rows(3))
+            write_confidence_calibration_report(tmp)
+            data = json.loads(
+                tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).read_text()
+            )
+            assert data["insufficient_data"] is True
+            assert len(data["buckets_5"]) == 5
+
+    def test_json_artifact_has_5_buckets_when_no_outcomes(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_confidence_calibration_report(tmp)
+            data = json.loads(
+                tmp.joinpath(*LATEST_CALIBRATION_JSON_RELATIVE_PATH).read_text()
+            )
+            assert len(data["buckets_5"]) == 5
+
+    def test_empty_buckets_have_zero_count(self):
+        summary = evaluate_confidence_calibration([])
+        assert all(b.count == 0 for b in summary.buckets_5)
+
+    def test_empty_buckets_hit_rate_is_none(self):
+        summary = evaluate_confidence_calibration([])
+        assert all(b.hit_rate is None for b in summary.buckets_5)
+
+    def test_insufficient_data_other_fields_unchanged(self):
+        rows = _make_rows(3)
+        summary = evaluate_confidence_calibration(rows)
+        assert summary.available is True
+        assert summary.observe_only is True
+        assert summary.total_resolved == 3
+        assert summary.overall_hit_rate is None
+        assert summary.overall_calibration_gap is None
+        assert summary.signal_results == []
