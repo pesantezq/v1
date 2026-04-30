@@ -1,6 +1,6 @@
 # Architecture
 
-Last verified against code on 2026-04-28.
+Last verified against code on 2026-04-29.
 
 ## Purpose
 
@@ -19,6 +19,8 @@ Decision Engine status:
 - pipeline integration in `main.py` is live in observe-only mode
 - `decision_plan.json` and `decision_plan.md` are additive artifacts
 - `portfolio_automation/decision_explainer.py` is implemented and wired as an additive downstream consumer
+- `portfolio_automation/ai_decision_validator.py` is implemented and wired as an additive downstream validation layer
+- `portfolio_automation/decision_outcome_tracker.py` is implemented and wired as an additive downstream feedback layer
 
 ## End-To-End Flow
 
@@ -57,18 +59,28 @@ GUI (gui/app.py)
     +--> reads SQLite state for status/history views
 ```
 
-Decision Engine flow:
+Decision Engine and learning flow:
 
 ```text
-Data sources
-    -> market / theme / watchlist scanners
-    -> scoring / conviction / allocation
+Data
+    -> Scanner
     -> Decision Engine
-    -> decision_plan artifacts
-    -> AI Explanation Layer
-    -> decision_explanations artifacts
-    -> GUI / daily memo / future explanation consumers
+    -> decision_plan.json
+    -> decision_reason_structured
+    -> Insight Cards
+    -> AI Validation
+    -> ai_decision_validation.json
+    -> Decision Outcome Tracker
+    -> decision_outcomes.jsonl
+    -> decision_outcome_summary.json
 ```
+
+System boundaries:
+
+- observe-only only
+- rules-first decision generation
+- AI is limited to explanation and validation only
+- feedback loop is a learning layer, not an execution layer
 
 AI Explanation Layer flow:
 
@@ -78,6 +90,31 @@ outputs/latest/decision_plan.json
     -> portfolio_automation/decision_explainer.py
     -> outputs/latest/decision_explanations.json
     -> outputs/latest/decision_explanations.md
+```
+
+AI Validation Layer flow:
+
+```text
+outputs/latest/decision_plan.json
+    -> portfolio_automation/ai_decision_validator.py
+    -> deterministic validation rules
+    -> optional LLM enhancement when AI_VALIDATOR_USE_LLM=1
+    -> outputs/latest/ai_decision_validation.json
+    -> outputs/latest/ai_decision_validation.md
+    -> GUI "AI Validation" section
+```
+
+Decision Outcome Tracker flow:
+
+```text
+outputs/latest/decision_plan.json
+    + outputs/latest/ai_decision_validation.json
+    + outputs/latest/watchlist_signals.json
+    -> portfolio_automation/decision_outcome_tracker.py
+    -> outputs/policy/decision_outcomes.jsonl
+    -> outputs/policy/decision_outcome_summary.json
+    -> outputs/policy/decision_outcome_summary.md
+    -> GUI "Decision Performance" section
 ```
 
 Daily memo consumption flow:
@@ -192,10 +229,20 @@ Current integrated behavior:
 - emit additive artifacts:
   - `outputs/latest/decision_plan.json`
   - `outputs/latest/decision_plan.md`
+- include additive structured explainability fields on decision rows, including `decision_reason_structured`
 - after the decision plan is written, call the additive explainer
 - emit explanation artifacts:
   - `outputs/latest/decision_explanations.json`
   - `outputs/latest/decision_explanations.md`
+- then run the additive AI validation layer
+- emit validation artifacts:
+  - `outputs/latest/ai_decision_validation.json`
+  - `outputs/latest/ai_decision_validation.md`
+- then run the additive decision outcome tracker
+- emit feedback artifacts:
+  - `outputs/policy/decision_outcomes.jsonl`
+  - `outputs/policy/decision_outcome_summary.json`
+  - `outputs/policy/decision_outcome_summary.md`
 - log the top 3 ranked decisions
 - leave existing recommendation behavior unchanged
 - leave existing output schemas unchanged
@@ -234,6 +281,62 @@ Architectural role:
 - explanation is a downstream reader of the decision plan
 - it does not feed back into ranking, scoring, or recommendations
 - it is safe for future GUI and memo consumers because it is additive and read-only
+
+## AI Validation Layer
+
+Current integrated behavior:
+
+- `portfolio_automation/ai_decision_validator.py` runs after `decision_plan.json` is written
+- deterministic rules run first
+- optional LLM enhancement is enabled only when `AI_VALIDATOR_USE_LLM=1`
+- validation failures are non-fatal
+- validator never changes decisions, scores, ranks, or allocations
+
+Current validation outputs:
+
+- `outputs/latest/ai_decision_validation.json`
+- `outputs/latest/ai_decision_validation.md`
+
+Architectural role:
+
+- validate, not decide
+- rules-first
+- AI is optional and non-blocking
+- contradiction detection is QA and explainability only
+- `WAIT` plus negated hold-off language is not a contradiction
+- positive deploy/buy/open language against `WAIT`/`HOLD`/`AVOID` is a contradiction
+
+## Feedback Loop
+
+Current integrated behavior:
+
+- `portfolio_automation/decision_outcome_tracker.py` runs after validation
+- it snapshots decision rows into `outputs/policy/decision_outcomes.jsonl`
+- it resolves outcomes on 1/3/7 day windows when prices are available
+- it writes aggregated summaries for GUI and later calibration work
+- tracker failures are non-fatal
+
+Current feedback outputs:
+
+- `outputs/policy/decision_outcomes.jsonl`
+- `outputs/policy/decision_outcome_summary.json`
+- `outputs/policy/decision_outcome_summary.md`
+
+Resolution model:
+
+- `SELL` and `AVOID` are directionally correct when price moves down
+- `BUY` and `SCALE` are directionally correct when price moves up
+- `WAIT` is correct when the move stays inside the wait threshold
+- `HOLD` remains neutral and is excluded from hit-rate judgment
+
+This is a learning system. It exists to support calibration and optimization later, not to alter current-run advisory decisions.
+
+Architectural role:
+
+- learning layer only
+- supports hit rate, average return, and direction-correct measurement
+- does not feed back into same-run decisions
+- enables later calibration and optimization work
 
 ## Daily Memo Integration
 

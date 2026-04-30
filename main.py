@@ -122,6 +122,13 @@ except ImportError:
     _run_calibration = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.decision_performance_attribution import (
+        run_performance_attribution as _run_performance_attribution,
+    )
+except ImportError:
+    _run_performance_attribution = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -2093,6 +2100,30 @@ def run_portfolio_update(
                 except Exception as _cal_err:
                     logger.warning(
                         "CONFIDENCE CALIBRATION: non-fatal error — %s", _cal_err, exc_info=True
+                    )
+
+            # ── Performance attribution ────────────────────────────────────────
+            if _run_performance_attribution is not None:
+                try:
+                    _pa_root = _decision_explainer_root_from_output_dir(output_dir)
+                    _pa_payload, _ = _run_performance_attribution(_pa_root)
+                    if _pa_payload.get("insufficient_data"):
+                        logger.info(
+                            "PERFORMANCE ATTRIBUTION: skipped — %s",
+                            _pa_payload.get("summary_line", "insufficient data"),
+                        )
+                    else:
+                        logger.info(
+                            "PERFORMANCE ATTRIBUTION: decision_performance_attribution.json written"
+                            " (resolved=%d hit_rate=%s)",
+                            _pa_payload.get("resolved_decisions", 0),
+                            f"{_pa_payload['hit_rate']:.0%}"
+                            if _pa_payload.get("hit_rate") is not None
+                            else "n/a",
+                        )
+                except Exception as _pa_err:
+                    logger.warning(
+                        "PERFORMANCE ATTRIBUTION: non-fatal error — %s", _pa_err, exc_info=True
                     )
 
             # ── Scanner outputs ────────────────────────────────────────────────

@@ -2575,6 +2575,90 @@ def _render_ai_insight_cards(bundle: dict) -> None:
         st.markdown("---")
 
 
+def _render_decision_performance_attribution(bundle: dict) -> None:
+    data = bundle.get("decision_performance_attribution") or {}
+    st.markdown("### Performance Attribution")
+
+    if not data.get("available"):
+        msg = data.get("summary_line") or "No performance attribution data available."
+        if data.get("insufficient_data"):
+            st.caption(f"Insufficient data — {msg}")
+        else:
+            st.caption(msg)
+        return
+
+    total = data.get("total_decisions", 0)
+    resolved = data.get("resolved_decisions", 0)
+    hit_rate = data.get("hit_rate")
+    avg_return = data.get("avg_return")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Decisions", total)
+    m2.metric("Resolved", resolved)
+    m3.metric("Hit Rate", f"{hit_rate:.0%}" if hit_rate is not None else "—")
+    m4.metric("Avg Return", f"{avg_return:+.2%}" if avg_return is not None else "—")
+
+    def _breakdown_df(d: dict) -> list[dict]:
+        rows = []
+        for label, stats in (d or {}).items():
+            if stats.get("total", 0) == 0:
+                continue
+            hr = stats.get("hit_rate")
+            ar = stats.get("avg_return")
+            rows.append({
+                "Label": label.replace("_", " ").title(),
+                "Total": stats.get("total", 0),
+                "Resolved": stats.get("resolved", 0),
+                "Hit Rate": f"{hr:.0%}" if hr is not None else "—",
+                "Avg Return": f"{ar:+.2%}" if ar is not None else "—",
+            })
+        return rows
+
+    with st.expander("Breakdown Tables", expanded=False):
+        by_dec = _breakdown_df(data.get("by_decision") or {})
+        if by_dec:
+            st.markdown("**By Decision Type**")
+            st.dataframe(_coerce_df(by_dec, columns=["Label", "Total", "Resolved", "Hit Rate", "Avg Return"]),
+                         hide_index=True, width="stretch")
+
+        by_strat = _breakdown_df(data.get("by_strategy") or {})
+        if by_strat:
+            st.markdown("**By Strategy**")
+            st.dataframe(_coerce_df(by_strat, columns=["Label", "Total", "Resolved", "Hit Rate", "Avg Return"]),
+                         hide_index=True, width="stretch")
+
+        by_val = _breakdown_df(data.get("by_validation_status") or {})
+        if by_val:
+            st.markdown("**By Validation Status**")
+            st.dataframe(_coerce_df(by_val, columns=["Label", "Total", "Resolved", "Hit Rate", "Avg Return"]),
+                         hide_index=True, width="stretch")
+
+        by_triage = _breakdown_df(data.get("by_triage_bucket") or {})
+        if by_triage:
+            st.markdown("**By Triage Bucket**")
+            st.dataframe(_coerce_df(by_triage, columns=["Label", "Total", "Resolved", "Hit Rate", "Avg Return"]),
+                         hide_index=True, width="stretch")
+
+    best = data.get("best_decision")
+    worst = data.get("worst_decision")
+    if best or worst:
+        st.markdown("**Notable Decisions**")
+        if best:
+            ret = best.get("return_pct")
+            st.success(
+                f"Best: **{best.get('decision')} {best.get('symbol')}** "
+                f"on {best.get('date')} — {f'{ret:+.2%}' if ret is not None else '—'} "
+                f"({best.get('validation_status', '—')})"
+            )
+        if worst:
+            ret = worst.get("return_pct")
+            st.warning(
+                f"Worst: **{worst.get('decision')} {worst.get('symbol')}** "
+                f"on {worst.get('date')} — {f'{ret:+.2%}' if ret is not None else '—'} "
+                f"({worst.get('validation_status', '—')})"
+            )
+
+
 def _render_system_confidence_section(bundle: dict) -> None:
     data = bundle.get("confidence_calibration") or {}
 
@@ -4450,6 +4534,8 @@ def page_decision_center() -> None:
     _render_system_confidence_section(bundle)
     st.divider()
     _render_decision_performance_section(bundle)
+    st.divider()
+    _render_decision_performance_attribution(bundle)
 
 
 # ============================================================================

@@ -223,3 +223,197 @@ The prior wording made expected absent policy artifacts look like broken require
 - memo and GUI health wording can distinguish required missing vs defaulting vs optional absence
 - regression tests now guard against non-critical artifacts inflating critical missing counts
 
+---
+
+## AI Validation Layer
+
+### Date
+
+2026-04-29
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `portfolio_automation/ai_decision_validator.py`
+- `main.py` â€” post-decision-plan validation hook
+- `gui_operator_data.py` â€” validation artifact loader
+- `gui/app.py` â€” `AI Validation` section
+- `tests/test_ai_decision_validator.py`
+
+### Decision
+
+Added a deterministic-first AI validation layer that runs after `decision_plan.json` is written and produces:
+
+- `outputs/latest/ai_decision_validation.json`
+- `outputs/latest/ai_decision_validation.md`
+
+Validation statuses:
+
+- `aligned`
+- `caution`
+- `contradiction`
+- `insufficient_context`
+
+### Why
+
+The system needed a downstream quality-check layer that could validate whether decision narratives and capital-action language match the already-emitted decision without changing the decision itself.
+
+### Invariants Preserved
+
+- observe-only operation
+- no decision mutation
+- no scoring changes
+- no allocation changes
+- validator is non-blocking
+
+### Downstream Impact
+
+- GUI now has an `AI Validation` section
+- validation artifacts are available for later analytics
+- future agents can inspect contradiction rates without touching decision logic
+
+---
+
+## Contradiction Detection And Negation Fix
+
+### Date
+
+2026-04-29
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `portfolio_automation/ai_decision_validator.py` â€” contradiction detection, negation handling
+- `tests/test_ai_decision_validator.py`
+
+### Decision
+
+Added explicit contradiction detection between decision type and capital-action language, then refined it so negated deployment phrases are not treated as contradictions.
+
+Fixed example:
+
+- `WAIT` + `Stand by â€” do not deploy capital until conditions improve.`
+  no longer counts as contradiction
+
+Still contradictory:
+
+- `WAIT` + `deploy capital now`
+- `WAIT` + `buy shares now`
+
+### Why
+
+The first contradiction pass generated false positives for valid hold-off language. The negation fix preserves validator usefulness without punishing correct observe-only phrasing.
+
+### Invariants Preserved
+
+- decision generation unchanged
+- capital action semantics unchanged
+- validator remains downstream only
+
+### Downstream Impact
+
+- lower false-positive contradiction counts
+- cleaner GUI validation summaries
+- more trustworthy validation artifacts for later calibration
+
+---
+
+## Decision Outcome Tracker
+
+### Date
+
+2026-04-29
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `portfolio_automation/decision_outcome_tracker.py`
+- `main.py` â€” post-validation outcome-tracker hook
+- `gui_operator_data.py` â€” outcome summary loader
+- `gui/app.py` â€” `Decision Performance` section
+- `tests/test_decision_outcome_tracker.py`
+
+### Decision
+
+Added a downstream outcome tracker that snapshots decisions into JSONL history, resolves outcomes over time, and writes aggregated performance summaries:
+
+- `outputs/policy/decision_outcomes.jsonl`
+- `outputs/policy/decision_outcome_summary.json`
+- `outputs/policy/decision_outcome_summary.md`
+
+### Why
+
+The system needed a durable feedback layer so future calibration and optimization work can use observed decision outcomes instead of anecdotal review.
+
+### Invariants Preserved
+
+- no execution behavior
+- no same-run feedback into decisions
+- no scoring changes
+- no allocation changes
+- tracker failures remain non-fatal
+
+### Downstream Impact
+
+- GUI now has a `Decision Performance` section
+- hit-rate and return metrics are available by decision type and validation status
+- future agents can reason about calibration using persisted history
+
+---
+
+## Self-Validating And Learning Architecture
+
+### Date
+
+2026-04-29
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `portfolio_automation/decision_engine.py`
+- `portfolio_automation/decision_explainer.py`
+- `portfolio_automation/ai_decision_validator.py`
+- `portfolio_automation/decision_outcome_tracker.py`
+- `main.py`
+- `gui/app.py`
+- `docs/ARCHITECTURE.md`
+
+### Decision
+
+Upgraded the production system from pure decision support to a layered observe-only architecture:
+
+```text
+Decide -> Explain -> Validate -> Track Outcomes
+```
+
+AI remains limited to explanation and validation. The feedback loop remains analytically downstream and does not control decisions.
+
+### Why
+
+Future agents need a stable model of where reasoning ends, where validation begins, and where learning artifacts accumulate over time.
+
+### Invariants Preserved
+
+- observe-only operation
+- rules-first decision generation
+- no trade execution
+- `decision_plan.json` remains the downstream source of truth
+
+### Downstream Impact
+
+- richer operator visibility
+- stronger explainability and QA surfaces
+- better long-term maintainability for future AI agents
+

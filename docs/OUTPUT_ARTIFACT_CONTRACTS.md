@@ -1,6 +1,6 @@
 # Output Artifact Contracts
 
-Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, plus `gui_operator_data.py` and `watchlist_scanner/output_writers.py`.
+Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, and `portfolio_automation/decision_outcome_tracker.py`.
 
 ## Contract Policy
 
@@ -326,6 +326,112 @@ Contract notes:
 - this is the decision source of truth for downstream consumers
 - downstream layers must not mutate this file
 - downstream layers must not recompute decision order or actions
+- additive structured explainability fields are allowed and now expected on production rows when present, including:
+  - `decision_type`
+  - `priority_score`
+  - `capital_action`
+  - `decision_reason`
+  - `override_flags`
+  - `allocation`
+  - `decision_reason_structured`
+
+### `outputs/latest/ai_decision_validation.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `observe_only`
+- `available`
+- `total_validated`
+- `aligned_count`
+- `caution_count`
+- `contradiction_count`
+- `insufficient_context_count`
+- `ai_used`
+- `summary_line`
+- `validations`
+
+Required validation row fields:
+
+- `symbol`
+- `decision`
+- `validation_status`
+- `plain_english_summary`
+- `rule_alignment`
+- `narrative_context`
+- `contradictions`
+- `watch_next`
+- `ai_used`
+- `model`
+- `generated_at`
+
+Contract notes:
+
+- validation is downstream only
+- validator must never change decisions, ranks, scores, or allocations
+- deterministic rules run first
+- optional LLM use must remain non-blocking
+- missing or malformed `decision_plan.json` must degrade to:
+  - `available: false`
+  - zero counts
+  - empty `validations`
+  - a clear `summary_line`
+
+### `outputs/policy/decision_outcomes.jsonl`
+
+Required row fields:
+
+- `run_id`
+- `date`
+- `symbol`
+- `decision`
+- `priority`
+- `source`
+- `strategy`
+- `band`
+- `confidence`
+- `validation_status`
+- `price_at_decision`
+- `timestamp`
+- `resolved`
+- `resolved_at`
+- `days_elapsed`
+- `price_at_resolution`
+- `return_pct`
+- `direction_correct`
+
+Contract notes:
+
+- one JSON object per line
+- snapshot step must be idempotent for the same `run_id`
+- unresolved rows are valid and expected
+- `direction_correct` may be:
+  - `true`
+  - `false`
+  - `null` for neutral decisions such as `HOLD`
+
+### `outputs/policy/decision_outcome_summary.json`
+
+Required top-level fields:
+
+- `generated_at`
+- `total_decisions`
+- `resolved`
+- `unresolved`
+- `hit_rate`
+- `avg_return_pct`
+- `by_decision`
+- `by_validation_status`
+- `last_10_resolved`
+- `best_decision`
+- `worst_decision`
+
+Contract notes:
+
+- summary is aggregated from `decision_outcomes.jsonl`
+- `hit_rate` and `avg_return_pct` may be `null` when no resolved rows exist
+- `by_validation_status` links decision outcome analysis to the AI validation layer
+- this artifact is consumed by GUI read-only performance views
 
 ### `outputs/latest/decision_explanations.json`
 

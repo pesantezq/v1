@@ -31,8 +31,27 @@ Typical outcomes:
 - updates `outputs/latest`
 - writes scored finance recommendations and portfolio artifacts
 - may run theme engine and watchlist scanner if enabled
+- writes `outputs/latest/decision_plan.json` and `outputs/latest/decision_plan.md`
+- auto-runs AI validation after the decision plan step
+- writes:
+  - `outputs/latest/ai_decision_validation.json`
+  - `outputs/latest/ai_decision_validation.md`
+- auto-runs the decision outcome tracker after validation
+- writes:
+  - `outputs/policy/decision_outcomes.jsonl`
+  - `outputs/policy/decision_outcome_summary.json`
+  - `outputs/policy/decision_outcome_summary.md`
 - records snapshot and run history in SQLite
 - copies successful outputs to `outputs/history/YYYY-MM-DD`
+
+Decision-layer execution order:
+
+```text
+decision_plan
+  -> decision_explanations
+  -> ai_decision_validation
+  -> decision_outcome_tracker
+```
 
 ### Analysis-only daily orchestrator
 
@@ -173,6 +192,17 @@ bash scripts/rerun_today_safe.sh
 
 Logs are written to `logs/rerun_YYYY-MM-DD_HHMMSS.log`.
 
+### Minimal same-day rerun workaround
+
+If you need the exact manual override instead of the wrapper, reset today's `run_history` row and rerun:
+
+```bash
+sqlite3 data/portfolio.db "UPDATE run_history SET status='failed', completed_at=NULL WHERE run_id='<YYYY-MM-DD>_daily';"
+python main.py --run-mode daily
+```
+
+Use this only when today's run already completed and you intentionally need a fresh same-day rewrite of `outputs/latest`.
+
 ---
 
 ## Common Failures And Fixes
@@ -251,6 +281,32 @@ Fix:
 
 - run `main.py` enough times to produce scored recommendation history
 - do not treat this as a pipeline error
+
+### AI Validation Unavailable
+
+Symptoms:
+
+- `ai_decision_validation.json` missing
+- GUI `AI Validation` section unavailable
+
+Fix:
+
+- confirm `decision_plan.json` exists first
+- inspect validator logs after the decision-plan write step
+- remember validator failures are non-fatal by design
+
+### Outcome Tracker Sparse Or Empty
+
+Symptoms:
+
+- `decision_outcome_summary.json` exists but shows low counts or `null` hit rate
+- GUI `Decision Performance` section has little data
+
+Fix:
+
+- allow more daily runs to accumulate history
+- confirm `outputs/policy/decision_outcomes.jsonl` is being appended
+- do not treat unresolved or low-history states as pipeline failure
 
 ### GUI Missing Data
 

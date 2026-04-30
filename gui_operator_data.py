@@ -32,6 +32,9 @@ CORE_ARTIFACTS = {
 DECISION_PLAN_RELATIVE_PATH = ("outputs", "latest", "decision_plan.json")
 SYSTEM_DECISION_SUMMARY_RELATIVE_PATH = ("outputs", "latest", "system_decision_summary.json")
 DECISION_EXPLANATIONS_RELATIVE_PATH = ("outputs", "latest", "decision_explanations.json")
+DECISION_PERFORMANCE_ATTRIBUTION_RELATIVE_PATH = (
+    "outputs", "policy", "decision_performance_attribution.json"
+)
 AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_validation.json")
 DECISION_OUTCOME_SUMMARY_RELATIVE_PATH = ("outputs", "policy", "decision_outcome_summary.json")
 DECISION_TRIAGE_RELATIVE_PATH = ("outputs", "latest", "decision_triage.json")
@@ -1413,6 +1416,31 @@ def _get_insight_cards(data: dict[str, Any]) -> list[dict[str, Any]]:
     return (data.get("explanations") or [])[:5]
 
 
+def load_decision_performance_attribution(root: Path | str) -> dict[str, Any]:
+    path = Path(root).joinpath(*DECISION_PERFORMANCE_ATTRIBUTION_RELATIVE_PATH)
+    if not path.exists():
+        return {
+            "available": False,
+            "insufficient_data": True,
+            "summary_line": "No performance attribution data available.",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {
+            "available": False,
+            "insufficient_data": True,
+            "summary_line": "Performance attribution file could not be read.",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "available": False,
+            "insufficient_data": True,
+            "summary_line": "Performance attribution file is malformed.",
+        }
+    return payload
+
+
 def _normalize_decision_brief(
     *,
     decision_plan: dict[str, Any],
@@ -1584,6 +1612,7 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "decision_outcome_summary": load_decision_outcome_summary(root_path),
         "decision_triage": load_decision_triage(root_path),
         "confidence_calibration": load_confidence_calibration(root_path),
+        "decision_performance_attribution": load_decision_performance_attribution(root_path),
     }
 
 
