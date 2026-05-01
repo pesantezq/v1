@@ -1,6 +1,6 @@
 # Output Artifact Contracts
 
-Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, and `portfolio_automation/historical_replay/replay_reports.py`.
+Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, `outputs/sandbox/discovery/`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, `portfolio_automation/historical_replay/replay_reports.py`, and `portfolio_automation/discovery/discovery_reports.py`.
 
 ## Contract Policy
 
@@ -667,3 +667,47 @@ Required top-level fields:
 - `decision_analysis` — dict keyed by decision type; may be empty
 - `insights` — array of strings (max 5); may be empty
 - `summary_line` — human-readable string
+
+## Discovery Engine Sandbox Artifacts
+
+All four artifacts are written to `outputs/sandbox/discovery/` by `RunMode.DISCOVERY` only.
+Official modes (DAILY, MANUAL_UPDATE, WEEKLY_REVIEW) cannot write these paths.
+
+### `outputs/sandbox/discovery/emerging_candidates.json`
+
+| Field | Type | Always present |
+|---|---|---|
+| `generated_at` | ISO timestamp | Yes |
+| `run_id` | string | Yes |
+| `observe_only` | `true` | Yes |
+| `discovery_only` | `true` | Yes |
+| `sandbox_only` | `true` | Yes |
+| `disclaimer` | string | Yes |
+| `total_candidates` | int | Yes |
+| `watch_count` | int | Yes |
+| `discovered_count` | int | Yes |
+| `candidates` | array | Yes (may be empty) |
+
+Each candidate object: `ticker`, `status` (discovered/watch/rejected), `score`, `mention_count`, `unique_source_count`, `event_type`, `event_confidence`, `risk_flag`, `rejection_reason`, `discovery_only`, `sandbox_only`, `corroboration_required` (true), `corroboration_met` (false), `corroboration_sources` ([]), `first_seen`, `last_seen`, `evidence_snippets`.
+
+### `outputs/sandbox/discovery/rejected_candidates.json`
+
+Same top-level shape as `emerging_candidates.json`. Contains only REJECTED candidates.
+`total_rejected` instead of `total_candidates`.
+
+### `outputs/sandbox/discovery/discovery_memory.json`
+
+| Field | Type | Always present |
+|---|---|---|
+| `generated_at` | ISO timestamp | Yes |
+| `discovery_only` | `true` | Yes |
+| `sandbox_only` | `true` | Yes |
+| `entry_count` | int | Yes |
+| `entries` | array | Yes (may be empty) |
+
+Each memory entry: `ticker`, `first_seen`, `last_seen`, `mention_count`, `source_count`, `seen_runs`, `status`, `last_score`, `last_event_type`, `rejected_reason`, `discovery_only`, `sandbox_only`.
+
+### `outputs/sandbox/discovery/discovery_memo_section.md`
+
+Markdown. Always contains the disclaimer: *"Discovery candidates are not buy/sell recommendations."*
+Always states: *"Official watchlist and recommendations were not modified."*

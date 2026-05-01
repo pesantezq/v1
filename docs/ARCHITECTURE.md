@@ -2,6 +2,22 @@
 
 Last verified against code on 2026-04-30.
 
+## Discovery Engine (Research Lane)
+
+`portfolio_automation/discovery/` is the sandbox-only research layer. It never writes to
+official output namespaces and never produces buy/sell recommendations.
+
+Modules: `news_ticker_discovery`, `event_classifier`, `candidate_promotion_engine`,
+`discovery_memory`, `discovery_reports`.
+
+Artifacts: `outputs/sandbox/discovery/` — all carry `discovery_only=True`, `sandbox_only=True`,
+and `"Discovery candidates are not buy/sell recommendations."` disclaimer.
+
+Entry point: `run_discovery_engine(records, run_mode="discovery", ...)`. Governed by
+`RunMode.DISCOVERY` — other modes raise `RunModeViolation` on any attempt to write.
+
+See `docs/DISCOVERY_ENGINE.md`.
+
 ## Run Mode Governance
 
 `portfolio_automation/run_mode_governance.py` centralizes run-mode declarations

@@ -305,15 +305,38 @@ No live scoring, allocation, recommendation, or output schema changed.
 
 ---
 
+## Discovery Engine Foundation (Complete)
+
+Sandbox-only, research-lane candidate discovery added at `portfolio_automation/discovery/`.
+
+Modules:
+- `news_ticker_discovery.py` — deterministic cashtag/parenthetical/source-provided ticker extraction; noise-word filtering; known_universe allowlist
+- `event_classifier.py` — keyword-based classification into 11 event types + unknown; risk_flag for legal/regulatory negative signals
+- `candidate_promotion_engine.py` — scoring by mention count, source diversity, event confidence, risk penalty; statuses: DISCOVERED, WATCH, REJECTED only
+- `discovery_memory.py` — persistent sandbox candidate memory; tolerates missing/corrupt files; accumulates mention_count and seen_runs
+- `discovery_reports.py` — sandbox artifact writer (`emerging_candidates.json`, `rejected_candidates.json`, `discovery_memory.json`, `discovery_memo_section.md`) + `run_discovery_engine` orchestrator
+
+Governance:
+- All artifacts written to `outputs/sandbox/discovery/` only
+- `can_execute_trades=False`, `discovery_only=True`, `sandbox_only=True` in every artifact
+- Disclaimer on every artifact: "Discovery candidates are not buy/sell recommendations."
+- `assert_can_write_namespace(RunMode.DISCOVERY, "sandbox")` enforced before any I/O
+- DAILY/MANUAL_UPDATE/WEEKLY_REVIEW/HISTORICAL_REPLAY raise `RunModeViolation` if they try to write
+- Corroboration gates: `corroboration_required=True`, `corroboration_met=False` on every candidate
+
+Not done / pending:
+- Corroboration implementation (requires multi-source evidence scoring)
+- GUI discovery approval workflow
+- Manual promotion proposal (MANUAL_UPDATE + approved=True)
+- Daily Memo discovery section
+- Historical replay/backtest for discovery candidates
+
+Tests: `tests/discovery/` — 171 passed across 5 test files
+Docs: `docs/DISCOVERY_ENGINE.md`
+
+---
+
 ## Post-Phase-0 Next Steps
-
-### Discovery Engine Foundation
-
-- Status: not started
-- Define discovery pipeline that consumes `discovery_only` signals from the registry
-- Route `STRONG_MOVE_UP`, `VOLUME_SPIKE`, `BREAKOUT_PROXY` through a separate
-  corroboration step before they become actionable candidates
-- Keep discovery artifacts in `OutputNamespace.SANDBOX` until corroboration passes
 
 ### GUI Data Quality + AI Budget Panels
 

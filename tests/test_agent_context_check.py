@@ -195,12 +195,12 @@ class TestPhaseStatusKeys:
     def test_post_phase_0_present(self):
         assert "post_phase_0" in self.phase
 
-    def test_discovery_engine_not_started(self):
+    def test_discovery_engine_present(self):
         post = self.phase.get("post_phase_0", {})
         discovery = post.get("discovery_engine_foundation", {})
-        status = discovery.get("status", "not_started")
-        assert status in ("not_started", "deferred"), (
-            f"discovery_engine_foundation.status must be 'not_started' or 'deferred', got {status!r}"
+        status = discovery.get("status", "")
+        assert status in ("not_started", "deferred", "complete", "in_progress"), (
+            f"discovery_engine_foundation.status unexpected value: {status!r}"
         )
 
     def test_auto_trading_out_of_scope(self):

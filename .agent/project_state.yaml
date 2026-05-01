@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: discovery_engine_foundation
+current_step: gui_data_quality_and_ai_budget_panels
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -25,12 +25,14 @@ completed_steps:
   - agent_orchestration_layer
   - confidence_calibration_feedback_loop
   - run_mode_governance_operating_mode_separation
+  - discovery_engine_foundation
 
 next_official_step:
-  primary: discovery_engine_foundation
+  primary: gui_data_quality_and_ai_budget_panels
   secondary:
-    - gui_data_quality_and_ai_budget_panels
     - instrument_ai_call_sites
+    - discovery_corroboration_implementation
+    - gui_discovery_approval_workflow
 
 # ---------------------------------------------------------------------------
 # Two-lane operating model (added by run_mode_governance step)

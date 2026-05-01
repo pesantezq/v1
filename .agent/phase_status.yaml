@@ -107,11 +107,28 @@ post_phase_0:
     tests: 132 passed
 
   discovery_engine_foundation:
-    status: not_started
+    status: complete
     priority: medium
-    description: Define discovery pipeline consuming discovery_only signals; route corroboration step before signals become actionable
-    note: DO NOT START until run_mode_governance_operating_mode_separation is complete or explicitly prioritized
-    warning: PREMATURE_DISCOVERY_IS_FORBIDDEN — do not begin implementation without explicit user approval
+    description: Sandbox-only ticker extraction, event classification, candidate scoring, memory, and sandbox report writing
+    files:
+      - portfolio_automation/discovery/__init__.py
+      - portfolio_automation/discovery/news_ticker_discovery.py
+      - portfolio_automation/discovery/event_classifier.py
+      - portfolio_automation/discovery/candidate_promotion_engine.py
+      - portfolio_automation/discovery/discovery_memory.py
+      - portfolio_automation/discovery/discovery_reports.py
+      - tests/discovery/__init__.py
+      - tests/discovery/test_news_ticker_discovery.py
+      - tests/discovery/test_event_classifier.py
+      - tests/discovery/test_candidate_promotion_engine.py
+      - tests/discovery/test_discovery_memory.py
+      - tests/discovery/test_discovery_reports.py
+      - docs/DISCOVERY_ENGINE.md
+    tests: 171 passed
+    pending_sub_steps:
+      - discovery_corroboration_implementation
+      - gui_discovery_approval_workflow
+      - daily_memo_discovery_section
 
   gui_data_quality_and_ai_budget_panels:
     status: not_started
