@@ -132,9 +132,11 @@ post_phase_0:
       - historical_replay_backtest_for_discovery_candidates
 
   gui_data_quality_and_ai_budget_panels:
-    status: not_started
+    status: complete
     priority: medium
-    description: Read-only GUI cards consuming data_quality_report.json and ai_budget_summary.json
+    description: Read-only GUI panels for Data Quality, AI Budget, Confidence Calibration (latest), and Discovery Sandbox; 4 loaders in gui_operator_data.py; 4 tabs in gui/app.py
+    files: [gui_operator_data.py, gui/app.py, tests/test_gui_system_health_panels.py]
+    tests: 66 passed
     prerequisite: phase_0_complete
 
   instrument_ai_call_sites:

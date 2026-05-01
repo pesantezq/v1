@@ -36,6 +36,10 @@ from gui_operator_data import (
     _compact_decision_reason,
     _ai_validation_badge,
     _get_insight_cards,
+    load_data_quality_report,
+    load_ai_budget_summary,
+    load_confidence_calibration_latest,
+    load_discovery_sandbox_status,
 )
 from gui_insight_cards import render_insight_cards
 from gui_insights import generate_insights as _generate_insights
@@ -2437,6 +2441,310 @@ def _render_recommendation_quality_tab(bundle: dict) -> None:
         st.caption(note)
 
 
+def _render_data_quality_tab(bundle: dict) -> None:
+    dq = bundle.get("data_quality_report", {})
+    st.subheader("Data Quality Monitor")
+    _render_interpretation(
+        "Observe-only view of data quality for the last pipeline run. "
+        "No scores, allocations, or recommendations are changed here."
+    )
+    st.caption("Source: `outputs/latest/data_quality_report.json` — observe-only, never modifies pipeline behavior.")
+
+    if not dq.get("available"):
+        st.info(dq.get("summary_line") or "Data quality report not available yet. Run the daily pipeline to generate it.")
+        st.caption("Expected at: `outputs/latest/data_quality_report.json`")
+        return
+
+    total = dq.get("total_symbols", 0)
+    healthy = dq.get("healthy_symbols", 0)
+    warning = dq.get("warning_symbols", 0)
+    critical = dq.get("critical_symbols", 0)
+
+    if critical > 0:
+        overall_tone = "bad"
+        overall_label = "Critical"
+    elif warning > 0:
+        overall_tone = "warn"
+        overall_label = "Warning"
+    elif total > 0:
+        overall_tone = "good"
+        overall_label = "Healthy"
+    else:
+        overall_tone = "neutral"
+        overall_label = "Unavailable"
+
+    badges = [
+        _badge(overall_label, overall_tone),
+        _badge(f"{healthy}/{total} healthy", "good" if healthy == total else "neutral"),
+    ]
+    if warning > 0:
+        badges.append(_badge(f"{warning} warning", "warn"))
+    if critical > 0:
+        badges.append(_badge(f"{critical} critical", "bad"))
+    st.markdown("".join(badges), unsafe_allow_html=True)
+    st.caption(dq.get("summary_line", ""))
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Symbols", total)
+    c2.metric("Healthy", healthy)
+    c3.metric("Warning", warning)
+    c4.metric("Critical", critical)
+
+    issues = dq.get("issues") or []
+    critical_issues = [i for i in issues if isinstance(i, dict) and i.get("severity") == "critical"]
+    warning_issues = [i for i in issues if isinstance(i, dict) and i.get("severity") == "warning"]
+
+    if critical_issues:
+        with st.expander(f"Critical Issues ({len(critical_issues)})", expanded=True):
+            for issue in critical_issues:
+                st.error(f"**{issue.get('issue_type', 'UNKNOWN')}** — {issue.get('message', '')}")
+    if warning_issues:
+        with st.expander(f"Warnings ({len(warning_issues)})", expanded=False):
+            for issue in warning_issues:
+                st.warning(f"**{issue.get('issue_type', 'UNKNOWN')}** — {issue.get('message', '')}")
+    if not critical_issues and not warning_issues:
+        st.success("No critical or warning issues detected.")
+
+    fallback = dq.get("fallback_count", 0)
+    stale = dq.get("stale_price_count", 0)
+    missing_price = dq.get("missing_price_count", 0)
+    if any(v > 0 for v in (fallback, stale, missing_price)):
+        st.caption(f"Fallback used: {fallback} | Stale prices: {stale} | Missing price: {missing_price}")
+
+
+def _render_ai_budget_tab(bundle: dict) -> None:
+    budget = bundle.get("ai_budget_summary", {})
+    st.subheader("AI Budget Summary")
+    _render_interpretation(
+        "Observe-only tracking of AI/LLM call costs from the last pipeline run. "
+        "Advisory and observability only — does not block or modify AI calls unless hard enforcement is enabled."
+    )
+    st.caption("Source: `outputs/latest/ai_budget_summary.json` — advisory/observability only.")
+
+    if not budget.get("available"):
+        st.info(budget.get("summary_line") or "AI budget summary not available yet. Run the daily pipeline to generate it.")
+        st.caption("Expected at: `outputs/latest/ai_budget_summary.json`")
+        return
+
+    blocked = budget.get("blocked", False)
+    warning = budget.get("warning", False)
+    observe_only = budget.get("observe_only", True)
+
+    if blocked:
+        overall_tone, overall_label = "bad", "Blocked"
+    elif warning:
+        overall_tone, overall_label = "warn", "Warning"
+    else:
+        overall_tone, overall_label = "good", "Within Budget"
+
+    badges = [
+        _badge(overall_label, overall_tone),
+        _badge("observe-only" if observe_only else "hard enforcement", "neutral" if observe_only else "warn"),
+    ]
+    st.markdown("".join(badges), unsafe_allow_html=True)
+    st.caption(budget.get("summary_line", ""))
+
+    daily_cost = budget.get("daily_cost_total_usd", 0.0)
+    monthly_cost = budget.get("monthly_cost_total_usd", 0.0)
+    daily_limit = budget.get("daily_cost_limit_usd")
+    monthly_limit = budget.get("monthly_cost_limit_usd")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Daily Cost", f"${daily_cost:.4f}")
+    c2.metric("Monthly Cost", f"${monthly_cost:.4f}")
+    c3.metric("Daily Limit", f"${daily_limit:.4f}" if daily_limit is not None else "None")
+    c4.metric("Monthly Limit", f"${monthly_limit:.4f}" if monthly_limit is not None else "None")
+
+    warnings = budget.get("warnings") or []
+    if warnings:
+        for w in warnings:
+            st.warning(w)
+
+    event_count = budget.get("event_count", 0)
+    daily_tokens = budget.get("daily_token_total", 0)
+    st.caption(f"AI calls tracked today: {event_count} | Tokens: {daily_tokens:,}")
+
+
+def _render_calibration_tab(bundle: dict) -> None:
+    cal = bundle.get("confidence_calibration_latest", {})
+    st.subheader("Confidence Calibration")
+    _render_interpretation(
+        "Observe-only calibration of historical confidence scores against resolved outcomes. "
+        "This does not automatically change scoring — it surfaces calibration gaps for review only."
+    )
+    st.caption(
+        "Source: `outputs/latest/confidence_calibration.json` — observe-only. "
+        "Does not automatically change scoring or registry values."
+    )
+
+    if not cal.get("available"):
+        st.info(cal.get("summary_line") or "Confidence calibration not available yet.")
+        st.caption("Expected at: `outputs/latest/confidence_calibration.json`")
+        return
+
+    if cal.get("insufficient_data"):
+        st.warning(
+            "Insufficient resolved decisions to compute calibration. "
+            f"Total resolved: {cal.get('total_resolved', 0)}. Check back after more signals resolve."
+        )
+        dq_warnings = cal.get("dq_warnings") or []
+        for w in dq_warnings:
+            st.caption(f"DQ note: {w}")
+        return
+
+    total = cal.get("total_resolved", 0)
+    hit_rate = cal.get("overall_hit_rate")
+    avg_return = cal.get("overall_avg_return")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Resolved Decisions", total)
+    if hit_rate is not None:
+        c2.metric("Overall Hit Rate", f"{hit_rate * 100:.1f}%")
+    if avg_return is not None:
+        c3.metric("Avg Return", f"{avg_return * 100:.2f}%")
+
+    st.caption(cal.get("summary_line", ""))
+
+    buckets_5 = cal.get("buckets_5") or []
+    if buckets_5:
+        st.subheader("5-Bucket Calibration")
+        bucket_rows = []
+        for b in buckets_5:
+            if not isinstance(b, dict):
+                continue
+            hr = b.get("hit_rate")
+            avg_r = b.get("avg_return_5d")
+            bucket_rows.append({
+                "Bucket": b.get("label", "unknown"),
+                "Count": b.get("count", 0),
+                "Resolved": b.get("attributable_count", 0),
+                "Hit Rate": f"{hr * 100:.1f}%" if hr is not None else "—",
+                "Avg Return 5d": f"{avg_r * 100:.2f}%" if avg_r is not None else "—",
+                "Small Sample": "Yes" if b.get("small_sample") else "No",
+            })
+        if bucket_rows:
+            st.dataframe(_coerce_df(bucket_rows), width="stretch", hide_index=True)
+
+    signal_results = cal.get("signal_results") or []
+    if signal_results:
+        with st.expander(f"Per-Signal Calibration ({len(signal_results)} signals)", expanded=False):
+            sig_rows = []
+            for s in signal_results:
+                if not isinstance(s, dict):
+                    continue
+                gap = s.get("calibration_gap")
+                review = s.get("suggested_review", False)
+                sig_rows.append({
+                    "Signal": s.get("signal_source", "unknown"),
+                    "Resolved": s.get("resolved_count", 0),
+                    "Hit Rate": f"{s.get('hit_rate', 0) * 100:.1f}%" if s.get("hit_rate") is not None else "—",
+                    "Avg Conf": f"{s.get('average_confidence', 0) * 100:.1f}%" if s.get("average_confidence") is not None else "—",
+                    "Gap": f"{gap * 100:.1f}%" if gap is not None else "—",
+                    "Review?": "Yes" if review else "No",
+                })
+            if sig_rows:
+                st.dataframe(_coerce_df(sig_rows), width="stretch", hide_index=True)
+
+    dq_warnings = cal.get("dq_warnings") or []
+    if dq_warnings:
+        with st.expander("Data Quality Notes", expanded=False):
+            for w in dq_warnings:
+                st.caption(w)
+
+
+def _render_discovery_sandbox_tab(bundle: dict) -> None:
+    disc = bundle.get("discovery_sandbox_status", {})
+    st.subheader("Discovery Sandbox")
+    st.markdown(
+        "> **Research-only.** Discovery candidates are not buy/sell recommendations and are not part of the official watchlist or portfolio. "
+        "No official portfolio state has been modified."
+    )
+    st.caption("Source: `outputs/sandbox/discovery/` — sandbox lane only. No official actions taken.")
+
+    if not disc.get("available"):
+        st.info(
+            "No discovery sandbox artifacts found. "
+            "Run the pipeline in `discovery` mode to generate research candidates."
+        )
+        st.caption("Expected at: `outputs/sandbox/discovery/`")
+        return
+
+    watch_count = disc.get("watch_count", 0)
+    discovered_count = disc.get("discovered_count", 0)
+    rejected_count = disc.get("total_rejected", 0)
+    memory_count = disc.get("memory_entry_count", 0)
+
+    badges = [
+        _badge("research-only", "neutral"),
+        _badge("sandbox", "neutral"),
+        _badge("no trades", "neutral"),
+    ]
+    st.markdown("".join(badges), unsafe_allow_html=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Watch", watch_count)
+    c2.metric("Discovered", discovered_count)
+    c3.metric("Rejected", rejected_count)
+    c4.metric("Memory Entries", memory_count)
+
+    if disc.get("run_id"):
+        st.caption(f"Run ID: `{disc['run_id']}`")
+
+    watch_cands = disc.get("watch_candidates") or []
+    if watch_cands:
+        st.subheader("Watch Candidates")
+        watch_rows = []
+        for c in watch_cands:
+            if not isinstance(c, dict):
+                continue
+            watch_rows.append({
+                "Ticker": c.get("ticker", "?"),
+                "Score": f"{c.get('score', 0):.2f}",
+                "Event Type": c.get("event_type", "unknown"),
+                "Mentions": c.get("mention_count", 0),
+                "Sources": c.get("unique_source_count", 0),
+                "Risk Flag": "Yes" if c.get("risk_flag") else "No",
+                "Corroboration Met": "Yes" if c.get("corroboration_met") else "No",
+                "First Seen": (c.get("first_seen") or "")[:10],
+            })
+        st.dataframe(_coerce_df(watch_rows), width="stretch", hide_index=True)
+        st.caption("Corroboration is required before any candidate can be considered for promotion. All candidates show corroboration_met=False in v1.")
+
+    discovered_cands = disc.get("discovered_candidates") or []
+    if discovered_cands:
+        with st.expander(f"Discovered Candidates ({len(discovered_cands)})", expanded=False):
+            disc_rows = []
+            for c in discovered_cands:
+                if not isinstance(c, dict):
+                    continue
+                disc_rows.append({
+                    "Ticker": c.get("ticker", "?"),
+                    "Score": f"{c.get('score', 0):.2f}",
+                    "Event Type": c.get("event_type", "unknown"),
+                    "Mentions": c.get("mention_count", 0),
+                })
+            st.dataframe(_coerce_df(disc_rows), width="stretch", hide_index=True)
+
+    rejected_cands = disc.get("rejected_candidates") or []
+    if rejected_cands:
+        with st.expander(f"Rejected Candidates ({len(rejected_cands)})", expanded=False):
+            rej_rows = []
+            for c in rejected_cands:
+                if not isinstance(c, dict):
+                    continue
+                rej_rows.append({
+                    "Ticker": c.get("ticker", "?"),
+                    "Rejection Reason": c.get("rejection_reason", "unknown"),
+                    "Score": f"{c.get('score', 0):.2f}",
+                })
+            st.dataframe(_coerce_df(rej_rows), width="stretch", hide_index=True)
+
+    memo_md = disc.get("memo_md", "")
+    if memo_md:
+        with st.expander("Research Memo", expanded=False):
+            st.markdown(memo_md)
+
+
 def _render_weekly_review_tab(bundle: dict) -> None:
     report = bundle.get("weekly_review", {})
     st.subheader("Weekly Review")
@@ -4632,6 +4940,7 @@ def page_dashboard() -> None:
         tab_health, tab_performance, tab_regime, tab_enrichment, tab_quality,
         tab_attribution, tab_rotation,
         tab_weekly,
+        tab_data_quality, tab_ai_budget, tab_calibration, tab_discovery,
     ) = st.tabs(
         [
             "Insights",
@@ -4655,6 +4964,10 @@ def page_dashboard() -> None:
             "Attribution",
             "Rotation",
             "Weekly Review",
+            "Data Quality",
+            "AI Budget",
+            "Calibration",
+            "Discovery",
         ]
     )
 
@@ -4700,6 +5013,14 @@ def page_dashboard() -> None:
         _render_rotation_tab(rot_events)
     with tab_weekly:
         _render_weekly_review_tab(bundle)
+    with tab_data_quality:
+        _render_data_quality_tab(bundle)
+    with tab_ai_budget:
+        _render_ai_budget_tab(bundle)
+    with tab_calibration:
+        _render_calibration_tab(bundle)
+    with tab_discovery:
+        _render_discovery_sandbox_tab(bundle)
 
 
 # ============================================================================

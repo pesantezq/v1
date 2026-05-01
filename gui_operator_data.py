@@ -39,6 +39,13 @@ AI_DECISION_VALIDATION_RELATIVE_PATH = ("outputs", "latest", "ai_decision_valida
 DECISION_OUTCOME_SUMMARY_RELATIVE_PATH = ("outputs", "policy", "decision_outcome_summary.json")
 DECISION_TRIAGE_RELATIVE_PATH = ("outputs", "latest", "decision_triage.json")
 CONFIDENCE_CALIBRATION_RELATIVE_PATH = ("outputs", "policy", "confidence_calibration.json")
+CONFIDENCE_CALIBRATION_LATEST_RELATIVE_PATH = ("outputs", "latest", "confidence_calibration.json")
+DATA_QUALITY_RELATIVE_PATH = ("outputs", "latest", "data_quality_report.json")
+AI_BUDGET_RELATIVE_PATH = ("outputs", "latest", "ai_budget_summary.json")
+DISCOVERY_EMERGING_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "emerging_candidates.json")
+DISCOVERY_REJECTED_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "rejected_candidates.json")
+DISCOVERY_MEMORY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memory.json")
+DISCOVERY_MEMO_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memo_section.md")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1503,6 +1510,136 @@ def _normalize_decision_brief(
     }
 
 
+def load_data_quality_report(root: Path | str) -> dict[str, Any]:
+    _empty: dict[str, Any] = {
+        "available": False,
+        "observe_only": True,
+        "total_symbols": 0,
+        "healthy_symbols": 0,
+        "warning_symbols": 0,
+        "critical_symbols": 0,
+        "missing_price_count": 0,
+        "stale_price_count": 0,
+        "fallback_count": 0,
+        "issues": [],
+        "summary_line": "Data quality report not available yet.",
+    }
+    path = Path(root).joinpath(*DATA_QUALITY_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "Data quality report could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "Data quality report is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault("summary_line", f"{payload.get('total_symbols', 0)} symbols evaluated.")
+    return payload
+
+
+def load_ai_budget_summary(root: Path | str) -> dict[str, Any]:
+    _empty: dict[str, Any] = {
+        "available": False,
+        "observe_only": True,
+        "enabled": False,
+        "daily_token_total": 0,
+        "daily_cost_total_usd": 0.0,
+        "monthly_cost_total_usd": 0.0,
+        "daily_cost_limit_usd": None,
+        "monthly_cost_limit_usd": None,
+        "warning": False,
+        "blocked": False,
+        "warnings": [],
+        "event_count": 0,
+        "summary_line": "AI budget summary not available yet.",
+    }
+    path = Path(root).joinpath(*AI_BUDGET_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "AI budget summary could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "AI budget summary is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault("summary_line", f"{payload.get('event_count', 0)} AI calls tracked today.")
+    return payload
+
+
+def load_confidence_calibration_latest(root: Path | str) -> dict[str, Any]:
+    _empty: dict[str, Any] = {
+        "available": False,
+        "observe_only": True,
+        "insufficient_data": True,
+        "total_resolved": 0,
+        "overall_hit_rate": None,
+        "overall_avg_return": None,
+        "buckets_5": [],
+        "signal_results": [],
+        "dq_warnings": [],
+        "summary_line": "Confidence calibration (latest) not available yet.",
+    }
+    path = Path(root).joinpath(*CONFIDENCE_CALIBRATION_LATEST_RELATIVE_PATH)
+    if not path.exists():
+        return _empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {**_empty, "summary_line": "Confidence calibration file could not be read."}
+    if not isinstance(payload, dict):
+        return {**_empty, "summary_line": "Confidence calibration file is malformed."}
+    payload.setdefault("available", True)
+    payload.setdefault(
+        "summary_line",
+        f"{payload.get('total_resolved', 0)} resolved decisions analyzed.",
+    )
+    return payload
+
+
+def load_discovery_sandbox_status(root: Path | str) -> dict[str, Any]:
+    root_path = Path(root)
+    emerging = _safe_json(root_path.joinpath(*DISCOVERY_EMERGING_RELATIVE_PATH))
+    rejected = _safe_json(root_path.joinpath(*DISCOVERY_REJECTED_RELATIVE_PATH))
+    memory = _safe_json(root_path.joinpath(*DISCOVERY_MEMORY_RELATIVE_PATH))
+    memo_path = root_path.joinpath(*DISCOVERY_MEMO_RELATIVE_PATH)
+    memo_md = _safe_text(memo_path)
+
+    available = bool(emerging or rejected or memory)
+    candidates = _safe_list(emerging.get("candidates"))
+    watch_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "watch"]
+    discovered_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "discovered"]
+    rejected_list = _safe_list(rejected.get("rejected_candidates"))
+
+    return {
+        "available": available,
+        "discovery_only": True,
+        "sandbox_only": True,
+        "observe_only": True,
+        "can_execute_trades": False,
+        "official_watchlist_modified": False,
+        "disclaimer": emerging.get("disclaimer") or "Discovery candidates are not buy/sell recommendations.",
+        "run_id": emerging.get("run_id"),
+        "generated_at": emerging.get("generated_at"),
+        "watch_count": len(watch_candidates),
+        "discovered_count": len(discovered_candidates),
+        "total_candidates": len(candidates),
+        "total_rejected": len(rejected_list),
+        "watch_candidates": watch_candidates,
+        "discovered_candidates": discovered_candidates,
+        "rejected_candidates": rejected_list,
+        "memory_entry_count": memory.get("entry_count", 0),
+        "memo_md": memo_md,
+        "artifacts": {
+            "emerging_candidates": str(root_path.joinpath(*DISCOVERY_EMERGING_RELATIVE_PATH)),
+            "rejected_candidates": str(root_path.joinpath(*DISCOVERY_REJECTED_RELATIVE_PATH)),
+            "discovery_memory": str(root_path.joinpath(*DISCOVERY_MEMORY_RELATIVE_PATH)),
+            "discovery_memo_section": str(memo_path),
+        },
+    }
+
+
 def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
     root_path = Path(root)
     now = datetime.now()
@@ -1613,6 +1750,10 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "decision_triage": load_decision_triage(root_path),
         "confidence_calibration": load_confidence_calibration(root_path),
         "decision_performance_attribution": load_decision_performance_attribution(root_path),
+        "data_quality_report": load_data_quality_report(root_path),
+        "ai_budget_summary": load_ai_budget_summary(root_path),
+        "confidence_calibration_latest": load_confidence_calibration_latest(root_path),
+        "discovery_sandbox_status": load_discovery_sandbox_status(root_path),
     }
 
 

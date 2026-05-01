@@ -339,13 +339,24 @@ Docs: `docs/DISCOVERY_ENGINE.md`
 
 ## Post-Phase-0 Next Steps
 
-### GUI Data Quality + AI Budget Panels
+### GUI Data Quality + AI Budget + Calibration + Discovery Panels (Complete)
 
-- Status: pending
-- Add a Data Quality card to the GUI Decision Center's System/Data Health section
-  consuming `outputs/latest/data_quality_report.json`
-- Add an AI Budget card consuming `outputs/latest/ai_budget_summary.json`
-- Both panels are read-only; no new decision logic introduced
+Four read-only GUI panels added to the Advanced Dashboard tab strip:
+
+- **Data Quality Monitor** (`Data Quality` tab) — consumes `outputs/latest/data_quality_report.json`; badges: healthy/warning/critical/unavailable; shows issue breakdown by severity
+- **AI Budget Summary** (`AI Budget` tab) — consumes `outputs/latest/ai_budget_summary.json`; badges: within budget/warning/blocked; advisory/observability only note
+- **Confidence Calibration** (`Calibration` tab) — consumes `outputs/latest/confidence_calibration.json` (LATEST, with `buckets_5`); note: observe-only, does not automatically change scoring
+- **Discovery Sandbox Status** (`Discovery` tab) — consumes `outputs/sandbox/discovery/`; clearly labeled research-only; shows watch/discovered/rejected candidates; no promote buttons
+
+Loaders added to `gui_operator_data.py`:
+- `load_data_quality_report(root)` — LATEST namespace
+- `load_ai_budget_summary(root)` — LATEST namespace
+- `load_confidence_calibration_latest(root)` — LATEST namespace (separate from existing POLICY loader)
+- `load_discovery_sandbox_status(root)` — SANDBOX namespace
+
+All panels are read-only. Missing artifacts degrade gracefully. No API calls, no AI calls, no buy/sell language.
+
+Tests: `tests/test_gui_system_health_panels.py` — 66 passed
 
 ### Instrument AI Call Sites
 

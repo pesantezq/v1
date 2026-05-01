@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: gui_data_quality_and_ai_budget_panels
+current_step: instrument_ai_call_sites
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -26,9 +26,10 @@ completed_steps:
   - confidence_calibration_feedback_loop
   - run_mode_governance_operating_mode_separation
   - discovery_engine_foundation
+  - gui_data_quality_and_ai_budget_panels
 
 next_official_step:
-  primary: gui_data_quality_and_ai_budget_panels
+  primary: instrument_ai_call_sites
   secondary:
     - instrument_ai_call_sites
     - discovery_corroboration_implementation
