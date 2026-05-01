@@ -228,6 +228,12 @@ class TestRunModeGovernance:
         # Should not raise
         write_discovery_reports(cands, mem, run_mode="discovery", base_dir=str(tmp_path))
 
+    def test_backtest_mode_can_write_sandbox(self, tmp_path):
+        cands = [_make_candidate("NVDA")]
+        mem = _mem_with("NVDA")
+        # BACKTEST is intentionally sandbox-writable for offline discovery evaluation.
+        write_discovery_reports(cands, mem, run_mode="backtest", base_dir=str(tmp_path))
+
     def test_daily_mode_cannot_write_sandbox(self, tmp_path):
         cands = [_make_candidate("NVDA")]
         mem = _mem_with("NVDA")

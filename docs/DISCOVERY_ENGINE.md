@@ -34,7 +34,7 @@ All discovery work runs in the **research/sandbox lane** governed by `RunMode.DI
 | Lane | Modes | May Write |
 |------|-------|-----------|
 | Official | DAILY, MANUAL_UPDATE, WEEKLY_REVIEW | `outputs/latest/`, `outputs/policy/`, `outputs/portfolio/` |
-| Research | DISCOVERY, BACKTEST, HISTORICAL_REPLAY | `outputs/sandbox/`, `outputs/backtest/` |
+| Research | DISCOVERY, BACKTEST, HISTORICAL_REPLAY | sandbox and/or backtest namespaces depending on mode |
 
 ## Sandbox-Only Behavior
 
@@ -111,17 +111,22 @@ Enforced via `portfolio_automation/run_mode_governance.py`.
 
 ```python
 from portfolio_automation.run_mode_governance import (
-    assert_can_write_namespace, RunModeViolation
+    assert_can_write_namespace, RunMode, RunModeViolation
 )
 
 # DISCOVERY mode: allowed
 assert_can_write_namespace(RunMode.DISCOVERY, "sandbox")   # passes
 
+# BACKTEST mode: also allowed for offline sandbox evaluation
+assert_can_write_namespace(RunMode.BACKTEST, "sandbox")    # passes
+
 # DAILY mode: blocked
 assert_can_write_namespace(RunMode.DAILY, "sandbox")       # raises RunModeViolation
 ```
 
-`write_discovery_reports` calls `assert_can_write_namespace` before any file I/O. Non-discovery modes raise `RunModeViolation`.
+`write_discovery_reports` calls `assert_can_write_namespace` before any file I/O.
+`DISCOVERY` and `BACKTEST` may write sandbox discovery artifacts.
+`DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW`, and `HISTORICAL_REPLAY` raise `RunModeViolation`.
 
 ## Modules
 
@@ -179,3 +184,11 @@ The discovery engine does not read or write the official watchlist. Candidates m
 | Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action |
 | Historical backtest for discovery | Run discovery against historical data to calibrate scoring thresholds |
 | Daily Memo discovery section | Add a sandbox-only research summary to the daily memo (read-only) |
+
+## Known v1 Limitation
+
+`QQQ` is treated as a noise token by default in `news_ticker_discovery.py`.
+Adding `QQQ` to `known_universe` does not override that filter because noise filtering runs first.
+
+This is acceptable for conservative v1 behavior, but it should be revisited if ETF discovery
+becomes an explicit goal in a future enhancement.

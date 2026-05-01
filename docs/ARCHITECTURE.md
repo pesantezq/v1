@@ -14,7 +14,11 @@ Artifacts: `outputs/sandbox/discovery/` — all carry `discovery_only=True`, `sa
 and `"Discovery candidates are not buy/sell recommendations."` disclaimer.
 
 Entry point: `run_discovery_engine(records, run_mode="discovery", ...)`. Governed by
-`RunMode.DISCOVERY` — other modes raise `RunModeViolation` on any attempt to write.
+run-mode sandbox permissions:
+
+- `RunMode.DISCOVERY` and `RunMode.BACKTEST` may write sandbox discovery artifacts
+- `RunMode.DAILY`, `RunMode.MANUAL_UPDATE`, `RunMode.WEEKLY_REVIEW`, and
+  `RunMode.HISTORICAL_REPLAY` raise `RunModeViolation` on any attempt to write
 
 See `docs/DISCOVERY_ENGINE.md`.
 

@@ -143,10 +143,15 @@ is_research_only_mode(RunMode.DISCOVERY)    # True
 
 ## Integration with Discovery Engine
 
-When the Discovery Engine Foundation is built, all discovery pipeline runs must use `RunMode.DISCOVERY`. The governance layer will enforce that:
+The Discovery Engine Foundation is now implemented.
+
+For normal research runs, discovery should use `RunMode.DISCOVERY`. The governance layer enforces that:
 - Discovery candidates are written to `outputs/sandbox/` only
 - Discovery runs cannot write `outputs/latest/` or emit official recommendations
 - Candidates require corroboration before promotion to the official lane
+
+For offline evaluation, `RunMode.BACKTEST` may also write sandbox discovery artifacts.
+`RunMode.HISTORICAL_REPLAY` may not.
 
 ## Module
 

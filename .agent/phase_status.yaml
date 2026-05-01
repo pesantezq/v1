@@ -129,6 +129,7 @@ post_phase_0:
       - discovery_corroboration_implementation
       - gui_discovery_approval_workflow
       - daily_memo_discovery_section
+      - historical_replay_backtest_for_discovery_candidates
 
   gui_data_quality_and_ai_budget_panels:
     status: not_started

@@ -670,8 +670,18 @@ Required top-level fields:
 
 ## Discovery Engine Sandbox Artifacts
 
-All four artifacts are written to `outputs/sandbox/discovery/` by `RunMode.DISCOVERY` only.
-Official modes (DAILY, MANUAL_UPDATE, WEEKLY_REVIEW) cannot write these paths.
+All four artifacts are written to `outputs/sandbox/discovery/` by sandbox-writable research modes.
+Current allowed modes:
+
+- `RunMode.DISCOVERY`
+- `RunMode.BACKTEST`
+
+Blocked modes:
+
+- `RunMode.DAILY`
+- `RunMode.MANUAL_UPDATE`
+- `RunMode.WEEKLY_REVIEW`
+- `RunMode.HISTORICAL_REPLAY`
 
 ### `outputs/sandbox/discovery/emerging_candidates.json`
 

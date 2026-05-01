@@ -320,8 +320,9 @@ Governance:
 - All artifacts written to `outputs/sandbox/discovery/` only
 - `can_execute_trades=False`, `discovery_only=True`, `sandbox_only=True` in every artifact
 - Disclaimer on every artifact: "Discovery candidates are not buy/sell recommendations."
-- `assert_can_write_namespace(RunMode.DISCOVERY, "sandbox")` enforced before any I/O
-- DAILY/MANUAL_UPDATE/WEEKLY_REVIEW/HISTORICAL_REPLAY raise `RunModeViolation` if they try to write
+- `assert_can_write_namespace(..., "sandbox")` enforced before any I/O
+- `DISCOVERY` and `BACKTEST` may write sandbox discovery artifacts
+- `DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW`, and `HISTORICAL_REPLAY` raise `RunModeViolation` if they try to write
 - Corroboration gates: `corroboration_required=True`, `corroboration_met=False` on every candidate
 
 Not done / pending:
