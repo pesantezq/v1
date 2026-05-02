@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 # Sandbox sub-paths — consistent with discovery_reports.py conventions
 _APPROVAL_DECISIONS_SUBPATH = "discovery/approval_decisions.jsonl"
-_APPROVAL_SUMMARY_SUBPATH   = "discovery/approval_summary.json"
 
 # ---------------------------------------------------------------------------
 # Forbidden decision values — never accepted, checked at write time

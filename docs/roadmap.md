@@ -446,10 +446,10 @@ New module `portfolio_automation/discovery/approval_workflow.py`:
 Changes to existing modules:
 
 - `gui_operator_data.py`:
-  - Added `DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH` and `DISCOVERY_APPROVAL_SUMMARY_RELATIVE_PATH` constants
-  - Added `load_discovery_approval_decisions(root)` — JSONL loader with malformed-line tolerance
+  - Added `DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH` constant
+  - Added `load_discovery_approval_decisions(root)` — JSONL loader with malformed-line and tampered-record tolerance
   - Added `load_discovery_approval_summary(root)` — builds summary from decisions; always includes governance flags
-  - `load_discovery_sandbox_status()` now returns `approval_decisions` and `approval_summary` keys
+  - `load_discovery_sandbox_status()` now returns `approval_decisions` and `approval_summary` keys, loads rejected runtime artifacts from `candidates`, and remains backward compatible with old `rejected_candidates` fixtures
 
 - `gui/app.py`:
   - `_render_discovery_sandbox_tab()` extended with a "Sandbox Review Decisions" section
@@ -465,9 +465,29 @@ Constraints preserved:
 - No official watchlist or portfolio mutation
 - No buy/sell/actionable/promoted/validated decisions ever written
 - Governance flags validated before every write; any tampering raises ValueError
+- Read-side loaders skip tampered valid JSONL records with forbidden decisions or missing/false governance flags
+- Approval summary is in-memory only; no separate `approval_summary.json` artifact is written
 - No AI/LLM calls, no external API calls, no auto-trading
 
 Tests:
-- `tests/discovery/test_approval_workflow.py` — 66 new tests
-- `tests/test_gui_discovery_approval.py` — 25 new tests
-- 301 total across discovery test suite; 4360 prior full suite + 91 new = 4451 total
+- `tests/discovery/test_approval_workflow.py` — approval model, append-only JSONL, tampered-load filtering
+- `tests/test_gui_discovery_approval.py` — GUI loaders, approval summaries, rejected runtime key compatibility
+- 301 total across discovery test suite after initial implementation; cleanup hardening adds read-side regression coverage
+
+---
+
+### Repo Cleanup Checkpoint (Complete)
+
+Consolidation pass before `daily_memo_discovery_section`.
+
+Scope:
+- Audited discovery approval, corroboration, data governance, AI budget, confidence calibration, GUI health panels, artifact contracts, roadmap, and agent state for docs-to-runtime drift.
+- Preserved scoring, allocation, recommendation, discovery promotion, run-mode permissions, artifact schemas, and advisory-only boundaries.
+
+Fixes:
+- Clarified `rejected_candidates.json` uses top-level `candidates` at runtime.
+- Clarified approval JSONL read-side tamper filtering and in-memory-only approval summary behavior.
+- Removed stale approval summary artifact constants.
+- Added `docs/REPO_CLEANUP_AUDIT.md` with active files, suspected legacy/dead candidates, cleanup backlog, and safety confirmation.
+
+Next official step remains `daily_memo_discovery_section`.

@@ -830,6 +830,19 @@ Each candidate object:
 
 Contains only REJECTED candidates. Carries `observe_only`, `discovery_only`, `sandbox_only`, and `disclaimer` like `emerging_candidates.json`, but has a different top-level shape: uses `total_rejected` (not `total_candidates`) and does **not** include `watch_count` or `discovered_count`.
 
+Required top-level fields:
+
+- `generated_at` - ISO timestamp
+- `run_id` - string
+- `observe_only` - always `true`
+- `discovery_only` - always `true`
+- `sandbox_only` - always `true`
+- `disclaimer` - warning string
+- `total_rejected` - int
+- `candidates` - array of rejected candidate objects
+
+Compatibility note: runtime writers use the top-level `candidates` key. GUI loaders also tolerate the older `rejected_candidates` key for backward-compatible fixture reads.
+
 ### `outputs/sandbox/discovery/discovery_memory.json`
 
 | Field | Type | Always present |
@@ -874,4 +887,6 @@ Per-decision fields:
 Allowed `decision` values: `approve_for_research_review`, `keep_watching`, `reject_candidate`, `needs_more_evidence`.
 Forbidden `decision` values (never written): `buy`, `sell`, `actionable`, `promoted`, `validated`.
 
-This file is never written outside `outputs/sandbox/discovery/`. Governance flags are validated before every append.
+This file is never written outside `outputs/sandbox/discovery/`. Governance flags are validated before every append. Loaders skip malformed JSONL lines and semantically tampered lines, including forbidden decision values or governance flags that are missing or not strictly `true`.
+
+No separate approval summary artifact is written. Approval summaries are computed in memory from valid `approval_decisions.jsonl` records by the GUI and approval workflow helpers.

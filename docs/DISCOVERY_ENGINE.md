@@ -133,6 +133,8 @@ All artifacts written to `outputs/sandbox/discovery/`:
 | `sandbox_only` | `true` |
 | `disclaimer` | Warning string |
 
+`rejected_candidates.json` stores rejected rows under the top-level `candidates` key and uses `total_rejected` instead of `total_candidates`. GUI loaders retain backward compatibility with older fixtures that used `rejected_candidates`.
+
 `discovery_memory.json` is internal sandbox memory. It carries `discovery_only` and `sandbox_only` but does **not** include `observe_only` or `disclaimer` — those fields are for operator-facing report artifacts only.
 
 ## Run Mode Governance
@@ -245,7 +247,11 @@ Decisions are written append-only to `outputs/sandbox/discovery/approval_decisio
 | `no_trade` | Always `true` |
 | `no_official_promotion` | Always `true` |
 
-Governance flags (`sandbox_only`, `no_trade`, `no_official_promotion`) are validated before every write. Any attempt to set them to `False` raises `ValueError`.
+Governance flags (`observe_only`, `sandbox_only`, `no_trade`, `no_official_promotion`) are validated before every write. Any attempt to set them to `False` raises `ValueError`.
+
+Read-side loaders are also defensive: malformed JSONL lines are skipped, and syntactically valid but semantically tampered records are ignored when they contain forbidden decisions or missing/false governance flags.
+
+No `approval_summary.json` artifact is produced. Approval summaries are computed in memory from valid JSONL records.
 
 ### Approval Entry Points
 

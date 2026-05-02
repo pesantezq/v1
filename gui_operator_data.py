@@ -48,7 +48,6 @@ DISCOVERY_REJECTED_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "rejected
 DISCOVERY_MEMORY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memory.json")
 DISCOVERY_MEMO_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memo_section.md")
 DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_decisions.jsonl")
-DISCOVERY_APPROVAL_SUMMARY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_summary.json")
 
 ARTIFACT_META = {
     "run_summary": {
