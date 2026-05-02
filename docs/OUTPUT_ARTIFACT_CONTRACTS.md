@@ -828,8 +828,7 @@ Each candidate object:
 
 ### `outputs/sandbox/discovery/rejected_candidates.json`
 
-Same top-level shape as `emerging_candidates.json`. Contains only REJECTED candidates.
-`total_rejected` instead of `total_candidates`.
+Contains only REJECTED candidates. Carries `observe_only`, `discovery_only`, `sandbox_only`, and `disclaimer` like `emerging_candidates.json`, but has a different top-level shape: uses `total_rejected` (not `total_candidates`) and does **not** include `watch_count` or `discovered_count`.
 
 ### `outputs/sandbox/discovery/discovery_memory.json`
 

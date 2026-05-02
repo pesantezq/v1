@@ -139,13 +139,13 @@ def _determine_status(
     watch_threshold: float,
     reject_risk_below: float,
 ) -> tuple[CandidateStatus, str | None]:
-    """Return (status, rejection_reason). WATCH requires corroboration_met=True."""
+    """Return (status, rejection_reason). WATCH requires corroboration_met=True and risk_flag=False."""
     if classification.risk_flag and classification.confidence < reject_risk_below:
         return CandidateStatus.REJECTED, (
             f"Risk flag with low event confidence "
             f"({classification.confidence:.2f} < {reject_risk_below:.2f})"
         )
-    if score >= watch_threshold and corroboration_met:
+    if score >= watch_threshold and corroboration_met and not classification.risk_flag:
         return CandidateStatus.WATCH, None
     return CandidateStatus.DISCOVERED, None
 

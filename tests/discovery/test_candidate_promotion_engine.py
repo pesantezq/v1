@@ -337,3 +337,65 @@ class TestCorroborationFields:
         cls = _make_cls(confidence=0.75, event_type=EventType.EARNINGS)
         result = evaluate_candidates([d], [cls], watch_threshold=2.0)
         assert result[0].status == CandidateStatus.DISCOVERED
+
+
+# ---------------------------------------------------------------------------
+# 10. Risk flag blocks WATCH
+# ---------------------------------------------------------------------------
+
+class TestRiskFlagBlocksWatch:
+    def test_risk_flag_high_score_high_corroboration_not_watch(self):
+        # risk_flag=True must block WATCH regardless of score or corroboration
+        d = _make_discovered("BADCO", mention_count=7, sources=["a", "b", "c", "d"])
+        cls = _make_cls(risk_flag=True, confidence=0.9, event_type=EventType.LEGAL_RISK)
+        cand = score_candidate(d, cls, watch_threshold=1.0, seen_runs=5)
+        assert cand.status != CandidateStatus.WATCH, (
+            "risk_flag=True must never produce WATCH"
+        )
+
+    def test_risk_flag_high_score_high_corroboration_stays_discovered_or_rejected(self):
+        # With confidence >= reject_risk_below, a risk candidate stays DISCOVERED
+        d = _make_discovered("BADCO", mention_count=7, sources=["a", "b", "c", "d"])
+        cls = _make_cls(risk_flag=True, confidence=0.9, event_type=EventType.LEGAL_RISK)
+        cand = score_candidate(d, cls, watch_threshold=1.0, reject_risk_below=0.3, seen_runs=5)
+        assert cand.status in (CandidateStatus.DISCOVERED, CandidateStatus.REJECTED)
+
+    def test_no_risk_flag_can_still_watch(self):
+        # Without risk_flag, high score + strong corroboration → WATCH
+        d = _make_discovered("NVDA", mention_count=5, sources=["a", "b", "c"])
+        cls = _make_cls(risk_flag=False, confidence=0.75, event_type=EventType.EARNINGS)
+        cand = score_candidate(d, cls, watch_threshold=2.0, seen_runs=2)
+        assert cand.status == CandidateStatus.WATCH
+
+    def test_risk_flag_low_confidence_still_rejected(self):
+        # Existing rejection rule preserved: risk_flag + confidence < threshold → REJECTED
+        d = _make_discovered("BADCO", mention_count=3)
+        cls = _make_cls(risk_flag=True, confidence=0.1, event_type=EventType.LEGAL_RISK)
+        cand = score_candidate(d, cls, reject_risk_below=0.3)
+        assert cand.status == CandidateStatus.REJECTED
+
+    def test_risk_flag_strong_corroboration_stays_discovered(self):
+        # risk_flag=True, confidence >= reject_risk_below, strong corroboration → DISCOVERED
+        d = _make_discovered("BADCO", mention_count=7, sources=["a", "b", "c", "d"])
+        cls = _make_cls(risk_flag=True, confidence=0.8, event_type=EventType.LEGAL_RISK)
+        cand = score_candidate(d, cls, watch_threshold=1.0, reject_risk_below=0.3, seen_runs=5)
+        assert cand.status == CandidateStatus.DISCOVERED
+        assert cand.corroboration_met is True  # strong corroboration exists but WATCH still blocked
+
+    def test_evaluate_candidates_no_watch_when_all_risk_flagged(self):
+        # All risk-flagged candidates → no WATCH in the result
+        tickers = [
+            _make_discovered("BADCO", mention_count=7, sources=["a", "b", "c", "d"], record_indices=[0]),
+            _make_discovered("RISKY", mention_count=5, sources=["x", "y", "z"], record_indices=[1]),
+        ]
+        clss = [
+            _make_cls(risk_flag=True, confidence=0.9, event_type=EventType.LEGAL_RISK),
+            _make_cls(risk_flag=True, confidence=0.8, event_type=EventType.LEGAL_RISK),
+        ]
+        result = evaluate_candidates(
+            tickers, clss, watch_threshold=1.0,
+            persistence_data={"BADCO": 5, "RISKY": 5},
+        )
+        assert not any(c.status == CandidateStatus.WATCH for c in result), (
+            "No risk-flagged candidate should be WATCH"
+        )

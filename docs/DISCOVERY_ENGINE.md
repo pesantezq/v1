@@ -124,7 +124,7 @@ All artifacts written to `outputs/sandbox/discovery/`:
 | `discovery_memory.json` | Persistent candidate history across runs |
 | `discovery_memo_section.md` | Human-readable research memo with disclaimer |
 
-All JSON artifacts carry these top-level fields:
+`emerging_candidates.json` and `rejected_candidates.json` carry these operator-facing top-level fields:
 
 | Field | Value |
 |---|---|
@@ -132,6 +132,8 @@ All JSON artifacts carry these top-level fields:
 | `discovery_only` | `true` |
 | `sandbox_only` | `true` |
 | `disclaimer` | Warning string |
+
+`discovery_memory.json` is internal sandbox memory. It carries `discovery_only` and `sandbox_only` but does **not** include `observe_only` or `disclaimer` — those fields are for operator-facing report artifacts only.
 
 ## Run Mode Governance
 
