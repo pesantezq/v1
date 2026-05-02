@@ -618,4 +618,4 @@ All four loaders are included in the bundle returned by `load_operator_dashboard
 
 ## Next Implementation Step
 
-All advisory layers, the GUI Decision Center v1, System Health panels, and Historical Replay v1 are now live. Potential next steps: instrument AI call sites with real token counts (`decision_explainer.py`, `ai_decision_validator.py`), or implement the GUI discovery approval workflow and Daily Memo discovery section.
+All advisory layers, the GUI Decision Center v1, System Health panels, and Historical Replay v1 are now live. The official next step is to instrument AI call sites with real token counts (`decision_explainer.py`, `ai_decision_validator.py`). Discovery approval workflow, Daily Memo discovery integration, and discovery candidate replay/backtest remain pending.

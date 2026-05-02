@@ -61,6 +61,66 @@ System summary, memo, and GUI health messaging should use severity-aware wording
 
 ## Current Stable JSON Artifacts
 
+### `outputs/latest/data_quality_report.json`
+
+Observe-only data quality report. Written with `safe_write_json(OutputNamespace.LATEST, ...)` by `write_data_quality_report()`.
+
+Required top-level fields:
+
+- `generated_at` — ISO timestamp string
+- `observe_only` — always `true`
+- `available` — bool; may be `false` when no records were available
+- `total_symbols` — int
+- `healthy_symbols` — int
+- `warning_symbols` — int
+- `critical_symbols` — int
+- `missing_price_count` — int
+- `missing_fundamentals_count` — int
+- `missing_news_count` — int
+- `stale_price_count` — int
+- `fallback_count` — int
+- `cached_count` — int
+- `source_counts` — object keyed by source label
+- `summary_line` — human-readable string
+- `issues` — array of aggregate issue objects
+- `symbols` — array of per-symbol data quality reports
+
+Issue objects include `issue_type`, `severity`, `symbol`, `source`, `message`, and `metadata`.
+Per-symbol reports include symbol-level source/status flags plus an `issues` array.
+
+### `outputs/latest/data_quality_report.md`
+
+Markdown companion to `data_quality_report.json`. Written with `safe_write_text(OutputNamespace.LATEST, ...)`.
+It is operator-facing documentation only and must not be parsed as the machine contract.
+
+### `outputs/latest/ai_budget_summary.json`
+
+Observe-only AI usage budget summary. Written with `safe_write_json(OutputNamespace.LATEST, ...)` by `write_ai_budget_summary()`.
+
+Required top-level fields:
+
+- `generated_at` — ISO timestamp string
+- `observe_only` — bool; `true` by default
+- `enabled` — bool
+- `daily_token_total` — int
+- `daily_cost_total_usd` — float
+- `monthly_cost_total_usd` — float
+- `daily_cost_limit_usd` — float or null
+- `monthly_cost_limit_usd` — float or null
+- `warning` — bool
+- `blocked` — bool
+- `warnings` — array of strings
+- `summary_line` — human-readable string
+- `event_count` — int
+- `events` — array of daily AI usage event objects
+
+Contract note: the raw artifact does not include an `available` field. GUI loaders may add `available=True` at read time for display normalization, but producers are not required to write it.
+
+### `outputs/latest/ai_budget_summary.md`
+
+Markdown companion to `ai_budget_summary.json`. Written with `safe_write_text(OutputNamespace.LATEST, ...)`.
+It is operator-facing documentation only and must not be parsed as the machine contract.
+
 ### `outputs/latest/watchlist_signals.json`
 
 Required top-level fields:
