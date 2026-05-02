@@ -564,3 +564,13 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 **Updated:** `portfolio_automation/discovery/__init__.py` (5 new public exports), `docs/DISCOVERY_ENGINE.md`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
 
 **Limitation:** No live price data is available in the repo; all outcome metrics require injected `price_outcomes` dict. An operator must supply historical prices to get resolved candidate metrics. Candidates without price data are marked `insufficient_data=True` and excluded from aggregate calculations.
+
+**Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `manual_promotion_proposal`.
+
+### Email Memo Sender / Delivery Track (Next)
+
+Delivery workflow for existing daily memo outputs. This step must preserve advisory-only behavior and must not change scoring, allocation, recommendations, discovery promotion, or portfolio state.
+
+### Manual Promotion Proposal (Pending After Email Delivery)
+
+Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.

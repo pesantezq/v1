@@ -147,6 +147,29 @@ post_phase_0:
       - docs/roadmap.md
     tests: 79 new (405 total in tests/discovery/)
 
+  email_memo_sender_delivery_track:
+    status: not_started
+    priority: high
+    description: >
+      Next operator workflow after Discovery Replay Codex review. Delivery track
+      should package/send existing daily memo outputs without changing scoring,
+      allocation, recommendations, discovery promotion, or advisory-only behavior.
+    prerequisite: historical_replay_backtest_for_discovery_candidates_reviewed
+    next_step: manual_promotion_proposal
+    files: []
+    tests: pending
+
+  manual_promotion_proposal:
+    status: not_started
+    priority: high
+    description: >
+      Future controlled proposal workflow. Must remain advisory-only and must not
+      promote discovery candidates to official watchlist entries, recommendations,
+      or portfolio actions without explicit operator-approved governance.
+    prerequisite: email_memo_sender_delivery_track_complete
+    files: []
+    tests: pending
+
   discovery_corroboration_implementation:
     status: complete
     priority: high

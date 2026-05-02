@@ -80,14 +80,15 @@ _FORBIDDEN_STATUSES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 def _safe_load_json(path: Path) -> dict[str, Any] | None:
-    """Load JSON from path; return None on missing or corrupt file."""
+    """Load JSON object from path; return None on missing, corrupt, or non-object file."""
     try:
         if not path.exists():
             return None
         text = path.read_text(encoding="utf-8")
         if not text.strip():
             return None
-        return json.loads(text)
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
     except Exception as exc:
         logger.warning("discovery_replay: failed to load %s — %s", path, exc)
         return None

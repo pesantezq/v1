@@ -220,6 +220,14 @@ class TestLoadDiscoveryReplayInputs:
         assert result["emerging"] is None
         assert result["candidates"] == []
 
+    def test_non_object_json_returns_none_no_crash(self, tmp_path):
+        p = tmp_path / "sandbox" / "discovery" / "emerging_candidates.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('[{"ticker": "BAD"}]', encoding="utf-8")
+        result = load_discovery_replay_inputs(base_dir=tmp_path)
+        assert result["emerging"] is None
+        assert result["candidates"] == []
+
     def test_valid_approval_loaded(self, tmp_path):
         _write_approvals(tmp_path, [_make_valid_approval("NVDA")])
         result = load_discovery_replay_inputs(base_dir=tmp_path)
