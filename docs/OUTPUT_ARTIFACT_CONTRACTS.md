@@ -802,7 +802,29 @@ Blocked modes:
 | `discovered_count` | int | Yes |
 | `candidates` | array | Yes (may be empty) |
 
-Each candidate object: `ticker`, `status` (discovered/watch/rejected), `score`, `mention_count`, `unique_source_count`, `event_type`, `event_confidence`, `risk_flag`, `rejection_reason`, `discovery_only`, `sandbox_only`, `corroboration_required` (true), `corroboration_met` (false), `corroboration_sources` ([]), `first_seen`, `last_seen`, `evidence_snippets`.
+Each candidate object:
+
+| Field | Type | Notes |
+|---|---|---|
+| `ticker` | string | |
+| `status` | string | `discovered`, `watch`, or `rejected` |
+| `score` | float | Base relevance score |
+| `mention_count` | int | |
+| `unique_source_count` | int | |
+| `event_type` | string | |
+| `event_confidence` | float | |
+| `risk_flag` | bool | |
+| `rejection_reason` | string\|null | |
+| `discovery_only` | bool | Always `true` |
+| `sandbox_only` | bool | Always `true` |
+| `corroboration_required` | bool | Always `true` |
+| `corroboration_met` | bool | `true` when `corroboration_score >= 0.65` |
+| `corroboration_score` | float | 0.0–1.0 composite; source_diversity 35%, mention 20%, event_strength 25%, persistence 20%, risk_penalty −0.20 |
+| `corroboration_level` | string | `none` (<0.30), `weak` (0.30–0.50), `moderate` (0.50–0.65), `strong` (≥0.65) |
+| `corroboration_sources` | array | Unique source names contributing evidence |
+| `first_seen` | ISO timestamp | |
+| `last_seen` | ISO timestamp | |
+| `evidence_snippets` | array | Up to 3 text snippets |
 
 ### `outputs/sandbox/discovery/rejected_candidates.json`
 

@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: discovery_corroboration_implementation
+current_step: gui_discovery_approval_workflow
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -28,12 +28,13 @@ completed_steps:
   - discovery_engine_foundation
   - gui_data_quality_and_ai_budget_panels
   - instrument_ai_call_sites
+  - discovery_corroboration_implementation
 
 next_official_step:
-  primary: discovery_corroboration_implementation
+  primary: gui_discovery_approval_workflow
   secondary:
-    - gui_discovery_approval_workflow
     - daily_memo_discovery_section
+    - historical_replay_backtest_for_discovery_candidates
 
 # ---------------------------------------------------------------------------
 # Two-lane operating model (added by run_mode_governance step)

@@ -126,10 +126,29 @@ post_phase_0:
       - docs/DISCOVERY_ENGINE.md
     tests: 171 passed
     pending_sub_steps:
-      - discovery_corroboration_implementation
       - gui_discovery_approval_workflow
       - daily_memo_discovery_section
       - historical_replay_backtest_for_discovery_candidates
+
+  discovery_corroboration_implementation:
+    status: complete
+    priority: high
+    description: >
+      Deterministic corroboration scoring layer. New corroboration.py module with weighted
+      formula (source 35%, mention 20%, event 25%, persistence 20%, risk -0.20).
+      WATCH status now requires corroboration_met=True (score >= 0.65).
+      Persistence data from DiscoveryMemory threads into evaluate_candidates.
+    files:
+      - portfolio_automation/discovery/corroboration.py
+      - portfolio_automation/discovery/candidate_promotion_engine.py
+      - portfolio_automation/discovery/discovery_reports.py
+      - portfolio_automation/discovery/__init__.py
+      - tests/discovery/test_corroboration.py
+      - tests/discovery/test_candidate_promotion_engine.py
+      - docs/DISCOVERY_ENGINE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+    tests: 229 passed (58 new in test_corroboration.py)
 
   gui_data_quality_and_ai_budget_panels:
     status: complete

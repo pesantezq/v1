@@ -78,6 +78,8 @@ def _candidate_to_dict(cand: DiscoveryCandidate) -> dict:
         "sandbox_only": cand.sandbox_only,
         "corroboration_required": cand.corroboration_required,
         "corroboration_met": cand.corroboration_met,
+        "corroboration_score": cand.corroboration_score,
+        "corroboration_level": cand.corroboration_level,
         "corroboration_sources": cand.corroboration_sources,
         "first_seen": cand.first_seen,
         "last_seen": cand.last_seen,
@@ -156,6 +158,7 @@ def _build_memo_markdown(
         for c in watch[:10]:
             lines.append(
                 f"- **{c.ticker}** — score {c.score:.2f}, "
+                f"corroboration: {c.corroboration_level} ({c.corroboration_score:.2f}), "
                 f"event: {c.event_type.value}, "
                 f"mentions: {c.mention_count}, "
                 f"sources: {c.unique_source_count}"
@@ -191,11 +194,26 @@ def _build_memo_markdown(
         lines.append("*No rejections this run.*")
     lines.append("")
 
+    # Corroboration summary
+    corr_levels: dict[str, int] = {}
+    for c in candidates:
+        corr_levels[c.corroboration_level] = corr_levels.get(c.corroboration_level, 0) + 1
+
+    lines += ["### Corroboration Summary", ""]
+    for lvl in ("strong", "moderate", "weak", "none"):
+        count = corr_levels.get(lvl, 0)
+        if count:
+            lines.append(f"- {lvl}: {count}")
+    if not any(corr_levels.get(lvl, 0) for lvl in ("strong", "moderate", "weak", "none")):
+        lines.append("*No candidates.*")
+    lines.append("")
+
     lines += [
         "---",
         "",
-        "_Discovery Engine v1 — research lane only._",
-        "_No corroboration has been performed. No official action may be taken based on this output._",
+        "_Discovery Engine v1 — corroboration layer active._",
+        "_WATCH status requires corroboration_met=True (score ≥ 0.65)._",
+        "_No official action may be taken based on this output._",
     ]
     return "\n".join(lines)
 
@@ -327,21 +345,29 @@ def run_discovery_engine(
         classify_record(r) for r in records
     ]
 
-    # 3. Candidate scoring and status
+    # 3. Load prior memory for persistence scoring
+    memory = DiscoveryMemory()
+    if memory_path is not None:
+        memory = DiscoveryMemory.load_from_path(memory_path)
+    persistence_data: dict[str, int] = {}
+    for dt in discovered_tickers:
+        entry = memory.get(dt.ticker)
+        if entry is not None:
+            persistence_data[dt.ticker] = entry.seen_runs
+
+    # 4. Candidate scoring and status (corroboration computed inside)
     candidates: list[DiscoveryCandidate] = evaluate_candidates(
         discovered_tickers,
         record_classifications,
         watch_threshold=watch_threshold,
         reject_risk_below=reject_risk_below,
+        persistence_data=persistence_data,
     )
 
-    # 4. Memory update
-    memory = DiscoveryMemory()
-    if memory_path is not None:
-        memory = DiscoveryMemory.load_from_path(memory_path)
+    # 5. Memory update (after scoring so seen_runs is from prior runs only)
     memory.update(candidates)
 
-    # 5. Write sandbox artifacts
+    # 6. Write sandbox artifacts
     written: dict[str, Path] = {}
     if write_files:
         written = write_discovery_reports(

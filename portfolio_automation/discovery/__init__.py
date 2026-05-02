@@ -35,6 +35,11 @@ from portfolio_automation.discovery.candidate_promotion_engine import (
     DiscoveryCandidate,
     evaluate_candidates,
 )
+from portfolio_automation.discovery.corroboration import (
+    CorroborationResult,
+    compute_corroboration,
+    CORROBORATION_MET_THRESHOLD,
+)
 from portfolio_automation.discovery.discovery_memory import (
     DiscoveryMemory,
     MemoryEntry,
@@ -58,6 +63,10 @@ __all__ = [
     "CandidateStatus",
     "DiscoveryCandidate",
     "evaluate_candidates",
+    # corroboration
+    "CorroborationResult",
+    "compute_corroboration",
+    "CORROBORATION_MET_THRESHOLD",
     # memory
     "DiscoveryMemory",
     "MemoryEntry",

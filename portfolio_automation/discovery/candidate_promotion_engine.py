@@ -24,6 +24,7 @@ from typing import Sequence
 
 from portfolio_automation.discovery.news_ticker_discovery import DiscoveredTicker
 from portfolio_automation.discovery.event_classifier import ClassificationResult, EventType
+from portfolio_automation.discovery.corroboration import compute_corroboration, CorroborationResult
 
 
 # ---------------------------------------------------------------------------
@@ -54,12 +55,16 @@ class DiscoveryCandidate:
     risk_flag: bool
     rejection_reason: str | None
 
-    # Hard governance flags — always True/False in v1
+    # Hard governance flags
     discovery_only: bool = True
     sandbox_only: bool = True
     corroboration_required: bool = True
     corroboration_met: bool = False
     corroboration_sources: list[str] = field(default_factory=list)
+
+    # Corroboration detail (populated by compute_corroboration)
+    corroboration_score: float = 0.0
+    corroboration_level: str = "none"
 
     # Timestamps
     first_seen: str | None = None
@@ -130,16 +135,17 @@ def _compute_score(
 def _determine_status(
     score: float,
     classification: ClassificationResult,
+    corroboration_met: bool,
     watch_threshold: float,
     reject_risk_below: float,
 ) -> tuple[CandidateStatus, str | None]:
-    """Return (status, rejection_reason)."""
+    """Return (status, rejection_reason). WATCH requires corroboration_met=True."""
     if classification.risk_flag and classification.confidence < reject_risk_below:
         return CandidateStatus.REJECTED, (
             f"Risk flag with low event confidence "
             f"({classification.confidence:.2f} < {reject_risk_below:.2f})"
         )
-    if score >= watch_threshold:
+    if score >= watch_threshold and corroboration_met:
         return CandidateStatus.WATCH, None
     return CandidateStatus.DISCOVERED, None
 
@@ -190,22 +196,33 @@ def score_candidate(
     now: datetime | None = None,
     watch_threshold: float = 2.0,
     reject_risk_below: float = 0.3,
+    seen_runs: int = 0,
 ) -> DiscoveryCandidate:
     """
     Produce a :class:`DiscoveryCandidate` from a single :class:`DiscoveredTicker`
     and its associated :class:`ClassificationResult`.
 
-    The returned candidate always has:
-    - ``discovery_only = True``
-    - ``sandbox_only = True``
-    - ``corroboration_required = True``
-    - ``corroboration_met = False``
-    - ``corroboration_sources = []``
+    Parameters
+    ----------
+    seen_runs:
+        Number of prior runs this ticker appeared in (from DiscoveryMemory).
+        Used for persistence component of corroboration scoring.
+        WATCH status requires corroboration_met=True.
     """
     ts = (now or datetime.now(timezone.utc)).isoformat()
     score = _compute_score(discovered, classification)
+
+    corr = compute_corroboration(
+        unique_source_count=len(discovered.unique_sources),
+        mention_count=discovered.mention_count,
+        event_confidence=classification.confidence,
+        risk_flag=classification.risk_flag,
+        seen_runs=seen_runs,
+        source_names=list(discovered.unique_sources),
+    )
+
     status, rejection_reason = _determine_status(
-        score, classification, watch_threshold, reject_risk_below
+        score, classification, corr.corroboration_met, watch_threshold, reject_risk_below
     )
     snippets = list({
         e.context for e in discovered.evidence if e.context
@@ -221,6 +238,10 @@ def score_candidate(
         event_confidence=round(classification.confidence, 4),
         risk_flag=classification.risk_flag,
         rejection_reason=rejection_reason,
+        corroboration_met=corr.corroboration_met,
+        corroboration_sources=corr.corroboration_sources,
+        corroboration_score=corr.score,
+        corroboration_level=corr.level,
         first_seen=ts,
         last_seen=ts,
         evidence_snippets=snippets,
@@ -234,6 +255,7 @@ def evaluate_candidates(
     now: datetime | None = None,
     watch_threshold: float = 2.0,
     reject_risk_below: float = 0.3,
+    persistence_data: dict[str, int] | None = None,
 ) -> list[DiscoveryCandidate]:
     """
     Score and assign statuses to all discovered tickers.
@@ -250,21 +272,27 @@ def evaluate_candidates(
         Minimum score for WATCH status.
     reject_risk_below:
         Confidence floor below which a risk-flagged event triggers REJECTED.
+    persistence_data:
+        Optional mapping of ticker → seen_runs from DiscoveryMemory (prior runs only).
+        Used for corroboration persistence component. WATCH requires corroboration_met=True.
 
     Returns
     -------
     List of :class:`DiscoveryCandidate`, sorted: WATCH first, then DISCOVERED,
     then REJECTED; within each group sorted by score descending.
     """
+    _persistence = persistence_data or {}
     candidates: list[DiscoveryCandidate] = []
     for discovered in discovered_tickers:
         classification = _best_classification(discovered, record_classifications)
+        seen_runs = _persistence.get(discovered.ticker, 0)
         candidate = score_candidate(
             discovered,
             classification,
             now=now,
             watch_threshold=watch_threshold,
             reject_risk_below=reject_risk_below,
+            seen_runs=seen_runs,
         )
         candidates.append(candidate)
 

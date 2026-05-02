@@ -12,8 +12,9 @@ The Discovery Engine identifies and tracks research candidates from news/event t
 - Extracts ticker candidates from news/event records (cashtag, parenthetical, source-provided)
 - Classifies the event type driving each record (earnings, merger, legal risk, etc.)
 - Scores candidates by mention count, source diversity, event confidence, and risk signals
-- Assigns research-lane statuses: DISCOVERED, WATCH, REJECTED
-- Maintains sandbox memory across runs (`discovery_memory.json`)
+- Computes deterministic corroboration score (source diversity 35%, mention 20%, event strength 25%, persistence 20%, risk penalty −0.20)
+- Assigns research-lane statuses: DISCOVERED, WATCH, REJECTED — **WATCH requires corroboration_met=True**
+- Maintains sandbox memory across runs (`discovery_memory.json`); persistence data feeds corroboration scoring
 - Writes sandbox-only artifacts to `outputs/sandbox/discovery/`
 
 ## What Discovery v1 Does NOT Do
@@ -68,20 +69,47 @@ Every artifact written by the discovery engine:
 
 | Status | Meaning |
 |---|---|
-| `WATCH` | Score meets threshold — worth monitoring in the research lane |
-| `DISCOVERED` | Extracted and scored but below WATCH threshold |
+| `WATCH` | Score meets threshold AND `corroboration_met=True` — worth monitoring in the research lane |
+| `DISCOVERED` | Extracted and scored but below WATCH threshold, or score meets threshold but corroboration not met |
 | `REJECTED` | Risk flag with low event confidence, or below minimum threshold |
 
 **Never produced:** PROMOTED, VALIDATED, ACTIONABLE, BUY, SELL.
 
-Every candidate has:
+Every candidate carries corroboration fields:
 ```json
 {
   "corroboration_required": true,
   "corroboration_met": false,
+  "corroboration_score": 0.0,
+  "corroboration_level": "none",
   "corroboration_sources": []
 }
 ```
+
+`corroboration_met=True` requires `corroboration_score >= 0.65` (level `"strong"`).
+
+## Corroboration Scoring
+
+Implemented in `portfolio_automation/discovery/corroboration.py`.
+
+| Component | Weight | Normalization |
+|---|---|---|
+| `source_diversity` | 35% | `min(unique_sources / 4, 1.0)` |
+| `mention` | 20% | `min(log2(mentions+1) / 3.0, 1.0)` |
+| `event_strength` | 25% | `event_confidence` (direct, 0.0–1.0) |
+| `persistence` | 20% | `min(seen_runs / 3, 1.0)` |
+| `risk_penalty` | −0.20 | Applied when `risk_flag=True` |
+
+Levels:
+
+| Level | Score Range | `corroboration_met` |
+|---|---|---|
+| `none` | [0.00, 0.30) | `False` |
+| `weak` | [0.30, 0.50) | `False` |
+| `moderate` | [0.50, 0.65) | `False` |
+| `strong` | [0.65, 1.00] | `True` |
+
+`seen_runs` comes from `DiscoveryMemory` (prior runs only — not the current run). A first-run candidate with strong evidence from 4+ sources and high confidence can still meet corroboration. Most WATCH candidates will have persistence from multiple runs.
 
 No candidate may become an official watchlist entry or recommendation without explicit operator action in `MANUAL_UPDATE` mode with `approved=True`.
 
@@ -134,7 +162,8 @@ assert_can_write_namespace(RunMode.DAILY, "sandbox")       # raises RunModeViola
 |---|---|
 | `news_ticker_discovery.py` | Deterministic ticker extraction (cashtag, parenthetical, source-provided) |
 | `event_classifier.py` | Keyword-based event type classification |
-| `candidate_promotion_engine.py` | Scoring, status assignment, corroboration flags |
+| `corroboration.py` | Deterministic corroboration scoring (`compute_corroboration`, `CorroborationResult`) |
+| `candidate_promotion_engine.py` | Scoring, status assignment, corroboration integration |
 | `discovery_memory.py` | Persistent sandbox memory (load/update/serialize) |
 | `discovery_reports.py` | Sandbox artifact writer + `run_discovery_engine` orchestrator |
 | `__init__.py` | Public API re-exports |
@@ -168,7 +197,7 @@ The discovery engine never produces a buy or sell signal. The `CandidateStatus` 
 candidate.discovery_only = True       # always
 candidate.sandbox_only = True         # always
 candidate.corroboration_required = True  # always
-candidate.corroboration_met = False   # always in v1
+# corroboration_met is computed — True only when corroboration_score >= 0.65
 ```
 
 ## No Official Watchlist Mutation Rule
@@ -179,7 +208,7 @@ The discovery engine does not read or write the official watchlist. Candidates m
 
 | Step | Description |
 |---|---|
-| Corroboration | Cross-validate discovery candidates across multiple independent sources before promoting to WATCH |
+| ~~Corroboration~~ | ~~Cross-validate discovery candidates across multiple independent sources before promoting to WATCH~~ — **complete** |
 | GUI approval workflow | Operator reviews WATCH candidates and approves promotion proposals |
 | Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action |
 | Historical backtest for discovery | Run discovery against historical data to calibrate scoring thresholds |

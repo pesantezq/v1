@@ -323,16 +323,15 @@ Governance:
 - `assert_can_write_namespace(..., "sandbox")` enforced before any I/O
 - `DISCOVERY` and `BACKTEST` may write sandbox discovery artifacts
 - `DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW`, and `HISTORICAL_REPLAY` raise `RunModeViolation` if they try to write
-- Corroboration gates: `corroboration_required=True`, `corroboration_met=False` on every candidate
+- Corroboration gates: `corroboration_required=True` on every candidate; `corroboration_met` computed by corroboration layer
 
 Not done / pending:
-- Corroboration implementation (requires multi-source evidence scoring)
 - GUI discovery approval workflow
 - Manual promotion proposal (MANUAL_UPDATE + approved=True)
 - Daily Memo discovery section
 - Historical replay/backtest for discovery candidates
 
-Tests: `tests/discovery/` — 171 passed across 5 test files
+Tests: `tests/discovery/` — 171 passed across 5 test files (plus 58 new in corroboration step)
 Docs: `docs/DISCOVERY_ENGINE.md`
 
 ---
@@ -392,3 +391,40 @@ Constraints preserved:
 
 Tests added: `tests/test_ai_decision_validator.py` — 17 new tests in
 `TestAiBudgetInstrumentation` (79 total in file).
+
+---
+
+### Discovery Corroboration Implementation (Complete)
+
+Deterministic corroboration scoring layer added to the discovery engine.
+
+New module `portfolio_automation/discovery/corroboration.py`:
+- `CorroborationResult` dataclass with score, level, corroboration_met, and per-component fields
+- `compute_corroboration()` — weighted formula: source_diversity 35%, mention 20%, event_strength 25%, persistence 20%, risk_penalty −0.20
+- `CORROBORATION_MET_THRESHOLD = 0.65`
+
+Levels: `none` (<0.30), `weak` (0.30–0.50), `moderate` (0.50–0.65), `strong` (≥0.65)
+`corroboration_met = True` when score ≥ 0.65 (only at "strong" level).
+
+Changes to existing modules:
+
+- `candidate_promotion_engine.py`:
+  - `DiscoveryCandidate` gained `corroboration_score` and `corroboration_level` fields
+  - `score_candidate()` accepts `seen_runs: int = 0`; calls `compute_corroboration()` and sets all corroboration fields
+  - `_determine_status()` requires `corroboration_met=True` for WATCH — high-score first-run candidates stay DISCOVERED until corroboration is met
+  - `evaluate_candidates()` accepts `persistence_data: dict[str, int] | None` (ticker → seen_runs from prior memory)
+
+- `discovery_reports.py`:
+  - `run_discovery_engine` loads memory BEFORE calling `evaluate_candidates` to build `persistence_data` from prior runs
+  - `_candidate_to_dict` serializes `corroboration_score` and `corroboration_level`
+  - `_build_memo_markdown` shows corroboration level per WATCH candidate; adds Corroboration Summary section
+
+- `discovery/__init__.py`: exports `CorroborationResult`, `compute_corroboration`, `CORROBORATION_MET_THRESHOLD`
+
+Constraints preserved:
+- All discovery remains sandbox/research-lane only; no official artifacts modified
+- No buy/sell status produced; CandidateStatus values unchanged
+- `corroboration_required=True` remains hardcoded on every candidate
+- Governance flags (`discovery_only`, `sandbox_only`, `observe_only`) unchanged
+
+Tests: `tests/discovery/test_corroboration.py` — 58 new tests; 229 total across discovery test suite; 4354 total suite passing

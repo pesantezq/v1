@@ -16,6 +16,7 @@ from portfolio_automation.discovery.candidate_promotion_engine import (
     evaluate_candidates,
     score_candidate,
 )
+from portfolio_automation.discovery.corroboration import CORROBORATION_MET_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +106,11 @@ class TestCorroborationFlags:
         cand = score_candidate(d, cls)
         assert cand.corroboration_met is False
 
-    def test_corroboration_sources_empty(self):
-        d = _make_discovered("NVDA")
+    def test_corroboration_sources_from_unique_sources(self):
+        d = _make_discovered("NVDA", sources=["source_a"])
         cls = _make_cls()
         cand = score_candidate(d, cls)
-        assert cand.corroboration_sources == []
+        assert cand.corroboration_sources == ["source_a"]
 
     def test_all_candidates_have_corroboration_required(self):
         tickers = [_make_discovered("NVDA"), _make_discovered("AAPL")]
@@ -193,9 +194,10 @@ class TestRiskPenalty:
 
 class TestStatusAssignment:
     def test_watch_status_high_score(self):
+        # 3 sources, 5 mentions, 0.75 confidence, 2 prior runs → corroboration_met=True
         d = _make_discovered("NVDA", mention_count=5, sources=["a", "b", "c"])
         cls = _make_cls(confidence=0.75, event_type=EventType.EARNINGS)
-        cand = score_candidate(d, cls, watch_threshold=2.0)
+        cand = score_candidate(d, cls, watch_threshold=2.0, seen_runs=2)
         assert cand.status == CandidateStatus.WATCH
 
     def test_discovered_status_low_score(self):
@@ -288,3 +290,50 @@ class TestEvaluateCandidates:
         d = _make_discovered("NVDA", sources=["a", "b", "c"])
         result = evaluate_candidates([d], [_make_cls()])
         assert result[0].unique_source_count == 3
+
+
+# ---------------------------------------------------------------------------
+# 9. Corroboration fields on candidates
+# ---------------------------------------------------------------------------
+
+class TestCorroborationFields:
+    def test_corroboration_score_is_float(self):
+        d = _make_discovered("NVDA")
+        cand = score_candidate(d, _make_cls())
+        assert isinstance(cand.corroboration_score, float)
+
+    def test_corroboration_level_is_string(self):
+        d = _make_discovered("NVDA")
+        cand = score_candidate(d, _make_cls())
+        assert cand.corroboration_level in ("none", "weak", "moderate", "strong")
+
+    def test_strong_corroboration_sets_corroboration_met(self):
+        # 4 sources, 7 mentions, 0.9 confidence, 3 prior runs → strong
+        d = _make_discovered("NVDA", mention_count=7, sources=["a", "b", "c", "d"])
+        cls = _make_cls(confidence=0.9)
+        cand = score_candidate(d, cls, seen_runs=3)
+        assert cand.corroboration_met is True
+        assert cand.corroboration_level == "strong"
+
+    def test_no_persistence_weak_candidate_not_watch(self):
+        # High base score but no persistence → corroboration_met=False → DISCOVERED
+        d = _make_discovered("NVDA", mention_count=5, sources=["a", "b", "c"])
+        cls = _make_cls(confidence=0.75)
+        cand = score_candidate(d, cls, watch_threshold=2.0, seen_runs=0)
+        assert cand.status == CandidateStatus.DISCOVERED
+
+    def test_evaluate_candidates_uses_persistence_data(self):
+        d = _make_discovered("NVDA", mention_count=5, sources=["a", "b", "c"])
+        cls = _make_cls(confidence=0.75, event_type=EventType.EARNINGS)
+        # With 2 prior runs, corroboration_met=True → should WATCH
+        result = evaluate_candidates(
+            [d], [cls], watch_threshold=2.0, persistence_data={"NVDA": 2}
+        )
+        assert result[0].status == CandidateStatus.WATCH
+
+    def test_evaluate_candidates_without_persistence_no_watch(self):
+        # Same inputs but no persistence_data → corroboration_met=False → DISCOVERED
+        d = _make_discovered("NVDA", mention_count=5, sources=["a", "b", "c"])
+        cls = _make_cls(confidence=0.75, event_type=EventType.EARNINGS)
+        result = evaluate_candidates([d], [cls], watch_threshold=2.0)
+        assert result[0].status == CandidateStatus.DISCOVERED
