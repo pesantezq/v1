@@ -567,9 +567,56 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 **Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `manual_promotion_proposal`.
 
-### Email Memo Sender / Delivery Track (Next)
+---
 
-Delivery workflow for existing daily memo outputs. This step must preserve advisory-only behavior and must not change scoring, allocation, recommendations, discovery promotion, or portfolio state.
+### Email Memo Sender / Delivery Track (Complete)
+
+**Scope:** Delivers existing daily memo files (`outputs/latest/daily_memo.txt` / `.md`) by email.  Disabled by default.  No scoring, allocation, recommendations, discovery, or portfolio state changes.
+
+**Module:** `portfolio_automation/memo_email_sender.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `load_memo_email_config(env)` | Load config from env vars; password never logged |
+| `build_memo_email_message(...)` | Build `EmailMessage` with plain-text body + Markdown attachment |
+| `send_daily_memo_email(config, message)` | Send via SMTP; dry-run skips SMTP; sanitized errors on failure |
+| `write_memo_delivery_status(data, base_dir)` | Write per-run status to `OutputNamespace.LATEST` |
+| `append_memo_delivery_log(entry, base_dir)` | Append audit entry to `OutputNamespace.POLICY` JSONL |
+| `run_memo_email_delivery(*, run_id, base_dir, ...)` | Full delivery pipeline; always returns status dict |
+
+**Config:** 14 env vars; all optional with safe defaults.  Feature disabled when `MEMO_EMAIL_ENABLED` is not `1`.
+
+**Delivery artifacts:**
+
+- `outputs/latest/memo_delivery_status.json` (LATEST namespace)
+- `outputs/policy/memo_delivery_log.jsonl` (POLICY namespace, append-only)
+
+**Idempotency:** Checks `memo_delivery_log.jsonl` for same `run_id` or `memo_date` with `sent=true`.  Skips duplicate sends unless `MEMO_EMAIL_FORCE_RESEND=1`.  Dry-run does not create idempotency records.
+
+**Integration:**
+
+- Non-blocking call added to `watchlist_scanner/daily_memo.py`'s `_main()` after memo files are written
+- Non-blocking import + call added to `main.py`'s finalize section
+- Loader `load_memo_delivery_status()` added to `gui_operator_data.py`
+
+**Safety:**
+
+- No trades, no portfolio mutations, no AI/LLM calls, no market-data API calls
+- Password never appears in artifacts, repr, or logs
+- `observe_only: true`, `no_trade: true` hard-coded in every artifact
+- Non-blocking by default (`MEMO_EMAIL_STRICT_FAILURE=0`)
+
+**CLI:** `python -m portfolio_automation.memo_email_sender --dry-run / --send / --force-resend`
+
+**Tests:** `tests/test_memo_email_sender.py` — 81 tests across 9 test classes.  All SMTP interactions mocked.
+
+**Files created:** `portfolio_automation/memo_email_sender.py`, `tests/test_memo_email_sender.py`
+
+**Files modified:** `watchlist_scanner/daily_memo.py`, `main.py`, `gui_operator_data.py`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/PIPELINE_RUNBOOK.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+---
 
 ### Manual Promotion Proposal (Pending After Email Delivery)
 

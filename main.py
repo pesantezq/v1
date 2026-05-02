@@ -129,6 +129,13 @@ except ImportError:
     _run_performance_attribution = None  # type: ignore[assignment]
 
 try:
+    from portfolio_automation.memo_email_sender import (
+        run_memo_email_delivery as _run_memo_email_delivery,
+    )
+except ImportError:
+    _run_memo_email_delivery = None  # type: ignore[assignment]
+
+try:
     from api_budget import AVDailyBudget as _AVDailyBudget
 except ImportError:
     _AVDailyBudget = None  # type: ignore[assignment,misc]
@@ -2601,6 +2608,32 @@ def run_portfolio_update(
                 logger.error(f"Email error: {e}")
                 result['warnings'].append(f"Email failed: {e}")
         
+        # ── Memo email delivery (observe-only, disabled by default) ───────────
+        # Reads outputs/latest/daily_memo.txt and .md written by daily_memo.py.
+        # Fires only when MEMO_EMAIL_ENABLED=1; non-blocking unless
+        # MEMO_EMAIL_STRICT_FAILURE=1.
+        if _run_memo_email_delivery is not None and not dry_run:
+            try:
+                _memo_base = (
+                    output_dir.parent
+                    if output_dir is not None and output_dir.name == "latest"
+                    else Path("outputs")
+                )
+                _memo_run_id = f"{date.today().isoformat()}_{run_mode}"
+                _memo_result = _run_memo_email_delivery(
+                    run_id=_memo_run_id,
+                    base_dir=_memo_base,
+                )
+                logger.info(
+                    "MEMO EMAIL: enabled=%s sent=%s skipped=%s reason=%s",
+                    _memo_result.get("enabled"),
+                    _memo_result.get("sent"),
+                    _memo_result.get("skipped"),
+                    _memo_result.get("reason"),
+                )
+            except Exception as _memo_err:
+                logger.warning("MEMO EMAIL: non-fatal error — %s", _memo_err, exc_info=True)
+
         # =====================
         # 9. FINALIZE
         # =====================

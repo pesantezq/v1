@@ -148,16 +148,24 @@ post_phase_0:
     tests: 79 new (405 total in tests/discovery/)
 
   email_memo_sender_delivery_track:
-    status: not_started
+    status: complete
     priority: high
     description: >
-      Next operator workflow after Discovery Replay Codex review. Delivery track
-      should package/send existing daily memo outputs without changing scoring,
-      allocation, recommendations, discovery promotion, or advisory-only behavior.
-    prerequisite: historical_replay_backtest_for_discovery_candidates_reviewed
-    next_step: manual_promotion_proposal
-    files: []
-    tests: pending
+      Safe, opt-in email delivery for existing daily memo outputs.
+      Disabled by default (MEMO_EMAIL_ENABLED=0). Dry-run mode.
+      Idempotency via delivery log. No scoring/allocation/recommendation/
+      portfolio/watchlist changes. No AI/LLM or market-data API calls.
+      Password never logged. observe_only=true, no_trade=true hardcoded.
+    files:
+      - portfolio_automation/memo_email_sender.py
+      - tests/test_memo_email_sender.py
+      - watchlist_scanner/daily_memo.py (non-blocking integration)
+      - main.py (non-blocking integration)
+      - gui_operator_data.py (loader + dashboard key)
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/PIPELINE_RUNBOOK.md
+      - docs/roadmap.md
+    tests: 81 new (tests/test_memo_email_sender.py)
 
   manual_promotion_proposal:
     status: not_started

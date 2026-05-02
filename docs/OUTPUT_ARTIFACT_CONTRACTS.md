@@ -947,3 +947,61 @@ The daily memo (`outputs/latest/daily_memo.txt` and `outputs/latest/daily_memo.m
 - Always includes the disclaimer: *"Discovery candidates are sandbox research only. They are not buy/sell recommendations and do not update the official watchlist or portfolio."*
 
 The discovery section does **not** produce a new artifact — it is part of the standard memo outputs (`daily_memo.txt`, `daily_memo.md`) that already exist.
+
+---
+
+## Memo Email Delivery Artifacts
+
+Produced by `portfolio_automation/memo_email_sender.py`.
+
+**Feature is disabled by default** (`MEMO_EMAIL_ENABLED=0`).  No SMTP connections are ever made unless explicitly enabled.
+
+### `outputs/latest/memo_delivery_status.json`
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string (ISO 8601) | Timestamp of delivery attempt |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `available` | bool | `true` when memo files were found |
+| `enabled` | bool | Whether MEMO_EMAIL_ENABLED was set |
+| `dry_run` | bool | Whether dry-run mode was active |
+| `attempted` | bool | Whether an SMTP connection was tried |
+| `sent` | bool | Whether the message was sent |
+| `skipped` | bool | Whether delivery was skipped (and why) |
+| `reason` | string | `disabled`, `dry_run`, `sent`, `already_sent`, `memo_file_missing`, `missing_smtp_config`, `invalid_or_missing_recipients`, `smtp_error`, etc. |
+| `run_id` | string | `YYYY-MM-DD_memo_delivery` or caller-supplied |
+| `memo_date` | string | `YYYY-MM-DD` date of delivery attempt |
+| `memo_source_txt` | string | Path to `daily_memo.txt` read |
+| `memo_source_md` | string | Path to `daily_memo.md` read |
+| `recipients_count` | int | Number of To recipients |
+| `cc_count` | int | Number of CC recipients |
+| `bcc_count` | int | Number of BCC recipients |
+| `smtp_host_present` | bool | Whether MEMO_EMAIL_SMTP_HOST was set |
+| `username_present` | bool | Whether MEMO_EMAIL_USERNAME was set |
+| `error_class` | string | Exception class name on failure, else `null` |
+| `error_message_sanitized` | string | Sanitized error (password/secret redacted), else `null` |
+
+**Never contains**: SMTP password, raw credentials, full recipient list beyond count.
+
+### `outputs/policy/memo_delivery_log.jsonl`
+
+Append-only log of every delivery attempt.  One JSON object per line.
+
+| Field | Description |
+|---|---|
+| `generated_at` | ISO 8601 timestamp |
+| `run_id` | Run identifier |
+| `memo_date` | `YYYY-MM-DD` |
+| `enabled` | Feature enabled flag |
+| `dry_run` | Dry-run flag |
+| `attempted` | Whether SMTP connection was attempted |
+| `sent` | Whether message was delivered |
+| `skipped` | Whether delivery was skipped |
+| `reason` | Reason string |
+| `recipients_count` | To-recipient count |
+| `error_class` | Exception class or `null` |
+| `observe_only` | Always `true` |
+| `no_trade` | Always `true` |
+
+**Never contains**: SMTP password, raw credentials, or sensitive exception dumps.

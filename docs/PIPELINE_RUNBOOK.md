@@ -148,6 +148,78 @@ After a healthy full run, expect at least:
 - `outputs/performance/performance_summary.json`
 - `outputs/latest/system_decision_summary.json`
 
+## Daily Memo Generation and Email Delivery
+
+### Generating the daily memo
+
+Command:
+```
+python -m watchlist_scanner.daily_memo
+```
+
+Writes `outputs/latest/daily_memo.txt` and `outputs/latest/daily_memo.md`.  Optionally appends a sandbox Discovery Research section when sandbox discovery artifacts exist.
+
+### Memo email delivery
+
+Controlled by `portfolio_automation/memo_email_sender.py`.  **Disabled by default** — no SMTP connections unless `MEMO_EMAIL_ENABLED=1`.
+
+#### Required environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEMO_EMAIL_ENABLED` | `0` | Set to `1` to enable delivery |
+| `MEMO_EMAIL_DRY_RUN` | `1` | Set to `0` to send (CLI overrides this) |
+| `MEMO_EMAIL_SMTP_HOST` | — | SMTP server hostname |
+| `MEMO_EMAIL_SMTP_PORT` | `587` | SMTP port |
+| `MEMO_EMAIL_USERNAME` | — | SMTP auth username |
+| `MEMO_EMAIL_PASSWORD` | — | SMTP auth password (never logged) |
+| `MEMO_EMAIL_FROM` | — | From address |
+| `MEMO_EMAIL_TO` | — | Comma-separated To recipients |
+| `MEMO_EMAIL_CC` | — | Comma-separated CC (optional) |
+| `MEMO_EMAIL_BCC` | — | Comma-separated BCC (optional) |
+| `MEMO_EMAIL_USE_TLS` | `1` | STARTTLS (set `0` for plain) |
+| `MEMO_EMAIL_SUBJECT_PREFIX` | — | Optional subject prefix (e.g. `[PROD]`) |
+| `MEMO_EMAIL_STRICT_FAILURE` | `0` | Set to `1` to raise on SMTP error |
+| `MEMO_EMAIL_FORCE_RESEND` | `0` | Set to `1` to bypass duplicate-send protection |
+
+#### Gmail / app-password note
+
+For Gmail, generate an **App Password** (not your account password) under Google Account → Security → App Passwords.  Use it as `MEMO_EMAIL_PASSWORD`.
+
+#### CLI usage
+
+```bash
+# Verify config and message build — no SMTP connection
+python -m portfolio_automation.memo_email_sender --dry-run
+
+# Send (requires MEMO_EMAIL_SMTP_HOST / USERNAME / PASSWORD / FROM / TO in env)
+python -m portfolio_automation.memo_email_sender --send
+
+# Re-send even if already sent today
+python -m portfolio_automation.memo_email_sender --force-resend
+```
+
+#### Idempotency
+
+The module reads `outputs/policy/memo_delivery_log.jsonl` before sending.  If a `sent=true` entry exists for the same `run_id` or `memo_date`, the send is skipped.  Dry-run runs do **not** create idempotency records.
+
+#### Troubleshooting
+
+- **`reason: disabled`** — set `MEMO_EMAIL_ENABLED=1`
+- **`reason: missing_smtp_config`** — check `MEMO_EMAIL_SMTP_HOST`, `MEMO_EMAIL_USERNAME`, `MEMO_EMAIL_PASSWORD`, `MEMO_EMAIL_FROM`
+- **`reason: invalid_or_missing_recipients`** — check `MEMO_EMAIL_TO` is a valid `user@domain.com` address
+- **`reason: memo_file_missing`** — run `python -m watchlist_scanner.daily_memo` first to generate memo files
+- **`reason: already_sent`** — set `MEMO_EMAIL_FORCE_RESEND=1` to override
+- **SMTP error** — check `error_class` and `error_message_sanitized` in `outputs/latest/memo_delivery_status.json`
+
+#### Safety constraints
+
+- Never executes trades or modifies portfolio state
+- Never calls AI/LLM or market-data APIs
+- Never logs or writes SMTP password or secrets to any artifact
+- `observe_only: true`, `no_trade: true` hard-coded in every output
+- Failure is non-blocking by default (`MEMO_EMAIL_STRICT_FAILURE=0`)
+
 ## Same-Day Rerun After Code Deployment
 
 ### When to use this

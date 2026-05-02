@@ -48,6 +48,7 @@ DISCOVERY_REJECTED_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "rejected
 DISCOVERY_MEMORY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memory.json")
 DISCOVERY_MEMO_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memo_section.md")
 DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_decisions.jsonl")
+MEMO_DELIVERY_STATUS_RELATIVE_PATH = ("outputs", "latest", "memo_delivery_status.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1840,12 +1841,31 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "ai_budget_summary": load_ai_budget_summary(root_path),
         "confidence_calibration_latest": load_confidence_calibration_latest(root_path),
         "discovery_sandbox_status": load_discovery_sandbox_status(root_path),
+        "memo_delivery_status": load_memo_delivery_status(root_path),
     }
 
 
 # ---------------------------------------------------------------------------
 # Attribution / Rotation loaders (read-only, no side effects)
 # ---------------------------------------------------------------------------
+
+def load_memo_delivery_status(root: Path | str) -> dict[str, Any]:
+    """
+    Load outputs/latest/memo_delivery_status.json.
+
+    Returns {"available": False} when the file is absent or malformed.
+    Read-only — never writes or modifies any artifact.
+    observe_only and no_trade are hard-coded True in the source artifact.
+    """
+    path = Path(root).joinpath(*MEMO_DELIVERY_STATUS_RELATIVE_PATH)
+    if not path.exists():
+        return {"available": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        return payload if isinstance(payload, dict) else {"available": False}
+    except Exception:
+        return {"available": False}
+
 
 def load_profit_attribution(root: Path | str) -> dict[str, Any]:
     """

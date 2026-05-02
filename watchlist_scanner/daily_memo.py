@@ -1656,6 +1656,22 @@ def _main() -> None:
         else:
             print("Email send failed or skipped (check env vars / logs).")
 
+    # Non-blocking memo email delivery via memo_email_sender (disabled by default).
+    # Fires automatically when MEMO_EMAIL_ENABLED=1 is set in the environment.
+    # Does not interact with the legacy --send / send_email() path above.
+    if not args.dry_run:
+        try:
+            from portfolio_automation.memo_email_sender import (
+                run_memo_email_delivery as _run_memo_delivery,
+            )
+            _delivery = _run_memo_delivery(write_files=True)
+            if _delivery.get("sent"):
+                print("Memo email delivered (memo_email_sender).")
+            elif _delivery.get("dry_run"):
+                print("Memo email dry-run complete (memo_email_sender).")
+        except Exception:
+            pass  # non-blocking — never breaks memo generation
+
 
 if __name__ == "__main__":
     _main()
