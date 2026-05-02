@@ -241,6 +241,34 @@ def record_approval_decision(
 
 
 # ---------------------------------------------------------------------------
+# Read-side validation helper
+# ---------------------------------------------------------------------------
+
+def is_valid_loaded_approval_record(record: dict[str, Any]) -> bool:
+    """
+    Return True only if *record* is a structurally valid approval decision.
+
+    Rejects:
+    - records whose ``decision`` value is not one of the four allowed values
+    - records where any governance flag (``observe_only``, ``sandbox_only``,
+      ``no_trade``, ``no_official_promotion``) is not strictly True
+
+    This prevents tampered-but-syntactically-valid JSONL lines (e.g.
+    ``"decision": "buy"`` or ``"sandbox_only": false``) from being counted
+    as valid approvals in summaries or GUI tables.
+    """
+    if not isinstance(record, dict):
+        return False
+    decision_val = str(record.get("decision", "")).strip().lower()
+    if decision_val not in _ALLOWED_DECISION_VALUES:
+        return False
+    for flag in ("observe_only", "sandbox_only", "no_trade", "no_official_promotion"):
+        if record.get(flag) is not True:
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Read — JSONL loader
 # ---------------------------------------------------------------------------
 
@@ -248,9 +276,11 @@ def load_approval_decisions(
     base_dir: str | Path = "outputs",
 ) -> list[dict[str, Any]]:
     """
-    Load all sandbox review decisions from the approval JSONL artifact.
+    Load all *valid* sandbox review decisions from the approval JSONL artifact.
 
-    Malformed lines are silently skipped.
+    Malformed JSON lines are silently skipped.
+    Records that fail :func:`is_valid_loaded_approval_record` (e.g. tampered
+    ``decision`` values or false governance flags) are also skipped.
     Returns an empty list if the file does not exist or cannot be read.
 
     Parameters
@@ -271,7 +301,7 @@ def load_approval_decisions(
                 continue
             try:
                 obj = json.loads(raw_line)
-                if isinstance(obj, dict):
+                if isinstance(obj, dict) and is_valid_loaded_approval_record(obj):
                     decisions.append(obj)
             except json.JSONDecodeError:
                 pass

@@ -15,6 +15,7 @@ from portfolio_automation.discovery.approval_workflow import (
     _validate_decision,
     _validate_governance_flags,
     build_approval_summary,
+    is_valid_loaded_approval_record,
     load_approval_decisions,
     make_approval_decision,
     record_approval_decision,
@@ -516,3 +517,189 @@ class TestSafetyConstraints(unittest.TestCase):
         self.assertEqual(obj["decision"], "reject_candidate")
         self.assertTrue(obj["no_trade"])
         self.assertTrue(obj["no_official_promotion"])
+
+
+# ---------------------------------------------------------------------------
+# 10. is_valid_loaded_approval_record
+# ---------------------------------------------------------------------------
+
+class TestIsValidLoadedApprovalRecord(unittest.TestCase):
+    def _valid(self, **overrides) -> dict:
+        base = {
+            "decision": "keep_watching",
+            "observe_only": True,
+            "sandbox_only": True,
+            "no_trade": True,
+            "no_official_promotion": True,
+        }
+        base.update(overrides)
+        return base
+
+    def test_valid_record_returns_true(self):
+        self.assertTrue(is_valid_loaded_approval_record(self._valid()))
+
+    def test_all_four_decisions_valid(self):
+        for val in ("approve_for_research_review", "keep_watching",
+                    "reject_candidate", "needs_more_evidence"):
+            self.assertTrue(is_valid_loaded_approval_record(self._valid(decision=val)))
+
+    def test_buy_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="buy")))
+
+    def test_sell_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="sell")))
+
+    def test_actionable_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="actionable")))
+
+    def test_promoted_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="promoted")))
+
+    def test_validated_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="validated")))
+
+    def test_unknown_decision_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(decision="xyz_unknown")))
+
+    def test_sandbox_only_false_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(sandbox_only=False)))
+
+    def test_observe_only_false_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(observe_only=False)))
+
+    def test_no_trade_false_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(no_trade=False)))
+
+    def test_no_official_promotion_false_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record(self._valid(no_official_promotion=False)))
+
+    def test_missing_observe_only_returns_false(self):
+        rec = self._valid()
+        del rec["observe_only"]
+        self.assertFalse(is_valid_loaded_approval_record(rec))
+
+    def test_missing_sandbox_only_returns_false(self):
+        rec = self._valid()
+        del rec["sandbox_only"]
+        self.assertFalse(is_valid_loaded_approval_record(rec))
+
+    def test_non_dict_returns_false(self):
+        self.assertFalse(is_valid_loaded_approval_record([]))  # type: ignore
+        self.assertFalse(is_valid_loaded_approval_record("string"))  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# 11. Tampered JSONL filtering in load_approval_decisions
+# ---------------------------------------------------------------------------
+
+class TestLoadApprovalDecisionsTamperedRecords(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name) / "outputs"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _jsonl_path(self) -> Path:
+        p = self.base / "sandbox" / "discovery" / "approval_decisions.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _good_line(self, symbol: str = "NVDA", decision: str = "keep_watching") -> str:
+        rec = {
+            "symbol": symbol, "decision": decision,
+            "observe_only": True, "sandbox_only": True,
+            "no_trade": True, "no_official_promotion": True,
+        }
+        return json.dumps(rec)
+
+    def _bad_line(self, **overrides) -> str:
+        base = {
+            "symbol": "BADCO", "decision": "keep_watching",
+            "observe_only": True, "sandbox_only": True,
+            "no_trade": True, "no_official_promotion": True,
+        }
+        base.update(overrides)
+        return json.dumps(base)
+
+    def test_tampered_buy_decision_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(decision="buy") + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_sell_decision_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(decision="sell") + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_actionable_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(decision="actionable") + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_sandbox_only_false_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(sandbox_only=False) + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_observe_only_false_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(observe_only=False) + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_no_trade_false_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(no_trade=False) + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_no_official_promotion_false_skipped(self):
+        p = self._jsonl_path()
+        p.write_text(self._bad_line(no_official_promotion=False) + "\n", encoding="utf-8")
+        result = load_approval_decisions(self.base)
+        self.assertEqual(result, [])
+
+    def test_tampered_mixed_with_valid_only_valid_counted(self):
+        p = self._jsonl_path()
+        p.write_text(
+            self._bad_line(decision="buy") + "\n"
+            + self._good_line("NVDA", "keep_watching") + "\n"
+            + self._bad_line(sandbox_only=False) + "\n"
+            + self._good_line("AAPL", "reject_candidate") + "\n",
+            encoding="utf-8",
+        )
+        result = load_approval_decisions(self.base)
+        self.assertEqual(len(result), 2)
+        symbols = {r["symbol"] for r in result}
+        self.assertEqual(symbols, {"NVDA", "AAPL"})
+
+    def test_malformed_json_still_tolerated_alongside_tampered(self):
+        p = self._jsonl_path()
+        p.write_text(
+            "NOT JSON\n"
+            + self._bad_line(decision="sell") + "\n"
+            + self._good_line("MSFT", "needs_more_evidence") + "\n",
+            encoding="utf-8",
+        )
+        result = load_approval_decisions(self.base)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["symbol"], "MSFT")
+
+    def test_build_approval_summary_excludes_tampered(self):
+        # build_approval_summary takes already-filtered input from load_approval_decisions
+        p = self._jsonl_path()
+        p.write_text(
+            self._bad_line(decision="buy") + "\n"
+            + self._good_line("NVDA", "keep_watching") + "\n",
+            encoding="utf-8",
+        )
+        decisions = load_approval_decisions(self.base)
+        summary = build_approval_summary(decisions)
+        self.assertEqual(summary["total_decisions"], 1)
+        self.assertNotIn("buy", summary["decision_counts"])
+        self.assertIn("keep_watching", summary["decision_counts"])

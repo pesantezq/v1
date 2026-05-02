@@ -14,6 +14,7 @@ from watchlist_scanner.daily_memo import (
     _risk_focus_items,
     _top_decision_rows,
 )
+from portfolio_automation.discovery.approval_workflow import is_valid_loaded_approval_record
 
 
 CORE_ARTIFACTS = {
@@ -1602,9 +1603,10 @@ def load_confidence_calibration_latest(root: Path | str) -> dict[str, Any]:
 
 def load_discovery_approval_decisions(root: Path | str) -> list[dict[str, Any]]:
     """
-    Load sandbox discovery approval decisions from approval_decisions.jsonl.
+    Load *valid* sandbox discovery approval decisions from approval_decisions.jsonl.
 
-    Malformed lines are silently skipped.
+    Malformed JSON lines and records that fail governance validation (tampered
+    decision values or false governance flags) are silently skipped.
     Returns [] when the file is absent or unreadable.
     Read-only — never writes or modifies any artifact.
     """
@@ -1619,7 +1621,7 @@ def load_discovery_approval_decisions(root: Path | str) -> list[dict[str, Any]]:
                 continue
             try:
                 obj = json.loads(raw)
-                if isinstance(obj, dict):
+                if isinstance(obj, dict) and is_valid_loaded_approval_record(obj):
                     decisions.append(obj)
             except json.JSONDecodeError:
                 pass
@@ -1680,14 +1682,19 @@ def load_discovery_sandbox_status(root: Path | str) -> dict[str, Any]:
     memo_path = root_path.joinpath(*DISCOVERY_MEMO_RELATIVE_PATH)
     memo_md = _safe_text(memo_path)
 
-    available = bool(emerging or rejected or memory)
     candidates = _safe_list(emerging.get("candidates"))
     watch_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "watch"]
     discovered_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "discovered"]
-    rejected_list = _safe_list(rejected.get("rejected_candidates"))
+    # Runtime shape uses "candidates" key; fall back to "rejected_candidates" for backward compat
+    rejected_list = _safe_list(
+        rejected.get("candidates") or rejected.get("rejected_candidates")
+    )
 
     approval_decisions = load_discovery_approval_decisions(root_path)
     approval_summary = load_discovery_approval_summary(root_path)
+
+    # available=True when any candidate artifact OR approval decisions exist
+    available = bool(emerging or rejected or memory or approval_decisions)
 
     return {
         "available": available,

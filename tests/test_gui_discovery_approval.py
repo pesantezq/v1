@@ -296,6 +296,17 @@ class TestDiscoverySandboxStatusWithApproval(_Base):
         self.assertIn("approval_decisions", result)
         self.assertIn("approval_summary", result)
 
+    def test_available_true_when_only_approval_decisions_exist(self):
+        # No candidate artifacts, but approval JSONL exists → available=True
+        self._write_jsonl(_DECISIONS_PATH, [self._approval_line("NVDA")])
+        result = load_discovery_sandbox_status(self.root)
+        self.assertTrue(result["available"])
+
+    def test_available_false_when_nothing_exists(self):
+        # Nothing at all → available=False
+        result = load_discovery_sandbox_status(self.root)
+        self.assertFalse(result["available"])
+
     def _approval_line(self, symbol: str, decision: str = "keep_watching") -> dict:
         return {
             "symbol": symbol,
@@ -307,3 +318,125 @@ class TestDiscoverySandboxStatusWithApproval(_Base):
             "corroboration_level": "strong",
             "generated_at": "2026-05-02T12:00:00",
         }
+
+
+# ---------------------------------------------------------------------------
+# Tampered JSONL filtering in GUI loader
+# ---------------------------------------------------------------------------
+
+class TestLoadDiscoveryApprovalDecisionsTampered(_Base):
+    _PATH = _DECISIONS_PATH
+
+    def _good(self, symbol: str = "NVDA", decision: str = "keep_watching") -> dict:
+        return {
+            "symbol": symbol, "decision": decision,
+            "observe_only": True, "sandbox_only": True,
+            "no_trade": True, "no_official_promotion": True,
+        }
+
+    def _bad(self, **overrides) -> dict:
+        base = {
+            "symbol": "EVIL", "decision": "keep_watching",
+            "observe_only": True, "sandbox_only": True,
+            "no_trade": True, "no_official_promotion": True,
+        }
+        base.update(overrides)
+        return base
+
+    def test_tampered_buy_decision_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(decision="buy")])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_tampered_sell_decision_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(decision="sell")])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_tampered_sandbox_only_false_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(sandbox_only=False)])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_tampered_observe_only_false_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(observe_only=False)])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_tampered_no_trade_false_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(no_trade=False)])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_tampered_no_official_promotion_false_not_loaded(self):
+        self._write_jsonl(self._PATH, [self._bad(no_official_promotion=False)])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(result, [])
+
+    def test_mixed_valid_and_tampered_only_valid_returned(self):
+        self._write_jsonl(self._PATH, [
+            self._bad(decision="buy"),
+            self._good("NVDA", "keep_watching"),
+            self._bad(sandbox_only=False),
+            self._good("AAPL", "reject_candidate"),
+        ])
+        result = load_discovery_approval_decisions(self.root)
+        self.assertEqual(len(result), 2)
+        symbols = {r["symbol"] for r in result}
+        self.assertEqual(symbols, {"NVDA", "AAPL"})
+
+    def test_tampered_not_counted_in_summary(self):
+        self._write_jsonl(self._PATH, [
+            self._bad(decision="buy"),
+            self._good("NVDA", "keep_watching"),
+        ])
+        summary = load_discovery_approval_summary(self.root)
+        self.assertEqual(summary["total_decisions"], 1)
+        self.assertNotIn("buy", summary.get("decision_counts", {}))
+
+
+# ---------------------------------------------------------------------------
+# Rejected candidate artifact key compatibility
+# ---------------------------------------------------------------------------
+
+class TestRejectedCandidatesKeyCompat(_Base):
+    _REJECTED_PATH = "outputs/sandbox/discovery/rejected_candidates.json"
+
+    def _base_rejected(self, use_candidates_key: bool) -> dict:
+        candidates = [{
+            "ticker": "BADCO",
+            "status": "rejected",
+            "score": 0.5,
+            "rejection_reason": "Risk flag with low confidence",
+        }]
+        payload = {
+            "generated_at": "2026-05-02T09:00:00",
+            "run_id": "test",
+            "observe_only": True,
+            "discovery_only": True,
+            "sandbox_only": True,
+            "disclaimer": "...",
+            "total_rejected": 1,
+        }
+        if use_candidates_key:
+            payload["candidates"] = candidates
+        else:
+            payload["rejected_candidates"] = candidates
+        return payload
+
+    def test_rejected_artifact_candidates_key_loaded(self):
+        self._write(self._REJECTED_PATH, self._base_rejected(use_candidates_key=True))
+        result = load_discovery_sandbox_status(self.root)
+        self.assertEqual(len(result["rejected_candidates"]), 1)
+        self.assertEqual(result["rejected_candidates"][0]["ticker"], "BADCO")
+
+    def test_rejected_artifact_backward_compat_rejected_candidates_key(self):
+        self._write(self._REJECTED_PATH, self._base_rejected(use_candidates_key=False))
+        result = load_discovery_sandbox_status(self.root)
+        self.assertEqual(len(result["rejected_candidates"]), 1)
+        self.assertEqual(result["rejected_candidates"][0]["ticker"], "BADCO")
+
+    def test_rejected_count_correct_with_candidates_key(self):
+        self._write(self._REJECTED_PATH, self._base_rejected(use_candidates_key=True))
+        result = load_discovery_sandbox_status(self.root)
+        self.assertEqual(result["total_rejected"], 1)
