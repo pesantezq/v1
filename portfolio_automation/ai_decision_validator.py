@@ -231,6 +231,40 @@ def validate_single_decision(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 characters per token (best-effort for cost tracking)."""
+    return max(0, len(text) // 4)
+
+
+def _record_validator_event(
+    *,
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    status: str,
+    base_dir: "str | Path" = "outputs",
+    error: str | None = None,
+) -> None:
+    """Record an AI usage event for the validator. Best-effort: never raises."""
+    try:
+        from portfolio_automation.ai_budget import check_ai_budget, record_ai_usage_event
+        meta: dict[str, Any] = {"usage_source": "estimated_from_length", "status": status}
+        if error:
+            meta["error"] = error
+        event = check_ai_budget(
+            task_name="ai_decision_validator",
+            provider=provider,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            metadata=meta,
+        )
+        record_ai_usage_event(event, base_dir=str(base_dir))
+    except Exception as _err:
+        logger.warning("ai_decision_validator: usage event recording failed: %s", _err)
+
+
 def _try_llm_enhance(
     record: dict[str, Any],
     row: dict[str, Any],
@@ -238,6 +272,7 @@ def _try_llm_enhance(
     provider: str,
     model: str,
     timeout: int = 20,
+    base_dir: "str | Path" = "outputs",
 ) -> dict[str, Any]:
     """Attempt LLM text enhancement. Returns the record unchanged if LLM fails."""
     try:
@@ -258,6 +293,8 @@ def _try_llm_enhance(
         "Be factual, concise, and advisory. Do not invent data or make trading recommendations."
     )
 
+    estimated_prompt_tokens = _estimate_tokens(prompt)
+
     try:
         text = call_provider(
             provider=provider,
@@ -267,6 +304,14 @@ def _try_llm_enhance(
             timeout=timeout,
         )
         if text and len(text.strip()) > 10:
+            _record_validator_event(
+                provider=provider,
+                model=model,
+                prompt_tokens=estimated_prompt_tokens,
+                completion_tokens=_estimate_tokens(text),
+                status="success",
+                base_dir=base_dir,
+            )
             enhanced = dict(record)
             enhanced["plain_english_summary"] = text.strip()[:500]
             enhanced["ai_used"] = True
@@ -274,6 +319,15 @@ def _try_llm_enhance(
             enhanced["generated_at"] = datetime.now().isoformat()
             return enhanced
     except Exception as exc:
+        _record_validator_event(
+            provider=provider,
+            model=model,
+            prompt_tokens=estimated_prompt_tokens,
+            completion_tokens=0,
+            status="error",
+            error=str(exc)[:200],
+            base_dir=base_dir,
+        )
         logger.debug(
             "LLM enhancement skipped for %s %s: %s",
             record["decision"],
@@ -299,6 +353,7 @@ def build_ai_validation(
     use_llm: bool = False,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    base_dir: "str | Path" = "outputs",
 ) -> dict[str, Any]:
     decisions = _safe_list(decision_plan.get("decisions"))
     top_decisions = decisions[:_MAX_DECISIONS]
@@ -317,7 +372,7 @@ def build_ai_validation(
         record = validate_single_decision(row)
         if use_llm:
             try:
-                record = _try_llm_enhance(record, row, provider=provider, model=model)
+                record = _try_llm_enhance(record, row, provider=provider, model=model, base_dir=base_dir)
             except Exception as _llm_err:
                 logger.debug("LLM enhancement skipped for %s: %s", row.get("symbol"), _llm_err)
             if record.get("ai_used"):
@@ -414,6 +469,7 @@ def run_ai_validation(
 ) -> tuple[dict[str, Any], str]:
     root_path = Path(root) if root is not None else Path(".")
     plan_path = root_path.joinpath(*DECISION_PLAN_RELATIVE_PATH)
+    _base_dir = root_path / "outputs"
 
     decision_plan, plan_status = _safe_json_load(plan_path)
 
@@ -441,6 +497,7 @@ def run_ai_validation(
             use_llm=use_llm,
             llm_provider=llm_provider,
             llm_model=llm_model,
+            base_dir=str(_base_dir),
         )
         payload["available"] = True
         payload["summary_line"] = f"{payload['total_validated']} decisions validated."

@@ -159,6 +159,63 @@ summary = write_ai_budget_summary(events, config=cfg)
 
 ---
 
+## Instrumented AI Call Sites
+
+`portfolio_automation/ai_decision_validator.py` is the only module that makes real
+LLM calls in the current stack. `portfolio_automation/decision_explainer.py` is
+fully deterministic and records no events.
+
+### How instrumentation works
+
+After each `call_provider()` call in `_try_llm_enhance`, a usage event is recorded
+via `_record_validator_event()`:
+
+- **Successful call** — records `task_name="ai_decision_validator"`, provider,
+  model, estimated prompt/completion tokens, `status="success"`.
+- **Failed call** (any exception from `call_provider`) — records same fields with
+  `status="error"` and `error=<message[:200]>`, `completion_tokens=0`.
+
+Token counts are estimated from text length (`len(text) // 4 chars per token`)
+because `call_provider()` returns plain text with no response object. Events are
+annotated with `metadata.usage_source="estimated_from_length"` to distinguish them
+from exact API counts.
+
+### Non-blocking guarantee
+
+`_record_validator_event` wraps all budget/filesystem operations in try/except.
+If recording fails, a `WARNING` log is emitted and the original LLM call result
+(success or failure) is returned unchanged. The pipeline is never blocked.
+
+### Event fields recorded
+
+```json
+{
+  "task_name": "ai_decision_validator",
+  "provider": "ollama",
+  "model": "gemma3:4b",
+  "prompt_tokens": 116,
+  "completion_tokens": 7,
+  "total_tokens": 123,
+  "estimated_cost_usd": 0.0,
+  "allowed": true,
+  "metadata": {
+    "usage_source": "estimated_from_length",
+    "status": "success"
+  }
+}
+```
+
+### LLM call is opt-in
+
+`ai_decision_validator` only calls the LLM when `use_llm=True`, which requires
+`AI_VALIDATOR_USE_LLM=1` in the environment. By default no LLM calls are made and
+no events are recorded.
+
+**AI Budget is observability/cost-control only. It does not change portfolio
+decisions, scoring, allocation, recommendations, or discovery behavior.**
+
+---
+
 ## Context Manager
 
 ```python

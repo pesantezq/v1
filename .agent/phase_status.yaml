@@ -140,10 +140,19 @@ post_phase_0:
     prerequisite: phase_0_complete
 
   instrument_ai_call_sites:
-    status: not_started
+    status: complete
     priority: low
-    description: Add record_ai_usage_event calls in decision_explainer.py and ai_decision_validator.py using real token counts from API responses
+    description: >
+      Instrumented _try_llm_enhance in ai_decision_validator.py. decision_explainer.py
+      has no LLM calls (deterministic). Token counts estimated from text length
+      (usage_source=estimated_from_length). Non-blocking via _record_validator_event.
     prerequisite: ai_cost_budget_wrapper_complete
+    files:
+      - portfolio_automation/ai_decision_validator.py
+      - tests/test_ai_decision_validator.py
+      - docs/AI_BUDGET.md
+      - docs/roadmap.md
+    tests: 79 passed (17 new in TestAiBudgetInstrumentation)
 
 # ---------------------------------------------------------------------------
 # Permanently deferred (out of scope)

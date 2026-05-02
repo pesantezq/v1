@@ -2157,8 +2157,6 @@ def run_portfolio_update(
                     load_recent_ai_usage_events as _load_ai_events,
                     write_ai_budget_summary as _write_ai_budget,
                 )
-                # TODO: instrument AI call sites (decision_explainer, ai_decision_validator)
-                # to call record_ai_usage_event() so events accumulate in the JSONL log.
                 _ai_events = _load_ai_events()
                 if not dry_run:
                     _ai_budget_summary = _write_ai_budget(_ai_events)

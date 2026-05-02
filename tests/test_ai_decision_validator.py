@@ -671,5 +671,254 @@ class TestGuiDataLayer(unittest.TestCase):
         self.assertIn("insufficient_context_count", result)
 
 
+# ---------------------------------------------------------------------------
+# TestAiBudgetInstrumentation
+# ---------------------------------------------------------------------------
+
+class TestAiBudgetInstrumentation(unittest.TestCase):
+    """Verify that _try_llm_enhance records AI usage events correctly."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.base_dir = str(self.root / "outputs")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_record(self):
+        return validate_single_decision(_structural_sell())
+
+    # ------------------------------------------------------------------
+    # Token estimation helper
+    # ------------------------------------------------------------------
+
+    def test_estimate_tokens_empty_string(self):
+        from portfolio_automation.ai_decision_validator import _estimate_tokens
+        self.assertEqual(0, _estimate_tokens(""))
+
+    def test_estimate_tokens_positive(self):
+        from portfolio_automation.ai_decision_validator import _estimate_tokens
+        result = _estimate_tokens("a" * 400)
+        self.assertEqual(100, result)
+
+    def test_estimate_tokens_non_negative(self):
+        from portfolio_automation.ai_decision_validator import _estimate_tokens
+        for text in ["", "x", "hello world", "a" * 1000]:
+            self.assertGreaterEqual(_estimate_tokens(text), 0)
+
+    # ------------------------------------------------------------------
+    # Successful LLM call records usage event
+    # ------------------------------------------------------------------
+
+    def test_successful_call_records_usage_event(self):
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance, _record_validator_event
+        row = _structural_sell()
+        record = self._make_record()
+
+        recorded: list[dict] = []
+
+        def fake_record(**kwargs):
+            recorded.append(kwargs)
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=fake_record):
+            with patch("agent.llm_adapters.call_provider", return_value="This decision is aligned with structural rules."):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("success", recorded[0]["status"])
+
+    def test_successful_call_records_provider_and_model(self):
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value="Structural alignment confirmed."):
+                _try_llm_enhance(record, row, provider="anthropic", model="claude-haiku-4-5-20251001", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("anthropic", recorded[0]["provider"])
+        self.assertEqual("claude-haiku-4-5-20251001", recorded[0]["model"])
+
+    def test_successful_call_records_estimated_tokens(self):
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance, _estimate_tokens
+        row = _structural_sell()
+        record = self._make_record()
+
+        recorded: list[dict] = []
+        response_text = "Structural alignment confirmed."
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value=response_text):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertGreater(recorded[0]["prompt_tokens"], 0)
+        self.assertEqual(_estimate_tokens(response_text), recorded[0]["completion_tokens"])
+
+    def test_successful_call_usage_source_is_estimated(self):
+        """metadata.usage_source must be 'estimated_from_length'."""
+        from portfolio_automation.ai_decision_validator import _record_validator_event
+        import tempfile as _tf
+        tmp_base = Path(_tf.mkdtemp()) / "outputs"
+
+        _record_validator_event(
+            provider="ollama",
+            model="gemma3:4b",
+            prompt_tokens=100,
+            completion_tokens=50,
+            status="success",
+            base_dir=str(tmp_base),
+        )
+        event_path = tmp_base / "policy" / "ai_usage_events.jsonl"
+        self.assertTrue(event_path.exists())
+        import json as _json
+        line = _json.loads(event_path.read_text())
+        self.assertEqual("estimated_from_length", line["metadata"]["usage_source"])
+        self.assertEqual("success", line["metadata"]["status"])
+
+    # ------------------------------------------------------------------
+    # Failed LLM call records failure event
+    # ------------------------------------------------------------------
+
+    def test_failed_call_records_error_event(self):
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("connection refused")):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("error", recorded[0]["status"])
+        self.assertEqual(0, recorded[0]["completion_tokens"])
+        self.assertFalse(result.get("ai_used"))
+
+    def test_failed_call_preserves_original_exception_fallback(self):
+        """Failed LLM call returns record unchanged; does not raise."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        original_summary = record["plain_english_summary"]
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
+            with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("timeout")):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(original_summary, result["plain_english_summary"])
+        self.assertFalse(result.get("ai_used"))
+
+    # ------------------------------------------------------------------
+    # Recording failure does not break the caller
+    # ------------------------------------------------------------------
+
+    def test_recording_failure_does_not_break_successful_enhance(self):
+        """Internal budget recording failure must not block the LLM enhancement.
+
+        _record_validator_event catches all internal errors; even if the underlying
+        record_ai_usage_event raises, the enhance result should be unaffected.
+        """
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+
+        with patch("portfolio_automation.ai_budget.record_ai_usage_event", side_effect=RuntimeError("disk full")):
+            with patch("agent.llm_adapters.call_provider", return_value="Structurally aligned decision."):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertTrue(result.get("ai_used"))
+
+    # ------------------------------------------------------------------
+    # Import failure: budget module unavailable
+    # ------------------------------------------------------------------
+
+    def test_budget_import_failure_does_not_break_enhance(self):
+        """If ai_budget cannot be imported, _try_llm_enhance still works."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+
+        with patch.dict("sys.modules", {"portfolio_automation.ai_budget": None}):
+            with patch("agent.llm_adapters.call_provider", return_value="Aligned with structural rules."):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertTrue(result.get("ai_used"))
+
+    # ------------------------------------------------------------------
+    # No extra AI calls for instrumentation
+    # ------------------------------------------------------------------
+
+    def test_no_extra_ai_calls_for_instrumentation(self):
+        """Instrumentation must not make additional provider calls."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+
+        call_count = {"n": 0}
+
+        def counting_provider(**kwargs):
+            call_count["n"] += 1
+            return "Aligned."
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
+            with patch("agent.llm_adapters.call_provider", side_effect=counting_provider):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, call_count["n"])
+
+    # ------------------------------------------------------------------
+    # base_dir threading: run_ai_validation → build → _try_llm_enhance
+    # ------------------------------------------------------------------
+
+    def test_run_ai_validation_writes_event_to_root_outputs(self):
+        """Usage event must land in {root}/outputs/policy/ai_usage_events.jsonl."""
+        plan_path = self.root / "outputs" / "latest" / "decision_plan.json"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(json.dumps(_make_plan([_structural_sell()])), encoding="utf-8")
+
+        with patch("agent.llm_adapters.call_provider", return_value="Aligned with structural rules."):
+            run_ai_validation(self.root, use_llm=True)
+
+        event_log = self.root / "outputs" / "policy" / "ai_usage_events.jsonl"
+        self.assertTrue(event_log.exists(), "event log should exist after a real LLM call")
+        import json as _json
+        lines = [l for l in event_log.read_text().splitlines() if l.strip()]
+        self.assertGreater(len(lines), 0)
+        event = _json.loads(lines[0])
+        self.assertEqual("ai_decision_validator", event["task_name"])
+
+    # ------------------------------------------------------------------
+    # Safety: no scoring/allocation/recommendation behavior changes
+    # ------------------------------------------------------------------
+
+    def test_instrumentation_does_not_change_validation_status(self):
+        """Adding instrumentation must not alter validation_status output."""
+        plan = _make_plan([_structural_sell()])
+        result_no_llm = build_ai_validation(plan, use_llm=False)
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
+            result_with_llm = build_ai_validation(plan, use_llm=False)
+
+        for r_no, r_with in zip(result_no_llm["validations"], result_with_llm["validations"]):
+            self.assertEqual(r_no["validation_status"], r_with["validation_status"])
+
+    def test_decision_explainer_has_no_llm_calls(self):
+        """decision_explainer.py must not import or call any LLM provider."""
+        import portfolio_automation.decision_explainer as de
+        import inspect
+        src = inspect.getsource(de)
+        self.assertNotIn("call_provider", src)
+        self.assertNotIn("call_claude", src)
+        self.assertNotIn("call_openai", src)
+        self.assertNotIn("call_ollama", src)
+        self.assertNotIn("import anthropic", src)
+
+
 if __name__ == "__main__":
     unittest.main()

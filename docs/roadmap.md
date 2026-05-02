@@ -358,9 +358,37 @@ All panels are read-only. Missing artifacts degrade gracefully. No API calls, no
 
 Tests: `tests/test_gui_system_health_panels.py` — 66 passed
 
-### Instrument AI Call Sites
+### Instrument AI Call Sites (Complete)
 
-- Add `record_ai_usage_event` calls after each LLM call in
-  `decision_explainer.py` and `ai_decision_validator.py`
-- Use actual token counts from API responses (not estimates)
-- Gate with `with_ai_budget` context manager when hard enforcement is desired
+Instrumented the real LLM call site in `portfolio_automation/ai_decision_validator.py`.
+
+Key findings and decisions:
+
+- `decision_explainer.py` has **no actual LLM calls** — it is 100% deterministic
+  rule-based logic. Nothing to instrument.
+- `ai_decision_validator.py` has one real LLM call site: `_try_llm_enhance()` via
+  `call_provider()`. This is the only instrumentation target.
+- `call_provider()` returns plain text only (no response object with token usage).
+  Token counts are estimated from text length (`len(text) // 4`), annotated with
+  `metadata.usage_source="estimated_from_length"`.
+
+Changes:
+
+- Added `_estimate_tokens(text)` — rough character-based token estimator.
+- Added `_record_validator_event(...)` — best-effort, never raises; wraps
+  `check_ai_budget` + `record_ai_usage_event` in try/except with `logger.warning`.
+- `_try_llm_enhance` now calls `_record_validator_event` after the LLM call
+  (success → `status="success"`; failure → `status="error"`, `completion_tokens=0`).
+- `base_dir` threaded from `run_ai_validation` → `build_ai_validation` → `_try_llm_enhance`
+  → `_record_validator_event` so test temp dirs work correctly.
+- Removed the `TODO` comment from `main.py`'s AI Budget section.
+
+Constraints preserved:
+
+- LLM call is opt-in (`AI_VALIDATOR_USE_LLM=1`); default pipeline makes no LLM calls.
+- No extra AI/API calls for instrumentation.
+- No scoring, allocation, recommendation, or discovery behavior changed.
+- `record_ai_usage_event` failure never blocks the pipeline.
+
+Tests added: `tests/test_ai_decision_validator.py` — 17 new tests in
+`TestAiBudgetInstrumentation` (79 total in file).
