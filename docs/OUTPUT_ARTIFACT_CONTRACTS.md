@@ -1,6 +1,6 @@
 # Output Artifact Contracts
 
-Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, `outputs/sandbox/discovery/`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, `portfolio_automation/historical_replay/replay_reports.py`, and `portfolio_automation/discovery/discovery_reports.py`.
+Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, `outputs/sandbox/discovery/`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_budget.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, `portfolio_automation/historical_replay/replay_reports.py`, and `portfolio_automation/discovery/discovery_reports.py`.
 
 ## Contract Policy
 
@@ -120,6 +120,50 @@ Contract note: the raw artifact does not include an `available` field. GUI loade
 
 Markdown companion to `ai_budget_summary.json`. Written with `safe_write_text(OutputNamespace.LATEST, ...)`.
 It is operator-facing documentation only and must not be parsed as the machine contract.
+
+### `outputs/policy/ai_usage_events.jsonl`
+
+Append-only AI usage event log. Written by `record_ai_usage_event()` after each real LLM call.
+One JSON object per line; new lines are appended on each call (no full rewrite).
+
+Required per-event fields:
+
+- `timestamp` — ISO 8601 timestamp string (UTC) when the event was recorded
+- `task_name` — string identifying the caller; currently `"ai_decision_validator"`
+- `provider` — LLM provider string: `"anthropic"`, `"openai"`, `"ollama"`, or `"local"`
+- `model` — model name string (e.g. `"gemma3:4b"`, `"claude-haiku-4-5-20251001"`)
+- `run_id` — string or `null`; pipeline run identifier when available
+- `prompt_tokens` — int; estimated input token count (see note on estimation below)
+- `completion_tokens` — int; estimated output token count; `0` on error or empty response
+- `total_tokens` — int; `prompt_tokens + completion_tokens`
+- `estimated_cost_usd` — float; cost estimate in USD; `0.0` for free/unknown providers
+- `allowed` — bool; `true` when budget policy allowed the call; always `true` in observe-only mode
+- `blocked_reason` — string or `null`; set only when `allowed=false`
+- `metadata` — object with optional observability fields:
+  - `usage_source` — always `"estimated_from_length"` for `ai_decision_validator` events;
+    token counts are derived from text length (`len(text) // 4`), not from the provider response
+  - `status` — `"success"` or `"error"`
+  - `output_accepted` — bool; `true` when the LLM response was long enough to use as an
+    enhancement; `false` for empty/short responses that were silently discarded
+  - `fallback_reason` — `"empty_response"` or `"short_response"` when `output_accepted=false`;
+    absent when `output_accepted=true`
+  - `error` — string (≤200 chars) describing the exception when `status="error"`; absent on success
+  - `unknown_pricing` — bool; set by the budget layer when no pricing data exists for the model
+
+Contract notes:
+
+- Token counts for `ai_decision_validator` are **estimated** from text length because
+  `call_provider()` returns plain text only, with no API response object carrying usage metadata.
+  Events are tagged `usage_source="estimated_from_length"` to document this.
+- A usage event is recorded for **every completed provider call** — including calls whose output
+  was empty or too short to use (empty/short responses fall back silently but still incur cost).
+- Provider exceptions produce an event with `status="error"` and `completion_tokens=0`.
+- If `record_ai_usage_event` itself fails, a warning is logged and the pipeline continues.
+  The event log may be incomplete under filesystem errors.
+- This artifact is **observability and cost-control only**. It does not influence portfolio
+  decisions, scoring, allocation, recommendations, or discovery behavior.
+- The LLM call path is opt-in (`AI_VALIDATOR_USE_LLM=1`). No events are recorded when
+  the validator runs in its default deterministic mode.
 
 ### `outputs/latest/watchlist_signals.json`
 

@@ -919,6 +919,152 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         self.assertNotIn("call_ollama", src)
         self.assertNotIn("import anthropic", src)
 
+    # ------------------------------------------------------------------
+    # Empty / short response: event recorded even when output not accepted
+    # ------------------------------------------------------------------
+
+    def test_empty_response_records_event(self):
+        """Empty string from provider must still produce a usage event."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value=""):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded), "exactly one event should be recorded")
+        self.assertEqual("success", recorded[0]["status"])
+        self.assertFalse(recorded[0]["output_accepted"])
+        self.assertEqual("empty_response", recorded[0]["fallback_reason"])
+        self.assertFalse(result.get("ai_used"))
+
+    def test_none_response_records_empty_event(self):
+        """None from provider is treated as empty response."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value=None):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertFalse(recorded[0]["output_accepted"])
+        self.assertEqual("empty_response", recorded[0]["fallback_reason"])
+        self.assertFalse(result.get("ai_used"))
+
+    def test_short_response_records_event(self):
+        """Text <= 10 chars after strip must produce event with output_accepted=False."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value="OK"):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("success", recorded[0]["status"])
+        self.assertFalse(recorded[0]["output_accepted"])
+        self.assertEqual("short_response", recorded[0]["fallback_reason"])
+        self.assertFalse(result.get("ai_used"))
+
+    def test_valid_response_records_event_output_accepted(self):
+        """Text > 10 chars after strip must produce event with output_accepted=True."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value="Structurally aligned decision."):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertTrue(recorded[0]["output_accepted"])
+        self.assertIsNone(recorded[0]["fallback_reason"])
+
+    def test_empty_response_does_not_enhance_record(self):
+        """Empty response must leave record unchanged (no ai_used, no summary change)."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        original_summary = record["plain_english_summary"]
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
+            with patch("agent.llm_adapters.call_provider", return_value=""):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertFalse(result.get("ai_used"))
+        self.assertEqual(original_summary, result["plain_english_summary"])
+
+    def test_short_response_does_not_enhance_record(self):
+        """Short response must leave record unchanged."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        original_summary = record["plain_english_summary"]
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
+            with patch("agent.llm_adapters.call_provider", return_value="Short."):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertFalse(result.get("ai_used"))
+        self.assertEqual(original_summary, result["plain_english_summary"])
+
+    def test_empty_response_completion_tokens_zero(self):
+        """Empty response should estimate zero completion tokens."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance, _estimate_tokens
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value=""):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(0, recorded[0]["completion_tokens"])
+
+    def test_whitespace_only_response_is_empty(self):
+        """Whitespace-only response must be treated as empty."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", return_value="   \n  "):
+                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual("empty_response", recorded[0]["fallback_reason"])
+        self.assertFalse(result.get("ai_used"))
+
+    def test_provider_raises_records_error_not_success(self):
+        """Exception from provider must produce error event, not success event."""
+        from portfolio_automation.ai_decision_validator import _try_llm_enhance
+        row = _structural_sell()
+        record = self._make_record()
+        recorded: list[dict] = []
+
+        with patch("portfolio_automation.ai_decision_validator._record_validator_event",
+                   side_effect=lambda **kw: recorded.append(kw)):
+            with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("timeout")):
+                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+
+        self.assertEqual(1, len(recorded))
+        self.assertEqual("error", recorded[0]["status"])
+        self.assertNotIn("output_accepted", recorded[0])
+
 
 if __name__ == "__main__":
     unittest.main()

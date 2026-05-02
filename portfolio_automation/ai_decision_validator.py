@@ -245,6 +245,8 @@ def _record_validator_event(
     status: str,
     base_dir: "str | Path" = "outputs",
     error: str | None = None,
+    output_accepted: bool | None = None,
+    fallback_reason: str | None = None,
 ) -> None:
     """Record an AI usage event for the validator. Best-effort: never raises."""
     try:
@@ -252,6 +254,10 @@ def _record_validator_event(
         meta: dict[str, Any] = {"usage_source": "estimated_from_length", "status": status}
         if error:
             meta["error"] = error
+        if output_accepted is not None:
+            meta["output_accepted"] = output_accepted
+        if fallback_reason:
+            meta["fallback_reason"] = fallback_reason
         event = check_ai_budget(
             task_name="ai_decision_validator",
             provider=provider,
@@ -303,15 +309,24 @@ def _try_llm_enhance(
             max_tokens=200,
             timeout=timeout,
         )
-        if text and len(text.strip()) > 10:
-            _record_validator_event(
-                provider=provider,
-                model=model,
-                prompt_tokens=estimated_prompt_tokens,
-                completion_tokens=_estimate_tokens(text),
-                status="success",
-                base_dir=base_dir,
+        output_accepted = bool(text and len(text.strip()) > 10)
+        if not output_accepted:
+            fallback_reason: str | None = (
+                "empty_response" if not text or not text.strip() else "short_response"
             )
+        else:
+            fallback_reason = None
+        _record_validator_event(
+            provider=provider,
+            model=model,
+            prompt_tokens=estimated_prompt_tokens,
+            completion_tokens=_estimate_tokens(text or ""),
+            status="success",
+            base_dir=base_dir,
+            output_accepted=output_accepted,
+            fallback_reason=fallback_reason,
+        )
+        if output_accepted:
             enhanced = dict(record)
             enhanced["plain_english_summary"] = text.strip()[:500]
             enhanced["ai_used"] = True
