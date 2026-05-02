@@ -46,6 +46,8 @@ DISCOVERY_EMERGING_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "emerging
 DISCOVERY_REJECTED_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "rejected_candidates.json")
 DISCOVERY_MEMORY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memory.json")
 DISCOVERY_MEMO_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memo_section.md")
+DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_decisions.jsonl")
+DISCOVERY_APPROVAL_SUMMARY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_summary.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1598,6 +1600,78 @@ def load_confidence_calibration_latest(root: Path | str) -> dict[str, Any]:
     return payload
 
 
+def load_discovery_approval_decisions(root: Path | str) -> list[dict[str, Any]]:
+    """
+    Load sandbox discovery approval decisions from approval_decisions.jsonl.
+
+    Malformed lines are silently skipped.
+    Returns [] when the file is absent or unreadable.
+    Read-only — never writes or modifies any artifact.
+    """
+    path = Path(root).joinpath(*DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH)
+    if not path.exists():
+        return []
+    decisions: list[dict[str, Any]] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    decisions.append(obj)
+            except json.JSONDecodeError:
+                pass
+    except Exception:
+        pass
+    return decisions
+
+
+def load_discovery_approval_summary(root: Path | str) -> dict[str, Any]:
+    """
+    Build an in-memory approval summary from the JSONL decisions file.
+
+    Always includes governance flags (observe_only, sandbox_only, no_trade,
+    no_official_promotion) regardless of artifact state.
+    Returns a safe empty summary when no decisions exist.
+    Read-only — never writes or modifies any artifact.
+    """
+    _base = {
+        "total_decisions": 0,
+        "unique_symbols_reviewed": 0,
+        "decision_counts": {},
+        "latest_per_symbol": {},
+        "observe_only": True,
+        "sandbox_only": True,
+        "no_trade": True,
+        "no_official_promotion": True,
+        "disclaimer": (
+            "Approval decisions are sandbox research notes only. "
+            "They do not update the official watchlist, portfolio, or recommendations."
+        ),
+    }
+    decisions = load_discovery_approval_decisions(root)
+    if not decisions:
+        return _base
+
+    counts: dict[str, int] = {}
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for d in decisions:
+        val = d.get("decision", "unknown")
+        counts[val] = counts.get(val, 0) + 1
+        sym = d.get("symbol", "?")
+        by_symbol[sym] = d  # last decision per symbol wins
+
+    return {
+        **_base,
+        "total_decisions": len(decisions),
+        "unique_symbols_reviewed": len(by_symbol),
+        "decision_counts": counts,
+        "latest_per_symbol": by_symbol,
+    }
+
+
 def load_discovery_sandbox_status(root: Path | str) -> dict[str, Any]:
     root_path = Path(root)
     emerging = _safe_json(root_path.joinpath(*DISCOVERY_EMERGING_RELATIVE_PATH))
@@ -1611,6 +1685,9 @@ def load_discovery_sandbox_status(root: Path | str) -> dict[str, Any]:
     watch_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "watch"]
     discovered_candidates = [c for c in candidates if isinstance(c, dict) and c.get("status") == "discovered"]
     rejected_list = _safe_list(rejected.get("rejected_candidates"))
+
+    approval_decisions = load_discovery_approval_decisions(root_path)
+    approval_summary = load_discovery_approval_summary(root_path)
 
     return {
         "available": available,
@@ -1631,11 +1708,14 @@ def load_discovery_sandbox_status(root: Path | str) -> dict[str, Any]:
         "rejected_candidates": rejected_list,
         "memory_entry_count": memory.get("entry_count", 0),
         "memo_md": memo_md,
+        "approval_decisions": approval_decisions,
+        "approval_summary": approval_summary,
         "artifacts": {
             "emerging_candidates": str(root_path.joinpath(*DISCOVERY_EMERGING_RELATIVE_PATH)),
             "rejected_candidates": str(root_path.joinpath(*DISCOVERY_REJECTED_RELATIVE_PATH)),
             "discovery_memory": str(root_path.joinpath(*DISCOVERY_MEMORY_RELATIVE_PATH)),
             "discovery_memo_section": str(memo_path),
+            "approval_decisions": str(root_path.joinpath(*DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH)),
         },
     }
 

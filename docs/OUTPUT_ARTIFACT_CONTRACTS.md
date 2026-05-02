@@ -846,3 +846,32 @@ Each memory entry: `ticker`, `first_seen`, `last_seen`, `mention_count`, `source
 
 Markdown. Always contains the disclaimer: *"Discovery candidates are not buy/sell recommendations."*
 Always states: *"Official watchlist and recommendations were not modified."*
+
+### `outputs/sandbox/discovery/approval_decisions.jsonl`
+
+Append-only JSONL. One JSON object per line. Written by the GUI approval workflow via `approval_workflow.record_approval_decision()`.
+
+Per-decision fields:
+
+| Field | Type | Always present |
+|---|---|---|
+| `generated_at` | ISO timestamp | Yes |
+| `symbol` | string (uppercase) | Yes |
+| `company_name` | string | Yes (may be empty) |
+| `candidate_status` | string | Yes |
+| `corroboration_score` | float | Yes |
+| `corroboration_level` | string | Yes |
+| `decision` | string | Yes — one of four allowed values |
+| `decision_reason` | string | Yes (may be empty) |
+| `operator` | string | Yes |
+| `source_artifact` | string | Yes |
+| `run_id` | string | Yes |
+| `observe_only` | `true` | Always |
+| `sandbox_only` | `true` | Always |
+| `no_trade` | `true` | Always |
+| `no_official_promotion` | `true` | Always |
+
+Allowed `decision` values: `approve_for_research_review`, `keep_watching`, `reject_candidate`, `needs_more_evidence`.
+Forbidden `decision` values (never written): `buy`, `sell`, `actionable`, `promoted`, `validated`.
+
+This file is never written outside `outputs/sandbox/discovery/`. Governance flags are validated before every append.

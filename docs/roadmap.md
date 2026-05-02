@@ -428,3 +428,46 @@ Constraints preserved:
 - Governance flags (`discovery_only`, `sandbox_only`, `observe_only`) unchanged
 
 Tests: `tests/discovery/test_corroboration.py` — 58 new tests; 229 total across discovery test suite; 4354 total suite passing
+
+---
+
+### GUI Discovery Approval Workflow (Complete)
+
+Sandbox-only operator audit layer allowing research review decisions for discovery candidates.
+
+New module `portfolio_automation/discovery/approval_workflow.py`:
+- `ApprovalDecision` enum — 4 allowed values: `approve_for_research_review`, `keep_watching`, `reject_candidate`, `needs_more_evidence`; no buy/sell/actionable/promoted/validated
+- `DiscoveryApprovalDecision` dataclass — hardcoded governance flags: `observe_only=True`, `sandbox_only=True`, `no_trade=True`, `no_official_promotion=True`
+- `make_approval_decision()` — validated factory; rejects forbidden decision values
+- `record_approval_decision()` — append-only write to `outputs/sandbox/discovery/approval_decisions.jsonl`; validates namespace via `data_governance.validate_output_path` before any write
+- `load_approval_decisions()` — reads JSONL; tolerates malformed lines; returns `[]` on missing file
+- `build_approval_summary()` — in-memory summary with counts, per-symbol latest decision, governance flags
+
+Changes to existing modules:
+
+- `gui_operator_data.py`:
+  - Added `DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH` and `DISCOVERY_APPROVAL_SUMMARY_RELATIVE_PATH` constants
+  - Added `load_discovery_approval_decisions(root)` — JSONL loader with malformed-line tolerance
+  - Added `load_discovery_approval_summary(root)` — builds summary from decisions; always includes governance flags
+  - `load_discovery_sandbox_status()` now returns `approval_decisions` and `approval_summary` keys
+
+- `gui/app.py`:
+  - `_render_discovery_sandbox_tab()` extended with a "Sandbox Review Decisions" section
+  - Shows existing approval summary (decision counts, per-symbol latest decision table)
+  - For each WATCH candidate: expander with corroboration details, evidence snippets, selectbox, reason text area, and "Record sandbox review decision" button
+  - Button calls `record_approval_decision()` — writes to sandbox JSONL only; no official mutations
+  - Flash messages via `st.session_state`; rerun on submission
+
+- `discovery/__init__.py`: exports `ApprovalDecision`, `DiscoveryApprovalDecision`, `make_approval_decision`, `record_approval_decision`, `load_approval_decisions`, `build_approval_summary`
+
+Constraints preserved:
+- All approval artifacts remain in `outputs/sandbox/discovery/` only
+- No official watchlist or portfolio mutation
+- No buy/sell/actionable/promoted/validated decisions ever written
+- Governance flags validated before every write; any tampering raises ValueError
+- No AI/LLM calls, no external API calls, no auto-trading
+
+Tests:
+- `tests/discovery/test_approval_workflow.py` — 66 new tests
+- `tests/test_gui_discovery_approval.py` — 25 new tests
+- 301 total across discovery test suite; 4360 prior full suite + 91 new = 4451 total

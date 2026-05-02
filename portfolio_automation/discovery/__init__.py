@@ -48,6 +48,14 @@ from portfolio_automation.discovery.discovery_reports import (
     run_discovery_engine,
     write_discovery_reports,
 )
+from portfolio_automation.discovery.approval_workflow import (
+    ApprovalDecision,
+    DiscoveryApprovalDecision,
+    make_approval_decision,
+    record_approval_decision,
+    load_approval_decisions,
+    build_approval_summary,
+)
 
 __all__ = [
     # ticker extraction
@@ -73,4 +81,11 @@ __all__ = [
     # reports / orchestration
     "run_discovery_engine",
     "write_discovery_reports",
+    # approval workflow (sandbox audit layer)
+    "ApprovalDecision",
+    "DiscoveryApprovalDecision",
+    "make_approval_decision",
+    "record_approval_decision",
+    "load_approval_decisions",
+    "build_approval_summary",
 ]

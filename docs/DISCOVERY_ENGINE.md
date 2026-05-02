@@ -204,15 +204,89 @@ candidate.corroboration_required = True  # always
 
 ## No Official Watchlist Mutation Rule
 
-The discovery engine does not read or write the official watchlist. Candidates must go through a future GUI approval workflow and `MANUAL_UPDATE` mode (with `approved=True`) before any official action can be taken.
+The discovery engine does not read or write the official watchlist. Approval decisions recorded via the GUI approval workflow are sandbox research notes only — they do not trigger any official action. A future `MANUAL_UPDATE` mode step (with `approved=True`) would be required before any official action could be taken.
+
+## GUI Approval Workflow (Sandbox Only)
+
+Implemented in `portfolio_automation/discovery/approval_workflow.py`.
+
+The approval workflow is a **sandbox audit layer only**. It allows the operator to record research review decisions for WATCH candidates visible in the GUI. It does **not**:
+
+- Create buy/sell recommendations
+- Update the official watchlist
+- Mutate portfolio state
+- Trigger any trade
+
+### Allowed Review Decisions
+
+| Decision | Meaning |
+|---|---|
+| `approve_for_research_review` | Candidate worth tracking in the research lane |
+| `keep_watching` | Continue monitoring; not ready for further review |
+| `needs_more_evidence` | Corroboration score too low; wait for more data |
+| `reject_candidate` | Not worth further research attention |
+
+**Never produced:** buy, sell, actionable, promoted, validated.
+
+### Approval Artifact
+
+Decisions are written append-only to `outputs/sandbox/discovery/approval_decisions.jsonl`. Every line is a JSON object carrying:
+
+| Field | Value |
+|---|---|
+| `symbol` | Ticker reviewed |
+| `decision` | One of the four allowed values |
+| `decision_reason` | Optional operator note |
+| `corroboration_score` | Score at time of review |
+| `corroboration_level` | Level at time of review |
+| `candidate_status` | Sandbox status at time of review |
+| `observe_only` | Always `true` |
+| `sandbox_only` | Always `true` |
+| `no_trade` | Always `true` |
+| `no_official_promotion` | Always `true` |
+
+Governance flags (`sandbox_only`, `no_trade`, `no_official_promotion`) are validated before every write. Any attempt to set them to `False` raises `ValueError`.
+
+### Approval Entry Points
+
+```python
+from portfolio_automation.discovery.approval_workflow import (
+    make_approval_decision,
+    record_approval_decision,
+    load_approval_decisions,
+    build_approval_summary,
+    ApprovalDecision,
+)
+
+# Create a validated decision
+dec = make_approval_decision(
+    symbol="NVDA",
+    decision=ApprovalDecision.KEEP_WATCHING,
+    decision_reason="Strong earnings corroboration, watching one more run.",
+    corroboration_score=0.72,
+    corroboration_level="strong",
+)
+
+# Append to sandbox JSONL
+path = record_approval_decision(dec, base_dir="outputs")
+
+# Load all decisions
+decisions = load_approval_decisions(base_dir="outputs")
+
+# Compute summary
+summary = build_approval_summary(decisions)
+print(summary["total_decisions"])      # int
+print(summary["sandbox_only"])         # True
+print(summary["no_official_promotion"]) # True
+```
 
 ## Future Path
 
 | Step | Description |
 |---|---|
 | ~~Corroboration~~ | ~~Cross-validate discovery candidates across multiple independent sources before promoting to WATCH~~ — **complete** |
-| GUI approval workflow | Operator reviews WATCH candidates and approves promotion proposals |
-| Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action |
+| ~~GUI approval workflow~~ | ~~Operator reviews WATCH candidates and records sandbox research decisions~~ — **complete** |
+| Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action (future phase) |
 | Historical backtest for discovery | Run discovery against historical data to calibrate scoring thresholds |
 | Daily Memo discovery section | Add a sandbox-only research summary to the daily memo (read-only) |
 

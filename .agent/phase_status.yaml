@@ -126,13 +126,32 @@ post_phase_0:
       - docs/DISCOVERY_ENGINE.md
     tests: 171 passed
     pending_sub_steps:
-      - gui_discovery_approval_workflow
       - daily_memo_discovery_section
       - historical_replay_backtest_for_discovery_candidates
 
   discovery_corroboration_implementation:
     status: complete
     priority: high
+
+  gui_discovery_approval_workflow:
+    status: complete
+    priority: high
+    description: >
+      Sandbox-only operator approval/audit layer. approval_workflow.py module with
+      ApprovalDecision enum (4 values, no buy/sell), DiscoveryApprovalDecision dataclass,
+      append-only JSONL artifact (approval_decisions.jsonl), GUI review section in
+      _render_discovery_sandbox_tab, loaders in gui_operator_data.py.
+    files:
+      - portfolio_automation/discovery/approval_workflow.py
+      - portfolio_automation/discovery/__init__.py
+      - gui_operator_data.py
+      - gui/app.py
+      - tests/discovery/test_approval_workflow.py
+      - tests/test_gui_discovery_approval.py
+      - docs/DISCOVERY_ENGINE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+    tests: 91 new (66 approval_workflow + 25 gui_discovery_approval)
     description: >
       Deterministic corroboration scoring layer. New corroboration.py module with weighted
       formula (source 35%, mention 20%, event 25%, persistence 20%, risk -0.20).

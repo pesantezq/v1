@@ -41,6 +41,11 @@ from gui_operator_data import (
     load_confidence_calibration_latest,
     load_discovery_sandbox_status,
 )
+from portfolio_automation.discovery.approval_workflow import (
+    ApprovalDecision,
+    make_approval_decision,
+    record_approval_decision,
+)
 from gui_insight_cards import render_insight_cards
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
@@ -2705,10 +2710,15 @@ def _render_discovery_sandbox_tab(bundle: dict) -> None:
                 "Sources": c.get("unique_source_count", 0),
                 "Risk Flag": "Yes" if c.get("risk_flag") else "No",
                 "Corroboration Met": "Yes" if c.get("corroboration_met") else "No",
+                "Corr. Score": f"{c.get('corroboration_score', 0):.2f}",
+                "Corr. Level": c.get("corroboration_level", "none"),
                 "First Seen": (c.get("first_seen") or "")[:10],
             })
         st.dataframe(_coerce_df(watch_rows), width="stretch", hide_index=True)
-        st.caption("Corroboration is required before any candidate can be considered for promotion. All candidates show corroboration_met=False in v1.")
+        st.caption(
+            "WATCH status requires corroboration_met=True (score ≥ 0.65) and risk_flag=False. "
+            "These are research-lane observations only."
+        )
 
     discovered_cands = disc.get("discovered_candidates") or []
     if discovered_cands:
@@ -2722,6 +2732,7 @@ def _render_discovery_sandbox_tab(bundle: dict) -> None:
                     "Score": f"{c.get('score', 0):.2f}",
                     "Event Type": c.get("event_type", "unknown"),
                     "Mentions": c.get("mention_count", 0),
+                    "Corr. Level": c.get("corroboration_level", "none"),
                 })
             st.dataframe(_coerce_df(disc_rows), width="stretch", hide_index=True)
 
@@ -2743,6 +2754,151 @@ def _render_discovery_sandbox_tab(bundle: dict) -> None:
     if memo_md:
         with st.expander("Research Memo", expanded=False):
             st.markdown(memo_md)
+
+    # ------------------------------------------------------------------ #
+    # Sandbox Approval Workflow                                           #
+    # ------------------------------------------------------------------ #
+    st.divider()
+    st.subheader("Sandbox Review Decisions")
+    st.info(
+        "**Discovery approval decisions are sandbox research notes only.** "
+        "They are not buy/sell recommendations and do not update the official "
+        "watchlist or portfolio. No trade is executed."
+    )
+
+    # Show existing approval decisions summary
+    approval_summary = disc.get("approval_summary") or {}
+    total_decisions = approval_summary.get("total_decisions", 0)
+    if total_decisions > 0:
+        decision_counts = approval_summary.get("decision_counts") or {}
+        summary_cols = st.columns(len(decision_counts) + 1 if decision_counts else 2)
+        summary_cols[0].metric("Total Reviews", total_decisions)
+        for i, (dec_val, cnt) in enumerate(sorted(decision_counts.items()), start=1):
+            if i < len(summary_cols):
+                summary_cols[i].metric(dec_val.replace("_", " ").title(), cnt)
+
+        latest_per_symbol = approval_summary.get("latest_per_symbol") or {}
+        if latest_per_symbol:
+            with st.expander(f"Recorded Reviews ({len(latest_per_symbol)} symbols)", expanded=False):
+                review_rows = []
+                for sym, d in sorted(latest_per_symbol.items()):
+                    if not isinstance(d, dict):
+                        continue
+                    review_rows.append({
+                        "Symbol": sym,
+                        "Decision": d.get("decision", "?"),
+                        "Reason": (d.get("decision_reason") or "")[:60],
+                        "Corr. Level": d.get("corroboration_level", "?"),
+                        "Recorded At": (d.get("generated_at") or "")[:19],
+                    })
+                if review_rows:
+                    st.dataframe(_coerce_df(review_rows), width="stretch", hide_index=True)
+                st.caption(
+                    "Latest decision per symbol (append-only log). "
+                    "These are sandbox research notes — not official recommendations."
+                )
+
+    # Approval form — one card per WATCH candidate
+    reviewable = list(watch_cands)
+    if not reviewable:
+        st.caption("No WATCH candidates available to review. Run the discovery engine to generate candidates.")
+        return
+
+    st.markdown("**Review WATCH Candidates**")
+    st.caption(
+        "Select a research decision and optional reason for each candidate. "
+        "Decisions are recorded as sandbox notes only."
+    )
+
+    _DECISION_LABELS: dict[str, str] = {
+        ApprovalDecision.APPROVE_FOR_RESEARCH_REVIEW.value: "Approve for Research Review",
+        ApprovalDecision.KEEP_WATCHING.value:               "Keep Watching",
+        ApprovalDecision.NEEDS_MORE_EVIDENCE.value:         "Needs More Evidence",
+        ApprovalDecision.REJECT_CANDIDATE.value:            "Reject Candidate",
+    }
+    _DECISION_OPTIONS = list(_DECISION_LABELS.keys())
+
+    for cand in reviewable:
+        if not isinstance(cand, dict):
+            continue
+        ticker = cand.get("ticker", "?")
+        with st.expander(
+            f"{ticker} — score {cand.get('score', 0):.2f} | "
+            f"corr: {cand.get('corroboration_level', '?')} ({cand.get('corroboration_score', 0):.2f}) | "
+            f"event: {cand.get('event_type', '?')}",
+            expanded=False,
+        ):
+            # Candidate detail
+            d1, d2, d3 = st.columns(3)
+            d1.markdown(f"**Mentions:** {cand.get('mention_count', 0)}")
+            d2.markdown(f"**Sources:** {cand.get('unique_source_count', 0)}")
+            d3.markdown(f"**Risk Flag:** {'Yes' if cand.get('risk_flag') else 'No'}")
+
+            d4, d5 = st.columns(2)
+            d4.markdown(f"**First Seen:** {(cand.get('first_seen') or '')[:10]}")
+            d5.markdown(f"**Last Seen:** {(cand.get('last_seen') or '')[:10]}")
+
+            corr_sources = cand.get("corroboration_sources") or []
+            if corr_sources:
+                st.markdown(f"**Corroboration Sources:** {', '.join(str(s) for s in corr_sources[:6])}")
+
+            snippets = cand.get("evidence_snippets") or []
+            if snippets:
+                st.markdown("**Evidence Snippets:**")
+                for snip in snippets[:3]:
+                    st.caption(f"• {snip}")
+
+            st.caption(
+                "This is a sandbox research note. Selecting a decision does not "
+                "create a recommendation, modify the watchlist, or execute any trade."
+            )
+
+            # Decision form
+            sel_key = f"disc_approval_decision_{ticker}"
+            reason_key = f"disc_approval_reason_{ticker}"
+            btn_key = f"disc_approval_btn_{ticker}"
+
+            selected_label = st.selectbox(
+                "Research Decision",
+                options=_DECISION_OPTIONS,
+                format_func=lambda v: _DECISION_LABELS.get(v, v),
+                key=sel_key,
+            )
+            reason_text = st.text_area(
+                "Reason / Notes (optional)",
+                key=reason_key,
+                height=80,
+                placeholder="Optional: explain why you chose this decision...",
+            )
+
+            flash_ok_key = f"disc_approval_ok_{ticker}"
+            flash_err_key = f"disc_approval_err_{ticker}"
+            if st.session_state.pop(flash_ok_key, None):
+                st.success(f"Sandbox review decision recorded for {ticker}.")
+            _flash_err = st.session_state.pop(flash_err_key, None)
+            if _flash_err:
+                st.error(f"Failed to record decision for {ticker}: {_flash_err}")
+
+            if st.button("Record sandbox review decision", key=btn_key):
+                try:
+                    dec = make_approval_decision(
+                        symbol=ticker,
+                        decision=selected_label,
+                        decision_reason=reason_text or "",
+                        candidate_status=cand.get("status", "watch"),
+                        corroboration_score=float(cand.get("corroboration_score", 0.0)),
+                        corroboration_level=cand.get("corroboration_level", "none"),
+                        company_name=cand.get("company_name", ""),
+                        source_artifact=str(
+                            disc.get("artifacts", {}).get("emerging_candidates", "")
+                        ),
+                        run_id=disc.get("run_id", ""),
+                    )
+                    record_approval_decision(dec, base_dir=str(ROOT / "outputs"))
+                    st.session_state[flash_ok_key] = True
+                except Exception as exc:
+                    st.session_state[flash_err_key] = str(exc)
+                st.rerun()
 
 
 def _render_weekly_review_tab(bundle: dict) -> None:
