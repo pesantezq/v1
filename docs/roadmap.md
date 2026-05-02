@@ -526,4 +526,41 @@ Adds a **DISCOVERY RESEARCH [Sandbox Only]** section to `outputs/latest/daily_me
 
 **Tests:** 57 new tests (115 total in `tests/test_daily_memo.py`).
 
-Next official step: `historical_replay_backtest_for_discovery_candidates`.
+Next step after this was: `historical_replay_backtest_for_discovery_candidates` — now complete (see below).
+
+---
+
+### Historical Replay Backtest for Discovery Candidates (Complete)
+
+**Scope:** Sandbox-only replay evaluation framework for assessing whether discovery candidates have predictive value over time. No official portfolio mutations, no trade execution, no external API calls.
+
+**New module:** `portfolio_automation/discovery/discovery_replay.py`
+
+**Public functions:**
+- `run_discovery_replay(...)` — Full orchestration pipeline
+- `load_discovery_replay_inputs(...)` — Load sandbox artifacts for replay
+- `evaluate_discovery_candidate_outcomes(...)` — Compute outcome metrics from injected price data
+- `summarize_discovery_replay_results(...)` — Aggregate by status, corroboration, approval decision, risk
+- `write_discovery_replay_report(...)` — Write sandbox artifacts (DISCOVERY/BACKTEST modes only)
+
+**Output artifacts (all `outputs/sandbox/discovery/`):**
+- `replay_results.json` — Summary JSON with governance flags and aggregates
+- `replay_results.md` — Markdown report with disclaimer and all comparison sections
+- `replay_candidate_outcomes.jsonl` — Per-candidate outcome records (overwritten per run)
+
+**Safety constraints:**
+- Never produces BUY/SELL/ACTIONABLE/PROMOTED/VALIDATED statuses
+- Forbidden-status candidates filtered at evaluation time
+- Run mode governance enforced: DISCOVERY and BACKTEST modes only
+- Approval decisions validated via `is_valid_loaded_approval_record()` before use
+- Deterministic — same inputs produce same metrics; no randomness, no external calls
+
+**Metrics implemented:**
+- Per-window (1, 3, 5, 10, 20 days): `forward_return_pct`, `direction_correct`, `max_drawdown_pct`, `max_runup_pct`, `insufficient_data`
+- Aggregates: WATCH vs DISCOVERED, high vs low corroboration, all four approval decisions, risk-flagged vs non-risk, rejected candidate review
+
+**Tests:** 79 tests in `tests/discovery/test_discovery_replay.py`; 405 total in `tests/discovery/`
+
+**Updated:** `portfolio_automation/discovery/__init__.py` (5 new public exports), `docs/DISCOVERY_ENGINE.md`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+**Limitation:** No live price data is available in the repo; all outcome metrics require injected `price_outcomes` dict. An operator must supply historical prices to get resolved candidate metrics. Candidates without price data are marked `insufficient_data=True` and excluded from aggregate calculations.

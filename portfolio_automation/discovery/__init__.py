@@ -56,6 +56,13 @@ from portfolio_automation.discovery.approval_workflow import (
     load_approval_decisions,
     build_approval_summary,
 )
+from portfolio_automation.discovery.discovery_replay import (
+    run_discovery_replay,
+    write_discovery_replay_report,
+    load_discovery_replay_inputs,
+    evaluate_discovery_candidate_outcomes,
+    summarize_discovery_replay_results,
+)
 
 __all__ = [
     # ticker extraction
@@ -88,4 +95,10 @@ __all__ = [
     "record_approval_decision",
     "load_approval_decisions",
     "build_approval_summary",
+    # discovery replay (sandbox backtest evaluation)
+    "run_discovery_replay",
+    "write_discovery_replay_report",
+    "load_discovery_replay_inputs",
+    "evaluate_discovery_candidate_outcomes",
+    "summarize_discovery_replay_results",
 ]

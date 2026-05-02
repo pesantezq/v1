@@ -326,14 +326,73 @@ The daily memo now includes a **DISCOVERY RESEARCH [Sandbox Only]** section rend
 
 All four are optional — the section gracefully degrades if any are missing, corrupt, or empty.
 
+## Discovery Replay (Sandbox Backtest Evaluation)
+
+Implemented in `portfolio_automation/discovery/discovery_replay.py`.
+
+Evaluates whether sandbox discovery candidates have predictive value over time using injected price/outcome data. No external API calls are made — price data must be supplied by the caller.
+
+**SANDBOX-ONLY**: All outputs go to `outputs/sandbox/discovery/`. No official watchlist, portfolio, or recommendation mutations occur.
+
+### Public Functions
+
+| Function | Description |
+|---|---|
+| `run_discovery_replay(...)` | Full orchestration pipeline |
+| `load_discovery_replay_inputs(...)` | Load and validate sandbox artifacts |
+| `evaluate_discovery_candidate_outcomes(...)` | Compute outcome metrics from injected price data |
+| `summarize_discovery_replay_results(...)` | Aggregate metrics by status, corroboration, approval decision, risk |
+| `write_discovery_replay_report(...)` | Write sandbox artifacts (DISCOVERY or BACKTEST mode only) |
+
+### Output Artifacts
+
+| Artifact | Path | Description |
+|---|---|---|
+| `replay_results.json` | `outputs/sandbox/discovery/replay_results.json` | Summary with aggregates and governance flags |
+| `replay_results.md` | `outputs/sandbox/discovery/replay_results.md` | Human-readable markdown report with disclaimer |
+| `replay_candidate_outcomes.jsonl` | `outputs/sandbox/discovery/replay_candidate_outcomes.jsonl` | Per-candidate outcome records (overwritten per run) |
+
+All artifacts carry `observe_only=true`, `sandbox_only=true`, `no_trade=true`, `no_official_promotion=true`.
+
+### Metrics Computed
+
+Per candidate: `status`, `corroboration_score`, `corroboration_level`, `risk_flag`, `event_type`, `insufficient_data`, and for each forward window: `forward_return_pct`, `direction_correct`, `max_drawdown_pct`, `max_runup_pct`.
+
+Aggregates: `status_comparison` (WATCH vs DISCOVERED vs REJECTED), `corroboration_comparison` (high vs low), `approval_decision_comparison` (by decision type), `risk_comparison` (risk-flagged vs non-risk), `rejected_candidate_review`.
+
+### Safety Constraints
+
+- Never produces BUY/SELL/ACTIONABLE/PROMOTED/VALIDATED statuses
+- Candidates with forbidden statuses are silently skipped
+- Run mode governance enforced: only DISCOVERY and BACKTEST may write
+- All approval decisions validated via `is_valid_loaded_approval_record()` before use
+- Never writes to `outputs/latest/`, `outputs/policy/`, or `outputs/portfolio/`
+
+### Injected Price Data Format
+
+```python
+price_outcomes = {
+    "NVDA": {
+        "window_1":  {"forward_return_pct": 2.5, "direction_correct": True,
+                      "max_drawdown_pct": -0.5, "max_runup_pct": 3.0},
+        "window_3":  {...},
+        "window_5":  {...},
+        "window_10": {...},
+        "window_20": {...},
+    }
+}
+```
+
+Pass `{}` or `None` when no price data is available — all candidates are marked `insufficient_data=True`.
+
 ## Future Path
 
 | Step | Description |
 |---|---|
 | ~~Corroboration~~ | ~~Cross-validate discovery candidates across multiple independent sources before promoting to WATCH~~ — **complete** |
 | ~~GUI approval workflow~~ | ~~Operator reviews WATCH candidates and records sandbox research decisions~~ — **complete** |
+| ~~Historical backtest for discovery~~ | ~~Sandbox replay to evaluate candidate quality over time~~ — **complete** |
 | Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action (future phase) |
-| Historical backtest for discovery | Run discovery against historical data to calibrate scoring thresholds |
 | ~~Daily Memo discovery section~~ | ~~Add a sandbox-only research summary to the daily memo (read-only)~~ — **complete** |
 
 ## Known v1 Limitation

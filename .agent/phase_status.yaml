@@ -125,8 +125,27 @@ post_phase_0:
       - tests/discovery/test_discovery_reports.py
       - docs/DISCOVERY_ENGINE.md
     tests: 171 passed
-    pending_sub_steps:
-      - historical_replay_backtest_for_discovery_candidates
+
+  historical_replay_backtest_for_discovery_candidates:
+    status: complete
+    priority: medium
+    description: >
+      Sandbox-only replay evaluation framework. discovery_replay.py module with
+      five public functions: run_discovery_replay, load_discovery_replay_inputs,
+      evaluate_discovery_candidate_outcomes, summarize_discovery_replay_results,
+      write_discovery_replay_report. Accepts injected price/outcome data (no
+      external API calls). Aggregates by status, corroboration, approval decision,
+      risk. Writes replay_results.json, replay_results.md,
+      replay_candidate_outcomes.jsonl to outputs/sandbox/discovery/.
+      Run mode governance: DISCOVERY and BACKTEST only.
+    files:
+      - portfolio_automation/discovery/discovery_replay.py
+      - portfolio_automation/discovery/__init__.py
+      - tests/discovery/test_discovery_replay.py
+      - docs/DISCOVERY_ENGINE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+    tests: 79 new (405 total in tests/discovery/)
 
   discovery_corroboration_implementation:
     status: complete

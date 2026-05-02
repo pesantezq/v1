@@ -891,6 +891,50 @@ This file is never written outside `outputs/sandbox/discovery/`. Governance flag
 
 No separate approval summary artifact is written. Approval summaries are computed in memory from valid `approval_decisions.jsonl` records by the GUI and approval workflow helpers.
 
+### `outputs/sandbox/discovery/replay_results.json`
+
+Written by `discovery_replay.write_discovery_replay_report()`. Sandbox-only. Produced in DISCOVERY or BACKTEST run modes only.
+
+Top-level governance flags (always `true`): `observe_only`, `sandbox_only`, `no_trade`, `no_official_promotion`.
+
+Required top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | ISO timestamp | When the report was produced |
+| `observe_only` | `true` | Always true |
+| `sandbox_only` | `true` | Always true |
+| `no_trade` | `true` | Always true |
+| `no_official_promotion` | `true` | Always true |
+| `insufficient_data` | bool | True when no candidates have price data |
+| `disclaimer` | string | Sandbox-only warning |
+| `methodology` | string | Explanation of replay methodology |
+| `disclaimers` | list[string] | List of safety statements |
+| `candidate_count` | int | Total candidates evaluated |
+| `resolved_count` | int | Candidates with price data available |
+| `insufficient_data_count` | int | Candidates without price data |
+| `summary` | object | Counts by status |
+| `window_metrics` | object | Per-window aggregate metrics |
+| `status_comparison` | object | WATCH vs DISCOVERED vs REJECTED aggregates |
+| `corroboration_comparison` | object | High vs low corroboration aggregates |
+| `approval_decision_comparison` | object | Per-decision type aggregates |
+| `risk_comparison` | object | Risk-flagged vs non-risk aggregates |
+| `rejected_candidate_review` | object | Rejected candidate summary |
+
+Never contains BUY/SELL/ACTIONABLE/PROMOTED/VALIDATED status keys.
+
+### `outputs/sandbox/discovery/replay_results.md`
+
+Markdown companion to `replay_results.json`. Contains disclaimer, executive summary, data coverage, outcome metrics table (when data available), WATCH vs DISCOVERED comparison, corroboration analysis, approval decision analysis, rejected/risk summary, insufficient data notes, and recommended future research thresholds.
+
+Always includes: `"SANDBOX ONLY"` header, `"No official recommendation or watchlist change is made by this report."`, sandbox-only closing statement.
+
+### `outputs/sandbox/discovery/replay_candidate_outcomes.jsonl`
+
+One JSON object per evaluated candidate. **Overwritten** on each replay run (not append-only). Each record carries per-window metrics (`forward_return_pct`, `direction_correct`, `max_drawdown_pct`, `max_runup_pct`), candidate metadata, `insufficient_data` flag, and governance flags (`observe_only=true`, `sandbox_only=true`, `no_trade=true`, `discovery_only=true`).
+
+Never contains candidates with forbidden statuses (buy/sell/actionable/promoted/validated).
+
 ### Daily Memo — Discovery Research Section
 
 The daily memo (`outputs/latest/daily_memo.txt` and `outputs/latest/daily_memo.md`) includes a **DISCOVERY RESEARCH [Sandbox Only]** section when sandbox discovery artifacts are present. This section:

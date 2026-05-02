@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-02 (daily_memo_discovery_section complete)
+# Last updated: 2026-05-02 (historical_replay_backtest_for_discovery_candidates complete)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: historical_replay_backtest_for_discovery_candidates
+current_step: manual_promotion_proposal
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -31,9 +31,10 @@ completed_steps:
   - discovery_corroboration_implementation
   - gui_discovery_approval_workflow
   - daily_memo_discovery_section
+  - historical_replay_backtest_for_discovery_candidates
 
 next_official_step:
-  primary: historical_replay_backtest_for_discovery_candidates
+  primary: manual_promotion_proposal
   secondary: []
 
 # ---------------------------------------------------------------------------
