@@ -286,6 +286,46 @@ print(summary["sandbox_only"])         # True
 print(summary["no_official_promotion"]) # True
 ```
 
+## Daily Memo Discovery Section (Sandbox Only)
+
+Implemented in `watchlist_scanner/daily_memo.py`.
+
+The daily memo now includes a **DISCOVERY RESEARCH [Sandbox Only]** section rendered after the System/Data Health section (if discovery sandbox artifacts exist). This section is:
+
+- **Read-only**: reads sandbox artifacts only; never writes to sandbox or any namespace
+- **Non-blocking**: if discovery artifacts are missing or malformed, the memo generates normally with the section absent
+- **Sandbox-only**: includes a mandatory disclaimer stating candidates are not buy/sell recommendations and do not update the official watchlist or portfolio
+
+### Section Content
+
+| Subsection | Description |
+|---|---|
+| Disclaimer | Sandbox-only warning on every render |
+| Summary counts | WATCH / DISCOVERED / REJECTED counts and approval decision totals |
+| Top WATCH candidates | Up to 5 candidates with score, corroboration, event type, evidence snippet, latest approval decision |
+| Monitoring | DISCOVERED candidates listed compactly |
+| Persistence | Candidates seen across multiple runs vs. new this run (from `discovery_memory.json`) |
+| Recent research decisions | Last 5 operator approval decisions with symbol, decision, reason, timestamp |
+| Rejected / Risk summary | Count, risk-flag count, top rejection reasons |
+
+### Safety Constraints
+
+- All approval records are validated via `is_valid_loaded_approval_record()` before rendering
+- Records with `decision` = buy/sell/actionable/promoted/validated are silently excluded (defense-in-depth)
+- Records with any governance flag set to `False` are silently excluded
+- Section never writes, never mutates official state, never calls AI/LLM, never calls external APIs
+
+### Artifact Inputs (Read-Only)
+
+| Artifact | Read from |
+|---|---|
+| `emerging_candidates.json` | `outputs/sandbox/discovery/emerging_candidates.json` |
+| `rejected_candidates.json` | `outputs/sandbox/discovery/rejected_candidates.json` |
+| `discovery_memory.json` | `outputs/sandbox/discovery/discovery_memory.json` |
+| `approval_decisions.jsonl` | `outputs/sandbox/discovery/approval_decisions.jsonl` |
+
+All four are optional — the section gracefully degrades if any are missing, corrupt, or empty.
+
 ## Future Path
 
 | Step | Description |
@@ -294,7 +334,7 @@ print(summary["no_official_promotion"]) # True
 | ~~GUI approval workflow~~ | ~~Operator reviews WATCH candidates and records sandbox research decisions~~ — **complete** |
 | Manual promotion proposal | `MANUAL_UPDATE` + `approved=True` required for any official action (future phase) |
 | Historical backtest for discovery | Run discovery against historical data to calibrate scoring thresholds |
-| Daily Memo discovery section | Add a sandbox-only research summary to the daily memo (read-only) |
+| ~~Daily Memo discovery section~~ | ~~Add a sandbox-only research summary to the daily memo (read-only)~~ — **complete** |
 
 ## Known v1 Limitation
 

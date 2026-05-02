@@ -890,3 +890,16 @@ Forbidden `decision` values (never written): `buy`, `sell`, `actionable`, `promo
 This file is never written outside `outputs/sandbox/discovery/`. Governance flags are validated before every append. Loaders skip malformed JSONL lines and semantically tampered lines, including forbidden decision values or governance flags that are missing or not strictly `true`.
 
 No separate approval summary artifact is written. Approval summaries are computed in memory from valid `approval_decisions.jsonl` records by the GUI and approval workflow helpers.
+
+### Daily Memo — Discovery Research Section
+
+The daily memo (`outputs/latest/daily_memo.txt` and `outputs/latest/daily_memo.md`) includes a **DISCOVERY RESEARCH [Sandbox Only]** section when sandbox discovery artifacts are present. This section:
+
+- Is produced by `generate_daily_memo()` in `watchlist_scanner/daily_memo.py`
+- Reads sandbox artifacts (above four files) as **read-only inputs**; never writes to sandbox
+- Is omitted (not an error) when no sandbox discovery artifacts exist
+- Validates approval records via `is_valid_loaded_approval_record()` before rendering; tampered records silently excluded
+- Never emits BUY/SELL/ACTIONABLE/PROMOTED/VALIDATED language
+- Always includes the disclaimer: *"Discovery candidates are sandbox research only. They are not buy/sell recommendations and do not update the official watchlist or portfolio."*
+
+The discovery section does **not** produce a new artifact — it is part of the standard memo outputs (`daily_memo.txt`, `daily_memo.md`) that already exist.

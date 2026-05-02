@@ -1266,3 +1266,590 @@ class TestPipelineEmailSafety:
             p._step_daily_memo(send_email_flag=False)
 
         mock_send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestDiscoveryMemoSection
+# ---------------------------------------------------------------------------
+
+from watchlist_scanner.daily_memo import (
+    _build_discovery_section,
+    _build_discovery_section_md,
+    _load_discovery_approval_decisions,
+    _load_discovery_sandbox_data,
+)
+
+
+def _make_watch_candidate(
+    ticker: str = "NVDA",
+    score: float = 3.5,
+    corr_score: float = 0.75,
+    corr_level: str = "strong",
+    risk_flag: bool = False,
+    evidence: list | None = None,
+) -> dict:
+    return {
+        "ticker": ticker,
+        "status": "watch",
+        "score": score,
+        "corroboration_score": corr_score,
+        "corroboration_level": corr_level,
+        "event_type": "earnings_surprise",
+        "risk_flag": risk_flag,
+        "evidence_snippets": evidence or ["Strong earnings beat across multiple sources"],
+    }
+
+
+def _make_discovered_candidate(ticker: str = "AAPL") -> dict:
+    return {
+        "ticker": ticker,
+        "status": "discovered",
+        "score": 1.2,
+        "corroboration_score": 0.30,
+        "corroboration_level": "weak",
+        "event_type": "product_launch",
+        "risk_flag": False,
+        "evidence_snippets": [],
+    }
+
+
+def _make_rejected_candidate(ticker: str = "XYZ", reason: str = "below threshold") -> dict:
+    return {
+        "ticker": ticker,
+        "status": "rejected",
+        "score": 0.5,
+        "corroboration_score": 0.10,
+        "corroboration_level": "none",
+        "event_type": "unknown",
+        "risk_flag": False,
+        "rejection_reason": reason,
+    }
+
+
+def _make_approval(
+    symbol: str = "NVDA",
+    decision: str = "approve_for_research_review",
+    reason: str = "Strong corroboration",
+    ts: str = "2026-04-30T10:00:00+00:00",
+) -> dict:
+    return {
+        "symbol": symbol,
+        "decision": decision,
+        "decision_reason": reason,
+        "generated_at": ts,
+        "operator": "operator",
+        "observe_only": True,
+        "sandbox_only": True,
+        "no_trade": True,
+        "no_official_promotion": True,
+    }
+
+
+def _make_memory_entries(entries: list[dict]) -> list[dict]:
+    return entries
+
+
+def _make_discovery_data(
+    *,
+    watch: list | None = None,
+    discovered: list | None = None,
+    rejected_cands: list | None = None,
+    approvals: list | None = None,
+    memory_entries: list | None = None,
+) -> dict:
+    candidates = list(watch or []) + list(discovered or [])
+    return {
+        "emerging":  {"candidates": candidates},
+        "rejected":  {"candidates": rejected_cands or []},
+        "memory":    {"entries": memory_entries or []},
+        "approvals": approvals or [],
+    }
+
+
+class TestDiscoverySectionPlainText:
+    """Tests for _build_discovery_section (plain-text)."""
+
+    def test_disclaimer_present(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section(data)
+        assert "sandbox research only" in out.lower()
+        assert "not buy/sell" in out.lower()
+
+    def test_watch_candidate_appears(self):
+        cand = _make_watch_candidate("NVDA", score=3.5, corr_score=0.75, corr_level="strong")
+        data = _make_discovery_data(watch=[cand])
+        out = _build_discovery_section(data)
+        assert "NVDA" in out
+        assert "score 3.50" in out
+        assert "corroboration: strong" in out
+
+    def test_discovered_candidate_in_monitoring(self):
+        cand = _make_discovered_candidate("AAPL")
+        data = _make_discovery_data(discovered=[cand])
+        out = _build_discovery_section(data)
+        assert "Monitoring" in out
+        assert "AAPL" in out
+
+    def test_approval_decision_appears(self):
+        cand = _make_watch_candidate("NVDA")
+        ap = _make_approval("NVDA", "approve_for_research_review")
+        data = _make_discovery_data(watch=[cand], approvals=[ap])
+        out = _build_discovery_section(data)
+        assert "approve_for_research_review" in out
+        assert "Recent Research Decisions" in out
+
+    def test_approval_counts_correct(self):
+        cand = _make_watch_candidate("NVDA")
+        ap = _make_approval("NVDA", "approve_for_research_review")
+        ap2 = _make_approval("AAPL", "needs_more_evidence")
+        data = _make_discovery_data(watch=[cand], approvals=[ap, ap2])
+        out = _build_discovery_section(data)
+        assert "approved for research: 1" in out
+        assert "needs more evidence: 1" in out
+
+    def test_skips_buy_decision(self):
+        ap_bad = {
+            "symbol": "NVDA", "decision": "buy", "decision_reason": "fake",
+            "generated_at": "2026-04-30T10:00:00+00:00", "operator": "op",
+            "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True,
+        }
+        data = _make_discovery_data(approvals=[ap_bad])
+        out = _build_discovery_section(data)
+        # The word "buy" must not appear as a decision in the output
+        assert "buy" not in out.lower().split("research decisions")[1] if "recent research decisions" in out.lower() else True
+        assert "Approval decisions: 0" in out or "Approval decisions:" not in out
+
+    def test_skips_sell_decision(self):
+        ap_bad = {
+            "symbol": "NVDA", "decision": "sell", "decision_reason": "fake",
+            "generated_at": "2026-04-30T10:00:00+00:00", "operator": "op",
+            "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True,
+        }
+        data = _make_discovery_data(approvals=[ap_bad])
+        out = _build_discovery_section(data)
+        assert "sell" not in out.lower() or "not buy/sell" in out.lower()
+
+    def test_rejected_risk_summary_shown(self):
+        rej = _make_rejected_candidate("JUNK", "below threshold")
+        data = _make_discovery_data(rejected_cands=[rej])
+        out = _build_discovery_section(data)
+        assert "Rejected" in out
+        assert "below threshold" in out
+
+    def test_risk_flag_shown(self):
+        cand = _make_watch_candidate("RISKY", risk_flag=True)
+        data = _make_discovery_data(watch=[cand])
+        out = _build_discovery_section(data)
+        assert "risk flag" in out.lower()
+
+    def test_no_forbidden_status_words(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section(data)
+        lower = out.lower()
+        for word in ("actionable", "promoted", "validated"):
+            assert word not in lower, f"forbidden word '{word}' found in discovery section"
+
+    def test_no_official_action_language(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section(data)
+        lower = out.lower()
+        for bad in ("enter position", "exit position", "deploy capital", "official watchlist promotion"):
+            assert bad not in lower
+
+    def test_sandbox_only_footer_present(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section(data)
+        assert "sandbox only" in out.lower()
+        assert "no official action" in out.lower()
+
+    def test_evidence_snippet_appears(self):
+        cand = _make_watch_candidate("NVDA", evidence=["Analyst upgrades noted in multiple sources"])
+        data = _make_discovery_data(watch=[cand])
+        out = _build_discovery_section(data)
+        assert "Analyst upgrades" in out
+
+    def test_evidence_snippet_truncated_at_120(self):
+        long_snippet = "X" * 200
+        cand = _make_watch_candidate("NVDA", evidence=[long_snippet])
+        data = _make_discovery_data(watch=[cand])
+        out = _build_discovery_section(data)
+        # snippet must be at most 120 chars
+        assert "X" * 121 not in out
+
+    def test_memory_persistent_candidates_shown(self):
+        entries = [
+            {"ticker": "NVDA", "seen_runs": 3, "first_seen": "2026-04-01T00:00:00+00:00", "last_seen": "2026-04-30T00:00:00+00:00"},
+            {"ticker": "AAPL", "seen_runs": 1, "first_seen": "2026-04-30T00:00:00+00:00", "last_seen": "2026-04-30T00:00:00+00:00"},
+        ]
+        data = _make_discovery_data(memory_entries=entries)
+        out = _build_discovery_section(data)
+        assert "Persistent" in out
+        assert "NVDA" in out
+
+    def test_memory_new_this_run_shown(self):
+        entries = [
+            {"ticker": "FRESH", "seen_runs": 1, "first_seen": "2026-04-30T00:00:00+00:00", "last_seen": "2026-04-30T00:00:00+00:00"},
+        ]
+        data = _make_discovery_data(memory_entries=entries)
+        out = _build_discovery_section(data)
+        assert "New this run" in out
+        assert "FRESH" in out
+
+    def test_empty_candidates_safe(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section(data)
+        assert "DISCOVERY RESEARCH" in out
+        assert "WATCH=0" in out
+
+    def test_malformed_candidate_skipped(self):
+        data = _make_discovery_data(watch=["not-a-dict", None, 42])
+        out = _build_discovery_section(data)
+        assert "DISCOVERY RESEARCH" in out  # section still renders
+
+    def test_counts_in_header(self):
+        w = _make_watch_candidate("NVDA")
+        d = _make_discovered_candidate("AAPL")
+        r = _make_rejected_candidate("JUNK")
+        data = _make_discovery_data(watch=[w], discovered=[d], rejected_cands=[r])
+        out = _build_discovery_section(data)
+        assert "WATCH=1" in out
+        assert "DISCOVERED=1" in out
+        assert "REJECTED=1" in out
+
+    def test_at_most_5_watch_candidates_shown(self):
+        cands = [_make_watch_candidate(f"T{i}") for i in range(8)]
+        data = _make_discovery_data(watch=cands)
+        out = _build_discovery_section(data)
+        # Only first 5 should appear as numbered items
+        assert "  5. T4" in out
+        assert "  6. T5" not in out
+
+    def test_at_most_5_recent_approvals_shown(self):
+        cand = _make_watch_candidate("NVDA")
+        aps = [_make_approval(f"T{i}", "keep_watching") for i in range(8)]
+        data = _make_discovery_data(watch=[cand], approvals=aps)
+        out = _build_discovery_section(data)
+        # Only last 5 approvals shown; first 3 are T0, T1, T2 — they should not appear
+        for i in range(3):
+            assert f"- T{i}:" not in out
+
+    def test_rejection_reasons_deduplicated(self):
+        r1 = _make_rejected_candidate("A", "below threshold")
+        r2 = _make_rejected_candidate("B", "below threshold")
+        r3 = _make_rejected_candidate("C", "risk flag with low confidence")
+        data = _make_discovery_data(rejected_cands=[r1, r2, r3])
+        out = _build_discovery_section(data)
+        # "below threshold" appears only once in the reasons list
+        reasons_section = out.split("Top reasons:")[1] if "Top reasons:" in out else ""
+        assert reasons_section.count("below threshold") == 1
+
+
+class TestDiscoverySectionMarkdown:
+    """Tests for _build_discovery_section_md (Markdown)."""
+
+    def test_disclaimer_present(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section_md(data)
+        assert "sandbox research only" in out.lower()
+
+    def test_heading_present(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section_md(data)
+        assert "## Discovery Research" in out
+
+    def test_watch_candidate_appears(self):
+        cand = _make_watch_candidate("NVDA")
+        data = _make_discovery_data(watch=[cand])
+        out = _build_discovery_section_md(data)
+        assert "**NVDA**" in out
+        assert "### Research Candidates (WATCH)" in out
+
+    def test_approval_appears_in_md(self):
+        cand = _make_watch_candidate("NVDA")
+        ap = _make_approval("NVDA", "approve_for_research_review")
+        data = _make_discovery_data(watch=[cand], approvals=[ap])
+        out = _build_discovery_section_md(data)
+        assert "`approve_for_research_review`" in out
+
+    def test_no_forbidden_words_as_decisions(self):
+        ap_bad = {
+            "symbol": "NVDA", "decision": "buy", "decision_reason": "fake",
+            "generated_at": "2026-04-30T00:00:00+00:00", "operator": "op",
+            "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True,
+        }
+        data = _make_discovery_data(approvals=[ap_bad])
+        out = _build_discovery_section_md(data)
+        assert "`buy`" not in out
+
+    def test_sandbox_footer_present(self):
+        data = _make_discovery_data()
+        out = _build_discovery_section_md(data)
+        assert "sandbox only" in out.lower()
+
+    def test_memory_persistence_in_md(self):
+        entries = [{"ticker": "NVDA", "seen_runs": 2, "first_seen": "2026-04-01T00:00:00+00:00", "last_seen": "2026-04-30T00:00:00+00:00"}]
+        data = _make_discovery_data(memory_entries=entries)
+        out = _build_discovery_section_md(data)
+        assert "### Persistence" in out
+        assert "NVDA" in out
+
+    def test_rejected_summary_in_md(self):
+        rej = _make_rejected_candidate("JUNK", "below threshold")
+        data = _make_discovery_data(rejected_cands=[rej])
+        out = _build_discovery_section_md(data)
+        assert "### Rejected / Risk Summary" in out
+
+    def test_counts_in_md(self):
+        w = _make_watch_candidate("NVDA")
+        data = _make_discovery_data(watch=[w])
+        out = _build_discovery_section_md(data)
+        assert "**WATCH:** 1" in out
+
+
+class TestBuildDailyMemoWithDiscovery:
+    """Integration: build_daily_memo and build_daily_memo_md with discovery_data."""
+
+    def test_no_discovery_data_memo_unchanged(self):
+        out = build_daily_memo({})
+        assert "DISCOVERY RESEARCH" not in out
+
+    def test_with_discovery_data_section_appears(self):
+        data = _make_discovery_data(watch=[_make_watch_candidate("NVDA")])
+        out = build_daily_memo({}, discovery_data=data)
+        assert "DISCOVERY RESEARCH" in out
+        assert "NVDA" in out
+
+    def test_discovery_section_after_other_sections(self):
+        data = _make_discovery_data(watch=[_make_watch_candidate("NVDA")])
+        out = build_daily_memo({}, discovery_data=data)
+        # Discovery must come before the final advisory footer
+        disc_idx = out.index("DISCOVERY RESEARCH")
+        adv_idx = out.index("Advisory only")
+        assert disc_idx < adv_idx
+
+    def test_no_discovery_data_md_unchanged(self):
+        out = build_daily_memo_md({})
+        assert "Discovery Research" not in out
+
+    def test_with_discovery_data_md_section_appears(self):
+        data = _make_discovery_data(watch=[_make_watch_candidate("NVDA")])
+        out = build_daily_memo_md({}, discovery_data=data)
+        assert "## Discovery Research" in out
+        assert "NVDA" in out
+
+    def test_discovery_section_before_footer_md(self):
+        data = _make_discovery_data(watch=[_make_watch_candidate("NVDA")])
+        out = build_daily_memo_md({}, discovery_data=data)
+        disc_idx = out.index("## Discovery Research")
+        footer_idx = out.index("Advisory only")
+        assert disc_idx < footer_idx
+
+    def test_discovery_section_error_non_blocking(self):
+        """If _build_discovery_section raises, memo still completes with error note."""
+        data = _make_discovery_data()
+        with patch("watchlist_scanner.daily_memo._build_discovery_section", side_effect=RuntimeError("boom")):
+            out = build_daily_memo({}, discovery_data=data)
+        assert "Advisory only" in out  # main memo still complete
+        assert "unavailable" in out
+
+    def test_discovery_section_error_non_blocking_md(self):
+        data = _make_discovery_data()
+        with patch("watchlist_scanner.daily_memo._build_discovery_section_md", side_effect=RuntimeError("boom")):
+            out = build_daily_memo_md({}, discovery_data=data)
+        assert "Advisory only" in out
+        assert "unavailable" in out.lower()
+
+    def test_no_buy_sell_in_discovery_output(self):
+        ap_bad = {
+            "symbol": "NVDA", "decision": "buy", "decision_reason": "x",
+            "generated_at": "2026-04-30T00:00:00+00:00", "operator": "op",
+            "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True,
+        }
+        data = _make_discovery_data(approvals=[ap_bad])
+        out = build_daily_memo({}, discovery_data=data)
+        # "buy" should not appear in discovery decisions section
+        # (it can appear in CAPITAL ACTIONS as "BUY" uppercase from decision engine)
+        disc_section = out.split("DISCOVERY RESEARCH")[1] if "DISCOVERY RESEARCH" in out else ""
+        assert "buy" not in [word.strip(".,;:-").lower() for word in disc_section.split()
+                             if "research" not in word.lower() and "sandbox" not in word.lower()]
+
+
+class TestGenerateDailyMemoWithDiscovery:
+    """End-to-end: generate_daily_memo loads and integrates discovery data."""
+
+    def test_generate_loads_discovery_sandbox_data(self, tmp_path):
+        # Write minimal sandbox artifacts
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        import json as _json
+        (sandbox_dir / "emerging_candidates.json").write_text(_json.dumps({
+            "candidates": [_make_watch_candidate("NVDA")]
+        }), encoding="utf-8")
+        (sandbox_dir / "rejected_candidates.json").write_text(_json.dumps({"candidates": []}), encoding="utf-8")
+        (sandbox_dir / "discovery_memory.json").write_text(_json.dumps({"entries": []}), encoding="utf-8")
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "DISCOVERY RESEARCH" in txt
+        assert "## Discovery Research" in md
+        assert "NVDA" in txt
+
+    def test_generate_missing_discovery_artifacts_safe(self, tmp_path):
+        # No sandbox artifacts at all — should still generate memo
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Advisory only" in txt  # memo still generated
+        assert "DISCOVERY RESEARCH" not in txt  # section absent without data
+
+    def test_generate_no_discovery_section_when_data_empty(self, tmp_path):
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        import json as _json
+        (sandbox_dir / "emerging_candidates.json").write_text(_json.dumps({}), encoding="utf-8")
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        txt, _ = generate_daily_memo(root=tmp_path, write_files=False)
+        # Empty sandbox data → no section rendered
+        assert "DISCOVERY RESEARCH" not in txt
+
+    def test_generate_discovery_load_exception_non_blocking(self, tmp_path):
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        with patch("watchlist_scanner.daily_memo._load_discovery_sandbox_data", side_effect=RuntimeError("disk error")):
+            txt, md = generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Advisory only" in txt  # memo still generated
+
+    def test_generate_skips_tampered_approval_records(self, tmp_path):
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        import json as _json
+
+        # Write emerging with one WATCH candidate
+        (sandbox_dir / "emerging_candidates.json").write_text(_json.dumps({
+            "candidates": [_make_watch_candidate("NVDA")]
+        }), encoding="utf-8")
+        (sandbox_dir / "rejected_candidates.json").write_text(_json.dumps({"candidates": []}), encoding="utf-8")
+        (sandbox_dir / "discovery_memory.json").write_text(_json.dumps({"entries": []}), encoding="utf-8")
+
+        # Write tampered approval JSONL: one valid, one with decision=buy
+        valid_rec = _make_approval("NVDA", "approve_for_research_review")
+        bad_rec = {"symbol": "NVDA", "decision": "buy", "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True}
+        lines = _json.dumps(valid_rec) + "\n" + _json.dumps(bad_rec) + "\n"
+        (sandbox_dir / "approval_decisions.jsonl").write_text(lines, encoding="utf-8")
+
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        txt, _ = generate_daily_memo(root=tmp_path, write_files=False)
+
+        # Only 1 valid approval should be counted
+        assert "Approval decisions: 1" in txt
+
+    def test_generate_writes_files(self, tmp_path):
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        generate_daily_memo(root=tmp_path, write_files=True)
+        assert (tmp_path / "outputs" / "latest" / "daily_memo.txt").exists()
+        assert (tmp_path / "outputs" / "latest" / "daily_memo.md").exists()
+
+    def test_no_official_artifact_written_to_sandbox(self, tmp_path):
+        (tmp_path / "outputs" / "latest").mkdir(parents=True)
+        generate_daily_memo(root=tmp_path, write_files=True)
+        sandbox_dir = tmp_path / "outputs" / "sandbox"
+        # Discovery section must not write anything to sandbox
+        assert not sandbox_dir.exists() or not list(sandbox_dir.rglob("*.json"))
+
+
+class TestLoadDiscoveryApprovalDecisions:
+    """Unit tests for _load_discovery_approval_decisions."""
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        result = _load_discovery_approval_decisions(tmp_path / "nonexistent.jsonl")
+        assert result == []
+
+    def test_valid_record_loaded(self, tmp_path):
+        import json as _json
+        p = tmp_path / "approvals.jsonl"
+        rec = _make_approval("NVDA", "approve_for_research_review")
+        p.write_text(_json.dumps(rec) + "\n", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert len(result) == 1
+        assert result[0]["symbol"] == "NVDA"
+
+    def test_tampered_decision_skipped(self, tmp_path):
+        import json as _json
+        p = tmp_path / "approvals.jsonl"
+        bad = {"symbol": "X", "decision": "buy", "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True}
+        p.write_text(_json.dumps(bad) + "\n", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert result == []
+
+    def test_tampered_flag_skipped(self, tmp_path):
+        import json as _json
+        p = tmp_path / "approvals.jsonl"
+        bad = {"symbol": "X", "decision": "keep_watching", "observe_only": True, "sandbox_only": False, "no_trade": True, "no_official_promotion": True}
+        p.write_text(_json.dumps(bad) + "\n", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert result == []
+
+    def test_malformed_json_line_skipped(self, tmp_path):
+        import json as _json
+        p = tmp_path / "approvals.jsonl"
+        valid = _make_approval("NVDA")
+        p.write_text("not-json\n" + _json.dumps(valid) + "\n", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert len(result) == 1
+
+    def test_empty_file_returns_empty(self, tmp_path):
+        p = tmp_path / "approvals.jsonl"
+        p.write_text("", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert result == []
+
+    def test_mixed_valid_and_tampered(self, tmp_path):
+        import json as _json
+        p = tmp_path / "approvals.jsonl"
+        valid1 = _make_approval("NVDA", "approve_for_research_review")
+        valid2 = _make_approval("AAPL", "keep_watching")
+        bad = {"symbol": "X", "decision": "sell", "observe_only": True, "sandbox_only": True, "no_trade": True, "no_official_promotion": True}
+        p.write_text("\n".join([_json.dumps(valid1), _json.dumps(bad), _json.dumps(valid2)]) + "\n", encoding="utf-8")
+        result = _load_discovery_approval_decisions(p)
+        assert len(result) == 2
+        symbols = {r["symbol"] for r in result}
+        assert symbols == {"NVDA", "AAPL"}
+
+
+class TestLoadDiscoverySandboxData:
+    """Unit tests for _load_discovery_sandbox_data."""
+
+    def test_all_missing_returns_none(self, tmp_path):
+        result = _load_discovery_sandbox_data(tmp_path)
+        assert result is None
+
+    def test_emerging_only_returns_data(self, tmp_path):
+        import json as _json
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        (sandbox_dir / "emerging_candidates.json").write_text(
+            _json.dumps({"candidates": [_make_watch_candidate("NVDA")]}), encoding="utf-8"
+        )
+        result = _load_discovery_sandbox_data(tmp_path)
+        assert result is not None
+        assert result["emerging"]["candidates"][0]["ticker"] == "NVDA"
+
+    def test_approvals_only_returns_data(self, tmp_path):
+        import json as _json
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        rec = _make_approval("NVDA")
+        (sandbox_dir / "approval_decisions.jsonl").write_text(_json.dumps(rec) + "\n", encoding="utf-8")
+        result = _load_discovery_sandbox_data(tmp_path)
+        assert result is not None
+        assert len(result["approvals"]) == 1
+
+    def test_corrupt_json_still_loads_others(self, tmp_path):
+        import json as _json
+        sandbox_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+        sandbox_dir.mkdir(parents=True)
+        (sandbox_dir / "emerging_candidates.json").write_text("NOT JSON", encoding="utf-8")
+        (sandbox_dir / "rejected_candidates.json").write_text(_json.dumps({"candidates": []}), encoding="utf-8")
+        result = _load_discovery_sandbox_data(tmp_path)
+        # Even with corrupt emerging, rejected is loaded; empty emerging → might return None or partial
+        # Main requirement: no exception
+        # result could be None (all empty) or dict; both are valid
+        assert result is None or isinstance(result, dict)

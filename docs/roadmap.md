@@ -491,3 +491,39 @@ Fixes:
 - Added `docs/REPO_CLEANUP_AUDIT.md` with active files, suspected legacy/dead candidates, cleanup backlog, and safety confirmation.
 
 Next official step remains `daily_memo_discovery_section`.
+
+---
+
+### Daily Memo Discovery Section (Complete)
+
+Adds a **DISCOVERY RESEARCH [Sandbox Only]** section to `outputs/latest/daily_memo.txt` and `outputs/latest/daily_memo.md`. The section is produced by `generate_daily_memo()` in `watchlist_scanner/daily_memo.py` and reads sandbox artifacts only.
+
+**Scope:**
+
+- New helpers in `daily_memo.py`:
+  - `_load_discovery_approval_decisions(path)` — reads and validates approval JSONL; skips tampered records via `is_valid_loaded_approval_record()`
+  - `_load_discovery_sandbox_data(root_path)` — loads all four sandbox artifacts; returns `None` if all are empty/missing
+  - `_build_discovery_section(data)` — plain-text section builder
+  - `_build_discovery_section_md(data)` — Markdown section builder
+- `build_daily_memo` and `build_daily_memo_md` accept optional `discovery_data` kwarg; section appears before the footer if data is available
+- `generate_daily_memo` loads discovery data non-blocking (exception → section omitted, memo still complete)
+
+**Safety constraints:**
+
+- Never writes to sandbox or any namespace — read-only consumer
+- Approval records validated on load; buy/sell/actionable/promoted/validated rejected defense-in-depth in section builders too
+- Missing or corrupt artifact files handled gracefully
+- No AI/LLM calls, no external API calls
+- Sandbox-only disclaimer mandatory on every render
+
+**Artifacts written:** `outputs/latest/daily_memo.txt`, `outputs/latest/daily_memo.md` (existing paths — no new namespaces)
+
+**Artifacts read (sandbox, read-only):**
+- `outputs/sandbox/discovery/emerging_candidates.json`
+- `outputs/sandbox/discovery/rejected_candidates.json`
+- `outputs/sandbox/discovery/discovery_memory.json`
+- `outputs/sandbox/discovery/approval_decisions.jsonl`
+
+**Tests:** 57 new tests (115 total in `tests/test_daily_memo.py`).
+
+Next official step: `historical_replay_backtest_for_discovery_candidates`.

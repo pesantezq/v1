@@ -126,7 +126,6 @@ post_phase_0:
       - docs/DISCOVERY_ENGINE.md
     tests: 171 passed
     pending_sub_steps:
-      - daily_memo_discovery_section
       - historical_replay_backtest_for_discovery_candidates
 
   discovery_corroboration_implementation:
@@ -148,6 +147,23 @@ post_phase_0:
       - docs/OUTPUT_ARTIFACT_CONTRACTS.md
       - docs/roadmap.md
     tests: 235 passed (58 new in test_corroboration.py; 6 added in Codex hardening)
+
+  daily_memo_discovery_section:
+    status: complete
+    priority: high
+    description: >
+      Non-blocking Discovery Research section appended to daily memo (txt + md).
+      Reads sandbox-only artifacts: emerging_candidates.json, rejected_candidates.json,
+      discovery_memory.json, approval_decisions.jsonl. Validates approval records via
+      is_valid_loaded_approval_record(). Clear sandbox-only disclaimer; no BUY/SELL
+      language; missing/malformed files handled gracefully. 57 new tests.
+    files:
+      - watchlist_scanner/daily_memo.py
+      - tests/test_daily_memo.py
+      - docs/DISCOVERY_ENGINE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+    tests: 57 new (115 total in test_daily_memo.py)
 
   gui_discovery_approval_workflow:
     status: complete
