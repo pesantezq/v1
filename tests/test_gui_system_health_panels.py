@@ -556,3 +556,159 @@ class TestOperatorDashboardNewKeys(_Base):
         bundle = load_operator_dashboard_data(self.root)
         for key in ("health", "overview", "confidence_calibration", "decision_triage"):
             self.assertIn(key, bundle, f"Expected existing key '{key}' still in bundle")
+
+
+# ---------------------------------------------------------------------------
+# Safety tests — GUI loaders must not write, call APIs, or mutate state
+# ---------------------------------------------------------------------------
+
+class TestLoaderSafetyConstraints(_Base):
+    """Verify that all loaders are purely read-only: no writes, no external calls."""
+
+    def _write(self, rel: str, payload: dict) -> Path:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def _write_text(self, rel: str, content: str) -> Path:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_load_data_quality_does_not_write_files(self):
+        before = list(self.root.rglob("*"))
+        load_data_quality_report(self.root)
+        after = list(self.root.rglob("*"))
+        self.assertEqual(before, after, "load_data_quality_report must not create files")
+
+    def test_load_ai_budget_does_not_write_files(self):
+        before = list(self.root.rglob("*"))
+        load_ai_budget_summary(self.root)
+        after = list(self.root.rglob("*"))
+        self.assertEqual(before, after, "load_ai_budget_summary must not create files")
+
+    def test_load_calibration_does_not_write_files(self):
+        before = list(self.root.rglob("*"))
+        load_confidence_calibration_latest(self.root)
+        after = list(self.root.rglob("*"))
+        self.assertEqual(before, after, "load_confidence_calibration_latest must not create files")
+
+    def test_load_discovery_does_not_write_files(self):
+        before = list(self.root.rglob("*"))
+        load_discovery_sandbox_status(self.root)
+        after = list(self.root.rglob("*"))
+        self.assertEqual(before, after, "load_discovery_sandbox_status must not create files")
+
+    def test_load_data_quality_does_not_write_to_latest(self):
+        load_data_quality_report(self.root)
+        self.assertFalse((self.root / "outputs" / "latest").exists())
+
+    def test_load_ai_budget_does_not_write_to_policy(self):
+        load_ai_budget_summary(self.root)
+        self.assertFalse((self.root / "outputs" / "policy").exists())
+
+    def test_load_discovery_does_not_write_to_sandbox(self):
+        load_discovery_sandbox_status(self.root)
+        self.assertFalse((self.root / "outputs" / "sandbox").exists())
+
+    def test_load_discovery_does_not_mutate_official_watchlist(self):
+        result = load_discovery_sandbox_status(self.root)
+        self.assertFalse(result["official_watchlist_modified"])
+
+    def test_load_discovery_can_execute_trades_false(self):
+        result = load_discovery_sandbox_status(self.root)
+        self.assertFalse(result["can_execute_trades"])
+
+    def test_loaders_do_not_import_run_discovery_engine(self):
+        import gui_operator_data
+        source = Path(gui_operator_data.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("run_discovery_engine", source)
+
+    def test_loaders_do_not_import_assert_can_write(self):
+        import gui_operator_data
+        source = Path(gui_operator_data.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("assert_can_write_namespace", source)
+
+    def test_discovery_loader_observe_only_always_true(self):
+        result = load_discovery_sandbox_status(self.root)
+        self.assertTrue(result["observe_only"])
+
+    def test_discovery_loader_sandbox_only_always_true(self):
+        result = load_discovery_sandbox_status(self.root)
+        self.assertTrue(result["sandbox_only"])
+
+    def test_discovery_loader_discovery_only_always_true(self):
+        result = load_discovery_sandbox_status(self.root)
+        self.assertTrue(result["discovery_only"])
+
+    def test_calibration_loader_does_not_read_policy_path(self):
+        # Write only to POLICY path — LATEST loader must ignore it
+        path = self.root / "outputs" / "policy" / "confidence_calibration.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"total_resolved": 999, "available": True}), encoding="utf-8")
+        result = load_confidence_calibration_latest(self.root)
+        self.assertFalse(result["available"])
+
+    def test_no_affirmative_buy_sell_in_discovery_disclaimer(self):
+        result = load_discovery_sandbox_status(self.root)
+        disclaimer = result["disclaimer"].lower()
+        # Disclaimer must negate buy/sell — must contain "not"
+        self.assertIn("not", disclaimer)
+        # Must not contain any standalone actionable-trade phrases
+        self.assertNotIn("buy signal", disclaimer)
+        self.assertNotIn("sell signal", disclaimer)
+        self.assertNotIn("action required", disclaimer)
+        self.assertNotIn("execute trade", disclaimer)
+
+
+# ---------------------------------------------------------------------------
+# Governance flags — discover sandbox status always has correct flags
+# ---------------------------------------------------------------------------
+
+class TestDiscoverySandboxGovernanceFlags(_Base):
+    def _emerging(self, **overrides) -> dict:
+        base = {
+            "discovery_only": True,
+            "sandbox_only": True,
+            "observe_only": True,
+            "can_execute_trades": False,
+            "disclaimer": "Discovery candidates are not buy/sell recommendations.",
+            "candidates": [],
+        }
+        base.update(overrides)
+        return base
+
+    def _write(self, rel: str, payload: dict) -> Path:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_can_execute_trades_false_even_with_watch_candidates(self):
+        payload = self._emerging(candidates=[
+            {"ticker": "NVDA", "status": "watch", "score": 5.0, "event_type": "earnings",
+             "mention_count": 10, "unique_source_count": 5, "risk_flag": False, "corroboration_met": False,
+             "first_seen": "2026-05-01T00:00:00+00:00"}
+        ])
+        self._write("outputs/sandbox/discovery/emerging_candidates.json", payload)
+        result = load_discovery_sandbox_status(self.root)
+        self.assertFalse(result["can_execute_trades"])
+
+    def test_official_watchlist_modified_always_false(self):
+        payload = self._emerging(candidates=[
+            {"ticker": "AAPL", "status": "watch", "score": 3.0, "event_type": "guidance",
+             "mention_count": 4, "unique_source_count": 2, "risk_flag": False, "corroboration_met": False,
+             "first_seen": "2026-05-01T00:00:00+00:00"}
+        ])
+        self._write("outputs/sandbox/discovery/emerging_candidates.json", payload)
+        result = load_discovery_sandbox_status(self.root)
+        self.assertFalse(result["official_watchlist_modified"])
+
+    def test_observe_only_always_true_regardless_of_artifact(self):
+        # Even if the artifact erroneously sets observe_only=False, loader defaults to True
+        payload = self._emerging(observe_only=False, candidates=[])
+        self._write("outputs/sandbox/discovery/emerging_candidates.json", payload)
+        result = load_discovery_sandbox_status(self.root)
+        self.assertTrue(result["observe_only"])

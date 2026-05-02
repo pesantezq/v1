@@ -540,6 +540,82 @@ These boundaries are intentional and should not be collapsed:
 - Decision-plan artifacts are additive contracts.
   They must not silently break existing outputs that GUI or memo flows already consume.
 
+## GUI System Health Panels
+
+Four read-only observability panels added to the Advanced Dashboard tab strip.
+All panels are artifact-driven and consume local JSON/Markdown files only.
+No writes, no API calls, no AI/LLM calls from any panel.
+Missing or malformed artifacts degrade gracefully to an info banner.
+
+### Data Quality Monitor (`Data Quality` tab)
+
+Source: `outputs/latest/data_quality_report.json`
+
+Displays:
+- Overall health badge (healthy / warning / critical / unavailable)
+- Symbol counts: total, healthy, warning, critical
+- Issue list broken out by severity (critical → error, warning → warning)
+- Fallback / stale / missing price counts
+
+Mode: observe-only. Does not alter scoring, confidence, or recommendations.
+
+### AI Budget Summary (`AI Budget` tab)
+
+Source: `outputs/latest/ai_budget_summary.json`
+
+Displays:
+- Budget status badge (within budget / warning / blocked / unavailable)
+- Daily and monthly cost totals with configured limits
+- Event count and token total
+- Per-run warning messages
+
+Caption: "AI budget tracking is advisory/observability only and does not alter portfolio decisions."
+
+Mode: observe-only. Does not block AI calls or change pipeline behavior.
+
+### Confidence Calibration (`Calibration` tab)
+
+Source: `outputs/latest/confidence_calibration.json` (LATEST namespace, distinct from legacy POLICY path)
+
+Displays:
+- `available` / `insufficient_data` flags
+- Total resolved decisions, overall hit rate, avg return
+- 5-bucket table (`buckets_5` — always 5 rows, `insufficient_data=true` rows show count=0)
+- Per-signal calibration results table
+- Data quality warnings from `dq_warnings`
+
+Caption: "Calibration is observe-only and does not automatically change scoring or allocations."
+
+Mode: observe-only. Gaps are surfaced for manual review; no registry values are automatically changed.
+
+### Discovery Sandbox Status (`Discovery` tab)
+
+Source: `outputs/sandbox/discovery/` (research-lane sandbox namespace)
+
+Displays:
+- Research-only banner and disclaimer
+- Watch / discovered / rejected candidate counts
+- Watch candidates table (ticker, score, event type, mentions, corroboration status)
+- Rejected candidates expander
+- Memory entry count
+- Research memo expander (Markdown)
+
+Caption: "Discovery candidates are research-only and are not buy/sell recommendations."
+
+No promote/approve buttons. No official watchlist writes. No portfolio state mutation.
+`DAILY`, `MANUAL_UPDATE`, `WEEKLY_REVIEW` modes cannot produce these artifacts (enforced by `assert_can_write_namespace`).
+
+### Loader Functions (`gui_operator_data.py`)
+
+| Function | Source path | Namespace |
+|---|---|---|
+| `load_data_quality_report(root)` | `outputs/latest/data_quality_report.json` | LATEST |
+| `load_ai_budget_summary(root)` | `outputs/latest/ai_budget_summary.json` | LATEST |
+| `load_confidence_calibration_latest(root)` | `outputs/latest/confidence_calibration.json` | LATEST |
+| `load_discovery_sandbox_status(root)` | `outputs/sandbox/discovery/*.json + .md` | SANDBOX |
+
+All four loaders are included in the bundle returned by `load_operator_dashboard_data(root)` under the keys `data_quality_report`, `ai_budget_summary`, `confidence_calibration_latest`, and `discovery_sandbox_status`.
+
 ## Next Implementation Step
 
-All advisory layers, the GUI Decision Center v1, and Historical Replay v1 are now live. Potential next steps: GUI read-only integration of `outputs/backtest/` under a Backtest tab, or source-aware comparison of live vs historical hit-rates in the calibration report.
+All advisory layers, the GUI Decision Center v1, System Health panels, and Historical Replay v1 are now live. Potential next steps: instrument AI call sites with real token counts (`decision_explainer.py`, `ai_decision_validator.py`), or implement the GUI discovery approval workflow and Daily Memo discovery section.
