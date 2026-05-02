@@ -490,7 +490,7 @@ Fixes:
 - Removed stale approval summary artifact constants.
 - Added `docs/REPO_CLEANUP_AUDIT.md` with active files, suspected legacy/dead candidates, cleanup backlog, and safety confirmation.
 
-Next official step remains `daily_memo_discovery_section`.
+Cleanup checkpoint preceded `daily_memo_discovery_section`. The memo section is now complete; current next official step is `historical_replay_backtest_for_discovery_candidates`.
 
 ---
 
@@ -510,7 +510,7 @@ Adds a **DISCOVERY RESEARCH [Sandbox Only]** section to `outputs/latest/daily_me
 
 **Safety constraints:**
 
-- Never writes to sandbox or any namespace — read-only consumer
+- Never writes to sandbox or produces separate discovery artifacts — sandbox-read-only consumer rendered into existing daily memo outputs
 - Approval records validated on load; buy/sell/actionable/promoted/validated rejected defense-in-depth in section builders too
 - Missing or corrupt artifact files handled gracefully
 - No AI/LLM calls, no external API calls

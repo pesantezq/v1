@@ -292,7 +292,7 @@ Implemented in `watchlist_scanner/daily_memo.py`.
 
 The daily memo now includes a **DISCOVERY RESEARCH [Sandbox Only]** section rendered after the System/Data Health section (if discovery sandbox artifacts exist). This section is:
 
-- **Read-only**: reads sandbox artifacts only; never writes to sandbox or any namespace
+- **Sandbox-read-only**: reads sandbox artifacts only; never writes to sandbox or produces separate discovery artifacts
 - **Non-blocking**: if discovery artifacts are missing or malformed, the memo generates normally with the section absent
 - **Sandbox-only**: includes a mandatory disclaimer stating candidates are not buy/sell recommendations and do not update the official watchlist or portfolio
 
@@ -313,7 +313,7 @@ The daily memo now includes a **DISCOVERY RESEARCH [Sandbox Only]** section rend
 - All approval records are validated via `is_valid_loaded_approval_record()` before rendering
 - Records with `decision` = buy/sell/actionable/promoted/validated are silently excluded (defense-in-depth)
 - Records with any governance flag set to `False` are silently excluded
-- Section never writes, never mutates official state, never calls AI/LLM, never calls external APIs
+- Section never writes to sandbox, never mutates official state, never calls AI/LLM, never calls external APIs
 
 ### Artifact Inputs (Read-Only)
 
