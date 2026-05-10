@@ -565,7 +565,7 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 **Limitation:** No live price data is available in the repo; all outcome metrics require injected `price_outcomes` dict. An operator must supply historical prices to get resolved candidate metrics. Candidates without price data are marked `insufficient_data=True` and excluded from aggregate calculations.
 
-**Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `manual_promotion_proposal`.
+**Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `fmp_news_intelligence_layer`, then `discovery_news_integration`, then `daily_weekly_monthly_ai_market_narratives`, then `news_evidence_layer_for_decision_engine`, then `manual_promotion_proposal`.
 
 ---
 

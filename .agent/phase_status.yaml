@@ -1,6 +1,6 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-04-30
+# Last updated: 2026-05-10
 
 # ---------------------------------------------------------------------------
 # Phase 0 — Infrastructure & Data Governance
@@ -167,6 +167,50 @@ post_phase_0:
       - docs/roadmap.md
     tests: 81 new (tests/test_memo_email_sender.py)
 
+  fmp_news_intelligence_layer:
+    status: not_started
+    priority: high
+    description: >
+      Next approved roadmap step after Email Memo Sender / Delivery Track.
+      Must preserve advisory-only behavior, FMP registry compliance, and no
+      scoring/allocation/recommendation changes without explicit approval.
+    prerequisite: email_memo_sender_delivery_track_complete
+    files: []
+    tests: pending
+
+  discovery_news_integration:
+    status: not_started
+    priority: high
+    description: >
+      Planned follow-up after fmp_news_intelligence_layer. Integrates approved
+      news intelligence into sandbox discovery workflows without official
+      promotion, BUY/SELL outputs, broker execution, or auto-trading.
+    prerequisite: fmp_news_intelligence_layer_complete
+    files: []
+    tests: pending
+
+  daily_weekly_monthly_ai_market_narratives:
+    status: not_started
+    priority: medium
+    description: >
+      Planned narrative/reporting layer after discovery_news_integration.
+      AI may summarize or explain but must not override deterministic rules,
+      scoring, allocations, recommendations, or artifact contracts.
+    prerequisite: discovery_news_integration_complete
+    files: []
+    tests: pending
+
+  news_evidence_layer_for_decision_engine:
+    status: not_started
+    priority: high
+    description: >
+      Planned evidence layer after daily_weekly_monthly_ai_market_narratives.
+      Must remain evidence/observability oriented unless explicitly approved;
+      no recommendation semantics or decision-engine behavior changes by default.
+    prerequisite: daily_weekly_monthly_ai_market_narratives_complete
+    files: []
+    tests: pending
+
   manual_promotion_proposal:
     status: not_started
     priority: high
@@ -174,7 +218,7 @@ post_phase_0:
       Future controlled proposal workflow. Must remain advisory-only and must not
       promote discovery candidates to official watchlist entries, recommendations,
       or portfolio actions without explicit operator-approved governance.
-    prerequisite: email_memo_sender_delivery_track_complete
+    prerequisite: news_evidence_layer_for_decision_engine_complete
     files: []
     tests: pending
 
