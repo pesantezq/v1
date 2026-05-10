@@ -618,6 +618,50 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 ---
 
+### FMP News Intelligence Layer (Complete)
+
+**Scope:** Observe-only, rules-first evidence foundation. Ingests raw FMP news articles and emits structured evidence packets for official holdings, watchlist symbols, ETFs/sectors/themes, and sandbox discovery candidates. No BUY/SELL/HOLD outputs, no official watchlist mutation, no candidate promotion, no AI/LLM calls.
+
+**Module:** `portfolio_automation/news/fmp_news_intelligence.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `normalize_news_articles(raw_articles)` | Normalize raw FMP-style dicts into `NormalizedArticle` objects |
+| `dedupe_news_articles(articles)` | Remove duplicates; sort newest-first |
+| `extract_news_entities(article)` | Deterministic ticker extraction (source-provided, cashtag, parenthetical, alias map) |
+| `classify_news_themes(article)` | Keyword scoring across 16 themes |
+| `build_news_evidence_packets(articles, holdings, watchlist, discovery_candidates)` | Group evidence by ticker; assign evidence lanes |
+| `write_news_intelligence_report(base_dir, raw_articles, ...)` | Full pipeline + artifact writes |
+| `run_fmp_news_intelligence(raw_articles, ...)` | Top-level orchestrator |
+
+**Evidence lanes:**
+
+- `official_monitoring` — tickers in current holdings or official watchlist
+- `sandbox_discovery_research` — all other tickers (not promoted)
+
+**Artifacts produced:**
+
+- `outputs/latest/news_intelligence.json` (LATEST namespace)
+- `outputs/latest/news_intelligence.md` (LATEST namespace)
+- `outputs/sandbox/discovery/news_candidate_evidence.json` (SANDBOX, when sandbox packets exist)
+
+**Safety:** `observe_only: true`, `no_trade: true`, `not_recommendation: true` hardcoded everywhere. No allocation, scoring, recommendation, or decision-engine changes.
+
+**Tests:** `tests/test_fmp_news_intelligence.py` — 91 tests across 8 test classes. No live API required.
+
+**Files created:** `portfolio_automation/news/__init__.py`, `portfolio_automation/news/fmp_news_intelligence.py`, `tests/test_fmp_news_intelligence.py`, `docs/NEWS_INTELLIGENCE.md`
+
+**Files modified:** `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+**Consumed by future phases:**
+- `discovery_news_integration` — evidence packets feed into discovery candidate scoring
+- `daily_weekly_monthly_ai_market_narratives` — themes/evidence as narrative context
+- `news_evidence_layer_for_decision_engine` — evidence attached to decision plan entries
+
+---
+
 ### Manual Promotion Proposal (Pending After Email Delivery)
 
 Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.

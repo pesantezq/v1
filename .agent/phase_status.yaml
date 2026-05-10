@@ -168,15 +168,25 @@ post_phase_0:
     tests: 81 new (tests/test_memo_email_sender.py)
 
   fmp_news_intelligence_layer:
-    status: not_started
+    status: complete
     priority: high
     description: >
-      Next approved roadmap step after Email Memo Sender / Delivery Track.
-      Must preserve advisory-only behavior, FMP registry compliance, and no
-      scoring/allocation/recommendation changes without explicit approval.
+      Observe-only rules-first FMP news intelligence layer. Normalizes articles,
+      deduplicates, extracts entities via alias map/cashtag/parenthetical,
+      classifies 16 themes by keyword scoring, builds evidence packets with
+      official_monitoring and sandbox_discovery_research lanes, writes to
+      LATEST and SANDBOX namespaces. No BUY/SELL/HOLD, no official state mutation.
     prerequisite: email_memo_sender_delivery_track_complete
-    files: []
-    tests: pending
+    files:
+      - portfolio_automation/news/__init__.py
+      - portfolio_automation/news/fmp_news_intelligence.py
+      - tests/test_fmp_news_intelligence.py
+      - docs/NEWS_INTELLIGENCE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 91 passed
 
   discovery_news_integration:
     status: not_started

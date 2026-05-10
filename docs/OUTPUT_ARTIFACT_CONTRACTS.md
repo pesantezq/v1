@@ -1005,3 +1005,59 @@ Append-only log of every delivery attempt.  One JSON object per line.
 | `no_trade` | Always `true` |
 
 **Never contains**: SMTP password, raw credentials, or sensitive exception dumps.
+
+---
+
+## News Intelligence Artifacts
+
+### `outputs/latest/news_intelligence.json`
+
+Namespace: LATEST. Written by `portfolio_automation/news/fmp_news_intelligence.py`.
+
+Top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `source` | string | `"fmp_news_intelligence_layer"` |
+| `run_mode` | string | Run mode string |
+| `article_count_raw` | int | Input article count |
+| `article_count_normalized` | int | After normalization |
+| `article_count_deduped` | int | After deduplication |
+| `evidence_packet_count` | int | Total evidence packets |
+| `official_monitoring_count` | int | Packets in official monitoring lane |
+| `sandbox_count` | int | Packets in sandbox lane |
+| `disclaimer` | string | Safety disclaimer |
+| `evidence_packets` | array | List of evidence packet objects |
+
+Evidence packet fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_key` | string | Ticker symbol |
+| `entity_type` | string | `"ticker"` |
+| `related_tickers` | array | Associated tickers |
+| `article_count` | int | Articles mentioning this entity |
+| `source_count` | int | Unique source count |
+| `latest_published_at` | string | Newest article timestamp |
+| `themes` | array | Top theme names |
+| `risk_flags` | array | Detected risk keywords |
+| `catalyst_flags` | array | Detected catalyst keywords |
+| `sentiment_hint` | string | `positive`, `negative`, `mixed`, or `neutral` |
+| `article_refs` | array | Article title/url/date/source references (up to 10) |
+| `summary_bullets` | array | Top 3 article titles as bullets |
+| `evidence_lane` | string | `official_monitoring` or `sandbox_discovery_research` |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+
+### `outputs/latest/news_intelligence.md`
+
+Namespace: LATEST. Human-readable Markdown report. Contains disclaimer, official monitoring section, and sandbox research section. No BUY/SELL/HOLD language.
+
+### `outputs/sandbox/discovery/news_candidate_evidence.json`
+
+Namespace: SANDBOX. Written only when sandbox-lane evidence packets exist. Contains same evidence packet structure as above, filtered to `evidence_lane: sandbox_discovery_research`. Includes all safety flags.

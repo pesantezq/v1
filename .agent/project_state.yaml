@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-10 (roadmap order after email_memo_sender_delivery_track)
+# Last updated: 2026-05-10 (fmp_news_intelligence_layer complete)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: fmp_news_intelligence_layer
+current_step: discovery_news_integration
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -33,11 +33,11 @@ completed_steps:
   - daily_memo_discovery_section
   - historical_replay_backtest_for_discovery_candidates
   - email_memo_sender_delivery_track
+  - fmp_news_intelligence_layer
 
 next_official_step:
-  primary: fmp_news_intelligence_layer
+  primary: discovery_news_integration
   secondary:
-    - discovery_news_integration
     - daily_weekly_monthly_ai_market_narratives
     - news_evidence_layer_for_decision_engine
     - manual_promotion_proposal
