@@ -123,8 +123,8 @@ Both written to `OutputNamespace.LATEST`:
   "decision_contexts": [
     {
       "ticker": "NVDA",
-      "decision_action": "maintain",     // read-only copy
-      "decision_reason": "...",          // read-only copy
+      "upstream_decision_present": true,                   // ticker exists in upstream decision plan
+      "upstream_decision_context": "decision_plan_context_only", // neutral enum; no action label
       "news_evidence_strength": "moderate",
       "news_context_effect": "catalyst_context",
       "context_note": "...",
@@ -182,15 +182,35 @@ The fixed `_SAFETY_DISCLAIMER` and discovery disclaimer may legitimately contain
 
 ## No-Mutation Boundary
 
-The layer is read-only against all upstream artifacts:
-- Decision actions and reasons are copied verbatim into `decision_contexts` and never modified
-- No `signal_score`, `confidence_score`, `effective_score`, or other scoring fields are emitted
-- No `allocation`, `target_weight`, or allocation-mutation fields are emitted
-- No `watchlist`, `watchlist_add`, or watchlist-mutation fields are emitted
+The layer is read-only against all upstream artifacts and **cannot emit upstream decision action labels**:
+
+- Upstream decision action labels (`BUY`/`SELL`/`HOLD`/`ACTIONABLE`/`PROMOTED`/`VALIDATED`) are **never** copied into the output. The previous `decision_action` and `decision_reason` fields on `DecisionNewsContext` have been removed entirely.
+- The layer records only **presence** of an upstream decision via the neutral `upstream_decision_present: bool` and `upstream_decision_context: str` enum (`"decision_plan_context_only"` or `"absent"`).
+- No `signal_score`, `confidence_score`, `effective_score`, or other scoring fields are emitted.
+- No `allocation`, `target_weight`, or allocation-mutation fields are emitted.
+- No `watchlist`, `watchlist_add`, or watchlist-mutation fields are emitted.
+
+### Action-label boundary enforcement
+
+Three enforcement layers prevent action labels from leaking:
+
+1. **Schema-level**: `DecisionNewsContext` does not have an `action` or `reason` field. There is nowhere in the dataclass to hold the upstream action.
+2. **Sanitizer-level**: `sanitize_news_evidence_text()` redacts whole-word `BUY`/`SELL`/`HOLD`/`ACTIONABLE`/`PROMOTED`/`VALIDATED` with `[REDACTED]`. `sanitize_label()` further rewrites a pure-action label to the neutral marker `"redacted_action_label_context_only"`. Substrings inside other words (e.g., `"buyer"`, `"rebuild"`) are preserved.
+3. **Validator-level**: `validate_news_evidence_safety()` detects standalone whole-word action tokens anywhere in the payload or rendered Markdown. If any remain after sanitization, `UnsafeNewsEvidenceArtifactError` is raised and no artifact is written.
+
+### Markdown rendering
+
+The Markdown report includes an "Upstream Decision-Plan Context _(Reference Only)_" section that lists tickers for which an upstream decision exists, with text:
+
+> "Upstream decision-plan context is available for the following tickers. The News Evidence Layer does not repeat, override, or modify the upstream decision action."
+
+Lines like `"Decision action: BUY"` are not produced. Each ticker line reads:
+
+> `- **NVDA**: news evidence is _moderate_ (catalyst_context); upstream decision context: \`decision_plan_context_only\`.`
 
 ## Tests
 
 File: `tests/test_news_evidence_layer.py`
-Count: 74 tests across 8 test classes
+Count: 104 tests across 10 test classes (74 original + 30 added in the Codex boundary-hardening patch)
 
-Coverage: input loading, sanitizers, report building, ticker matching, evidence strength/effect classification, markdown rendering, artifact writing, orchestrator, adversarial input protection, no-mutation boundary verification, determinism.
+Coverage: input loading, sanitizers, report building, ticker matching, evidence strength/effect classification, markdown rendering, artifact writing, orchestrator, adversarial-phrase protection, standalone-action detection (`BUY`/`SELL`/`HOLD`/`ACTIONABLE`/`PROMOTED`/`VALIDATED`), decision-action boundary, neutralized `DecisionNewsContext` schema, no leakage into JSON or Markdown, writer blocks unsafe artifacts, determinism under adversarial decision plans, no-mutation-fields invariants.

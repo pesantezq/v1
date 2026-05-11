@@ -234,10 +234,13 @@ post_phase_0:
       Capped, observe-only layer that converts news/narrative/discovery evidence
       into decision-engine-adjacent context.  Hard influence cap "context_only".
       Cannot override decisions, scoring, allocation, recommendations, or
-      watchlists.  Per-ticker evidence_strength + context_effect classification;
-      decision_contexts carry read-only decision copies with no_decision_override.
-      Three-layer sanitization (label / payload / pre-write validation) blocks
-      unsafe artifact writes.
+      watchlists.  Per-ticker evidence_strength + context_effect classification.
+      Codex boundary hardening: DecisionNewsContext schema reframed to drop
+      decision_action / decision_reason; emits only upstream_decision_present
+      (bool) + upstream_decision_context (neutral enum).  Validator + sanitizer
+      now detect whole-word standalone action tokens
+      (BUY/SELL/HOLD/ACTIONABLE/PROMOTED/VALIDATED) in addition to multi-word
+      instruction phrases.  Pre-write validation blocks unsafe artifact writes.
     prerequisite: daily_weekly_monthly_ai_market_narratives_complete
     files:
       - portfolio_automation/news_evidence_layer.py
@@ -247,7 +250,7 @@ post_phase_0:
       - docs/roadmap.md
       - .agent/project_state.yaml
       - .agent/phase_status.yaml
-    tests: 74 passed
+    tests: 104 passed (74 original + 30 Codex boundary hardening)
 
   manual_promotion_proposal:
     status: not_started

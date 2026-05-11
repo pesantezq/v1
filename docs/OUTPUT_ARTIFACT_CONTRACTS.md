@@ -1248,17 +1248,19 @@ Both artifacts are written to `OutputNamespace.LATEST` by `portfolio_automation/
 | `evidence_strength` | string (`none` / `weak` / `moderate` / `strong`) |
 | `context_effect` | string (`informational` / `risk_context` / `catalyst_context` / `confidence_context`) |
 
-#### `decision_contexts[]` shape
+#### `decision_contexts[]` shape (Codex boundary hardened)
 
 | Field | Type | Description |
 |---|---|---|
 | `ticker` | string | |
-| `decision_action` | string | Read-only copy of existing decision |
-| `decision_reason` | string | Read-only copy of existing reason |
+| `upstream_decision_present` | bool | `true` if ticker exists in upstream `decision_plan.json` |
+| `upstream_decision_context` | string | Neutral enum: `"decision_plan_context_only"` or `"absent"` |
 | `news_evidence_strength` | string | Strength band for this ticker |
 | `news_context_effect` | string | Effect classification |
-| `context_note` | string | Aggregated context |
+| `context_note` | string | Aggregated news evidence context (sanitized) |
 | `no_decision_override` | bool | Always `true` |
+
+**Action-label boundary:** Upstream decision actions (`BUY`/`SELL`/`HOLD`/`ACTIONABLE`/`PROMOTED`/`VALIDATED`) are **never** emitted. The previous `decision_action` and `decision_reason` fields have been removed; only a neutral `upstream_decision_context` enum and `upstream_decision_present` boolean indicate that an upstream decision exists for the ticker. Whole-word standalone-action detection is enforced across all output fields and the rendered Markdown.
 
 ### `outputs/latest/news_evidence_layer.md`
 

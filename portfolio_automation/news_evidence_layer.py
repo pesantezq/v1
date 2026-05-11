@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,6 +125,27 @@ _PROHIBITED_INSTRUCTION_PATTERNS: list[str] = [
     "consider selling",
 ]
 
+# Standalone action tokens that must never appear as whole-word output values
+# even though they are not multi-word "instruction phrases".  Codex hardening:
+# upstream decision_plan.json may contain "BUY"/"SELL"/"HOLD"/"ACTIONABLE"/
+# "PROMOTED"/"VALIDATED" as action values; this layer is forbidden from
+# emitting them at all.
+_FORBIDDEN_STANDALONE_ACTIONS: frozenset[str] = frozenset({
+    "buy",
+    "sell",
+    "hold",
+    "actionable",
+    "promoted",
+    "validated",
+})
+
+# Neutral context-only replacement for upstream decision action labels.
+_NEUTRAL_REDACTED_ACTION_LABEL = "redacted_action_label_context_only"
+
+# Neutral enum-style markers used by DecisionNewsContext.upstream_decision_context
+_UPSTREAM_DECISION_PRESENT = "decision_plan_context_only"
+_UPSTREAM_DECISION_ABSENT = "absent"
+
 # Output filenames (relative to OutputNamespace.LATEST)
 _JSON_NAME = "news_evidence_layer.json"
 _MD_NAME = "news_evidence_layer.md"
@@ -186,11 +208,18 @@ class NewsCatalystEvidence:
 class DecisionNewsContext:
     """Per-decision context surfaced for the decision explainer/memo layers.
 
-    Strictly advisory; does not alter decisions.
+    Strictly advisory; does not alter decisions.  This layer cannot emit
+    upstream decision actions (BUY/SELL/HOLD/ACTIONABLE/PROMOTED/VALIDATED).
+    Instead it records only that an upstream decision exists, via the neutral
+    enum-style ``upstream_decision_context`` field.
     """
     ticker: str
-    decision_action: str = ""           # the existing decision (read-only copy)
-    decision_reason: str = ""           # the existing reason (read-only copy)
+    upstream_decision_present: bool = False
+    # Neutral enum-style value; never carries the raw upstream action.
+    # Allowed values:
+    #   "decision_plan_context_only"  — ticker is in upstream decision plan
+    #   "absent"                       — ticker is not in upstream decision plan
+    upstream_decision_context: str = _UPSTREAM_DECISION_ABSENT
     news_evidence_strength: str = _STRENGTH_NONE
     news_context_effect: str = _EFFECT_INFORMATIONAL
     context_note: str = ""
@@ -313,20 +342,39 @@ def _detect_prohibited_phrases(text: str) -> list[str]:
     return [p for p in _PROHIBITED_INSTRUCTION_PATTERNS if p in lower]
 
 
-def _text_contains_only_allowed_disclaimer(text: str, violations: list[str]) -> bool:
-    if not violations:
-        return True
-    sanitized = text
+def _detect_standalone_actions(text: str) -> list[str]:
+    """Return forbidden standalone action tokens present as whole words.
+
+    Whole-word matching uses ``\\b`` boundaries, so "buyer" or "rebuild" do
+    NOT trigger; "BUY", "Sell.", "  hold  " do.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    for token in _FORBIDDEN_STANDALONE_ACTIONS:
+        if re.search(rf"\b{re.escape(token)}\b", text, flags=re.IGNORECASE):
+            found.append(token)
+    return found
+
+
+def _strip_allowed_disclaimers(text: str) -> str:
+    out = text
     for allowed in _DISCLAIMER_ALLOWED_SUBSTRINGS:
-        sanitized = sanitized.replace(allowed, "")
-    sanitized_lower = sanitized.lower()
-    return not any(v in sanitized_lower for v in violations)
+        if allowed:
+            out = out.replace(allowed, "")
+    return out
 
 
 def validate_news_evidence_safety(value: Any) -> list[str]:
     """
     Walk a string, dict, list, tuple, set, or dataclass and return prohibited
-    phrases detected.  Fixed safety disclaimers are excluded from violations.
+    phrases / standalone action tokens detected.  Fixed safety disclaimers are
+    excluded from violations.
+
+    Detects both:
+      - multi-word instruction phrases (e.g. "buy now", "promote candidate")
+      - standalone action tokens (whole-word: "BUY", "SELL", "HOLD",
+        "ACTIONABLE", "PROMOTED", "VALIDATED")
     """
     violations: set[str] = set()
 
@@ -334,13 +382,13 @@ def validate_news_evidence_safety(value: Any) -> list[str]:
         if node is None or isinstance(node, (bool, int, float)):
             return
         if isinstance(node, str):
-            detected = _detect_prohibited_phrases(node)
-            if detected and not _text_contains_only_allowed_disclaimer(node, detected):
-                stripped = node
-                for allowed in _DISCLAIMER_ALLOWED_SUBSTRINGS:
-                    stripped = stripped.replace(allowed, "")
-                for p in _detect_prohibited_phrases(stripped):
-                    violations.add(p)
+            stripped = _strip_allowed_disclaimers(node)
+            for p in _detect_prohibited_phrases(stripped):
+                violations.add(p)
+            for a in _detect_standalone_actions(stripped):
+                # Surface standalone actions in uppercase to make the failure
+                # cause visible in logs/test output.
+                violations.add(a.upper())
             return
         if isinstance(node, dict):
             for v in node.values():
@@ -363,6 +411,11 @@ def sanitize_news_evidence_text(value: str) -> str:
     """
     Replace prohibited substrings with ``[REDACTED]`` while preserving the
     fixed safety disclaimer wording exactly.
+
+    Redacts:
+      - multi-word instruction phrases (e.g. "buy now")
+      - whole-word standalone action tokens (e.g. "BUY", "SELL", "HOLD",
+        "ACTIONABLE", "PROMOTED", "VALIDATED")
     """
     if not isinstance(value, str) or not value:
         return value if isinstance(value, str) else ""
@@ -375,6 +428,7 @@ def sanitize_news_evidence_text(value: str) -> str:
             out = out.replace(allowed, token)
             placeholders.append((token, allowed))
 
+    # Phrase-level redaction (longest-first via list order).
     lower = out.lower()
     for pattern in _PROHIBITED_INSTRUCTION_PATTERNS:
         while pattern in lower:
@@ -382,16 +436,33 @@ def sanitize_news_evidence_text(value: str) -> str:
             out = out[:idx] + _REDACTION_MARKER + out[idx + len(pattern):]
             lower = out.lower()
 
+    # Whole-word standalone action redaction (case-insensitive).
+    for action_token in _FORBIDDEN_STANDALONE_ACTIONS:
+        out = re.sub(
+            rf"\b{re.escape(action_token)}\b",
+            _REDACTION_MARKER,
+            out,
+            flags=re.IGNORECASE,
+        )
+
     for token, allowed in placeholders:
         out = out.replace(token, allowed)
     return out
 
 
 def sanitize_label(value: Any) -> str:
-    """Sanitize a label-style string; coerces non-strings to str."""
+    """Sanitize a label-style string; coerces non-strings to str.
+
+    A label that, after sanitization, reduces to just ``[REDACTED]`` is
+    rewritten to a context-only marker so JSON consumers see an informative
+    placeholder rather than a bare ``[REDACTED]`` token.
+    """
     if value is None:
         return ""
-    return sanitize_news_evidence_text(str(value))
+    sanitized = sanitize_news_evidence_text(str(value))
+    if sanitized.strip() == _REDACTION_MARKER:
+        return _NEUTRAL_REDACTED_ACTION_LABEL
+    return sanitized
 
 
 def sanitize_nested_news_evidence_payload(payload: Any) -> Any:
@@ -424,12 +495,17 @@ def _normalize_ticker(value: Any) -> str:
 def _collect_decision_tickers(
     decision_plan: dict | None,
     explanations: dict | None,
-) -> dict[str, dict[str, str]]:
+) -> set[str]:
     """
-    Return a dict ticker → {decision_action, decision_reason} drawn from
-    decision_plan / decision_explanations.  Both fields are sanitized.
+    Return the set of tickers present in upstream decision_plan or
+    decision_explanations.
+
+    Codex hardening: we deliberately do NOT carry the upstream action label
+    or reason text through to this layer's output.  The News Evidence Layer
+    is forbidden from emitting BUY/SELL/HOLD/ACTIONABLE/PROMOTED/VALIDATED.
+    Tickers are recorded only as a "present" / "absent" boundary indicator.
     """
-    out: dict[str, dict[str, str]] = {}
+    present: set[str] = set()
 
     if isinstance(decision_plan, dict):
         decisions = decision_plan.get("decisions") or []
@@ -438,16 +514,8 @@ def _collect_decision_tickers(
                 if not isinstance(d, dict):
                     continue
                 ticker = _normalize_ticker(d.get("ticker") or d.get("symbol"))
-                if not ticker:
-                    continue
-                action = sanitize_label(d.get("decision") or d.get("action") or "")
-                reason = sanitize_news_evidence_text(
-                    str(d.get("decision_reason") or d.get("reason") or "")
-                )
-                out[ticker] = {
-                    "decision_action": action,
-                    "decision_reason": reason[:240],  # cap reason length
-                }
+                if ticker:
+                    present.add(ticker)
 
     if isinstance(explanations, dict):
         items = explanations.get("explanations") or []
@@ -456,14 +524,9 @@ def _collect_decision_tickers(
                 if not isinstance(e, dict):
                     continue
                 ticker = _normalize_ticker(e.get("ticker") or e.get("symbol"))
-                if not ticker:
-                    continue
-                rec = out.setdefault(ticker, {"decision_action": "", "decision_reason": ""})
-                if not rec["decision_reason"]:
-                    rec["decision_reason"] = sanitize_news_evidence_text(
-                        str(e.get("explanation") or "")
-                    )[:240]
-    return out
+                if ticker:
+                    present.add(ticker)
+    return present
 
 
 def _index_news_packets(news_intel: dict | None) -> dict[str, list[dict]]:
@@ -871,7 +934,7 @@ def build_news_evidence_layer_report(
     all_tickers: list[str] = []
     seen: set[str] = set()
     for src_iter in (
-        list(decision_tickers.keys()),
+        sorted(decision_tickers),
         list(news_index.keys()),
         list(enriched_index.keys()),
     ):
@@ -895,14 +958,16 @@ def build_news_evidence_layer_report(
         ticker_contexts.append(ev)
 
         if ticker in decision_tickers:
-            dec_rec = decision_tickers[ticker]
+            # Codex hardening: emit only a neutral context-only flag.  Do not
+            # copy through the upstream decision action label or reason text.
             decision_contexts.append(DecisionNewsContext(
                 ticker=ticker,
-                decision_action=dec_rec.get("decision_action", ""),
-                decision_reason=dec_rec.get("decision_reason", ""),
+                upstream_decision_present=True,
+                upstream_decision_context=_UPSTREAM_DECISION_PRESENT,
                 news_evidence_strength=ev.evidence_strength,
                 news_context_effect=ev.context_effect,
                 context_note=ev.context_note,
+                no_decision_override=True,
             ))
 
     risk_evidence = _build_risk_evidence_aggregate(news_intel, enriched)
@@ -960,6 +1025,25 @@ def render_news_evidence_markdown(report: NewsEvidenceLayerReport) -> str:
             lines.append(
                 f"- **{t.ticker}** _({t.evidence_strength} / {t.context_effect})_: "
                 f"{t.context_note}"
+            )
+        lines.append("")
+
+    # Upstream decision-plan context (presence only — no action labels).
+    upstream_present = [d for d in report.decision_contexts if d.upstream_decision_present]
+    if upstream_present:
+        lines.append("## Upstream Decision-Plan Context _(Reference Only)_")
+        lines.append("")
+        lines.append(
+            "Upstream decision-plan context is available for the following tickers. "
+            "The News Evidence Layer does not repeat, override, or modify the "
+            "upstream decision action."
+        )
+        lines.append("")
+        for d in upstream_present[:15]:
+            lines.append(
+                f"- **{d.ticker}**: news evidence is _{d.news_evidence_strength}_ "
+                f"({d.news_context_effect}); upstream decision context: "
+                f"`{d.upstream_decision_context}`."
             )
         lines.append("")
 
@@ -1055,8 +1139,8 @@ def _report_to_dict(report: NewsEvidenceLayerReport) -> dict[str, Any]:
     def _dc(d: DecisionNewsContext) -> dict:
         return {
             "ticker": d.ticker,
-            "decision_action": d.decision_action,
-            "decision_reason": d.decision_reason,
+            "upstream_decision_present": d.upstream_decision_present,
+            "upstream_decision_context": d.upstream_decision_context,
             "news_evidence_strength": d.news_evidence_strength,
             "news_context_effect": d.news_context_effect,
             "context_note": d.context_note,

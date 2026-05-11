@@ -308,7 +308,11 @@ class TestReportBuilding:
         assert "NVDA" in dec_tickers
         nvda = next(d for d in report.decision_contexts if d.ticker == "NVDA")
         assert nvda.no_decision_override is True
-        assert nvda.decision_action == "maintain"
+        # Codex hardening: upstream action label is NOT emitted; only a
+        # neutral presence flag + neutral context enum is emitted.
+        assert nvda.upstream_decision_present is True
+        assert nvda.upstream_decision_context == "decision_plan_context_only"
+        assert not hasattr(nvda, "decision_action")
 
     def test_evidence_strength_classified(self, tmp_path):
         _write_latest(tmp_path, "news_intelligence.json", {
@@ -715,7 +719,7 @@ class TestAdversarialInputProtection:
 # ---------------------------------------------------------------------------
 
 class TestNoMutationBoundary:
-    def test_decision_action_preserved_not_changed(self, tmp_path):
+    def test_decision_action_not_emitted_only_presence_flag(self, tmp_path):
         _write_latest(tmp_path, "decision_plan.json", {
             "decisions": [{
                 "ticker": "NVDA", "decision": "maintain",
@@ -726,8 +730,11 @@ class TestNoMutationBoundary:
         inputs = load_all_inputs(tmp_path)
         report = build_news_evidence_layer_report(inputs, tmp_path)
         nvda_dc = next(d for d in report.decision_contexts if d.ticker == "NVDA")
-        # Decision action read-only — no override
-        assert nvda_dc.decision_action == "maintain"
+        # The upstream action label is NOT emitted at all.  Only a neutral
+        # presence flag remains.
+        assert not hasattr(nvda_dc, "decision_action")
+        assert not hasattr(nvda_dc, "decision_reason")
+        assert nvda_dc.upstream_decision_present is True
         assert nvda_dc.no_decision_override is True
 
     def test_no_score_in_output(self, tmp_path):
@@ -760,3 +767,245 @@ class TestNoMutationBoundary:
         )
         for field_name in ("watchlist", "watchlist_changes", "watchlist_add"):
             assert field_name not in payload
+
+
+# ---------------------------------------------------------------------------
+# 9. Codex boundary-hardening regression tests
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_FORBIDDEN_ACTIONS = ("BUY", "SELL", "HOLD", "ACTIONABLE", "PROMOTED", "VALIDATED")
+
+
+def _strip_disclaimers(text: str) -> str:
+    from portfolio_automation.news_evidence_layer import (
+        _SAFETY_DISCLAIMER,
+        _DISCOVERY_DISCLAIMER,
+    )
+    out = text.replace(_SAFETY_DISCLAIMER, "").replace(_DISCOVERY_DISCLAIMER, "")
+    return out
+
+
+def _adversarial_decision_plan() -> dict:
+    return {
+        "decisions": [
+            {"ticker": "NVDA", "decision": "BUY", "decision_reason": "execute trade now"},
+            {"ticker": "AAPL", "decision": "SELL", "decision_reason": "trim position"},
+            {"ticker": "MSFT", "decision": "HOLD", "decision_reason": "stable"},
+            {"ticker": "GOOGL", "decision": "ACTIONABLE", "decision_reason": "momentum"},
+            {"ticker": "AMZN", "decision": "PROMOTED", "decision_reason": "promote candidate"},
+            {"ticker": "META", "decision": "VALIDATED", "decision_reason": "validated buy"},
+        ]
+    }
+
+
+class TestStandaloneActionDetection:
+    """Codex finding: standalone BUY/SELL/HOLD action labels were not blocked.
+
+    These tests verify the validator and sanitizer now treat them as forbidden.
+    """
+
+    def test_validator_detects_standalone_buy(self):
+        assert "BUY" in validate_news_evidence_safety("BUY")
+
+    def test_validator_detects_standalone_sell(self):
+        assert "SELL" in validate_news_evidence_safety("SELL")
+
+    def test_validator_detects_standalone_hold(self):
+        assert "HOLD" in validate_news_evidence_safety("HOLD")
+
+    def test_validator_detects_actionable(self):
+        assert "ACTIONABLE" in validate_news_evidence_safety("ACTIONABLE")
+
+    def test_validator_detects_promoted(self):
+        assert "PROMOTED" in validate_news_evidence_safety("PROMOTED")
+
+    def test_validator_detects_validated(self):
+        assert "VALIDATED" in validate_news_evidence_safety("VALIDATED")
+
+    def test_validator_detects_action_inside_phrase(self):
+        violations = validate_news_evidence_safety("Decision action: BUY")
+        assert "BUY" in violations
+
+    def test_validator_allows_substring_buyer(self):
+        # "buyer" should NOT trigger "buy" detection
+        assert validate_news_evidence_safety("Major buyer in tech sector") == []
+
+    def test_validator_allows_substring_rebuild(self):
+        assert validate_news_evidence_safety("rebuild infrastructure") == []
+
+    def test_validator_allows_safety_disclaimer(self):
+        from portfolio_automation.news_evidence_layer import _SAFETY_DISCLAIMER
+        assert validate_news_evidence_safety(_SAFETY_DISCLAIMER) == []
+
+    def test_validator_allows_discovery_disclaimer(self):
+        from portfolio_automation.news_evidence_layer import _DISCOVERY_DISCLAIMER
+        assert validate_news_evidence_safety(_DISCOVERY_DISCLAIMER) == []
+
+    def test_sanitizer_replaces_standalone_buy(self):
+        out = sanitize_news_evidence_text("Decision action: BUY")
+        assert _re.search(r"\bbuy\b", out, _re.IGNORECASE) is None
+
+    def test_sanitizer_replaces_all_actions(self):
+        for token in _FORBIDDEN_ACTIONS:
+            out = sanitize_news_evidence_text(f"Result was {token}")
+            assert _re.search(rf"\b{token}\b", out, _re.IGNORECASE) is None
+
+    def test_sanitizer_preserves_buyer_word(self):
+        assert "buyer" in sanitize_news_evidence_text("Major buyer in tech")
+
+    def test_sanitize_label_neutralizes_pure_action(self):
+        # A label that is exactly "BUY" should become the neutral marker,
+        # not "[REDACTED]"
+        assert sanitize_label("BUY") == "redacted_action_label_context_only"
+
+    def test_sanitize_label_neutralizes_all_pure_actions(self):
+        for token in _FORBIDDEN_ACTIONS:
+            assert sanitize_label(token) == "redacted_action_label_context_only"
+
+
+class TestDecisionActionBoundary:
+    """Codex finding: decision_action carried BUY/SELL/HOLD from decision_plan.
+
+    Verify the new neutralized DecisionNewsContext schema."""
+
+    def test_decision_contexts_no_longer_have_decision_action_attr(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        for dc in report.decision_contexts:
+            assert not hasattr(dc, "decision_action")
+            assert not hasattr(dc, "decision_reason")
+
+    def test_upstream_decision_context_is_neutral(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        allowed = {"decision_plan_context_only", "absent"}
+        for dc in report.decision_contexts:
+            assert dc.upstream_decision_context in allowed
+
+    def test_upstream_decision_present_flag_set(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        # All adversarial tickers should be marked present
+        for dc in report.decision_contexts:
+            assert dc.upstream_decision_present is True
+
+    def test_no_action_label_in_decision_contexts(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        # Walk decision_contexts dataclass values — no string should equal
+        # one of the forbidden tokens after upper/strip.
+        for dc in report.decision_contexts:
+            for attr_value in vars(dc).values():
+                if isinstance(attr_value, str):
+                    assert attr_value.strip().upper() not in _FORBIDDEN_ACTIONS
+
+    def test_report_validation_passes_with_adversarial_decision_plan(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        assert report.prohibited_actions_detected == []
+
+    def test_action_labels_do_not_leak_into_json(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        run_news_evidence_layer(base_dir=tmp_path)
+        raw = (tmp_path / "latest" / "news_evidence_layer.json").read_text()
+        stripped = _strip_disclaimers(raw)
+        for token in _FORBIDDEN_ACTIONS:
+            assert _re.search(rf'\b{token}\b', stripped, _re.IGNORECASE) is None, \
+                f"Forbidden action {token!r} leaked into JSON output"
+
+    def test_action_labels_do_not_leak_into_markdown(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        run_news_evidence_layer(base_dir=tmp_path)
+        md = (tmp_path / "latest" / "news_evidence_layer.md").read_text()
+        stripped = _strip_disclaimers(md)
+        for token in _FORBIDDEN_ACTIONS:
+            assert _re.search(rf'\b{token}\b', stripped, _re.IGNORECASE) is None, \
+                f"Forbidden action {token!r} leaked into Markdown output"
+
+    def test_markdown_does_not_say_decision_action_label(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        run_news_evidence_layer(base_dir=tmp_path)
+        md = (tmp_path / "latest" / "news_evidence_layer.md").read_text()
+        # Should not contain "Decision action: BUY"-style lines
+        assert "Decision action: BUY" not in md
+        assert "Decision action: SELL" not in md
+        assert "Decision action: HOLD" not in md
+
+    def test_decision_contexts_still_produced(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        inputs = load_all_inputs(tmp_path)
+        report = build_news_evidence_layer_report(inputs, tmp_path)
+        # All 6 tickers should still appear (context-only form)
+        tickers_in_decision = {dc.ticker for dc in report.decision_contexts}
+        for t in ("NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META"):
+            assert t in tickers_in_decision
+
+    def test_input_decision_plan_not_mutated(self, tmp_path):
+        original = _adversarial_decision_plan()
+        # Make a snapshot
+        snapshot = json.dumps(original, sort_keys=True)
+        _write_latest(tmp_path, "decision_plan.json", original)
+        inputs = load_all_inputs(tmp_path)
+        build_news_evidence_layer_report(inputs, tmp_path)
+        # Input dict object passed in via inputs payload — verify shape unchanged
+        loaded = inputs["decision_plan"]["payload"]
+        assert json.dumps(loaded, sort_keys=True) == snapshot
+
+    def test_writer_blocks_unsafe_decision_context(self, tmp_path, monkeypatch):
+        """Force-bypass sanitizer; writer must refuse to emit standalone actions."""
+        from portfolio_automation import news_evidence_layer as nel
+
+        tampered = NewsEvidenceLayerReport(
+            generated_at="2026-05-11T00:00:00Z",
+            decision_contexts=[DecisionNewsContext(
+                ticker="NVDA",
+                upstream_decision_present=True,
+                upstream_decision_context="BUY",  # forbidden standalone token
+            )],
+        )
+        monkeypatch.setattr(nel, "sanitize_nested_news_evidence_payload", lambda p: p)
+        monkeypatch.setattr(nel, "sanitize_news_evidence_text", lambda s: s)
+        with pytest.raises(UnsafeNewsEvidenceArtifactError):
+            write_news_evidence_layer_report(tampered, tmp_path)
+        assert not (tmp_path / "latest" / "news_evidence_layer.json").exists()
+
+    def test_safety_flags_all_true_after_hardening(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        run_news_evidence_layer(base_dir=tmp_path)
+        payload = json.loads(
+            (tmp_path / "latest" / "news_evidence_layer.json").read_text()
+        )
+        for key in ("observe_only", "no_trade", "not_recommendation",
+                    "no_decision_override", "no_score_mutation",
+                    "no_allocation_mutation", "no_watchlist_mutation"):
+            assert payload[key] is True
+        assert payload["influence_cap"] == "context_only"
+
+    def test_no_mutation_fields_added_by_hardening(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        run_news_evidence_layer(base_dir=tmp_path)
+        payload = json.loads(
+            (tmp_path / "latest" / "news_evidence_layer.json").read_text()
+        )
+        for forbidden_field in (
+            "signal_score", "confidence_score", "effective_score",
+            "conviction_score", "final_rank_score", "recommendation_score",
+            "allocation", "allocations", "target_weight",
+            "watchlist", "watchlist_changes", "watchlist_add",
+        ):
+            assert forbidden_field not in payload
+
+    def test_deterministic_under_adversarial_decision_plan(self, tmp_path):
+        _write_latest(tmp_path, "decision_plan.json", _adversarial_decision_plan())
+        r1 = run_news_evidence_layer(base_dir=tmp_path, write_files=False)
+        r2 = run_news_evidence_layer(base_dir=tmp_path, write_files=False)
+        assert r1["ticker_context_count"] == r2["ticker_context_count"]
+        assert r1["decision_context_count"] == r2["decision_context_count"]
+        assert r1["safety_violations"] == r2["safety_violations"]
