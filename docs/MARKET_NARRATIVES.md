@@ -124,16 +124,40 @@ Focuses on:
 - System health summary
 - Suggested review areas (not recommendations)
 
-## Safety Validator
+## Safety Validator and Sanitizer
 
-`validate_narrative_safety(text)` checks for prohibited instruction patterns including:
-- `buy now`, `sell now`, `hold now`
-- `add shares`, `reduce shares`, `rebalance now`
-- `execute trade`, `execute order`
-- `recommend buying`, `recommend selling`
-- `promote candidate`, `official recommendation`
+The layer defends against prohibited language at three points:
 
-Returns a list of detected violations (empty = clean). Used internally to guard all generated text.
+1. **Label-level sanitization** — every input-derived label (theme names, risk/catalyst labels, discovery context strings, status fields, severities, system health, run mode, tickers) passes through `sanitize_label()` before being inserted into the report.
+
+2. **Full-payload sanitization** — the serialized JSON payload is recursively scrubbed by `sanitize_nested_narrative_payload()` immediately before write. The rendered Markdown is passed through `sanitize_narrative_text()` as well.
+
+3. **Pre-write validation** — `validate_narrative_safety()` walks the full serialized payload and the rendered Markdown. If any prohibited phrase remains, `write_market_narrative_report()` raises `UnsafeNarrativeArtifactError` and no artifact is written.
+
+### Prohibited patterns checked
+
+Includes (non-exhaustive):
+- `buy now`, `sell now`, `hold now`, `trim now`, `trade now`, `trim position`, `rebalance now`
+- `add shares`, `buy shares`, `sell shares`, `reduce shares`
+- `execute trade`, `execute order`, `execute now`, `place trade`, `place order`
+- `promote candidate`, `promote to watchlist`
+- `actionable buy`, `actionable sell`, `validated buy`, `validated sell`
+- `official recommendation`, `recommend buying`, `recommend selling`, `recommend holding`, `i recommend`
+- `you should buy`, `you should sell`, `you should hold`, `consider buying`, `consider selling`
+
+### Allowed exception
+
+The fixed `_SAFETY_DISCLAIMER` and the discovery-research disclaimer may legitimately contain "buy/sell/hold recommendation" wording (since they explicitly state the artifact is **not** such a recommendation). The validator preserves these exact strings; the sanitizer carves them out before redaction and splices them back unchanged.
+
+### Helper functions
+
+| Function | Purpose |
+|---|---|
+| `sanitize_label(value)` | Sanitize a single label string (coerces non-strings to `str`) |
+| `sanitize_narrative_text(value)` | Sanitize a free-text string while preserving the safety disclaimer |
+| `sanitize_nested_narrative_payload(payload)` | Recursively sanitize any JSON-serializable structure |
+| `validate_narrative_safety(value)` | Walk any string/dict/list/dataclass and return detected violations |
+| `UnsafeNarrativeArtifactError` | Raised by the writer when prohibited language remains after sanitization |
 
 ## Discovery Research Context
 
@@ -156,6 +180,6 @@ When/if AI support is added later:
 ## Tests
 
 File: `tests/test_market_narratives.py`
-Count: 79 tests across 9 test classes
+Count: 104 tests across 11 test classes (79 original + 25 adversarial-input regression tests added in the Codex hardening patch)
 
-Coverage: input loading, safety validator, daily/weekly/monthly narrative, markdown rendering, artifact writing, orchestrator, discovery boundary, namespace compliance, determinism.
+Coverage: input loading, safety validator, daily/weekly/monthly narrative, markdown rendering, artifact writing, orchestrator, discovery boundary, namespace compliance, determinism, full-payload sanitization, adversarial label injection (themes/risks/catalysts/discovery), pre-write validation blocking unsafe writes, deterministic behavior under adversarial input.

@@ -65,21 +65,34 @@ _SAFETY_DISCLAIMER = (
 
 # Phrases that must not appear as instructions in narrative text.
 # The validator checks for these to prevent narrative sections from sounding
-# like trading commands.
+# like trading commands.  Order matters: longer phrases are checked first so
+# substring detection neutralizes the strongest signal.
 _PROHIBITED_INSTRUCTION_PATTERNS: list[str] = [
+    # explicit orders
     "buy now",
     "sell now",
     "hold now",
     "trim now",
-    "add shares",
-    "reduce shares",
+    "trade now",
+    "trim position",
     "rebalance now",
+    "add shares",
+    "buy shares",
+    "sell shares",
+    "reduce shares",
     "execute trade",
     "execute order",
     "execute now",
     "place trade",
     "place order",
+    # promotion / validation language
     "promote candidate",
+    "promote to watchlist",
+    "actionable buy",
+    "actionable sell",
+    "validated buy",
+    "validated sell",
+    # recommendation language
     "official recommendation",
     "recommend buying",
     "recommend selling",
@@ -91,6 +104,17 @@ _PROHIBITED_INSTRUCTION_PATTERNS: list[str] = [
     "consider buying",
     "consider selling",
 ]
+
+# Marker used by the sanitizer to replace any prohibited substring.
+_REDACTION_MARKER = "[REDACTED]"
+
+# The fixed safety disclaimer naturally contains "buy/sell/hold recommendation"
+# style wording.  Validators allow that exact disclaimer text to pass through.
+_DISCLAIMER_ALLOWED_SUBSTRINGS: tuple[str, ...] = (
+    _SAFETY_DISCLAIMER,
+    "Discovery research is sandbox-only. "
+    "No candidates are promoted or recommended.",
+)
 
 # Discovery status labels safe for narrative use
 _SAFE_DISCOVERY_LABELS: dict[str, str] = {
@@ -311,30 +335,147 @@ def load_all_inputs(base_dir: str | Path = "outputs") -> dict[str, Any]:
 # Safety validator
 # ---------------------------------------------------------------------------
 
-def validate_narrative_safety(text: str) -> list[str]:
-    """
-    Check narrative text for prohibited instruction patterns.
-
-    Returns a list of detected violations (empty = clean).
-    Detection is case-insensitive.  Phrases are checked as substrings.
-    """
-    text_lower = text.lower()
-    violations: list[str] = []
-    for pattern in _PROHIBITED_INSTRUCTION_PATTERNS:
-        if pattern in text_lower:
-            violations.append(pattern)
-    return violations
-
-
-def _sanitize_text(text: str) -> str:
-    """Strip or neutralize detected prohibited phrases from text."""
+def _detect_prohibited_phrases(text: str) -> list[str]:
+    """Return the sorted list of prohibited patterns present in *text*."""
+    if not text:
+        return []
     lower = text.lower()
+    return [p for p in _PROHIBITED_INSTRUCTION_PATTERNS if p in lower]
+
+
+def _text_contains_only_allowed_disclaimer(text: str, violations: list[str]) -> bool:
+    """
+    Return True if every detected violation appears only inside an allowed
+    fixed disclaimer substring.  Used to permit the safety disclaimer text
+    which legitimately contains "buy/sell/hold" wording.
+    """
+    if not violations:
+        return True
+    sanitized = text
+    for allowed in _DISCLAIMER_ALLOWED_SUBSTRINGS:
+        sanitized = sanitized.replace(allowed, "")
+    sanitized_lower = sanitized.lower()
+    return not any(v in sanitized_lower for v in violations)
+
+
+def validate_narrative_safety(value: Any) -> list[str]:
+    """
+    Check arbitrary narrative content for prohibited instruction patterns.
+
+    Accepts a string, dict, list, dataclass, or `MarketNarrativeReport`.
+    Walks the entire structure and returns a deduplicated list of prohibited
+    phrase strings detected.  Empty list means clean.
+
+    The fixed safety disclaimer is allowed to contain "buy/sell/hold
+    recommendation" wording because it explicitly states the artifact is NOT
+    such a recommendation; that case is excluded from the violation list.
+    """
+    violations: set[str] = set()
+
+    def _walk(node: Any) -> None:
+        if node is None or isinstance(node, (bool, int, float)):
+            return
+        if isinstance(node, str):
+            detected = _detect_prohibited_phrases(node)
+            if detected and not _text_contains_only_allowed_disclaimer(node, detected):
+                # Re-detect on text with disclaimer stripped, to avoid
+                # falsely surfacing disclaimer wording.
+                stripped = node
+                for allowed in _DISCLAIMER_ALLOWED_SUBSTRINGS:
+                    stripped = stripped.replace(allowed, "")
+                for p in _detect_prohibited_phrases(stripped):
+                    violations.add(p)
+            return
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+            return
+        if isinstance(node, (list, tuple, set)):
+            for v in node:
+                _walk(v)
+            return
+        # Dataclass-like (MarketNarrativeReport, NarrativeTheme, etc.):
+        # walk its __dict__ if present.
+        if hasattr(node, "__dict__"):
+            _walk(vars(node))
+            return
+        # Anything else: coerce to string to be safe.
+        _walk(str(node))
+
+    _walk(value)
+    return sorted(violations)
+
+
+def sanitize_narrative_text(value: str) -> str:
+    """
+    Return *value* with every prohibited substring replaced by ``[REDACTED]``.
+
+    Case-insensitive matching is used to locate prohibited substrings, but
+    replacements preserve the surrounding text exactly.  The fixed safety
+    disclaimer is preserved (its wording is allowed by policy).
+    """
+    if not isinstance(value, str) or not value:
+        return value if isinstance(value, str) else ""
+
+    # Preserve any occurrence of the fixed safety disclaimers by carving them
+    # out, redacting the remainder, then splicing them back.
+    placeholders: list[tuple[str, str]] = []
+    out = value
+    for idx, allowed in enumerate(_DISCLAIMER_ALLOWED_SUBSTRINGS):
+        token = f"\x00DISCLAIMER_{idx}\x00"
+        if allowed and allowed in out:
+            out = out.replace(allowed, token)
+            placeholders.append((token, allowed))
+
+    lower = out.lower()
     for pattern in _PROHIBITED_INSTRUCTION_PATTERNS:
-        if pattern in lower:
+        while pattern in lower:
             idx = lower.find(pattern)
-            text = text[:idx] + "[REDACTED]" + text[idx + len(pattern):]
-            lower = text.lower()
-    return text
+            out = out[:idx] + _REDACTION_MARKER + out[idx + len(pattern):]
+            lower = out.lower()
+
+    for token, allowed in placeholders:
+        out = out.replace(token, allowed)
+    return out
+
+
+def sanitize_label(value: Any) -> str:
+    """
+    Sanitize a label-style string (theme name, risk/catalyst label, status).
+
+    Non-strings are coerced via str().  Result is always a clean string with
+    no prohibited substrings remaining.
+    """
+    if value is None:
+        return ""
+    return sanitize_narrative_text(str(value))
+
+
+def sanitize_nested_narrative_payload(payload: Any) -> Any:
+    """
+    Recursively sanitize every string in a JSON-serializable payload.
+
+    Returns a new structure of the same shape with prohibited substrings
+    replaced.  Dicts, lists, tuples, and primitives are handled.
+    """
+    if payload is None or isinstance(payload, (bool, int, float)):
+        return payload
+    if isinstance(payload, str):
+        return sanitize_narrative_text(payload)
+    if isinstance(payload, dict):
+        return {k: sanitize_nested_narrative_payload(v) for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [sanitize_nested_narrative_payload(v) for v in payload]
+    if isinstance(payload, tuple):
+        return tuple(sanitize_nested_narrative_payload(v) for v in payload)
+    if isinstance(payload, set):
+        return {sanitize_nested_narrative_payload(v) for v in payload}
+    return payload
+
+
+# Backwards-compatible alias used internally.
+def _sanitize_text(text: str) -> str:
+    return sanitize_narrative_text(text)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +483,12 @@ def _sanitize_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _extract_themes_from_news(news_intel: dict | None) -> list[NarrativeTheme]:
-    """Extract top themes from news_intelligence artifact."""
+    """Extract top themes from news_intelligence artifact.
+
+    All input-derived labels are passed through ``sanitize_label`` so prohibited
+    instruction phrases injected via upstream theme names cannot leak into the
+    narrative output.
+    """
     if not isinstance(news_intel, dict):
         return []
     packets = news_intel.get("evidence_packets") or []
@@ -354,13 +500,16 @@ def _extract_themes_from_news(news_intel: dict | None) -> list[NarrativeTheme]:
     for p in packets:
         if not isinstance(p, dict):
             continue
-        ticker = str(p.get("entity_key") or "")
+        ticker = sanitize_label(p.get("entity_key") or "")
         for t in (p.get("themes") or []):
             if isinstance(t, str):
-                theme_counts[t] = theme_counts.get(t, 0) + 1
-                theme_tickers.setdefault(t, [])
-                if ticker and ticker not in theme_tickers[t]:
-                    theme_tickers[t].append(ticker)
+                clean = sanitize_label(t)
+                if not clean:
+                    continue
+                theme_counts[clean] = theme_counts.get(clean, 0) + 1
+                theme_tickers.setdefault(clean, [])
+                if ticker and ticker not in theme_tickers[clean]:
+                    theme_tickers[clean].append(ticker)
 
     themes: list[NarrativeTheme] = []
     for theme, count in sorted(theme_counts.items(), key=lambda x: x[1], reverse=True)[:6]:
@@ -385,17 +534,23 @@ def _extract_risks_catalysts(
         for p in packets:
             if not isinstance(p, dict):
                 continue
-            ticker = str(p.get("entity_key") or p.get("ticker") or "")
+            ticker = sanitize_label(p.get("entity_key") or p.get("ticker") or "")
             for flag in (p.get("risk_flags") or []):
                 if isinstance(flag, str):
-                    risk_map.setdefault(flag, [])
-                    if ticker and ticker not in risk_map[flag]:
-                        risk_map[flag].append(ticker)
+                    clean = sanitize_label(flag)
+                    if not clean:
+                        continue
+                    risk_map.setdefault(clean, [])
+                    if ticker and ticker not in risk_map[clean]:
+                        risk_map[clean].append(ticker)
             for flag in (p.get("catalyst_flags") or []):
                 if isinstance(flag, str):
-                    catalyst_map.setdefault(flag, [])
-                    if ticker and ticker not in catalyst_map[flag]:
-                        catalyst_map[flag].append(ticker)
+                    clean = sanitize_label(flag)
+                    if not clean:
+                        continue
+                    catalyst_map.setdefault(clean, [])
+                    if ticker and ticker not in catalyst_map[clean]:
+                        catalyst_map[clean].append(ticker)
 
     if isinstance(news_intel, dict):
         _process_packets(news_intel.get("evidence_packets") or [])
@@ -445,9 +600,9 @@ def _build_discovery_context(
             for c in candidates:
                 if not isinstance(c, dict):
                     continue
-                ticker = str(c.get("ticker") or "")
-                ctx = str(c.get("news_context") or "")
-                status = str(c.get("candidate_status") or "")
+                ticker = sanitize_label(c.get("ticker") or "")
+                ctx = sanitize_label(c.get("news_context") or "")
+                status = sanitize_label(c.get("candidate_status") or "")
                 if status == "watch":
                     watch_count += 1
                 if ctx == "research_supported" and ticker:
@@ -458,7 +613,9 @@ def _build_discovery_context(
                     news_only.append(ticker)
                 for t in (c.get("matched_themes") or []):
                     if isinstance(t, str):
-                        theme_counts[t] = theme_counts.get(t, 0) + 1
+                        clean = sanitize_label(t)
+                        if clean:
+                            theme_counts[clean] = theme_counts.get(clean, 0) + 1
             top_themes = sorted(theme_counts, key=lambda x: theme_counts[x], reverse=True)[:5]
 
     elif isinstance(emerging, dict):
@@ -488,17 +645,19 @@ def _extract_data_quality_notes(dq: dict | None) -> list[str]:
     notes: list[str] = []
     issues = dq.get("issues") or []
     if isinstance(issues, list) and issues:
-        # Count by severity
+        # Count by severity (sanitize severity strings from upstream).
         sev: dict[str, int] = {}
         for issue in issues:
             if isinstance(issue, dict):
-                s = str(issue.get("severity") or "unknown")
+                s = sanitize_label(issue.get("severity") or "unknown") or "unknown"
                 sev[s] = sev.get(s, 0) + 1
         parts = [f"{v} {k}" for k, v in sev.items() if v]
-        notes.append(f"Data quality issues detected: {', '.join(parts)}.")
-    overall = dq.get("overall_health") or dq.get("health_status") or ""
+        notes.append(sanitize_narrative_text(
+            f"Data quality issues detected: {', '.join(parts)}."
+        ))
+    overall = sanitize_label(dq.get("overall_health") or dq.get("health_status") or "")
     if overall:
-        notes.append(f"Overall data health: {overall}.")
+        notes.append(sanitize_narrative_text(f"Overall data health: {overall}."))
     return notes
 
 
@@ -508,11 +667,15 @@ def _extract_confidence_notes(cal: dict | None) -> list[str]:
         return []
     notes: list[str] = []
     resolved = cal.get("resolved_decisions") or cal.get("total_resolved") or 0
-    if resolved:
-        notes.append(f"Confidence calibration: {resolved} resolved decisions available.")
+    if isinstance(resolved, (int, float)) and resolved:
+        notes.append(
+            f"Confidence calibration: {int(resolved)} resolved decisions available."
+        )
     accuracy = cal.get("overall_accuracy") or cal.get("hit_rate")
-    if accuracy is not None:
-        notes.append(f"Decision accuracy: {accuracy:.1%}." if isinstance(accuracy, float) else f"Decision accuracy: {accuracy}.")
+    if isinstance(accuracy, float):
+        notes.append(f"Decision accuracy: {accuracy:.1%}.")
+    elif isinstance(accuracy, (int,)):
+        notes.append(f"Decision accuracy: {accuracy}.")
     return notes
 
 
@@ -528,16 +691,24 @@ def _build_portfolio_context(
         decisions = decision_plan.get("decisions") or []
         if isinstance(decisions, list) and decisions:
             top = decisions[:3]
-            tickers = [str(d.get("ticker") or d.get("symbol") or "") for d in top if isinstance(d, dict)]
+            tickers = [
+                sanitize_label(d.get("ticker") or d.get("symbol") or "")
+                for d in top if isinstance(d, dict)
+            ]
             tickers = [t for t in tickers if t]
             if tickers:
-                parts.append(f"Decision plan covers {len(decisions)} position(s); top: {', '.join(tickers)}.")
+                parts.append(
+                    f"Decision plan covers {len(decisions)} position(s); "
+                    f"top: {', '.join(tickers)}."
+                )
 
     if isinstance(sys_summary, dict):
-        health = sys_summary.get("system_health") or sys_summary.get("overall_health") or ""
+        health = sanitize_label(
+            sys_summary.get("system_health") or sys_summary.get("overall_health") or ""
+        )
         if health:
             parts.append(f"System health: {health}.")
-        run_mode = sys_summary.get("run_mode") or ""
+        run_mode = sanitize_label(sys_summary.get("run_mode") or "")
         if run_mode:
             parts.append(f"Run mode: {run_mode}.")
 
@@ -545,10 +716,10 @@ def _build_portfolio_context(
         return "No decision plan data available for this period."
 
     if period == "daily":
-        return " ".join(parts)
+        return sanitize_narrative_text(" ".join(parts))
     if period == "weekly":
-        return "Weekly view — " + " ".join(parts)
-    return "Monthly view — " + " ".join(parts)
+        return sanitize_narrative_text("Weekly view — " + " ".join(parts))
+    return sanitize_narrative_text("Monthly view — " + " ".join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -737,29 +908,30 @@ def build_market_narrative_report(
         period, themes, risks, catalysts, discovery, all_summaries
     )
 
+    # Sanitize every text-bearing field on the report before validation.
     report = MarketNarrativeReport(
         narrative_period=period,
         generated_at=generated_at,
-        top_headline=headline,
-        executive_summary=exec_summary,
+        top_headline=sanitize_narrative_text(headline),
+        executive_summary=sanitize_narrative_text(exec_summary),
         key_themes=themes,
-        portfolio_context=portfolio_ctx,
+        portfolio_context=sanitize_narrative_text(portfolio_ctx),
         discovery_context=discovery,
         risks_to_watch=risks,
         catalysts_to_watch=catalysts,
-        data_quality_notes=dq_notes,
-        confidence_notes=conf_notes,
-        operator_watchlist=operator_wl,
+        data_quality_notes=[sanitize_narrative_text(n) for n in dq_notes],
+        confidence_notes=[sanitize_narrative_text(n) for n in conf_notes],
+        operator_watchlist=[sanitize_narrative_text(item) for item in operator_wl],
         inputs_used=all_summaries,
         missing_inputs=missing,
         data_available=data_available,
         safety_disclaimer=_SAFETY_DISCLAIMER,
     )
 
-    # Safety check on generated text
-    all_text = f"{headline} {exec_summary} {portfolio_ctx}"
-    violations = validate_narrative_safety(all_text)
-    report.prohibited_actions_detected = violations
+    # Validate the full report (walks every nested field, including labels in
+    # themes/risks/catalysts/discovery context).  Should be empty after
+    # sanitization; anything remaining is a real violation.
+    report.prohibited_actions_detected = validate_narrative_safety(report)
 
     return report
 
@@ -912,6 +1084,10 @@ def render_market_narrative_markdown(report: MarketNarrativeReport) -> str:
 # Report → dict serializer
 # ---------------------------------------------------------------------------
 
+class UnsafeNarrativeArtifactError(RuntimeError):
+    """Raised when the writer detects prohibited language in artifact output."""
+
+
 def _report_to_dict(report: MarketNarrativeReport) -> dict[str, Any]:
     """Serialize a MarketNarrativeReport to a JSON-safe dict."""
 
@@ -998,6 +1174,8 @@ def write_market_narrative_report(
 
     Returns dict with artifact path strings.
     Raises ValueError for unknown period.
+    Raises UnsafeNarrativeArtifactError if prohibited language is detected in
+    the serialized JSON payload or rendered Markdown after sanitization.
     """
     if period not in _ARTIFACT_NAMES:
         raise ValueError(f"Unknown period {period!r}")
@@ -1005,13 +1183,32 @@ def write_market_narrative_report(
     base = Path(base_dir)
     names = _ARTIFACT_NAMES[period]
 
+    # 1. Serialize → sanitize the full payload → validate.
+    payload = _report_to_dict(report)
+    payload = sanitize_nested_narrative_payload(payload)
+    payload_violations = validate_narrative_safety(payload)
+    if payload_violations:
+        raise UnsafeNarrativeArtifactError(
+            f"Refusing to write {names['json']!r}: prohibited language remains "
+            f"after sanitization: {payload_violations!r}"
+        )
+
+    # 2. Render Markdown from the (already sanitized) report → sanitize → validate.
+    md_content = sanitize_narrative_text(render_market_narrative_markdown(report))
+    md_violations = validate_narrative_safety(md_content)
+    if md_violations:
+        raise UnsafeNarrativeArtifactError(
+            f"Refusing to write {names['md']!r}: prohibited language remains "
+            f"after sanitization: {md_violations!r}"
+        )
+
+    # 3. Safe to write.
     json_path = safe_write_json(
         OutputNamespace.LATEST,
         names["json"],
-        _report_to_dict(report),
+        payload,
         base_dir=base,
     )
-    md_content = render_market_narrative_markdown(report)
     md_path = safe_write_text(
         OutputNamespace.LATEST,
         names["md"],
@@ -1075,9 +1272,15 @@ def run_market_narratives(
                 "artifacts": {},
             }
             if write_files:
-                artifact_paths = write_market_narrative_report(period, report, base)
-                period_result["artifacts"] = artifact_paths
-                results["artifacts"].update(artifact_paths)
+                try:
+                    artifact_paths = write_market_narrative_report(period, report, base)
+                    period_result["artifacts"] = artifact_paths
+                    results["artifacts"].update(artifact_paths)
+                except UnsafeNarrativeArtifactError as safety_exc:
+                    logger.error(
+                        "Blocked unsafe artifact write for %r: %s", period, safety_exc
+                    )
+                    period_result["blocked_unsafe_write"] = str(safety_exc)
             results[period] = period_result
         except Exception as exc:
             logger.error("Narrative generation failed for period %r: %s", period, exc, exc_info=True)

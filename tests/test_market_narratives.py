@@ -41,8 +41,12 @@ from portfolio_automation.market_narratives import (
     NarrativeCatalyst,
     NarrativeDiscoveryContext,
     MarketNarrativeReport,
+    UnsafeNarrativeArtifactError,
     load_all_inputs,
     validate_narrative_safety,
+    sanitize_narrative_text,
+    sanitize_label,
+    sanitize_nested_narrative_payload,
     build_market_narrative_report,
     render_market_narrative_markdown,
     write_market_narrative_report,
@@ -698,3 +702,271 @@ class TestDiscoveryBoundary:
         # discovery_context is always populated (even if empty)
         assert report.discovery_context is not None
         assert report.discovery_context.candidate_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. Adversarial / sanitization regression tests
+# ---------------------------------------------------------------------------
+
+def _adversarial_news_intel() -> dict:
+    """A news_intelligence payload whose labels carry prohibited instruction phrases."""
+    return {
+        "observe_only": True,
+        "evidence_packets": [
+            {
+                "entity_key": "NVDA",
+                "themes": ["buy now", "ai_infrastructure"],
+                "risk_flags": ["sell now"],
+                "catalyst_flags": ["promote candidate"],
+                "article_count": 4,
+                "source_count": 2,
+            },
+            {
+                "entity_key": "AAPL",
+                "themes": ["actionable buy"],
+                "risk_flags": ["validated sell"],
+                "catalyst_flags": ["trim position"],
+                "article_count": 2,
+                "source_count": 1,
+            },
+        ],
+    }
+
+
+def _adversarial_enriched() -> dict:
+    return {
+        "observe_only": True,
+        "enriched_candidates": [
+            {
+                "ticker": "ZZZZ",
+                "candidate_status": "watch",
+                "news_context": "research_supported",
+                "matched_themes": ["rebalance now", "execute trade"],
+                "risk_flags": ["promote candidate"],
+                "catalyst_flags": ["buy now"],
+            },
+        ],
+    }
+
+
+_ADVERSARIAL_PHRASES = (
+    "buy now",
+    "sell now",
+    "promote candidate",
+    "actionable buy",
+    "validated sell",
+    "trim position",
+    "rebalance now",
+    "execute trade",
+)
+
+
+class TestSanitizationHelpers:
+    def test_sanitize_label_basic(self):
+        assert "buy now" not in sanitize_label("buy now investigation").lower()
+
+    def test_sanitize_label_preserves_benign(self):
+        assert sanitize_label("ai_infrastructure") == "ai_infrastructure"
+
+    def test_sanitize_label_handles_none(self):
+        assert sanitize_label(None) == ""
+
+    def test_sanitize_label_handles_non_string(self):
+        result = sanitize_label(42)
+        assert isinstance(result, str)
+
+    def test_sanitize_narrative_text_redacts(self):
+        out = sanitize_narrative_text("This will buy now at open.")
+        assert "buy now" not in out.lower()
+        assert "[REDACTED]" in out
+
+    def test_sanitize_narrative_text_preserves_disclaimer(self):
+        out = sanitize_narrative_text(_SAFETY_DISCLAIMER)
+        assert _SAFETY_DISCLAIMER in out
+
+    def test_sanitize_nested_payload(self):
+        bad = {
+            "headline": "execute trade now",
+            "themes": ["buy now", "ai_infrastructure"],
+            "nested": {"label": "promote candidate"},
+            "count": 3,
+            "flag": True,
+        }
+        clean = sanitize_nested_narrative_payload(bad)
+        assert validate_narrative_safety(clean) == []
+        assert clean["count"] == 3
+        assert clean["flag"] is True
+        assert "ai_infrastructure" in clean["themes"]
+
+    def test_validate_narrative_safety_walks_dict(self):
+        violations = validate_narrative_safety({"headline": "buy now"})
+        assert "buy now" in violations
+
+    def test_validate_narrative_safety_walks_list(self):
+        violations = validate_narrative_safety([{"themes": ["sell now"]}])
+        assert "sell now" in violations
+
+    def test_validate_narrative_safety_walks_report(self):
+        report = MarketNarrativeReport(
+            narrative_period="daily",
+            generated_at="2026-05-11T00:00:00Z",
+            top_headline="benign",
+            key_themes=[NarrativeTheme(theme="execute trade", signal_count=1,
+                                       sources=[], description="x")],
+        )
+        violations = validate_narrative_safety(report)
+        assert "execute trade" in violations
+
+    def test_validate_allows_safety_disclaimer(self):
+        assert validate_narrative_safety(_SAFETY_DISCLAIMER) == []
+
+    def test_expanded_patterns_present(self):
+        text_lower = " ".join(_PROHIBITED_INSTRUCTION_PATTERNS).lower()
+        for adversarial in _ADVERSARIAL_PHRASES:
+            assert adversarial in text_lower
+
+
+class TestAdversarialInputProtection:
+    """Codex finding: prohibited phrases in input labels leak into output.
+
+    These tests assert that adversarial upstream labels cannot survive the
+    sanitization layer.
+    """
+
+    def test_adversarial_themes_dont_leak_to_report(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        for t in report.key_themes:
+            low = t.theme.lower()
+            for phrase in _ADVERSARIAL_PHRASES:
+                assert phrase not in low
+
+    def test_adversarial_risks_dont_leak_to_report(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        for r in report.risks_to_watch:
+            for phrase in _ADVERSARIAL_PHRASES:
+                assert phrase not in r.label.lower()
+
+    def test_adversarial_catalysts_dont_leak_to_report(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        for c in report.catalysts_to_watch:
+            for phrase in _ADVERSARIAL_PHRASES:
+                assert phrase not in c.label.lower()
+
+    def test_adversarial_discovery_themes_dont_leak(self, tmp_path):
+        _write_sandbox(tmp_path, "discovery/news_enriched_candidates.json", _adversarial_enriched())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        disc = report.discovery_context
+        for theme in disc.top_themes:
+            for phrase in _ADVERSARIAL_PHRASES:
+                assert phrase not in theme.lower()
+
+    def test_full_report_validation_after_adversarial_input(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        _write_sandbox(tmp_path, "discovery/news_enriched_candidates.json", _adversarial_enriched())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        assert report.prohibited_actions_detected == []
+
+    def test_adversarial_input_does_not_appear_in_json_output(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        _write_sandbox(tmp_path, "discovery/news_enriched_candidates.json", _adversarial_enriched())
+        run_market_narratives(base_dir=tmp_path, periods=["daily"], write_files=True)
+        raw = (tmp_path / "latest" / "market_narrative_daily.json").read_text()
+        stripped = raw.replace(_SAFETY_DISCLAIMER, "")
+        for phrase in _ADVERSARIAL_PHRASES:
+            assert phrase not in stripped.lower(), \
+                f"Prohibited phrase {phrase!r} leaked into JSON output"
+
+    def test_adversarial_input_does_not_appear_in_markdown_output(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        _write_sandbox(tmp_path, "discovery/news_enriched_candidates.json", _adversarial_enriched())
+        run_market_narratives(base_dir=tmp_path, periods=["daily"], write_files=True)
+        md = (tmp_path / "latest" / "market_narrative_daily.md").read_text()
+        stripped = md.replace(_SAFETY_DISCLAIMER, "")
+        for phrase in _ADVERSARIAL_PHRASES:
+            assert phrase not in stripped.lower(), \
+                f"Prohibited phrase {phrase!r} leaked into Markdown output"
+
+    def test_all_three_periods_protected(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        _write_sandbox(tmp_path, "discovery/news_enriched_candidates.json", _adversarial_enriched())
+        run_market_narratives(
+            base_dir=tmp_path,
+            periods=["daily", "weekly", "monthly"],
+            write_files=True,
+        )
+        for period in ("daily", "weekly", "monthly"):
+            json_text = (tmp_path / "latest" / f"market_narrative_{period}.json").read_text()
+            md_text = (tmp_path / "latest" / f"market_narrative_{period}.md").read_text()
+            stripped_j = json_text.replace(_SAFETY_DISCLAIMER, "")
+            stripped_m = md_text.replace(_SAFETY_DISCLAIMER, "")
+            for phrase in _ADVERSARIAL_PHRASES:
+                assert phrase not in stripped_j.lower(), f"{period} json leaked {phrase!r}"
+                assert phrase not in stripped_m.lower(), f"{period} md leaked {phrase!r}"
+
+    def test_writer_sanitizes_tampered_report(self, tmp_path):
+        bad_report = MarketNarrativeReport(
+            narrative_period="daily",
+            generated_at="2026-05-11T00:00:00Z",
+            top_headline="benign headline",
+            key_themes=[NarrativeTheme(theme="buy now", signal_count=1,
+                                       sources=[], description="x")],
+        )
+        paths = write_market_narrative_report("daily", bad_report, tmp_path)
+        raw = Path(paths["market_narrative_daily_json"]).read_text()
+        md = Path(paths["market_narrative_daily_md"]).read_text()
+        assert "buy now" not in raw.lower()
+        assert "buy now" not in md.lower()
+
+    def test_writer_raises_when_sanitizer_disabled(self, tmp_path, monkeypatch):
+        from portfolio_automation import market_narratives as mn
+
+        bad_report = MarketNarrativeReport(
+            narrative_period="daily",
+            generated_at="2026-05-11T00:00:00Z",
+            top_headline="buy now sell now",
+            key_themes=[NarrativeTheme(theme="promote candidate", signal_count=1,
+                                       sources=[], description="x")],
+        )
+        monkeypatch.setattr(mn, "sanitize_nested_narrative_payload", lambda p: p)
+        monkeypatch.setattr(mn, "sanitize_narrative_text", lambda s: s)
+        with pytest.raises(UnsafeNarrativeArtifactError):
+            write_market_narrative_report("daily", bad_report, tmp_path)
+        assert not (tmp_path / "latest" / "market_narrative_daily.json").exists()
+        assert not (tmp_path / "latest" / "market_narrative_daily.md").exists()
+
+    def test_orchestrator_records_blocked_write(self, tmp_path, monkeypatch):
+        from portfolio_automation import market_narratives as mn
+
+        def _raise(period, report, base_dir):
+            raise UnsafeNarrativeArtifactError("forced for test")
+        monkeypatch.setattr(mn, "write_market_narrative_report", _raise)
+        result = mn.run_market_narratives(
+            base_dir=tmp_path, periods=["daily"], write_files=True
+        )
+        assert "blocked_unsafe_write" in result["daily"]
+
+    def test_deterministic_under_adversarial_input(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _adversarial_news_intel())
+        r1 = run_market_narratives(
+            base_dir=tmp_path, periods=["daily"], write_files=False
+        )
+        r2 = run_market_narratives(
+            base_dir=tmp_path, periods=["daily"], write_files=False
+        )
+        assert r1["daily"]["themes_found"] == r2["daily"]["themes_found"]
+        assert r1["daily"]["risks_found"] == r2["daily"]["risks_found"]
+        assert r1["daily"]["safety_violations"] == r2["daily"]["safety_violations"]
+
+    def test_disclaimer_survives_in_output(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _news_intel_payload())
+        run_market_narratives(base_dir=tmp_path, periods=["daily"], write_files=True)
+        md = (tmp_path / "latest" / "market_narrative_daily.md").read_text()
+        assert _SAFETY_DISCLAIMER in md
