@@ -63,6 +63,17 @@ from portfolio_automation.discovery.discovery_replay import (
     evaluate_discovery_candidate_outcomes,
     summarize_discovery_replay_results,
 )
+from portfolio_automation.discovery.news_integration import (
+    load_news_intelligence,
+    load_news_candidate_evidence,
+    load_emerging_candidates,
+    load_rejected_candidates,
+    match_evidence_to_candidates,
+    enrich_candidates,
+    build_integration_summary,
+    write_news_integration_artifacts,
+    run_discovery_news_integration,
+)
 
 __all__ = [
     # ticker extraction
@@ -101,4 +112,14 @@ __all__ = [
     "load_discovery_replay_inputs",
     "evaluate_discovery_candidate_outcomes",
     "summarize_discovery_replay_results",
+    # discovery news integration
+    "load_news_intelligence",
+    "load_news_candidate_evidence",
+    "load_emerging_candidates",
+    "load_rejected_candidates",
+    "match_evidence_to_candidates",
+    "enrich_candidates",
+    "build_integration_summary",
+    "write_news_integration_artifacts",
+    "run_discovery_news_integration",
 ]

@@ -662,6 +662,46 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 ---
 
+### Discovery News Integration (Complete)
+
+**Scope:** Enriches sandbox discovery candidates with structured news evidence from the FMP News Intelligence layer. Sandbox-only, observe-only. No official state mutation, no candidate promotion, no BUY/SELL/HOLD outputs.
+
+**Module:** `portfolio_automation/discovery/news_integration.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `load_news_intelligence(base_dir)` | Load `news_intelligence.json` safely |
+| `load_news_candidate_evidence(base_dir)` | Load sandbox news evidence safely |
+| `load_emerging_candidates(base_dir)` | Load emerging discovery candidates |
+| `load_rejected_candidates(base_dir)` | Load rejected discovery candidates |
+| `match_evidence_to_candidates(packets, candidates)` | Match by ticker/related_tickers |
+| `enrich_candidates(candidates, matched, all_packets)` | Build enriched records |
+| `build_integration_summary(enriched, run_mode, ts)` | Markdown summary with disclaimer |
+| `write_news_integration_artifacts(base_dir, enriched, md, mode, id)` | Write sandbox artifacts |
+| `run_discovery_news_integration(base_dir, run_mode, run_id, dry_run)` | Orchestrator |
+
+**Enrichment:** Matches evidence by ticker, aggregates themes/risk/catalyst flags, computes `news_relevance_score`, `corroboration_news_score`, and `news_context` (`research_supported`/`research_caution`/`research_neutral`/`no_news`).
+
+**News-only tickers:** Tickers in news evidence without discovery candidates added as `candidate_status: "news_only"` — needs corroboration, never auto-promoted.
+
+**Run mode governance:** Only DISCOVERY and BACKTEST may write sandbox artifacts. Other modes treated as dry_run.
+
+**Artifacts produced:**
+- `outputs/sandbox/discovery/news_enriched_candidates.json` (SANDBOX)
+- `outputs/sandbox/discovery/news_integration_summary.md` (SANDBOX)
+
+**Safety:** `observe_only: true`, `no_trade: true`, `not_recommendation: true`, `discovery_only: true` hardcoded. No official namespace writes. No PROMOTED/VALIDATED/ACTIONABLE/BUY/SELL statuses.
+
+**Tests:** `tests/discovery/test_news_integration.py` — 72 tests across 7 test classes.
+
+**Files created:** `portfolio_automation/discovery/news_integration.py`, `tests/discovery/test_news_integration.py`, `docs/DISCOVERY_NEWS_INTEGRATION.md`
+
+**Files modified:** `portfolio_automation/discovery/__init__.py`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+---
+
 ### Manual Promotion Proposal (Pending After Email Delivery)
 
 Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.

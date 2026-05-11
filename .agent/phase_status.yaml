@@ -189,15 +189,23 @@ post_phase_0:
     tests: 91 passed
 
   discovery_news_integration:
-    status: not_started
+    status: complete
     priority: high
     description: >
-      Planned follow-up after fmp_news_intelligence_layer. Integrates approved
-      news intelligence into sandbox discovery workflows without official
-      promotion, BUY/SELL outputs, broker execution, or auto-trading.
+      Sandbox-only enrichment of discovery candidates with FMP news evidence.
+      Matches by ticker, aggregates themes/flags, computes news_relevance_score
+      and news_context. Adds news-only tickers. Only DISCOVERY/BACKTEST modes
+      may write. No official state mutation, no promotion, no BUY/SELL outputs.
     prerequisite: fmp_news_intelligence_layer_complete
-    files: []
-    tests: pending
+    files:
+      - portfolio_automation/discovery/news_integration.py
+      - portfolio_automation/discovery/__init__.py
+      - tests/discovery/test_news_integration.py
+      - docs/DISCOVERY_NEWS_INTEGRATION.md
+      - docs/roadmap.md
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 72 passed
 
   daily_weekly_monthly_ai_market_narratives:
     status: not_started
