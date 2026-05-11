@@ -1,6 +1,6 @@
 # Automatic Promotion Governance _(Sandbox Research Only)_
 
-**Generated:** 2026-05-11T17:35:22.859180+00:00
+**Generated:** 2026-05-11T18:21:09.342547+00:00
 **Run mode:** discovery
 **Run id:** 2026-05-11_automatic_promotion
 

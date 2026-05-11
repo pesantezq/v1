@@ -829,3 +829,5 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 **Files modified:** `portfolio_automation/discovery/__init__.py`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
 
 **Manual Promotion Proposal:** Marked `superseded_by_automatic_promotion_governance_layer` in `.agent/phase_status.yaml`. If a future operator-driven UI workflow is desired, it should build on top of the sandbox automatic promotion artifacts rather than replacing them.
+
+**Roadmap status after Codex review:** `automatic_promotion_governance_layer` is complete, VPS validated, and Codex-reviewed with no blocking implementation issues. The active agent state is now `awaiting_next_approved_roadmap_step`; the next implementation step should be selected by the user/GPT from the next approved roadmap options.
