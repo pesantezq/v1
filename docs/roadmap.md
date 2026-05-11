@@ -742,6 +742,47 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 ---
 
+### News Evidence Layer (Complete)
+
+**Scope:** Capped, observe-only layer that converts news, narrative, and discovery evidence into decision-engine-adjacent context. Cannot override decisions, scoring, allocation, recommendations, or watchlists. Hard influence cap: `context_only`.
+
+**Module:** `portfolio_automation/news_evidence_layer.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `load_all_inputs(base_dir)` | Load all input artifacts safely; degrades on missing/malformed |
+| `build_news_evidence_layer_report(inputs, base_dir)` | Build structured `NewsEvidenceLayerReport` |
+| `render_news_evidence_markdown(report)` | Render Markdown report |
+| `write_news_evidence_layer_report(report, base_dir)` | Write JSON + MD to LATEST (sanitizes & validates) |
+| `run_news_evidence_layer(base_dir, write_files)` | Top-level orchestrator |
+| `validate_news_evidence_safety(value)` | Walk and detect prohibited phrases |
+| `sanitize_news_evidence_text(value)` / `sanitize_label(value)` / `sanitize_nested_news_evidence_payload(payload)` | Sanitizers |
+
+**Data types:** `NewsEvidenceInputSummary`, `TickerNewsEvidence`, `DecisionNewsContext`, `NewsRiskEvidence`, `NewsCatalystEvidence`, `NewsEvidenceLayerReport`, `UnsafeNewsEvidenceArtifactError`
+
+**Evidence classification:**
+- `evidence_strength`: `none` / `weak` / `moderate` / `strong` (by article count + source diversity)
+- `context_effect`: `informational` / `risk_context` / `catalyst_context` / `confidence_context`
+- No `BUY`/`SELL`/`HOLD`/`PROMOTED`/`VALIDATED`/`ACTIONABLE` values are ever emitted
+
+**Sanitizer:** Same three-layer pattern as market narratives — label sanitization, full-payload sanitization, pre-write JSON+Markdown validation. Blocks writes via `UnsafeNewsEvidenceArtifactError` if prohibited language remains.
+
+**Artifacts produced** (all LATEST namespace):
+- `outputs/latest/news_evidence_layer.json`
+- `outputs/latest/news_evidence_layer.md`
+
+**Safety:** All seven safety flags hardcoded (`observe_only`, `no_trade`, `not_recommendation`, `no_decision_override`, `no_score_mutation`, `no_allocation_mutation`, `no_watchlist_mutation`). No POLICY/PORTFOLIO/SANDBOX writes. Decision actions and reasons copied read-only.
+
+**Tests:** `tests/test_news_evidence_layer.py` — 74 tests across 8 test classes including adversarial input protection and no-mutation boundary verification.
+
+**Files created:** `portfolio_automation/news_evidence_layer.py`, `tests/test_news_evidence_layer.py`, `docs/NEWS_EVIDENCE_LAYER.md`
+
+**Files modified:** `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+---
+
 ### Manual Promotion Proposal (Pending After Email Delivery)
 
 Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.

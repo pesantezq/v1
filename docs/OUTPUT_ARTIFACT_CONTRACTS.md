@@ -1197,3 +1197,82 @@ All six narrative artifacts are written to `OutputNamespace.LATEST` by `portfoli
 | `market_narrative_monthly.md` | `outputs/latest/market_narrative_monthly.md` |
 
 **Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, or any modification of official portfolio/watchlist/allocation state.
+
+---
+
+## News Evidence Layer Artifacts
+
+Both artifacts are written to `OutputNamespace.LATEST` by `portfolio_automation/news_evidence_layer.py`. Context-only by design — this layer cannot mutate decisions, scoring, allocation, recommendations, watchlists, or portfolio state.
+
+### `outputs/latest/news_evidence_layer.json`
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `no_decision_override` | bool | Always `true` |
+| `no_score_mutation` | bool | Always `true` |
+| `no_allocation_mutation` | bool | Always `true` |
+| `no_watchlist_mutation` | bool | Always `true` |
+| `source` | string | `"news_evidence_layer"` |
+| `influence_cap` | string | `"context_only"` |
+| `data_available` | bool | Whether any input was available |
+| `inputs_used` | array | Per-artifact availability records |
+| `missing_inputs` | array | Names of missing input artifacts |
+| `portfolio_context` | string | Brief portfolio context |
+| `ticker_contexts` | array | Per-ticker aggregated news evidence (see below) |
+| `decision_contexts` | array | Read-only decision + news context pairs (see below) |
+| `risk_evidence` | array | Aggregated risk signals (label, tickers, count, description) |
+| `catalyst_evidence` | array | Aggregated catalyst signals (label, tickers, count, description) |
+| `discovery_context_summary` | string | Sandbox-only discovery context summary |
+| `confidence_context` | array | Data quality / calibration notes |
+| `operator_review_flags` | array | Review-only operator flags |
+| `memo_bullets` | array | Memo-ready context bullets |
+| `prohibited_actions_detected` | array | Safety validator output (should be empty) |
+| `safety_disclaimer` | string | Fixed disclaimer text |
+
+#### `ticker_contexts[]` shape
+
+| Field | Type |
+|---|---|
+| `ticker` | string |
+| `source` | string (`decision_plan` / `news_intelligence` / `discovery`) |
+| `matched_article_count` | int |
+| `source_diversity` | int |
+| `themes` | array |
+| `risk_flags` | array |
+| `catalyst_flags` | array |
+| `context_note` | string |
+| `evidence_strength` | string (`none` / `weak` / `moderate` / `strong`) |
+| `context_effect` | string (`informational` / `risk_context` / `catalyst_context` / `confidence_context`) |
+
+#### `decision_contexts[]` shape
+
+| Field | Type | Description |
+|---|---|---|
+| `ticker` | string | |
+| `decision_action` | string | Read-only copy of existing decision |
+| `decision_reason` | string | Read-only copy of existing reason |
+| `news_evidence_strength` | string | Strength band for this ticker |
+| `news_context_effect` | string | Effect classification |
+| `context_note` | string | Aggregated context |
+| `no_decision_override` | bool | Always `true` |
+
+### `outputs/latest/news_evidence_layer.md`
+
+Human-readable Markdown rendering of the same content, with sections:
+
+- News Evidence Layer (header)
+- Portfolio Context
+- Ticker Evidence Context
+- Risks To Monitor
+- Catalysts To Monitor
+- Discovery Research Context (sandbox-only)
+- Confidence / Data Quality Context
+- Operator Review Flags
+- Memo Bullets
+- Safety Boundary & Coverage
+
+**Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, score values, allocation values, or watchlist modifications.
