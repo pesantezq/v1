@@ -898,3 +898,55 @@ All helpers reuse the existing `_operator_dashboard_css()` / `_badge()` / `_rend
 **Tests:** `tests/test_gui_automatic_promotion.py` — 31 tests across 7 test classes (loader graceful degradation, valid parsing, aggregator stable shape, candidate grouping, safety flag detection, dashboard wiring, read-only invariants, content safety, GUI helper import safety).
 
 **Future cockpit roadmap:** Same helpers can power a refreshed Dashboard landing page, a News Evidence Layer panel, a Market Narrative panel, and a unified Discovery Sandbox panel. None of these require backend changes.
+
+---
+
+### GUI Operator Cockpit Redesign — slice 2: Dashboard Landing Card Refresh (Complete)
+
+**Scope:** UI/UX additive layer only. Adds a card-based "Cockpit Summary" grid at the top of the existing **Dashboard** page using the reusable helpers from slice 1. Every existing dashboard widget below the new summary remains untouched. No portfolio logic, scoring, allocation, recommendation, decision-engine, automatic-promotion-governance, or artifact-schema changes.
+
+**Step name:** `gui_operator_cockpit_redesign`
+**Slice:** `dashboard_landing_card_refresh`
+
+**Module touchpoints:**
+
+| File | Change |
+|---|---|
+| `gui_operator_data.py` | Added 2 new path constants (`NEWS_EVIDENCE_LAYER_RELATIVE_PATH`, `MARKET_NARRATIVE_DAILY_RELATIVE_PATH`), 2 new loaders (`load_news_evidence_layer`, `load_market_narrative_daily`), and wired both into `load_operator_dashboard_data()` |
+| `gui/app.py` | Added `_render_cockpit_summary_grid(bundle)` helper; added single 2-line invocation at the top of `page_dashboard()` (before the existing system summary block); imported the two new loaders |
+| `tests/test_gui_cockpit_summary.py` | New — 19 tests across 6 test classes |
+| `docs/GUI_OPERATOR_COCKPIT.md` | Added "Dashboard cockpit summary (slice 2)" section + updated Future Cockpit Roadmap |
+| `docs/roadmap.md` | This entry |
+| `.agent/project_state.yaml` / `.agent/phase_status.yaml` | Updated |
+
+**Cockpit Summary layout (8-card grid in 2 rows of 4):**
+
+| # | Card | Source artifact |
+|---|---|---|
+| 1 | Portfolio Status | `outputs/latest/system_decision_summary.json` (`system_health`) |
+| 2 | Today's Market Narrative | `outputs/latest/market_narrative_daily.json` (`top_headline`) |
+| 3 | Decision Plan | `outputs/latest/decision_plan.json` (`decisions` length) |
+| 4 | Data Quality | `outputs/latest/data_quality_report.json` (`overall_health`, `issues`) |
+| 5 | News Evidence | `outputs/latest/news_evidence_layer.json` (`ticker_contexts` length) |
+| 6 | Automatic Promotion | Aggregator: `monitor_count` + `needs_review_count` from sandbox artifacts |
+| 7 | Memo Delivery | `outputs/latest/memo_delivery_status.json` (`sent`/`skipped`/`enabled`) |
+| 8 | Safety Boundary | Fixed reminder ("Observe-only. No trades. No portfolio mutation.") |
+
+Each card uses `render_metric_card(title, value, subtitle, badges)` + `render_status_badge(text, tone)` from slice 1. Tone is determined per-card by the artifact's health/availability values.
+
+**Safety confirmation:**
+- GUI remains strictly read-only; no writes, no portfolio/watchlist/allocation/scoring/recommendation/decision mutation
+- No broker/API/auto-trading code
+- No LLM/AI calls
+- New loaders verified by test to not write or modify any files
+- Cockpit summary helper uses no trading-instruction language (`buy now`, `sell now`, `execute trade`, etc.) outside the fixed Safety Boundary card's disclaimer wording — verified by automated test (`test_helper_avoids_forbidden_trading_language`)
+- Existing dashboard widgets below the summary are not touched
+
+**Tests:** `tests/test_gui_cockpit_summary.py` — 19 tests across 6 test classes (loader graceful degradation, valid parsing, aggregator wiring, cockpit helper source-level checks: defined / invoked / uses reusable components / renders 7 cards / avoids forbidden trading language, read-only invariants, tone logic).
+
+**Future cockpit roadmap progress:**
+- ✅ Slice 1: `gui_automatic_promotion_review_panel`
+- ✅ Slice 2: `dashboard_landing_card_refresh`
+- Slice 3 (candidate): `news_evidence_layer_panel`
+- Slice 4 (candidate): `market_narrative_panel`
+- Slice 5 (candidate): `unified_discovery_sandbox_panel`

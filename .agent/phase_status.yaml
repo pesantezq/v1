@@ -292,19 +292,34 @@ post_phase_0:
       details.  No portfolio/discovery/scoring/allocation/recommendation/
       decision-engine/automatic-promotion-governance behavior changes.  No
       broker/API or auto-trading.  No LLM/AI calls.
-    first_slice: gui_automatic_promotion_review_panel
-    first_slice_status: complete
-    first_slice_files:
-      - gui_operator_data.py
-      - gui/app.py
-      - tests/test_gui_automatic_promotion.py
-      - docs/GUI_OPERATOR_COCKPIT.md
-      - docs/roadmap.md
-      - .agent/project_state.yaml
-      - .agent/phase_status.yaml
-    first_slice_tests: 31 passed
+    slices:
+      gui_automatic_promotion_review_panel:
+        status: complete
+        files:
+          - gui_operator_data.py
+          - gui/app.py
+          - tests/test_gui_automatic_promotion.py
+          - docs/GUI_OPERATOR_COCKPIT.md
+        tests: 31 passed
+      dashboard_landing_card_refresh:
+        status: complete
+        description: >
+          Added _render_cockpit_summary_grid() to gui/app.py and invoked it
+          at the top of page_dashboard().  Added load_news_evidence_layer
+          and load_market_narrative_daily loaders.  8-card grid: Portfolio
+          Status, Today's Market Narrative, Decision Plan, Data Quality,
+          News Evidence, Automatic Promotion, Memo Delivery, Safety
+          Boundary.  Additive only — existing dashboard widgets unchanged.
+        files:
+          - gui_operator_data.py
+          - gui/app.py
+          - tests/test_gui_cockpit_summary.py
+          - docs/GUI_OPERATOR_COCKPIT.md
+          - docs/roadmap.md
+          - .agent/project_state.yaml
+          - .agent/phase_status.yaml
+        tests: 19 passed
     follow_up_slices:
-      - dashboard_landing_card_refresh
       - news_evidence_layer_panel
       - market_narrative_panel
       - unified_discovery_sandbox_panel

@@ -58,6 +58,8 @@ AUTOMATIC_PROMOTION_SUMMARY_RELATIVE_PATH = (
 AUTOMATIC_PROMOTION_DECISIONS_RELATIVE_PATH = (
     "outputs", "sandbox", "discovery", "automatic_promotion_decisions.jsonl"
 )
+NEWS_EVIDENCE_LAYER_RELATIVE_PATH = ("outputs", "latest", "news_evidence_layer.json")
+MARKET_NARRATIVE_DAILY_RELATIVE_PATH = ("outputs", "latest", "market_narrative_daily.json")
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1852,6 +1854,8 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "discovery_sandbox_status": load_discovery_sandbox_status(root_path),
         "memo_delivery_status": load_memo_delivery_status(root_path),
         "automatic_promotion": load_automatic_promotion_data(root_path),
+        "news_evidence_layer": load_news_evidence_layer(root_path),
+        "market_narrative_daily": load_market_narrative_daily(root_path),
     }
 
 
@@ -2055,6 +2059,52 @@ def load_automatic_promotion_data(root: Path | str) -> dict[str, Any]:
             payload.get("gate_summary") if isinstance(payload.get("gate_summary"), dict) else {}
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# News Evidence Layer + Market Narrative loaders (LATEST, read-only)
+# ---------------------------------------------------------------------------
+
+def load_news_evidence_layer(root: Path | str) -> dict[str, Any]:
+    """
+    Load outputs/latest/news_evidence_layer.json.
+
+    Returns ``{"available": False}`` on missing/malformed/non-object JSON.
+    Read-only — never writes or modifies any artifact.
+    """
+    path = Path(root).joinpath(*NEWS_EVIDENCE_LAYER_RELATIVE_PATH)
+    if not path.exists():
+        return {"available": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(payload, dict):
+            return {"available": False}
+        payload = dict(payload)
+        payload["available"] = True
+        return payload
+    except Exception:
+        return {"available": False}
+
+
+def load_market_narrative_daily(root: Path | str) -> dict[str, Any]:
+    """
+    Load outputs/latest/market_narrative_daily.json.
+
+    Returns ``{"available": False}`` on missing/malformed/non-object JSON.
+    Read-only — never writes or modifies any artifact.
+    """
+    path = Path(root).joinpath(*MARKET_NARRATIVE_DAILY_RELATIVE_PATH)
+    if not path.exists():
+        return {"available": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(payload, dict):
+            return {"available": False}
+        payload = dict(payload)
+        payload["available"] = True
+        return payload
+    except Exception:
+        return {"available": False}
 
 
 def load_memo_delivery_status(root: Path | str) -> dict[str, Any]:

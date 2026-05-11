@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-11 (gui_operator_cockpit_redesign — gui_automatic_promotion_review_panel slice complete)
+# Last updated: 2026-05-11 (gui_operator_cockpit_redesign — slice 2: dashboard_landing_card_refresh complete)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -39,6 +39,7 @@ completed_steps:
   - news_evidence_layer_for_decision_engine
   - automatic_promotion_governance_layer
   - gui_operator_cockpit_redesign__gui_automatic_promotion_review_panel
+  - gui_operator_cockpit_redesign__dashboard_landing_card_refresh
 
 next_official_step:
   primary: gui_operator_cockpit_redesign

@@ -112,13 +112,41 @@ Count: 31 tests across 7 test classes
 
 Coverage: missing/malformed/non-object/empty input degradation, valid artifact parsing, aggregator stable shape, candidate grouping by proposed status, safety flag detection (all-true, missing, explicit False), `load_operator_dashboard_data` wiring, read-only invariants (loaders do not write to disk; do not touch LATEST/POLICY/PORTFOLIO), aggregator content safety (no forbidden status emission, defensive `OTHER` bucket for unknown statuses), GUI helper smoke tests (module compiles, all helpers present, no forbidden trading language in cockpit helpers, page registered in nav).
 
+## Dashboard cockpit summary (slice 2)
+
+The Dashboard landing page now opens with an at-a-glance **Cockpit Summary** card grid that uses the same reusable helpers as the Automatic Promotion page. The summary is additive — every existing dashboard widget below it remains untouched.
+
+### Cards
+
+| # | Card | Source artifact | Tone logic |
+|---|---|---|---|
+| 1 | **Portfolio Status** | `outputs/latest/system_decision_summary.json` (`system_health` / `overall_health`) | `good` healthy / `warn` degraded / `bad` critical / `neutral` unknown |
+| 2 | **Today's Market Narrative** | `outputs/latest/market_narrative_daily.json` (`top_headline`) | `good` when present, `neutral` when missing |
+| 3 | **Decision Plan** | `outputs/latest/decision_plan.json` (`decisions` length) | `good` when count > 0, `neutral` when zero |
+| 4 | **Data Quality** | `outputs/latest/data_quality_report.json` | `good` healthy / `warn` degraded / `bad` critical |
+| 5 | **News Evidence** | `outputs/latest/news_evidence_layer.json` (`ticker_contexts` length) | `good` when populated, `neutral` when empty |
+| 6 | **Automatic Promotion** | Aggregator over `outputs/sandbox/discovery/automatic_promotion_*` (`monitor_count`, `needs_review_count`) | `good` when monitor > 0, `warn` when review > 0, `neutral` otherwise |
+| 7 | **Memo Delivery** | `outputs/latest/memo_delivery_status.json` | `good` sent / `warn` pending / `neutral` skipped/disabled |
+| 8 | **Safety Boundary** | Fixed reminder | always `good` (system constant) |
+
+The summary helper is `_render_cockpit_summary_grid(bundle)` in `gui/app.py`. It accepts the `bundle` already loaded by `load_operator_dashboard_data()`, so no extra I/O is required on the dashboard page.
+
+### New loaders backing the summary
+
+| Loader | Artifact |
+|---|---|
+| `load_news_evidence_layer(root)` | `outputs/latest/news_evidence_layer.json` |
+| `load_market_narrative_daily(root)` | `outputs/latest/market_narrative_daily.json` |
+
+Both are read-only, degrade safely on missing/malformed/non-object input, and are wired into `load_operator_dashboard_data()` under the keys `news_evidence_layer` and `market_narrative_daily`.
+
 ## Future Cockpit Roadmap
 
-Slices that can build on the helpers added in this step:
+Remaining slices that can build on the helpers added so far:
 
-1. Refresh the **Dashboard** landing page using the same card grid (Portfolio Status, Today's Market Narrative, Decision Plan Status, Data Quality, News Evidence, Automatic Promotion, Memo Delivery).
-2. Add a beginner-friendly **News Evidence Layer** panel that reads `outputs/latest/news_evidence_layer.json` and renders ticker context cards.
-3. Add a **Market Narrative** panel that surfaces the daily/weekly/monthly narrative artifacts with the same card-first style.
-4. Add a **Discovery Sandbox** panel that combines emerging/rejected candidates, news enrichment, replay, and automatic promotion into a single research view.
+1. ✅ ~~Dashboard landing card refresh~~ — complete (slice 2)
+2. **News Evidence Layer** panel — beginner-friendly view of `outputs/latest/news_evidence_layer.json` with ticker context cards
+3. **Market Narrative** panel — daily/weekly/monthly narrative surfaces with the same card-first style
+4. **Unified Discovery Sandbox** panel — combine emerging/rejected candidates, news enrichment, replay, and automatic promotion into one research view
 
-None of these require backend changes — they all read existing artifacts and use the helpers added in this slice.
+None of these require backend changes — they all read existing artifacts and use the helpers added so far.

@@ -41,6 +41,8 @@ from gui_operator_data import (
     load_confidence_calibration_latest,
     load_discovery_sandbox_status,
     load_automatic_promotion_data,
+    load_news_evidence_layer,
+    load_market_narrative_daily,
 )
 from portfolio_automation.discovery.approval_workflow import (
     ApprovalDecision,
@@ -5070,6 +5072,13 @@ def page_dashboard() -> None:
         if st.button("Refresh", width="stretch"):
             st.rerun()
 
+    # Operator Cockpit summary — card-based at-a-glance landing.  Additive,
+    # read-only, beginner-friendly.  Uses the reusable helpers added in the
+    # gui_operator_cockpit_redesign track.  Existing dashboard sections
+    # below remain unchanged for power users.
+    _render_cockpit_summary_grid(bundle)
+    st.divider()
+
     _render_system_summary()
     _render_daily_memo_section()
     st.divider()
@@ -6789,6 +6798,181 @@ def render_candidate_card(decision: dict, key_prefix: str = "ap") -> None:
 
         st.caption("Raw decision record (read-only):")
         st.json(decision)
+
+
+def _render_cockpit_summary_grid(bundle: dict) -> None:
+    """
+    Operator cockpit summary — 7 card grid at the top of the Dashboard.
+
+    Read-only.  Reads existing artifacts already loaded into ``bundle`` by
+    ``load_operator_dashboard_data()``.  Cards degrade gracefully when an
+    upstream artifact is missing.  Never uses trading-instruction language
+    outside fixed safety disclaimers.
+
+    Cards:
+      1. Portfolio Status
+      2. Today's Market Narrative
+      3. Decision Plan
+      4. Data Quality
+      5. News Evidence
+      6. Automatic Promotion
+      7. Memo Delivery
+    """
+    if not isinstance(bundle, dict):
+        bundle = {}
+
+    decision_plan = bundle.get("decision_plan") if isinstance(bundle.get("decision_plan"), dict) else {}
+    sys_summary   = bundle.get("system_decision_summary") if isinstance(bundle.get("system_decision_summary"), dict) else {}
+    dq            = bundle.get("data_quality_report") if isinstance(bundle.get("data_quality_report"), dict) else {}
+    nel           = bundle.get("news_evidence_layer") if isinstance(bundle.get("news_evidence_layer"), dict) else {}
+    nar           = bundle.get("market_narrative_daily") if isinstance(bundle.get("market_narrative_daily"), dict) else {}
+    apg           = bundle.get("automatic_promotion") if isinstance(bundle.get("automatic_promotion"), dict) else {}
+    memo          = bundle.get("memo_delivery_status") if isinstance(bundle.get("memo_delivery_status"), dict) else {}
+
+    # --- Card 1: Portfolio Status ----------------------------------------
+    health = str(sys_summary.get("system_health") or sys_summary.get("overall_health") or "")
+    if health.lower() in ("healthy", "ok", "good"):
+        port_tone = "good"
+    elif health.lower() in ("degraded", "warn", "warning"):
+        port_tone = "warn"
+    elif health.lower() in ("critical", "fail", "failed"):
+        port_tone = "bad"
+    else:
+        port_tone = "neutral"
+    port_value = health.title() if health else "—"
+    port_subtitle = "Current pipeline + data health snapshot"
+
+    # --- Card 2: Today's Market Narrative --------------------------------
+    nar_headline = str(nar.get("top_headline") or "").strip()
+    nar_available = bool(nar.get("available")) and bool(nar_headline)
+    nar_value = nar_headline[:80] if nar_available else "—"
+    nar_subtitle = "Daily market narrative (read-only context)"
+    nar_tone = "good" if nar_available else "neutral"
+
+    # --- Card 3: Decision Plan -------------------------------------------
+    decisions = decision_plan.get("decisions") if isinstance(decision_plan.get("decisions"), list) else []
+    decision_count = len(decisions)
+    dp_value = str(decision_count)
+    dp_subtitle = "Positions covered by the latest decision plan"
+    dp_tone = "good" if decision_count > 0 else "neutral"
+
+    # --- Card 4: Data Quality --------------------------------------------
+    dq_health = str(dq.get("overall_health") or dq.get("health_status") or "")
+    issue_count = 0
+    if isinstance(dq.get("issues"), list):
+        issue_count = len(dq["issues"])
+    if dq_health.lower() == "healthy":
+        dq_tone = "good"
+        dq_value = "Healthy"
+    elif dq_health.lower() in ("degraded", "warning"):
+        dq_tone = "warn"
+        dq_value = "Degraded"
+    elif dq_health.lower() in ("critical", "failed"):
+        dq_tone = "bad"
+        dq_value = "Critical"
+    elif issue_count > 0:
+        dq_tone = "warn"
+        dq_value = f"{issue_count} issue(s)"
+    else:
+        dq_tone = "neutral"
+        dq_value = "—"
+    dq_subtitle = "Observe-only data quality monitor"
+
+    # --- Card 5: News Evidence -------------------------------------------
+    nel_available = bool(nel.get("available"))
+    ticker_contexts = nel.get("ticker_contexts") if isinstance(nel.get("ticker_contexts"), list) else []
+    nel_value = str(len(ticker_contexts)) if nel_available else "—"
+    nel_subtitle = "Per-ticker news evidence (context only)"
+    nel_tone = "good" if nel_available and ticker_contexts else "neutral"
+
+    # --- Card 6: Automatic Promotion -------------------------------------
+    apg_available = bool(apg.get("available"))
+    apg_monitor = int(apg.get("monitor_count") or 0)
+    apg_review = int(apg.get("needs_review_count") or 0)
+    if apg_available:
+        apg_value = f"{apg_monitor} monitor"
+        if apg_review:
+            apg_value += f" · {apg_review} review"
+        apg_tone = "good" if apg_monitor > 0 else ("warn" if apg_review > 0 else "neutral")
+    else:
+        apg_value = "—"
+        apg_tone = "neutral"
+    apg_subtitle = "Sandbox research governance"
+
+    # --- Card 7: Memo Delivery -------------------------------------------
+    memo_available = bool(memo.get("available", memo.get("enabled") is not None))
+    memo_sent = bool(memo.get("sent"))
+    memo_skipped = bool(memo.get("skipped"))
+    memo_disabled = (memo.get("enabled") is False) or (str(memo.get("reason") or "").lower() == "disabled")
+    if memo_disabled:
+        memo_value = "Disabled"
+        memo_tone = "neutral"
+    elif memo_sent:
+        memo_value = "Sent"
+        memo_tone = "good"
+    elif memo_skipped:
+        memo_value = "Skipped"
+        memo_tone = "neutral"
+    elif memo_available:
+        memo_value = "Pending"
+        memo_tone = "warn"
+    else:
+        memo_value = "—"
+        memo_tone = "neutral"
+    memo_subtitle = "Daily memo email status"
+
+    # --- Render -----------------------------------------------------------
+    render_section_header(
+        "Cockpit Summary",
+        "At-a-glance snapshot of the latest observe-only artifacts. "
+        "Read-only — this view does not change portfolio state.",
+    )
+    row1 = st.columns(4)
+    with row1[0]:
+        render_metric_card(
+            "Portfolio Status", port_value, port_subtitle,
+            [render_status_badge("system", port_tone)],
+        )
+    with row1[1]:
+        render_metric_card(
+            "Today's Market Narrative", nar_value, nar_subtitle,
+            [render_status_badge("narrative", nar_tone)],
+        )
+    with row1[2]:
+        render_metric_card(
+            "Decision Plan", dp_value, dp_subtitle,
+            [render_status_badge("decisions", dp_tone)],
+        )
+    with row1[3]:
+        render_metric_card(
+            "Data Quality", dq_value, dq_subtitle,
+            [render_status_badge("quality", dq_tone)],
+        )
+
+    row2 = st.columns(4)
+    with row2[0]:
+        render_metric_card(
+            "News Evidence", nel_value, nel_subtitle,
+            [render_status_badge("news", nel_tone)],
+        )
+    with row2[1]:
+        render_metric_card(
+            "Automatic Promotion", apg_value, apg_subtitle,
+            [render_status_badge("sandbox", apg_tone)],
+        )
+    with row2[2]:
+        render_metric_card(
+            "Memo Delivery", memo_value, memo_subtitle,
+            [render_status_badge("memo", memo_tone)],
+        )
+    with row2[3]:
+        # Final card: safety reminder so the operator always sees the boundary
+        render_metric_card(
+            "Safety Boundary",
+            "Observe-only",
+            "No trades. No portfolio mutation. No buy/sell/hold recommendation.",
+            [render_status_badge("safe", "good")],
+        )
 
 
 def page_automatic_promotion() -> None:
