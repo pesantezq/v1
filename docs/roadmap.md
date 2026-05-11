@@ -831,3 +831,70 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 **Manual Promotion Proposal:** Marked `superseded_by_automatic_promotion_governance_layer` in `.agent/phase_status.yaml`. If a future operator-driven UI workflow is desired, it should build on top of the sandbox automatic promotion artifacts rather than replacing them.
 
 **Roadmap status after Codex review:** `automatic_promotion_governance_layer` is complete, VPS validated, and Codex-reviewed with no blocking implementation issues. The active agent state is now `awaiting_next_approved_roadmap_step`; the next implementation step should be selected by the user/GPT from the next approved roadmap options.
+
+---
+
+### GUI Operator Cockpit Redesign — first slice: Automatic Promotion Review Panel (Complete)
+
+**Scope:** UI/UX layer only. No portfolio logic, discovery logic, scoring, allocation, recommendation, decision-engine, automatic-promotion-governance behavior, broker/API execution, auto-trading, or artifact schemas were changed. The cockpit reads existing sandbox artifacts and surfaces them in a card-based, beginner-friendly, expandable view.
+
+**Step name:** `gui_operator_cockpit_redesign`
+**Primary build slice:** `gui_automatic_promotion_review_panel`
+
+**Module touchpoints:**
+
+| File | Change |
+|---|---|
+| `gui_operator_data.py` | Added 3 new path constants, 3 new loaders, an aggregator, and wired `automatic_promotion` into `load_operator_dashboard_data()` |
+| `gui/app.py` | Added 8 reusable UI helpers, added `page_automatic_promotion()`, registered `Automatic Promotion` in the nav `PAGES` list and router |
+| `tests/test_gui_automatic_promotion.py` | New — 31 tests across 7 test classes |
+| `docs/GUI_OPERATOR_COCKPIT.md` | New — purpose, page list, helpers, safety boundaries, future cockpit roadmap |
+| `docs/roadmap.md` | This entry |
+| `.agent/project_state.yaml` / `.agent/phase_status.yaml` | Updated |
+
+**Reusable UI helpers added** (intended for use by future cockpit pages):
+
+| Helper | Purpose |
+|---|---|
+| `render_status_badge(text, tone)` | Inline HTML badge |
+| `render_metric_card(title, value, subtitle, badges)` | Card with label/value/subtitle/badges |
+| `render_section_header(title, subtitle)` | Section header with caption |
+| `render_empty_state(message, icon)` | Friendly empty-state info |
+| `render_safety_flags(safety_flags, missing)` | Safety boundary panel — one badge per expected flag |
+| `render_candidate_card(decision, key_prefix)` | Single candidate card with expander |
+| `_status_tone(status)` / `_status_explanation(status)` | Maps status → tone / plain-English line |
+
+All helpers reuse the existing `_operator_dashboard_css()` / `_badge()` / `_render_operator_card()` foundations so all cockpit pages share one visual language.
+
+**Loaders added** (`gui_operator_data.py`):
+
+| Loader | Returns |
+|---|---|
+| `load_automatic_promotion_candidates(root)` | `dict` with `available` flag |
+| `load_automatic_promotion_summary_markdown(root)` | `str` (empty if missing) |
+| `load_automatic_promotion_decisions(root)` | `list[dict]` (malformed lines skipped) |
+| `load_automatic_promotion_data(root)` | Aggregator with stable shape; never raises; wired into `load_operator_dashboard_data` |
+
+**Automatic Promotion Review page layout:**
+
+1. Header + safety disclaimer
+2. 6-card top metrics row: Total Reviewed, Moved to Monitor, Needs Review, Rejected, Expired, Safety Status
+3. Safety Boundary panel — one badge per expected safety flag, with a warning if any are missing or False
+4. "What does each status mean?" expander — plain-English explanations
+5. Grouped candidate sections by status (MONITOR / NEEDS_REVIEW / REJECTED / EXPIRED) — each candidate is a card with an expander showing evidence score, corroboration, news relevance, source diversity, gates passed/failed, risk/catalyst flags, replay/memory/operator context, and raw JSON
+6. Producer-rendered Markdown summary (collapsed by default)
+7. Recent decisions audit log (last 50 JSONL records, collapsed by default)
+8. Governance gates table (collapsed by default)
+9. Footer with generated_at, run_mode, run_id, source artifact paths
+
+**Safety confirmation:**
+- GUI is strictly read-only; no writes, no portfolio/watchlist/allocation/scoring/recommendation/decision mutation
+- No broker/API/auto-trading code
+- No LLM/AI calls
+- Aggregator never invents action labels; unknown statuses fall into the defensive `OTHER` bucket
+- Cockpit helper text uses no trading-instruction language outside the fixed safety disclaimer — verified by automated test
+- All 9 expected safety flags surfaced and re-checked at render time
+
+**Tests:** `tests/test_gui_automatic_promotion.py` — 31 tests across 7 test classes (loader graceful degradation, valid parsing, aggregator stable shape, candidate grouping, safety flag detection, dashboard wiring, read-only invariants, content safety, GUI helper import safety).
+
+**Future cockpit roadmap:** Same helpers can power a refreshed Dashboard landing page, a News Evidence Layer panel, a Market Narrative panel, and a unified Discovery Sandbox panel. None of these require backend changes.

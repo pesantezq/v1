@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-11 (automatic_promotion_governance_layer complete; awaiting next approved roadmap step)
+# Last updated: 2026-05-11 (gui_operator_cockpit_redesign — gui_automatic_promotion_review_panel slice complete)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: awaiting_next_approved_roadmap_step
+current_step: gui_operator_cockpit_redesign
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -38,11 +38,16 @@ completed_steps:
   - daily_weekly_monthly_ai_market_narratives
   - news_evidence_layer_for_decision_engine
   - automatic_promotion_governance_layer
+  - gui_operator_cockpit_redesign__gui_automatic_promotion_review_panel
 
 next_official_step:
-  primary: awaiting_next_approved_roadmap_step
+  primary: gui_operator_cockpit_redesign
   secondary: []
-  note: Next implementation step should be selected by the user/GPT from the next approved roadmap options.
+  note: >
+    First slice (gui_automatic_promotion_review_panel) is complete.  Future
+    slices in this UI/UX track may include: refreshed Dashboard landing page,
+    News Evidence Layer panel, Market Narrative panel, unified Discovery
+    Sandbox panel — all read-only, using the new reusable helpers.
 
 # ---------------------------------------------------------------------------
 # Two-lane operating model (added by run_mode_governance step)

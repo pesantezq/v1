@@ -40,6 +40,7 @@ from gui_operator_data import (
     load_ai_budget_summary,
     load_confidence_calibration_latest,
     load_discovery_sandbox_status,
+    load_automatic_promotion_data,
 )
 from portfolio_automation.discovery.approval_workflow import (
     ApprovalDecision,
@@ -5014,8 +5015,8 @@ st.sidebar.title("StockBot")
 st.sidebar.caption("Operator Dashboard")
 
 PAGES = [
-    "Dashboard", "Decision Center", "Run Controls", "Outputs",
-    "Watchlist", "Run History", "API Health",
+    "Dashboard", "Decision Center", "Automatic Promotion",
+    "Run Controls", "Outputs", "Watchlist", "Run History", "API Health",
     "Config Editor", "Prompts", "Logs", "Diagnostics",
 ]
 
@@ -6615,6 +6616,366 @@ def page_diagnostics() -> None:
 
 
 # ============================================================================
+# Operator Cockpit — Reusable UI helpers (card-based, beginner-friendly)
+# ============================================================================
+#
+# These helpers are intentionally small, dependency-light, and read-only.
+# They never write artifacts, never call broker/API endpoints, and never use
+# trading-instruction language ("buy"/"sell"/"hold") outside the fixed
+# safety disclaimer wording.
+#
+# Color semantics:
+#   green / success    → healthy, monitor, supported
+#   yellow / warning   → needs review, weak evidence, partial coverage
+#   red / error        → rejected, high risk, safety violation
+#   gray / info        → expired, no data, neutral
+# ----------------------------------------------------------------------------
+
+_COCKPIT_DISCLAIMER = (
+    "This is sandbox research governance only. "
+    "It is not a buy/sell/hold recommendation."
+)
+
+
+def _status_tone(status: str) -> str:
+    """Map an automatic-promotion status to a card tone."""
+    s = str(status or "").strip().upper()
+    if s == "MONITOR":
+        return "good"
+    if s in ("NEEDS_REVIEW", "WATCH"):
+        return "warn"
+    if s == "REJECTED":
+        return "bad"
+    if s == "EXPIRED":
+        return "neutral"
+    return "neutral"
+
+
+def _status_explanation(status: str) -> str:
+    """Plain-English one-liner for an automatic-promotion status."""
+    s = str(status or "").strip().upper()
+    return {
+        "MONITOR": "Strong enough to keep watching",
+        "NEEDS_REVIEW": "Mixed evidence — operator should inspect",
+        "REJECTED": "Risk or weak evidence",
+        "EXPIRED": "No longer supported by recent evidence",
+        "WATCH": "Sandbox watch candidate",
+        "DISCOVERED": "Early-stage research candidate",
+    }.get(s, "Sandbox research only")
+
+
+def render_status_badge(text: str, tone: str = "neutral") -> str:
+    """Public helper alias for ``_badge``; returns inline HTML."""
+    return _badge(text, tone)
+
+
+def render_metric_card(
+    title: str,
+    value: str,
+    subtitle: str = "",
+    badges: list[str] | None = None,
+) -> None:
+    """Public helper alias for ``_render_operator_card``."""
+    _render_operator_card(title=title, value=value, subtitle=subtitle, badges=badges)
+
+
+def render_section_header(title: str, subtitle: str = "") -> None:
+    """Render a section header with optional caption."""
+    st.markdown(f"### {title}")
+    if subtitle:
+        st.caption(subtitle)
+
+
+def render_empty_state(message: str = "Nothing here yet.", icon: str = "ℹ️") -> None:
+    """Render a friendly empty-state info panel."""
+    st.info(f"{icon} {message}")
+
+
+def render_safety_flags(safety_flags: dict, missing: list[str] | None = None) -> None:
+    """
+    Render the safety boundary panel.
+
+    Shows one row of green / red badges, one per expected safety flag.
+    Emits a warning if any flag is missing or False.
+    """
+    if not isinstance(safety_flags, dict) or not safety_flags:
+        render_empty_state("No safety flags reported by the producing artifact.", "⚠️")
+        return
+    badges: list[str] = []
+    for flag, value in safety_flags.items():
+        tone = "good" if bool(value) else "bad"
+        badges.append(_badge(f"{flag}: {'✓' if value else '✗'}", tone))
+    st.markdown("".join(badges), unsafe_allow_html=True)
+    if missing:
+        st.warning(
+            "Some safety flags are missing or False: "
+            + ", ".join(missing[:9])
+        )
+
+
+def render_candidate_card(decision: dict, key_prefix: str = "ap") -> None:
+    """
+    Render one automatic-promotion candidate as an expandable card.
+
+    Beginner-friendly: shows ticker, status, plain-English explanation,
+    evidence numbers, and a short reason.  Expander reveals full evidence
+    details and raw JSON.
+    """
+    if not isinstance(decision, dict):
+        return
+    ticker = str(decision.get("ticker") or "—").upper()
+    status = str(decision.get("proposed_status") or "—").upper()
+    tone = _status_tone(status)
+    explanation = _status_explanation(status)
+    evidence_score = decision.get("evidence_score", 0.0)
+    corroboration = decision.get("corroboration_score", 0.0)
+    news_relevance = decision.get("news_relevance_score", 0.0)
+    sources = decision.get("source_diversity", 0)
+    reason = str(decision.get("reason") or "—")
+    risk_flags = decision.get("risk_flags") or []
+    catalyst_flags = decision.get("catalyst_flags") or []
+
+    badges = [
+        _badge(status, tone),
+        _badge(f"evidence {evidence_score}", "neutral"),
+    ]
+    if isinstance(risk_flags, list) and risk_flags:
+        badges.append(_badge(f"{len(risk_flags)} risk", "bad"))
+    if isinstance(catalyst_flags, list) and catalyst_flags:
+        badges.append(_badge(f"{len(catalyst_flags)} catalyst", "good"))
+
+    _render_operator_card(
+        title=f"{ticker} — {explanation}",
+        value=str(ticker),
+        subtitle=reason[:180],
+        badges=badges,
+    )
+
+    with st.expander(f"Details · {ticker}", expanded=False):
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Evidence", f"{evidence_score}")
+        col2.metric("Corroboration", f"{corroboration}")
+        col3.metric("News relevance", f"{news_relevance}")
+        col4.metric("Sources", f"{sources}")
+
+        st.markdown("**Why this candidate moved:**")
+        st.write(reason)
+
+        gates_passed = decision.get("gates_passed") or []
+        gates_failed = decision.get("gates_failed") or []
+        if gates_passed or gates_failed:
+            st.markdown("**Gates:**")
+            st.write({
+                "passed": gates_passed,
+                "failed": gates_failed,
+            })
+
+        if risk_flags:
+            st.markdown("**Risk flags (research context):**")
+            st.write(list(risk_flags))
+        if catalyst_flags:
+            st.markdown("**Catalyst flags (research context):**")
+            st.write(list(catalyst_flags))
+
+        for label, key in (
+            ("Replay context", "replay_context"),
+            ("Memory context", "memory_context"),
+            ("Operator context", "operator_context"),
+            ("Evidence summary", "evidence_summary"),
+        ):
+            val = decision.get(key)
+            if val:
+                st.markdown(f"**{label}:** {val}")
+
+        st.caption("Raw decision record (read-only):")
+        st.json(decision)
+
+
+def page_automatic_promotion() -> None:
+    """
+    Operator Cockpit — Automatic Promotion Review.
+
+    Read-only sandbox research view.  Reads
+    outputs/sandbox/discovery/automatic_promotion_* artifacts.
+    Never writes or mutates state.  Never emits trading instructions.
+    """
+    _operator_dashboard_css()
+    render_section_header(
+        "Automatic Promotion Review",
+        "Sandbox research only — how recent discovery candidates were "
+        "automatically classified by governance gates.",
+    )
+    st.markdown(f"> **{_COCKPIT_DISCLAIMER}**")
+
+    data = load_automatic_promotion_data(ROOT)
+
+    if not data.get("available"):
+        render_empty_state(
+            "No automatic promotion artifacts found yet. Run the governance "
+            "layer in DISCOVERY or BACKTEST mode to populate this page.",
+            icon="🧪",
+        )
+        st.caption(
+            "Producer: portfolio_automation.discovery.automatic_promotion_governance"
+        )
+        return
+
+    # --- Top metrics row ---------------------------------------------------
+    cols = st.columns(6)
+    with cols[0]:
+        render_metric_card(
+            "Total Reviewed",
+            str(data["decision_count"]),
+            "Candidates evaluated this run",
+            [_badge("sandbox", "neutral")],
+        )
+    with cols[1]:
+        render_metric_card(
+            "Moved to Monitor",
+            str(data["monitor_count"]),
+            "Strong enough to keep watching",
+            [_badge("monitor", "good")],
+        )
+    with cols[2]:
+        render_metric_card(
+            "Needs Review",
+            str(data["needs_review_count"]),
+            "Mixed evidence — operator should inspect",
+            [_badge("review", "warn")],
+        )
+    with cols[3]:
+        render_metric_card(
+            "Rejected",
+            str(data["rejected_count"]),
+            "Risk or weak evidence",
+            [_badge("rejected", "bad")],
+        )
+    with cols[4]:
+        render_metric_card(
+            "Expired",
+            str(data["expired_count"]),
+            "No longer supported by recent evidence",
+            [_badge("expired", "neutral")],
+        )
+    with cols[5]:
+        ok = data.get("safety_flags_ok")
+        render_metric_card(
+            "Safety Status",
+            "OK" if ok else "Check",
+            "All required flags hardcoded true" if ok else "Some flags missing",
+            [_badge("safe" if ok else "warning", "good" if ok else "bad")],
+        )
+
+    st.divider()
+
+    # --- Safety boundary panel --------------------------------------------
+    render_section_header(
+        "Safety Boundary",
+        "These flags are hardcoded by the producer and re-checked here.",
+    )
+    render_safety_flags(
+        data.get("safety_flags") or {},
+        data.get("missing_safety_flags") or [],
+    )
+
+    st.divider()
+
+    # --- Plain-English explanation -----------------------------------------
+    with st.expander("What does each status mean?", expanded=False):
+        st.markdown(
+            "- **Monitor** — *Strong enough to keep watching.* Corroboration, "
+            "news relevance, and persistence all met the governance gates. "
+            "Still sandbox research; no investment action implied.\n"
+            "- **Needs Review** — *Mixed evidence — operator should inspect.* "
+            "Some gates passed but not all. The operator decides what (if "
+            "anything) to do next.\n"
+            "- **Rejected** — *Risk or weak evidence.* Either the risk flag "
+            "count exceeded the maximum, or the candidate was already in the "
+            "sandbox rejected list, or upstream carried a forbidden status.\n"
+            "- **Expired** — *No longer supported by recent evidence.* No "
+            "discovery memory signal within the staleness window.\n"
+            "\n"
+            "**Why this is not a trade recommendation:** the automatic "
+            "promotion layer is capped at `context_only`. It cannot alter "
+            "official portfolio, watchlist, allocation, scoring, "
+            "recommendation, or decision state."
+        )
+
+    # --- Grouped candidate sections ---------------------------------------
+    by_status = data.get("candidates_by_status") or {}
+    section_order = (
+        ("MONITOR", "Candidates Moved To Monitor",
+         "Strong enough to keep watching."),
+        ("NEEDS_REVIEW", "Candidates Needing Review",
+         "Mixed evidence — operator should inspect."),
+        ("REJECTED", "Candidates Rejected",
+         "Risk or weak evidence."),
+        ("EXPIRED", "Candidates Expired",
+         "No longer supported by recent evidence."),
+    )
+
+    for status_key, header, caption in section_order:
+        items = by_status.get(status_key) or []
+        st.divider()
+        render_section_header(header, caption)
+        if not items:
+            render_empty_state(
+                f"No candidates currently in {status_key.replace('_', ' ').title()}.",
+                icon="—",
+            )
+            continue
+        for idx, item in enumerate(items):
+            render_candidate_card(item, key_prefix=f"{status_key.lower()}_{idx}")
+
+    # --- Producer summary markdown ----------------------------------------
+    summary_md = data.get("summary_markdown") or ""
+    if summary_md.strip():
+        st.divider()
+        render_section_header(
+            "Producer-rendered summary",
+            "Verbatim Markdown from the automatic_promotion_summary.md artifact.",
+        )
+        with st.expander("Show summary Markdown", expanded=False):
+            st.markdown(summary_md)
+
+    # --- Recent decision log (JSONL) --------------------------------------
+    recent = data.get("recent_decisions") or []
+    if recent:
+        st.divider()
+        render_section_header(
+            "Recent decisions (audit log)",
+            "Last 50 lines of automatic_promotion_decisions.jsonl.",
+        )
+        with st.expander("Show recent decision records", expanded=False):
+            st.json(recent)
+
+    # --- Gates table ------------------------------------------------------
+    gates = data.get("gates") or {}
+    if gates:
+        st.divider()
+        render_section_header(
+            "Governance gates in effect",
+            "Tunable thresholds that controlled this run.",
+        )
+        with st.expander("Show gate values", expanded=False):
+            st.json(gates)
+
+    # --- Footer -----------------------------------------------------------
+    st.divider()
+    st.caption(
+        f"Generated at: `{data.get('generated_at') or '—'}` · "
+        f"Run mode: `{data.get('run_mode') or '—'}` · "
+        f"Run id: `{data.get('run_id') or '—'}`"
+    )
+    st.caption(
+        "Source artifacts (read-only): "
+        "`outputs/sandbox/discovery/automatic_promotion_candidates.json` · "
+        "`outputs/sandbox/discovery/automatic_promotion_summary.md` · "
+        "`outputs/sandbox/discovery/automatic_promotion_decisions.jsonl`"
+    )
+
+
+# ============================================================================
 # ROUTER
 # ============================================================================
 
@@ -6629,3 +6990,4 @@ elif page == "Config Editor":page_config_editor()
 elif page == "Prompts":      page_prompts()
 elif page == "Logs":         page_logs()
 elif page == "Diagnostics":  page_diagnostics()
+elif page == "Automatic Promotion": page_automatic_promotion()

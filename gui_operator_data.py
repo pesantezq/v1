@@ -49,6 +49,15 @@ DISCOVERY_MEMORY_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_
 DISCOVERY_MEMO_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "discovery_memo_section.md")
 DISCOVERY_APPROVAL_DECISIONS_RELATIVE_PATH = ("outputs", "sandbox", "discovery", "approval_decisions.jsonl")
 MEMO_DELIVERY_STATUS_RELATIVE_PATH = ("outputs", "latest", "memo_delivery_status.json")
+AUTOMATIC_PROMOTION_CANDIDATES_RELATIVE_PATH = (
+    "outputs", "sandbox", "discovery", "automatic_promotion_candidates.json"
+)
+AUTOMATIC_PROMOTION_SUMMARY_RELATIVE_PATH = (
+    "outputs", "sandbox", "discovery", "automatic_promotion_summary.md"
+)
+AUTOMATIC_PROMOTION_DECISIONS_RELATIVE_PATH = (
+    "outputs", "sandbox", "discovery", "automatic_promotion_decisions.jsonl"
+)
 
 ARTIFACT_META = {
     "run_summary": {
@@ -1842,12 +1851,211 @@ def load_operator_dashboard_data(root: Path | str) -> dict[str, Any]:
         "confidence_calibration_latest": load_confidence_calibration_latest(root_path),
         "discovery_sandbox_status": load_discovery_sandbox_status(root_path),
         "memo_delivery_status": load_memo_delivery_status(root_path),
+        "automatic_promotion": load_automatic_promotion_data(root_path),
     }
 
 
 # ---------------------------------------------------------------------------
 # Attribution / Rotation loaders (read-only, no side effects)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Automatic Promotion Governance loaders (sandbox; read-only)
+# ---------------------------------------------------------------------------
+#
+# These loaders are used by the Operator Cockpit "Automatic Promotion Review"
+# page.  All three artifacts are sandbox-only research outputs from
+# portfolio_automation/discovery/automatic_promotion_governance.py.  Loaders
+# never write or modify any artifact.
+#
+# Safety flags expected in the JSON artifact (hardcoded by the producer):
+#   observe_only, no_trade, not_recommendation, discovery_only,
+#   no_portfolio_mutation, no_watchlist_mutation, no_decision_override,
+#   no_score_mutation, no_allocation_mutation
+#
+# Allowed proposed_status values: DISCOVERED, WATCH, MONITOR, REJECTED,
+# EXPIRED, NEEDS_REVIEW.  Forbidden values are never emitted by the producer
+# but the loader does not re-validate semantics — it only re-shapes for the GUI.
+
+def load_automatic_promotion_candidates(root: Path | str) -> dict[str, Any]:
+    """
+    Load outputs/sandbox/discovery/automatic_promotion_candidates.json.
+
+    Returns ``{"available": False}`` on missing, empty, malformed, or
+    non-object JSON.  Always adds ``available=True`` to a valid payload.
+    Read-only — never writes or modifies any artifact.
+    """
+    path = Path(root).joinpath(*AUTOMATIC_PROMOTION_CANDIDATES_RELATIVE_PATH)
+    if not path.exists():
+        return {"available": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        if not isinstance(payload, dict):
+            return {"available": False}
+        payload = dict(payload)
+        payload["available"] = True
+        return payload
+    except Exception:
+        return {"available": False}
+
+
+def load_automatic_promotion_summary_markdown(root: Path | str) -> str:
+    """
+    Load outputs/sandbox/discovery/automatic_promotion_summary.md as text.
+
+    Returns ``""`` when missing or unreadable.  Read-only.
+    """
+    path = Path(root).joinpath(*AUTOMATIC_PROMOTION_SUMMARY_RELATIVE_PATH)
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def load_automatic_promotion_decisions(root: Path | str) -> list[dict[str, Any]]:
+    """
+    Load outputs/sandbox/discovery/automatic_promotion_decisions.jsonl.
+
+    Each non-empty line is one decision record.  Malformed lines are skipped
+    silently.  Returns ``[]`` when missing or unreadable.  Read-only.
+    """
+    path = Path(root).joinpath(*AUTOMATIC_PROMOTION_DECISIONS_RELATIVE_PATH)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            s = raw.strip()
+            if not s:
+                continue
+            try:
+                obj = json.loads(s)
+                if isinstance(obj, dict):
+                    records.append(obj)
+            except json.JSONDecodeError:
+                pass
+    except Exception:
+        pass
+    return records
+
+
+_AUTOMATIC_PROMOTION_SAFETY_FLAGS: tuple[str, ...] = (
+    "observe_only",
+    "no_trade",
+    "not_recommendation",
+    "discovery_only",
+    "no_portfolio_mutation",
+    "no_watchlist_mutation",
+    "no_decision_override",
+    "no_score_mutation",
+    "no_allocation_mutation",
+)
+
+
+def _group_candidates_by_status(decisions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Bucket decisions by proposed_status (defensive against unknown values)."""
+    buckets: dict[str, list[dict[str, Any]]] = {
+        "MONITOR": [],
+        "NEEDS_REVIEW": [],
+        "REJECTED": [],
+        "EXPIRED": [],
+        "WATCH": [],
+        "DISCOVERED": [],
+        "OTHER": [],
+    }
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        status = str(d.get("proposed_status") or "").strip().upper()
+        if status in buckets:
+            buckets[status].append(d)
+        else:
+            buckets["OTHER"].append(d)
+    return buckets
+
+
+def load_automatic_promotion_data(root: Path | str) -> dict[str, Any]:
+    """
+    Aggregate loader for the GUI Automatic Promotion Review page.
+
+    Returns a stable dict shape regardless of whether the underlying
+    artifacts exist.  Never raises, never writes.
+
+    Top-level keys:
+      - available: bool
+      - generated_at: str
+      - run_mode: str
+      - run_id: str
+      - decision_count, monitor_count, needs_review_count,
+        rejected_count, expired_count: int
+      - safety_flags: dict[str, bool]   (all expected hardcoded flags)
+      - safety_flags_ok: bool           (True iff all expected flags are True)
+      - missing_safety_flags: list[str]
+      - candidates: list[dict]          (sanitized as-emitted by the producer)
+      - candidates_by_status: dict[str, list[dict]]
+      - recent_decisions: list[dict]    (up to the last 50 lines of the JSONL)
+      - summary_markdown: str
+      - safety_disclaimer: str
+      - gates: dict
+      - gate_summary: dict
+    """
+    root_path = Path(root)
+    payload = load_automatic_promotion_candidates(root_path)
+    summary_md = load_automatic_promotion_summary_markdown(root_path)
+    log_records = load_automatic_promotion_decisions(root_path)
+
+    available = bool(payload.get("available")) or bool(summary_md) or bool(log_records)
+
+    candidates: list[dict[str, Any]] = []
+    if isinstance(payload.get("decisions"), list):
+        candidates = [d for d in payload["decisions"] if isinstance(d, dict)]
+
+    by_status = _group_candidates_by_status(candidates)
+
+    safety_flags: dict[str, bool] = {}
+    missing_flags: list[str] = []
+    for flag in _AUTOMATIC_PROMOTION_SAFETY_FLAGS:
+        val = payload.get(flag)
+        if isinstance(val, bool):
+            safety_flags[flag] = val
+            if not val:
+                missing_flags.append(flag)
+        else:
+            safety_flags[flag] = False
+            missing_flags.append(flag)
+    safety_flags_ok = (
+        bool(payload.get("available"))
+        and not missing_flags
+    )
+
+    return {
+        "available": available,
+        "generated_at": str(payload.get("generated_at") or ""),
+        "run_mode": str(payload.get("run_mode") or ""),
+        "run_id": str(payload.get("run_id") or ""),
+        "decision_count": int(payload.get("decision_count") or len(candidates)),
+        "monitor_count": int(payload.get("monitor_count") or len(by_status["MONITOR"])),
+        "needs_review_count": int(
+            payload.get("needs_review_count") or len(by_status["NEEDS_REVIEW"])
+        ),
+        "rejected_count": int(payload.get("rejected_count") or len(by_status["REJECTED"])),
+        "expired_count": int(payload.get("expired_count") or len(by_status["EXPIRED"])),
+        "safety_flags": safety_flags,
+        "safety_flags_ok": safety_flags_ok,
+        "missing_safety_flags": missing_flags,
+        "candidates": candidates,
+        "candidates_by_status": by_status,
+        "recent_decisions": log_records[-50:],
+        "summary_markdown": summary_md,
+        "safety_disclaimer": str(payload.get("safety_disclaimer") or ""),
+        "gates": payload.get("gates") if isinstance(payload.get("gates"), dict) else {},
+        "gate_summary": (
+            payload.get("gate_summary") if isinstance(payload.get("gate_summary"), dict) else {}
+        ),
+    }
+
 
 def load_memo_delivery_status(root: Path | str) -> dict[str, Any]:
     """
