@@ -208,15 +208,24 @@ post_phase_0:
     tests: 72 passed
 
   daily_weekly_monthly_ai_market_narratives:
-    status: not_started
+    status: complete
     priority: medium
     description: >
-      Planned narrative/reporting layer after discovery_news_integration.
-      AI may summarize or explain but must not override deterministic rules,
-      scoring, allocations, recommendations, or artifact contracts.
+      Observe-only market narrative layer. Turns existing structured artifacts
+      into daily/weekly/monthly operator narratives. Includes safety validator
+      for prohibited instruction patterns, discovery context (sandbox-only),
+      and all six narrative artifacts to LATEST namespace. AI support deferred;
+      all generation is deterministic. No official state mutation.
     prerequisite: discovery_news_integration_complete
-    files: []
-    tests: pending
+    files:
+      - portfolio_automation/market_narratives.py
+      - tests/test_market_narratives.py
+      - docs/MARKET_NARRATIVES.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 79 passed
 
   news_evidence_layer_for_decision_engine:
     status: not_started

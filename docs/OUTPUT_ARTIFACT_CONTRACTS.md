@@ -1061,3 +1061,139 @@ Namespace: LATEST. Human-readable Markdown report. Contains disclaimer, official
 ### `outputs/sandbox/discovery/news_candidate_evidence.json`
 
 Namespace: SANDBOX. Written only when sandbox-lane evidence packets exist. Contains same evidence packet structure as above, filtered to `evidence_lane: sandbox_discovery_research`. Includes all safety flags.
+
+---
+
+## Discovery News Integration Artifacts
+
+Sandbox-only discovery artifacts written by `portfolio_automation/discovery/news_integration.py`.
+Both artifacts are written under `OutputNamespace.SANDBOX` and are research context only.
+They do **not** mutate official watchlists, portfolio state, recommendations, allocation,
+scoring, broker/API execution, or auto-trading behavior.
+
+Top-level governance flags for the JSON artifact are always:
+
+- `observe_only: true`
+- `no_trade: true`
+- `not_recommendation: true`
+- `discovery_only: true`
+
+### `outputs/sandbox/discovery/news_enriched_candidates.json`
+
+Namespace: SANDBOX. Enriches sandbox discovery candidates using
+`outputs/latest/news_intelligence.json` as read-only input. Also reads sandbox
+discovery candidate artifacts as input. It does not write to `outputs/latest`,
+`outputs/policy`, `outputs/portfolio`, or official state.
+
+Top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `run_id` | string | Run identifier |
+| `run_mode` | string | Run mode used for the write |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `discovery_only` | bool | Always `true` |
+| `source` | string | `"discovery_news_integration"` |
+| `disclaimer` | string | Sandbox-only safety disclaimer |
+| `total_enriched` | int | Total enriched records |
+| `with_news_count` | int | Records with matched news evidence |
+| `research_caution_count` | int | Records with risk-heavy news context |
+| `research_supported_count` | int | Records with catalyst-supported news context |
+| `news_only_count` | int | News-only tickers without existing discovery candidate records |
+| `enriched_candidates` | array | Sandbox enriched candidate records |
+
+Enriched candidate fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `ticker` | string | Candidate or news-only ticker |
+| `candidate_status` | string | Original sandbox status or `news_only`; never BUY/SELL/ACTIONABLE/PROMOTED/VALIDATED |
+| `discovery_only` | bool | Always `true` |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `matched_news_count` | int | Total matched article count |
+| `matched_evidence_packets` | int | Number of matched evidence packets |
+| `source_diversity` | int | Aggregate source count from matched packets |
+| `matched_themes` | array | News themes matched to the ticker |
+| `catalyst_flags` | array | Catalyst flags from matched evidence |
+| `risk_flags` | array | Risk flags from matched evidence |
+| `news_relevance_score` | float | Deterministic news relevance score |
+| `corroboration_news_score` | float | Deterministic news corroboration context score |
+| `news_context` | string | `research_supported`, `research_caution`, `research_neutral`, or `no_news` |
+| `latest_news_headlines` | array | Matched headlines, capped for readability |
+| `integration_reason` | string | Human-readable evidence match explanation |
+| `safety_disclaimer` | string | Sandbox-only disclaimer |
+| `original_score` | number/null | Original sandbox discovery score when present |
+| `original_mention_count` | int/null | Original mention count when present |
+| `original_corroboration_score` | number/null | Original corroboration score when present |
+| `first_seen` | string/null | Original first-seen timestamp when present |
+| `last_seen` | string/null | Original last-seen timestamp when present |
+
+### `outputs/sandbox/discovery/news_integration_summary.md`
+
+Namespace: SANDBOX. Human-readable sandbox summary for Discovery News Integration.
+It summarizes enriched candidate counts, news-supported research context,
+risk-heavy research context, and news-only tickers. It includes a sandbox-only
+disclaimer and does not emit BUY/SELL/HOLD recommendations or official promotion
+instructions.
+
+---
+
+## Market Narrative Artifacts
+
+All six narrative artifacts are written to `OutputNamespace.LATEST` by `portfolio_automation/market_narratives.py`. All are observe-only; none mutate scoring, allocation, recommendations, official watchlist, or portfolio state.
+
+### Top-level fields (all six artifacts share this shape)
+
+| Field | Type | Description |
+|---|---|---|
+| `narrative_period` | string | `"daily"`, `"weekly"`, or `"monthly"` |
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `source` | string | `"market_narratives_layer"` |
+| `data_available` | bool | Whether any input artifact was available |
+| `top_headline` | string | One-line narrative headline |
+| `executive_summary` | string | 2–4 sentence period summary |
+| `key_themes` | array | Top themes (theme, signal_count, sources, description) |
+| `portfolio_context` | string | Brief portfolio context from decision plan |
+| `discovery_context` | object/null | Sandbox-only discovery research context |
+| `risks_to_watch` | array | Risk signals (label, tickers, description) |
+| `catalysts_to_watch` | array | Catalyst signals (label, tickers, description) |
+| `data_quality_notes` | array | Data quality warnings |
+| `confidence_notes` | array | Calibration context |
+| `operator_watchlist` | array | Review items (no trading commands) |
+| `inputs_used` | array | Per-artifact availability records |
+| `missing_inputs` | array | List of unavailable input artifact names |
+| `prohibited_actions_detected` | array | Safety validator output (should be empty) |
+| `safety_disclaimer` | string | Mandatory safety disclaimer |
+
+### `discovery_context` object
+
+| Field | Type | Description |
+|---|---|---|
+| `candidate_count` | int | Total sandbox research candidates |
+| `watch_count` | int | Candidates at WATCH status |
+| `news_supported` | array | Tickers with positive news context |
+| `risk_heavy` | array | Tickers with risk-heavy news context |
+| `news_only` | array | News-only tickers needing corroboration |
+| `top_themes` | array | Top sandbox themes |
+| `disclaimer` | string | Sandbox-only disclaimer |
+
+### Artifact paths
+
+| Artifact | Path |
+|---|---|
+| `market_narrative_daily.json` | `outputs/latest/market_narrative_daily.json` |
+| `market_narrative_daily.md` | `outputs/latest/market_narrative_daily.md` |
+| `market_narrative_weekly.json` | `outputs/latest/market_narrative_weekly.json` |
+| `market_narrative_weekly.md` | `outputs/latest/market_narrative_weekly.md` |
+| `market_narrative_monthly.json` | `outputs/latest/market_narrative_monthly.json` |
+| `market_narrative_monthly.md` | `outputs/latest/market_narrative_monthly.md` |
+
+**Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, or any modification of official portfolio/watchlist/allocation state.

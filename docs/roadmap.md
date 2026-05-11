@@ -702,6 +702,46 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 ---
 
+### Daily / Weekly / Monthly AI Market Narratives (Complete)
+
+**Scope:** Observe-only layer that turns existing structured artifacts into daily, weekly, and monthly operator-readable market narratives. No recommendations, no official state mutation, no trading commands.
+
+**Module:** `portfolio_automation/market_narratives.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `load_all_inputs(base_dir)` | Load all input artifacts safely; degrades on missing/malformed |
+| `validate_narrative_safety(text)` | Check text for prohibited instruction patterns |
+| `build_market_narrative_report(period, inputs, base_dir)` | Build structured `MarketNarrativeReport` |
+| `render_market_narrative_markdown(report)` | Render report as Markdown |
+| `write_market_narrative_report(period, report, base_dir)` | Write JSON + MD to LATEST namespace |
+| `run_market_narratives(base_dir, periods, write_files)` | Top-level orchestrator |
+
+**Data types:** `NarrativeInputSummary`, `NarrativeTheme`, `NarrativeRisk`, `NarrativeCatalyst`, `NarrativeDiscoveryContext`, `MarketNarrativeReport`
+
+**Narrative periods:** daily (what changed, top themes, risks/catalysts), weekly (persistent themes, discovery context, operator review), monthly (regime/theme context, system health, review areas)
+
+**Safety validator:** `validate_narrative_safety()` scans generated text for 19 prohibited instruction patterns (buy now, sell now, execute trade, promote candidate, etc.) and returns detected violations.
+
+**Artifacts produced** (all LATEST namespace):
+- `outputs/latest/market_narrative_daily.json` + `.md`
+- `outputs/latest/market_narrative_weekly.json` + `.md`
+- `outputs/latest/market_narrative_monthly.json` + `.md`
+
+**AI support:** Deferred. All generation is deterministic keyword/rules-based.
+
+**Safety:** `observe_only: true`, `no_trade: true`, `not_recommendation: true` hardcoded. No POLICY/PORTFOLIO/SANDBOX writes. Discovery context always sandbox-labeled with disclaimer.
+
+**Tests:** `tests/test_market_narratives.py` — 79 tests across 9 test classes.
+
+**Files created:** `portfolio_automation/market_narratives.py`, `tests/test_market_narratives.py`, `docs/MARKET_NARRATIVES.md`
+
+**Files modified:** `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+---
+
 ### Manual Promotion Proposal (Pending After Email Delivery)
 
 Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.
