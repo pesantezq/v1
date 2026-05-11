@@ -183,4 +183,4 @@ Coverage: missing/malformed inputs, enrichment, matching by entity_key/related_t
 |---|---|
 | `daily_weekly_monthly_ai_market_narratives` | Uses enriched evidence as narrative context input |
 | `news_evidence_layer_for_decision_engine` | Attaches enriched evidence to decision plan entries as context |
-| `manual_promotion_proposal` | Enriched news context available for operator review during manual promotion workflow |
+| `automatic_promotion_governance_layer` | Enriched news context feeds news_relevance_score / risk-flag aggregation used by the automatic promotion gates (replaces the previously planned `manual_promotion_proposal`) |

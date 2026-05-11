@@ -252,16 +252,44 @@ post_phase_0:
       - .agent/phase_status.yaml
     tests: 104 passed (74 original + 30 Codex boundary hardening)
 
-  manual_promotion_proposal:
-    status: not_started
+  automatic_promotion_governance_layer:
+    status: complete
     priority: high
     description: >
-      Future controlled proposal workflow. Must remain advisory-only and must not
-      promote discovery candidates to official watchlist entries, recommendations,
-      or portfolio actions without explicit operator-approved governance.
+      Replaces the previously planned manual_promotion_proposal step.
+      Deterministic, observe-only, sandbox-only governance layer that
+      automatically evaluates sandbox discovery candidates against explicit
+      gates and graduates qualified candidates to MONITOR state (or to
+      NEEDS_REVIEW, REJECTED, or EXPIRED).  Never emits BUY/SELL/HOLD/
+      ACTIONABLE/PROMOTED/VALIDATED/APPROVED/TRADE/RECOMMENDATION.  Writes
+      three sandbox artifacts: automatic_promotion_candidates.json,
+      automatic_promotion_decisions.jsonl (append-only audit log),
+      automatic_promotion_summary.md.  Run-mode governance: only DISCOVERY
+      and BACKTEST may write.  Three-layer sanitization (label / payload /
+      pre-write validation) blocks unsafe artifact writes.
+    prerequisite: news_evidence_layer_for_decision_engine_complete
+    files:
+      - portfolio_automation/discovery/automatic_promotion_governance.py
+      - portfolio_automation/discovery/__init__.py
+      - tests/discovery/test_automatic_promotion_governance.py
+      - docs/AUTOMATIC_PROMOTION_GOVERNANCE.md
+      - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      - docs/roadmap.md
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 68 passed
+
+  manual_promotion_proposal:
+    status: superseded_by_automatic_promotion_governance_layer
+    priority: low
+    description: >
+      Superseded by automatic_promotion_governance_layer.  Retained here
+      only as a historical reference.  If a future operator-driven UI
+      workflow is desired, it should build on top of the sandbox
+      automatic_promotion artifacts rather than replacing them.
     prerequisite: news_evidence_layer_for_decision_engine_complete
     files: []
-    tests: pending
+    tests: not_applicable
 
   discovery_corroboration_implementation:
     status: complete

@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-11 (news_evidence_layer_for_decision_engine complete)
+# Last updated: 2026-05-11 (automatic_promotion_governance_layer complete; replaces manual_promotion_proposal)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -13,7 +13,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: manual_promotion_proposal
+current_step: automatic_promotion_governance_layer
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -37,9 +37,10 @@ completed_steps:
   - discovery_news_integration
   - daily_weekly_monthly_ai_market_narratives
   - news_evidence_layer_for_decision_engine
+  - automatic_promotion_governance_layer
 
 next_official_step:
-  primary: manual_promotion_proposal
+  primary: automatic_promotion_governance_layer
   secondary: []
 
 # ---------------------------------------------------------------------------

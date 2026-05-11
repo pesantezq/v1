@@ -1278,3 +1278,84 @@ Human-readable Markdown rendering of the same content, with sections:
 - Safety Boundary & Coverage
 
 **Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, score values, allocation values, or watchlist modifications.
+
+---
+
+## Automatic Promotion Governance Artifacts (sandbox only)
+
+Three artifacts are written to `OutputNamespace.SANDBOX` by `portfolio_automation/discovery/automatic_promotion_governance.py`. All are observe-only and discovery-only. The layer cannot mutate decisions, scoring, allocation, recommendations, watchlists, or portfolio state.
+
+### `outputs/sandbox/discovery/automatic_promotion_candidates.json`
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `run_mode` | string | RunMode value (only `discovery` or `backtest` produce writes) |
+| `run_id` | string | Run identifier |
+| `observe_only` | bool | Always `true` |
+| `no_trade` | bool | Always `true` |
+| `not_recommendation` | bool | Always `true` |
+| `discovery_only` | bool | Always `true` |
+| `no_portfolio_mutation` | bool | Always `true` |
+| `no_watchlist_mutation` | bool | Always `true` |
+| `no_decision_override` | bool | Always `true` |
+| `no_score_mutation` | bool | Always `true` |
+| `no_allocation_mutation` | bool | Always `true` |
+| `source` | string | `"automatic_promotion_governance"` |
+| `data_available` | bool | Whether any input was available |
+| `inputs_used` | array | Per-input artifact availability records |
+| `missing_inputs` | array | Names of missing input artifacts |
+| `gates` | object | The governance threshold values used |
+| `gate_summary` | object | Per-gate pass/fail counts across candidates |
+| `decision_count` | int | Total decisions emitted |
+| `monitor_count` | int | Count of candidates moved to MONITOR |
+| `needs_review_count` | int | Count flagged for review |
+| `rejected_count` | int | Count rejected |
+| `expired_count` | int | Count expired |
+| `decisions` | array | Decision records (see below) |
+| `prohibited_actions_detected` | array | Safety validator output (should be empty) |
+| `safety_disclaimer` | string | Fixed disclaimer text |
+
+#### `decisions[]` shape
+
+| Field | Type | Description |
+|---|---|---|
+| `ticker` | string | |
+| `prior_status` | string | Normalized to ALLOWED_STATUSES |
+| `proposed_status` | string | Always one of `DISCOVERED`/`WATCH`/`MONITOR`/`REJECTED`/`EXPIRED`/`NEEDS_REVIEW`; never `BUY`/`SELL`/`HOLD`/`ACTIONABLE`/`PROMOTED`/`VALIDATED`/`APPROVED`/`TRADE`/`RECOMMENDATION` |
+| `decision_type` | string | `promote_to_monitor` / `demote_to_review` / `reject` / `expire` / `hold_status` |
+| `eligibility_result` | string | Sanitized summary |
+| `evidence_score` | float | 0–1, deterministic weighted mix |
+| `evidence_summary` | string | Sanitized aggregated evidence string |
+| `gates_passed` | array | Names of gates the candidate passed |
+| `gates_failed` | array | Names of gates the candidate failed |
+| `risk_flags` | array | Sanitized risk labels |
+| `catalyst_flags` | array | Sanitized catalyst labels |
+| `corroboration_score` | float | Aggregated corroboration |
+| `news_relevance_score` | float | From news evidence |
+| `source_diversity` | int | Unique source count |
+| `replay_context` | string | Replay outcome context |
+| `memory_context` | string | Discovery memory context |
+| `operator_context` | string | Approval-decision context |
+| `safety_flags` | object | 9 hardcoded `true` safety flags |
+| `created_at` | string | ISO timestamp |
+| `reason` | string | Sanitized natural-language reason |
+
+### `outputs/sandbox/discovery/automatic_promotion_decisions.jsonl`
+
+Append-only JSONL audit log. Each line is one sanitized `decision` record from above (same shape). New decisions are appended on every governance run.
+
+### `outputs/sandbox/discovery/automatic_promotion_summary.md`
+
+Human-readable Markdown summary with sections:
+
+- Automatic Promotion Governance (header + disclaimer)
+- Candidates Moved To Monitor
+- Candidates Needing Review
+- Candidates Rejected / Expired
+- Gate Summary
+- Risk Notes
+- Safety Boundary (lists allowed and forbidden statuses; whitelisted as documentation)
+- Coverage
+
+**Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, score/allocation/watchlist mutation fields. The "Safety Boundary" section documents the forbidden tokens explicitly but is sanitizer-whitelisted as documentation.

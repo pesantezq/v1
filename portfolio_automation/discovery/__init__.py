@@ -74,6 +74,24 @@ from portfolio_automation.discovery.news_integration import (
     write_news_integration_artifacts,
     run_discovery_news_integration,
 )
+from portfolio_automation.discovery.automatic_promotion_governance import (
+    PromotionGates,
+    PromotionEligibilityResult,
+    PromotionDecision,
+    AutomaticPromotionReport,
+    UnsafeAutomaticPromotionArtifactError,
+    ALLOWED_STATUSES,
+    FORBIDDEN_STATUSES,
+    load_automatic_promotion_inputs,
+    evaluate_candidate_promotion,
+    build_automatic_promotion_report,
+    render_automatic_promotion_markdown,
+    write_automatic_promotion_report,
+    run_automatic_promotion_governance,
+    validate_automatic_promotion_safety,
+    sanitize_automatic_promotion_text,
+    sanitize_nested_automatic_promotion_payload,
+)
 
 __all__ = [
     # ticker extraction
@@ -122,4 +140,21 @@ __all__ = [
     "build_integration_summary",
     "write_news_integration_artifacts",
     "run_discovery_news_integration",
+    # automatic promotion governance
+    "PromotionGates",
+    "PromotionEligibilityResult",
+    "PromotionDecision",
+    "AutomaticPromotionReport",
+    "UnsafeAutomaticPromotionArtifactError",
+    "ALLOWED_STATUSES",
+    "FORBIDDEN_STATUSES",
+    "load_automatic_promotion_inputs",
+    "evaluate_candidate_promotion",
+    "build_automatic_promotion_report",
+    "render_automatic_promotion_markdown",
+    "write_automatic_promotion_report",
+    "run_automatic_promotion_governance",
+    "validate_automatic_promotion_safety",
+    "sanitize_automatic_promotion_text",
+    "sanitize_nested_automatic_promotion_payload",
 ]

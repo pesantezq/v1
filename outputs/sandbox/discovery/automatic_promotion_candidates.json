@@ -1,0 +1,106 @@
+{
+  "generated_at": "2026-05-11T17:35:22.859180+00:00",
+  "run_mode": "discovery",
+  "run_id": "2026-05-11_automatic_promotion",
+  "observe_only": true,
+  "no_trade": true,
+  "not_recommendation": true,
+  "discovery_only": true,
+  "no_portfolio_mutation": true,
+  "no_watchlist_mutation": true,
+  "no_decision_override": true,
+  "no_score_mutation": true,
+  "no_allocation_mutation": true,
+  "source": "automatic_promotion_governance",
+  "data_available": true,
+  "inputs_used": [
+    {
+      "artifact": "emerging_candidates",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "rejected_candidates",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "discovery_memory",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "news_enriched_candidates",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "news_candidate_evidence",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "replay_results",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "news_evidence_layer",
+      "available": true,
+      "summary": ""
+    },
+    {
+      "artifact": "news_intelligence",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "market_narrative_daily",
+      "available": true,
+      "summary": ""
+    },
+    {
+      "artifact": "data_quality_report",
+      "available": false,
+      "summary": ""
+    },
+    {
+      "artifact": "approval_decisions",
+      "available": false,
+      "summary": ""
+    }
+  ],
+  "missing_inputs": [
+    "emerging_candidates",
+    "rejected_candidates",
+    "discovery_memory",
+    "news_enriched_candidates",
+    "news_candidate_evidence",
+    "replay_results",
+    "news_intelligence",
+    "data_quality_report",
+    "approval_decisions"
+  ],
+  "gates": {
+    "minimum_corrob_score": 0.65,
+    "minimum_source_diversity": 2,
+    "minimum_news_relevance": 0.4,
+    "maximum_risk_flags": 2,
+    "stale_after_days": 30,
+    "minimum_persistence_runs": 2,
+    "minimum_persistence_mentions": 3,
+    "require_watch_status_for_monitor": true,
+    "require_persistence_for_monitor": true,
+    "block_rejected_candidates": true,
+    "block_forbidden_statuses": true
+  },
+  "gate_summary": {},
+  "decision_count": 0,
+  "monitor_count": 0,
+  "needs_review_count": 0,
+  "rejected_count": 0,
+  "expired_count": 0,
+  "decisions": [],
+  "prohibited_actions_detected": [],
+  "safety_disclaimer": "This is sandbox research governance only, not a buy/sell/hold recommendation. Candidates are classified into research-monitor states for further review; this layer cannot alter official portfolio, watchlist, allocation, scoring, recommendation, or decision state."
+}

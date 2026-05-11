@@ -565,7 +565,7 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 **Limitation:** No live price data is available in the repo; all outcome metrics require injected `price_outcomes` dict. An operator must supply historical prices to get resolved candidate metrics. Candidates without price data are marked `insufficient_data=True` and excluded from aggregate calculations.
 
-**Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `fmp_news_intelligence_layer`, then `discovery_news_integration`, then `daily_weekly_monthly_ai_market_narratives`, then `news_evidence_layer_for_decision_engine`, then `manual_promotion_proposal`.
+**Execution order:** Codex review for Discovery Replay, then `email_memo_sender_delivery_track`, then `fmp_news_intelligence_layer`, then `discovery_news_integration`, then `daily_weekly_monthly_ai_market_narratives`, then `news_evidence_layer_for_decision_engine`, then `automatic_promotion_governance_layer` (replaces `manual_promotion_proposal`).
 
 ---
 
@@ -783,6 +783,49 @@ Next step after this was: `historical_replay_backtest_for_discovery_candidates` 
 
 ---
 
-### Manual Promotion Proposal (Pending After Email Delivery)
+### Automatic Promotion Governance Layer (Complete — replaces Manual Promotion Proposal)
 
-Future controlled proposal workflow. Discovery candidates remain sandbox research until an explicitly approved governance workflow exists.
+**Scope:** Deterministic, observe-only, sandbox-only governance layer that automatically evaluates discovery candidates against explicit gates and graduates qualified candidates to MONITOR. Replaces the previously planned `manual_promotion_proposal` step. No BUY/SELL/HOLD/ACTIONABLE/PROMOTED/VALIDATED/APPROVED/TRADE/RECOMMENDATION outputs. No portfolio, watchlist, scoring, allocation, recommendation, or decision mutation.
+
+**Module:** `portfolio_automation/discovery/automatic_promotion_governance.py`
+
+**Public functions:**
+
+| Function | Description |
+|---|---|
+| `load_automatic_promotion_inputs(base_dir)` | Load all input artifacts safely |
+| `evaluate_candidate_promotion(candidate, context, gates, now)` | Per-candidate gate evaluation |
+| `build_automatic_promotion_report(inputs, run_mode, run_id, gates)` | Build full structured report |
+| `render_automatic_promotion_markdown(report)` | Markdown summary |
+| `write_automatic_promotion_report(report, base_dir, run_mode, run_id)` | Write 3 sandbox artifacts (sanitized + validated) |
+| `run_automatic_promotion_governance(...)` | Top-level orchestrator |
+| `validate_automatic_promotion_safety(value)` / `sanitize_automatic_promotion_text(value)` / `sanitize_label(value)` / `sanitize_nested_automatic_promotion_payload(payload)` | Sanitizer + validator helpers |
+
+**Data types:** `PromotionGates` (with `DEFAULT_GATES`), `PromotionEligibilityResult`, `PromotionDecision`, `AutomaticPromotionReport`, `UnsafeAutomaticPromotionArtifactError`, plus `ALLOWED_STATUSES` / `FORBIDDEN_STATUSES` frozensets.
+
+**Allowed statuses:** `DISCOVERED`, `WATCH`, `MONITOR`, `REJECTED`, `EXPIRED`, `NEEDS_REVIEW`.
+**Forbidden statuses (never emitted):** `BUY`, `SELL`, `HOLD`, `ACTIONABLE`, `PROMOTED`, `VALIDATED`, `APPROVED`, `TRADE`, `RECOMMENDATION`.
+
+**Governance gates (conservative defaults):**
+- `minimum_corrob_score: 0.65`, `minimum_source_diversity: 2`, `minimum_news_relevance: 0.4`
+- `maximum_risk_flags: 2`, `stale_after_days: 30`
+- `require_watch_status_for_monitor: True`, `require_persistence_for_monitor: True`
+- `block_rejected_candidates: True`, `block_forbidden_statuses: True`
+
+**State machine:** WATCH + all gates pass → MONITOR; soft-gate-only failures → NEEDS_REVIEW; risk overflow or rejected list or forbidden upstream status → REJECTED; stale → EXPIRED; otherwise hold prior status.
+
+**Run mode governance:** Only `DISCOVERY` and `BACKTEST` may write. Other modes return as dry-run.
+
+**Sanitizer:** Same three-layer pattern as market narratives / news evidence layer — label sanitization, full-payload sanitization (including dict keys), pre-write JSON + Markdown + JSONL validation. Standalone whole-word action detection covers `buy`/`sell`/`hold`/`actionable`/`promoted`/`validated`/`approved`/`trade`/`recommendation`. Pure-action labels rewritten to `redacted_action_label_context_only`. Writer raises `UnsafeAutomaticPromotionArtifactError` if residual violations remain.
+
+**Artifacts produced** (all SANDBOX namespace):
+- `outputs/sandbox/discovery/automatic_promotion_candidates.json`
+- `outputs/sandbox/discovery/automatic_promotion_decisions.jsonl` (append-only audit)
+- `outputs/sandbox/discovery/automatic_promotion_summary.md`
+
+**Tests:** `tests/discovery/test_automatic_promotion_governance.py` — 68 tests across 9 test classes (safety constants, input loading, sanitizer/validator, eligibility evaluator across all state transitions, report builder determinism, Markdown rendering, three-artifact writing, run-mode write blocking, JSONL append behavior, dry-run, adversarial input protection, no-mutation field invariants).
+
+**Files created:** `portfolio_automation/discovery/automatic_promotion_governance.py`, `tests/discovery/test_automatic_promotion_governance.py`, `docs/AUTOMATIC_PROMOTION_GOVERNANCE.md`
+**Files modified:** `portfolio_automation/discovery/__init__.py`, `docs/OUTPUT_ARTIFACT_CONTRACTS.md`, `docs/roadmap.md`, `.agent/project_state.yaml`, `.agent/phase_status.yaml`
+
+**Manual Promotion Proposal:** Marked `superseded_by_automatic_promotion_governance_layer` in `.agent/phase_status.yaml`. If a future operator-driven UI workflow is desired, it should build on top of the sandbox automatic promotion artifacts rather than replacing them.
