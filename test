@@ -1,0 +1,51 @@
+# Portfolio Automation Environment Variables
+# Copy this file to .env and fill in your values
+
+# ===========================================
+# MARKET DATA API
+# ===========================================
+# Alpha Vantage API Key (required)
+# Get your free key at: https://www.alphavantage.co/support/#api-key
+ALPHA_VANTAGE_API_KEY=U6CYW5JCFTR1KJGM
+
+# ===========================================
+# EMAIL CONFIGURATION
+# ===========================================
+# Gmail SMTP credentials (required for email reports)
+# Use an App Password, NOT your regular Gmail password
+# Generate at: https://myaccount.google.com/apppasswords
+EMAIL_PASSWORD=xrlf hziw ljye ujcv
+
+# Optional: Override sender email from config
+EMAIL_SENDER=pesantez.q@gmail.com
+
+# Optional: Override recipient email from config
+ EMAIL_RECIPIENT=pesantez.q@gmail.com
+
+
+
+# ===========================================
+# SCANNER — FMP (Financial Modeling Prep)
+# ===========================================
+# Required when scanner.enabled=true in config.json.
+# The key is read from this variable ONLY — never hardcoded.
+# Get a free/starter key at: https://financialmodelingprep.com/developer/docs/
+# Free tier: 250 calls/day.  Bulk endpoints (profile/all, key-metrics-bulk)
+# require a Starter plan (~$15/mo).  Quote batch endpoints are free-tier.
+FMP_API_KEY=JPGLXKR37qCoiVuPgCpvENJupM8ISj0V
+# ===========================================
+# OPTIONAL OVERRIDES
+# ===========================================
+# Override config file path
+# CONFIG_PATH=/path/to/custom/config.json
+
+# Override output directory
+# OUTPUT_DIR=/path/to/output
+
+# Enable debug logging
+DEBUG=true
+
+ANTHROPIC_API_KEY=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
+OLLAMA_MODEL=gemma3:4b
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
