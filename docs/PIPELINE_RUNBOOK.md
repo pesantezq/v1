@@ -10,6 +10,7 @@
 - `python run_daily_pipeline.py`
 - `python -m watchlist_scanner`
 - `python -m theme_engine --mode daily`
+- `python -m tools.manual_portfolio_update --input <csv> --cash <n> --as-of <YYYY-MM-DD> --approve` — operator-driven manual holdings/cash update; see [MANUAL_PORTFOLIO_UPDATE.md](MANUAL_PORTFOLIO_UPDATE.md)
 
 ## Daily
 

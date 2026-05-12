@@ -283,6 +283,31 @@ post_phase_0:
       Roadmap execution is now awaiting the next approved step selection by
       the user/GPT from the next roadmap options.
 
+  manual_portfolio_update_workflow:
+    status: complete
+    priority: high
+    description: >
+      CLI tool tools/manual_portfolio_update.py for operator-driven holdings
+      and cash updates without using the GUI.  Hardcoded RunMode.MANUAL_UPDATE
+      + explicit --approve flag; delegates approval enforcement to existing
+      assert_can_update_portfolio_state().  Atomically rewrites only
+      portfolio.holdings and portfolio.cash_available in config.json (all
+      other config keys preserved byte-for-byte).  Writes a pre-update
+      backup to outputs/policy/portfolio_backups/ and appends one JSONL line
+      per run to outputs/policy/manual_portfolio_updates.jsonl.  No broker/API
+      calls, no LLM/AI, no scoring/allocation/recommendation/watchlist/
+      discovery mutation.  CSV input is the primary format; JSON also
+      supported.  Strict header validation, symbol regex, non-negative
+      shares, duplicate detection, ISO date and non-negative cash gates.
+    files:
+      - tools/manual_portfolio_update.py
+      - tests/test_manual_portfolio_update.py
+      - docs/MANUAL_PORTFOLIO_UPDATE.md
+      - docs/PIPELINE_RUNBOOK.md
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 50 passed
+
   gui_operator_cockpit_redesign:
     status: in_progress
     priority: medium
