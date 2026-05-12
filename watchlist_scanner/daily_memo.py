@@ -1414,7 +1414,7 @@ def generate_daily_memo(
     Degrades gracefully when the summary file is missing — returns a minimal
     memo noting that no data is available.
     """
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
 
     summary = _safe_load(root_path.joinpath(*_SUMMARY_JSON_REL))
     decision_plan = _safe_load(root_path.joinpath(*_DECISION_PLAN_JSON_REL))
