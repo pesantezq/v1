@@ -1178,6 +1178,134 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Enrichment section helpers (Portfolio Growth, Top Movers, Hit Rate, Watch)
+# ---------------------------------------------------------------------------
+#
+# These read structured artifacts via watchlist_scanner.memo_enrichment and
+# append four additional sections to the existing memo.  All non-blocking:
+# any error in one section logs a warning and leaves a clean placeholder.
+
+def _enrichment_repo_root() -> Path:
+    # daily_memo.py lives at <repo>/watchlist_scanner/daily_memo.py
+    return Path(__file__).resolve().parents[1]
+
+
+def _enrichment_payload() -> dict[str, Any]:
+    """
+    Compute all four enrichment sections.  Returns an empty dict on any
+    catastrophic failure so callers can no-op cleanly.
+    """
+    try:
+        from watchlist_scanner.memo_enrichment import build_enrichment
+        return build_enrichment(_enrichment_repo_root())
+    except Exception as exc:
+        logger.warning("daily_memo: enrichment payload failed — %s", exc)
+        return {}
+
+
+def _append_enrichment_text(append) -> None:
+    """Append the four enrichment sections to the plain-text memo."""
+    try:
+        from watchlist_scanner.memo_enrichment import (
+            render_growth_text,
+            render_top_movers_text,
+            render_hit_rate_text,
+            render_what_to_watch_text,
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: enrichment renderers unavailable — %s", exc)
+        return
+
+    payload = _enrichment_payload()
+    if not payload:
+        return
+
+    def _section(title: str, body_lines: list[str]) -> None:
+        append(_LINE)
+        append(f"  {title}")
+        append(_LINE)
+        if body_lines:
+            for line in body_lines:
+                append(f"  {line}")
+        else:
+            append("  Data not yet available.")
+        append("")
+
+    try:
+        _section("PORTFOLIO GROWTH", render_growth_text(payload.get("growth") or {}))
+    except Exception as exc:
+        logger.warning("daily_memo: growth section failed — %s", exc)
+    try:
+        _section("TOP MOVERS", render_top_movers_text(payload.get("movers") or {}))
+    except Exception as exc:
+        logger.warning("daily_memo: top movers section failed — %s", exc)
+    try:
+        _section(
+            "DECISION HIT RATE  (predicted vs actual)",
+            render_hit_rate_text(payload.get("hit_rate") or {}),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: hit rate section failed — %s", exc)
+    try:
+        _section(
+            "WHAT TO WATCH  [Sandbox Only]",
+            render_what_to_watch_text(payload.get("what_to_watch") or {}),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: what-to-watch section failed — %s", exc)
+
+
+def _append_enrichment_md(append) -> None:
+    """Append the four enrichment sections to the Markdown memo."""
+    try:
+        from watchlist_scanner.memo_enrichment import (
+            render_growth_md,
+            render_top_movers_md,
+            render_hit_rate_md,
+            render_what_to_watch_md,
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: enrichment renderers (md) unavailable — %s", exc)
+        return
+
+    payload = _enrichment_payload()
+    if not payload:
+        return
+
+    def _section(title: str, body_lines: list[str]) -> None:
+        append(f"## {title}")
+        if body_lines:
+            for line in body_lines:
+                append(line)
+        else:
+            append("_Data not yet available._")
+        append("")
+
+    try:
+        _section("Portfolio Growth", render_growth_md(payload.get("growth") or {}))
+    except Exception as exc:
+        logger.warning("daily_memo: growth section (md) failed — %s", exc)
+    try:
+        _section("Top Movers", render_top_movers_md(payload.get("movers") or {}))
+    except Exception as exc:
+        logger.warning("daily_memo: top movers section (md) failed — %s", exc)
+    try:
+        _section(
+            "Decision Hit Rate — Predicted vs Actual",
+            render_hit_rate_md(payload.get("hit_rate") or {}),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: hit rate section (md) failed — %s", exc)
+    try:
+        _section(
+            "What To Watch — Sandbox Only",
+            render_what_to_watch_md(payload.get("what_to_watch") or {}),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: what-to-watch section (md) failed — %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Compact memo builders
 # ---------------------------------------------------------------------------
 
@@ -1270,6 +1398,16 @@ def build_daily_memo(
     for item in change_items[:3]:
         a(f"  - {item}")
     a("")
+
+    # ------------------------------------------------------------------
+    # Enrichment sections — Portfolio Growth, Top Movers, Decision Hit
+    # Rate, What To Watch.  Additive; each section degrades gracefully
+    # when its data source is missing.  Failures are non-blocking.
+    # ------------------------------------------------------------------
+    try:
+        _append_enrichment_text(a)
+    except Exception as exc:
+        logger.warning("daily_memo: enrichment sections failed — %s", exc)
 
     if health_items:
         a(_LINE)
@@ -1375,6 +1513,14 @@ def build_daily_memo_md(
     for item in change_items[:3]:
         a(f"- {item}")
     a("")
+
+    # ------------------------------------------------------------------
+    # Enrichment sections (Markdown variant)
+    # ------------------------------------------------------------------
+    try:
+        _append_enrichment_md(a)
+    except Exception as exc:
+        logger.warning("daily_memo: enrichment sections (md) failed — %s", exc)
 
     if health_items:
         a("## System / Data Health")
