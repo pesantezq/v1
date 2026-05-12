@@ -44,3 +44,11 @@ Thumbs.db
 outputs/portfolio/portfolio_snapshot.json
 outputs/portfolio/portfolio_summary.md
 test
+
+# Runtime output artifacts (regenerated every run)
+outputs/performance/
+outputs/portfolio/
+outputs/regime/
+outputs/sandbox/
+outputs/latest/
+outputs/policy/portfolio_backups/
