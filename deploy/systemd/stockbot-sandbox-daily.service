@@ -1,0 +1,53 @@
+; Example systemd unit for the observe-only sandbox/research lane.
+; This file is provided as a reference — do NOT enable until reviewed.
+;
+; Install:
+;   sudo cp deploy/systemd/stockbot-sandbox-daily.service /etc/systemd/system/
+;   sudo cp deploy/systemd/stockbot-sandbox-daily.timer   /etc/systemd/system/
+;   sudo systemctl daemon-reload
+;
+; Enable on the VPS (only after manual verification):
+;   sudo systemctl enable --now stockbot-sandbox-daily.timer
+;
+; Inspect:
+;   systemctl list-timers stockbot-sandbox-daily.timer
+;   journalctl -u stockbot-sandbox-daily.service -n 200 --no-pager
+;
+; Safety notes:
+;   - Observe-only — never executes trades, never calls brokers.
+;   - Writes only to /opt/stockbot/outputs/sandbox/discovery/.
+;   - Independent from stockbot-daily.* (official pipeline) — a failure here
+;     never blocks the official pipeline.
+;   - Exit code is always 0 unless the wrapper itself errors; per-step
+;     success/failure is recorded in sandbox_run_status.json.
+
+[Unit]
+Description=Stockbot Sandbox/Research Lane (observe-only)
+Documentation=file:///opt/stockbot/docs/DAILY_SANDBOX_RUN.md
+After=network-online.target
+Wants=network-online.target
+; Intentionally not coupled to stockbot-daily.service — sandbox runs are
+; independent of the official daily pipeline.
+
+[Service]
+Type=oneshot
+User=stockbot
+Group=stockbot
+WorkingDirectory=/opt/stockbot
+Environment=PYTHONUNBUFFERED=1
+; Make a dry run by uncommenting:
+; Environment=DRY_RUN_MODE=1
+ExecStart=/bin/bash /opt/stockbot/scripts/run_daily_sandbox_safe.sh
+
+; Hardening — sandbox lane never needs elevated privileges
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/stockbot/outputs /opt/stockbot/logs
+
+; The sandbox lane is non-critical; do not restart on failure
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

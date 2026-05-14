@@ -1,6 +1,6 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-05-10
+# Last updated: 2026-05-14
 
 # ---------------------------------------------------------------------------
 # Phase 0 — Infrastructure & Data Governance
@@ -282,6 +282,37 @@ post_phase_0:
     next_step_note: >
       Roadmap execution is now awaiting the next approved step selection by
       the user/GPT from the next roadmap options.
+
+  daily_sandbox_run_orchestrator:
+    status: complete
+    priority: high
+    description: >
+      Additive, observe-only orchestrator for the sandbox/research lane.
+      tools/daily_sandbox_run.py wraps existing entry points
+      (run_discovery_news_integration, run_automatic_promotion_governance,
+      run_discovery_replay) and writes
+      outputs/sandbox/discovery/sandbox_run_status.{json,md}.  Run mode
+      hardcoded to RunMode.DISCOVERY.  Non-blocking: per-step failures
+      are recorded in the status artifact and the wrapper still exits 0,
+      so a systemd timer never flaps.  Does not touch config.json, the
+      official watchlist, allocation policy, scoring, recommendations,
+      or any decision artifact.  No broker/API calls.  No LLM/AI calls.
+      Writes only to OutputNamespace.SANDBOX.  Shell wrapper
+      scripts/run_daily_sandbox_safe.sh and example systemd units in
+      deploy/systemd/ (not enabled by default).
+    prerequisite: automatic_promotion_governance_layer_complete
+    files:
+      - tools/daily_sandbox_run.py
+      - scripts/run_daily_sandbox_safe.sh
+      - tests/test_daily_sandbox_run.py
+      - docs/DAILY_SANDBOX_RUN.md
+      - docs/PIPELINE_RUNBOOK.md
+      - deploy/systemd/stockbot-sandbox-daily.service
+      - deploy/systemd/stockbot-sandbox-daily.timer
+      - .agent/project_state.yaml
+      - .agent/phase_status.yaml
+    tests: 26 passed
+    review_status: locally verified — VPS validation pending operator run.
 
   manual_portfolio_update_workflow:
     status: complete

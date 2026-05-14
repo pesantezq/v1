@@ -11,6 +11,7 @@
 - `python -m watchlist_scanner`
 - `python -m theme_engine --mode daily`
 - `python -m tools.manual_portfolio_update --input <csv> --cash <n> --as-of <YYYY-MM-DD> --approve` — operator-driven manual holdings/cash update; see [MANUAL_PORTFOLIO_UPDATE.md](MANUAL_PORTFOLIO_UPDATE.md)
+- `python -m tools.daily_sandbox_run` (or `bash scripts/run_daily_sandbox_safe.sh`) — observe-only daily sandbox/research lane orchestrator; see [DAILY_SANDBOX_RUN.md](DAILY_SANDBOX_RUN.md)
 
 ## Daily
 
@@ -86,6 +87,42 @@ Wrapper behavior:
 - can use `DRY_RUN_MODE=1` to call `python main.py --run-mode daily --dry-run`
 - `DRY_RUN_MODE=1` follows the current application dry-run behavior, which may still emit cache-only watchlist artifacts
 - for a strictly preflight-only validation, run `bash scripts/preflight.sh` without the wrapper
+
+### Daily sandbox/research lane
+
+Command:
+`python -m tools.daily_sandbox_run`  (or `bash scripts/run_daily_sandbox_safe.sh`)
+
+Purpose: refresh the sandbox/research lane artifacts (news-enriched
+candidates, automatic promotion governance) on a daily cadence —
+independent of, and non-blocking to, the official daily pipeline.
+
+Steps (each is non-blocking; failure of one does not abort the others):
+
+1. `discovery_news_integration` — calls `run_discovery_news_integration(run_mode="discovery")`
+2. `automatic_promotion_governance` — calls `run_automatic_promotion_governance(run_mode="discovery", write_files=True)`
+3. `discovery_replay` — runs only if `outputs/sandbox/discovery/replay_price_outcomes.json` is present (skipped otherwise)
+
+Outputs (sandbox namespace only):
+
+- `outputs/sandbox/discovery/sandbox_run_status.json`
+- `outputs/sandbox/discovery/sandbox_run_status.md`
+- (plus any artifacts written by the underlying module entry points)
+
+Safety:
+
+- observe-only; never calls brokers, never executes trades
+- never mutates `config.json`, the watchlist, allocation policy, scoring,
+  or any decision artifact
+- only writes to `outputs/sandbox/discovery/`
+- exits 0 even if individual steps fail (status artifact records each step)
+
+Optional environment:
+
+- `DRY_RUN_MODE=1 bash scripts/run_daily_sandbox_safe.sh` — runs the
+  module steps but skips writing the sandbox_run_status artifacts
+
+See [DAILY_SANDBOX_RUN.md](DAILY_SANDBOX_RUN.md) for the full spec.
 
 ## Weekly
 

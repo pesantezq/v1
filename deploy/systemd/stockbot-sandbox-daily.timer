@@ -1,0 +1,23 @@
+; Example systemd timer for the observe-only sandbox/research lane.
+; Reference only — do NOT enable until reviewed.
+;
+; Default cadence: every weekday at 09:30 local time, 60 minutes after the
+; official daily pipeline (stockbot-daily.timer at 08:30) so the sandbox
+; lane reads fresh outputs/latest/ artifacts.  Adjust as needed.
+;
+; The Persistent= option ensures a missed run (e.g. host was offline) is
+; caught up once on next boot.
+
+[Unit]
+Description=Daily timer for the Stockbot Sandbox/Research Lane (observe-only)
+Documentation=file:///opt/stockbot/docs/DAILY_SANDBOX_RUN.md
+
+[Timer]
+; Run weekdays at 09:30 local time.
+OnCalendar=Mon..Fri 09:30
+Persistent=true
+RandomizedDelaySec=120
+Unit=stockbot-sandbox-daily.service
+
+[Install]
+WantedBy=timers.target

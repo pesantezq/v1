@@ -10,7 +10,18 @@
       "Bash(wc -l /c/PersonalWork/stock_bot/v1/*.py)",
       "Bash(python -m unittest tests.test_run_mode -v)",
       "Bash(schtasks /query)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "PowerShell(python -m py_compile tools/daily_sandbox_run.py; echo \"EXIT $LASTEXITCODE\")",
+      "PowerShell(python -m pytest -q tests/test_daily_sandbox_run.py 2>&1)",
+      "PowerShell(tail -60)",
+      "PowerShell(New-Item -ItemType Directory -Path deploy/systemd -Force)",
+      "PowerShell(\"created\")",
+      "PowerShell(python -m py_compile tools/daily_sandbox_run.py tests/test_daily_sandbox_run.py; \"py_compile exit $LASTEXITCODE\")",
+      "PowerShell(python scripts/agent_context_check.py 2>&1)",
+      "PowerShell(python -m pytest -q tests/discovery/ 2>&1)",
+      "PowerShell($tmp = Join-Path $env:TEMP \"sandbox_smoke_$\\([guid]::NewGuid\\(\\).ToString\\('N'\\)\\)\"; New-Item -ItemType Directory -Path $tmp | Out-Null; python -m tools.daily_sandbox_run --base-dir $tmp 2>&1 | Select-Object -Last 25; \"---\"; Get-ChildItem -Path $tmp -Recurse | Select-Object FullName)",
+      "PowerShell($p = \"C:\\\\Users\\\\en-pes\\\\AppData\\\\Local\\\\Temp\\\\sandbox_smoke_6ee0fca63f6545d3927addb6b3d36d73\"; if \\(Test-Path $p\\) { Get-ChildItem $p -Recurse -File | Select-Object FullName } else { \"missing: $p\" })",
+      "PowerShell(python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py 2>&1)"
     ]
   }
 }

@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-12 (manual_portfolio_update_workflow complete; pauses GUI cockpit work)
+# Last updated: 2026-05-14 (daily_sandbox_run_orchestrator complete; GUI cockpit still paused)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -41,15 +41,19 @@ completed_steps:
   - gui_operator_cockpit_redesign__gui_automatic_promotion_review_panel
   - gui_operator_cockpit_redesign__dashboard_landing_card_refresh
   - manual_portfolio_update_workflow
+  - daily_sandbox_run_orchestrator
 
 next_official_step:
   primary: gui_operator_cockpit_redesign
   secondary: []
   note: >
-    First slice (gui_automatic_promotion_review_panel) is complete.  Future
-    slices in this UI/UX track may include: refreshed Dashboard landing page,
-    News Evidence Layer panel, Market Narrative panel, unified Discovery
-    Sandbox panel — all read-only, using the new reusable helpers.
+    GUI work remains paused at user request.  Sandbox/research lane is
+    now scheduled via tools.daily_sandbox_run +
+    scripts/run_daily_sandbox_safe.sh, with example systemd timer units
+    in deploy/systemd/ (not enabled by default).  When GUI work resumes,
+    remaining slices in this UI/UX track may include: News Evidence Layer
+    panel, Market Narrative panel, unified Discovery Sandbox panel — all
+    read-only, using the existing reusable helpers.
 
 # ---------------------------------------------------------------------------
 # Two-lane operating model (added by run_mode_governance step)
