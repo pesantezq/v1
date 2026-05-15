@@ -184,6 +184,69 @@
     </section>
     {% endif %}
 
+    <!-- Market narratives (daily / weekly / monthly) -->
+    {% if market_narratives.available %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Market narrative</h2>
+      <div class="space-y-3">
+        {% for label, key in [("Daily", "daily"), ("Weekly", "weekly"), ("Monthly", "monthly")] %}
+          {% set narr = market_narratives[key] %}
+          {% if narr.available %}
+          <details class="bg-zinc-900 rounded-lg border border-zinc-800" {% if key == "daily" %}open{% endif %}>
+            <summary class="cursor-pointer px-4 py-3 text-sm">
+              <span class="font-mono text-zinc-400">{{ label }}</span>
+              <span class="text-zinc-200 ml-2">{{ narr.top_headline or "(no headline)" }}</span>
+            </summary>
+            <div class="border-t border-zinc-800 px-4 py-3 space-y-3 text-sm">
+              {% if narr.executive_summary %}
+              <p class="text-zinc-300">{{ narr.executive_summary }}</p>
+              {% endif %}
+              {% if narr.key_themes %}
+              <div>
+                <span class="text-xs uppercase tracking-wide text-emerald-300">Themes</span>
+                <ul class="mt-1 ml-4 list-disc text-zinc-300">
+                  {% for t in narr.key_themes %}<li>{{ t }}</li>{% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {% if narr.catalysts_to_watch %}
+                <div>
+                  <span class="text-xs uppercase tracking-wide text-emerald-300">Catalysts to watch</span>
+                  <ul class="mt-1 ml-4 list-disc text-zinc-300">
+                    {% for c in narr.catalysts_to_watch %}<li>{{ c }}</li>{% endfor %}
+                  </ul>
+                </div>
+                {% endif %}
+                {% if narr.risks_to_watch %}
+                <div>
+                  <span class="text-xs uppercase tracking-wide text-rose-300">Risks to watch</span>
+                  <ul class="mt-1 ml-4 list-disc text-zinc-300">
+                    {% for r in narr.risks_to_watch %}<li>{{ r }}</li>{% endfor %}
+                  </ul>
+                </div>
+                {% endif %}
+              </div>
+              {% if narr.operator_watchlist %}
+              <div>
+                <span class="text-xs uppercase tracking-wide text-amber-300">Operator watchlist</span>
+                <p class="mt-1 text-zinc-300 font-mono">{{ narr.operator_watchlist | join(", ") }}</p>
+              </div>
+              {% endif %}
+              {% if narr.generated_at %}
+              <p class="text-xs text-zinc-500">Generated <span class="font-mono">{{ narr.generated_at }}</span></p>
+              {% endif %}
+            </div>
+          </details>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <p class="text-xs text-zinc-500 mt-2">
+        Deterministic narrative layer; never overrides decisions or scoring.
+      </p>
+    </section>
+    {% endif %}
+
     <!-- News evidence (context-only; never a recommendation) -->
     {% if news_evidence.available %}
     <section>

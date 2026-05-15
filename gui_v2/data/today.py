@@ -192,6 +192,40 @@ def _validation_counts(validation: dict | None) -> dict[str, Any]:
     }
 
 
+def _market_narrative(payload: dict | None) -> dict[str, Any]:
+    """Project a single market_narrative_*.json to the fields Today renders."""
+    if not isinstance(payload, dict):
+        return {"available": False}
+    if payload.get("data_available") is False:
+        return {"available": False}
+    return {
+        "available": True,
+        "period": payload.get("narrative_period"),
+        "generated_at": payload.get("generated_at"),
+        "top_headline": payload.get("top_headline") or "",
+        "executive_summary": payload.get("executive_summary") or "",
+        "key_themes": [t for t in (payload.get("key_themes") or []) if t][:6],
+        "risks_to_watch": [r for r in (payload.get("risks_to_watch") or []) if r][:6],
+        "catalysts_to_watch": [c for c in (payload.get("catalysts_to_watch") or []) if c][:6],
+        "operator_watchlist": [
+            w for w in (payload.get("operator_watchlist") or []) if w
+        ][:8],
+    }
+
+
+def _market_narratives_summary(
+    daily: dict | None, weekly: dict | None, monthly: dict | None,
+) -> dict[str, Any]:
+    """Aggregate the three market_narrative_*.json artifacts. Never raises."""
+    sections = {
+        "daily": _market_narrative(daily),
+        "weekly": _market_narrative(weekly),
+        "monthly": _market_narrative(monthly),
+    }
+    available = any(s.get("available") for s in sections.values())
+    return {"available": available, **sections}
+
+
 def _news_evidence_summary(news: dict | None) -> dict[str, Any]:
     """
     Project outputs/latest/news_evidence_layer.json down to what Today
@@ -288,6 +322,9 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
 
     # News evidence + market narrative
     news_evidence = _read_json(latest / "news_evidence_layer.json")
+    narrative_daily = _read_json(latest / "market_narrative_daily.json")
+    narrative_weekly = _read_json(latest / "market_narrative_weekly.json")
+    narrative_monthly = _read_json(latest / "market_narrative_monthly.json")
 
     return {
         "advisory_only": True,
@@ -307,4 +344,8 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
         "decision_performance": _decision_performance(outcome_summary),
         # News evidence (context-only)
         "news_evidence": _news_evidence_summary(news_evidence),
+        # Market narratives (deterministic; daily / weekly / monthly)
+        "market_narratives": _market_narratives_summary(
+            narrative_daily, narrative_weekly, narrative_monthly,
+        ),
     }

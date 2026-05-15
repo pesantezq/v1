@@ -264,6 +264,61 @@ def _write_news_evidence(repo: Path, **overrides) -> None:
     )
 
 
+def _write_narrative(repo: Path, period: str, **overrides) -> None:
+    payload = {
+        "narrative_period": period,
+        "generated_at": f"2026-05-15T00:00:00+00:00",
+        "observe_only": True,
+        "no_trade": True,
+        "data_available": True,
+        "top_headline": f"{period.title()} headline",
+        "executive_summary": f"{period.title()} summary text",
+        "key_themes": [f"theme-{i}" for i in range(3)],
+        "risks_to_watch": ["regulatory", "macro"],
+        "catalysts_to_watch": ["earnings"],
+        "operator_watchlist": ["NVDA", "AAPL"],
+    }
+    payload.update(overrides)
+    (repo / "outputs" / "latest" / f"market_narrative_{period}.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+class TestMarketNarratives:
+    def test_unavailable_when_all_missing(self, fake_repo: Path):
+        view = collect_today_view(fake_repo)
+        assert view["market_narratives"]["available"] is False
+
+    def test_partial_availability(self, fake_repo: Path):
+        _write_narrative(fake_repo, "daily")
+        view = collect_today_view(fake_repo)
+        nm = view["market_narratives"]
+        assert nm["available"] is True
+        assert nm["daily"]["available"] is True
+        assert nm["weekly"]["available"] is False
+        assert nm["monthly"]["available"] is False
+
+    def test_data_available_false_treated_unavailable(self, fake_repo: Path):
+        _write_narrative(fake_repo, "daily", data_available=False)
+        nm = collect_today_view(fake_repo)["market_narratives"]
+        assert nm["daily"]["available"] is False
+        assert nm["available"] is False
+
+    def test_all_three_periods(self, fake_repo: Path):
+        _write_narrative(fake_repo, "daily")
+        _write_narrative(fake_repo, "weekly")
+        _write_narrative(fake_repo, "monthly")
+        nm = collect_today_view(fake_repo)["market_narratives"]
+        assert nm["daily"]["top_headline"] == "Daily headline"
+        assert nm["weekly"]["top_headline"] == "Weekly headline"
+        assert nm["monthly"]["top_headline"] == "Monthly headline"
+
+    def test_themes_capped_at_six(self, fake_repo: Path):
+        _write_narrative(fake_repo, "daily", key_themes=[f"t{i}" for i in range(20)])
+        nm = collect_today_view(fake_repo)["market_narratives"]["daily"]
+        assert len(nm["key_themes"]) == 6
+
+
 class TestNewsEvidence:
     def test_unavailable_when_missing(self, fake_repo: Path):
         view = collect_today_view(fake_repo)
