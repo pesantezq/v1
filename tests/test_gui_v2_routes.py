@@ -40,3 +40,30 @@ def test_severity_badge_classes_via_jinja_filter():
     assert "rose"    in _severity_classes("FAIL")
     # Unknown severity falls back to neutral zinc tones
     assert "zinc"    in _severity_classes("UNKNOWN")
+
+
+def test_today_renders_decisions_and_memo(tmp_path, monkeypatch):
+    import json
+    from gui_v2 import app as appmod
+    fake = tmp_path
+    (fake / "main.py").write_text("# marker\n", encoding="utf-8")
+    (fake / "outputs" / "latest").mkdir(parents=True)
+    (fake / "outputs" / "latest" / "decision_plan.json").write_text(json.dumps({
+        "generated_at": "x", "total_decisions": 1, "observe_only": True,
+        "decisions": [{"symbol": "ZZZX", "decision": "BUY",
+                       "priority": 1.0, "urgency": "high",
+                       "source": "test", "reason": "test reason"}],
+    }), encoding="utf-8")
+    (fake / "outputs" / "latest" / "daily_memo.md").write_text(
+        "# Memo Heading\n\nbody text", encoding="utf-8",
+    )
+    monkeypatch.setattr(appmod, "REPO_ROOT", fake)
+
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+    body = client.get("/").text
+    assert "ZZZX" in body
+    assert "test reason" in body
+    assert "Memo Heading" in body
+    # HTMX auto-refresh marker
+    assert "hx-trigger" in body or "hx-get" in body

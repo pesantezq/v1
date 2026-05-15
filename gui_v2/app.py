@@ -34,9 +34,12 @@ def _render(request: Request, template_name: str, **context) -> HTMLResponse:
     return templates.TemplateResponse(request, template_name, context)
 
 
+from gui_v2.data.today import collect_today_view
+
+
 @app.get("/", response_class=HTMLResponse)
 def page_today(request: Request) -> HTMLResponse:
-    return _render(request, "today.html")
+    return _render(request, "today.html", **collect_today_view(REPO_ROOT))
 
 
 @app.get("/portfolio", response_class=HTMLResponse)

@@ -1,6 +1,118 @@
 {% extends "base.html" %}
 {% block title %}Today &mdash; StockBot{% endblock %}
+{% block header_right %}
+  {% if header.run_id %}
+    run_id: {{ header.run_id }} · {{ "succeeded" if header.success else "failed" }}
+  {% endif %}
+{% endblock %}
 {% block content %}
-  <h1 class="text-2xl font-semibold">Today</h1>
-  <p class="text-zinc-400">Coming soon &mdash; will land in Task 5.</p>
+  <div id="today-content"
+       hx-get="/?fragment=1"
+       hx-trigger="every 60s"
+       hx-target="#today-content"
+       hx-swap="outerHTML"
+       class="space-y-8">
+
+    <header class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-semibold">Today</h1>
+        <p class="text-sm text-zinc-400">
+          {% if header.generated_at %}
+            Generated <span class="font-mono">{{ header.generated_at }}</span>
+            · mode <span class="font-mono">{{ header.run_mode or "?" }}</span>
+          {% else %}
+            No recent pipeline run found.
+          {% endif %}
+        </p>
+      </div>
+      <button hx-get="/?fragment=1"
+              hx-target="#today-content"
+              hx-swap="outerHTML"
+              class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+        Refresh
+      </button>
+    </header>
+
+    <!-- Capital actions strip -->
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {% with label="SELL", value="$" ~ ("{:,.0f}".format(capital_actions.SELL or 0)) %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+      {% with label="SCALE", value="$" ~ ("{:,.0f}".format(capital_actions.SCALE or 0)) %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+      {% with label="BUY", value="$" ~ ("{:,.0f}".format(capital_actions.BUY or 0)) %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+    </section>
+
+    <!-- Decisions -->
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Top decisions</h2>
+      {% if decisions %}
+        <ul class="space-y-2">
+          {% for d in decisions %}
+          <li class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 flex items-center gap-4">
+            <span class="font-mono font-semibold text-zinc-100 w-16">{{ d.decision }}</span>
+            <span class="font-mono text-zinc-300 w-20">{{ d.symbol }}</span>
+            <span class="text-xs text-zinc-500 w-24">{{ d.urgency or "" }}</span>
+            <span class="text-xs text-zinc-500 w-24 font-mono">pri {{ "%.3f"|format(d.priority or 0) }}</span>
+            <span class="text-sm text-zinc-300 flex-1 truncate">{{ d.reason }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        {% with heading="No decisions in the current plan",
+                body="Expect this when the daily run has not yet produced a decision_plan.json." %}
+          {% include "components/empty_state.html" %}
+        {% endwith %}
+      {% endif %}
+    </section>
+
+    <!-- Risk focus -->
+    {% if risk_focus %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Risk focus</h2>
+      <ul class="space-y-2">
+        {% for r in risk_focus %}
+        <li class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3">
+          <span class="font-mono font-semibold">{{ r.symbol }}</span>
+          <span class="text-sm text-zinc-300 ml-2">{{ r.flags | join(", ") }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <!-- Top movers -->
+    {% if top_movers %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Top movers</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 divide-y divide-zinc-800">
+        {% for m in top_movers %}
+        <div class="px-4 py-2 flex items-center gap-4">
+          <span class="font-mono w-20">{{ m.symbol }}</span>
+          <span class="font-mono w-20 text-right">
+            {% if m.change_pct is not none %}
+              {{ "%+.2f"|format(m.change_pct) }}%
+            {% endif %}
+          </span>
+          <span class="text-xs text-zinc-500">{{ m.sector or "" }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Memo -->
+    {% if memo_html %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Daily memo</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-6 prose prose-invert max-w-none">
+        {{ memo_html | safe }}
+      </div>
+    </section>
+    {% endif %}
+
+  </div>
 {% endblock %}
