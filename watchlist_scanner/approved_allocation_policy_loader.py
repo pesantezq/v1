@@ -153,5 +153,5 @@ def load_approved_allocation_policy(policy_path: Path | str) -> dict[str, Any] |
 
 def default_policy_path(root: Path | str | None = None) -> Path:
     """Return the default path to approved_allocation_policy.json."""
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     return root_path.joinpath(*_ARTIFACT_REL)

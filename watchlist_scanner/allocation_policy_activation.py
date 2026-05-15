@@ -292,7 +292,7 @@ def run_activation_check(
       - artifact_written: bool
       - audit_written: bool
     """
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     out_dir = (
         Path(output_dir) if output_dir is not None
         else root_path.joinpath(*_ARTIFACT_REL).parent

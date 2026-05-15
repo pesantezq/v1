@@ -278,7 +278,7 @@ def generate_allocation_policy_simulation_report(
     Returns the simulation dict.
     Gracefully handles missing DB or preview file.
     """
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     _db = Path(db_path) if db_path is not None else root_path / "data" / "portfolio.db"
     out_dir = (
         Path(output_dir) if output_dir is not None

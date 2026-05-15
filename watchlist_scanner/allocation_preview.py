@@ -268,7 +268,7 @@ def generate_allocation_preview_report(
     Returns the preview dict.
     Does not raise on missing inputs — falls back to empty signals or empty snapshot.
     """
-    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    root_path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     out_dir = Path(output_dir) if output_dir is not None else root_path.joinpath(*_OUTPUT_REL).parent
 
     signals_path = root_path.joinpath(*_SIGNALS_REL)
