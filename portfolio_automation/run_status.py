@@ -121,6 +121,52 @@ class PipelineRunStatus:
         return sum(1 for s in self.steps if s.status == _STATUS_SKIPPED)
 
 
+def status_from_idempotent_skip(
+    *,
+    run_mode: str,
+    skip_reason: str,
+    completed_run_id: str | None = None,
+    run_id: str | None = None,
+) -> PipelineRunStatus:
+    """
+    Build a :class:`PipelineRunStatus` for a run that was skipped before
+    ``run_portfolio_update`` was invoked — i.e. the daily idempotency guard
+    or the "already in progress" guard short-circuited.
+
+    A skip is a correct outcome, not a failure: ``success=True``, ``exit_code=0``.
+    The single emitted step is named ``run_portfolio_update`` with
+    ``status="skipped"`` and the supplied *skip_reason* recorded.
+
+    If *completed_run_id* is given it is stored under
+    ``summary.already_completed_run_id`` so an operator can correlate the skip
+    with the morning's successful run.
+    """
+    generated_at = _now_iso()
+    _run_id = run_id or make_run_id(run_mode, generated_at=generated_at)
+    step = StepStatus(
+        name="run_portfolio_update",
+        status=_STATUS_SKIPPED,
+        duration_seconds=0.0,
+        skip_reason=skip_reason,
+    )
+    summary: dict[str, Any] = {}
+    if completed_run_id:
+        summary["already_completed_run_id"] = completed_run_id
+    return PipelineRunStatus(
+        generated_at=generated_at,
+        run_id=_run_id,
+        run_mode=run_mode,
+        source="main",
+        success=True,
+        exit_code=0,
+        steps=[step],
+        errors=[],
+        warnings=[],
+        artifacts_written=[],
+        summary=summary,
+    )
+
+
 def status_from_main_result(
     result: dict[str, Any],
     *,

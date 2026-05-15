@@ -2676,6 +2676,48 @@ def run_portfolio_update(
     return result
 
 
+def _emit_skip_status(
+    *,
+    run_mode: str,
+    skip_reason: str,
+    completed_run_id: str | None,
+    logger,
+) -> None:
+    """
+    Write a 'skipped' pipeline_run_status artifact for a short-circuit path
+    that exits before run_portfolio_update is called (idempotent guard,
+    already-in-progress guard, run-lock contention).
+
+    Always non-blocking: any write failure is logged and swallowed.
+    """
+    try:
+        from portfolio_automation.run_status import (
+            status_from_idempotent_skip,
+            write_pipeline_run_status,
+        )
+        _skip_status = status_from_idempotent_skip(
+            run_mode=run_mode,
+            skip_reason=skip_reason,
+            completed_run_id=completed_run_id,
+        )
+        _paths = write_pipeline_run_status(_skip_status)
+        if "error" in _paths:
+            logger.warning(
+                "pipeline_run_status (skip:%s) write failed: %s",
+                skip_reason, _paths["error"],
+            )
+        else:
+            logger.info(
+                "pipeline_run_status (skip:%s) written: %s",
+                skip_reason, _paths.get("pipeline_run_status_json"),
+            )
+    except Exception as _status_err:
+        logger.warning(
+            "pipeline_run_status (skip:%s) emission failed (non-fatal): %s",
+            skip_reason, _status_err,
+        )
+
+
 def main() -> int:
     """Main entry point for scheduled and manual runs."""
     args = parse_arguments()
@@ -2711,6 +2753,12 @@ def main() -> int:
     lock_file = Path("data/run.lock")
     if not acquire_run_lock(lock_file):
         logger.info("Exiting — another run is already in progress.")
+        _emit_skip_status(
+            run_mode=args.run_mode,
+            skip_reason="run_lock_held",
+            completed_run_id=None,
+            logger=logger,
+        )
         return 0
 
     exit_code = 1
@@ -2813,6 +2861,12 @@ def main() -> int:
                     f"Run {run_id} already completed today — "
                     "outputs/latest is current. Exiting (idempotent)."
                 )
+                _emit_skip_status(
+                    run_mode=args.run_mode,
+                    skip_reason="idempotent_already_completed",
+                    completed_run_id=run_id,
+                    logger=logger,
+                )
                 return 0
             if store.is_stale_running(run_id, stale_minutes=30):
                 logger.warning(
@@ -2822,6 +2876,12 @@ def main() -> int:
                 store.fail_run(run_id)
             if not store.start_run(run_id, args.run_mode):
                 logger.info(f"Run {run_id} is already in progress — exiting.")
+                _emit_skip_status(
+                    run_mode=args.run_mode,
+                    skip_reason="another_run_in_progress",
+                    completed_run_id=run_id,
+                    logger=logger,
+                )
                 return 0
 
         # ── Output directories ─────────────────────────────────────────────────

@@ -17,6 +17,7 @@ from portfolio_automation.run_status import (
     build_status_payload,
     make_run_id,
     render_status_markdown,
+    status_from_idempotent_skip,
     status_from_main_result,
     status_from_pipeline_steps,
     write_pipeline_run_status,
@@ -221,6 +222,78 @@ class TestStatusFromPipelineSteps:
         steps = [_FakeStepResult("a", "weird", 0.1, "")]
         st = status_from_pipeline_steps(steps)
         assert st.steps[0].status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Adapter: status_from_idempotent_skip
+# ---------------------------------------------------------------------------
+
+class TestStatusFromIdempotentSkip:
+    def test_basic_shape(self):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="idempotent_already_completed",
+            completed_run_id="2026-05-15_daily",
+        )
+        assert st.success is True
+        assert st.exit_code == 0
+        assert st.source == "main"
+        assert st.run_mode == "daily"
+        assert len(st.steps) == 1
+        assert st.steps[0].name == "run_portfolio_update"
+        assert st.steps[0].status == "skipped"
+        assert st.steps[0].skip_reason == "idempotent_already_completed"
+        assert st.steps[0].duration_seconds == 0.0
+
+    def test_summary_carries_completed_run_id(self):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="idempotent_already_completed",
+            completed_run_id="2026-05-15_daily",
+        )
+        assert st.summary["already_completed_run_id"] == "2026-05-15_daily"
+
+    def test_summary_omits_completed_run_id_when_absent(self):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="run_lock_held",
+            completed_run_id=None,
+        )
+        assert "already_completed_run_id" not in st.summary
+
+    def test_step_counts(self):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="another_run_in_progress",
+        )
+        assert st.steps_attempted == 1
+        assert st.steps_skipped == 1
+        assert st.steps_failed == 0
+        assert st.steps_succeeded == 0
+
+    def test_explicit_run_id_used(self):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="run_lock_held",
+            run_id="custom-rid",
+        )
+        assert st.run_id == "custom-rid"
+
+    def test_payload_round_trip(self, base_outputs: Path):
+        st = status_from_idempotent_skip(
+            run_mode="daily",
+            skip_reason="idempotent_already_completed",
+            completed_run_id="2026-05-15_daily",
+        )
+        result = write_pipeline_run_status(st, base_dir=base_outputs)
+        assert "error" not in result
+        payload = json.loads(Path(result["pipeline_run_status_json"]).read_text(encoding="utf-8"))
+        assert payload["success"] is True
+        assert payload["exit_code"] == 0
+        assert payload["steps_skipped"] == 1
+        assert payload["steps"][0]["status"] == "skipped"
+        assert payload["steps"][0]["skip_reason"] == "idempotent_already_completed"
+        assert payload["summary"]["already_completed_run_id"] == "2026-05-15_daily"
 
 
 # ---------------------------------------------------------------------------
