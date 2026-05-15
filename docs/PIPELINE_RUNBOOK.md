@@ -436,3 +436,29 @@ Fix:
 - `outputs/history/YYYY-MM-DD` is the archived daily snapshot after successful `main.py` runs.
 - SQLite is persistent system memory. Deleting it resets cooldowns, evaluation state, and subsystem health.
 - For VPS automation, prefer `bash scripts/run_daily_safe.sh` over direct cron calls to `python main.py`.
+
+
+## GUI v2 dashboard (opt-in)
+
+The FastAPI-based dashboard runs alongside the existing Streamlit GUI.
+Streamlit on port 8501 is unchanged; this is port 8502.
+
+**Enable** (one-time):
+
+```bash
+sudo cp /opt/stockbot/deploy/systemd/stockbot-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stockbot-dashboard.service
+journalctl -u stockbot-dashboard.service -n 30 --no-pager
+```
+
+**URL:** `http://<vps-ip>:8502`. Restrict via cloud firewall or use an SSH
+tunnel — same security posture as 8501.
+
+**Disable / retire:**
+
+```bash
+sudo systemctl disable --now stockbot-dashboard.service
+```
+
+The daily timer and the Streamlit unit are unaffected by any of this.

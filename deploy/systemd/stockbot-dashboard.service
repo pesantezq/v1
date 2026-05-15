@@ -1,0 +1,19 @@
+[Unit]
+Description=StockBot Dashboard v2 (FastAPI + HTMX)
+After=network.target
+Documentation=docs/superpowers/specs/2026-05-15-gui-v2-design.md
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stockbot
+EnvironmentFile=/opt/stockbot/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/stockbot/.venv/bin/uvicorn gui_v2.app:app --host 0.0.0.0 --port 8502
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
