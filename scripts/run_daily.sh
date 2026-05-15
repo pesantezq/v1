@@ -66,6 +66,13 @@ run_stage_nonblocking "Automatic promotion governance" \
 run_stage_nonblocking "Daily memo + email" \
     "$PYTHON_BIN" -c "import os; os.chdir('/opt/stockbot'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
 
+# ----- Stage 5: Production status probe (non-blocking, advisory) -----
+# Reads existing JSON artifacts and the artifact registry; never writes.
+# Prints a one-screen health summary to the daily log. Exit code is
+# ignored so a probe finding cannot block the chain.
+run_stage_nonblocking "Status probe" \
+    "$PYTHON_BIN" -m tools.status
+
 log "============================================================"
 log "STOCKBOT DAILY CHAIN COMPLETE"
 log "============================================================"

@@ -242,11 +242,16 @@ REGISTRY: tuple[Artifact, ...] = (
         consumers=("watchlist_scanner.daily_memo", "gui_operator_data"),
         schema_version=1,
         append_only=False,
-        optional=False,
+        # Optional because it is produced by run_daily_pipeline.py, not by
+        # main.py.  The production cron (scripts/run_daily.sh) currently
+        # invokes main.py only, so this artifact is legitimately absent in
+        # production today.
+        optional=True,
         observe_only_required=False,
         documented_in="docs/OUTPUT_ARTIFACT_CONTRACTS.md",
         description="Top-level system state, capital preview, policy insight, "
-                    "data health digest.",
+                    "data health digest. Produced by run_daily_pipeline.py "
+                    "(not by main.py).",
     ),
     Artifact(
         name="decision_plan",
@@ -355,10 +360,15 @@ REGISTRY: tuple[Artifact, ...] = (
         consumers=("gui_operator_data",),
         schema_version=1,
         append_only=False,
-        optional=False,
+        # Optional in production: bundle is produced by run_daily_pipeline.py
+        # and downstream agent flows.  The production cron (run_daily.sh)
+        # invokes main.py only, so this artifact is legitimately absent.
+        optional=True,
         observe_only_required=False,
         documented_in="docs/OUTPUT_ARTIFACT_CONTRACTS.md",
-        description="Consolidated AI-oriented bundle of latest artifacts.",
+        description="Consolidated AI-oriented bundle of latest artifacts. "
+                    "Produced by run_daily_pipeline.py / agent flows "
+                    "(not by main.py).",
     ),
     Artifact(
         name="news_evidence_layer",
@@ -470,10 +480,15 @@ REGISTRY: tuple[Artifact, ...] = (
         consumers=("watchlist_scanner.system_summary", "agent.bundle_builder", "gui_operator_data"),
         schema_version=1,
         append_only=False,
-        optional=False,
+        # Optional in production: policy evaluation runs via
+        # run_daily_pipeline.py (stage policy_eval), not via main.py.  The
+        # production cron currently invokes main.py only.
+        optional=True,
         observe_only_required=False,
         documented_in="docs/OUTPUT_ARTIFACT_CONTRACTS.md",
-        description="Policy profile selection score and recommendation.",
+        description="Policy profile selection score and recommendation. "
+                    "Produced by policy_evaluator via run_daily_pipeline.py "
+                    "(not by main.py).",
     ),
     Artifact(
         name="profit_attribution",

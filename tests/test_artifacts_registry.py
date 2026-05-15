@@ -85,6 +85,25 @@ class TestRegistryPresence:
         ):
             assert find_artifact(name) is not None, f"core artifact missing: {name}"
 
+    @pytest.mark.parametrize("name", [
+        "system_decision_summary",
+        "agent_bundle",
+        "policy_recommendation",
+    ])
+    def test_run_daily_pipeline_only_artifacts_marked_optional(self, name: str):
+        """
+        These three artifacts are produced by run_daily_pipeline.py / agent
+        flows, not by main.py. The production cron (scripts/run_daily.sh)
+        only invokes main.py, so their absence is correct and they must be
+        registered as optional. Guards against a future contributor flipping
+        them back to required without also wiring production producers.
+        """
+        art = get_artifact(name)
+        assert art.optional is True, (
+            f"{name} is registered as required, but production cron does not "
+            "produce it. Either mark optional or add a producer to run_daily.sh."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Self-consistency
