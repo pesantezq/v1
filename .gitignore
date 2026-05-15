@@ -11,8 +11,10 @@ __pycache__/
 .env
 *.env.local
 
-# Runtime data (state, caches, DB) — stored locally only
-data/
+# Runtime data (state, caches, DB) — stored locally only.
+# Anchored to repo root so package subdirectories can be named data/
+# (e.g. gui_v2/data/ for the pure data-collection layer).
+/data/
 
 # Log files
 logs/
