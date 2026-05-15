@@ -2,5 +2,11 @@
 {% block title %}Research &mdash; StockBot{% endblock %}
 {% block content %}
   <h1 class="text-2xl font-semibold">Research</h1>
-  <p class="text-zinc-400">Stub page &mdash; full content deferred. See spec.</p>
+  <p class="text-xs text-zinc-500">Sandbox / research lane &mdash; not buy/sell recommendations.</p>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {% with label="Emerging", value=counts.emerging %}{% include "components/metric_card.html" %}{% endwith %}
+    {% with label="Rejected", value=counts.rejected %}{% include "components/metric_card.html" %}{% endwith %}
+    {% with label="Promotion", value=counts.promotion %}{% include "components/metric_card.html" %}{% endwith %}
+  </div>
+  <p class="text-xs text-zinc-500">Stub page &mdash; full content deferred.</p>
 {% endblock %}

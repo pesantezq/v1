@@ -36,6 +36,9 @@ def _render(request: Request, template_name: str, **context) -> HTMLResponse:
 
 from gui_v2.data.today import collect_today_view
 from gui_v2.data.health import collect_health_view, overall_severity
+from gui_v2.data.portfolio import collect_portfolio_stub
+from gui_v2.data.research import collect_research_stub
+from gui_v2.data.operations import collect_operations_stub
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -45,12 +48,12 @@ def page_today(request: Request) -> HTMLResponse:
 
 @app.get("/portfolio", response_class=HTMLResponse)
 def page_portfolio(request: Request) -> HTMLResponse:
-    return _render(request, "portfolio.html")
+    return _render(request, "portfolio.html", **collect_portfolio_stub(REPO_ROOT))
 
 
 @app.get("/research", response_class=HTMLResponse)
 def page_research(request: Request) -> HTMLResponse:
-    return _render(request, "research.html")
+    return _render(request, "research.html", **collect_research_stub(REPO_ROOT))
 
 
 @app.get("/health", response_class=HTMLResponse)
@@ -61,4 +64,4 @@ def page_health(request: Request) -> HTMLResponse:
 
 @app.get("/operations", response_class=HTMLResponse)
 def page_operations(request: Request) -> HTMLResponse:
-    return _render(request, "operations.html")
+    return _render(request, "operations.html", **collect_operations_stub(REPO_ROOT))

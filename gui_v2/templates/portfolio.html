@@ -2,5 +2,23 @@
 {% block title %}Portfolio &mdash; StockBot{% endblock %}
 {% block content %}
   <h1 class="text-2xl font-semibold">Portfolio</h1>
-  <p class="text-zinc-400">Stub page &mdash; full content deferred. See spec.</p>
+  {% if available %}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {% with label="Total value", value="$" ~ ("{:,.2f}".format(total_value or 0)) %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+      {% with label="Cash available", value="$" ~ ("{:,.2f}".format(cash_available or 0)) %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+      {% with label="Snapshot at", value=generated_at or "n/a" %}
+        {% include "components/metric_card.html" %}
+      {% endwith %}
+    </div>
+    <p class="text-xs text-zinc-500">Stub page &mdash; full content deferred.</p>
+  {% else %}
+    {% with heading="No portfolio snapshot yet",
+            body="Run the daily pipeline or watchlist scanner to produce outputs/portfolio/portfolio_snapshot.json." %}
+      {% include "components/empty_state.html" %}
+    {% endwith %}
+  {% endif %}
 {% endblock %}

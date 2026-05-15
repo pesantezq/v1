@@ -2,5 +2,30 @@
 {% block title %}Operations &mdash; StockBot{% endblock %}
 {% block content %}
   <h1 class="text-2xl font-semibold">Operations</h1>
-  <p class="text-zinc-400">Stub page &mdash; full content deferred. See spec.</p>
+  <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-2 mt-6">Recent runs</h2>
+  {% if recent_runs %}
+    <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-x-auto">
+      <table class="w-full text-sm font-mono">
+        <thead class="text-zinc-500">
+          <tr><th class="text-left px-3 py-2">run_id</th><th class="text-left px-3 py-2">status</th><th class="text-left px-3 py-2">started</th><th class="text-left px-3 py-2">completed</th></tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for r in recent_runs %}
+          <tr>
+            <td class="px-3 py-1.5">{{ r.run_id }}</td>
+            <td class="px-3 py-1.5 text-zinc-400">{{ r.status }}</td>
+            <td class="px-3 py-1.5 text-zinc-400">{{ r.started_at }}</td>
+            <td class="px-3 py-1.5 text-zinc-400">{{ r.completed_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    {% with heading="No run history",
+            body="Once the daily pipeline runs, recent entries appear here." %}
+      {% include "components/empty_state.html" %}
+    {% endwith %}
+  {% endif %}
+  <p class="text-xs text-zinc-500 mt-4">Stub page &mdash; full content deferred.</p>
 {% endblock %}
