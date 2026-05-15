@@ -94,6 +94,53 @@
       {% endif %}
     </section>
 
+    <!-- AI cost trend (last 30 days) -->
+    {% if ai_cost_trend.available %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">AI cost trend ({{ ai_cost_trend.window_days }} days)</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        {% with label="Total cost",
+                value="$" ~ "{:,.4f}".format(ai_cost_trend.total_cost_usd or 0) %}
+          {% include "components/metric_card.html" %}
+        {% endwith %}
+        {% with label="Last 7 days",
+                value="$" ~ "{:,.4f}".format(ai_cost_trend.seven_day_cost_usd or 0) %}
+          {% include "components/metric_card.html" %}
+        {% endwith %}
+        {% with label="Total tokens",
+                value="{:,}".format(ai_cost_trend.total_tokens or 0) %}
+          {% include "components/metric_card.html" %}
+        {% endwith %}
+        {% with label="Daily max cost",
+                value="$" ~ "{:,.4f}".format(ai_cost_trend.max_cost_usd or 0) %}
+          {% include "components/metric_card.html" %}
+        {% endwith %}
+      </div>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+        <div class="flex items-end gap-px h-24">
+          {% set max_cost = ai_cost_trend.max_cost_usd or 0 %}
+          {% for d in ai_cost_trend.days %}
+            {% set h = ((d.cost_usd / max_cost) * 100) if max_cost > 0 else 0 %}
+            <div class="flex-1 flex items-end relative group">
+              <div class="w-full {{ 'bg-emerald-500/60 hover:bg-emerald-400' if d.cost_usd > 0 else 'bg-zinc-800' }} transition-colors"
+                   style="height: {{ '%.1f'|format(h if h > 0 else 1.5) }}%"
+                   title="{{ d.date }}: ${{ "{:,.4f}".format(d.cost_usd) }} ({{ d.event_count }} events)">
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="flex justify-between text-xs text-zinc-500 font-mono mt-2">
+          <span>{{ ai_cost_trend.days[0].date }}</span>
+          <span>{{ ai_cost_trend.days[-1].date }}</span>
+        </div>
+      </div>
+      <p class="text-xs text-zinc-500 mt-2">
+        Source: <span class="font-mono">outputs/policy/ai_usage_events.jsonl</span>.
+        Hover a bar for that day's cost.
+      </p>
+    </section>
+    {% endif %}
+
     <!-- Environment variables -->
     <section>
       <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Environment variables</h2>
