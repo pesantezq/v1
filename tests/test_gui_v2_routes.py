@@ -48,6 +48,57 @@ def test_nav_contains_overall_severity_dot(client):
     assert ("emerald" in body or "sky" in body or "amber" in body or "rose" in body)
 
 
+def test_research_renders_promotion_review(tmp_path, monkeypatch):
+    """Research page surfaces the migrated Automatic Promotion Review when
+    the producer artifact is present."""
+    import json
+    from gui_v2 import app as appmod
+    fake = tmp_path
+    (fake / "main.py").write_text("# marker\n", encoding="utf-8")
+    (fake / "outputs" / "sandbox" / "discovery").mkdir(parents=True)
+    (fake / "outputs" / "sandbox" / "discovery" / "automatic_promotion_candidates.json").write_text(
+        json.dumps({
+            "available": True,
+            "generated_at": "2026-05-15T15:00:00+00:00",
+            "run_mode": "discovery",
+            "run_id": "x",
+            "observe_only": True,
+            "no_trade": True,
+            "not_recommendation": True,
+            "discovery_only": True,
+            "sandbox_only": True,
+            "no_portfolio_mutation": True,
+            "no_watchlist_mutation": True,
+            "no_allocation_policy_change": True,
+            "no_decision_override": True,
+            "decision_count": 1,
+            "decisions": [{
+                "ticker": "ZZZA",
+                "proposed_status": "MONITOR",
+                "composite_score": 0.72,
+                "news_relevance_score": 0.6,
+                "corroboration_score": 0.55,
+                "risk_flag_count": 0,
+                "risk_flags": [],
+                "reason": "Strong corroboration; sandbox watch.",
+            }],
+        }), encoding="utf-8",
+    )
+    monkeypatch.setattr(appmod, "REPO_ROOT", fake)
+
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+    body = client.get("/research").text
+    assert "Automatic Promotion Review" in body
+    assert "Moved to Monitor" in body
+    assert "ZZZA" in body
+    assert "Safety boundary" in body
+    # Disclaimer language
+    assert "not buy/sell recommendations" in body
+    # The advisory footer
+    assert "Advisory only" in body
+
+
 def test_health_renders_all_sections(client):
     body = client.get("/health").text
     assert "Pipeline" in body or "status" in body.lower()

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from gui_v2.data.portfolio import collect_portfolio_stub
-from gui_v2.data.research import collect_research_stub
+from gui_v2.data.research import collect_research_stub, collect_research_view
 from gui_v2.data.operations import collect_operations_stub
 
 
@@ -58,6 +58,49 @@ class TestResearchStub:
         )
         v = collect_research_stub(fake_repo)
         assert v["counts"]["emerging"] == 2
+
+
+class TestResearchFullView:
+    def test_returns_stub_shape_plus_auto_promotion(self, fake_repo: Path):
+        v = collect_research_view(fake_repo)
+        # Stub keys preserved
+        assert v["advisory_only"] is True
+        assert "counts" in v
+        # New auto_promotion block present (even if unavailable)
+        assert "auto_promotion" in v
+        assert isinstance(v["auto_promotion"], dict)
+
+    def test_empty_repo_auto_promotion_unavailable(self, fake_repo: Path):
+        v = collect_research_view(fake_repo)
+        assert v["auto_promotion"].get("available") is False
+
+    def test_with_promotion_artifact_present(self, fake_repo: Path):
+        # Materialize a minimal automatic_promotion_candidates.json that
+        # load_automatic_promotion_data will consider "available"
+        ap_path = (
+            fake_repo / "outputs" / "sandbox" / "discovery"
+            / "automatic_promotion_candidates.json"
+        )
+        ap_path.write_text(json.dumps({
+            "available": True,
+            "generated_at": "2026-05-15T15:00:00+00:00",
+            "run_mode": "discovery",
+            "run_id": "x",
+            "observe_only": True,
+            "no_trade": True,
+            "not_recommendation": True,
+            "discovery_only": True,
+            "sandbox_only": True,
+            "no_portfolio_mutation": True,
+            "no_watchlist_mutation": True,
+            "no_allocation_policy_change": True,
+            "no_decision_override": True,
+            "decision_count": 0,
+            "decisions": [],
+        }), encoding="utf-8")
+        v = collect_research_view(fake_repo)
+        assert v["auto_promotion"].get("available") is True
+        assert v["auto_promotion"].get("run_mode") == "discovery"
 
 
 class TestOperationsStub:

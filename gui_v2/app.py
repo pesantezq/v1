@@ -48,7 +48,7 @@ def _render(request: Request, template_name: str, **context) -> HTMLResponse:
 from gui_v2.data.today import collect_today_view
 from gui_v2.data.health import collect_health_view, overall_severity
 from gui_v2.data.portfolio import collect_portfolio_stub
-from gui_v2.data.research import collect_research_stub
+from gui_v2.data.research import collect_research_view
 from gui_v2.data.operations import collect_operations_stub
 
 
@@ -64,7 +64,7 @@ def page_portfolio(request: Request) -> HTMLResponse:
 
 @app.get("/research", response_class=HTMLResponse)
 def page_research(request: Request) -> HTMLResponse:
-    return _render(request, "research.html", **collect_research_stub(REPO_ROOT))
+    return _render(request, "research.html", **collect_research_view(REPO_ROOT))
 
 
 @app.get("/health", response_class=HTMLResponse)
