@@ -4,12 +4,43 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}StockBot Dashboard{% endblock %}</title>
+  <!-- Apply persisted theme BEFORE any rendering to avoid a flash -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('stockbot-theme');
+        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      } catch (e) {}
+    })();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
   <style>
     :root { color-scheme: dark; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
     .font-mono { font-family: ui-monospace, "Menlo", "Consolas", monospace; }
+
+    /* Light theme — bounded CSS override on top of the existing Tailwind
+       utility classes. Default state is dark; setting
+       <html data-theme="light"> flips the surface tokens via overrides. */
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="light"] body            { background:#fafafa; color:#18181b; }
+    html[data-theme="light"] .bg-zinc-950,
+    html[data-theme="light"] .bg-zinc-950\/90{ background:#fafafa !important; }
+    html[data-theme="light"] .bg-zinc-900    { background:#ffffff !important; }
+    html[data-theme="light"] .bg-zinc-800    { background:#f4f4f5 !important; }
+    html[data-theme="light"] .text-zinc-100,
+    html[data-theme="light"] .text-zinc-200,
+    html[data-theme="light"] .text-zinc-300  { color:#18181b !important; }
+    html[data-theme="light"] .text-zinc-400  { color:#52525b !important; }
+    html[data-theme="light"] .text-zinc-500  { color:#71717a !important; }
+    html[data-theme="light"] .border-zinc-800,
+    html[data-theme="light"] .border-zinc-700{ border-color:#e4e4e7 !important; }
+    html[data-theme="light"] .divide-zinc-800 > * + * { border-color:#e4e4e7 !important; }
+    html[data-theme="light"] .text-emerald-300{ color:#047857 !important; }
+    html[data-theme="light"] .text-sky-300    { color:#0369a1 !important; }
+    html[data-theme="light"] .text-amber-300  { color:#b45309 !important; }
+    html[data-theme="light"] .text-rose-300   { color:#be123c !important; }
   </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen">
@@ -29,10 +60,44 @@
         <span role="status"
               title="Overall: {{ nav_severity }}"
               class="inline-block w-2.5 h-2.5 rounded-full {{ nav_severity | severity_classes }}"></span>
+        <button id="theme-toggle"
+                type="button"
+                title="Toggle light/dark"
+                aria-label="Toggle light/dark"
+                class="text-zinc-400 hover:text-emerald-400 text-sm leading-none px-2 py-1 rounded-md border border-zinc-800">
+          <span data-theme-icon-dark>☾</span><span data-theme-icon-light class="hidden">☀</span>
+        </button>
         <div class="text-xs text-zinc-400 font-mono">{% block header_right %}{% endblock %}</div>
       </div>
     </div>
   </header>
+  <script>
+    (function () {
+      var btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      function sync() {
+        var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        document.querySelectorAll('[data-theme-icon-dark]').forEach(function (el) {
+          el.classList.toggle('hidden', isLight);
+        });
+        document.querySelectorAll('[data-theme-icon-light]').forEach(function (el) {
+          el.classList.toggle('hidden', !isLight);
+        });
+      }
+      sync();
+      btn.addEventListener('click', function () {
+        var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        if (isLight) {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.setItem('stockbot-theme', 'dark'); } catch (e) {}
+        } else {
+          document.documentElement.setAttribute('data-theme', 'light');
+          try { localStorage.setItem('stockbot-theme', 'light'); } catch (e) {}
+        }
+        sync();
+      });
+    })();
+  </script>
   <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
     {% block content %}{% endblock %}
   </main>

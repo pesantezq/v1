@@ -59,6 +59,30 @@ def test_htmx_select_present_to_prevent_full_doc_nesting(client, path: str, targ
     )
 
 
+def test_theme_toggle_present_and_dark_default(client):
+    """Light/dark toggle must be present in the nav and the page must default
+    to dark mode (the <html> tag itself has no data-theme attribute on
+    server render — JS adds it only when the operator picked light).
+    The CSS override block defines html[data-theme="light"] rules so the
+    toggle works on the client."""
+    body = client.get("/").text
+    # Toggle button + handler script present
+    assert 'id="theme-toggle"' in body
+    assert "stockbot-theme" in body
+    # The <html> tag itself does NOT carry a data-theme attribute server-side
+    # (CSS rule selectors that contain the string are fine — we only care
+    # about the actual element's attributes).
+    import re
+    html_tag = re.search(r"<html\b[^>]*>", body)
+    assert html_tag is not None
+    assert "data-theme" not in html_tag.group(0), (
+        "<html> tag should not have data-theme set server-side; "
+        "client JS sets it only when operator picked light."
+    )
+    # Light-mode CSS override block is shipped so the toggle works
+    assert "html[data-theme=\"light\"]" in body
+
+
 def test_severity_badge_classes_via_jinja_filter():
     from gui_v2.app import _severity_classes
     assert "emerald" in _severity_classes("OK")
