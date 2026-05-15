@@ -133,6 +133,17 @@ fi
 [ -n "${FMP_API_KEY:-}" ] || fail "FMP_API_KEY is missing from both the environment and .env"
 pass "FMP_API_KEY is available"
 
+section "Env Var Registry"
+# portfolio_automation.env.check_state — declared env-var inventory + redaction.
+# --strict exits non-zero when any registered required var is missing.
+# Secret values are never printed. Existing call sites continue to read
+# os.environ directly; this is the new validation surface only.
+if python -m portfolio_automation.env --check --strict; then
+    pass "All registered required env vars are set"
+else
+    fail "One or more registered required env vars are missing (see above)"
+fi
+
 section "FMP Compliance"
 compliance_output="$(mktemp)"
 pytest_output=""
