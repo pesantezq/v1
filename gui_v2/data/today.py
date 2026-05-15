@@ -192,6 +192,46 @@ def _validation_counts(validation: dict | None) -> dict[str, Any]:
     }
 
 
+def _news_evidence_summary(news: dict | None) -> dict[str, Any]:
+    """
+    Project outputs/latest/news_evidence_layer.json down to what Today
+    actually renders.  Returns ``available=False`` when the artifact is
+    missing or carries ``data_available=False``.  Never raises.
+    """
+    if not isinstance(news, dict):
+        return {"available": False}
+    if news.get("data_available") is False:
+        return {"available": False, "missing_inputs": news.get("missing_inputs") or []}
+
+    def _events(rows: list | None, max_rows: int = 8) -> list[dict[str, Any]]:
+        if not isinstance(rows, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for r in rows[:max_rows]:
+            if not isinstance(r, dict):
+                continue
+            out.append({
+                "label": r.get("label"),
+                "count": r.get("count"),
+                "tickers": r.get("tickers") or [],
+                "description": r.get("description") or "",
+            })
+        return out
+
+    bullets = [b for b in (news.get("memo_bullets") or []) if isinstance(b, str)][:6]
+    return {
+        "available": True,
+        "generated_at": news.get("generated_at"),
+        "influence_cap": news.get("influence_cap") or "context_only",
+        "portfolio_context": news.get("portfolio_context") or "",
+        "memo_bullets": bullets,
+        "catalyst_evidence": _events(news.get("catalyst_evidence")),
+        "risk_evidence": _events(news.get("risk_evidence")),
+        "operator_review_flags": news.get("operator_review_flags") or [],
+        "discovery_context_summary": news.get("discovery_context_summary") or "",
+    }
+
+
 def _decision_performance(outcome_summary: dict | None) -> dict[str, Any]:
     if not isinstance(outcome_summary, dict):
         return {"available": False}
@@ -246,6 +286,9 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
     explanations = _read_json(latest / "decision_explanations.json")
     outcome_summary = _read_json(policy / "decision_outcome_summary.json")
 
+    # News evidence + market narrative
+    news_evidence = _read_json(latest / "news_evidence_layer.json")
+
     return {
         "advisory_only": True,
         "no_trade": True,
@@ -262,4 +305,6 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
         "validations_by_symbol": _validations_by_symbol(validation),
         "explanations_by_symbol": _explanations_by_symbol(explanations),
         "decision_performance": _decision_performance(outcome_summary),
+        # News evidence (context-only)
+        "news_evidence": _news_evidence_summary(news_evidence),
     }

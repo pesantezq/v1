@@ -238,3 +238,52 @@ class TestDecisionPerformance:
         assert dp["available"] is True
         assert dp["hit_rate"] == 0.75
         assert dp["avg_return_pct"] == 0.025
+
+
+def _write_news_evidence(repo: Path, **overrides) -> None:
+    payload = {
+        "generated_at": "x",
+        "observe_only": True,
+        "no_trade": True,
+        "source": "news_evidence_layer",
+        "influence_cap": "context_only",
+        "data_available": True,
+        "portfolio_context": "Tech-heavy",
+        "memo_bullets": ["Bullet 1", "Bullet 2"],
+        "catalyst_evidence": [
+            {"label": "earnings_beat", "count": 3, "tickers": ["NVDA"], "description": "strong Q"},
+        ],
+        "risk_evidence": [
+            {"label": "regulatory", "count": 1, "tickers": ["META"], "description": "FTC probe"},
+        ],
+        "operator_review_flags": [],
+    }
+    payload.update(overrides)
+    (repo / "outputs" / "latest" / "news_evidence_layer.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+class TestNewsEvidence:
+    def test_unavailable_when_missing(self, fake_repo: Path):
+        view = collect_today_view(fake_repo)
+        assert view["news_evidence"]["available"] is False
+
+    def test_unavailable_when_data_available_false(self, fake_repo: Path):
+        _write_news_evidence(fake_repo, data_available=False, missing_inputs=["x"])
+        view = collect_today_view(fake_repo)
+        assert view["news_evidence"]["available"] is False
+
+    def test_memo_bullets_and_evidence_passthrough(self, fake_repo: Path):
+        _write_news_evidence(fake_repo)
+        ne = collect_today_view(fake_repo)["news_evidence"]
+        assert ne["available"] is True
+        assert ne["influence_cap"] == "context_only"
+        assert "Bullet 1" in ne["memo_bullets"]
+        assert ne["catalyst_evidence"][0]["label"] == "earnings_beat"
+        assert ne["risk_evidence"][0]["label"] == "regulatory"
+
+    def test_memo_bullets_capped_at_six(self, fake_repo: Path):
+        _write_news_evidence(fake_repo, memo_bullets=[f"B{i}" for i in range(10)])
+        ne = collect_today_view(fake_repo)["news_evidence"]
+        assert len(ne["memo_bullets"]) == 6

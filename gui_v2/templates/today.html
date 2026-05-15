@@ -184,6 +184,76 @@
     </section>
     {% endif %}
 
+    <!-- News evidence (context-only; never a recommendation) -->
+    {% if news_evidence.available %}
+    <section>
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-xs uppercase tracking-wide text-zinc-400">News evidence</h2>
+        <span class="text-xs text-zinc-500 font-mono">influence: {{ news_evidence.influence_cap }}</span>
+      </div>
+      {% if news_evidence.portfolio_context %}
+      <p class="text-sm text-zinc-300 mb-3">{{ news_evidence.portfolio_context }}</p>
+      {% endif %}
+      {% if news_evidence.memo_bullets %}
+      <ul class="space-y-2 mb-4">
+        {% for b in news_evidence.memo_bullets %}
+        <li class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-2 text-sm text-zinc-300">
+          {{ b }}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+          <h3 class="text-xs uppercase tracking-wide text-emerald-300 mb-2">Catalysts</h3>
+          {% if news_evidence.catalyst_evidence %}
+          <ul class="space-y-1 text-sm">
+            {% for c in news_evidence.catalyst_evidence %}
+            <li>
+              <span class="font-mono text-zinc-200">{{ c.label }}</span>
+              {% if c.count %}<span class="text-xs text-zinc-500"> ({{ c.count }})</span>{% endif %}
+              {% if c.tickers %}
+              <span class="text-xs text-zinc-400 font-mono">{{ c.tickers | join(", ") }}</span>
+              {% endif %}
+              {% if c.description %}<div class="text-xs text-zinc-500 ml-1">{{ c.description }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-xs text-zinc-500">No catalyst signals.</p>
+          {% endif %}
+        </div>
+        <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+          <h3 class="text-xs uppercase tracking-wide text-rose-300 mb-2">Risks</h3>
+          {% if news_evidence.risk_evidence %}
+          <ul class="space-y-1 text-sm">
+            {% for r in news_evidence.risk_evidence %}
+            <li>
+              <span class="font-mono text-zinc-200">{{ r.label }}</span>
+              {% if r.count %}<span class="text-xs text-zinc-500"> ({{ r.count }})</span>{% endif %}
+              {% if r.tickers %}
+              <span class="text-xs text-zinc-400 font-mono">{{ r.tickers | join(", ") }}</span>
+              {% endif %}
+              {% if r.description %}<div class="text-xs text-zinc-500 ml-1">{{ r.description }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-xs text-zinc-500">No risk signals.</p>
+          {% endif %}
+        </div>
+      </div>
+      {% if news_evidence.operator_review_flags %}
+      <p class="text-xs text-amber-300 mt-3">
+        Operator review: {{ news_evidence.operator_review_flags | join(", ") }}
+      </p>
+      {% endif %}
+      <p class="text-xs text-zinc-500 mt-2">
+        Context-only layer; cannot override decisions, scoring, or allocations.
+      </p>
+    </section>
+    {% endif %}
+
     <!-- Decision performance -->
     {% if decision_performance.available %}
     <section>
