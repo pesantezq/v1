@@ -38,6 +38,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -543,6 +544,8 @@ def render_text(state: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("Environment Variable Check")
     lines.append("=" * 40)
+    if state.get("dotenv_loaded_from"):
+        lines.append(f".env: {state['dotenv_loaded_from']}")
     s = state["summary"]
     lines.append(
         f"Total: {s['total']}   "
@@ -586,6 +589,76 @@ def render_json(state: dict[str, Any]) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _find_dotenv_for_cli() -> Path | None:
+    """
+    Locate a ``.env`` file near the operator: first the current working
+    directory, then the repo root (two levels up from this file).  Returns
+    None when no ``.env`` exists.  Library-mode imports never call this —
+    it is invoked only from :func:`main`.
+    """
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ]
+    seen: set[Path] = set()
+    for c in candidates:
+        try:
+            r = c.resolve()
+        except OSError:
+            continue
+        if r in seen:
+            continue
+        seen.add(r)
+        if r.is_file():
+            return r
+    return None
+
+
+def _load_dotenv_for_cli() -> Path | None:
+    """
+    Best-effort ``.env`` load for CLI invocations.  Uses python-dotenv when
+    available; falls back to a small parser when it isn't.  Never overrides
+    values already present in the process environment.  Returns the file
+    that was loaded, or None.
+    """
+    path = _find_dotenv_for_cli()
+    if path is None:
+        return None
+    # Prefer python-dotenv when present.
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        load_dotenv = None  # type: ignore
+
+    if load_dotenv is not None:
+        try:
+            load_dotenv(path, override=False)
+            return path
+        except Exception:
+            pass  # fall through to manual parser
+
+    # Manual parser — handles KEY=VALUE lines, strips comments / whitespace,
+    # never overrides existing env vars.
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Strip a single layer of matching quotes
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError:
+        return None
+    return path
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m portfolio_automation.env",
@@ -604,6 +677,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true",
         help="Exit 1 when any required variable is missing.",
     )
+    p.add_argument(
+        "--no-dotenv", action="store_true",
+        help="Skip auto-loading .env. Use when you want to inspect the bare "
+             "process environment.",
+    )
     return p
 
 
@@ -614,7 +692,15 @@ def main(argv: list[str] | None = None) -> int:
         # Default behaviour: same as --check. Friendlier for `python -m`.
         args.check = True
 
+    # Best-effort .env load so an interactive invocation matches what the
+    # daily run would see. Process-env values always win; we never override.
+    loaded_from: Path | None = None
+    if not args.no_dotenv:
+        loaded_from = _load_dotenv_for_cli()
+
     state = check_state()
+    if loaded_from is not None:
+        state["dotenv_loaded_from"] = str(loaded_from)
     if args.format == "json":
         print(render_json(state))
     else:

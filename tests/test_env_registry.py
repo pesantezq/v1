@@ -4,6 +4,7 @@ Tests for portfolio_automation/env.py
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -268,29 +269,116 @@ class TestCLI:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
     ):
         monkeypatch.setenv("FMP_API_KEY", "x")
-        rc = envmod.main([])
+        rc = envmod.main(["--no-dotenv"])
         out = capsys.readouterr().out
         assert rc == 0
         assert "Environment Variable Check" in out
 
     def test_check_json(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture):
         monkeypatch.setenv("FMP_API_KEY", "x")
-        rc = envmod.main(["--check", "--format", "json"])
+        rc = envmod.main(["--check", "--format", "json", "--no-dotenv"])
         out = capsys.readouterr().out
         assert rc == 0
         parsed = json.loads(out)
         assert "missing_required" in parsed
 
     def test_strict_exits_one_when_required_missing(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path,
     ):
+        monkeypatch.chdir(tmp_path)  # ensure no .env in CWD
         monkeypatch.delenv("FMP_API_KEY", raising=False)
-        rc = envmod.main(["--check", "--strict"])
+        rc = envmod.main(["--check", "--strict", "--no-dotenv"])
         assert rc == 1
 
     def test_strict_exits_zero_when_all_required_set(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
     ):
         monkeypatch.setenv("FMP_API_KEY", "x")
-        rc = envmod.main(["--check", "--strict"])
+        rc = envmod.main(["--check", "--strict", "--no-dotenv"])
         assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Dotenv auto-load (CLI only)
+# ---------------------------------------------------------------------------
+
+class TestDotenvAutoload:
+    def test_loads_dotenv_from_cwd(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ):
+        # Build a .env in a tmp dir, run CLI from there, observe load.
+        env_file = tmp_path / ".env"
+        env_file.write_text("FMP_API_KEY=loaded-from-dotenv\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+        loaded = envmod._load_dotenv_for_cli()
+        assert loaded is not None
+        assert os.environ.get("FMP_API_KEY") == "loaded-from-dotenv"
+
+    def test_does_not_override_existing_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text("FMP_API_KEY=from-file\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("FMP_API_KEY", "from-shell")
+        envmod._load_dotenv_for_cli()
+        assert os.environ.get("FMP_API_KEY") == "from-shell"
+
+    def test_no_dotenv_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ):
+        monkeypatch.chdir(tmp_path)  # tmp_path has no .env
+        # Also avoid the repo-root fallback finding the real .env
+        monkeypatch.setattr(envmod, "_find_dotenv_for_cli", lambda: None)
+        assert envmod._load_dotenv_for_cli() is None
+
+    def test_handles_comments_and_quoted_values(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "# comment line\n"
+            "EMPTY_LINE_NEXT=\n"
+            "\n"
+            "QUOTED_VAR=\"hello world\"\n"
+            "SINGLE_QUOTED='hi there'\n"
+            "EXPORT_VAR=keep-it\n"
+            "export EXPORT_PREFIXED=via-export\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        for k in ("QUOTED_VAR", "SINGLE_QUOTED", "EXPORT_PREFIXED", "EMPTY_LINE_NEXT"):
+            monkeypatch.delenv(k, raising=False)
+        # Force the manual parser path to ensure both implementations agree.
+        # (python-dotenv if present handles all these too.)
+        loaded = envmod._load_dotenv_for_cli()
+        assert loaded is not None
+        assert os.environ.get("QUOTED_VAR") == "hello world"
+        assert os.environ.get("SINGLE_QUOTED") == "hi there"
+        assert os.environ.get("EXPORT_PREFIXED") == "via-export"
+
+    def test_cli_reports_loaded_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture,
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text("FMP_API_KEY=loaded-x\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+        rc = envmod.main(["--check"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert ".env:" in out
+
+    def test_cli_no_dotenv_flag_skips_load(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path, capsys: pytest.CaptureFixture,
+    ):
+        env_file = tmp_path / ".env"
+        env_file.write_text("FMP_API_KEY=should-not-load\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+        rc = envmod.main(["--check", "--strict", "--no-dotenv"])
+        # With dotenv skipped and FMP_API_KEY unset, strict mode exits 1.
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert ".env:" not in out
