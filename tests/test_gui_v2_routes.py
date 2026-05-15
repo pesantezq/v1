@@ -56,6 +56,60 @@ def test_health_renders_all_sections(client):
     assert "registry" in body.lower()
 
 
+def test_today_renders_decision_center_sections(tmp_path, monkeypatch):
+    """Migrated Decision Center sections (validation, full queue, performance)
+    appear when the underlying artifacts are present."""
+    import json
+    from gui_v2 import app as appmod
+    fake = tmp_path
+    (fake / "main.py").write_text("# marker\n", encoding="utf-8")
+    (fake / "outputs" / "latest").mkdir(parents=True)
+    (fake / "outputs" / "policy").mkdir(parents=True)
+
+    # 7 decisions to trigger the full-queue section (cap is 5 for top)
+    (fake / "outputs" / "latest" / "decision_plan.json").write_text(json.dumps({
+        "generated_at": "x", "total_decisions": 7, "observe_only": True,
+        "decisions": [
+            {"symbol": f"S{i}", "decision": "BUY", "priority": float(i),
+             "urgency": "high", "source": "test",
+             "reason": f"reason {i}",
+             "recommended_amount": 100.0 * (i + 1)}
+            for i in range(7)
+        ],
+    }), encoding="utf-8")
+    (fake / "outputs" / "latest" / "ai_decision_validation.json").write_text(json.dumps({
+        "generated_at": "x", "observe_only": True, "available": True,
+        "total_validated": 1, "aligned_count": 1, "caution_count": 0,
+        "contradiction_count": 0, "insufficient_context_count": 0,
+        "ai_used": False, "summary_line": "1 aligned",
+        "validations": [{"symbol": "S0", "decision": "BUY",
+                         "validation_status": "aligned",
+                         "plain_english_summary": "ok",
+                         "contradictions": [], "watch_next": ["earnings"]}],
+    }), encoding="utf-8")
+    (fake / "outputs" / "policy" / "decision_outcome_summary.json").write_text(json.dumps({
+        "generated_at": "x", "total_decisions": 40, "resolved": 2,
+        "unresolved": 38, "hit_rate": 0.0, "avg_return_pct": 0.0088,
+        "by_decision": {}, "by_validation_status": {},
+        "last_10_resolved": [], "best_decision": None, "worst_decision": None,
+    }), encoding="utf-8")
+    monkeypatch.setattr(appmod, "REPO_ROOT", fake)
+
+    from fastapi.testclient import TestClient
+    client = TestClient(appmod.app)
+    body = client.get("/").text
+    # Full queue surface
+    assert "Full decision queue" in body
+    assert "7 decisions total" in body
+    # AI validation surface
+    assert "AI validation" in body
+    assert "Aligned" in body
+    # Decision performance surface
+    assert "Decision performance" in body
+    assert "Hit rate" in body
+    assert "Avg return" in body
+
+
 def test_today_renders_decisions_and_memo(tmp_path, monkeypatch):
     import json
     from gui_v2 import app as appmod

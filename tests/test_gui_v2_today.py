@@ -106,3 +106,135 @@ class TestMemo:
     def test_missing_memo_is_empty(self, fake_repo: Path):
         view = collect_today_view(fake_repo)
         assert view["memo_html"] == ""
+
+
+# Decision Center sections migrated from gui/page_decision_center
+
+
+def _write_validation(repo: Path, validations: list[dict], **overrides) -> None:
+    payload = {
+        "generated_at": "x",
+        "observe_only": True,
+        "available": True,
+        "total_validated": len(validations),
+        "aligned_count": sum(1 for v in validations if v.get("validation_status") == "aligned"),
+        "caution_count": sum(1 for v in validations if v.get("validation_status") == "caution"),
+        "contradiction_count": 0,
+        "insufficient_context_count": 0,
+        "ai_used": False,
+        "summary_line": "",
+        "validations": validations,
+    }
+    payload.update(overrides)
+    (repo / "outputs" / "latest" / "ai_decision_validation.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def _write_explanations(repo: Path, explanations: list[dict]) -> None:
+    (repo / "outputs" / "latest" / "decision_explanations.json").write_text(
+        json.dumps({
+            "generated_at": "x", "available": True, "observe_only": True,
+            "summary_line": "", "source_artifacts": [], "explanations": explanations,
+        }),
+        encoding="utf-8",
+    )
+
+
+def _write_outcome_summary(repo: Path, **overrides) -> None:
+    policy = repo / "outputs" / "policy"
+    policy.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": "x",
+        "total_decisions": 10,
+        "resolved": 5,
+        "unresolved": 5,
+        "hit_rate": 0.6,
+        "avg_return_pct": 0.012,
+        "by_decision": {},
+        "by_validation_status": {},
+        "last_10_resolved": [],
+        "best_decision": None,
+        "worst_decision": None,
+    }
+    payload.update(overrides)
+    (policy / "decision_outcome_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestFullDecisions:
+    def test_returns_all_rows(self, fake_repo: Path):
+        _write_decision_plan(fake_repo, [
+            {"symbol": f"S{i}", "decision": "BUY", "priority": float(i)}
+            for i in range(7)
+        ])
+        view = collect_today_view(fake_repo)
+        assert len(view["full_decisions"]) == 7
+        # Top 5 (the compact view) still capped
+        assert len(view["decisions"]) == 5
+
+    def test_empty_plan(self, fake_repo: Path):
+        view = collect_today_view(fake_repo)
+        assert view["full_decisions"] == []
+
+
+class TestValidationCounts:
+    def test_unavailable_when_missing(self, fake_repo: Path):
+        view = collect_today_view(fake_repo)
+        assert view["validation_counts"]["available"] is False
+
+    def test_counts_passthrough(self, fake_repo: Path):
+        _write_validation(fake_repo, [
+            {"symbol": "A", "decision": "BUY", "validation_status": "aligned",
+             "plain_english_summary": "ok"},
+            {"symbol": "B", "decision": "SELL", "validation_status": "caution",
+             "plain_english_summary": "watch"},
+        ])
+        view = collect_today_view(fake_repo)
+        vc = view["validation_counts"]
+        assert vc["available"] is True
+        assert vc["total"] == 2
+        assert vc["aligned"] == 1
+        assert vc["caution"] == 1
+
+
+class TestValidationsBySymbol:
+    def test_lookup_by_symbol(self, fake_repo: Path):
+        _write_validation(fake_repo, [
+            {"symbol": "ZZZX", "decision": "BUY", "validation_status": "aligned",
+             "plain_english_summary": "looks good", "contradictions": [],
+             "watch_next": ["earnings", "RSI"]},
+        ])
+        view = collect_today_view(fake_repo)
+        v = view["validations_by_symbol"].get("ZZZX")
+        assert v is not None
+        assert v["status"] == "aligned"
+        assert v["summary"] == "looks good"
+        assert v["watch_next"] == ["earnings", "RSI"]
+
+
+class TestExplanationsBySymbol:
+    def test_lookup_by_symbol(self, fake_repo: Path):
+        _write_explanations(fake_repo, [
+            {"decision_id": 1, "symbol": "ABCD", "action": "BUY",
+             "concise_explanation": "strong tape",
+             "risks": ["vol-spike"], "what_to_watch_next": ["earnings"]},
+        ])
+        view = collect_today_view(fake_repo)
+        e = view["explanations_by_symbol"].get("ABCD")
+        assert e is not None
+        assert e["concise"] == "strong tape"
+        assert e["risks"] == ["vol-spike"]
+
+
+class TestDecisionPerformance:
+    def test_unavailable_when_missing(self, fake_repo: Path):
+        view = collect_today_view(fake_repo)
+        assert view["decision_performance"]["available"] is False
+
+    def test_passthrough(self, fake_repo: Path):
+        _write_outcome_summary(fake_repo, hit_rate=0.75, avg_return_pct=0.025)
+        view = collect_today_view(fake_repo)
+        dp = view["decision_performance"]
+        assert dp["available"] is True
+        assert dp["hit_rate"] == 0.75
+        assert dp["avg_return_pct"] == 0.025

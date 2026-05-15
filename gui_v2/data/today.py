@@ -107,6 +107,107 @@ def _risk_focus(plan: dict | None) -> list[dict[str, Any]]:
     return out
 
 
+def _full_decisions(plan: dict | None) -> list[dict[str, Any]]:
+    """Every decision row, normalised to a small projection for the queue view."""
+    if not isinstance(plan, dict):
+        return []
+    rows = plan.get("decisions")
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        out.append({
+            "symbol": row.get("symbol"),
+            "decision": row.get("decision"),
+            "priority": row.get("priority"),
+            "urgency": row.get("urgency"),
+            "source": row.get("source"),
+            "reason": row.get("reason") or row.get("decision_reason") or "",
+            "recommended_amount": row.get("recommended_amount"),
+            "recommended_allocation_pct": row.get("recommended_allocation_pct"),
+            "confidence": row.get("confidence"),
+            "risk_flags": row.get("risk_flags") or [],
+        })
+    return out
+
+
+def _validations_by_symbol(validation: dict | None) -> dict[str, dict[str, Any]]:
+    """Map symbol -> {validation_status, plain_english_summary} for join with decisions."""
+    if not isinstance(validation, dict):
+        return {}
+    rows = validation.get("validations")
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = row.get("symbol")
+        if not sym:
+            continue
+        out[sym] = {
+            "status": row.get("validation_status"),
+            "summary": row.get("plain_english_summary"),
+            "contradictions": row.get("contradictions") or [],
+            "watch_next": row.get("watch_next") or [],
+        }
+    return out
+
+
+def _explanations_by_symbol(expl: dict | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(expl, dict):
+        return {}
+    rows = expl.get("explanations")
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sym = row.get("symbol")
+        if not sym:
+            continue
+        out[sym] = {
+            "concise": row.get("concise_explanation"),
+            "risks": row.get("risks") or [],
+            "what_to_watch_next": row.get("what_to_watch_next") or [],
+        }
+    return out
+
+
+def _validation_counts(validation: dict | None) -> dict[str, Any]:
+    if not isinstance(validation, dict):
+        return {"available": False}
+    return {
+        "available": bool(validation.get("available")),
+        "total": validation.get("total_validated", 0),
+        "aligned": validation.get("aligned_count", 0),
+        "caution": validation.get("caution_count", 0),
+        "contradiction": validation.get("contradiction_count", 0),
+        "insufficient": validation.get("insufficient_context_count", 0),
+        "ai_used": bool(validation.get("ai_used")),
+        "summary_line": validation.get("summary_line", ""),
+    }
+
+
+def _decision_performance(outcome_summary: dict | None) -> dict[str, Any]:
+    if not isinstance(outcome_summary, dict):
+        return {"available": False}
+    return {
+        "available": True,
+        "total_decisions": outcome_summary.get("total_decisions"),
+        "resolved": outcome_summary.get("resolved"),
+        "unresolved": outcome_summary.get("unresolved"),
+        "hit_rate": outcome_summary.get("hit_rate"),
+        "avg_return_pct": outcome_summary.get("avg_return_pct"),
+        "last_10_resolved": outcome_summary.get("last_10_resolved", []),
+        "best_decision": outcome_summary.get("best_decision"),
+        "worst_decision": outcome_summary.get("worst_decision"),
+    }
+
+
 def _top_movers(opps: dict | None, max_rows: int = 8) -> list[dict[str, Any]]:
     if not isinstance(opps, dict):
         return []
@@ -133,11 +234,17 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
     returns a dict; never raises.
     """
     latest = Path(repo_root) / "outputs" / "latest"
+    policy = Path(repo_root) / "outputs" / "policy"
 
     status = _read_json(latest / "pipeline_run_status.json")
     plan = _read_json(latest / "decision_plan.json")
     opps = _read_json(latest / "market_opportunities.json")
     memo_md = _read_text(latest / "daily_memo.md")
+
+    # Decision Center inputs (migrated from gui/page_decision_center)
+    validation = _read_json(latest / "ai_decision_validation.json")
+    explanations = _read_json(latest / "decision_explanations.json")
+    outcome_summary = _read_json(policy / "decision_outcome_summary.json")
 
     return {
         "advisory_only": True,
@@ -145,8 +252,14 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
         "repo_root": str(repo_root),
         "header": _header_from_status(status),
         "decisions": _decisions(plan),
+        "full_decisions": _full_decisions(plan),
         "capital_actions": _capital_actions(plan),
         "risk_focus": _risk_focus(plan),
         "top_movers": _top_movers(opps),
         "memo_html": _render_markdown(memo_md),
+        # Decision Center sections
+        "validation_counts": _validation_counts(validation),
+        "validations_by_symbol": _validations_by_symbol(validation),
+        "explanations_by_symbol": _explanations_by_symbol(explanations),
+        "decision_performance": _decision_performance(outcome_summary),
     }
