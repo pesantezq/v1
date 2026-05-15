@@ -151,6 +151,66 @@ def _allocation_summary(holdings: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _profit_attribution(repo_root: Path) -> dict[str, Any]:
+    """Project outputs/policy/profit_attribution.json to what Portfolio renders.
+
+    Defensive — the upstream artifact is rich; we only surface a small
+    operator-friendly subset. Returns ``available=False`` when missing.
+    """
+    payload = _read_json(Path(repo_root) / "outputs" / "policy" / "profit_attribution.json")
+    if not isinstance(payload, dict):
+        return {"available": False}
+
+    metrics = payload.get("metrics") or {}
+    metrics_view: dict[str, Any] = {}
+    if isinstance(metrics, dict):
+        # Pull common keys; tolerate any subset
+        for k in ("total_trades", "attributed_trades", "win_rate", "hit_rate",
+                  "avg_return_pct", "rr", "risk_reward", "expectancy",
+                  "missed_opportunities"):
+            if k in metrics:
+                metrics_view[k] = metrics[k]
+
+    def _breakdown(rows: Any, max_rows: int = 8) -> list[dict[str, Any]]:
+        """Normalise a dict-or-list breakdown into a list of {key, count, value}."""
+        if isinstance(rows, dict):
+            items = []
+            for key, val in rows.items():
+                if isinstance(val, dict):
+                    items.append({"key": key, **val})
+                else:
+                    items.append({"key": key, "value": val})
+            return items[:max_rows]
+        if isinstance(rows, list):
+            return [r for r in rows[:max_rows] if isinstance(r, dict)]
+        return []
+
+    missed = payload.get("missed_opportunities") or []
+    missed_rows: list[dict[str, Any]] = []
+    if isinstance(missed, list):
+        for r in missed[:5]:
+            if isinstance(r, dict):
+                missed_rows.append({
+                    "symbol": r.get("symbol") or r.get("ticker"),
+                    "missed_return_pct": r.get("missed_return_pct") or r.get("return_pct"),
+                    "reason": r.get("reason") or "",
+                })
+
+    return {
+        "available": True,
+        "generated_at": payload.get("generated_at"),
+        "metrics": metrics_view,
+        "by_strategy": _breakdown(payload.get("by_strategy")),
+        "by_score_band": _breakdown(payload.get("by_score_band")),
+        "by_regime": _breakdown(payload.get("by_regime")),
+        "missed_opportunities": missed_rows,
+        "total_opportunity_cost": payload.get("total_opportunity_cost"),
+        "data_quality_notes": [
+            n for n in (payload.get("data_quality_notes") or []) if n
+        ][:5],
+    }
+
+
 def collect_portfolio_view(repo_root: Path) -> dict[str, Any]:
     """Full Portfolio page data: stub + holdings + watchlist (read-only) + signals."""
     base = collect_portfolio_stub(repo_root)
@@ -160,4 +220,5 @@ def collect_portfolio_view(repo_root: Path) -> dict[str, Any]:
     base["allocation"] = _allocation_summary(holdings)
     base["watchlist"] = _watchlist_with_tags(repo_root)
     base["recent_signals"] = _recent_signals(repo_root)
+    base["profit_attribution"] = _profit_attribution(repo_root)
     return base

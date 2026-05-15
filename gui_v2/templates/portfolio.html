@@ -158,6 +158,89 @@
     </section>
     {% endif %}
 
+    <!-- Profit attribution -->
+    {% if profit_attribution.available %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Profit attribution</h2>
+      {% if profit_attribution.metrics %}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        {% for k, v in profit_attribution.metrics.items() %}
+          {% if v is number %}
+            {% if k in ("win_rate", "hit_rate") %}
+              {% set value = "%.1f%%"|format((v or 0)*100) %}
+            {% elif k in ("avg_return_pct",) %}
+              {% set value = "%+.2f%%"|format((v or 0)*100) %}
+            {% elif k in ("rr", "risk_reward", "expectancy") %}
+              {% set value = "%.2f"|format(v or 0) %}
+            {% else %}
+              {% set value = "{:,}".format(v|int) if (v == v|int) else "%.2f"|format(v) %}
+            {% endif %}
+          {% else %}
+            {% set value = v %}
+          {% endif %}
+          {% with label=k.replace("_", " "), value=value %}{% include "components/metric_card.html" %}{% endwith %}
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if profit_attribution.total_opportunity_cost is not none %}
+      <p class="text-xs text-zinc-400 mb-3">
+        Total opportunity cost:
+        <span class="font-mono text-amber-300">${{ "{:,.0f}".format(profit_attribution.total_opportunity_cost or 0) }}</span>
+      </p>
+      {% endif %}
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {% for title, rows in [
+            ("By strategy", profit_attribution.by_strategy),
+            ("By score band", profit_attribution.by_score_band),
+            ("By regime", profit_attribution.by_regime),
+        ] %}
+          {% if rows %}
+          <details class="bg-zinc-900 rounded-lg border border-zinc-800">
+            <summary class="cursor-pointer px-4 py-3 text-sm text-zinc-300">{{ title }} ({{ rows | length }})</summary>
+            <ul class="border-t border-zinc-800 px-4 py-2 text-xs font-mono space-y-1">
+              {% for r in rows %}
+              <li class="flex items-baseline justify-between gap-3">
+                <span class="text-zinc-300">{{ r.key or "" }}</span>
+                <span class="text-zinc-500">
+                  {%- for fk, fv in r.items() if fk != "key" -%}
+                    {{ fk }}={{ fv }}{{ "  " if not loop.last else "" }}
+                  {%- endfor -%}
+                </span>
+              </li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      {% if profit_attribution.missed_opportunities %}
+      <div class="mt-4">
+        <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-2">Missed opportunities</h3>
+        <ul class="space-y-1 text-sm">
+          {% for m in profit_attribution.missed_opportunities %}
+          <li class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-2 flex items-center gap-3">
+            <span class="font-mono font-semibold w-20">{{ m.symbol or "?" }}</span>
+            <span class="font-mono text-amber-300 w-24 text-right">
+              {% if m.missed_return_pct is not none %}{{ "%+.2f"|format((m.missed_return_pct or 0)*100) }}%{% endif %}
+            </span>
+            <span class="text-xs text-zinc-400">{{ m.reason }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      {% if profit_attribution.data_quality_notes %}
+      <p class="text-xs text-zinc-500 mt-3">
+        {{ profit_attribution.data_quality_notes | join(" · ") }}
+      </p>
+      {% endif %}
+    </section>
+    {% endif %}
+
     <!-- Watchlist symbols + tags (read-only) -->
     {% if watchlist %}
     <section>

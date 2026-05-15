@@ -110,6 +110,41 @@ class TestPortfolioFullView:
         # Sorted descending by signal_score
         assert [r["symbol"] for r in v["recent_signals"]][:3] == ["B", "C", "A"]
 
+    def test_profit_attribution_unavailable_when_missing(self, fake_repo: Path):
+        v = collect_portfolio_view(fake_repo)
+        assert v["profit_attribution"]["available"] is False
+
+    def test_profit_attribution_passthrough(self, fake_repo: Path):
+        policy = fake_repo / "outputs" / "policy"
+        policy.mkdir(parents=True, exist_ok=True)
+        (policy / "profit_attribution.json").write_text(json.dumps({
+            "generated_at": "x",
+            "metrics": {"total_trades": 43, "win_rate": 0.55, "rr": 1.8,
+                        "avg_return_pct": 0.025},
+            "by_strategy": {"momentum": {"trades": 10, "win_rate": 0.6}},
+            "by_score_band": [],
+            "by_regime": {"normal": {"trades": 30}, "drawdown": {"trades": 13}},
+            "trade_ledger": [],
+            "exit_summary": {},
+            "missed_opportunities": [
+                {"symbol": "NVDA", "missed_return_pct": 0.12, "reason": "skipped"},
+            ],
+            "total_opportunity_cost": 1234.56,
+            "data_quality_notes": ["note 1"],
+            "execution": {},
+        }), encoding="utf-8")
+        pa = collect_portfolio_view(fake_repo)["profit_attribution"]
+        assert pa["available"] is True
+        assert pa["metrics"]["total_trades"] == 43
+        assert pa["metrics"]["win_rate"] == 0.55
+        # by_strategy dict normalised to list of dicts with `key`
+        assert any(r["key"] == "momentum" for r in pa["by_strategy"])
+        # by_regime same
+        assert any(r["key"] == "normal" for r in pa["by_regime"])
+        # missed opportunities preserved
+        assert pa["missed_opportunities"][0]["symbol"] == "NVDA"
+        assert pa["total_opportunity_cost"] == 1234.56
+
 
 class TestResearchStub:
     def test_empty_repo_returns_zero_counts(self, fake_repo: Path):
