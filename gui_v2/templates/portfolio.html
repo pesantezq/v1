@@ -1,9 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Portfolio &mdash; StockBot{% endblock %}
 {% block content %}
-  <h1 class="text-2xl font-semibold">Portfolio</h1>
-  {% if available %}
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+  <div id="portfolio-content"
+       hx-get="/portfolio?fragment=1"
+       hx-target="#portfolio-content"
+       hx-swap="outerHTML"
+       class="space-y-8">
+
+    <header class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-semibold">Portfolio</h1>
+        <p class="text-sm text-zinc-400">
+          Holdings, allocation, watchlist symbols, and recent signals &mdash; read-only.
+          Write actions (add/remove symbols, bulk replace) remain in the Streamlit
+          Watchlist Manager.
+        </p>
+      </div>
+      <button hx-get="/portfolio?fragment=1"
+              hx-target="#portfolio-content"
+              hx-swap="outerHTML"
+              class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+        Refresh
+      </button>
+    </header>
+
+    <!-- Summary metrics -->
+    {% if available %}
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
       {% with label="Total value", value="$" ~ ("{:,.2f}".format(total_value or 0)) %}
         {% include "components/metric_card.html" %}
       {% endwith %}
@@ -13,12 +36,163 @@
       {% with label="Snapshot at", value=generated_at or "n/a" %}
         {% include "components/metric_card.html" %}
       {% endwith %}
-    </div>
-    <p class="text-xs text-zinc-500">Stub page &mdash; full content deferred.</p>
-  {% else %}
-    {% with heading="No portfolio snapshot yet",
-            body="Run the daily pipeline or watchlist scanner to produce outputs/portfolio/portfolio_snapshot.json." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
-  {% endif %}
+    </section>
+    {% else %}
+      {% with heading="No portfolio snapshot yet",
+              body="Run the daily pipeline or watchlist scanner to produce outputs/portfolio/portfolio_snapshot.json." %}
+        {% include "components/empty_state.html" %}
+      {% endwith %}
+    {% endif %}
+
+    <!-- Holdings table -->
+    {% if holdings %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Holdings</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-zinc-500">
+            <tr>
+              <th class="text-left px-3 py-2">symbol</th>
+              <th class="text-right px-3 py-2">shares</th>
+              <th class="text-right px-3 py-2">price</th>
+              <th class="text-right px-3 py-2">value</th>
+              <th class="text-right px-3 py-2">alloc</th>
+              <th class="text-right px-3 py-2">target</th>
+              <th class="text-right px-3 py-2">drift</th>
+              <th class="text-left px-3 py-2">sector</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for h in holdings %}
+            <tr>
+              <td class="px-3 py-1.5 font-semibold">{{ h.symbol or "" }}</td>
+              <td class="px-3 py-1.5 text-right">{% if h.shares is not none %}{{ "{:,.4f}".format(h.shares or 0) }}{% endif %}</td>
+              <td class="px-3 py-1.5 text-right text-zinc-400">{% if h.price is not none %}${{ "{:,.2f}".format(h.price or 0) }}{% endif %}</td>
+              <td class="px-3 py-1.5 text-right">{% if h.value is not none %}${{ "{:,.2f}".format(h.value or 0) }}{% endif %}</td>
+              <td class="px-3 py-1.5 text-right text-zinc-400">{% if h.alloc_pct is not none %}{{ "%.1f"|format((h.alloc_pct or 0)*100) }}%{% endif %}</td>
+              <td class="px-3 py-1.5 text-right text-zinc-500">{% if h.target_alloc_pct is not none %}{{ "%.1f"|format((h.target_alloc_pct or 0)*100) }}%{% endif %}</td>
+              <td class="px-3 py-1.5 text-right
+                  {% if h.drift_pct is not none and (h.drift_pct or 0) >= 0.10 %}text-amber-300
+                  {% elif h.drift_pct is not none and (h.drift_pct or 0) <= -0.10 %}text-rose-300
+                  {% else %}text-zinc-400{% endif %}">
+                {% if h.drift_pct is not none %}{{ "%+.1f"|format((h.drift_pct or 0)*100) }}%{% endif %}
+              </td>
+              <td class="px-3 py-1.5 text-zinc-400">{{ h.sector or "" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Drift warnings -->
+    {% if allocation.drift_warnings %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Drift warnings (|drift| ≥ 10%)</h2>
+      <ul class="space-y-2">
+        {% for w in allocation.drift_warnings %}
+        <li class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-2 flex items-center gap-3">
+          {% with severity=("WARN" if w.drift_pct >= 0 else "FAIL"), label=("over" if w.drift_pct >= 0 else "under") %}
+            {% include "components/severity_badge.html" %}
+          {% endwith %}
+          <span class="font-mono font-semibold">{{ w.symbol }}</span>
+          <span class="font-mono text-zinc-400">{{ "%+.1f"|format(w.drift_pct*100) }}%</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <!-- Sector allocation -->
+    {% if allocation.by_sector_value %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Allocation by sector</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4">
+        <ul class="space-y-1 text-sm font-mono">
+          {% set total = allocation.total_value or 0 %}
+          {% for sector, value in allocation.by_sector_value.items() | sort(attribute='1', reverse=true) %}
+          <li class="flex items-center gap-3">
+            <span class="text-zinc-400 flex-1">{{ sector }}</span>
+            <span class="text-right w-28">${{ "{:,.0f}".format(value) }}</span>
+            <span class="text-right w-16 text-zinc-500">
+              {% if total > 0 %}{{ "%.1f"|format(value/total*100) }}%{% endif %}
+            </span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Recent watchlist signals -->
+    {% if recent_signals %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Recent watchlist signals</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-zinc-500">
+            <tr>
+              <th class="text-left px-3 py-2">symbol</th>
+              <th class="text-right px-3 py-2">signal</th>
+              <th class="text-right px-3 py-2">confidence</th>
+              <th class="text-left px-3 py-2">alert</th>
+              <th class="text-left px-3 py-2">sector</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for s in recent_signals %}
+            <tr>
+              <td class="px-3 py-1.5 font-semibold">{{ s.symbol or "" }}</td>
+              <td class="px-3 py-1.5 text-right text-zinc-300">{% if s.signal_score is not none %}{{ "%.3f"|format(s.signal_score or 0) }}{% endif %}</td>
+              <td class="px-3 py-1.5 text-right text-zinc-400">{% if s.confidence is not none %}{{ "%.2f"|format(s.confidence or 0) }}{% endif %}</td>
+              <td class="px-3 py-1.5 text-zinc-400">{{ s.alert or "" }}</td>
+              <td class="px-3 py-1.5 text-zinc-400">{{ s.sector or "" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    <!-- Watchlist symbols + tags (read-only) -->
+    {% if watchlist %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">
+        Watchlist ({{ watchlist | length }} symbols)
+      </h2>
+      <p class="text-xs text-zinc-500 mb-3">
+        Read-only view. To add or remove symbols, use the Streamlit Watchlist Manager.
+      </p>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-zinc-500">
+            <tr>
+              <th class="text-left px-3 py-2">symbol</th>
+              <th class="text-left px-3 py-2">enabled</th>
+              <th class="text-left px-3 py-2">tags</th>
+              <th class="text-left px-3 py-2">note</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for w in watchlist %}
+            <tr>
+              <td class="px-3 py-1.5 font-semibold">{{ w.symbol }}</td>
+              <td class="px-3 py-1.5">
+                <span class="{{ 'text-emerald-300' if w.enabled else 'text-zinc-500' }}">
+                  {{ '✓' if w.enabled else '·' }}
+                </span>
+              </td>
+              <td class="px-3 py-1.5 text-zinc-400">{{ w.tags | join(", ") }}</td>
+              <td class="px-3 py-1.5 text-zinc-500">{{ w.note }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+  </div>
 {% endblock %}
