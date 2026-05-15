@@ -1,10 +1,13 @@
 """GUI v2 — FastAPI application."""
 from __future__ import annotations
 
+import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -12,6 +15,66 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 app = FastAPI(title="StockBot Dashboard v2")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+# ---------------------------------------------------------------------------
+# Optional HTTP basic auth
+# ---------------------------------------------------------------------------
+#
+# When BOTH GUI_V2_AUTH_USER and GUI_V2_AUTH_PASS are set in the environment,
+# every route requires HTTP Basic credentials matching those values. When
+# either is unset, the dashboard is open (current default behavior).
+#
+# Credentials are compared with constant-time comparison so the response
+# time does not leak whether the username matches.
+# ---------------------------------------------------------------------------
+
+# auto_error=False so the dependency runs even when no Authorization header
+# is sent.  This lets us decide at request time whether auth is required.
+_security = HTTPBasic(auto_error=False)
+
+
+def _require_auth(
+    credentials: HTTPBasicCredentials | None = Depends(_security),
+) -> str | None:
+    """
+    Route gate. Returns the username when auth succeeds OR when auth is
+    not configured (open mode).  Raises 401 when auth IS configured and
+    the credentials are missing/wrong.
+
+    Decision happens at request time so the operator can flip env vars
+    without restarting the process (though systemd-managed env requires
+    a restart — this still tests cleanly under monkeypatch).
+    """
+    expected_user = os.environ.get("GUI_V2_AUTH_USER", "").strip()
+    expected_pass = os.environ.get("GUI_V2_AUTH_PASS", "").strip()
+    auth_enabled = bool(expected_user and expected_pass)
+
+    if not auth_enabled:
+        return None  # open mode
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="StockBot Dashboard"'},
+        )
+
+    user_ok = secrets.compare_digest(
+        credentials.username.encode("utf-8"),
+        expected_user.encode("utf-8"),
+    )
+    pass_ok = secrets.compare_digest(
+        credentials.password.encode("utf-8"),
+        expected_pass.encode("utf-8"),
+    )
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="StockBot Dashboard"'},
+        )
+    return credentials.username
 
 
 _SEVERITY_PALETTE = {
@@ -53,22 +116,22 @@ from gui_v2.data.operations import collect_operations_view
 
 
 @app.get("/", response_class=HTMLResponse)
-def page_today(request: Request) -> HTMLResponse:
+def page_today(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
     return _render(request, "today.html", **collect_today_view(REPO_ROOT))
 
 
 @app.get("/portfolio", response_class=HTMLResponse)
-def page_portfolio(request: Request) -> HTMLResponse:
+def page_portfolio(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
     return _render(request, "portfolio.html", **collect_portfolio_view(REPO_ROOT))
 
 
 @app.get("/research", response_class=HTMLResponse)
-def page_research(request: Request) -> HTMLResponse:
+def page_research(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
     return _render(request, "research.html", **collect_research_view(REPO_ROOT))
 
 
 @app.get("/health", response_class=HTMLResponse)
-def page_health(request: Request) -> HTMLResponse:
+def page_health(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
     view = collect_health_view(REPO_ROOT)
     return _render(request, "health.html", overall=overall_severity(view), **view)
 
@@ -78,6 +141,7 @@ def page_operations(
     request: Request,
     log: str | None = None,
     tail: int = 200,
+    _auth: str | None = Depends(_require_auth),
 ) -> HTMLResponse:
     # Clamp tail to a sane range so a hostile querystring can't OOM the host.
     tail = max(10, min(5000, int(tail or 200)))
