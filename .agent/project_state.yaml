@@ -45,24 +45,54 @@ completed_steps:
   - production_hardening_track_phase_a_through_f
   - gui_v2_mvp
   - gui_v2_read_only_migration
+  - gui_v2_write_surface_decision  # resolved: CLI replacements (see docs/STREAMLIT_RETIREMENT.md)
+  - gui_v2_theme_toggle
+  - gui_v2_extra_panels  # news_evidence + market_narrative + profit_attribution + ai_cost_trend
+  - gui_v2_basic_auth
+  - tools_watchlist_edit_cli
+  - tools_notify_status_cli
+  - tools_backup_portfolio_db_cli
 
 next_official_step:
-  primary: gui_v2_write_surface_decision
-  secondary:
-    - gui_v2_compiled_tailwind
-    - gui_v2_theme_toggle
+  primary: project_complete
+  secondary: []
   note: >
-    Streamlit operator cockpit was superseded by gui_v2 (FastAPI + HTMX +
-    Jinja2 + Tailwind, port 8502).  Five gui_v2 pages now have full
-    real content: Today, Portfolio, Research, Health, Operations.  Five
-    Streamlit pages migrated read-only: Decision Center, Automatic
-    Promotion, Watchlist Manager (read parts only), Run History, Logs.
-    Streamlit pages that write state remain live: Run Controls, Config
-    Editor, Prompts, Watchlist add/remove/import, Outputs (download).
-    Next decision is the write-surface strategy: keep Streamlit for writes
-    indefinitely, add an explicit write mode to gui_v2 with confirmation
-    gates, or replace each Streamlit write page with a CLI tool.  Until
-    that decision lands, gui_v2 remains strict read-only by spec.
+    All identified roadmap items are shipped.  The Streamlit operator
+    cockpit was superseded by gui_v2 (FastAPI + HTMX + Jinja2 + Tailwind,
+    port 8502).  Write surface decision resolved: CLIs.  The full
+    runbook for retiring Streamlit lives in docs/STREAMLIT_RETIREMENT.md.
+
+    Permanently-deferred items remain out of scope and are listed under
+    `deferred_steps` below: auto-trading, broker integration, billing,
+    multi-tenant auth, redis event bus, external customer
+    productization, full discovery promotion engine.
+
+    Operational items the project doesn't ship but that the operator
+    runs day-to-day:
+      - Streamlit retirement (when the operator chooses)
+      - Compiled Tailwind (cosmetic; CDN is fine)
+      - Slack integration for notify_status (today: email only)
+
+project_status: complete
+
+gui_v2_extras:
+  basic_auth:           gated by GUI_V2_AUTH_USER + GUI_V2_AUTH_PASS env vars
+  news_evidence_panel:  on Today; reads outputs/latest/news_evidence_layer.json
+  market_narrative_panel: on Today; reads market_narrative_{daily,weekly,monthly}.json
+  profit_attribution_panel: on Portfolio; reads outputs/policy/profit_attribution.json
+  ai_cost_trend_chart:  on Health; 30-day series from outputs/policy/ai_usage_events.jsonl
+  theme_toggle:         light/dark, persisted via localStorage
+
+production_tools:
+  status:                python -m tools.status [--strict] [--format json|md]
+  smoke_test:            python -m tools.smoke_test [--strict]
+  env_check:             python -m portfolio_automation.env --check [--strict]
+  watchlist_edit:        python -m tools.watchlist_edit --list | --add | --remove | ...
+  manual_portfolio_update: python -m tools.manual_portfolio_update --input CSV --approve
+  backup_portfolio_db:   python -m tools.backup_portfolio_db --retain N
+  notify_status:         python -m tools.notify_status (opt-in via STATUS_ALERT_ENABLED=1)
+  cleanup_orphan_outputs: python -m tools.cleanup_orphan_outputs (one-shot)
+  daily_sandbox_run:     python -m tools.daily_sandbox_run (already scheduled via timer)
 
 gui_v2:
   port: 8502
