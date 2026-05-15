@@ -350,6 +350,24 @@ def run_pipeline(
 
     _print_summary(steps, (datetime.now() - started_at).total_seconds(),
                    log=log, dry_run=dry_run)
+
+    # Pipeline run status (additive, non-blocking).  Mirrors the sandbox lane's
+    # sandbox_run_status.json shape so operators have one consistent contract.
+    # Never blocks the pipeline result.
+    try:
+        from portfolio_automation.run_status import (
+            status_from_pipeline_steps,
+            write_pipeline_run_status,
+        )
+        _run_status = status_from_pipeline_steps(steps, run_mode="daily")
+        _paths = write_pipeline_run_status(_run_status, base_dir=ROOT / "outputs")
+        if "error" in _paths:
+            log.warning("pipeline_run_status write failed: %s", _paths["error"])
+        else:
+            log.info("pipeline_run_status written: %s", _paths.get("pipeline_run_status_json"))
+    except Exception as _status_err:
+        log.warning("pipeline_run_status emission failed (non-fatal): %s", _status_err)
+
     return steps
 
 

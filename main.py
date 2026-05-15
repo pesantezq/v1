@@ -621,7 +621,10 @@ def run_portfolio_update(
     # Resolve output directory (caller may override via output_dir param)
     if output_dir is None:
         output_dir = Path(config.output.get('csv_path', 'output/snapshot.csv')).parent
-    
+
+    # Wall-clock timer for the official-lane status artifact (non-blocking).
+    _run_status_start = time.monotonic()
+
     try:
         # =====================
         # 1. VALIDATE CONFIG
@@ -2645,7 +2648,31 @@ def run_portfolio_update(
         logger.debug(traceback.format_exc())
         result['errors'].append(str(e))
         result['success'] = False
-    
+
+    # Pipeline run status (additive, non-blocking). Mirrors the sandbox lane's
+    # sandbox_run_status.json so operators have one consistent shape for both
+    # lanes. Failures here must not affect the run result.
+    try:
+        from portfolio_automation.run_status import (
+            status_from_main_result,
+            write_pipeline_run_status,
+        )
+        _run_status = status_from_main_result(
+            result,
+            run_mode=run_mode,
+            duration_seconds=time.monotonic() - _run_status_start,
+        )
+        _run_status_paths = write_pipeline_run_status(_run_status)
+        if "error" in _run_status_paths:
+            logger.warning("pipeline_run_status write failed: %s", _run_status_paths["error"])
+        else:
+            logger.info(
+                "pipeline_run_status written: %s",
+                _run_status_paths.get("pipeline_run_status_json"),
+            )
+    except Exception as _status_err:
+        logger.warning("pipeline_run_status emission failed (non-fatal): %s", _status_err)
+
     return result
 
 
