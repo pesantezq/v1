@@ -25,7 +25,12 @@
           <a href="/operations" class="hover:text-emerald-400">Operations</a>
         </nav>
       </div>
-      <div class="text-xs text-zinc-400 font-mono">{% block header_right %}{% endblock %}</div>
+      <div class="flex items-center gap-3">
+        <span role="status"
+              title="Overall: {{ nav_severity }}"
+              class="inline-block w-2.5 h-2.5 rounded-full {{ nav_severity | severity_classes }}"></span>
+        <div class="text-xs text-zinc-400 font-mono">{% block header_right %}{% endblock %}</div>
+      </div>
     </div>
   </header>
   <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">

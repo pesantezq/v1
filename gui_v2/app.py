@@ -30,8 +30,19 @@ def _severity_classes(severity: str) -> str:
 templates.env.filters["severity_classes"] = _severity_classes
 
 
+def _overall_severity_for_nav() -> str:
+    """Compute overall severity for the nav badge. Best-effort; never raises."""
+    try:
+        from gui_v2.data.health import collect_health_view, overall_severity
+        return overall_severity(collect_health_view(REPO_ROOT))
+    except Exception:
+        return "INFO"
+
+
 def _render(request: Request, template_name: str, **context) -> HTMLResponse:
-    return templates.TemplateResponse(request, template_name, context)
+    ctx = {"nav_severity": _overall_severity_for_nav()}
+    ctx.update(context)
+    return templates.TemplateResponse(request, template_name, ctx)
 
 
 from gui_v2.data.today import collect_today_view

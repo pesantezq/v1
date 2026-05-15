@@ -42,6 +42,12 @@ def test_severity_badge_classes_via_jinja_filter():
     assert "zinc"    in _severity_classes("UNKNOWN")
 
 
+def test_nav_contains_overall_severity_dot(client):
+    body = client.get("/").text
+    assert 'role="status"' in body
+    assert ("emerald" in body or "sky" in body or "amber" in body or "rose" in body)
+
+
 def test_health_renders_all_sections(client):
     body = client.get("/health").text
     assert "Pipeline" in body or "status" in body.lower()
