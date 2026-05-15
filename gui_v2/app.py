@@ -35,6 +35,7 @@ def _render(request: Request, template_name: str, **context) -> HTMLResponse:
 
 
 from gui_v2.data.today import collect_today_view
+from gui_v2.data.health import collect_health_view, overall_severity
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -54,7 +55,8 @@ def page_research(request: Request) -> HTMLResponse:
 
 @app.get("/health", response_class=HTMLResponse)
 def page_health(request: Request) -> HTMLResponse:
-    return _render(request, "health.html")
+    view = collect_health_view(REPO_ROOT)
+    return _render(request, "health.html", overall=overall_severity(view), **view)
 
 
 @app.get("/operations", response_class=HTMLResponse)

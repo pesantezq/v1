@@ -42,6 +42,14 @@ def test_severity_badge_classes_via_jinja_filter():
     assert "zinc"    in _severity_classes("UNKNOWN")
 
 
+def test_health_renders_all_sections(client):
+    body = client.get("/health").text
+    assert "Pipeline" in body or "status" in body.lower()
+    assert "Artifact shape" in body or "smoke" in body.lower()
+    assert "Environment" in body or "env" in body.lower()
+    assert "registry" in body.lower()
+
+
 def test_today_renders_decisions_and_memo(tmp_path, monkeypatch):
     import json
     from gui_v2 import app as appmod
