@@ -9,7 +9,7 @@ import pytest
 
 from gui_v2.data.portfolio import collect_portfolio_stub, collect_portfolio_view
 from gui_v2.data.research import collect_research_stub, collect_research_view
-from gui_v2.data.operations import collect_operations_stub
+from gui_v2.data.operations import collect_operations_stub, collect_operations_view
 
 
 @pytest.fixture
@@ -191,3 +191,105 @@ class TestOperationsStub:
         v = collect_operations_stub(fake_repo)
         assert len(v["recent_runs"]) == 1
         assert v["recent_runs"][0]["run_id"] == "2026-05-15_daily"
+
+
+class TestOperationsFullView:
+    def test_empty_repo_returns_expected_keys(self, fake_repo: Path):
+        v = collect_operations_view(fake_repo)
+        assert v["advisory_only"] is True
+        assert v["run_history"] == []
+        assert v["history_snapshots"] == []
+        assert v["portfolio_peaks"] == []
+        assert v["run_history_limit"] == 30
+
+    def test_reads_run_history_with_mode(self, fake_repo: Path):
+        db = fake_repo / "data" / "portfolio.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE run_history("
+            " run_id TEXT, mode TEXT, status TEXT, "
+            " started_at TEXT, completed_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO run_history VALUES (?, ?, ?, ?, ?)",
+            [
+                ("2026-05-15_daily", "daily", "completed",
+                 "2026-05-15T09:00", "2026-05-15T09:05"),
+                ("2026-05-14_daily", "daily", "completed",
+                 "2026-05-14T09:00", "2026-05-14T09:05"),
+                ("2026-05-13_weekly", "weekly", "failed",
+                 "2026-05-13T09:00", "2026-05-13T09:01"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        v = collect_operations_view(fake_repo)
+        assert len(v["run_history"]) == 3
+        statuses = {r["status"] for r in v["run_history"]}
+        assert statuses == {"completed", "failed"}
+        modes = {r["mode"] for r in v["run_history"]}
+        assert "daily" in modes
+        assert "weekly" in modes
+
+    def test_handles_older_schema_without_mode_column(self, fake_repo: Path):
+        # Recreate old-schema DB without mode column
+        db = fake_repo / "data" / "portfolio.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE run_history("
+            " run_id TEXT, status TEXT, "
+            " started_at TEXT, completed_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO run_history VALUES (?, ?, ?, ?)",
+            ("legacy_id", "completed", "2026-05-15T09:00", "2026-05-15T09:05"),
+        )
+        conn.commit()
+        conn.close()
+        v = collect_operations_view(fake_repo)
+        assert len(v["run_history"]) == 1
+        assert v["run_history"][0]["mode"] is None
+        assert v["run_history"][0]["run_id"] == "legacy_id"
+
+    def test_reads_history_snapshots(self, fake_repo: Path):
+        hist = fake_repo / "outputs" / "history"
+        (hist / "2026-05-13").mkdir(parents=True)
+        (hist / "2026-05-13" / "a.json").write_text("x" * 1024, encoding="utf-8")
+        (hist / "2026-05-13" / "b.json").write_text("y" * 2048, encoding="utf-8")
+        (hist / "2026-05-14").mkdir()
+        (hist / "2026-05-14" / "c.json").write_text("z" * 512, encoding="utf-8")
+        v = collect_operations_view(fake_repo)
+        # Most recent date first
+        assert v["history_snapshots"][0]["date"] == "2026-05-14"
+        assert v["history_snapshots"][1]["date"] == "2026-05-13"
+        # File counts correct
+        assert v["history_snapshots"][1]["file_count"] == 2
+
+    def test_reads_portfolio_peaks_when_table_exists(self, fake_repo: Path):
+        db = fake_repo / "data" / "portfolio.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE portfolio_peaks("
+            " peak_key TEXT, peak_value REAL, recorded_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO portfolio_peaks VALUES (?, ?, ?)",
+            ("all_time_high", 7745.68, "2026-05-15T09:00"),
+        )
+        conn.commit()
+        conn.close()
+        v = collect_operations_view(fake_repo)
+        assert len(v["portfolio_peaks"]) == 1
+        assert v["portfolio_peaks"][0]["peak_key"] == "all_time_high"
+
+    def test_handles_missing_portfolio_peaks_table(self, fake_repo: Path):
+        db = fake_repo / "data" / "portfolio.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE run_history(run_id TEXT, status TEXT, "
+            " started_at TEXT, completed_at TEXT)"
+        )
+        conn.commit()
+        conn.close()
+        v = collect_operations_view(fake_repo)
+        assert v["portfolio_peaks"] == []

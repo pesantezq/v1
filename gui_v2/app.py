@@ -49,7 +49,7 @@ from gui_v2.data.today import collect_today_view
 from gui_v2.data.health import collect_health_view, overall_severity
 from gui_v2.data.portfolio import collect_portfolio_view
 from gui_v2.data.research import collect_research_view
-from gui_v2.data.operations import collect_operations_stub
+from gui_v2.data.operations import collect_operations_view
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -75,4 +75,4 @@ def page_health(request: Request) -> HTMLResponse:
 
 @app.get("/operations", response_class=HTMLResponse)
 def page_operations(request: Request) -> HTMLResponse:
-    return _render(request, "operations.html", **collect_operations_stub(REPO_ROOT))
+    return _render(request, "operations.html", **collect_operations_view(REPO_ROOT))
