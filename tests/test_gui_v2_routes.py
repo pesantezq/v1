@@ -30,3 +30,13 @@ def test_nav_links_present_on_every_page(client):
         body = client.get(path).text
         for nav in ("Today", "Portfolio", "Research", "Health", "Operations"):
             assert f">{nav}<" in body, f"nav link {nav!r} missing on {path}"
+
+
+def test_severity_badge_classes_via_jinja_filter():
+    from gui_v2.app import _severity_classes
+    assert "emerald" in _severity_classes("OK")
+    assert "sky"     in _severity_classes("INFO")
+    assert "amber"   in _severity_classes("WARN")
+    assert "rose"    in _severity_classes("FAIL")
+    # Unknown severity falls back to neutral zinc tones
+    assert "zinc"    in _severity_classes("UNKNOWN")
