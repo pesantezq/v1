@@ -293,3 +293,50 @@ class TestOperationsFullView:
         conn.close()
         v = collect_operations_view(fake_repo)
         assert v["portfolio_peaks"] == []
+
+    def test_log_files_listed_and_tail_read(self, fake_repo: Path):
+        logs = fake_repo / "logs"
+        logs.mkdir()
+        (logs / "2026-05-14.log").write_text(
+            "INFO line 1\nWARNING line 2\nERROR line 3\nINFO line 4\n",
+            encoding="utf-8",
+        )
+        (logs / "2026-05-15.log").write_text(
+            "\n".join(f"INFO line {i}" for i in range(50)) + "\n",
+            encoding="utf-8",
+        )
+        v = collect_operations_view(fake_repo, log_tail_n=10)
+        # 2 log files surfaced
+        assert len(v["log_files"]) == 2
+        names = {f["name"] for f in v["log_files"]}
+        assert names == {"2026-05-14.log", "2026-05-15.log"}
+        # Default selection is one of them; tail is bounded
+        assert v["log_tail"]["available"] is True
+        assert v["log_tail"]["shown"] <= 10
+
+    def test_log_tail_counts_errors_and_warnings(self, fake_repo: Path):
+        logs = fake_repo / "logs"
+        logs.mkdir()
+        (logs / "today.log").write_text(
+            "INFO a\nERROR x\nWARNING y\nException blew up\nINFO done\n",
+            encoding="utf-8",
+        )
+        v = collect_operations_view(fake_repo, log_name="today.log")
+        tail = v["log_tail"]
+        assert tail["error_lines"] >= 2   # ERROR + Exception
+        assert tail["warning_lines"] >= 1
+
+    def test_log_section_empty_when_logs_dir_missing(self, fake_repo: Path):
+        # Default fake_repo has no logs/ dir
+        v = collect_operations_view(fake_repo)
+        assert v["log_files"] == []
+        assert v["log_tail"]["available"] is False
+
+    def test_log_name_override_picks_specified_file(self, fake_repo: Path):
+        logs = fake_repo / "logs"
+        logs.mkdir()
+        (logs / "a.log").write_text("alpha-line\n", encoding="utf-8")
+        (logs / "b.log").write_text("beta-line\n", encoding="utf-8")
+        v = collect_operations_view(fake_repo, log_name="b.log")
+        assert v["log_tail"]["name"] == "b.log"
+        assert any("beta-line" in line for line in v["log_tail"]["lines"])

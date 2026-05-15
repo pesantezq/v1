@@ -74,5 +74,14 @@ def page_health(request: Request) -> HTMLResponse:
 
 
 @app.get("/operations", response_class=HTMLResponse)
-def page_operations(request: Request) -> HTMLResponse:
-    return _render(request, "operations.html", **collect_operations_view(REPO_ROOT))
+def page_operations(
+    request: Request,
+    log: str | None = None,
+    tail: int = 200,
+) -> HTMLResponse:
+    # Clamp tail to a sane range so a hostile querystring can't OOM the host.
+    tail = max(10, min(5000, int(tail or 200)))
+    return _render(
+        request, "operations.html",
+        **collect_operations_view(REPO_ROOT, log_tail_n=tail, log_name=log),
+    )

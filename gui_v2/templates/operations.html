@@ -111,6 +111,37 @@
       {% endif %}
     </section>
 
+    <!-- Logs -->
+    {% if log_files %}
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Logs</h2>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-4 mb-3">
+        <p class="text-sm text-zinc-400 mb-2">
+          Currently showing: <span class="font-mono">{{ log_tail.name }}</span>
+          &mdash; last {{ log_tail.shown }} of {{ log_tail.total_lines }} lines
+        </p>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          {% with label="Total lines", value=log_tail.total_lines %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Showing", value=log_tail.shown %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Error lines", value=log_tail.error_lines %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Warning lines", value=log_tail.warning_lines %}{% include "components/metric_card.html" %}{% endwith %}
+        </div>
+        <p class="text-xs text-zinc-500">
+          Pick another log:
+          {% for f in log_files %}
+          <a href="/operations?log={{ f.name }}&amp;tail={{ log_tail.tail_n or 200 }}"
+             class="font-mono ml-2 hover:text-emerald-400
+                    {% if f.name == log_tail.name %}text-emerald-300{% else %}text-zinc-400{% endif %}">{{ f.name }}</a>
+          {% endfor %}
+        </p>
+      </div>
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-3 overflow-x-auto">
+        <pre class="text-xs font-mono text-zinc-300 whitespace-pre-wrap break-all leading-relaxed">{% for line in log_tail.lines %}{{ line }}
+{% endfor %}</pre>
+      </div>
+    </section>
+    {% endif %}
+
     <!-- Portfolio peaks -->
     {% if portfolio_peaks %}
     <section>

@@ -110,6 +110,61 @@ def _read_portfolio_peaks(db_path: Path, limit: int = 20) -> list[dict[str, Any]
     return [dict(zip(cols, r)) for r in rows]
 
 
+def _log_files(repo_root: Path) -> list[dict[str, Any]]:
+    """List ``logs/*.log`` newest-first with size + line count."""
+    logs = Path(repo_root) / "logs"
+    if not logs.exists() or not logs.is_dir():
+        return []
+    try:
+        files = sorted(logs.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for f in files:
+        try:
+            stat = f.stat()
+        except OSError:
+            continue
+        out.append({
+            "name": f.name,
+            "path": str(f),
+            "size_bytes": stat.st_size,
+        })
+    return out
+
+
+def _log_tail(log_path: Path, tail_n: int = 200) -> dict[str, Any]:
+    """Read a log file's last *tail_n* lines + summary stats.  Read-only."""
+    try:
+        if not log_path.exists():
+            return {"available": False}
+        # Stream the file once to get counts and tail.
+        all_lines: list[str] = []
+        err_count = 0
+        warn_count = 0
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                all_lines.append(line.rstrip("\n"))
+                low = line.lower()
+                if "error" in low or "exception" in low or "traceback" in low:
+                    err_count += 1
+                elif "warning" in low or "warn" in low:
+                    warn_count += 1
+    except OSError as exc:
+        return {"available": False, "error": str(exc)}
+    tail = all_lines[-tail_n:] if tail_n < len(all_lines) else all_lines
+    return {
+        "available": True,
+        "path": str(log_path),
+        "total_lines": len(all_lines),
+        "tail_n": tail_n,
+        "shown": len(tail),
+        "lines": tail,
+        "error_lines": err_count,
+        "warning_lines": warn_count,
+    }
+
+
 def _history_snapshots(repo_root: Path) -> list[dict[str, Any]]:
     history = Path(repo_root) / "outputs" / "history"
     if not history.exists() or not history.is_dir():
@@ -146,10 +201,24 @@ def collect_operations_stub(repo_root: Path) -> dict[str, Any]:
     }
 
 
-def collect_operations_view(repo_root: Path, *, history_limit: int = 30) -> dict[str, Any]:
-    """Full Operations page data: extended run history + snapshots + peaks."""
+def collect_operations_view(
+    repo_root: Path,
+    *,
+    history_limit: int = 30,
+    log_tail_n: int = 200,
+    log_name: str | None = None,
+) -> dict[str, Any]:
+    """Full Operations page data: run history + snapshots + peaks + log tail."""
     db = Path(repo_root) / "data" / "portfolio.db"
     recent_runs_ext = _read_run_history_extended(db, limit=history_limit)
+    files = _log_files(repo_root)
+    # Default to newest log; allow caller to pick by name (e.g. via querystring).
+    selected: dict[str, Any] = {"available": False}
+    if files:
+        target_name = log_name or files[0]["name"]
+        match = next((f for f in files if f["name"] == target_name), files[0])
+        selected = _log_tail(Path(match["path"]), tail_n=log_tail_n)
+        selected["name"] = match["name"]
     return {
         "advisory_only": True,
         "no_trade": True,
@@ -160,4 +229,7 @@ def collect_operations_view(repo_root: Path, *, history_limit: int = 30) -> dict
         "history_snapshots": _history_snapshots(repo_root),
         "portfolio_peaks": _read_portfolio_peaks(db),
         "run_history_limit": history_limit,
+        # Logs section (read-only tail)
+        "log_files": files,
+        "log_tail": selected,
     }
