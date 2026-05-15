@@ -2,8 +2,9 @@
 {% block title %}Operations &mdash; StockBot{% endblock %}
 {% block content %}
   <div id="operations-content"
-       hx-get="/operations?fragment=1"
+       hx-get="/operations"
        hx-target="#operations-content"
+       hx-select="#operations-content"
        hx-swap="outerHTML"
        class="space-y-8">
 
@@ -15,8 +16,9 @@
           Write actions (run controls, config edits, prompts) remain in Streamlit.
         </p>
       </div>
-      <button hx-get="/operations?fragment=1"
+      <button hx-get="/operations"
               hx-target="#operations-content"
+              hx-select="#operations-content"
               hx-swap="outerHTML"
               class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
         Refresh

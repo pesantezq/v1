@@ -2,8 +2,9 @@
 {% block title %}Health &mdash; StockBot{% endblock %}
 {% block content %}
   <div id="health-content"
-       hx-get="/health?fragment=1"
+       hx-get="/health"
        hx-target="#health-content"
+       hx-select="#health-content"
        hx-swap="outerHTML"
        class="space-y-8">
 
@@ -16,8 +17,9 @@
         {% with severity=overall, label="Overall " ~ overall %}
           {% include "components/severity_badge.html" %}
         {% endwith %}
-        <button hx-get="/health?fragment=1"
+        <button hx-get="/health"
                 hx-target="#health-content"
+                hx-select="#health-content"
                 hx-swap="outerHTML"
                 class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
           Refresh

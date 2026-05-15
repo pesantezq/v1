@@ -32,6 +32,33 @@ def test_nav_links_present_on_every_page(client):
             assert f">{nav}<" in body, f"nav link {nav!r} missing on {path}"
 
 
+@pytest.mark.parametrize("path,target_id", [
+    ("/", "today-content"),
+    ("/portfolio", "portfolio-content"),
+    ("/research", "research-content"),
+    ("/health", "health-content"),
+    ("/operations", "operations-content"),
+])
+def test_htmx_select_present_to_prevent_full_doc_nesting(client, path: str, target_id: str):
+    """Every HTMX-driven page must include hx-select to extract just its
+    content container from the server response. Without this, HTMX dumps
+    the entire HTML document (including <!doctype>...<html>) into the
+    target div, nesting on each refresh and breaking layout."""
+    body = client.get(path).text
+    # Must reference its own content container in hx-select
+    assert f'hx-select="#{target_id}"' in body, (
+        f"{path}: missing hx-select=\"#{target_id}\" on HTMX call sites; "
+        "HTMX will inject the full HTML document into the page instead "
+        "of just the content fragment."
+    )
+    # The legacy `?fragment=1` querystring should not appear — it was a
+    # leftover from the initial implementation and has no behaviour.
+    assert "?fragment=1" not in body, (
+        f"{path}: stale ?fragment=1 querystring present on an hx-get URL; "
+        "drop it — the server does not handle it and it confuses caches."
+    )
+
+
 def test_severity_badge_classes_via_jinja_filter():
     from gui_v2.app import _severity_classes
     assert "emerald" in _severity_classes("OK")

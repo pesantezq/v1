@@ -2,8 +2,9 @@
 {% block title %}Research &mdash; StockBot{% endblock %}
 {% block content %}
   <div id="research-content"
-       hx-get="/research?fragment=1"
+       hx-get="/research"
        hx-target="#research-content"
+       hx-select="#research-content"
        hx-swap="outerHTML"
        class="space-y-8">
 
@@ -16,8 +17,9 @@
           governance gates; the operator decides what (if anything) to do next.
         </p>
       </div>
-      <button hx-get="/research?fragment=1"
+      <button hx-get="/research"
               hx-target="#research-content"
+              hx-select="#research-content"
               hx-swap="outerHTML"
               class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
         Refresh

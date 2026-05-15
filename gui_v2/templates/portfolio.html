@@ -2,8 +2,9 @@
 {% block title %}Portfolio &mdash; StockBot{% endblock %}
 {% block content %}
   <div id="portfolio-content"
-       hx-get="/portfolio?fragment=1"
+       hx-get="/portfolio"
        hx-target="#portfolio-content"
+       hx-select="#portfolio-content"
        hx-swap="outerHTML"
        class="space-y-8">
 
@@ -16,8 +17,9 @@
           Watchlist Manager.
         </p>
       </div>
-      <button hx-get="/portfolio?fragment=1"
+      <button hx-get="/portfolio"
               hx-target="#portfolio-content"
+              hx-select="#portfolio-content"
               hx-swap="outerHTML"
               class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
         Refresh
