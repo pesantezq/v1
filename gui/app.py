@@ -5018,7 +5018,8 @@ st.sidebar.caption("Operator Dashboard")
 
 PAGES = [
     "Dashboard", "Decision Center", "Automatic Promotion",
-    "Run Controls", "Outputs", "Watchlist", "Run History", "API Health",
+    "Run Controls", "Outputs", "Watchlist", "Run History",
+    "Production Health", "API Health",
     "Config Editor", "Prompts", "Logs", "Diagnostics",
 ]
 
@@ -7175,3 +7176,6 @@ elif page == "Prompts":      page_prompts()
 elif page == "Logs":         page_logs()
 elif page == "Diagnostics":  page_diagnostics()
 elif page == "Automatic Promotion": page_automatic_promotion()
+elif page == "Production Health":
+    from gui.production_health_page import render_production_health_page
+    render_production_health_page(ROOT)
