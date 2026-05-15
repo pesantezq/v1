@@ -42,18 +42,58 @@ completed_steps:
   - gui_operator_cockpit_redesign__dashboard_landing_card_refresh
   - manual_portfolio_update_workflow
   - daily_sandbox_run_orchestrator
+  - production_hardening_track_phase_a_through_f
+  - gui_v2_mvp
+  - gui_v2_read_only_migration
 
 next_official_step:
-  primary: gui_operator_cockpit_redesign
-  secondary: []
+  primary: gui_v2_write_surface_decision
+  secondary:
+    - gui_v2_compiled_tailwind
+    - gui_v2_theme_toggle
   note: >
-    GUI work remains paused at user request.  Sandbox/research lane is
-    now scheduled via tools.daily_sandbox_run +
-    scripts/run_daily_sandbox_safe.sh, with example systemd timer units
-    in deploy/systemd/ (not enabled by default).  When GUI work resumes,
-    remaining slices in this UI/UX track may include: News Evidence Layer
-    panel, Market Narrative panel, unified Discovery Sandbox panel — all
-    read-only, using the existing reusable helpers.
+    Streamlit operator cockpit was superseded by gui_v2 (FastAPI + HTMX +
+    Jinja2 + Tailwind, port 8502).  Five gui_v2 pages now have full
+    real content: Today, Portfolio, Research, Health, Operations.  Five
+    Streamlit pages migrated read-only: Decision Center, Automatic
+    Promotion, Watchlist Manager (read parts only), Run History, Logs.
+    Streamlit pages that write state remain live: Run Controls, Config
+    Editor, Prompts, Watchlist add/remove/import, Outputs (download).
+    Next decision is the write-surface strategy: keep Streamlit for writes
+    indefinitely, add an explicit write mode to gui_v2 with confirmation
+    gates, or replace each Streamlit write page with a CLI tool.  Until
+    that decision lands, gui_v2 remains strict read-only by spec.
+
+gui_v2:
+  port: 8502
+  systemd_unit: deploy/systemd/stockbot-dashboard.service
+  spec: docs/superpowers/specs/2026-05-15-gui-v2-design.md
+  plan: docs/superpowers/plans/2026-05-15-gui-v2-mvp.md
+  invariants:
+    - read_only_consumer_of_outputs
+    - no_imports_from_gui_package
+    - no_business_logic
+    - no_broker_integration
+    - separate_systemd_unit_from_daily_timer
+  migrated_streamlit_pages:
+    decision_center: today
+    automatic_promotion: research
+    watchlist_manager_read_parts: portfolio
+    run_history: operations
+    logs: operations
+  remaining_streamlit_pages_writes:
+    - run_controls
+    - config_editor
+    - prompts
+    - watchlist_manager_add_remove_import
+    - outputs_download_preview
+
+gui_operator_cockpit_redesign:
+  status: superseded_by_gui_v2_mvp
+  note: >
+    The original Streamlit cockpit redesign track was paused.  gui_v2
+    delivers the same operator goals on a different stack and is the
+    forward path.  This entry is kept for historical traceability.
 
 # ---------------------------------------------------------------------------
 # Two-lane operating model (added by run_mode_governance step)
