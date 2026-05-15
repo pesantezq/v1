@@ -144,6 +144,19 @@ else
     fail "One or more registered required env vars are missing (see above)"
 fi
 
+section "Artifact Shape Smoke Test"
+# tools.smoke_test — registry-driven, read-only shape validation of every
+# artifact in portfolio_automation.artifacts_registry. --strict exits 1 when
+# any required artifact is missing or malformed (invalid JSON/JSONL, missing
+# observe_only flag, empty markdown/text, etc.). Optional and append-only
+# artifacts that are absent are reported as INFO and never fail preflight.
+# Read-only; never writes. Mirrors the env-registry strict gate above.
+if python -m tools.smoke_test --strict; then
+    pass "All registered required artifacts have the expected shape"
+else
+    fail "One or more registered required artifacts are missing or malformed (see above)"
+fi
+
 section "FMP Compliance"
 compliance_output="$(mktemp)"
 pytest_output=""
