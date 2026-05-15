@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" class="bg-zinc-950 text-zinc-100">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}StockBot Dashboard{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .font-mono { font-family: ui-monospace, "Menlo", "Consolas", monospace; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+  <header class="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur border-b border-zinc-800">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-6">
+        <span class="font-semibold tracking-tight">StockBot</span>
+        <nav class="flex gap-4 text-sm">
+          <a href="/" class="hover:text-emerald-400">Today</a>
+          <a href="/portfolio" class="hover:text-emerald-400">Portfolio</a>
+          <a href="/research" class="hover:text-emerald-400">Research</a>
+          <a href="/health" class="hover:text-emerald-400">Health</a>
+          <a href="/operations" class="hover:text-emerald-400">Operations</a>
+        </nav>
+      </div>
+      <div class="text-xs text-zinc-400 font-mono">{% block header_right %}{% endblock %}</div>
+    </div>
+  </header>
+  <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="max-w-7xl mx-auto px-6 py-6 text-xs text-zinc-500">
+    Advisory only &mdash; no trades executed.
+  </footer>
+</body>
+</html>
