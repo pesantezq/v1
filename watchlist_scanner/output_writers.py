@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from watchlist_scanner.models import WatchlistRow, WatchlistScanResult
@@ -18,6 +19,11 @@ def _write_signals_json(output_dir: Path, scan_result: WatchlistScanResult) -> N
 
 def _write_portfolio_snapshot_json(output_dir: Path, portfolio_snapshot: dict) -> None:
     path = output_dir / "portfolio_snapshot.json"
+    # Ensure the contract-required `generated_at` is present.  We add it
+    # only when the producer did not already provide one — never overwrite.
+    if isinstance(portfolio_snapshot, dict) and "generated_at" not in portfolio_snapshot:
+        portfolio_snapshot = dict(portfolio_snapshot)
+        portfolio_snapshot["generated_at"] = datetime.now(timezone.utc).isoformat()
     path.write_text(json.dumps(portfolio_snapshot, indent=2, default=str), encoding="utf-8")
     rows = len(portfolio_snapshot.get("rows", [])) if isinstance(portfolio_snapshot, dict) else 0
     logger.info("portfolio_snapshot.json written (%d rows)", rows)
