@@ -75,6 +75,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from portfolio_automation.env import get_secret
+
 try:
     import mcp.types as types
     from mcp.server import Server
@@ -447,7 +449,7 @@ def _do_claude_ping(model: str, api_key: str) -> dict:
 
 
 async def _tool_test_claude_connection() -> list[types.TextContent]:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = get_secret("ANTHROPIC_API_KEY") or ""
     if not api_key:
         return _json_result({
             "claude_status": "error",
@@ -661,7 +663,7 @@ async def _tool_simulate_agent_run(args: dict) -> list[types.TextContent]:
         model_used = f"ollama:{ollama_model}"
     except Exception as ollama_exc:
         # Try Claude fallback
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_key = get_secret("ANTHROPIC_API_KEY") or ""
         if api_key:
             claude_model = _claude_model()
             try:

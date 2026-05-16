@@ -23,6 +23,7 @@ import urllib.request
 from typing import Any, Optional
 
 from agent.io_utils import redact
+from portfolio_automation.env import get_secret
 
 logger = logging.getLogger("stockbot.agent.llm_adapters")
 
@@ -292,7 +293,7 @@ def call_openai(
         raise RuntimeError(
             "OPENAI_MODEL is not set. Set OPENAI_MODEL in your .env or shell environment."
         )
-    key = (api_key or os.environ.get("OPENAI_API_KEY") or "").strip()
+    key = (api_key or get_secret("OPENAI_API_KEY") or "").strip()
     if not key:
         raise RuntimeError(
             "OPENAI_API_KEY environment variable is not set. "
@@ -327,7 +328,7 @@ def call_claude(
         ) from exc
 
     resolved_model = (model or os.environ.get("ANTHROPIC_MODEL") or _DEFAULT_CLAUDE_MODEL).strip()
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    key = api_key or get_secret("ANTHROPIC_API_KEY") or ""
     if not key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY environment variable is not set. "

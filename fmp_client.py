@@ -28,6 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from portfolio_automation.env import get_secret
+
 logger = logging.getLogger('portfolio_automation.fmp_client')
 
 FMP_BASE_URL = "https://financialmodelingprep.com/api"
@@ -233,7 +235,7 @@ class FMPClient:
         timeout: int = 30,
         cache_dir: Optional[Path] = None,
     ) -> None:
-        self._api_key = api_key or os.environ.get('FMP_API_KEY')
+        self._api_key = api_key or get_secret('FMP_API_KEY')
         if not self._api_key:
             raise FMPError(
                 "FMP_API_KEY environment variable is not set. "

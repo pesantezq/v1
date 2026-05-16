@@ -7,6 +7,8 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from portfolio_automation.env import get_secret
+
 logger = logging.getLogger("stockbot.portfolio_automation.decision_outcome_tracker")
 
 # ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ def _try_build_price_fetcher() -> Callable[[list[str]], dict[str, float]] | None
     Try to build an FMP-backed price fetcher from environment variables.
     Returns None if FMP_API_KEY is absent or the client cannot be created.
     """
-    if not os.environ.get("FMP_API_KEY", "").strip():
+    if not get_secret("FMP_API_KEY"):
         return None
     try:
         from fmp_client import FMPClient
