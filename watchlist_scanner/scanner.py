@@ -164,6 +164,35 @@ def _compute_avg_sentiment(articles: list[dict]) -> float:
 # Composite signal score (3-component model)
 # ---------------------------------------------------------------------------
 
+def _multi_timeframe_gate(tech: dict[str, Any]) -> tuple[float, bool, bool, bool]:
+    """
+    P4.3 — Multi-timeframe trend gate for the technical score.
+
+    Reads optional weekly + monthly trend booleans from `tech`. When both
+    keys are present and non-None, returns:
+        both bullish     → 1.00
+        exactly one      → 0.85
+        both bearish     → 0.70
+
+    When either key is missing or None, returns 1.00 (legacy parity). The
+    gate never increases technical_score — it can only penalise
+    cross-timeframe disagreement.
+
+    Returns (gate, weekly_known, monthly_known, has_any).
+    """
+    weekly = tech.get("weekly_trend_bullish") if tech else None
+    monthly = tech.get("monthly_trend_bullish") if tech else None
+    weekly_known = weekly is not None
+    monthly_known = monthly is not None
+    if not (weekly_known and monthly_known):
+        return 1.00, weekly_known, monthly_known, (weekly_known or monthly_known)
+    if weekly and monthly:
+        return 1.00, True, True, True
+    if weekly or monthly:
+        return 0.85, True, True, True
+    return 0.70, True, True, True
+
+
 def _compute_signal_score(
     tech: dict[str, Any],
     theme_scores: dict[str, float],
@@ -189,6 +218,10 @@ def _compute_signal_score(
         5d price momentum    0.10 of 0.30  (normalised to 10%)
         volume spike         0.25 of 0.30
         SMA position         0.25 of 0.30  (SMA20=0.125, SMA50=0.125)
+
+    P4.3: technical_score is then multiplied by the multi-timeframe gate
+    (1.00 default, 0.85 partial disagreement, 0.70 both bearish). Legacy
+    callers that omit weekly/monthly inputs see no behavioral change.
 
     Returns (total_score, breakdown_dict).
     """
@@ -217,6 +250,10 @@ def _compute_signal_score(
 
         technical_score = min(1.0, momentum_1d + momentum_5d + vol_score + sma_score)
 
+    # ── P4.3: multi-timeframe gate on technical_score ────────────────────────
+    mtf_gate, weekly_known, monthly_known, mtf_any = _multi_timeframe_gate(tech or {})
+    technical_score = round(technical_score * mtf_gate, 4)
+
     # ── 3. Fundamental context score ─────────────────────────────────────────
     # fund_score already in [0, 1] from fundamentals_engine.fundamental_context_score()
 
@@ -230,7 +267,14 @@ def _compute_signal_score(
         "theme_news_score":          round(theme_news_score, 4),
         "technical_score":           round(technical_score, 4),
         "fundamental_context_score": round(fund_score, 4),
+        "mtf_gate":                  round(mtf_gate, 4),
     }
+    # Only surface the input booleans when caller actually provided them —
+    # legacy artifacts keep their existing shape.
+    if weekly_known:
+        breakdown["weekly_trend_bullish"] = bool((tech or {}).get("weekly_trend_bullish"))
+    if monthly_known:
+        breakdown["monthly_trend_bullish"] = bool((tech or {}).get("monthly_trend_bullish"))
 
     return round(min(1.0, total), 4), breakdown
 
