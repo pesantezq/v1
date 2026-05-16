@@ -52,15 +52,28 @@ completed_steps:
   - tools_watchlist_edit_cli
   - tools_notify_status_cli
   - tools_backup_portfolio_db_cli
+  - pnl_advisors_phase_1_exit_cash_correlation
+  - pnl_advisors_phase_2_earnings_vol_tax_harvest
+  - pnl_advisors_phase_3_kelly_alpha_attribution
+  - pnl_advisors_pipeline_integration
 
 next_official_step:
   primary: project_complete
-  secondary: []
+  secondary:
+    - pnl_advisors_phase_4_protected_semantics  # GATED — requires per-item explicit approval
   note: >
     All identified roadmap items are shipped.  The Streamlit operator
     cockpit was superseded by gui_v2 (FastAPI + HTMX + Jinja2 + Tailwind,
     port 8502).  Write surface decision resolved: CLIs.  The full
     runbook for retiring Streamlit lives in docs/STREAMLIT_RETIREMENT.md.
+
+    P&L Advisors Phases 1-3 are live and wired into main.py
+    (observe-only, non-fatal). See docs/PNL_ADVISORS.md for the catalogue.
+    Phase 4 is documented in docs/superpowers/specs/2026-05-15-pnl-maximization-roadmap.md
+    but remains gated: every Phase 4 item modifies a file in the
+    forbidden_changes list (conviction.py, decision_engine.py, scoring.py,
+    or allocation_engine.py) and requires explicit per-item user approval
+    before scope is unlocked.
 
     Permanently-deferred items remain out of scope and are listed under
     `deferred_steps` below: auto-trading, broker integration, billing,

@@ -478,6 +478,95 @@ post_phase_0:
 # ---------------------------------------------------------------------------
 # Permanently deferred (out of scope)
 # ---------------------------------------------------------------------------
+# P&L Maximization Roadmap (Phases 1-3 complete; Phase 4 gated)
+# ---------------------------------------------------------------------------
+
+pnl_maximization_roadmap:
+  spec: docs/superpowers/specs/2026-05-15-pnl-maximization-roadmap.md
+  reference_doc: docs/PNL_ADVISORS.md
+  validation_script: scripts/validate_pnl_advisors.py
+  phase_1:
+    status: complete
+    description: Exit / cash-deployment / correlation observe-only advisors
+    files:
+      - portfolio_automation/exit_advisor.py
+      - portfolio_automation/cash_deployment_plan.py
+      - portfolio_automation/correlation_risk_advisor.py
+      - tests/test_exit_advisor.py
+      - tests/test_cash_deployment_plan.py
+      - tests/test_correlation_risk_advisor.py
+    tests: 63 passed (22 + 20 + 22; cash_deployment grew by +1 after top-level portfolio_context fix)
+    artifacts:
+      - outputs/latest/exit_advisor.json
+      - outputs/latest/exit_advisor.md
+      - outputs/latest/cash_deployment_plan.json
+      - outputs/latest/cash_deployment_plan.md
+      - outputs/latest/correlation_risk_advisor.json
+      - outputs/latest/correlation_risk_advisor.md
+  phase_2:
+    status: complete
+    description: Earnings gate / vol regime / tax harvest observe-only advisors
+    files:
+      - portfolio_automation/earnings_gate.py
+      - portfolio_automation/vol_regime_advisor.py
+      - portfolio_automation/tax_harvest_advisor.py
+      - tests/test_earnings_gate.py
+      - tests/test_vol_regime_advisor.py
+      - tests/test_tax_harvest_advisor.py
+    tests: 48 passed (17 + 16 + 15)
+    artifacts:
+      - outputs/latest/earnings_gate.json
+      - outputs/latest/earnings_gate.md
+      - outputs/latest/vol_regime_advisor.json
+      - outputs/latest/vol_regime_advisor.md
+      - outputs/latest/tax_harvest_advisor.json
+      - outputs/latest/tax_harvest_advisor.md
+    note: >
+      earnings_gate ships with earnings_lookup=None because no FMP
+      earnings-calendar endpoint is currently registered. The gate
+      degrades to status="no_earnings_source". Wire the lookup when an
+      FMP-compliant earnings endpoint is added.
+  phase_3:
+    status: complete
+    description: Kelly sizing + alpha-attribution risk-adjusted reports
+    files:
+      - portfolio_automation/kelly_sizing_advisor.py
+      - portfolio_automation/alpha_attribution_report.py
+      - tests/test_kelly_sizing_advisor.py
+      - tests/test_alpha_attribution_report.py
+    tests: 25 passed (13 + 12)
+    gate: requires >=20 resolved decisions per group; degrades to insufficient_data
+    artifacts:
+      - outputs/latest/kelly_sizing_advisor.json
+      - outputs/latest/kelly_sizing_advisor.md
+      - outputs/latest/alpha_attribution_report.json
+      - outputs/latest/alpha_attribution_report.md
+  pipeline_integration:
+    status: complete
+    description: >
+      All eight advisors wired into main.py inside _write_decision_engine_outputs
+      after the existing observe-only layers. Each advisor has its own
+      try/except block — failures cannot block any other layer.
+      decision_plan.json envelope extended with a top-level
+      portfolio_context field (total_portfolio_value, cash, degraded_mode,
+      data_mode, drawdown_regime) for downstream consumers.
+    files:
+      - main.py
+      - scripts/validate_pnl_advisors.py
+  phase_4:
+    status: gated_requires_explicit_approval
+    blocked_by: forbidden_changes (conviction.py / decision_engine.py / scoring.py / allocation_engine.py)
+    designed_items:
+      - p4_1_calibrated_sizing_multipliers_in_conviction_py
+      - p4_2_decision_engine_consumes_exit_advisor_as_downgrade_source
+      - p4_3_multi_timeframe_signal_score_composite_in_scanner
+      - p4_4_regime_aware_allocation_in_allocation_engine
+    note: >
+      Each phase 4 item modifies a CLAUDE.md-protected file and changes
+      semantics of a score field listed under protected_semantics. Each
+      requires a per-item explicit approval before scope unlock.
+
+# ---------------------------------------------------------------------------
 
 permanently_deferred:
   auto_trading:

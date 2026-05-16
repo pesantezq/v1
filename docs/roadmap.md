@@ -950,3 +950,70 @@ Each card uses `render_metric_card(title, value, subtitle, badges)` + `render_st
 - Slice 3 (candidate): `news_evidence_layer_panel`
 - Slice 4 (candidate): `market_narrative_panel`
 - Slice 5 (candidate): `unified_discovery_sandbox_panel`
+
+---
+
+## P&L Maximization Roadmap (2026-05-15)
+
+**Spec:** `docs/superpowers/specs/2026-05-15-pnl-maximization-roadmap.md`
+**Reference doc:** `docs/PNL_ADVISORS.md`
+**Validation:** `python scripts/validate_pnl_advisors.py`
+
+### Phase 1 — shipped 2026-05-15
+
+| Module | Tests | Artifact |
+|---|---|---|
+| `portfolio_automation/exit_advisor.py` | 22 | `outputs/latest/exit_advisor.{json,md}` |
+| `portfolio_automation/cash_deployment_plan.py` | 20 | `outputs/latest/cash_deployment_plan.{json,md}` |
+| `portfolio_automation/correlation_risk_advisor.py` | 22 | `outputs/latest/correlation_risk_advisor.{json,md}` |
+
+Also: decision_plan.json gained a top-level `portfolio_context` field
+(additive) so cash_deployment_plan can read `total_portfolio_value`
+without traversing per-decision `inputs_used`.
+
+### Phase 2 — shipped 2026-05-15
+
+| Module | Tests | Artifact |
+|---|---|---|
+| `portfolio_automation/earnings_gate.py` | 17 | `outputs/latest/earnings_gate.{json,md}` |
+| `portfolio_automation/vol_regime_advisor.py` | 16 | `outputs/latest/vol_regime_advisor.{json,md}` |
+| `portfolio_automation/tax_harvest_advisor.py` | 15 | `outputs/latest/tax_harvest_advisor.{json,md}` |
+
+`earnings_gate` ships with `earnings_lookup=None` because no FMP-compliant
+earnings-calendar endpoint is registered yet. The gate degrades to
+`status="no_earnings_source"` and `gate="HOLD"`. Wire the lookup when the
+endpoint exists.
+
+### Phase 3 — shipped 2026-05-15
+
+| Module | Tests | Artifact |
+|---|---|---|
+| `portfolio_automation/kelly_sizing_advisor.py` | 13 | `outputs/latest/kelly_sizing_advisor.{json,md}` |
+| `portfolio_automation/alpha_attribution_report.py` | 12 | `outputs/latest/alpha_attribution_report.{json,md}` |
+
+Both gated at ≥20 resolved decisions per group; below the gate they
+degrade to `status="insufficient_data"`. They become informative as the
+outcome history grows.
+
+### Pipeline integration — shipped 2026-05-15
+
+All eight advisors wired into `main.py` inside `_write_decision_engine_outputs`
+after the existing observe-only layers (outcome tracker, triage, calibration,
+performance attribution). Each advisor has an independent try/except so a
+single failure cannot break any other layer.
+
+### Phase 4 — NOT shipped (gated)
+
+Each Phase 4 item modifies a CLAUDE.md-protected file and changes
+semantics of a score field listed under `protected_semantics` in
+`.agent/project_state.yaml`:
+
+- **P4.1** — calibrated sizing multipliers in `conviction.py`
+- **P4.2** — decision engine consumes exit_advisor as a downgrade source
+  (`portfolio_automation/decision_engine.py`)
+- **P4.3** — multi-timeframe trend confirmation in scanner signal_score
+  (`watchlist_scanner/scanner.py` + `scoring.py`)
+- **P4.4** — regime-aware allocation feedback from vol_regime_advisor
+  (`allocation_engine.py`)
+
+Each item requires a per-item explicit user approval before scope unlock.

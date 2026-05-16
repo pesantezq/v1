@@ -356,7 +356,13 @@ def _portfolio_value_from_context(
     decision_plan_payload: dict[str, Any],
     cfg: dict[str, Any],
 ) -> float:
-    # 1) try inputs_used.portfolio_context.total_portfolio_value on any decision
+    # 1) Preferred: top-level portfolio_context on the decision_plan envelope
+    #    (main.py writes this since 2026-05-15).
+    top_pc = decision_plan_payload.get("portfolio_context") or {}
+    v = _safe_float(top_pc.get("total_portfolio_value"))
+    if v and v > 0:
+        return v
+    # 2) Fallback: inputs_used.portfolio_context on any decision row (older runs)
     for d in decision_plan_payload.get("decisions") or []:
         if not isinstance(d, dict):
             continue
@@ -365,8 +371,8 @@ def _portfolio_value_from_context(
         v = _safe_float(pc.get("total_portfolio_value"))
         if v and v > 0:
             return v
-    # 2) approximate from holdings count * average estimate is unreliable —
-    #    fall back to cash + 0 so excess_cash_pct calc still works.
+    # 3) Last resort: cash-only fallback. Calling code treats current_cash_pct
+    #    as 100% in this branch, which is correct given we have no other info.
     cash = _safe_float((cfg.get("portfolio") or {}).get("cash_available")) or 0.0
     return cash
 

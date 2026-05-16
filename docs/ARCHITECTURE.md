@@ -1,6 +1,25 @@
 # Architecture
 
-Last verified against code on 2026-04-30.
+Last verified against code on 2026-05-15 (P&L advisors layer added).
+
+## P&L Advisors Layer
+
+`portfolio_automation/{exit_advisor,cash_deployment_plan,correlation_risk_advisor,earnings_gate,vol_regime_advisor,tax_harvest_advisor,kelly_sizing_advisor,alpha_attribution_report}.py`
+add eight observe-only advisory layers that read existing artifacts (and
+optionally FMP-cached price data) and write namespace-aware JSON + Markdown
+artifacts. Every artifact carries `observe_only=True` hardcoded.
+
+None of these layers modifies a protected score, alters a decision, or
+executes a trade. All run inside `main.py`'s `_write_decision_engine_outputs`
+chain wrapped in independent try/except blocks so a single failure cannot
+break the daily pipeline.
+
+The decision_plan.json envelope was extended in 2026-05-15 with a new
+top-level `portfolio_context` field (`total_portfolio_value`, `cash`,
+`degraded_mode`, `data_mode`, `drawdown_regime`). This is additive;
+existing consumers ignore unknown keys.
+
+See `docs/PNL_ADVISORS.md` for the full catalogue and per-module details.
 
 ## Discovery Engine (Research Lane)
 

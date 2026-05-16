@@ -86,6 +86,8 @@ from degraded_mode import (
 )
 import json as _json
 
+from portfolio_automation.env import is_truthy
+
 try:
     from portfolio_automation.decision_explainer import (
         generate_decision_explanations,
@@ -227,6 +229,12 @@ def _write_decision_engine_outputs(
     try:
         _dp_list = result.get('decision_plan') or []
         _dp_summary = result.get('decision_plan_summary') or ''
+        # Surface the portfolio context built upstream as a top-level additive
+        # field so observe-only downstream advisors (cash_deployment_plan,
+        # exit_advisor, etc.) can read total_portfolio_value without
+        # re-deriving it. Existing consumers ignore unknown keys, so this is
+        # backward-compatible per CLAUDE.md output-contract rules.
+        _dp_portfolio_ctx = result.get('decision_plan_portfolio_context') or {}
         _dp_json_path = output_dir / 'decision_plan.json'
         _dp_json_path.write_text(
             _json.dumps(
@@ -235,6 +243,7 @@ def _write_decision_engine_outputs(
                     'run_mode': run_mode,
                     'observe_only': True,
                     'total_decisions': len(_dp_list),
+                    'portfolio_context': _dp_portfolio_ctx,
                     'decisions': _dp_list,
                 },
                 indent=2,
@@ -285,7 +294,7 @@ def _write_decision_engine_outputs(
 
     try:
         _validator_root = explainer_root or _decision_explainer_root_from_output_dir(output_dir)
-        _use_llm = bool(int(os.environ.get("AI_VALIDATOR_USE_LLM", "0")))
+        _use_llm = is_truthy("AI_VALIDATOR_USE_LLM")
         _validation_payload, _ = _run_ai_validation(_validator_root, use_llm=_use_llm)
         logger_obj.info(
             "AI VALIDATOR: ai_decision_validation.json + .md written"
@@ -1941,6 +1950,17 @@ def run_portfolio_update(
 
             result['decision_plan'] = _decision_plan
             result['decision_plan_summary'] = _decision_plan_summary
+            # Slim copy of the portfolio context for the decision_plan.json
+            # envelope. current_holdings is intentionally omitted to keep the
+            # envelope small and free of per-symbol detail (which lives in
+            # decision rows already).
+            result['decision_plan_portfolio_context'] = {
+                'total_portfolio_value': _de_portfolio_ctx.get('total_portfolio_value', 0.0),
+                'cash': _de_portfolio_ctx.get('cash', 0.0),
+                'degraded_mode': _de_portfolio_ctx.get('degraded_mode', False),
+                'data_mode': _de_portfolio_ctx.get('data_mode', 'unknown'),
+                'drawdown_regime': _de_portfolio_ctx.get('drawdown_regime'),
+            }
 
             logger.info(
                 "DECISION ENGINE: %d decisions generated (observe-only)",
@@ -2160,6 +2180,93 @@ def run_portfolio_update(
                     logger.warning(
                         "PERFORMANCE ATTRIBUTION: non-fatal error — %s", _pa_err, exc_info=True
                     )
+
+            # ── P&L Advisors (observe-only, additive layers) ─────────────────
+            # Three observe-only advisors that read existing artifacts plus
+            # FMP-cached price data. Each is wrapped independently so a single
+            # failure cannot affect the others or the rest of the pipeline.
+            _pnl_root = _decision_explainer_root_from_output_dir(output_dir)
+            _pnl_fmp = None
+            try:
+                from fmp_client import FMPClient as _PnlFMP
+                _pnl_fmp = _PnlFMP(daily_budget=config.fmp_daily_calls_budget)
+            except Exception as _pnl_fmp_err:
+                logger.debug(
+                    "PNL ADVISORS: FMP client unavailable (advisors will degrade): %s",
+                    _pnl_fmp_err,
+                )
+
+            try:
+                from portfolio_automation.exit_advisor import run_exit_advisor as _run_exit_advisor
+                _ea_plan = _run_exit_advisor(_pnl_root, fmp_client=_pnl_fmp)
+                logger.info("EXIT ADVISOR: %s", _ea_plan.get('summary_line', '(no summary)'))
+            except Exception as _ea_err:
+                logger.warning("EXIT ADVISOR: non-fatal error — %s", _ea_err, exc_info=True)
+
+            try:
+                from portfolio_automation.cash_deployment_plan import (
+                    run_cash_deployment_plan as _run_cdp,
+                )
+                _cdp_plan = _run_cdp(_pnl_root)
+                logger.info("CASH DEPLOYMENT: %s", _cdp_plan.get('summary_line', '(no summary)'))
+            except Exception as _cdp_err:
+                logger.warning("CASH DEPLOYMENT: non-fatal error — %s", _cdp_err, exc_info=True)
+
+            try:
+                from portfolio_automation.correlation_risk_advisor import (
+                    run_correlation_risk_advisor as _run_cra,
+                )
+                _cra_plan = _run_cra(_pnl_root, fmp_client=_pnl_fmp)
+                logger.info("CORRELATION ADVISOR: %s", _cra_plan.get('summary_line', '(no summary)'))
+            except Exception as _cra_err:
+                logger.warning("CORRELATION ADVISOR: non-fatal error — %s", _cra_err, exc_info=True)
+
+            try:
+                from portfolio_automation.earnings_gate import (
+                    run_earnings_gate as _run_earnings_gate,
+                )
+                # earnings_lookup intentionally None until an FMP-compliant
+                # earnings calendar endpoint is registered (see docs/EARNINGS_GATE.md).
+                _eg_plan = _run_earnings_gate(_pnl_root, earnings_lookup=None)
+                logger.info("EARNINGS GATE: %s", _eg_plan.get('summary_line', '(no summary)'))
+            except Exception as _eg_err:
+                logger.warning("EARNINGS GATE: non-fatal error — %s", _eg_err, exc_info=True)
+
+            try:
+                from portfolio_automation.vol_regime_advisor import (
+                    run_vol_regime_advisor as _run_vra,
+                )
+                _vra_plan = _run_vra(_pnl_root, fmp_client=_pnl_fmp)
+                logger.info("VOL REGIME: %s", _vra_plan.get('summary_line', '(no summary)'))
+            except Exception as _vra_err:
+                logger.warning("VOL REGIME: non-fatal error — %s", _vra_err, exc_info=True)
+
+            try:
+                from portfolio_automation.tax_harvest_advisor import (
+                    run_tax_harvest_advisor as _run_tha,
+                )
+                _tha_plan = _run_tha(_pnl_root, fmp_client=_pnl_fmp)
+                logger.info("TAX HARVEST: %s", _tha_plan.get('summary_line', '(no summary)'))
+            except Exception as _tha_err:
+                logger.warning("TAX HARVEST: non-fatal error — %s", _tha_err, exc_info=True)
+
+            try:
+                from portfolio_automation.kelly_sizing_advisor import (
+                    run_kelly_sizing_advisor as _run_kelly,
+                )
+                _kelly_plan = _run_kelly(_pnl_root)
+                logger.info("KELLY SIZING: %s", _kelly_plan.get('summary_line', '(no summary)'))
+            except Exception as _kelly_err:
+                logger.warning("KELLY SIZING: non-fatal error — %s", _kelly_err, exc_info=True)
+
+            try:
+                from portfolio_automation.alpha_attribution_report import (
+                    run_alpha_attribution_report as _run_alpha,
+                )
+                _alpha_plan = _run_alpha(_pnl_root)
+                logger.info("ALPHA ATTRIBUTION: %s", _alpha_plan.get('summary_line', '(no summary)'))
+            except Exception as _alpha_err:
+                logger.warning("ALPHA ATTRIBUTION: non-fatal error — %s", _alpha_err, exc_info=True)
 
             # ── AI Budget Summary (observe-only) ─────────────────────────────
             try:

@@ -250,6 +250,22 @@ def test_run_plan_deploys_when_budget_available(tmp_path):
     assert out_json.exists()
 
 
+def test_run_plan_prefers_top_level_portfolio_context(tmp_path):
+    """Top-level decision_plan.portfolio_context wins over per-decision inputs_used."""
+    repo = _setup_repo(tmp_path)
+    # Rewrite decision_plan.json with top-level context different from per-row.
+    decision_plan_path = repo / "outputs" / "latest" / "decision_plan.json"
+    decision_plan = json.loads(decision_plan_path.read_text(encoding="utf-8"))
+    decision_plan["portfolio_context"] = {
+        "total_portfolio_value": 50_000.0,
+        "cash": 5_000.0,
+    }
+    # Per-row inputs_used has 10_000 which would otherwise be picked.
+    decision_plan_path.write_text(json.dumps(decision_plan), encoding="utf-8")
+    plan = run_cash_deployment_plan(repo, base_dir=repo / "outputs")
+    assert plan["cash_summary"]["portfolio_value"] == 50_000.0
+
+
 def test_run_plan_suspends_when_degraded(tmp_path):
     repo = _setup_repo(tmp_path, system_health={"degraded_mode": True, "data_mode": "fallback"})
     plan = run_cash_deployment_plan(repo, base_dir=repo / "outputs")
