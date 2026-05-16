@@ -23,5 +23,9 @@
       "PowerShell($p = \"C:\\\\Users\\\\en-pes\\\\AppData\\\\Local\\\\Temp\\\\sandbox_smoke_6ee0fca63f6545d3927addb6b3d36d73\"; if \\(Test-Path $p\\) { Get-ChildItem $p -Recurse -File | Select-Object FullName } else { \"missing: $p\" })",
       "PowerShell(python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py 2>&1)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "stockbot-mcp",
+    "agent-mcp"
+  ]
 }
