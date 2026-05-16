@@ -83,14 +83,50 @@ cat .agent/phase_status.yaml            # per-step roadmap status
 - Replay artifacts → `OutputNamespace.HISTORICAL` (`outputs/backtest/`) — never from live pipeline
 - Never write to namespaces outside the module's declared purpose.
 
-## VPS Warning
+## Operating Mode
 
-Claude runs locally. Claude does not have access to the production VPS.
+Claude Code runs in two environments. Behavior differs by environment.
 
-- Do not claim tests passed on VPS — they ran locally only.
-- Return VPS validation commands for the user to run manually.
-- Format VPS commands clearly as a copyable block at the end of the final report.
-- Use `.agent/task_templates/vps_validation_prompt.md` as the template for VPS commands.
+### Operator laptop (Windows, C:\PersonalWork\v1)
+Primary dev environment. Full write access. Validation commands that need
+the production VPS are returned as a copyable block for the operator to
+run manually on the VPS — do NOT claim VPS test results from the laptop.
+
+### Production VPS (Linux, /opt/stockbot)
+Claude Code runs here too. Switchable between two modes by swapping
+`.claude/settings.json`:
+
+- **dev_on_vps** (current default): full edit / commit / push access.
+  Used while hardening the system toward production-grade. Claude can
+  edit code, run pytest, push to main, and validate directly on the
+  production filesystem. The VPS is treated as a second dev environment,
+  not yet as untouchable production.
+- **read_only_ops** (target end state): can read artifacts, run pytest,
+  run validation scripts; cannot edit code, cannot mutate
+  `outputs/latest/`, cannot push to git. Switch into this mode once the
+  advisory layers are confirmed stable and the cron pipeline is treated
+  as ground truth.
+
+To switch modes on the VPS, tell Claude (or any operator) to apply the
+corresponding mode block from `docs/CLAUDE_VPS_MODES.md` into
+`.claude/settings.json`:
+
+- "Apply dev_on_vps mode" → copy the dev block into `.claude/settings.json`
+- "Apply read_only_ops mode" → copy the read-only block into `.claude/settings.json`
+
+Restart the Claude Code session afterward so the new permissions take
+effect. See `docs/CLAUDE_VPS_MODES.md` for both full JSON blocks and the
+rationale for every allow/deny pattern.
+
+### Validation reporting rules
+
+- When Claude runs on the VPS, validation commands are executed there;
+  the reported test results are real.
+- When Claude runs on the laptop, validation commands are returned as a
+  copyable block for the operator to run on the VPS manually. Do NOT
+  claim those tests passed.
+- Use `.agent/task_templates/vps_validation_prompt.md` as the template
+  when returning manual VPS commands.
 
 ## Test Requirements
 
