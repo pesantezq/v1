@@ -29,6 +29,7 @@ import decision_engine as structured_decision_engine
 DECISION_BUY = "BUY"
 DECISION_SELL = "SELL"
 DECISION_SCALE = "SCALE"
+DECISION_TRIM = "TRIM"  # P4.2 — partial exit, set by exit_advisor override
 DECISION_HOLD = "HOLD"
 DECISION_WAIT = "WAIT"
 DECISION_AVOID = "AVOID"
@@ -64,25 +65,32 @@ _MIN_ACTIONABLE_BAND = "starter"
 _CONFIDENCE_FLOOR = 0.60
 
 # Decision strength used for capping overrides.
+# TRIM sits between HOLD and SCALE: more decisive than holding, less so than
+# scaling up or fully buying/selling. SELL remains authoritative.
 _DECISION_RANK: dict[str, int] = {
     DECISION_AVOID: 0,
     DECISION_WAIT: 1,
     DECISION_HOLD: 2,
-    DECISION_SCALE: 3,
-    DECISION_BUY: 4,
-    DECISION_SELL: 5,  # SELL is authoritative — never downgraded by overrides.
+    DECISION_TRIM: 3,
+    DECISION_SCALE: 4,
+    DECISION_BUY: 5,
+    DECISION_SELL: 6,  # SELL is authoritative — never downgraded by overrides.
 }
 _RANK_TO_DECISION: dict[int, str] = {v: k for k, v in _DECISION_RANK.items()}
 
 # Decision precedence for consolidation (winner selection when two sources conflict).
 # SCALE > BUY: scaling an existing position reflects stronger conviction than opening new.
+# TRIM sits between HOLD and BUY — a partial exit signal is stronger than HOLD but
+# weaker than an entry signal at the consolidation step (exit_advisor downgrades
+# happen post-consolidation via apply_exit_advisor_override).
 _CONSOLIDATION_DECISION_RANK: dict[str, int] = {
     DECISION_AVOID: 0,
     DECISION_WAIT: 1,
     DECISION_HOLD: 2,
-    DECISION_BUY: 3,
-    DECISION_SCALE: 4,
-    DECISION_SELL: 5,
+    DECISION_TRIM: 3,
+    DECISION_BUY: 4,
+    DECISION_SCALE: 5,
+    DECISION_SELL: 6,
 }
 
 # Maximum priority score each source type may produce.
@@ -1152,6 +1160,89 @@ def apply_decision_overrides(
 
 
 # ---------------------------------------------------------------------------
+# P4.2 — Exit Advisor override
+# ---------------------------------------------------------------------------
+
+# Recommendation → target decision when downgrading from BUY/SCALE/HOLD.
+_EXIT_ADVISOR_DOWNGRADE: dict[str, str] = {
+    "EXIT_FULL":    DECISION_SELL,
+    "EXIT_HALF":    DECISION_TRIM,
+    "TIGHTEN_STOP": DECISION_HOLD,
+}
+
+# Source decisions eligible for exit-advisor downgrade. SELL is authoritative
+# (never downgraded). WAIT / AVOID are conservative-by-default and not held
+# positions. TRIM is already an exit decision — no further override.
+_EXIT_ADVISOR_ELIGIBLE_DECISIONS = {DECISION_BUY, DECISION_SCALE, DECISION_HOLD}
+
+
+def _exit_advisor_recommendation_for(symbol: str, plan: dict | None) -> tuple[str | None, dict | None]:
+    """Return (recommendation, row) for symbol in plan, or (None, None)."""
+    if not isinstance(plan, dict):
+        return None, None
+    rows = plan.get("by_position")
+    if not isinstance(rows, list):
+        return None, None
+    needle = str(symbol or "").upper()
+    if not needle:
+        return None, None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("symbol") or "").upper() == needle:
+            rec = row.get("recommendation")
+            return (str(rec) if rec else None), row
+    return None, None
+
+
+def apply_exit_advisor_override(
+    decision_record: dict,
+    exit_advisor_plan: dict | None,
+) -> dict:
+    """
+    Apply an exit-advisor-derived downgrade to a built decision record.
+
+    Mapping:
+        EXIT_FULL    → SELL
+        EXIT_HALF    → TRIM
+        TIGHTEN_STOP → HOLD
+
+    SELL decisions are never downgraded. Decisions in WAIT/AVOID are left
+    alone (exit advisor scope is currently-held positions). When the
+    target decision equals the current decision (e.g. HOLD + TIGHTEN_STOP),
+    no annotation is added.
+
+    Returns a shallow copy with modified fields; never mutates input.
+    """
+    record = dict(decision_record)
+    record["risk_flags"] = list(decision_record.get("risk_flags") or [])
+
+    current = record.get("decision", DECISION_HOLD)
+    if current not in _EXIT_ADVISOR_ELIGIBLE_DECISIONS:
+        return record
+
+    rec, row = _exit_advisor_recommendation_for(record.get("symbol", ""), exit_advisor_plan)
+    if not rec:
+        return record
+
+    target = _EXIT_ADVISOR_DOWNGRADE.get(rec.upper())
+    if target is None or target == current:
+        return record
+
+    record["decision"] = target
+    record["exit_advisor_override"] = {
+        "from": current,
+        "to": target,
+        "recommendation": rec,
+        "reason": str((row or {}).get("reason") or "exit_advisor recommended downgrade"),
+    }
+    if "exit_advisor_triggered" not in record["risk_flags"]:
+        record["risk_flags"].append("exit_advisor_triggered")
+    record["risk_flags"] = _dedup_flags(record["risk_flags"])
+    return record
+
+
+# ---------------------------------------------------------------------------
 # Violation resolution helpers
 # ---------------------------------------------------------------------------
 
@@ -1307,6 +1398,7 @@ def build_decision_plan(
     market_opportunities: Optional[list[dict]] = None,
     finance_recommendations: Optional[list[dict]] = None,
     portfolio_context: Optional[dict] = None,
+    exit_advisor_plan: Optional[dict] = None,
 ) -> list[dict]:
     """
     Unify all input sources into a ranked list of decision records.
@@ -1365,6 +1457,14 @@ def build_decision_plan(
 
     # One decision per symbol — merge duplicates by source/decision precedence.
     all_decisions = consolidate_decisions(all_decisions)
+
+    # P4.2 — apply exit_advisor downgrades AFTER consolidation so the override
+    # acts on the unified per-symbol decision (not a pre-merge candidate).
+    if exit_advisor_plan is not None:
+        all_decisions = [
+            apply_exit_advisor_override(d, exit_advisor_plan)
+            for d in all_decisions
+        ]
 
     ranked = rank_decisions(all_decisions)
     return [

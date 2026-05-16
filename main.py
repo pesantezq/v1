@@ -1951,6 +1951,20 @@ def run_portfolio_update(
                 'active_structural_violations': _de_violations,
             }
 
+            # P4.2 — Best-effort read of prior run's exit_advisor.json so the
+            # unified decision_engine can downgrade per-position decisions
+            # (EXIT_FULL→SELL, EXIT_HALF→TRIM, TIGHTEN_STOP→HOLD). Failures
+            # are non-fatal; missing plan → no downgrades applied.
+            _exit_advisor_plan_for_de: dict | None = None
+            try:
+                _ea_path = Path("outputs/latest/exit_advisor.json")
+                if _ea_path.exists():
+                    _exit_advisor_plan_for_de = _json.loads(_ea_path.read_text(encoding="utf-8"))
+            except Exception as _ea_err:
+                if logger is not None:
+                    logger.warning("decision_engine: exit_advisor.json read failed (non-fatal): %s", _ea_err)
+                _exit_advisor_plan_for_de = None
+
             _decision_plan: list = _build_decision_plan(
                 structural_violations=_de_violations,
                 portfolio_adjustments=_de_adjustments,
@@ -1958,6 +1972,7 @@ def run_portfolio_update(
                 market_opportunities=_de_market_opps,
                 finance_recommendations=_de_finance_recs,
                 portfolio_context=_de_portfolio_ctx,
+                exit_advisor_plan=_exit_advisor_plan_for_de,
             )
             _decision_plan_summary: str = _summarize_decision_plan(
                 _decision_plan, _de_portfolio_ctx
