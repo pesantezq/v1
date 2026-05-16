@@ -1,7 +1,7 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-14 (daily_sandbox_run_orchestrator complete; GUI cockpit still paused)
+# Last updated: 2026-05-16 (P4.1 outcome-driven conviction sizing — protected scope, user-approved, shipped)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -56,11 +56,12 @@ completed_steps:
   - pnl_advisors_phase_2_earnings_vol_tax_harvest
   - pnl_advisors_phase_3_kelly_alpha_attribution
   - pnl_advisors_pipeline_integration
+  - pnl_advisors_phase_4_p4_1_outcome_driven_conviction_sizing  # 2026-05-16 — user-approved protected scope unlock
 
 next_official_step:
-  primary: project_complete
+  primary: pnl_advisors_phase_4_remaining_items  # P4.2, P4.3, P4.4 (P4.1 shipped)
   secondary:
-    - pnl_advisors_phase_4_protected_semantics  # GATED — requires per-item explicit approval
+    - pnl_advisors_phase_4_protected_semantics  # remaining items still gated per CLAUDE.md (P4.1 approved + landed 2026-05-16)
   note: >
     All identified roadmap items are shipped.  The Streamlit operator
     cockpit was superseded by gui_v2 (FastAPI + HTMX + Jinja2 + Tailwind,

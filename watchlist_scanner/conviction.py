@@ -42,6 +42,15 @@ _BAND_RANK = {
     "high_conviction": 4,
 }
 
+# P4.1 — outcome-driven sizing tuning constants. _NOMINAL_KELLY_REFERENCE
+# anchors the multiplier scale: when the Kelly Sizing Advisor reports a
+# BUY fraction equal to this reference, the resulting band multipliers
+# match the legacy static values exactly. _SCALING_CLAMP bounds the
+# scaling factor so a single underfilled Kelly sample cannot collapse or
+# explode sizing.
+_NOMINAL_KELLY_REFERENCE = 0.20
+_SCALING_CLAMP = (0.5, 1.5)
+
 
 def _cfg(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
     merged = dict(base)
@@ -100,16 +109,58 @@ def _summary_line(counts: dict[str, int]) -> str:
     )
 
 
+def _kelly_buy_fraction(kelly_plan: dict[str, Any] | None) -> float | None:
+    """Extract the BUY decision's Kelly fraction, or None if not usable."""
+    if not isinstance(kelly_plan, dict):
+        return None
+    by_decision = kelly_plan.get("by_decision")
+    if not isinstance(by_decision, list):
+        return None
+    for entry in by_decision:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("decision") or "").upper() != "BUY":
+            continue
+        if entry.get("status") != "ok":
+            return None
+        f = entry.get("kelly_fraction_suggested")
+        try:
+            value = float(f) if f is not None else None
+        except (TypeError, ValueError):
+            return None
+        if value is None or value <= 0.0:
+            return None
+        return value
+    return None
+
+
+def _kelly_scaling(buy_fraction: float | None) -> tuple[float, str]:
+    """Return (scaling, source) — scaling clamped to _SCALING_CLAMP."""
+    if buy_fraction is None or buy_fraction <= 0.0:
+        return 1.0, "static-fallback"
+    raw = buy_fraction / _NOMINAL_KELLY_REFERENCE
+    lo, hi = _SCALING_CLAMP
+    return max(lo, min(hi, raw)), "outcome-driven"
+
+
 def apply_conviction_layer(
     scan_result: dict[str, Any],
     *,
     conviction_config: dict[str, Any] | None = None,
     sizing_config: dict[str, Any] | None = None,
+    kelly_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     conviction_cfg = _cfg(DEFAULT_CONVICTION_CONFIG, conviction_config)
     sizing_cfg = _cfg(DEFAULT_SIZING_CONFIG, sizing_config)
     if not conviction_cfg.get("enabled", True):
         return scan_result
+
+    # P4.1 — outcome-driven sizing. When the Kelly Sizing Advisor reports
+    # a usable BUY fraction we scale the static band multipliers by
+    # (fraction / nominal), clamped to [0.5, 1.5]. Otherwise scaling=1.0
+    # (byte-identical legacy behavior).
+    kelly_fraction_buy = _kelly_buy_fraction(kelly_plan)
+    kelly_scaling, kelly_source = _kelly_scaling(kelly_fraction_buy)
 
     counts = {band: 0 for band in _BAND_RANK}
 
@@ -165,7 +216,10 @@ def apply_conviction_layer(
 
         if count_band:
             counts[band] += 1
-        multiplier = float(sizing_cfg["multipliers"][band])
+        static_multiplier = float(sizing_cfg["multipliers"][band])
+        # Only scale non-zero bands so defer/observe stay at 0.00 regardless
+        # of Kelly state.
+        multiplier = round(static_multiplier * kelly_scaling, 4) if static_multiplier > 0.0 else 0.0
         target_band = str(sizing_cfg["target_allocation_bands"][band])
         sizing_reason_parts = [
             f"effective={effective_score:.2f}",
@@ -179,6 +233,10 @@ def apply_conviction_layer(
             sizing_reason_parts.append("cooldown active")
         if caps_applied:
             sizing_reason_parts.append("caps=" + ",".join(caps_applied))
+        if kelly_source == "outcome-driven":
+            sizing_reason_parts.append(
+                f"kelly_scaling={kelly_scaling:.2f} (fraction={kelly_fraction_buy:.3f})"
+            )
 
         row["conviction_score"] = conviction_score
         row["conviction_band"] = band
@@ -200,6 +258,9 @@ def apply_conviction_layer(
             "degraded_confidence_penalty": degraded_penalty,
             "cooldown_active": cooldown_active,
             "data_mode": data_mode,
+            "kelly_sizing_source": kelly_source,
+            "kelly_fraction_buy": kelly_fraction_buy,
+            "kelly_scaling": round(kelly_scaling, 4),
         }
         row["conviction_caps_applied"] = caps_applied
 
@@ -223,6 +284,13 @@ def apply_conviction_layer(
             "degraded_penalty_weight": conviction_cfg["degraded_penalty_weight"],
             "confidence_weight": conviction_cfg["confidence_weight"],
             "effective_score_weight": conviction_cfg["effective_score_weight"],
+        },
+        "kelly_sizing": {
+            "source": kelly_source,
+            "kelly_fraction_buy": kelly_fraction_buy,
+            "scaling": round(kelly_scaling, 4),
+            "nominal_kelly_reference": _NOMINAL_KELLY_REFERENCE,
+            "scaling_clamp": list(_SCALING_CLAMP),
         },
     }
     return scan_result

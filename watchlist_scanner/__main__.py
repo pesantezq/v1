@@ -403,10 +403,24 @@ def run(
         dry_run=manual_dry_run,
         feedback_config=config.get("performance_feedback", {}),
     )
+    # P4.1 — Read prior run's kelly_sizing_advisor.json (if present) so the
+    # conviction layer can scale band multipliers by realized hit-rate
+    # × win/loss ratio. Read is best-effort; conviction falls back to
+    # static multipliers when the artifact is missing or malformed.
+    _kelly_plan_for_conviction: dict | None = None
+    try:
+        _kelly_path = Path(output_dir) / "kelly_sizing_advisor.json"
+        if _kelly_path.exists():
+            _kelly_plan_for_conviction = json.loads(_kelly_path.read_text(encoding="utf-8"))
+    except Exception as _kelly_err:
+        logger.warning("conviction: kelly_sizing_advisor.json read failed (non-fatal): %s", _kelly_err)
+        _kelly_plan_for_conviction = None
+
     apply_conviction_layer(
         result,
         conviction_config=config.get("conviction", {}),
         sizing_config=config.get("sizing", {}),
+        kelly_plan=_kelly_plan_for_conviction,
     )
     apply_portfolio_construction_layer(
         result,
