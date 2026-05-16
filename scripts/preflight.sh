@@ -173,7 +173,14 @@ fi
 
 section "FMP Tests"
 pytest_output="$(mktemp)"
-if python -m pytest tests/ -k fmp -v | tee "$pytest_output"; then
+# Mirror the documented full_suite_command ignore list so a collection-time
+# error in the retired Streamlit GUI tests does not fail the FMP step. The
+# -k fmp filter applies post-collection, so without these ignores, pytest
+# still imports the GUI test modules and aborts on any import-time error.
+if python -m pytest tests/ -k fmp -v \
+    --ignore=tests/test_gui_api_health.py \
+    --ignore=tests/test_gui_insight_cards.py \
+    | tee "$pytest_output"; then
     pass "FMP-focused pytest suite passed"
 else
     fail "python -m pytest tests/ -k fmp -v failed"
