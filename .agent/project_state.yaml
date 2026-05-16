@@ -57,11 +57,12 @@ completed_steps:
   - pnl_advisors_phase_3_kelly_alpha_attribution
   - pnl_advisors_pipeline_integration
   - pnl_advisors_phase_4_p4_1_outcome_driven_conviction_sizing  # 2026-05-16 — user-approved protected scope unlock
+  - pnl_advisors_phase_4_p4_4_regime_aware_allocation  # 2026-05-16 — user-approved protected scope unlock
 
 next_official_step:
-  primary: pnl_advisors_phase_4_remaining_items  # P4.2, P4.3, P4.4 (P4.1 shipped)
+  primary: pnl_advisors_phase_4_remaining_items  # P4.2, P4.3 (P4.1 + P4.4 shipped)
   secondary:
-    - pnl_advisors_phase_4_protected_semantics  # remaining items still gated per CLAUDE.md (P4.1 approved + landed 2026-05-16)
+    - pnl_advisors_phase_4_protected_semantics  # remaining items still gated per CLAUDE.md (P4.1 + P4.4 approved + landed 2026-05-16)
   note: >
     All identified roadmap items are shipped.  The Streamlit operator
     cockpit was superseded by gui_v2 (FastAPI + HTMX + Jinja2 + Tailwind,

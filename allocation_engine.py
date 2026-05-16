@@ -54,6 +54,10 @@ class AllocationSuggestion:
     baseline_suggested_pct: float = 0.0
     rank_aware_suggested_pct: float = 0.0
     allocation_policy_reason: str = ""
+    # P4.4 — Vol regime advisor feedback
+    vol_regime_source: str = "default"  # "advisor" when plan was consulted
+    vol_regime_multiplier: float = 1.0
+    vol_regime_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,7 +75,32 @@ class AllocationSuggestion:
             "baseline_suggested_pct": round(self.baseline_suggested_pct, 4),
             "rank_aware_suggested_pct": round(self.rank_aware_suggested_pct, 4),
             "allocation_policy_reason": self.allocation_policy_reason,
+            "vol_regime_source": self.vol_regime_source,
+            "vol_regime_multiplier": round(self.vol_regime_multiplier, 4),
+            "vol_regime_label": self.vol_regime_label,
         }
+
+
+def _vol_regime_multiplier_from_plan(plan: dict[str, Any] | None) -> tuple[float, str, str]:
+    """
+    Extract (multiplier, source, label) from a vol_regime_advisor plan.
+
+    Returns (1.0, "default", "") when the plan is missing, malformed,
+    insufficient, or carries an invalid multiplier. When the advisor is
+    consulted and reports status=="ok", returns the suggested multiplier
+    (clamped to (0, ∞)) and source="advisor". A multiplier of exactly 1.0
+    still records source="advisor" so observability captures the consult.
+    """
+    if not isinstance(plan, dict):
+        return 1.0, "default", ""
+    if plan.get("status") != "ok":
+        return 1.0, "default", ""
+    raw = plan.get("sizing_multiplier_suggested")
+    value = as_finite_float(raw, default=None)
+    if value is None or value <= 0.0:
+        return 1.0, "default", ""
+    label = str(plan.get("regime") or "")
+    return float(value), "advisor", label
 
 
 def suggest_allocation(
@@ -84,6 +113,7 @@ def suggest_allocation(
     context: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
     approved_policy: dict[str, Any] | None = None,
+    vol_regime_plan: dict[str, Any] | None = None,
 ) -> AllocationSuggestion:
     cfg = dict(DEFAULT_CONFIG)
     cfg.update(config or {})
@@ -131,6 +161,17 @@ def suggest_allocation(
     if bool(context.get("degraded_mode")):
         suggested_pct *= _config_float(cfg, "degraded_penalty", DEFAULT_CONFIG["degraded_penalty"], minimum=0.0)
         rationale.append("degraded data mode reduces position size")
+
+    # P4.4 — Vol regime feedback. Applied after risk-off + degraded so
+    # both regimes can compound; applied before caps so caps still bind
+    # on the regime-adjusted size. Multiplier=1.0 is recorded for
+    # observability but does not alter suggested_pct or rationale.
+    vol_mult, vol_source, vol_label = _vol_regime_multiplier_from_plan(vol_regime_plan)
+    if vol_source == "advisor" and vol_mult != 1.0:
+        suggested_pct *= vol_mult
+        rationale.append(
+            f"vol regime '{vol_label}' applies aggregate sizing multiplier ×{vol_mult:.2f}"
+        )
 
     # Enforce a minimum viable position size.  When compounding penalties
     # (risk-off + degraded + low-confidence) would produce a sub-threshold
@@ -245,6 +286,9 @@ def suggest_allocation(
         baseline_suggested_pct=baseline_suggested_pct,
         rank_aware_suggested_pct=rank_aware_pct,
         allocation_policy_reason=policy_reason,
+        vol_regime_source=vol_source,
+        vol_regime_multiplier=vol_mult,
+        vol_regime_label=vol_label,
     )
 
 

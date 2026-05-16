@@ -59,6 +59,7 @@ def generate_portfolio_actions(
     cash_available: float,
     context: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    vol_regime_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     context = context or {}
     cfg = {
@@ -142,6 +143,7 @@ def generate_portfolio_actions(
                     current_sector_exposure=sector_exposures.get(_holding_sector(existing_holding), 0.0),
                     context=context,
                     config=allocation_cfg,
+                    vol_regime_plan=vol_regime_plan,
                 )
                 action = (
                     "BUY"
@@ -176,6 +178,7 @@ def generate_portfolio_actions(
             current_sector_exposure=sector_exposures.get(_holding_sector(opportunity), 0.0),
             context=context,
             config=allocation_cfg,
+            vol_regime_plan=vol_regime_plan,
         )
         rationale = list(route.rationale)
         rationale.extend(allocation.rationale)

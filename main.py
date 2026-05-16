@@ -1317,6 +1317,20 @@ def run_portfolio_update(
                     scanner_candidates=scanner_candidates,
                     cash_available=config.cash_available,
                 )
+                # P4.4 — Best-effort read of prior run's vol_regime_advisor.json
+                # so allocation_engine can scale aggregate sizing by realised
+                # benchmark volatility. Read failures are non-fatal; missing
+                # or insufficient plan → static allocation behavior preserved.
+                _vol_regime_plan: dict | None = None
+                try:
+                    _vol_regime_path = Path("outputs/latest/vol_regime_advisor.json")
+                    if _vol_regime_path.exists():
+                        _vol_regime_plan = _json.loads(_vol_regime_path.read_text(encoding="utf-8"))
+                except Exception as _vr_err:
+                    if logger is not None:
+                        logger.warning("portfolio_decision_engine: vol_regime_advisor.json read failed (non-fatal): %s", _vr_err)
+                    _vol_regime_plan = None
+
                 decision_layer = generate_portfolio_actions(
                     current_holdings=holdings,
                     opportunities=promoted_candidates,
@@ -1328,6 +1342,7 @@ def run_portfolio_update(
                         "degraded_mode": bool(_scanner_meta.get("fallback_used")),
                         "degraded_reason": _scanner_meta.get("fmp_error"),
                     },
+                    vol_regime_plan=_vol_regime_plan,
                 )
 
                 # Event summary: count per type
