@@ -183,7 +183,7 @@
     "include_in_net_worth": true
   },
   "ml_advisor": {
-    "enabled": false
+    "enabled": true
   },
   "market_data": {
     "provider": "alpha_vantage",

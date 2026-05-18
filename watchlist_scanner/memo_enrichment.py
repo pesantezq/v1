@@ -270,9 +270,15 @@ def compute_top_movers(
     if not isinstance(holdings, list) or not holdings:
         return {"available": False, "reason": "no_holdings"}
 
-    # Normalize signal list shape
+    # Normalize signal list shape. The watchlist scanner emits the rows under
+    # "results"; older artifacts used "signals" / "symbols".
     if isinstance(watchlist_signals, dict):
-        signal_list = watchlist_signals.get("signals") or watchlist_signals.get("symbols") or []
+        signal_list = (
+            watchlist_signals.get("signals")
+            or watchlist_signals.get("symbols")
+            or watchlist_signals.get("results")
+            or []
+        )
     elif isinstance(watchlist_signals, list):
         signal_list = watchlist_signals
     else:
@@ -309,10 +315,15 @@ def compute_top_movers(
         if price_raw is None:
             tech = sig.get("technicals") if isinstance(sig.get("technicals"), dict) else {}
             price_raw = tech.get("price") if isinstance(tech, dict) else None
+        # Watchlist scanner emits "price_change_pct"; legacy artifacts used
+        # "price_change_1d". Accept either so the memo works on both.
         change_raw = sig.get("price_change_1d")
         if change_raw is None:
+            change_raw = sig.get("price_change_pct")
+        if change_raw is None:
             tech = sig.get("technicals") if isinstance(sig.get("technicals"), dict) else {}
-            change_raw = tech.get("price_change_1d") if isinstance(tech, dict) else None
+            if isinstance(tech, dict):
+                change_raw = tech.get("price_change_1d") or tech.get("price_change_pct")
         if price_raw is None or change_raw is None:
             continue
         try:

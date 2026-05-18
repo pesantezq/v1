@@ -117,18 +117,10 @@ if [ -f "$REPO_ROOT/.env" ]; then
     load_dotenv_file "$REPO_ROOT/.env"
 fi
 
-section "Daily Pipeline"
-run_cmd=(python main.py --run-mode daily)
-if [ "${DRY_RUN_MODE:-0}" = "1" ]; then
-    run_cmd+=(--dry-run)
-    printf 'DRY_RUN_MODE=1 detected. Running advisory daily pipeline in --dry-run mode.\n'
-fi
-
-printf 'Command: %s\n' "${run_cmd[*]}"
-"${run_cmd[@]}"
-
-# Non-blocking advisory stages. Sandbox-only writes; failures must not
-# abort the chain because the official decision plan has already landed.
+# Helper for non-blocking advisory stages. Sandbox + read-only writes;
+# failures here must not abort the chain because either (a) the official
+# decision plan has already landed, or (b) the stage is a pre-pipeline
+# observability layer that should never block the main pipeline.
 run_aux_stage() {
     local label="$1"; shift
     section "$label"
@@ -139,14 +131,63 @@ run_aux_stage() {
     fi
 }
 
-# Stage 2 — Discovery news integration (sandbox research lane).
+# Stage 0 — News intelligence (run BEFORE the daily pipeline so it gets
+# first claim on the FMP budget; one batched call populates the news cache
+# for the rest of the run). Uses portfolio holdings + yesterday's watchlist
+# artifact as the seed universe; degrades gracefully when artifacts are
+# absent on first install.
+run_aux_stage "News intelligence (pre-pipeline)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.news.run_news_intelligence import run; s = run(root='.'); print('articles:', s.get('articles_fetched', 0), 'packets:', s.get('evidence_packet_count', 0))"
+
+section "Daily Pipeline"
+run_cmd=(python main.py --run-mode daily)
+if [ "${DRY_RUN_MODE:-0}" = "1" ]; then
+    run_cmd+=(--dry-run)
+    printf 'DRY_RUN_MODE=1 detected. Running advisory daily pipeline in --dry-run mode.\n'
+fi
+
+printf 'Command: %s\n' "${run_cmd[*]}"
+"${run_cmd[@]}"
+
+# Stage 2 — Weight tuning report (performance review of signal weights).
+run_aux_stage "Weight tuning" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.weight_tuning import generate_weight_tuning_report; r = generate_weight_tuning_report(db_path=Path('data/portfolio.db'), output_dir=Path('outputs/performance')); print('recommended:', (r.get('suggestions') or {}).get('recommended_candidate') or 'current')"
+
+# Stage 3 — Policy evaluator (historical decision policy evaluation).
+run_aux_stage "Policy evaluator" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from policy_evaluator.evaluator import evaluate_history; from policy_evaluator.report_writer import write_evaluation_reports; r = evaluate_history(history_path=None); write_evaluation_reports(r, policy_dir=None); print('records:', getattr(r, 'total_records', 0), 'runs:', getattr(r, 'total_runs', 0))"
+
+# Stage 4 — Allocation preview (writes outputs/latest/allocation_preview.json).
+run_aux_stage "Allocation preview" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.allocation_preview import generate_allocation_preview_report; p = generate_allocation_preview_report(root=Path('.')); print('candidates:', int(p.get('candidate_count') or len(p.get('opportunities') or [])))"
+
+# Stage 5 — Allocation policy simulation (rank-aware policy efficiency).
+run_aux_stage "Allocation policy simulation" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.allocation_policy_simulation import generate_allocation_policy_simulation_report; s = generate_allocation_policy_simulation_report(root=Path('.')); print('sample:', s.get('sample_size', 0))"
+
+# Stage 6 — Allocation policy activation (writes approved_*.json gate artifacts).
+run_aux_stage "Allocation policy activation" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.allocation_policy_activation import run_activation_check; r = run_activation_check(root=Path('.'), approve=False); print('all_rules_passed:', r.get('all_rules_passed', False))"
+
+# Stage 7 — System decision summary (writes outputs/latest/system_decision_summary.json).
+# Memo reads its generated_at from this file, so this must run before Stage 10.
+run_aux_stage "System decision summary" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.system_summary import generate_system_decision_summary; s = generate_system_decision_summary(root=Path('.'), write_files=True); print('top_theme:', (s.get('top_theme') or {}).get('name') or '-', 'top_opp:', (s.get('top_opportunity') or {}).get('ticker') or '-')"
+
+# Stage 8 — News intelligence refresh (re-run now that the decision plan
+# and watchlist have landed; cached calls cost no budget so this is cheap
+# and broadens the captured universe).
+run_aux_stage "News intelligence (post-pipeline refresh)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.news.run_news_intelligence import run; s = run(root='.'); print('articles:', s.get('articles_fetched', 0), 'packets:', s.get('evidence_packet_count', 0))"
+
+# Stage 8b — Discovery news integration (sandbox research lane).
 run_aux_stage "Discovery news integration" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.discovery.news_integration import run_discovery_news_integration; print(run_discovery_news_integration(run_mode='discovery'))"
 
-# Stage 3 — Automatic promotion governance (sandbox research lane).
+# Stage 9 — Automatic promotion governance (sandbox research lane).
 run_aux_stage "Automatic promotion governance" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.discovery.automatic_promotion_governance import run_automatic_promotion_governance; print(run_automatic_promotion_governance(run_mode='discovery', write_files=True))"
 
-# Stage 4 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
+# Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
