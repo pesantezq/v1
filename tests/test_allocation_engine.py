@@ -26,8 +26,9 @@ class TestAllocationEngine(unittest.TestCase):
             cash_available=20_000.0,
         )
 
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
-        self.assertAlmostEqual(suggestion.suggested_amount, 5_000.0, places=2)
+        # Compounder base = 10% post-retune (operator-approved 2026-05-18)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
+        self.assertAlmostEqual(suggestion.suggested_amount, 10_000.0, places=2)
 
     def test_momentum_and_lower_confidence_size_smaller(self):
         suggestion = suggest_allocation(
@@ -37,8 +38,9 @@ class TestAllocationEngine(unittest.TestCase):
             cash_available=20_000.0,
         )
 
-        self.assertLess(suggestion.suggested_pct, 0.03)
-        self.assertLess(suggestion.suggested_amount, 3_000.0)
+        # Momentum base = 6% post-retune; 0.64 confidence is medium (×0.75) → ~4.5%
+        self.assertLess(suggestion.suggested_pct, 0.06)
+        self.assertLess(suggestion.suggested_amount, 6_000.0)
 
     def test_sector_cap_limits_size(self):
         suggestion = suggest_allocation(
@@ -89,8 +91,9 @@ class TestAllocationEngine(unittest.TestCase):
             cash_available=20_000.0,
         )
 
+        # Confidence 60% is the medium threshold → 0.75× of 10% base = 7.5%
         self.assertAlmostEqual(suggestion.confidence, 0.60, places=3)
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.0375, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.075, places=4)
 
 
 class TestSectorCapDefault(unittest.TestCase):
@@ -99,11 +102,11 @@ class TestSectorCapDefault(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def test_default_sector_cap_is_20_pct(self):
-        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.20, places=4)
+    def test_default_sector_cap_is_35_pct(self):
+        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.35, places=4)
 
     def test_no_sector_exposure_allows_full_base_size(self):
-        # sector_cap=0.20, no existing exposure → headroom=0.20 > base 5% → no cap applied
+        # sector_cap=0.35, no existing exposure → headroom=0.35 > base 10% → no cap applied
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
@@ -111,45 +114,55 @@ class TestSectorCapDefault(unittest.TestCase):
             cash_available=20_000.0,
             current_sector_exposure=0.0,
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
         self.assertNotIn("sector_cap", suggestion.capped_by)
 
     def test_sector_nearly_full_limits_allocation(self):
-        # 18% already in sector, default cap 20% → only 2% headroom
+        # 32% already in sector, default cap 35% → 3% headroom < 10% base → cap kicks in
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.18,
+            current_sector_exposure=0.32,
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.02, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.03, places=4)
         self.assertIn("sector_cap", suggestion.capped_by)
 
     def test_sector_at_cap_zeroes_allocation(self):
-        # 20% already in sector, cap is 20% → 0% headroom → no allocation
+        # 35% already in sector, cap is 35% → 0% headroom → no allocation
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.20,
+            current_sector_exposure=0.35,
         )
         self.assertAlmostEqual(suggestion.suggested_pct, 0.0, places=4)
         self.assertAlmostEqual(suggestion.suggested_amount, 0.0, places=2)
 
     def test_sector_cap_can_be_disabled_with_none(self):
-        # Passing sector_cap=None explicitly overrides the default and removes the cap
-        suggestion = suggest_allocation(
+        # 30% exposure with default cap 35% → 5% headroom < 10% base → capped at 5%.
+        # Passing sector_cap=None removes the cap entirely → full 10% comes through.
+        capped = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.18,
+            current_sector_exposure=0.30,
+        )
+        uncapped = suggest_allocation(
+            opportunity=self._opportunity(),
+            strategy_type="compounder",
+            portfolio_value=100_000.0,
+            cash_available=20_000.0,
+            current_sector_exposure=0.30,
             config={"sector_cap": None},
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
-        self.assertNotIn("sector_cap", suggestion.capped_by)
+        self.assertAlmostEqual(capped.suggested_pct, 0.05, places=4)
+        self.assertIn("sector_cap", capped.capped_by)
+        self.assertAlmostEqual(uncapped.suggested_pct, 0.10, places=4)
+        self.assertNotIn("sector_cap", uncapped.capped_by)
 
 
 class TestMinPositionPct(unittest.TestCase):
@@ -162,7 +175,7 @@ class TestMinPositionPct(unittest.TestCase):
         self.assertAlmostEqual(DEFAULT_CONFIG["min_position_pct"], 0.01, places=4)
 
     def test_normal_size_above_floor_unaffected(self):
-        # 3% momentum at medium confidence → 2.25%, well above 1% floor
+        # 6% momentum at medium confidence → 4.5%, well above 1% floor (post-retune)
         suggestion = suggest_allocation(
             opportunity=self._opportunity(confidence=0.64),
             strategy_type="momentum",
@@ -172,15 +185,18 @@ class TestMinPositionPct(unittest.TestCase):
         self.assertGreater(suggestion.suggested_pct, 0.01)
 
     def test_extreme_penalties_zero_out_tiny_position(self):
-        # degraded + risk_off + low confidence:
-        # momentum base 3% × 0.50 (low-conf) × 0.55 (risk_off) × 0.65 (degraded) ≈ 0.54%
-        # 0.54% < min_position_pct (1%) → zeroed out
+        # After tactical retune, momentum base is 6% and low_confidence_multiplier
+        # is 0.65; the stacked-penalty product is roughly:
+        #   6% × 0.65 × 0.55 × 0.65 ≈ 1.39%.
+        # Raise min_position_pct to 0.02 so the same "zero out tiny positions"
+        # invariant is still exercised on the new baseline.
         suggestion = suggest_allocation(
             opportunity=self._opportunity(confidence=0.40),
             strategy_type="momentum",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
             context={"degraded_mode": True, "regime_label": "risk_off"},
+            config={"min_position_pct": 0.02},
         )
         self.assertAlmostEqual(suggestion.suggested_pct, 0.0, places=4)
         self.assertAlmostEqual(suggestion.suggested_amount, 0.0, places=2)
@@ -199,15 +215,16 @@ class TestMinPositionPct(unittest.TestCase):
         self.assertGreater(suggestion.suggested_pct, 0.0)
 
     def test_min_position_pct_custom_threshold(self):
-        # Set floor to 3% — a 2.25% medium-confidence momentum should be zeroed
+        # Post-retune: momentum 6% × medium 0.75 = 4.5%. Set the floor to 5% so
+        # the same intent (floor zeros a position that would otherwise pass) is preserved.
         suggestion = suggest_allocation(
             opportunity=self._opportunity(confidence=0.64),
             strategy_type="momentum",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            config={"min_position_pct": 0.03},
+            config={"min_position_pct": 0.05},
         )
-        # 3% × 0.75 = 2.25%, which is below the 3% floor → zeroed
+        # 6% × 0.75 = 4.5%, which is below the 5% floor → zeroed
         self.assertAlmostEqual(suggestion.suggested_pct, 0.0, places=4)
 
 

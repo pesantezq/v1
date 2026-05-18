@@ -240,9 +240,9 @@ class TestBuyStarterMultiplier(unittest.TestCase):
         self.assertLess(buy_amt, promote_amt)
 
     def test_buy_amount_is_70_pct_of_full_allocation(self):
-        # High-confidence BUY (confidence=0.80 → high multiplier → full base 5%),
-        # score=65 → BUY not PROMOTE.  With buy_starter_multiplier=0.70:
-        # expected = 100_000 × 0.05 × 1.0 × 0.70 = $3,500
+        # High-confidence BUY (confidence=0.80 → high multiplier → full base 10%
+        # post-retune), score=65 → BUY not PROMOTE.  With buy_starter_multiplier=0.70:
+        # expected = 100_000 × 0.10 × 1.0 × 0.70 = $7,000
         result = generate_portfolio_actions(
             current_holdings=[],
             opportunities=[self._opportunity(score=65.0, confidence=0.80)],
@@ -251,10 +251,10 @@ class TestBuyStarterMultiplier(unittest.TestCase):
         )
         act = result["actions"][0]
         self.assertEqual(act["action"], "BUY")
-        self.assertAlmostEqual(act["suggested_allocation_amount"], 3_500.0, delta=1.0)
+        self.assertAlmostEqual(act["suggested_allocation_amount"], 7_000.0, delta=1.0)
 
     def test_promote_gets_full_allocation_not_reduced(self):
-        # score=80, confidence=0.80 → PROMOTE, full compounder base 5% = $5,000
+        # score=80, confidence=0.80 → PROMOTE, full compounder base 10% = $10,000
         result = generate_portfolio_actions(
             current_holdings=[],
             opportunities=[self._opportunity(score=80.0, confidence=0.80)],
@@ -263,7 +263,7 @@ class TestBuyStarterMultiplier(unittest.TestCase):
         )
         act = result["actions"][0]
         self.assertEqual(act["action"], "PROMOTE_TO_PORTFOLIO")
-        self.assertAlmostEqual(act["suggested_allocation_amount"], 5_000.0, delta=1.0)
+        self.assertAlmostEqual(act["suggested_allocation_amount"], 10_000.0, delta=1.0)
 
     def test_buy_starter_multiplier_configurable(self):
         # With buy_starter_multiplier=1.0, BUY and PROMOTE get the same allocation
@@ -276,8 +276,8 @@ class TestBuyStarterMultiplier(unittest.TestCase):
         )
         act = result["actions"][0]
         self.assertEqual(act["action"], "BUY")
-        # No multiplier applied → full base 5% = $5,000
-        self.assertAlmostEqual(act["suggested_allocation_amount"], 5_000.0, delta=1.0)
+        # No multiplier applied → full base 10% = $10,000
+        self.assertAlmostEqual(act["suggested_allocation_amount"], 10_000.0, delta=1.0)
 
     def test_existing_holding_add_not_affected_by_starter_multiplier(self):
         # Adding to an existing confirmed holding should use full allocation,
@@ -304,8 +304,8 @@ class TestBuyStarterMultiplier(unittest.TestCase):
         act = result["actions"][0]
         # Existing holding with strong signals → BUY to add
         self.assertEqual(act["action"], "BUY")
-        # Should NOT be discounted — existing holding adds use full allocation
-        self.assertAlmostEqual(act["suggested_allocation_amount"], 5_000.0, delta=1.0)
+        # Should NOT be discounted — existing holding adds use full allocation (10% base)
+        self.assertAlmostEqual(act["suggested_allocation_amount"], 10_000.0, delta=1.0)
 
 
 if __name__ == "__main__":

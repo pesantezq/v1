@@ -128,8 +128,8 @@ def test_allocate_respects_position_cap():
             },
         ],
     )
-    # 20% × $10k = $2000 capped at 8% × $10k = $800
-    assert rows[0]["suggested_amount"] == pytest.approx(800.0, rel=1e-3)
+    # 20% × $10k = $2000 capped at 15% × $10k = $1500 (post-retune)
+    assert rows[0]["suggested_amount"] == pytest.approx(1500.0, rel=1e-3)
 
 
 def test_allocate_band_multiplier_for_starter():
@@ -304,8 +304,9 @@ def test_artifact_observe_only_field_is_hardcoded(tmp_path):
     assert payload["observe_only"] is True
 
 
-def test_max_position_cap_enforced_at_8pct(tmp_path):
+def test_max_position_cap_enforced_at_15pct(tmp_path):
     # Portfolio value 10k, request 20% allocation, high_conviction band.
+    # _MAX_POSITION_PCT (0.15 post-retune) mirrors allocation_engine.max_position_cap.
     repo = _setup_repo(
         tmp_path,
         decisions=[
@@ -320,5 +321,5 @@ def test_max_position_cap_enforced_at_8pct(tmp_path):
         ],
     )
     plan = run_cash_deployment_plan(repo, base_dir=repo / "outputs")
-    # 8% of $10k = $800 max
+    # 15% of $10k = $1,500 max
     assert plan["deployment_rows"][0]["suggested_amount"] <= _MAX_POSITION_PCT * 10_000.0 + 0.01

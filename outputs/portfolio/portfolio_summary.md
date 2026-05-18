@@ -1,59 +1,58 @@
 # Portfolio Construction View
 
 Summary: **skewed**  
-Portfolio view: 21 actionable signals, 13.0% suggested, 9.7% normalized, 21 capped  
+Portfolio view: 13 actionable signals, 7.0% suggested, 7.0% normalized, 0 capped  
 Observe-only: **yes**  
-Suggested allocation: **13.0%**  
-Normalized allocation: **9.7%**  
-Capped positions: **21**  
-Sectors capped: **TECHNOLOGY**  
+Suggested allocation: **7.0%**  
+Normalized allocation: **7.0%**  
+Capped positions: **0**  
+Sectors capped: **none**  
 
 ## Market Regime View
 
-- Market regime: risk_on (confidence 0.85) - broad uptrend with supportive breadth; leadership is reasonably distributed
+- Market regime: high_volatility (confidence 0.86) - elevated cross-signal volatility; leadership is reasonably distributed; average price change is negative
 - Portfolio fit: aligned
-- Commentary: Current normalized allocations look broadly aligned with a constructive regime. Concentration warnings active: overconcentration_top_sector:TECHNOLOGY:41.2%.
+- Commentary: Portfolio construction remains reasonably balanced despite elevated volatility. Concentration warnings active: overconcentration_top_sector:Financial Services:42.9%.
 
 ## Concentration Warnings
 
-- overconcentration_top_sector:TECHNOLOGY:41.2%
+- overconcentration_top_sector:Financial Services:42.9%
 
 ## Exposure Summary
 
-- Top sector: TECHNOLOGY (41.2%)
-- Top 3 ticker concentration: 23.0%
+- Top sector: Financial Services (42.9%)
+- Top 3 ticker concentration: 28.6%
 
 ## Allocation By Sector
 
-- TECHNOLOGY: 4.0%
-- Unknown: 2.7%
-- COMMUNICATION SERVICES: 1.1%
-- FINANCIAL SERVICES: 1.1%
-- CONSUMER CYCLICAL: 0.8%
+- Financial Services: 3.0%
+- Technology: 2.5%
+- Communication Services: 1.0%
+- Consumer Cyclical: 0.5%
 
 ## Ticker Allocations
 
 | Ticker | Conviction | Suggested | Normalized | Cap Reason |
 |--------|------------|-----------|------------|------------|
-| GOOGL | normal | 1.0% | 0.8% | total_allocation_cap |
-| NVDA | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
-| AMD | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
-| AVGO | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
-| MSFT | normal | 1.0% | 0.7% | total_allocation_cap,sector_cap |
-| META | starter | 0.5% | 0.4% | total_allocation_cap |
-| MARA | starter | 0.5% | 0.4% | total_allocation_cap |
-| AMZN | starter | 0.5% | 0.4% | total_allocation_cap |
-| COIN | starter | 0.5% | 0.4% | total_allocation_cap |
-| RIOT | starter | 0.5% | 0.4% | total_allocation_cap |
-| XLK | starter | 0.5% | 0.4% | total_allocation_cap |
-| IWM | starter | 0.5% | 0.4% | total_allocation_cap |
-| QQQ | starter | 0.5% | 0.4% | total_allocation_cap |
-| NASA | starter | 0.5% | 0.4% | total_allocation_cap |
-| SPY | starter | 0.5% | 0.4% | total_allocation_cap |
-| TSLA | starter | 0.5% | 0.4% | total_allocation_cap |
-| XLF | starter | 0.5% | 0.4% | total_allocation_cap |
-| CHAT | starter | 0.5% | 0.4% | total_allocation_cap |
-| SMCI | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
-| AAPL | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
-| PLTR | starter | 0.5% | 0.4% | total_allocation_cap,sector_cap |
-| XLE | observe | 0.0% | 0.0% | - |
+| AAPL | normal | 1.0% | 1.0% | - |
+| AMD | starter | 0.5% | 0.5% | - |
+| NVDA | starter | 0.5% | 0.5% | - |
+| GOOGL | starter | 0.5% | 0.5% | - |
+| XLE | starter | 0.5% | 0.5% | - |
+| QQQ | starter | 0.5% | 0.5% | - |
+| SPY | starter | 0.5% | 0.5% | - |
+| XLK | starter | 0.5% | 0.5% | - |
+| AMZN | starter | 0.5% | 0.5% | - |
+| PLTR | starter | 0.5% | 0.5% | - |
+| META | starter | 0.5% | 0.5% | - |
+| IWM | starter | 0.5% | 0.5% | - |
+| XLF | starter | 0.5% | 0.5% | - |
+| AVGO | defer | 0.0% | 0.0% | - |
+| MSFT | defer | 0.0% | 0.0% | - |
+| SMCI | defer | 0.0% | 0.0% | - |
+| TSLA | defer | 0.0% | 0.0% | - |
+| COIN | defer | 0.0% | 0.0% | - |
+| MARA | defer | 0.0% | 0.0% | - |
+| NASA | defer | 0.0% | 0.0% | - |
+| CHAT | defer | 0.0% | 0.0% | - |
+| RIOT | defer | 0.0% | 0.0% | - |

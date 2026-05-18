@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-11T18:21:09.342547+00:00",
+  "generated_at": "2026-05-15T13:52:15.421313+00:00",
   "run_mode": "discovery",
-  "run_id": "2026-05-11_automatic_promotion",
+  "run_id": "2026-05-15_automatic_promotion",
   "observe_only": true,
   "no_trade": true,
   "not_recommendation": true,
@@ -16,22 +16,22 @@
   "inputs_used": [
     {
       "artifact": "emerging_candidates",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
       "artifact": "rejected_candidates",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
       "artifact": "discovery_memory",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
       "artifact": "news_enriched_candidates",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
@@ -46,7 +46,7 @@
     },
     {
       "artifact": "news_evidence_layer",
-      "available": true,
+      "available": false,
       "summary": ""
     },
     {
@@ -56,12 +56,12 @@
     },
     {
       "artifact": "market_narrative_daily",
-      "available": true,
+      "available": false,
       "summary": ""
     },
     {
       "artifact": "data_quality_report",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
@@ -71,14 +71,11 @@
     }
   ],
   "missing_inputs": [
-    "emerging_candidates",
-    "rejected_candidates",
-    "discovery_memory",
-    "news_enriched_candidates",
     "news_candidate_evidence",
     "replay_results",
+    "news_evidence_layer",
     "news_intelligence",
-    "data_quality_report",
+    "market_narrative_daily",
     "approval_decisions"
   ],
   "gates": {

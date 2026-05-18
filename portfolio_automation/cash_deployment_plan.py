@@ -17,7 +17,7 @@ Hard guarantees:
     - Never mutates decision_plan or any score.
     - Never deploys when degraded_mode is true.
     - Caps suggested per-position deployment at allocation_engine
-      max_position_cap (0.08).
+      max_position_cap (0.15).
     - Preserves a safety floor of 5% cash (matches config cash_reserve).
 """
 
@@ -41,7 +41,7 @@ logger = logging.getLogger("stockbot.portfolio_automation.cash_deployment_plan")
 # Constants — mirror allocation_engine defaults; documented in spec.
 # ---------------------------------------------------------------------------
 
-_MAX_POSITION_PCT = 0.08          # mirrors allocation_engine max_position_cap
+_MAX_POSITION_PCT = 0.15          # mirrors allocation_engine max_position_cap
 _SAFETY_FLOOR_PCT = 0.05          # never deploy below this cash level
 _DEFAULT_TARGET_CASH = 0.05       # fallback when config.target_cash_weight missing
 

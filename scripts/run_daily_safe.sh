@@ -126,3 +126,27 @@ fi
 
 printf 'Command: %s\n' "${run_cmd[*]}"
 "${run_cmd[@]}"
+
+# Non-blocking advisory stages. Sandbox-only writes; failures must not
+# abort the chain because the official decision plan has already landed.
+run_aux_stage() {
+    local label="$1"; shift
+    section "$label"
+    if "$@"; then
+        printf '%s: OK\n' "$label"
+    else
+        printf '%s: WARN (non-blocking; exit %d)\n' "$label" "$?" >&2
+    fi
+}
+
+# Stage 2 — Discovery news integration (sandbox research lane).
+run_aux_stage "Discovery news integration" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.discovery.news_integration import run_discovery_news_integration; print(run_discovery_news_integration(run_mode='discovery'))"
+
+# Stage 3 — Automatic promotion governance (sandbox research lane).
+run_aux_stage "Automatic promotion governance" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.discovery.automatic_promotion_governance import run_automatic_promotion_governance; print(run_automatic_promotion_governance(run_mode='discovery', write_files=True))"
+
+# Stage 4 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
+run_aux_stage "Daily memo + email" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"

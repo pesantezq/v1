@@ -860,7 +860,9 @@ class TestBuildDailyMemoFull:
         normal = build_daily_memo(_full_summary())
         assert "SYSTEM / DATA HEALTH" not in normal
 
-    def test_system_data_health_lists_missing_artifact_paths_and_producers(self):
+    def test_system_data_health_lists_missing_artifact_count(self):
+        # Compact format: memo shows COUNT only; full paths live in
+        # system_decision_summary.json so the brief stays brief.
         degraded = _full_summary(
             data_health={
                 "degraded_mode": True,
@@ -881,8 +883,7 @@ class TestBuildDailyMemoFull:
             }
         )
         result = build_daily_memo(degraded)
-        assert "outputs/latest/watchlist_signals.json (watchlist scanner)" in result
-        assert "outputs/latest/theme_signals.json (theme engine)" in result
+        assert "2 required artifacts missing" in result
 
     def test_system_data_health_uses_defaulting_and_optional_wording(self):
         degraded = _full_summary(
@@ -908,10 +909,9 @@ class TestBuildDailyMemoFull:
             }
         )
         result = build_daily_memo(degraded)
-        assert "Defaulting because artifacts are not present" in result
-        assert "outputs/performance/approved_ranking_config.json (ranking config promotion)" in result
-        assert "Optional artifacts not present" in result
-        assert "outputs/latest/theme_opportunities.json (theme discovery)" in result
+        # Compact format: counts only; paths live in system_decision_summary.json.
+        assert "1 artifact defaulted" in result
+        assert "1 optional artifact absent" in result
 
 
 class TestBuildDailyMemoMd:

@@ -54,7 +54,7 @@ _PRIORITY_WEIGHTS = {
 }
 
 # Maximum allocation cap applied inside the engine as a hard safety rail.
-_ABSOLUTE_MAX_ALLOCATION_PCT = 0.08  # mirrors allocation_engine max_position_cap
+_ABSOLUTE_MAX_ALLOCATION_PCT = 0.15  # mirrors allocation_engine max_position_cap
 
 # ---------------------------------------------------------------------------
 # Input / Output data classes

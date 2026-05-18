@@ -60,7 +60,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=None,
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
         self.assertAlmostEqual(suggestion.vol_regime_multiplier, 1.00)
         self.assertEqual(suggestion.vol_regime_source, "default")
 
@@ -74,7 +74,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
         )
         # Even with a non-unity multiplier in the plan, insufficient status
         # means we ignore it.
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
         self.assertEqual(suggestion.vol_regime_source, "default")
 
     def test_no_change_when_multiplier_is_unity(self):
@@ -85,7 +85,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=_vol_plan(multiplier=1.00, regime="normal"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
         # Source is still "advisor" because we DID consult it — just no scaling
         self.assertEqual(suggestion.vol_regime_source, "advisor")
         self.assertAlmostEqual(suggestion.vol_regime_multiplier, 1.00)
@@ -99,7 +99,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
                 cash_available=20_000.0,
                 vol_regime_plan=_vol_plan(multiplier=bad),
             )
-            self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+            self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
             self.assertEqual(suggestion.vol_regime_source, "default")
 
     def test_no_change_when_plan_malformed(self):
@@ -110,13 +110,13 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan={"observe_only": True},  # no status, no multiplier
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
         self.assertEqual(suggestion.vol_regime_source, "default")
 
     # ---- Outcome-driven path -----------------------------------------------
 
     def test_high_vol_regime_shrinks_position(self):
-        # Multiplier 0.50 → high_conviction compounder 5% → 2.5%
+        # Multiplier 0.50 → compounder base 10% × 0.50 = 5% (post-retune)
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -124,12 +124,12 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=_vol_plan(multiplier=0.50, regime="high_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.025, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
         self.assertAlmostEqual(suggestion.vol_regime_multiplier, 0.50)
         self.assertEqual(suggestion.vol_regime_source, "advisor")
 
     def test_low_vol_regime_grows_position(self):
-        # Multiplier 1.20 → 5% × 1.20 = 6%, under max_position_cap (8%)
+        # Multiplier 1.20 → 10% × 1.20 = 12%, under max_position_cap (15%)
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -137,10 +137,10 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=_vol_plan(multiplier=1.20, regime="low_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.06, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.12, places=4)
 
     def test_regime_multiplier_bounded_by_position_cap(self):
-        # Multiplier 2.0 → 5% × 2.0 = 10%, but max_position_cap is 8%.
+        # Multiplier 2.0 → 10% × 2.0 = 20%, but max_position_cap is 15%.
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -148,12 +148,12 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=_vol_plan(multiplier=2.0, regime="low_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.08, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.15, places=4)
         self.assertIn("max_position_cap", suggestion.capped_by)
 
     def test_regime_multiplier_combines_with_risk_off(self):
         # Risk-off compounder multiplier 0.85 + vol regime 0.50
-        # 5% × 0.85 × 0.50 = 2.125% (rounded to 4 places by allocation_engine)
+        # 10% × 0.85 × 0.50 = 4.25% (rounded to 4 places by allocation_engine)
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -162,11 +162,11 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             context={"regime_label": "risk_off"},
             vol_regime_plan=_vol_plan(multiplier=0.50, regime="high_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.0213, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.0425, places=4)
 
     def test_regime_multiplier_combines_with_degraded_mode(self):
         # Degraded 0.65 + vol regime 0.50
-        # 5% × 0.65 × 0.50 = 1.625% → rounds to 0.0163 at 4 places
+        # 10% × 0.65 × 0.50 = 3.25% → 0.0325 at 4 places
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -175,7 +175,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             context={"degraded_mode": True},
             vol_regime_plan=_vol_plan(multiplier=0.50, regime="high_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.0163, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.0325, places=4)
 
     # ---- Observability -----------------------------------------------------
 
@@ -225,7 +225,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             portfolio_value=100_000.0,
             cash_available=20_000.0,
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.05, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.10, places=4)
 
 
 if __name__ == "__main__":

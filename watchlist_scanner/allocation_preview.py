@@ -46,10 +46,11 @@ MULTIPLIER_GOOD: float = 1.10
 MULTIPLIER_NEUTRAL: float = 1.00
 MULTIPLIER_POOR: float = 0.75
 
-# Fallback sizing config when portfolio snapshot config is absent
+# Fallback sizing config when portfolio snapshot config is absent.
+# Mirrors allocation_engine DEFAULT_CONFIG after the 2026-05-18 retune.
 _DEFAULT_BASELINE_PCT: float = 0.02
-_DEFAULT_MAX_TICKER_PCT: float = 0.08
-_DEFAULT_MAX_SECTOR_PCT: float = 0.20
+_DEFAULT_MAX_TICKER_PCT: float = 0.15
+_DEFAULT_MAX_SECTOR_PCT: float = 0.35
 _DEFAULT_MAX_TOTAL_PCT: float = 0.40
 _DEFAULT_CONFIDENCE_THRESHOLD: float = 0.50
 

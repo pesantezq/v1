@@ -602,26 +602,18 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
     if data_mode and data_mode not in ("live",):
         items.append(f"Data mode is {data_mode}.")
     if missing_count > 0:
-        if missing_details:
-            rendered = "; ".join(
-                f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
-                for item in missing_details
-            )
-            items.append(f"Required artifacts missing: {rendered}.")
-        else:
-            items.append(f"{missing_count} required artifacts were missing during summary generation.")
+        items.append(
+            f"{missing_count} required artifact{'s' if missing_count != 1 else ''} missing during summary generation."
+        )
     if defaulting_details:
-        rendered = "; ".join(
-            f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
-            for item in defaulting_details
+        items.append(
+            f"{len(defaulting_details)} artifact{'s' if len(defaulting_details) != 1 else ''} defaulted "
+            "(producer step did not emit). See system_decision_summary.json for paths."
         )
-        items.append(f"Defaulting because artifacts are not present: {rendered}.")
     if optional_details:
-        rendered = "; ".join(
-            f"{str(item.get('path') or 'unknown path')} ({str(item.get('producer_step') or 'unknown step')})"
-            for item in optional_details
+        items.append(
+            f"{len(optional_details)} optional artifact{'s' if len(optional_details) != 1 else ''} absent."
         )
-        items.append(f"Optional artifacts not present: {rendered}.")
     if fallback_used and len(items) < 3:
         items.append("Fallback alerts were used because stronger live signals were unavailable.")
     return items[:3]
@@ -1306,6 +1298,122 @@ def _append_enrichment_md(append) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Portfolio Pulse + Advisor Stack — additive, read-only enrichment
+# ---------------------------------------------------------------------------
+
+_PORTFOLIO_SNAPSHOT_REL = ("outputs", "portfolio", "portfolio_snapshot.json")
+_CONFIG_BASE_REL        = ("config", "base.json")
+_ML_HISTORY_REL         = ("data", "ml_history.json")
+_KELLY_REL              = ("outputs", "latest", "kelly_sizing_advisor.json")
+_VOL_REGIME_REL         = ("outputs", "latest", "vol_regime_advisor.json")
+
+
+def _portfolio_pulse_items(root: Path) -> list[str]:
+    """
+    Surface 3 condensed signals about how aggressively capital is deployed.
+    Lines are formatter-agnostic — same string used by text and markdown memos.
+    Returns [] when the snapshot is missing or empty.
+    """
+    snapshot = _safe_load(root.joinpath(*_PORTFOLIO_SNAPSHOT_REL))
+    if not snapshot:
+        return []
+
+    items: list[str] = []
+    bands = snapshot.get("allocation_by_conviction_band") or {}
+    if isinstance(bands, dict) and bands:
+        parts = [
+            f"high {_pct(bands.get('high_conviction'))}",
+            f"normal {_pct(bands.get('normal'))}",
+            f"starter {_pct(bands.get('starter'))}",
+        ]
+        items.append("Conviction allocation — " + ", ".join(parts))
+
+    top_sector = snapshot.get("top_sector") or {}
+    if isinstance(top_sector, dict) and top_sector.get("name"):
+        name = str(top_sector.get("name"))
+        share = top_sector.get("allocation_pct")
+        items.append(
+            f"Top sector — {name} at {_pct(share)} of portfolio "
+            f"(sector cap reference: 35%)"
+        )
+
+    total_pct = snapshot.get("total_suggested_allocation")
+    cap_count = int(_flt(snapshot.get("capped_positions"), 0))
+    if total_pct is not None:
+        items.append(
+            f"Suggested deployment — {_pct(total_pct)} total, "
+            f"{cap_count} position{'s' if cap_count != 1 else ''} hitting a cap"
+        )
+
+    return items[:3]
+
+
+def _advisor_stack_items(root: Path) -> list[str]:
+    """
+    One-liner per advisor (pattern recognition, Kelly, vol regime, discovery).
+    Each entry shows on/off + data readiness. Returns [] if no signal is loadable.
+    """
+    items: list[str] = []
+
+    cfg = _safe_load(root.joinpath(*_CONFIG_BASE_REL))
+    ml_cfg = (cfg.get("ml_advisor") or {}) if isinstance(cfg, dict) else {}
+    ml_enabled = bool(ml_cfg.get("enabled", False))
+    history = root.joinpath(*_ML_HISTORY_REL)
+    history_records = 0
+    if history.exists():
+        try:
+            history_records = sum(1 for _ in history.read_text(encoding="utf-8", errors="ignore").splitlines() if _.strip())
+        except Exception:
+            history_records = 0
+    items.append(
+        "Pattern recognition (ml_advisor): "
+        f"{'ON' if ml_enabled else 'OFF'} — "
+        f"{history_records} history record{'s' if history_records != 1 else ''}"
+    )
+
+    kelly = _safe_load(root.joinpath(*_KELLY_REL))
+    kelly_status = str(kelly.get("status") or "unknown") if isinstance(kelly, dict) else "unknown"
+    kelly_n = int(_flt(kelly.get("resolved_decisions"), 0)) if isinstance(kelly, dict) else 0
+    items.append(
+        f"Conviction sizing (Kelly): status `{kelly_status}` — "
+        f"{kelly_n} resolved decision{'s' if kelly_n != 1 else ''}"
+    )
+
+    vol = _safe_load(root.joinpath(*_VOL_REGIME_REL))
+    vol_status = str(vol.get("status") or "unknown") if isinstance(vol, dict) else "unknown"
+    vol_regime = str(vol.get("regime") or "—") if isinstance(vol, dict) else "—"
+    items.append(
+        f"Volatility regime advisor: status `{vol_status}` — regime `{vol_regime}`"
+    )
+
+    return items[:4]
+
+
+def _freshness_banner(summary: dict[str, Any]) -> str | None:
+    """
+    Return a one-line warning when the summary's generated_at lags the
+    current date by 2+ days. Returns None for fresh runs.
+    """
+    gen_at = str(summary.get("generated_at") or "").strip()
+    if not gen_at:
+        return None
+    try:
+        gen_dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    now = datetime.now(gen_dt.tzinfo) if gen_dt.tzinfo else datetime.now()
+    age_days = (now - gen_dt).days
+    if age_days < 2:
+        return None
+    return f"Stale: latest pipeline run is {age_days} day(s) old. Verify cron + run_daily_safe.sh."
+
+
+def _pulse_root() -> Path:
+    """Repo root from this file's location — used for path-based loads."""
+    return Path(__file__).resolve().parents[1]
+
+
+# ---------------------------------------------------------------------------
 # Compact memo builders
 # ---------------------------------------------------------------------------
 
@@ -1344,6 +1452,14 @@ def build_daily_memo(
     a(f"  {date_str}")
     a(_SEP)
     a("")
+
+    freshness = _freshness_banner(summary)
+    if freshness:
+        a(_LINE)
+        a("  ! STALE DATA WARNING")
+        a(_LINE)
+        a(f"  {freshness}")
+        a("")
 
     a(_LINE)
     a("  TOP INSIGHT")
@@ -1398,6 +1514,28 @@ def build_daily_memo(
     for item in change_items[:3]:
         a(f"  - {item}")
     a("")
+
+    # Portfolio pulse + advisor stack — read-only artifact loaders.
+    try:
+        pulse_root = _pulse_root()
+        pulse_items = _portfolio_pulse_items(pulse_root)
+        if pulse_items:
+            a(_LINE)
+            a("  PORTFOLIO PULSE")
+            a(_LINE)
+            for item in pulse_items:
+                a(f"  - {item}")
+            a("")
+        advisor_items = _advisor_stack_items(pulse_root)
+        if advisor_items:
+            a(_LINE)
+            a("  ADVISOR STACK")
+            a(_LINE)
+            for item in advisor_items:
+                a(f"  - {item}")
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: pulse/advisor sections failed — %s", exc)
 
     # ------------------------------------------------------------------
     # Enrichment sections — Portfolio Growth, Top Movers, Decision Hit
@@ -1470,6 +1608,11 @@ def build_daily_memo_md(
     a(f"**Generated:** {gen_display}")
     a("")
 
+    freshness = _freshness_banner(summary)
+    if freshness:
+        a(f"> ⚠ **Stale data warning:** {freshness}")
+        a("")
+
     a("## Top Insight")
     a("")
     a(f"> {_build_memo_top_insight(tt, to, top_rows)}")
@@ -1513,6 +1656,24 @@ def build_daily_memo_md(
     for item in change_items[:3]:
         a(f"- {item}")
     a("")
+
+    # Portfolio pulse + advisor stack — Markdown variant.
+    try:
+        pulse_root = _pulse_root()
+        pulse_items = _portfolio_pulse_items(pulse_root)
+        if pulse_items:
+            a("## Portfolio Pulse")
+            for item in pulse_items:
+                a(f"- {item}")
+            a("")
+        advisor_items = _advisor_stack_items(pulse_root)
+        if advisor_items:
+            a("## Advisor Stack")
+            for item in advisor_items:
+                a(f"- {item}")
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: pulse/advisor sections (md) failed — %s", exc)
 
     # ------------------------------------------------------------------
     # Enrichment sections (Markdown variant)

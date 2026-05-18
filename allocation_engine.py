@@ -14,19 +14,22 @@ from decision_support import as_finite_float, normalize_confidence, normalize_st
 from watchlist_scanner.allocation_preview import _rank_multiplier as _policy_rank_multiplier
 
 
+# Profit-maximization tactical retune (operator-approved 2026-05-18):
+# base sizes ~2×, max_position_cap nearly 2×, sector_cap 1.75×,
+# low_confidence_multiplier eased. Reverts cleanly by restoring prior values.
 DEFAULT_CONFIG = {
-    "compounder_base_pct": 0.05,
-    "momentum_base_pct": 0.03,
+    "compounder_base_pct": 0.10,
+    "momentum_base_pct": 0.06,
     "high_confidence_threshold": 0.75,
     "medium_confidence_threshold": 0.60,
     "high_confidence_multiplier": 1.00,
     "medium_confidence_multiplier": 0.75,
-    "low_confidence_multiplier": 0.50,
+    "low_confidence_multiplier": 0.65,
     "degraded_penalty": 0.65,
     "risk_off_compounder_multiplier": 0.85,
     "risk_off_momentum_multiplier": 0.55,
-    "max_position_cap": 0.08,
-    "sector_cap": 0.20,
+    "max_position_cap": 0.15,
+    "sector_cap": 0.35,
     "cash_reserve_pct": 0.05,
     "min_position_pct": 0.01,
     # Fundamentals-based sizing guard — applied before sector/cash caps.

@@ -203,7 +203,8 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         bundle = load_operator_dashboard_data(self.root)
         self.assertGreater(len(bundle["decision_brief"]["system_data_health"]), 0)
 
-    def test_system_health_reports_missing_artifact_paths_and_producers(self):
+    def test_system_health_reports_missing_artifact_count(self):
+        # Compact format: surface the count; full paths live in system_decision_summary.json.
         self._write(_SYSTEM_SUMMARY_REL, _make_summary(
             data_health={
                 "degraded_mode": True,
@@ -227,10 +228,11 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         self._write(_DECISION_PLAN_REL, _make_plan(_six_decisions()))
         bundle = load_operator_dashboard_data(self.root)
         joined = " ".join(bundle["decision_brief"]["system_data_health"])
-        self.assertIn("outputs/latest/watchlist_signals.json (watchlist scanner)", joined)
-        self.assertIn("outputs/latest/theme_signals.json (theme engine)", joined)
+        self.assertIn("2 required artifacts missing", joined)
 
-    def test_system_health_reports_defaulting_and_optional_artifacts(self):
+    def test_system_health_reports_defaulting_and_optional_counts(self):
+        # Compact format: surface counts only; the verbose path list lives in
+        # system_decision_summary.json so the Decision Center stays scannable.
         self._write(_SYSTEM_SUMMARY_REL, _make_summary(
             data_health={
                 "degraded_mode": True,
@@ -257,12 +259,8 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         self._write(_DECISION_PLAN_REL, _make_plan(_six_decisions()))
         bundle = load_operator_dashboard_data(self.root)
         joined = " ".join(bundle["decision_brief"]["system_data_health"])
-        self.assertIn("Defaulting because artifacts are not present", joined)
-        self.assertIn("outputs/performance/approved_ranking_config.json (ranking config promotion)", joined)
-        self.assertIn("Optional artifacts not present", joined)
-        self.assertIn("outputs/latest/theme_opportunities.json (theme discovery)", joined)
-        self.assertNotIn("required artifacts were missing", joined.lower())
-        self.assertNotIn("Required artifacts missing", joined)
+        self.assertIn("1 artifact defaulted", joined)
+        self.assertIn("1 optional artifact absent", joined)
 
     # ------------------------------------------------------------------
     # GUI does NOT recompute decisions
