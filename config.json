@@ -76,8 +76,8 @@
   },
   "growth_mode": {
     "mode": "accumulation_aggressive",
-    "concentration_cap": 0.4,
-    "leverage_cap": 0.15,
+    "concentration_cap": 0.6,
+    "leverage_cap": 0.25,
     "target_cagr": 0.09,
     "drawdown_thresholds": {
       "modest_equity_tilt": 0.1,
