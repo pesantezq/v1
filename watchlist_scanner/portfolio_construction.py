@@ -4,13 +4,17 @@ from collections import Counter, defaultdict
 from typing import Any
 
 
+# Tactical retune (operator-approved 2026-05-18): proportional bump matching
+# the allocation_engine retune so the portfolio snapshot's "suggested
+# deployment" headroom keeps pace with the wider per-position caps in the
+# decision plan. Reverts cleanly by restoring prior values.
 DEFAULT_PORTFOLIO_CONSTRUCTION_CONFIG = {
     "enabled": True,
     "observe_only": True,
-    "baseline_position_pct": 0.02,
-    "max_total_allocation": 0.10,
-    "max_ticker_allocation": 0.02,
-    "max_sector_allocation": 0.04,
+    "baseline_position_pct": 0.04,
+    "max_total_allocation": 0.30,
+    "max_ticker_allocation": 0.05,
+    "max_sector_allocation": 0.10,
     "top_sector_warning_threshold": 0.40,
     "top3_ticker_warning_threshold": 0.70,
     "high_conviction_theme_warning_count": 2,
