@@ -593,10 +593,30 @@ def render_top_movers_text(movers: dict[str, Any]) -> list[str]:
         return ["Top movers data not yet available."]
 
     lines: list[str] = []
-    coverage = f"{movers.get('total_covered', 0)}/{movers.get('total_held', 0)}"
-    lines.append(f"Coverage: {coverage} held positions have price signal today.")
+    covered = int(movers.get("total_covered") or 0)
+    held = int(movers.get("total_held") or 0)
+    lines.append(f"Coverage: {covered}/{held} held positions have price signal today.")
     winners = movers.get("winners") or []
     losers = movers.get("losers") or []
+    # When coverage is small, "top up" and "top down" produce the same set
+    # twice; collapse to a single sorted list.
+    if covered < 4:
+        seen: set[str] = set()
+        combined: list[dict[str, Any]] = []
+        for row in (winners + losers):
+            sym = str(row.get("symbol") or "")
+            if sym and sym not in seen:
+                seen.add(sym)
+                combined.append(row)
+        combined.sort(key=lambda r: float(r.get("change_1d_pct") or 0.0), reverse=True)
+        for row in combined:
+            lines.append(
+                f"  {row['symbol']}: "
+                f"{_fmt_pct(row['change_1d_pct'], signed=True)}  "
+                f"({_fmt_money(row['change_1d_dollar'], signed=True)} on "
+                f"{row['shares']:g} shares)"
+            )
+        return lines
     if winners:
         lines.append("Top up:")
         for w in winners:
@@ -662,7 +682,20 @@ def render_hit_rate_text(hr: dict[str, Any]) -> list[str]:
                 except Exception:
                     pass
 
-    correct = hr.get("recent_correct") or []
+    def _dedup_by_decision_symbol(items: list[dict]) -> list[dict]:
+        """Keep first occurrence per (decision, symbol) pair so the memo
+        doesn't list the same SELL QQQ four times in a row."""
+        seen: set[tuple[str, str]] = set()
+        out: list[dict] = []
+        for it in items:
+            key = (str(it.get("decision") or ""), str(it.get("symbol") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+        return out
+
+    correct = _dedup_by_decision_symbol(hr.get("recent_correct") or [])
     if correct:
         lines.append("Recent correct calls:")
         for c in correct:
@@ -670,7 +703,7 @@ def render_hit_rate_text(hr: dict[str, Any]) -> list[str]:
                 f"  {c['decision']} {c['symbol']}: "
                 f"{_fmt_pct(c['return_pct'], signed=True)}"
             )
-    missed = hr.get("recent_missed") or []
+    missed = _dedup_by_decision_symbol(hr.get("recent_missed") or [])
     if missed:
         lines.append("Recent missed calls:")
         for m in missed:
@@ -752,10 +785,28 @@ def render_top_movers_md(movers: dict[str, Any]) -> list[str]:
         return ["_Top movers data not yet available._"]
 
     lines: list[str] = []
-    coverage = f"{movers.get('total_covered', 0)}/{movers.get('total_held', 0)}"
-    lines.append(f"- _Coverage:_ {coverage} held positions have price signal today.")
+    covered = int(movers.get("total_covered") or 0)
+    held = int(movers.get("total_held") or 0)
+    lines.append(f"- _Coverage:_ {covered}/{held} held positions have price signal today.")
     winners = movers.get("winners") or []
     losers = movers.get("losers") or []
+    if covered < 4:
+        seen: set[str] = set()
+        combined: list[dict[str, Any]] = []
+        for row in (winners + losers):
+            sym = str(row.get("symbol") or "")
+            if sym and sym not in seen:
+                seen.add(sym)
+                combined.append(row)
+        combined.sort(key=lambda r: float(r.get("change_1d_pct") or 0.0), reverse=True)
+        for row in combined:
+            lines.append(
+                f"  - `{row['symbol']}`: "
+                f"{_fmt_pct(row['change_1d_pct'], signed=True)}  "
+                f"({_fmt_money(row['change_1d_dollar'], signed=True)} on "
+                f"{row['shares']:g} shares)"
+            )
+        return lines
     if winners:
         lines.append("- **Top up:**")
         for w in winners:
@@ -824,7 +875,18 @@ def render_hit_rate_md(hr: dict[str, Any]) -> list[str]:
             lines.append("- **By confidence bucket:**")
             lines.extend(bucket_lines)
 
-    correct = hr.get("recent_correct") or []
+    def _dedup_by_decision_symbol(items: list[dict]) -> list[dict]:
+        seen: set[tuple[str, str]] = set()
+        out: list[dict] = []
+        for it in items:
+            key = (str(it.get("decision") or ""), str(it.get("symbol") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+        return out
+
+    correct = _dedup_by_decision_symbol(hr.get("recent_correct") or [])
     if correct:
         lines.append("- **Recent correct calls:**")
         for c in correct:
@@ -832,7 +894,7 @@ def render_hit_rate_md(hr: dict[str, Any]) -> list[str]:
                 f"  - `{c['decision']}` `{c['symbol']}`: "
                 f"{_fmt_pct(c['return_pct'], signed=True)}"
             )
-    missed = hr.get("recent_missed") or []
+    missed = _dedup_by_decision_symbol(hr.get("recent_missed") or [])
     if missed:
         lines.append("- **Recent missed calls:**")
         for m in missed:

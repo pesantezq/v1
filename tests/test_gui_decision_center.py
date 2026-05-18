@@ -259,8 +259,8 @@ class TestDecisionCenterDataLayer(unittest.TestCase):
         self._write(_DECISION_PLAN_REL, _make_plan(_six_decisions()))
         bundle = load_operator_dashboard_data(self.root)
         joined = " ".join(bundle["decision_brief"]["system_data_health"])
-        self.assertIn("1 artifact defaulted", joined)
-        self.assertIn("1 optional artifact absent", joined)
+        # Compact format: defaulted + optional rolled into a single advisory line.
+        self.assertIn("2 advisory artifacts not yet populated", joined)
 
     # ------------------------------------------------------------------
     # GUI does NOT recompute decisions

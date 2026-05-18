@@ -143,6 +143,18 @@ def _build_discovery_section(data: dict[str, Any]) -> str:
     watch      = [c for c in candidates if str(c.get("status", "")).lower() == "watch"]
     discovered = [c for c in candidates if str(c.get("status", "")).lower() == "discovered"]
 
+    # Collapse the section when nothing has been emitted today.
+    if not watch and not discovered and not rejected_cands and not approvals:
+        memory_entries = memory.get("entries") if isinstance(memory, dict) else None
+        if not memory_entries:
+            return "\n".join([
+                _LINE,
+                "  DISCOVERY RESEARCH  [Sandbox Only]",
+                _LINE,
+                "  No sandbox research candidates today.",
+                "",
+            ])
+
     # Defense-in-depth: exclude forbidden decision values even if they slipped through
     valid_approvals = [
         ap for ap in approvals
@@ -297,6 +309,13 @@ def _build_discovery_section_md(data: dict[str, Any]) -> str:
 
     watch      = [c for c in candidates if str(c.get("status", "")).lower() == "watch"]
     discovered = [c for c in candidates if str(c.get("status", "")).lower() == "discovered"]
+
+    # When every count is zero and there are no approvals or memory entries,
+    # collapse the section to a single line — the disclaimer adds no signal.
+    if not watch and not discovered and not rejected_cands and not approvals:
+        memory_entries = memory.get("entries") if isinstance(memory, dict) else None
+        if not memory_entries:
+            return "## Discovery Research — Sandbox Only\n\n_No sandbox research candidates today._\n"
 
     valid_approvals = [
         ap for ap in approvals
@@ -488,8 +507,39 @@ def _fmt_money(val: Any) -> str:
 
 
 def _decision_reason(row: dict[str, Any]) -> str:
-    reason = str(row.get("reason") or "").strip()
-    return reason if reason else "No decision rationale provided."
+    """
+    Compact one-line decision rationale for the memo.
+
+    The raw reason emitted by the decision engine often pipes 2-3 nearly
+    identical explanations together (e.g. a structural rule, a STRUCTURAL:
+    summary, and a quantitative snapshot). For the brief, return only the
+    first pipe-segment and strip redundant cap/excess repetitions.
+    """
+    raw = str(row.get("reason") or "").strip()
+    if not raw:
+        return "No decision rationale provided."
+    # Keep just the first pipe-segment when the engine pipes multiple together.
+    primary = raw.split("|", 1)[0].strip()
+    # The engine often piles on cap/excess restatements to emphasize the
+    # violation; the first phrase already conveys the threshold. Drop the
+    # known redundant suffixes so the memo stays scannable.
+    import re
+    redundant = [
+        r"\s*\((?:\+|-)?[\d.]+%\s*(?:over|under)\s*cap\)\s*",
+        r"\s*Cap=[\d.]+%,\s*current=[\d.]+%\.?\s*",
+        # Drop "(drift -15.0%)" parenthetical restatements (the lead clause
+        # like "drift -15% vs +/-12%" already conveys the same info).
+        r"\s*\(drift\s+(?:\+|-)?[\d.]+%\)\s*",
+        # Drop a hanging "required" right after we've stripped the cap clause.
+        r"\brequired\b\s*",
+    ]
+    for pat in redundant:
+        primary = re.sub(pat, " ", primary)
+    # Final tidy: collapse whitespace and empty parens, restore terminating period.
+    primary = re.sub(r"\(\s*\)", "", primary)
+    primary = re.sub(r"\s+([.,])", r"\1", primary)
+    primary = re.sub(r"\s+", " ", primary).strip().rstrip(".")
+    return (primary + ".") if primary else raw
 
 
 def _top_structural_decisions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -605,14 +655,15 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
         items.append(
             f"{missing_count} required artifact{'s' if missing_count != 1 else ''} missing during summary generation."
         )
-    if defaulting_details:
+    # Roll up "defaulted" and "optional absent" counts into a single advisory
+    # line when present — the memo brief should not enumerate non-actionable
+    # artifact gaps; the full list lives in system_decision_summary.json.
+    advisory_gap_count = (len(defaulting_details) if defaulting_details else 0) + \
+                        (len(optional_details) if optional_details else 0)
+    if advisory_gap_count:
         items.append(
-            f"{len(defaulting_details)} artifact{'s' if len(defaulting_details) != 1 else ''} defaulted "
-            "(producer step did not emit). See system_decision_summary.json for paths."
-        )
-    if optional_details:
-        items.append(
-            f"{len(optional_details)} optional artifact{'s' if len(optional_details) != 1 else ''} absent."
+            f"{advisory_gap_count} advisory artifact{'s' if advisory_gap_count != 1 else ''} not yet populated "
+            "(see system_decision_summary.json)."
         )
     if fallback_used and len(items) < 3:
         items.append("Fallback alerts were used because stronger live signals were unavailable.")

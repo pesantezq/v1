@@ -909,9 +909,8 @@ class TestBuildDailyMemoFull:
             }
         )
         result = build_daily_memo(degraded)
-        # Compact format: counts only; paths live in system_decision_summary.json.
-        assert "1 artifact defaulted" in result
-        assert "1 optional artifact absent" in result
+        # Compact format: defaulted + optional rolled into a single advisory line.
+        assert "2 advisory artifacts not yet populated" in result
 
 
 class TestBuildDailyMemoMd:
@@ -1370,7 +1369,9 @@ class TestDiscoverySectionPlainText:
     """Tests for _build_discovery_section (plain-text)."""
 
     def test_disclaimer_present(self):
-        data = _make_discovery_data()
+        # Disclaimer appears on the full (non-collapsed) section; feed it a candidate.
+        cand = _make_watch_candidate("NVDA")
+        data = _make_discovery_data(watch=[cand])
         out = _build_discovery_section(data)
         assert "sandbox research only" in out.lower()
         assert "not buy/sell" in out.lower()
@@ -1457,7 +1458,10 @@ class TestDiscoverySectionPlainText:
             assert bad not in lower
 
     def test_sandbox_only_footer_present(self):
-        data = _make_discovery_data()
+        # Footer appears on the full section; feed it a candidate so the
+        # collapse path is not taken.
+        cand = _make_watch_candidate("NVDA")
+        data = _make_discovery_data(watch=[cand])
         out = _build_discovery_section(data)
         assert "sandbox only" in out.lower()
         assert "no official action" in out.lower()
@@ -1496,10 +1500,12 @@ class TestDiscoverySectionPlainText:
         assert "FRESH" in out
 
     def test_empty_candidates_safe(self):
+        # Empty data collapses to a one-line section to keep the memo concise.
+        # The section header must still be present so operators can grep for it.
         data = _make_discovery_data()
         out = _build_discovery_section(data)
         assert "DISCOVERY RESEARCH" in out
-        assert "WATCH=0" in out
+        assert "No sandbox research candidates today" in out
 
     def test_malformed_candidate_skipped(self):
         data = _make_discovery_data(watch=["not-a-dict", None, 42])
@@ -1548,7 +1554,9 @@ class TestDiscoverySectionMarkdown:
     """Tests for _build_discovery_section_md (Markdown)."""
 
     def test_disclaimer_present(self):
-        data = _make_discovery_data()
+        # Disclaimer appears on the full (non-collapsed) section; feed it a candidate.
+        cand = _make_watch_candidate("NVDA")
+        data = _make_discovery_data(watch=[cand])
         out = _build_discovery_section_md(data)
         assert "sandbox research only" in out.lower()
 
