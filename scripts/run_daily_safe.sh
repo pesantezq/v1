@@ -179,6 +179,14 @@ run_aux_stage "System decision summary" \
 run_aux_stage "Risk delta panel" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.risk_delta_advisor import run_risk_delta_advisor; r = run_risk_delta_advisor(root='.'); print('status:', r.get('status'), 'overall:', r.get('overall_status'), 'top_pos:', (r.get('concentration_top') or {}).get('symbol'), 'lev:', r.get('leverage_exposure'), 'var_pct:', r.get('var_pct'))"
 
+# Stage 7c — Retune impact tracker (gauge fingerprint vs baseline).
+run_aux_stage "Retune impact tracker" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.retune_impact_tracker import run_retune_impact_tracker; r = run_retune_impact_tracker(root='.'); print('fingerprint:', r.get('fingerprint'), 'changes:', r.get('changes_count'), 'appended:', r.get('history_row_appended'))"
+
+# Stage 7d — FMP / news budget telemetry (per-day call usage + news outcome).
+run_aux_stage "FMP budget telemetry" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.fmp_budget_telemetry import run_fmp_budget_telemetry; r = run_fmp_budget_telemetry(root='.'); print('overall:', r.get('overall_status'), 'memo_line:', r.get('memo_line'))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
@@ -196,3 +204,8 @@ run_aux_stage "Automatic promotion governance" \
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
+
+# Stage 11 — Daily run status (reads its own log; runs last so it captures
+# all preceding stages). Provides operator-glanceable ok/partial/failed.
+run_aux_stage "Daily run status" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.daily_run_status import run_daily_run_status; r = run_daily_run_status(root='.'); print('overall:', r.get('overall_status'), 'missing_required:', r.get('required_missing_count'))"

@@ -1358,6 +1358,7 @@ _ML_HISTORY_REL         = ("data", "ml_history.json")
 _KELLY_REL              = ("outputs", "latest", "kelly_sizing_advisor.json")
 _VOL_REGIME_REL         = ("outputs", "latest", "vol_regime_advisor.json")
 _RISK_DELTA_REL         = ("outputs", "latest", "risk_delta.json")
+_FMP_BUDGET_REL         = ("outputs", "latest", "fmp_budget_status.json")
 
 
 _RISK_STATUS_BADGE = {
@@ -1489,6 +1490,22 @@ def _advisor_stack_items(root: Path) -> list[str]:
     items.append(
         f"Volatility regime advisor: status `{vol_status}` — regime `{vol_regime}`"
     )
+
+    fmp = _safe_load(root.joinpath(*_FMP_BUDGET_REL))
+    if isinstance(fmp, dict):
+        b = fmp.get("budget") or {}
+        n = fmp.get("news") or {}
+        if b.get("available"):
+            news_bit = ""
+            if n.get("available"):
+                news_bit = (
+                    f" · news {n.get('article_count_raw')} articles → "
+                    f"{n.get('evidence_packet_count')} packets"
+                )
+            items.append(
+                f"FMP budget: {b.get('count_today')}/{b.get('budget')} "
+                f"({b.get('status')}){news_bit}"
+            )
 
     return items[:4]
 

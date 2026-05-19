@@ -1,0 +1,542 @@
+"""
+Retune Impact Tracker — observe-only gauge-version ledger.
+
+When the operator tunes a gauge knob, we want to know — once outcomes
+resolve — whether the new setting was better than the old one. That
+requires *tagging* every decision with the gauge state that produced it,
+so we can later group hit rates / mean returns / drawdowns by gauge
+version.
+
+This module is the substrate for that attribution. v1 responsibilities:
+
+  1. Compute a deterministic hash ("gauge fingerprint") of the current
+     gauge state across all four surfaces:
+        - allocation_engine.DEFAULT_CONFIG          (5 retuned knobs)
+        - portfolio_construction.DEFAULT_..._CONFIG (4 retuned knobs)
+        - config.json growth_mode.*                 (concentration_cap,
+                                                     leverage_cap)
+        - config.json ml_advisor.enabled
+  2. Compare current fingerprint to a hardcoded BASELINE captured from
+     commit 4223654c (the last commit before the 2026-05-18 retune
+     session). Surface which knobs differ, by how much, and when each
+     diverged.
+  3. Append today's snapshot to `data/gauge_versions.jsonl` so a
+     forward-looking outcome ledger can join on the version hash.
+  4. Write `outputs/latest/retune_impact.json` and `.md` summarising the
+     current vs baseline state.
+
+What v1 does NOT do (intentional simplifications):
+  - It does NOT (yet) join resolved outcomes to gauge versions. That
+    requires the outcome tracker to also write the gauge_version with
+    each resolved row, which is a separate change in the decision
+    outcome path. v1 lays the substrate; v2 adds the join.
+  - It does NOT modify decision_plan.json or any score. All writes are
+    observe-only artifacts.
+
+Hard guarantees:
+  - observe_only=True hardcoded in every artifact.
+  - No mutation of decision/score/allocation/recommendation state.
+  - Degrades to status="insufficient_data" when essential inputs are missing.
+
+Public API:
+  compute_gauge_fingerprint(root) -> dict
+  diff_against_baseline(current) -> list[dict]
+  append_to_history(payload, root) -> bool
+  build_retune_impact(root) -> dict
+  run_retune_impact_tracker(root, write_files) -> dict
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from portfolio_automation.data_governance import (
+    OutputNamespace,
+    safe_write_json,
+    safe_write_text,
+)
+
+logger = logging.getLogger("stockbot.portfolio_automation.retune_impact_tracker")
+
+_SCHEMA_VERSION = "1"
+_SOURCE_LABEL = "retune_impact_tracker"
+_OBSERVE_ONLY = True
+
+_DISCLAIMER = (
+    "Observe-only gauge versioning ledger. Captures current gauge state and "
+    "compares to a hardcoded pre-retune baseline. Does not modify portfolio, "
+    "allocation, scoring, decision, or recommendation state."
+)
+
+# ---------------------------------------------------------------------------
+# BASELINE — captured from commit 4223654c (last commit before 2026-05-18
+# retune session). When the operator retunes a knob, the diff in
+# retune_impact.md tells them exactly what changed vs this baseline.
+# ---------------------------------------------------------------------------
+
+_BASELINE_LABEL = "pre_retune_2026_05_18"
+_BASELINE_COMMIT = "4223654c"
+_BASELINE_GAUGE = {
+    "allocation_engine": {
+        "compounder_base_pct": 0.05,
+        "momentum_base_pct": 0.03,
+        "max_position_cap": 0.08,
+        "sector_cap": 0.20,
+        "low_confidence_multiplier": 0.50,
+    },
+    "portfolio_construction": {
+        "baseline_position_pct": 0.02,
+        "max_total_allocation": 0.10,
+        "max_ticker_allocation": 0.02,
+        "max_sector_allocation": 0.04,
+    },
+    "structural_caps": {
+        "concentration_cap": 0.40,
+        "leverage_cap": 0.15,
+    },
+    "feature_flags": {
+        "ml_advisor_enabled": False,
+    },
+    "api_limits": {
+        "fmp_daily_calls_budget": 230,
+    },
+}
+
+# Knobs we track per surface — must match the BASELINE keys above.
+_TRACKED_KNOBS = {
+    "allocation_engine": [
+        "compounder_base_pct",
+        "momentum_base_pct",
+        "max_position_cap",
+        "sector_cap",
+        "low_confidence_multiplier",
+    ],
+    "portfolio_construction": [
+        "baseline_position_pct",
+        "max_total_allocation",
+        "max_ticker_allocation",
+        "max_sector_allocation",
+    ],
+    "structural_caps": [
+        "concentration_cap",
+        "leverage_cap",
+    ],
+    "feature_flags": [
+        "ml_advisor_enabled",
+    ],
+    "api_limits": [
+        "fmp_daily_calls_budget",
+    ],
+}
+
+# Where the history ledger lives. Append-only JSONL — one row per run that
+# produces a new fingerprint (we don't append duplicates).
+_HISTORY_REL = ("data", "gauge_versions.jsonl")
+
+# Artifacts.
+_OUTPUT_JSON_REL = "retune_impact.json"
+_OUTPUT_MD_REL = "retune_impact.md"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_json_safe(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.debug("retune_impact: failed to load %s — %s", path, exc)
+        return {}
+
+
+def _fingerprint(payload: dict[str, Any]) -> str:
+    """SHA-256 of the canonicalised gauge dict, truncated to 16 chars."""
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Capture
+# ---------------------------------------------------------------------------
+
+
+def compute_gauge_fingerprint(root: str | Path = ".") -> dict[str, Any]:
+    """
+    Read the current gauge state from disk + imports, return a dict whose
+    shape mirrors `_BASELINE_GAUGE`. Falls back to None values for any
+    surface that can't be read.
+    """
+    root_path = Path(root).resolve()
+
+    # allocation_engine + portfolio_construction live in code — import the
+    # current DEFAULT_CONFIG dicts so the fingerprint reflects what would
+    # run, not what's in some config file.
+    try:
+        from allocation_engine import DEFAULT_CONFIG as _AE_CFG
+    except Exception as exc:
+        logger.warning("retune_impact: could not import allocation_engine — %s", exc)
+        _AE_CFG = {}
+
+    try:
+        from watchlist_scanner.portfolio_construction import (
+            DEFAULT_PORTFOLIO_CONSTRUCTION_CONFIG as _PC_CFG,
+        )
+    except Exception as exc:
+        logger.warning("retune_impact: could not import portfolio_construction — %s", exc)
+        _PC_CFG = {}
+
+    cfg = _load_json_safe(root_path / "config.json")
+    growth = (cfg.get("growth_mode") or {}) if isinstance(cfg, dict) else {}
+    api_limits = (cfg.get("api_limits") or {}) if isinstance(cfg, dict) else {}
+
+    # ml_advisor lives in config/base.json (per the post-retune flip).
+    base_cfg = _load_json_safe(root_path / "config" / "base.json")
+    ml_cfg = (base_cfg.get("ml_advisor") or {}) if isinstance(base_cfg, dict) else {}
+
+    snapshot: dict[str, dict[str, Any]] = {
+        "allocation_engine": {
+            k: _AE_CFG.get(k) for k in _TRACKED_KNOBS["allocation_engine"]
+        },
+        "portfolio_construction": {
+            k: _PC_CFG.get(k) for k in _TRACKED_KNOBS["portfolio_construction"]
+        },
+        "structural_caps": {
+            k: growth.get(k) for k in _TRACKED_KNOBS["structural_caps"]
+        },
+        "feature_flags": {
+            "ml_advisor_enabled": bool(ml_cfg.get("enabled", False)),
+        },
+        "api_limits": {
+            k: api_limits.get(k) for k in _TRACKED_KNOBS["api_limits"]
+        },
+    }
+    return {
+        "fingerprint": _fingerprint(snapshot),
+        "snapshot": snapshot,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Diff against baseline
+# ---------------------------------------------------------------------------
+
+
+def diff_against_baseline(current: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Return a list of changed knobs. Each row:
+      {surface, knob, baseline_value, current_value, delta_pct, delta_abs}
+    Unchanged knobs are omitted. Knobs missing from current snapshot
+    (None) are reported as "unavailable" rather than diffed.
+    """
+    snapshot = current.get("snapshot") or {}
+    changes: list[dict[str, Any]] = []
+
+    for surface, knobs in _TRACKED_KNOBS.items():
+        baseline_surface = _BASELINE_GAUGE.get(surface, {})
+        current_surface = snapshot.get(surface, {}) or {}
+        for knob in knobs:
+            baseline_value = baseline_surface.get(knob)
+            current_value = current_surface.get(knob)
+            if current_value is None:
+                changes.append({
+                    "surface": surface,
+                    "knob": knob,
+                    "baseline_value": baseline_value,
+                    "current_value": None,
+                    "status": "unavailable",
+                })
+                continue
+            if current_value == baseline_value:
+                continue
+            row: dict[str, Any] = {
+                "surface": surface,
+                "knob": knob,
+                "baseline_value": baseline_value,
+                "current_value": current_value,
+                "status": "changed",
+            }
+            # Compute deltas when both values are numeric.
+            try:
+                bv = float(baseline_value)
+                cv = float(current_value)
+                row["delta_abs"] = round(cv - bv, 6)
+                row["delta_pct"] = (
+                    round((cv - bv) / bv, 4) if bv not in (0.0, 0) else None
+                )
+            except (TypeError, ValueError):
+                # e.g. bool flags
+                row["delta_abs"] = None
+                row["delta_pct"] = None
+            changes.append(row)
+    return changes
+
+
+# ---------------------------------------------------------------------------
+# History ledger (append-only JSONL)
+# ---------------------------------------------------------------------------
+
+
+def append_to_history(
+    payload: dict[str, Any],
+    *,
+    root: str | Path = ".",
+) -> bool:
+    """
+    Append the current fingerprint to data/gauge_versions.jsonl when it
+    differs from the most recent recorded fingerprint. Returns True when
+    a new row was written; False when the current state matches the last
+    recorded row (no-op).
+    """
+    root_path = Path(root).resolve()
+    history_path = root_path.joinpath(*_HISTORY_REL)
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    current_fp = payload.get("fingerprint")
+    last_fp: str | None = None
+    if history_path.exists():
+        try:
+            with history_path.open("r", encoding="utf-8") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        row = json.loads(raw)
+                        last_fp = row.get("fingerprint") or last_fp
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as exc:
+            logger.warning("retune_impact: history read failed — %s", exc)
+
+    if current_fp == last_fp and last_fp is not None:
+        return False
+
+    row = {
+        "first_seen_at": datetime.now(timezone.utc).isoformat(),
+        "fingerprint": current_fp,
+        "snapshot": payload.get("snapshot"),
+    }
+    try:
+        with history_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        return True
+    except Exception as exc:
+        logger.warning("retune_impact: history append failed — %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Build artifact
+# ---------------------------------------------------------------------------
+
+
+def build_retune_impact(
+    *,
+    root: str | Path = ".",
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Compose the full artifact payload. No file writes."""
+    ts = generated_at or datetime.now(timezone.utc).isoformat()
+    current = compute_gauge_fingerprint(root=root)
+    changes = diff_against_baseline(current)
+
+    # Read history for "how many distinct gauge versions have we seen?"
+    history_path = Path(root).resolve().joinpath(*_HISTORY_REL)
+    distinct_versions = 0
+    history_size = 0
+    if history_path.exists():
+        try:
+            seen: set[str] = set()
+            for raw in history_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                history_size += 1
+                fp = row.get("fingerprint")
+                if fp:
+                    seen.add(fp)
+            distinct_versions = len(seen)
+        except Exception as exc:
+            logger.debug("retune_impact: history read for stats failed — %s", exc)
+
+    return {
+        "generated_at": ts,
+        "observe_only": _OBSERVE_ONLY,
+        "schema_version": _SCHEMA_VERSION,
+        "source": _SOURCE_LABEL,
+        "baseline_label": _BASELINE_LABEL,
+        "baseline_commit": _BASELINE_COMMIT,
+        "current_fingerprint": current.get("fingerprint"),
+        "current_snapshot": current.get("snapshot"),
+        "baseline_snapshot": _BASELINE_GAUGE,
+        "changes_vs_baseline": changes,
+        "changes_count": sum(1 for c in changes if c.get("status") == "changed"),
+        "history_size": history_size,
+        "distinct_versions_seen": distinct_versions,
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Markdown render
+# ---------------------------------------------------------------------------
+
+
+def _fmt_value(v: Any) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        # Pct-like values look right at 2 decimal places; budgets are ints.
+        if abs(v) < 10:
+            return f"{v:.4f}".rstrip("0").rstrip(".")
+        return f"{v:g}"
+    return str(v)
+
+
+def render_retune_impact_md(payload: dict[str, Any]) -> str:
+    """Render the artifact as a compact Markdown report."""
+    lines: list[str] = []
+    a = lines.append
+
+    a(f"# Retune Impact — {payload.get('generated_at', '')[:10]}")
+    a("")
+    a(f"**Generated:** {payload.get('generated_at', '')}  ")
+    a(f"**Current fingerprint:** `{payload.get('current_fingerprint')}`  ")
+    a(f"**Baseline:** `{payload.get('baseline_label')}` (commit `{payload.get('baseline_commit')}`)  ")
+    a(
+        f"**Distinct gauge versions recorded:** {payload.get('distinct_versions_seen', 0)} "
+        f"(history rows: {payload.get('history_size', 0)})"
+    )
+    a("")
+    a(f"> {payload.get('disclaimer', _DISCLAIMER)}")
+    a("")
+
+    changes = payload.get("changes_vs_baseline") or []
+    real_changes = [c for c in changes if c.get("status") == "changed"]
+    unavailable = [c for c in changes if c.get("status") == "unavailable"]
+
+    if real_changes:
+        a(f"## Changes vs Baseline — {len(real_changes)} knob(s) retuned")
+        a("")
+        a("| Surface | Knob | Baseline | Current | Δ |")
+        a("|---|---|---|---|---|")
+        for c in real_changes:
+            delta_abs = c.get("delta_abs")
+            delta_pct = c.get("delta_pct")
+            delta_str = ""
+            if delta_abs is not None and delta_pct is not None:
+                delta_str = f"{delta_abs:+g} ({delta_pct:+.1%})"
+            elif delta_abs is not None:
+                delta_str = f"{delta_abs:+g}"
+            a(
+                f"| `{c.get('surface')}` | `{c.get('knob')}` | "
+                f"{_fmt_value(c.get('baseline_value'))} | "
+                f"{_fmt_value(c.get('current_value'))} | "
+                f"{delta_str} |"
+            )
+        a("")
+    else:
+        a("## Changes vs Baseline")
+        a("")
+        a("_No knobs have moved from baseline._")
+        a("")
+
+    if unavailable:
+        a("## Unavailable Knobs")
+        a("")
+        for c in unavailable:
+            a(f"- `{c.get('surface')}.{c.get('knob')}` — could not read")
+        a("")
+
+    a("## Current Gauge Snapshot")
+    a("")
+    snapshot = payload.get("current_snapshot") or {}
+    for surface, knobs in snapshot.items():
+        a(f"**{surface}:**")
+        for k, v in (knobs or {}).items():
+            a(f"  - `{k}`: {_fmt_value(v)}")
+        a("")
+
+    a("---")
+    a("_Advisory only — substrate for future outcome attribution._")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Top-level orchestrator
+# ---------------------------------------------------------------------------
+
+
+def run_retune_impact_tracker(
+    *,
+    root: str | Path = ".",
+    write_files: bool = True,
+) -> dict[str, Any]:
+    """Read inputs, build payload, append history, optionally write artifacts."""
+    root_path = Path(root).resolve()
+    try:
+        payload = build_retune_impact(root=root_path)
+        new_row = append_to_history(
+            {"fingerprint": payload["current_fingerprint"], "snapshot": payload["current_snapshot"]},
+            root=root_path,
+        )
+        payload["history_row_appended"] = new_row
+
+        artifacts: dict[str, str] = {}
+        if write_files:
+            md = render_retune_impact_md(payload)
+            json_path = safe_write_json(
+                OutputNamespace.LATEST,
+                _OUTPUT_JSON_REL,
+                payload,
+                base_dir=root_path / "outputs",
+            )
+            md_path = safe_write_text(
+                OutputNamespace.LATEST,
+                _OUTPUT_MD_REL,
+                md,
+                base_dir=root_path / "outputs",
+            )
+            artifacts = {
+                "retune_impact_json": str(json_path),
+                "retune_impact_md": str(md_path),
+            }
+
+        return {
+            "status": "ok",
+            "fingerprint": payload["current_fingerprint"],
+            "changes_count": payload["changes_count"],
+            "history_row_appended": new_row,
+            "artifacts": artifacts,
+        }
+    except Exception as exc:
+        logger.error("retune_impact_tracker failed: %s", exc, exc_info=True)
+        return {"status": "error", "error": str(exc)}
+
+
+if __name__ == "__main__":
+    import sys
+    r = run_retune_impact_tracker(root=Path(__file__).resolve().parents[1])
+    print(
+        f"retune_impact: status={r.get('status')}"
+        f" fingerprint={r.get('fingerprint')}"
+        f" changes={r.get('changes_count')}"
+        f" appended={r.get('history_row_appended')}"
+    )
+    sys.exit(0)
