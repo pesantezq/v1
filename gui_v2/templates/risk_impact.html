@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block title %}Risk &amp; Impact &mdash; StockBot{% endblock %}
+{% block content %}
+  <div id="risk-impact-content"
+       hx-get="/risk-impact"
+       hx-target="#risk-impact-content"
+       hx-select="#risk-impact-content"
+       hx-swap="outerHTML"
+       class="space-y-8">
+
+    <header class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-semibold">Risk &amp; Impact</h1>
+        <p class="text-sm text-zinc-400">
+          Where the portfolio sits inside the structural caps, what's changed, did today's run work.
+        </p>
+      </div>
+      <div class="flex items-center gap-3">
+        {% with severity=overall_status|risk_severity, label="Overall " ~ overall_status %}
+          {% include "components/severity_badge.html" %}
+        {% endwith %}
+        <button hx-get="/risk-impact"
+                hx-target="#risk-impact-content"
+                hx-select="#risk-impact-content"
+                hx-swap="outerHTML"
+                class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    {% if missing_artifacts %}
+      <section class="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
+        <div class="text-sm text-amber-200 font-medium">
+          Missing source artifacts:
+          <span class="font-mono">{{ missing_artifacts | join(", ") }}</span>
+        </div>
+        <div class="text-xs text-amber-300/80 mt-1">
+          These outputs appear once the next pipeline run completes.
+        </div>
+      </section>
+    {% endif %}
+
+    <!-- Risk Delta -->
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Risk Delta — exposure vs structural caps</h2>
+      {% if risk_delta %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {% set conc = risk_delta.concentration %}
+          {% set lev = risk_delta.leverage %}
+          {% set var_block = risk_delta.var %}
+
+          <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-5 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="text-xs uppercase tracking-wide text-zinc-400">Concentration</div>
+              {% if conc and conc.available %}
+                {% with severity=(conc.top_position.status if conc.top_position else "ok")|risk_severity,
+                        label=(conc.top_position.status if conc.top_position else "ok") %}
+                  {% include "components/severity_badge.html" %}
+                {% endwith %}
+              {% endif %}
+            </div>
+            {% if conc and conc.available %}
+              <div class="text-2xl font-mono font-semibold">
+                {{ "%.1f%%"|format((conc.top_position.weight or 0) * 100) }}
+                <span class="text-sm text-zinc-500">/ {{ "%.0f%%"|format((conc.cap or 0) * 100) }}</span>
+              </div>
+              <div class="text-xs text-zinc-400">
+                Top: <span class="font-mono">{{ conc.top_position.symbol }}</span>
+                · headroom <span class="font-mono">{{ "%+.1f"|format((conc.top_position.headroom or 0) * 100) }}pp</span>
+              </div>
+              <div class="text-xs text-zinc-500">
+                Top-3 total: {{ "%.1f%%"|format((conc.top_3_total or 0) * 100) }}
+              </div>
+            {% else %}
+              <div class="text-sm text-zinc-500">Not available.</div>
+            {% endif %}
+          </div>
+
+          <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-5 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="text-xs uppercase tracking-wide text-zinc-400">Leverage</div>
+              {% if lev and lev.available %}
+                {% with severity=(lev.status or "ok")|risk_severity, label=(lev.status or "ok") %}
+                  {% include "components/severity_badge.html" %}
+                {% endwith %}
+              {% endif %}
+            </div>
+            {% if lev and lev.available %}
+              <div class="text-2xl font-mono font-semibold">
+                {{ "%.1f%%"|format((lev.total_exposure or 0) * 100) }}
+                <span class="text-sm text-zinc-500">/ {{ "%.0f%%"|format((lev.cap or 0) * 100) }}</span>
+              </div>
+              <div class="text-xs text-zinc-400">
+                Headroom <span class="font-mono">{{ "%+.1f"|format((lev.headroom or 0) * 100) }}pp</span>
+              </div>
+              <div class="text-xs text-zinc-500">
+                {{ lev.leveraged_positions|length }} leveraged position(s)
+              </div>
+            {% else %}
+              <div class="text-sm text-zinc-500">Not available.</div>
+            {% endif %}
+          </div>
+
+          <div class="bg-zinc-900 rounded-lg border border-zinc-800 p-5 space-y-3">
+            <div class="text-xs uppercase tracking-wide text-zinc-400">1-day 95% VaR</div>
+            {% if var_block and var_block.available %}
+              <div class="text-2xl font-mono font-semibold">
+                ${{ "%.0f"|format(var_block.var_dollar or 0) }}
+              </div>
+              <div class="text-xs text-zinc-400">
+                {{ "%.2f%%"|format((var_block.var_pct or 0) * 100) }} of portfolio
+              </div>
+              <div class="text-xs text-zinc-500">
+                Method: <span class="font-mono">{{ var_block.method }}</span>
+                · σ<sub>annual</sub> {{ "%.1f%%"|format((var_block.sigma_annual or 0) * 100) }}
+              </div>
+            {% else %}
+              <div class="text-sm text-zinc-500">Not available.</div>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if risk_delta.concentration and risk_delta.concentration.positions %}
+          <details class="mt-3">
+            <summary class="text-xs text-zinc-400 cursor-pointer hover:text-zinc-200">
+              Per-position breakdown ({{ risk_delta.concentration.positions|length }})
+            </summary>
+            <ul class="mt-2 space-y-1">
+              {% for p in risk_delta.concentration.positions %}
+                <li class="bg-zinc-900/50 rounded-md border border-zinc-800 px-3 py-2 flex items-center gap-3 text-sm">
+                  {% with severity=(p.status or "ok")|risk_severity, label=p.status or "ok" %}
+                    {% include "components/severity_badge.html" %}
+                  {% endwith %}
+                  <span class="font-mono">{{ p.symbol }}</span>
+                  <span>{{ "%.1f%%"|format((p.weight or 0) * 100) }}</span>
+                  <span class="text-zinc-500 text-xs">
+                    headroom {{ "%+.1f"|format((p.headroom or 0) * 100) }}pp
+                  </span>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      {% else %}
+        <div class="text-sm text-zinc-500">risk_delta.json not yet produced.</div>
+      {% endif %}
+    </section>
+
+    <!-- Retune Impact -->
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Retune Impact — gauge fingerprint &amp; outcome attribution</h2>
+      {% if retune_impact %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {% with label="Knobs vs baseline", value=retune_impact.changes_count %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Distinct versions seen", value=retune_impact.distinct_versions_seen %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Current fingerprint", value=(retune_impact.current_fingerprint[:8] if retune_impact.current_fingerprint else "—") %}{% include "components/metric_card.html" %}{% endwith %}
+        </div>
+
+        {% set attribution = retune_impact.outcome_attribution %}
+        {% if attribution and attribution.available %}
+          <div class="mt-4 bg-zinc-900 rounded-lg border border-zinc-800 p-5 space-y-3">
+            <div class="text-xs uppercase tracking-wide text-zinc-400">Outcome attribution</div>
+            <div class="text-sm text-zinc-300">
+              {{ attribution.total_signals }} total signals —
+              <span class="text-emerald-300">{{ attribution.attributed_signals }} attributed</span>,
+              <span class="text-zinc-500">{{ attribution.unattributed_signals }} pre-tracker</span>
+            </div>
+            {% if attribution.by_fingerprint %}
+              <table class="w-full text-sm">
+                <thead class="text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th class="text-left py-1">Fingerprint</th>
+                    <th class="text-right">Count</th>
+                    <th class="text-right">Resolved 1d</th>
+                    <th class="text-right">Hit rate 1d</th>
+                    <th class="text-right">Mean return 1d</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for fp, b in attribution.by_fingerprint.items() %}
+                    <tr class="border-t border-zinc-800/60">
+                      <td class="py-1 font-mono text-xs">{{ fp[:16] }}</td>
+                      <td class="text-right">{{ b.count }}</td>
+                      <td class="text-right">{{ b.resolved_1d }}</td>
+                      <td class="text-right">
+                        {% if b.hit_rate_1d is not none %}{{ "%.1f%%"|format(b.hit_rate_1d * 100) }}{% else %}—{% endif %}
+                      </td>
+                      <td class="text-right">
+                        {% if b.mean_return_1d is not none %}{{ "%+.2f%%"|format(b.mean_return_1d * 100) }}{% else %}—{% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% set changes = retune_impact.changes_vs_baseline %}
+        {% if changes %}
+          <details class="mt-3">
+            <summary class="text-xs text-zinc-400 cursor-pointer hover:text-zinc-200">
+              Changes vs baseline ({{ retune_impact.changes_count }})
+            </summary>
+            <ul class="mt-2 space-y-1">
+              {% for c in changes if c.status == "changed" %}
+                <li class="bg-zinc-900/50 rounded-md border border-zinc-800 px-3 py-2 flex items-center gap-3 text-sm">
+                  <span class="text-xs text-zinc-500 font-mono">{{ c.surface }}</span>
+                  <span class="font-mono">{{ c.knob }}</span>
+                  <span class="text-zinc-500">{{ c.baseline_value }} → {{ c.current_value }}</span>
+                  {% if c.delta_pct is not none %}
+                    <span class="text-emerald-300 text-xs">{{ "%+.1f%%"|format(c.delta_pct * 100) }}</span>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      {% else %}
+        <div class="text-sm text-zinc-500">retune_impact.json not yet produced.</div>
+      {% endif %}
+    </section>
+
+    <!-- Daily Run Status -->
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Today's Run</h2>
+      {% if daily_run_status %}
+        {% set sm = daily_run_status.stage_summary %}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          {% with label="Stages OK", value=sm.ok %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Warnings", value=sm.warn %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Failed", value=sm.failed %}{% include "components/metric_card.html" %}{% endwith %}
+          {% with label="Missing required", value=daily_run_status.required_missing_count %}{% include "components/metric_card.html" %}{% endwith %}
+        </div>
+        <details>
+          <summary class="text-xs text-zinc-400 cursor-pointer hover:text-zinc-200">
+            Stage timeline ({{ daily_run_status.stages|length }})
+          </summary>
+          <ul class="mt-2 space-y-1">
+            {% for s in daily_run_status.stages %}
+              <li class="bg-zinc-900/50 rounded-md border border-zinc-800 px-3 py-2 flex items-center gap-3 text-sm">
+                {% with severity=(s.status or "unknown")|risk_severity, label=s.status %}
+                  {% include "components/severity_badge.html" %}
+                {% endwith %}
+                <span class="font-mono">{{ s.name }}</span>
+                {% if s.exit_code is defined and s.exit_code is not none %}
+                  <span class="text-xs text-zinc-500">exit {{ s.exit_code }}</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% else %}
+        <div class="text-sm text-zinc-500">daily_run_status.json not yet produced.</div>
+      {% endif %}
+    </section>
+
+    <!-- FMP Budget -->
+    <section>
+      <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">FMP Budget &amp; News</h2>
+      {% if fmp_budget_status %}
+        {% set b = fmp_budget_status.budget %}
+        {% set n = fmp_budget_status.news %}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {% if b and b.available %}
+            {% with label="Calls used", value="%s / %s" | format(b.count_today, b.budget),
+                    caption="status: " ~ b.status %}{% include "components/metric_card.html" %}{% endwith %}
+            {% with label="Headroom", value=b.headroom %}{% include "components/metric_card.html" %}{% endwith %}
+          {% endif %}
+          {% if n and n.available %}
+            {% with label="News articles", value=n.article_count_raw %}{% include "components/metric_card.html" %}{% endwith %}
+            {% with label="Evidence packets", value=n.evidence_packet_count %}{% include "components/metric_card.html" %}{% endwith %}
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="text-sm text-zinc-500">fmp_budget_status.json not yet produced.</div>
+      {% endif %}
+    </section>
+
+  </div>
+{% endblock %}

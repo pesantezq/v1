@@ -1359,6 +1359,7 @@ _KELLY_REL              = ("outputs", "latest", "kelly_sizing_advisor.json")
 _VOL_REGIME_REL         = ("outputs", "latest", "vol_regime_advisor.json")
 _RISK_DELTA_REL         = ("outputs", "latest", "risk_delta.json")
 _FMP_BUDGET_REL         = ("outputs", "latest", "fmp_budget_status.json")
+_RETUNE_IMPACT_REL      = ("outputs", "latest", "retune_impact.json")
 
 
 _RISK_STATUS_BADGE = {
@@ -1507,7 +1508,30 @@ def _advisor_stack_items(root: Path) -> list[str]:
                 f"({b.get('status')}){news_bit}"
             )
 
-    return items[:4]
+    # Retune impact attribution — one line summarising pre-tracker vs current
+    # hit rate, only when the sample size is meaningful enough to report.
+    ri = _safe_load(root.joinpath(*_RETUNE_IMPACT_REL))
+    if isinstance(ri, dict):
+        att = ri.get("outcome_attribution") or {}
+        by_fp = (att.get("by_fingerprint") or {}) if att.get("available") else {}
+        current_fp = ri.get("current_fingerprint")
+        pre_label = att.get("pre_tracker_label") or "pre_tracker_unknown"
+        pre = by_fp.get(pre_label) or {}
+        cur = by_fp.get(current_fp) if current_fp else {}
+        pre_n = (pre or {}).get("resolved_1d", 0)
+        cur_n = (cur or {}).get("resolved_1d", 0)
+        if pre_n + cur_n > 0:
+            pre_hr = (pre or {}).get("hit_rate_1d")
+            cur_hr = (cur or {}).get("hit_rate_1d")
+            pre_str = f"{pre_hr*100:.1f}%" if pre_hr is not None else "—"
+            cur_str = f"{cur_hr*100:.1f}%" if cur_hr is not None else "—"
+            note = " (n<10 across versions; too small to call)" if cur_n < 10 else ""
+            items.append(
+                f"Retune impact (1d hit rate): pre {pre_str} (n={pre_n}) → "
+                f"current {cur_str} (n={cur_n}){note}"
+            )
+
+    return items[:5]
 
 
 def _freshness_banner(summary: dict[str, Any]) -> str | None:

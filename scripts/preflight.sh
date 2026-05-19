@@ -187,8 +187,36 @@ else
 fi
 
 section "Compile Check"
-python -m py_compile main.py fmp_client.py fmp_endpoint_registry.py fmp_endpoint_compliance.py
+python -m py_compile \
+    main.py fmp_client.py fmp_endpoint_registry.py fmp_endpoint_compliance.py \
+    portfolio_automation/risk_delta_advisor.py \
+    portfolio_automation/retune_impact_tracker.py \
+    portfolio_automation/fmp_budget_telemetry.py \
+    portfolio_automation/daily_run_status.py \
+    portfolio_automation/news/run_news_intelligence.py
 pass "Targeted py_compile check passed"
+
+section "Wrapper Syntax Check"
+bash -n "${REPO_ROOT}/scripts/run_daily_safe.sh"
+pass "scripts/run_daily_safe.sh parses cleanly"
+
+section "Advisor Smoke Imports"
+# Import-check the four new observability modules so a typo can't slip
+# past the wrapper's non-blocking stages and silently break in cron.
+python -c "
+import importlib
+modules = [
+    'portfolio_automation.risk_delta_advisor',
+    'portfolio_automation.retune_impact_tracker',
+    'portfolio_automation.fmp_budget_telemetry',
+    'portfolio_automation.daily_run_status',
+    'portfolio_automation.news.run_news_intelligence',
+]
+for m in modules:
+    importlib.import_module(m)
+print('imported:', len(modules), 'observability modules')
+"
+pass "Observability advisor imports clean"
 
 section "Summary"
 pass "Preflight completed successfully"

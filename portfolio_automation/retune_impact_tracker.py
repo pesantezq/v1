@@ -137,6 +137,13 @@ _TRACKED_KNOBS = {
 # produces a new fingerprint (we don't append duplicates).
 _HISTORY_REL = ("data", "gauge_versions.jsonl")
 
+# Source for outcome attribution.
+_SIGNAL_OUTCOMES_REL = ("outputs", "performance", "signal_outcomes.csv")
+
+# Sentinel for signals that predate the gauge_versions ledger (we cannot
+# attribute them retroactively without git-history walking).
+_PRE_TRACKER_LABEL = "pre_tracker_unknown"
+
 # Artifacts.
 _OUTPUT_JSON_REL = "retune_impact.json"
 _OUTPUT_MD_REL = "retune_impact.md"
@@ -335,6 +342,190 @@ def append_to_history(
 
 
 # ---------------------------------------------------------------------------
+# Outcome attribution — join signal_outcomes.csv to gauge_versions.jsonl
+# by timestamp range, group resolved outcomes per fingerprint.
+# ---------------------------------------------------------------------------
+
+
+def _parse_iso_to_utc_naive(value: Any) -> datetime | None:
+    """
+    Parse an ISO timestamp into a tz-naive UTC datetime so we can compare
+    signal_time (which is currently emitted timezone-naive in local time)
+    with gauge_version.first_seen_at (which is tz-aware UTC).
+    Returns None for any unparseable input.
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        # Convert to naive UTC.
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _load_gauge_history(root: Path) -> list[dict[str, Any]]:
+    """Read gauge_versions.jsonl in chronological order. Parse timestamps."""
+    path = root.joinpath(*_HISTORY_REL)
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            ts = _parse_iso_to_utc_naive(row.get("first_seen_at"))
+            if ts is None:
+                continue
+            row["_first_seen_dt"] = ts
+            rows.append(row)
+    except Exception as exc:
+        logger.debug("retune_impact: history read failed — %s", exc)
+        return []
+    rows.sort(key=lambda r: r["_first_seen_dt"])
+    return rows
+
+
+def _attribute_signal(signal_time_str: str, history: list[dict[str, Any]]) -> str:
+    """Return the gauge fingerprint active at signal_time, or _PRE_TRACKER_LABEL."""
+    sig_dt = _parse_iso_to_utc_naive(signal_time_str)
+    if sig_dt is None or not history:
+        return _PRE_TRACKER_LABEL
+    active = _PRE_TRACKER_LABEL
+    for row in history:
+        if row["_first_seen_dt"] <= sig_dt:
+            active = row.get("fingerprint") or _PRE_TRACKER_LABEL
+        else:
+            break
+    return active
+
+
+def _safe_float_csv(v: Any) -> float | None:
+    if v in (None, "", "—"):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int_csv(v: Any) -> int | None:
+    """For 0/1 success/direction_correct flags stored as ints in CSV."""
+    f = _safe_float_csv(v)
+    return int(f) if f is not None else None
+
+
+def compute_outcome_attribution(
+    *,
+    root: str | Path = ".",
+) -> dict[str, Any]:
+    """
+    Join signal_outcomes.csv → gauge_versions.jsonl by timestamp range.
+
+    Groups rows by gauge_version fingerprint and computes per-group:
+      - count           : total signals
+      - resolved_Nd     : rows with outcome_return_Nd populated (1d/3d/7d)
+      - hit_rate_Nd     : direction_correct_Nd success ratio over resolved
+      - mean_return_Nd  : mean of outcome_return_Nd over resolved
+
+    Returns dict shape:
+      {
+        "available": True,
+        "method": "timestamp_range_join",
+        "total_signals": int,
+        "by_fingerprint": {fp: {count, resolved_1d, hit_rate_1d, ...}}
+      }
+    """
+    import csv
+
+    root_path = Path(root).resolve()
+    csv_path = root_path.joinpath(*_SIGNAL_OUTCOMES_REL)
+    if not csv_path.exists():
+        return {"available": False, "reason": "no_signal_outcomes_csv"}
+
+    history = _load_gauge_history(root_path)
+
+    by_fp: dict[str, dict[str, Any]] = {}
+    total_signals = 0
+
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                total_signals += 1
+                fp = _attribute_signal(row.get("signal_time", ""), history)
+                bucket = by_fp.setdefault(fp, {
+                    "count": 0,
+                    "resolved_1d": 0, "resolved_3d": 0, "resolved_7d": 0,
+                    "hits_1d": 0,     "hits_3d": 0,     "hits_7d": 0,
+                    "sum_return_1d": 0.0, "sum_return_3d": 0.0, "sum_return_7d": 0.0,
+                    "first_signal_time": None,
+                    "last_signal_time": None,
+                })
+                bucket["count"] += 1
+                st = row.get("signal_time") or ""
+                if st:
+                    if bucket["first_signal_time"] is None or st < bucket["first_signal_time"]:
+                        bucket["first_signal_time"] = st
+                    if bucket["last_signal_time"] is None or st > bucket["last_signal_time"]:
+                        bucket["last_signal_time"] = st
+
+                for w in ("1d", "3d", "7d"):
+                    ret = _safe_float_csv(row.get(f"outcome_return_{w}"))
+                    if ret is None:
+                        continue
+                    bucket[f"resolved_{w}"] += 1
+                    bucket[f"sum_return_{w}"] += ret
+                    correct = _safe_int_csv(row.get(f"direction_correct_{w}"))
+                    if correct:
+                        bucket[f"hits_{w}"] += 1
+    except Exception as exc:
+        logger.warning("retune_impact: outcome attribution failed — %s", exc)
+        return {"available": False, "reason": f"csv_parse_error: {exc}"}
+
+    # Finalize: convert running sums into hit_rate + mean_return per window.
+    for fp, b in by_fp.items():
+        for w in ("1d", "3d", "7d"):
+            resolved = b[f"resolved_{w}"]
+            hits = b.pop(f"hits_{w}")
+            sum_ret = b.pop(f"sum_return_{w}")
+            b[f"hit_rate_{w}"] = round(hits / resolved, 4) if resolved else None
+            b[f"mean_return_{w}"] = round(sum_ret / resolved, 6) if resolved else None
+        # Attach known snapshot for this fingerprint (if any).
+        snapshot = next(
+            (r.get("snapshot") for r in history if r.get("fingerprint") == fp),
+            None,
+        )
+        if snapshot is not None:
+            b["snapshot_known"] = True
+        else:
+            b["snapshot_known"] = fp == _PRE_TRACKER_LABEL
+
+    return {
+        "available": True,
+        "method": "timestamp_range_join",
+        "total_signals": total_signals,
+        "attributed_signals": sum(
+            v["count"] for k, v in by_fp.items() if k != _PRE_TRACKER_LABEL
+        ),
+        "unattributed_signals": by_fp.get(_PRE_TRACKER_LABEL, {}).get("count", 0),
+        "fingerprint_count": len(by_fp),
+        "by_fingerprint": by_fp,
+        "pre_tracker_label": _PRE_TRACKER_LABEL,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Build artifact
 # ---------------------------------------------------------------------------
 
@@ -372,6 +563,9 @@ def build_retune_impact(
         except Exception as exc:
             logger.debug("retune_impact: history read for stats failed — %s", exc)
 
+    # Outcome attribution v2 — joins signal_outcomes.csv to this ledger.
+    outcome_attribution = compute_outcome_attribution(root=root)
+
     return {
         "generated_at": ts,
         "observe_only": _OBSERVE_ONLY,
@@ -386,6 +580,7 @@ def build_retune_impact(
         "changes_count": sum(1 for c in changes if c.get("status") == "changed"),
         "history_size": history_size,
         "distinct_versions_seen": distinct_versions,
+        "outcome_attribution": outcome_attribution,
         "disclaimer": _DISCLAIMER,
     }
 
@@ -461,6 +656,41 @@ def render_retune_impact_md(payload: dict[str, Any]) -> str:
         a("")
         for c in unavailable:
             a(f"- `{c.get('surface')}.{c.get('knob')}` — could not read")
+        a("")
+
+    attribution = payload.get("outcome_attribution") or {}
+    if attribution.get("available"):
+        a("## Outcome Attribution (signal_outcomes joined to gauge_versions)")
+        a("")
+        a(
+            f"- Total signals: **{attribution.get('total_signals', 0)}** — "
+            f"attributed: {attribution.get('attributed_signals', 0)}, "
+            f"unattributed (pre-tracker): {attribution.get('unattributed_signals', 0)}"
+        )
+        a(f"- Distinct fingerprints in outcomes: **{attribution.get('fingerprint_count', 0)}**")
+        a("")
+        by_fp = attribution.get("by_fingerprint") or {}
+        if by_fp:
+            a("| Fingerprint | Count | Resolved 1d | Hit rate 1d | Mean return 1d |")
+            a("|---|---|---|---|---|")
+            for fp, b in sorted(
+                by_fp.items(),
+                key=lambda kv: (kv[0] == _PRE_TRACKER_LABEL, -kv[1]["count"]),
+            ):
+                hr = b.get("hit_rate_1d")
+                mr = b.get("mean_return_1d")
+                hr_str = f"{hr:.1%}" if hr is not None else "—"
+                mr_str = f"{mr:+.2%}" if mr is not None else "—"
+                a(
+                    f"| `{fp[:16]}` | {b.get('count', 0)} | "
+                    f"{b.get('resolved_1d', 0)} | {hr_str} | {mr_str} |"
+                )
+            a("")
+    else:
+        a("## Outcome Attribution")
+        a("")
+        reason = attribution.get("reason", "unknown")
+        a(f"_Not available: {reason}._")
         a("")
 
     a("## Current Gauge Snapshot")

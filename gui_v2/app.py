@@ -93,6 +93,26 @@ def _severity_classes(severity: str) -> str:
 templates.env.filters["severity_classes"] = _severity_classes
 
 
+def _risk_severity(status: str | None) -> str:
+    """Map risk_delta-style status strings to the OK/WARN/FAIL palette."""
+    s = (status or "").strip().lower()
+    return {
+        "ok":               "OK",
+        "ok_with_warnings": "INFO",
+        "news_empty":       "INFO",
+        "near_cap":         "WARN",
+        "partial":          "WARN",
+        "warn":             "WARN",
+        "breach":           "FAIL",
+        "exhausted":        "FAIL",
+        "failed":           "FAIL",
+        "unknown":          "INFO",
+    }.get(s, "INFO")
+
+
+templates.env.filters["risk_severity"] = _risk_severity
+
+
 def _overall_severity_for_nav() -> str:
     """Compute overall severity for the nav badge. Best-effort; never raises."""
     try:
@@ -113,6 +133,7 @@ from gui_v2.data.health import collect_health_view, overall_severity
 from gui_v2.data.portfolio import collect_portfolio_view
 from gui_v2.data.research import collect_research_view
 from gui_v2.data.operations import collect_operations_view
+from gui_v2.data.risk_impact import collect_risk_impact_view
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -149,3 +170,8 @@ def page_operations(
         request, "operations.html",
         **collect_operations_view(REPO_ROOT, log_tail_n=tail, log_name=log),
     )
+
+
+@app.get("/risk-impact", response_class=HTMLResponse)
+def page_risk_impact(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
+    return _render(request, "risk_impact.html", **collect_risk_impact_view(REPO_ROOT))

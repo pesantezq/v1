@@ -15,6 +15,62 @@
 
 ## Daily
 
+### Safe-wrapper 13-stage pipeline (production cron path)
+
+Command:
+`bash scripts/run_daily_safe.sh`
+
+This is what cron runs at 09:00 UTC (`crontab -l`). Each stage is logged
+to `logs/daily_safe_YYYY-MM-DD.log` with a `== Stage Name ==` banner. The
+official decision-emitting stage (Stage 1) is fail-fast; everything after
+it is non-blocking so a single observability advisor failing cannot
+abort the run after the official plan has landed.
+
+| # | Stage | Producer | Primary artifact(s) |
+|---|---|---|---|
+| 0 | News intelligence (pre-pipeline) | `portfolio_automation.news.run_news_intelligence` | `outputs/latest/news_intelligence.json` |
+| 1 | Daily pipeline (FAIL-FAST) | `main.py --run-mode daily` | `outputs/latest/decision_plan.json` + `.md` |
+| 2 | Weight tuning | `watchlist_scanner.weight_tuning` | `outputs/performance/weight_tuning_suggestions.json` |
+| 3 | Policy evaluator | `policy_evaluator.evaluator` | `outputs/policy/*` |
+| 4 | Allocation preview | `watchlist_scanner.allocation_preview` | `outputs/latest/allocation_preview.json` |
+| 5 | Allocation policy simulation | `watchlist_scanner.allocation_policy_simulation` | `outputs/performance/allocation_policy_simulation.json` |
+| 6 | Allocation policy activation | `watchlist_scanner.allocation_policy_activation` | `outputs/performance/approved_*.json` (when all rules pass) |
+| 7 | System decision summary | `watchlist_scanner.system_summary` | `outputs/latest/system_decision_summary.json` + `.md` |
+| 7b | Risk delta panel | `portfolio_automation.risk_delta_advisor` | `outputs/latest/risk_delta.json` + `.md` |
+| 7c | Retune impact tracker | `portfolio_automation.retune_impact_tracker` | `outputs/latest/retune_impact.json` + `data/gauge_versions.jsonl` |
+| 7d | FMP budget telemetry | `portfolio_automation.fmp_budget_telemetry` | `outputs/latest/fmp_budget_status.json` + `data/fmp_budget_history.jsonl` |
+| 8 | News intelligence (post-pipeline refresh) | `portfolio_automation.news.run_news_intelligence` | rewrites `outputs/latest/news_intelligence.json` (cache hits, 0 budget) |
+| 8b | Discovery news integration | `portfolio_automation.discovery.news_integration` | `outputs/sandbox/discovery/news_enriched_candidates.json` |
+| 9 | Automatic promotion governance | `portfolio_automation.discovery.automatic_promotion_governance` | `outputs/sandbox/discovery/automatic_promotion_*.json` |
+| 10 | Daily memo + email | `watchlist_scanner.daily_memo` | `outputs/latest/daily_memo.{txt,md}` |
+| 11 | Daily run status | `portfolio_automation.daily_run_status` | `outputs/latest/daily_run_status.json` + `.md` |
+
+Stages 0 + 8 are deliberately paired: the pre-pipeline run gets first
+claim on the FMP daily budget (one batched call), and the post-pipeline
+refresh hits cache (zero budget). When Stage 0 fails (e.g. FMP outage),
+the scanner can still proceed but discovery enrichment sees zero news
+packets — that's surfaced in the memo's "FMP budget" line.
+
+The daily memo (Stage 10) reads `system_decision_summary.json` for its
+generated-at timestamp; Stage 7 must therefore run before Stage 10. If
+this ordering ever breaks, the memo header will display the previous
+summary's date and operators will see a stale-data banner.
+
+### Forcing a re-run on the same calendar day
+
+The pipeline is idempotent — `main.py` checks
+`PortfolioStateStore.is_completed(run_id)` and exits 0 with
+`skip_reason=idempotent_already_completed` when today's run already
+finished. To force a re-run (e.g. after a config tweak), mark today
+failed first:
+
+```bash
+.venv/bin/python -c "from state_store import PortfolioStateStore; \
+  from datetime import date; \
+  PortfolioStateStore().fail_run(f'{date.today().isoformat()}_daily')"
+bash scripts/run_daily_safe.sh
+```
+
 ### Main portfolio run
 
 Command:
