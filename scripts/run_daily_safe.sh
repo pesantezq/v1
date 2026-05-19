@@ -187,6 +187,11 @@ run_aux_stage "Retune impact tracker" \
 run_aux_stage "FMP budget telemetry" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.fmp_budget_telemetry import run_fmp_budget_telemetry; r = run_fmp_budget_telemetry(root='.'); print('overall:', r.get('overall_status'), 'memo_line:', r.get('memo_line'))"
 
+# Stage 7e — Resolution-due probe: surface any signal whose 1d/3d/7d
+# outcome window has elapsed but whose outcome_return_Nd is null.
+run_aux_stage "Resolution-due probe" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.resolution_due_probe import run_resolution_due_probe; r = run_resolution_due_probe(root='.'); print('status:', r.get('status'), 'stuck:', r.get('stuck_count'), '/', r.get('total_signals'))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).

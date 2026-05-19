@@ -315,6 +315,19 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
     opps = _read_json(latest / "market_opportunities.json")
     memo_md = _read_text(latest / "daily_memo.md")
 
+    # Risk Delta + Daily Run Status — minimal slice for the Today summary
+    # card; full detail lives on /risk-impact.
+    risk_delta = _read_json(latest / "risk_delta.json") or {}
+    daily_run = _read_json(latest / "daily_run_status.json") or {}
+    risk_summary = {
+        "available": bool(risk_delta) or bool(daily_run),
+        "overall_status": risk_delta.get("overall_status"),
+        "run_status": daily_run.get("overall_status"),
+        "top_position": (risk_delta.get("concentration") or {}).get("top_position"),
+        "var_dollar": (risk_delta.get("var") or {}).get("var_dollar"),
+        "var_pct": (risk_delta.get("var") or {}).get("var_pct"),
+    }
+
     # Decision Center inputs (migrated from gui/page_decision_center)
     validation = _read_json(latest / "ai_decision_validation.json")
     explanations = _read_json(latest / "decision_explanations.json")
@@ -348,4 +361,6 @@ def collect_today_view(repo_root: Path) -> dict[str, Any]:
         "market_narratives": _market_narratives_summary(
             narrative_daily, narrative_weekly, narrative_monthly,
         ),
+        # Risk & Impact summary card (links to /risk-impact for full detail)
+        "risk_summary": risk_summary,
     }

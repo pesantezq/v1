@@ -48,6 +48,43 @@
       {% endwith %}
     </section>
 
+    <!-- Risk & Impact summary (links to /risk-impact for full detail) -->
+    {% if risk_summary and risk_summary.available %}
+    <a href="/risk-impact"
+       class="block bg-zinc-900 rounded-lg border border-zinc-800 hover:border-emerald-500/40 hover:bg-zinc-900/70 transition px-5 py-4">
+      <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <span class="text-xs uppercase tracking-wide text-zinc-400">Risk &amp; Impact</span>
+          {% if risk_summary.overall_status %}
+            {% with severity=risk_summary.overall_status|risk_severity, label=risk_summary.overall_status %}
+              {% include "components/severity_badge.html" %}
+            {% endwith %}
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-4 text-sm">
+          {% if risk_summary.top_position %}
+            <span class="text-zinc-400">
+              Top: <span class="font-mono text-zinc-200">{{ risk_summary.top_position.symbol }}</span>
+              <span class="text-zinc-300">{{ "%.1f%%"|format((risk_summary.top_position.weight or 0) * 100) }}</span>
+            </span>
+          {% endif %}
+          {% if risk_summary.var_dollar is not none %}
+            <span class="text-zinc-400">
+              1d VaR: <span class="font-mono text-zinc-200">${{ "%.0f"|format(risk_summary.var_dollar) }}</span>
+              <span class="text-zinc-500 text-xs">({{ "%.2f%%"|format((risk_summary.var_pct or 0) * 100) }})</span>
+            </span>
+          {% endif %}
+          {% if risk_summary.run_status %}
+            <span class="text-zinc-400">
+              Run: <span class="font-mono text-zinc-200">{{ risk_summary.run_status }}</span>
+            </span>
+          {% endif %}
+          <span class="text-emerald-300/80 text-xs">View dashboard →</span>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+
     <!-- Decisions -->
     <section>
       <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Top decisions</h2>

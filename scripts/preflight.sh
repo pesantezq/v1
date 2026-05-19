@@ -193,6 +193,7 @@ python -m py_compile \
     portfolio_automation/retune_impact_tracker.py \
     portfolio_automation/fmp_budget_telemetry.py \
     portfolio_automation/daily_run_status.py \
+    portfolio_automation/resolution_due_probe.py \
     portfolio_automation/news/run_news_intelligence.py
 pass "Targeted py_compile check passed"
 
@@ -210,6 +211,7 @@ modules = [
     'portfolio_automation.retune_impact_tracker',
     'portfolio_automation.fmp_budget_telemetry',
     'portfolio_automation.daily_run_status',
+    'portfolio_automation.resolution_due_probe',
     'portfolio_automation.news.run_news_intelligence',
 ]
 for m in modules:

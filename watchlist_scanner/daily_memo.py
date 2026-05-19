@@ -1438,9 +1438,19 @@ def _portfolio_pulse_items(root: Path) -> list[str]:
     if isinstance(top_sector, dict) and top_sector.get("name"):
         name = str(top_sector.get("name"))
         share = top_sector.get("allocation_pct")
+        # Read sector_cap from allocation_engine.DEFAULT_CONFIG so the memo
+        # reflects the current gauge value rather than a stale literal.
+        cap_pct_str = "—"
+        try:
+            from allocation_engine import DEFAULT_CONFIG as _AE_CFG
+            cap_val = _AE_CFG.get("sector_cap")
+            if isinstance(cap_val, (int, float)) and cap_val > 0:
+                cap_pct_str = f"{cap_val * 100:.0f}%"
+        except Exception:
+            pass
         items.append(
             f"Top sector — {name} at {_pct(share)} of portfolio "
-            f"(sector cap reference: 35%)"
+            f"(sector cap reference: {cap_pct_str})"
         )
 
     total_pct = snapshot.get("total_suggested_allocation")
