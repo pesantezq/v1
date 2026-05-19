@@ -201,6 +201,14 @@ run_aux_stage "Discovery news integration" \
 run_aux_stage "Automatic promotion governance" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.discovery.automatic_promotion_governance import run_automatic_promotion_governance; print(run_automatic_promotion_governance(run_mode='discovery', write_files=True))"
 
+# Stage 9b — Sandbox lane status (writes outputs/sandbox/discovery/
+# sandbox_run_status.json + .md). The two underlying discovery steps run
+# again here via tools.daily_sandbox_run, but they hit the cache from
+# Stages 8b/9 so the cost is negligible. The point is to refresh the
+# sandbox lane's own run-status artifact so operators can see it ran.
+run_aux_stage "Sandbox lane status" \
+    python -m tools.daily_sandbox_run
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
