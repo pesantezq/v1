@@ -326,6 +326,54 @@ def create_record_from_adjustment(
     )
 
 
+def auto_resolve_pending_records(
+    store: MLHistoryStore,
+    active_drifts: Dict[str, float],
+    default_band: float = 0.12,
+) -> Dict[str, int]:
+    """
+    Auto-resolve any pending ml_history record whose underlying issue no
+    longer appears in today's portfolio adjustments.
+
+    Two paths:
+      1. rec_key still active today → caller provides current drift in
+         active_drifts; update_record_resolution decides resolved vs pending.
+      2. rec_key NOT active today → treat the absence as natural resolution:
+         the rebalance band absorbed the issue without operator action.
+         Resolved with current_drift=0 against the default band.
+
+    Returns counts: {pending_before, resolved, still_pending}.
+    """
+    all_records = list(store._records.values())  # internal accessor, read-only
+    pending_before = sum(1 for r in all_records if not r.is_resolved)
+
+    pending_keys = {r.rec_key for r in all_records if not r.is_resolved}
+    for key in pending_keys:
+        if key in active_drifts:
+            update_record_resolution(
+                store, key, current_drift=active_drifts[key], band=default_band
+            )
+        else:
+            # Issue isn't surfacing today → natural resolution.
+            update_record_resolution(
+                store, key, current_drift=0.0, band=default_band
+            )
+
+    still_pending = sum(
+        1 for r in store._records.values() if not r.is_resolved
+    )
+    resolved = pending_before - still_pending
+    logger.info(
+        "auto_resolve_pending_records: pending_before=%d resolved=%d still_pending=%d",
+        pending_before, resolved, still_pending,
+    )
+    return {
+        "pending_before": pending_before,
+        "resolved": resolved,
+        "still_pending": still_pending,
+    }
+
+
 def update_record_resolution(
     store: MLHistoryStore,
     rec_key: str,
@@ -363,8 +411,11 @@ def update_record_resolution(
             
             # Persistence label
             record.persisted = record.persistence_periods >= 2
-            
-            store.update_record(record.record_id, **record.to_dict())
+
+            # update_record takes record_id positionally; strip it from the
+            # dict expansion to avoid "multiple values for argument" TypeError.
+            updates = {k: v for k, v in record.to_dict().items() if k != "record_id"}
+            store.update_record(record.record_id, **updates)
             logger.info(f"Resolved record {record.record_id}: {record.resolution_type}")
         
         else:

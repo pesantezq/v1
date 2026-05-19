@@ -69,7 +69,12 @@ from adjustment import (
     ActionLevel as AdjActionLevel,
     CashAnalysis
 )
-from ml_history import MLHistoryStore, create_record_from_adjustment, update_record_resolution
+from ml_history import (
+    MLHistoryStore,
+    auto_resolve_pending_records,
+    create_record_from_adjustment,
+    update_record_resolution,
+)
 from ml_advisor import MLAdvisor, get_historical_analysis_prompt
 from drawdown import DrawdownTracker
 from contribution_engine import ContributionEngine
@@ -1791,6 +1796,34 @@ def run_portfolio_update(
         )
 
         ml_advisor_inst = MLAdvisor(ml_history) if ml_advisor_enabled else None
+
+        # Auto-resolve any pending ml_history record whose issue no longer
+        # surfaces in today's adjustments. Without this, records accumulate
+        # in a "pending" state forever and ml_advisor never has resolved
+        # samples to learn from — even with ml_advisor.enabled=true.
+        if not dry_run:
+            try:
+                _active_drifts = {
+                    adj.rec_key: float(adj.drift or 0.0)
+                    for adj in portfolio_adjustments
+                    if getattr(adj, "rec_key", None)
+                }
+                _band = float(
+                    getattr(config, "rebalance_band_pct", None)
+                    or (config.rebalance_rules.get("band_threshold") if hasattr(config, "rebalance_rules") else 0.12)
+                    or 0.12
+                )
+                _resolution_summary = auto_resolve_pending_records(
+                    ml_history, _active_drifts, default_band=_band
+                )
+                logger.info(
+                    "ml_history auto-resolve: %s",
+                    _resolution_summary,
+                )
+            except Exception as _resolve_err:
+                logger.warning(
+                    "ml_history auto-resolve skipped (non-fatal): %s", _resolve_err
+                )
 
         ml_outputs = []
         for adj in portfolio_adjustments:
