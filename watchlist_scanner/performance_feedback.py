@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from watchlist_scanner.cache_manager import CacheManager
-from watchlist_scanner.outcome_evaluator import _load_next_available_close
+from watchlist_scanner.outcome_evaluator import (
+    _load_next_available_close,
+    load_next_available_close,
+)
 from watchlist_scanner.state import WatchlistStateStore
 
 logger = logging.getLogger("watchlist_scanner.performance_feedback")
@@ -106,12 +109,32 @@ def evaluate_pending_signal_feedback(
     as_of: datetime | None = None,
     windows: tuple[int, ...] = DEFAULT_WINDOWS,
     limit: int = 5000,
+    fmp_client: Any = None,
 ) -> dict[str, Any]:
     now = as_of or datetime.now()
     as_of_date = now.date()
     store = WatchlistStateStore(db_path)
     cache = CacheManager(cache_dir=cache_dir)
     summary: dict[str, Any] = {"as_of": now.isoformat(), "by_window": {}}
+
+    # Best-effort FMP client for the price-cache fallback. The legacy
+    # resolver relied on AV TIME_SERIES_DAILY payloads which the FMP-primary
+    # pipeline doesn't populate; without an FMP fallback, every signal whose
+    # ticker lacks an AV cache entry is bucketed "missing_price". Caller can
+    # still pass fmp_client=None to keep the strict AV-only behavior.
+    if fmp_client is None:
+        try:
+            from fmp_client import FMPClient  # local import to keep test isolation simple
+            # Read daily budget from config so the cap honors the operator's setting.
+            try:
+                _cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+                _budget = int((_cfg.get("api_limits") or {}).get("fmp_daily_calls_budget", 0)) or None
+                fmp_client = FMPClient(daily_budget=_budget) if _budget else FMPClient()
+            except Exception:
+                fmp_client = FMPClient()
+        except Exception as exc:
+            logger.debug("evaluate_pending_signal_feedback: no FMP fallback (%s)", exc)
+            fmp_client = None
 
     for window_days in windows:
         pending_rows = store.list_pending_signal_feedback(window_days=window_days, limit=limit)
@@ -143,7 +166,9 @@ def evaluate_pending_signal_feedback(
                 invalid_baseline += 1
                 continue
 
-            next_close = _load_next_available_close(cache, ticker, due_date, as_of_date)
+            next_close = load_next_available_close(
+                cache, ticker, due_date, as_of_date, fmp_client=fmp_client,
+            )
             if next_close is None:
                 missing_price += 1
                 continue

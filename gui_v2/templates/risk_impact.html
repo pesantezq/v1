@@ -187,7 +187,7 @@
                         {% if b.hit_rate_1d is not none %}{{ "%.1f%%"|format(b.hit_rate_1d * 100) }}{% else %}—{% endif %}
                       </td>
                       <td class="text-right">
-                        {% if b.mean_return_1d is not none %}{{ "%+.2f%%"|format(b.mean_return_1d * 100) }}{% else %}—{% endif %}
+                        {% if b.mean_return_1d is not none %}{{ "%+.2f%%"|format(b.mean_return_1d) }}{% else %}—{% endif %}
                       </td>
                     </tr>
                   {% endfor %}

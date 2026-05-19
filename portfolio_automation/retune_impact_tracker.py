@@ -679,8 +679,11 @@ def render_retune_impact_md(payload: dict[str, Any]) -> str:
             ):
                 hr = b.get("hit_rate_1d")
                 mr = b.get("mean_return_1d")
-                hr_str = f"{hr:.1%}" if hr is not None else "—"
-                mr_str = f"{mr:+.2%}" if mr is not None else "—"
+                # hit_rate is a fraction (0.50 = 50%); mean_return is already
+                # in percent units per performance_feedback.evaluate_pending_*
+                # (which multiplies the raw fraction by 100 before storing).
+                hr_str = f"{hr * 100:.1f}%" if hr is not None else "—"
+                mr_str = f"{mr:+.2f}%" if mr is not None else "—"
                 a(
                     f"| `{fp[:16]}` | {b.get('count', 0)} | "
                     f"{b.get('resolved_1d', 0)} | {hr_str} | {mr_str} |"

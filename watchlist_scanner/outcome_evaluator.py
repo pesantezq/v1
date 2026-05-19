@@ -51,6 +51,82 @@ def _load_next_available_close(
     return candidates[0]
 
 
+def _load_next_available_close_fmp(
+    fmp_client: Any,
+    symbol: str,
+    target_date: date,
+    as_of_date: date,
+) -> tuple[date, float] | None:
+    """
+    FMP fallback for _load_next_available_close.
+
+    Returns the first close on or after target_date and on or before
+    as_of_date, sourced from fmp_client.get_historical_prices (which is
+    cached for 24h so repeated calls within a run are free). Returns None
+    when FMP returns nothing usable (budget exhausted, ticker unknown, etc).
+
+    The historical endpoint returns rows newest-first with keys
+    {date, open, high, low, close, adjClose, volume}. We treat "date" as
+    ISO YYYY-MM-DD per FMP's stable contract.
+    """
+    if fmp_client is None or not symbol:
+        return None
+    try:
+        rows = fmp_client.get_historical_prices(symbol, years=1, ttl_days=1)
+    except Exception as exc:
+        logger.debug("FMP historical fetch failed for %s: %s", symbol, exc)
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+
+    candidates: list[tuple[date, float]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        day_raw = r.get("date") or r.get("Date") or r.get("formattedDate")
+        try:
+            day = date.fromisoformat(str(day_raw)[:10])
+        except (TypeError, ValueError):
+            continue
+        if day < target_date or day > as_of_date:
+            continue
+        try:
+            close = float(r.get("close") or r.get("adjClose") or 0)
+        except (TypeError, ValueError):
+            continue
+        if close <= 0:
+            continue
+        candidates.append((day, close))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0]
+
+
+def load_next_available_close(
+    cache: CacheManager,
+    symbol: str,
+    target_date: date,
+    as_of_date: date,
+    *,
+    fmp_client: Any = None,
+) -> tuple[date, float] | None:
+    """
+    Public composite: try AV cache first, then FMP historical fallback.
+
+    Keeping the two readers split makes the data-source decision visible
+    in logs and lets callers pass `fmp_client=None` to preserve the
+    legacy AV-only behavior. Returns the first usable (date, close) in
+    the [target_date, as_of_date] window, or None when neither source
+    has data.
+    """
+    hit = _load_next_available_close(cache, symbol, target_date, as_of_date)
+    if hit is not None:
+        return hit
+    return _load_next_available_close_fmp(fmp_client, symbol, target_date, as_of_date)
+
+
 def _label_return(return_pct: float) -> str:
     """Simple first-pass outcome label for the first resolved checkpoint."""
     if return_pct >= 1.0:

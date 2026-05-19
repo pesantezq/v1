@@ -1533,9 +1533,10 @@ def _advisor_stack_items(root: Path) -> list[str]:
         if pre_n + cur_n > 0:
             pre_hr = (pre or {}).get("hit_rate_1d")
             cur_hr = (cur or {}).get("hit_rate_1d")
-            pre_str = f"{pre_hr*100:.1f}%" if pre_hr is not None else "—"
-            cur_str = f"{cur_hr*100:.1f}%" if cur_hr is not None else "—"
-            note = " (n<10 across versions; too small to call)" if cur_n < 10 else ""
+            # hit_rate_1d is a decimal fraction (0.5 = 50%).
+            pre_str = f"{pre_hr * 100:.1f}%" if pre_hr is not None else "—"
+            cur_str = f"{cur_hr * 100:.1f}%" if cur_hr is not None else "—"
+            note = " (n<10 in current version; too small to call)" if cur_n < 10 else ""
             items.append(
                 f"Retune impact (1d hit rate): pre {pre_str} (n={pre_n}) → "
                 f"current {cur_str} (n={cur_n}){note}"
