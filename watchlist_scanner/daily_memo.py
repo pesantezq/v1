@@ -1357,6 +1357,59 @@ _CONFIG_BASE_REL        = ("config", "base.json")
 _ML_HISTORY_REL         = ("data", "ml_history.json")
 _KELLY_REL              = ("outputs", "latest", "kelly_sizing_advisor.json")
 _VOL_REGIME_REL         = ("outputs", "latest", "vol_regime_advisor.json")
+_RISK_DELTA_REL         = ("outputs", "latest", "risk_delta.json")
+
+
+_RISK_STATUS_BADGE = {
+    "breach":   "BREACH",
+    "near_cap": "near cap",
+    "ok":       "ok",
+}
+
+
+def _risk_delta_items(root: Path) -> list[str]:
+    """
+    Three condensed lines describing exposure-vs-cap state.
+    Empty list when risk_delta.json is missing or degraded.
+    """
+    payload = _safe_load(root.joinpath(*_RISK_DELTA_REL))
+    if not payload:
+        return []
+
+    items: list[str] = []
+    conc = payload.get("concentration") or {}
+    if conc.get("available"):
+        top = conc.get("top_position") or {}
+        sym = top.get("symbol") or "?"
+        weight = top.get("weight") or 0
+        headroom = top.get("headroom") or 0
+        status = _RISK_STATUS_BADGE.get(top.get("status", "ok"), top.get("status", "ok"))
+        cap_pct = conc.get("cap") or 0
+        items.append(
+            f"Concentration — top position {sym} at {weight*100:.1f}% "
+            f"(cap {cap_pct*100:.0f}%, headroom {headroom*100:+.1f}pp, {status})"
+        )
+
+    lev = payload.get("leverage") or {}
+    if lev.get("available"):
+        exposure = lev.get("total_exposure") or 0
+        headroom = lev.get("headroom") or 0
+        status = _RISK_STATUS_BADGE.get(lev.get("status", "ok"), lev.get("status", "ok"))
+        cap_pct = lev.get("cap") or 0
+        items.append(
+            f"Leverage — total exposure {exposure*100:.1f}% "
+            f"(cap {cap_pct*100:.0f}%, headroom {headroom*100:+.1f}pp, {status})"
+        )
+
+    var = payload.get("var") or {}
+    if var.get("available"):
+        var_dollar = var.get("var_dollar") or 0
+        var_pct = var.get("var_pct") or 0
+        items.append(
+            f"1-day 95% VaR — ${var_dollar:,.0f} ({var_pct*100:.2f}% of portfolio)"
+        )
+
+    return items[:3]
 
 
 def _portfolio_pulse_items(root: Path) -> list[str]:
@@ -1566,7 +1619,7 @@ def build_daily_memo(
         a(f"  - {item}")
     a("")
 
-    # Portfolio pulse + advisor stack — read-only artifact loaders.
+    # Portfolio pulse + advisor stack + risk delta — read-only artifact loaders.
     try:
         pulse_root = _pulse_root()
         pulse_items = _portfolio_pulse_items(pulse_root)
@@ -1575,6 +1628,14 @@ def build_daily_memo(
             a("  PORTFOLIO PULSE")
             a(_LINE)
             for item in pulse_items:
+                a(f"  - {item}")
+            a("")
+        risk_items = _risk_delta_items(pulse_root)
+        if risk_items:
+            a(_LINE)
+            a("  RISK DELTA")
+            a(_LINE)
+            for item in risk_items:
                 a(f"  - {item}")
             a("")
         advisor_items = _advisor_stack_items(pulse_root)
@@ -1586,7 +1647,7 @@ def build_daily_memo(
                 a(f"  - {item}")
             a("")
     except Exception as exc:
-        logger.warning("daily_memo: pulse/advisor sections failed — %s", exc)
+        logger.warning("daily_memo: pulse/advisor/risk sections failed — %s", exc)
 
     # ------------------------------------------------------------------
     # Enrichment sections — Portfolio Growth, Top Movers, Decision Hit
@@ -1708,13 +1769,19 @@ def build_daily_memo_md(
         a(f"- {item}")
     a("")
 
-    # Portfolio pulse + advisor stack — Markdown variant.
+    # Portfolio pulse + advisor stack + risk delta — Markdown variant.
     try:
         pulse_root = _pulse_root()
         pulse_items = _portfolio_pulse_items(pulse_root)
         if pulse_items:
             a("## Portfolio Pulse")
             for item in pulse_items:
+                a(f"- {item}")
+            a("")
+        risk_items = _risk_delta_items(pulse_root)
+        if risk_items:
+            a("## Risk Delta")
+            for item in risk_items:
                 a(f"- {item}")
             a("")
         advisor_items = _advisor_stack_items(pulse_root)
@@ -1724,7 +1791,7 @@ def build_daily_memo_md(
                 a(f"- {item}")
             a("")
     except Exception as exc:
-        logger.warning("daily_memo: pulse/advisor sections (md) failed — %s", exc)
+        logger.warning("daily_memo: pulse/advisor/risk sections (md) failed — %s", exc)
 
     # ------------------------------------------------------------------
     # Enrichment sections (Markdown variant)

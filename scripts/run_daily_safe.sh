@@ -174,6 +174,11 @@ run_aux_stage "Allocation policy activation" \
 run_aux_stage "System decision summary" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from pathlib import Path; from watchlist_scanner.system_summary import generate_system_decision_summary; s = generate_system_decision_summary(root=Path('.'), write_files=True); print('top_theme:', (s.get('top_theme') or {}).get('name') or '-', 'top_opp:', (s.get('top_opportunity') or {}).get('ticker') or '-')"
 
+# Stage 7b — Risk delta panel (concentration / leverage / VaR vs caps).
+# Runs after system_summary so portfolio_value and benchmark sigma are fresh.
+run_aux_stage "Risk delta panel" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.risk_delta_advisor import run_risk_delta_advisor; r = run_risk_delta_advisor(root='.'); print('status:', r.get('status'), 'overall:', r.get('overall_status'), 'top_pos:', (r.get('concentration_top') or {}).get('symbol'), 'lev:', r.get('leverage_exposure'), 'var_pct:', r.get('var_pct'))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
