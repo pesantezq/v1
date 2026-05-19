@@ -670,6 +670,103 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
     return items[:3]
 
 
+_VERDICT_PRIORITY = {
+    "stale":           5,
+    "action_required": 4,
+    "structural_risk": 3,
+    "cautious":        2,
+    "steady":          1,
+    "unknown":         0,
+}
+
+
+def _build_verdict(
+    summary: dict[str, Any],
+    decision_rows: list[dict[str, Any]],
+    capital_counts: dict[str, int],
+    root: Path,
+) -> str:
+    """
+    One-line at-a-glance read on the day.
+
+    Synthesises decision urgency, structural risk source flags, risk_delta
+    overall_status, and capital-action counts into a single sentence the
+    operator can absorb in two seconds before deciding to dig into the rest
+    of the memo.
+
+    Verdict moods, in priority order (worst wins):
+      - stale            : memo is reading from a stale summary (>2d old)
+      - action_required  : decisions tagged critical or high urgency exist
+      - structural_risk  : structural-source decisions present (cap breach)
+                            or risk_delta overall_status is "breach"
+      - cautious         : risk_delta overall_status is "near_cap" or any
+                            medium-urgency decisions exist
+      - steady           : only low-urgency / WAIT / informational
+      - unknown          : nothing actionable could be inferred
+    """
+    mood = "steady"
+
+    # Stale check: same logic as the dedicated _freshness_banner.
+    if _freshness_banner(summary):
+        mood = "stale"
+
+    urgencies = [
+        str(r.get("urgency") or "").lower() for r in decision_rows
+    ]
+    sources = [str(r.get("source") or "").lower() for r in decision_rows]
+    has_critical = any(u == "critical" for u in urgencies)
+    has_high = any(u == "high" for u in urgencies)
+    has_medium = any(u == "medium" for u in urgencies)
+    has_structural = any(s == "structural" for s in sources)
+
+    # Read risk_delta overall_status for the cap-distance signal.
+    risk_payload = _safe_load(root.joinpath(*_RISK_DELTA_REL))
+    overall_status = (
+        str((risk_payload or {}).get("overall_status") or "").lower()
+        if isinstance(risk_payload, dict) else ""
+    )
+
+    if has_critical or has_high:
+        mood = max(mood, "action_required", key=_VERDICT_PRIORITY.get)
+    if has_structural or overall_status == "breach":
+        mood = max(mood, "structural_risk", key=_VERDICT_PRIORITY.get)
+    if overall_status == "near_cap" or has_medium:
+        mood = max(mood, "cautious", key=_VERDICT_PRIORITY.get)
+
+    # Build the body sentence by mood.
+    sell_n = int(capital_counts.get("SELL", 0) or 0)
+    scale_n = int(capital_counts.get("SCALE", 0) or 0)
+    buy_n = int(capital_counts.get("BUY", 0) or 0)
+    action_total = sell_n + scale_n + buy_n
+
+    if mood == "stale":
+        return "**Stale** — verdict suppressed; pipeline output is older than 2 days."
+    if mood == "action_required":
+        bits = []
+        if sell_n:  bits.append(f"{sell_n} SELL")
+        if scale_n: bits.append(f"{scale_n} SCALE")
+        if buy_n:   bits.append(f"{buy_n} BUY")
+        return f"**Action required** — {', '.join(bits) or 'urgent decisions present'}."
+    if mood == "structural_risk":
+        struct_syms = ", ".join(
+            str(r.get("symbol") or "-")
+            for r in decision_rows
+            if str(r.get("source") or "").lower() == "structural"
+        )[:60] or "concentration / leverage caps"
+        return f"**Structural risk** — {struct_syms} flagged at cap; review first."
+    if mood == "cautious":
+        bits = []
+        if overall_status == "near_cap":
+            bits.append("portfolio near a cap")
+        if has_medium:
+            bits.append(f"{action_total} advisory action(s)")
+        body = "; ".join(bits) or "monitor today's exposures"
+        return f"**Cautious** — {body}."
+    if mood == "steady":
+        return f"**Steady** — no urgent actions; {action_total} advisory action(s) on the board."
+    return "**Unknown** — insufficient data to render a verdict."
+
+
 def _build_memo_top_insight(
     top_theme: dict[str, Any],
     top_opportunity: dict[str, Any],
@@ -1617,6 +1714,20 @@ def build_daily_memo(
         a(f"  {freshness}")
         a("")
 
+    # Two-second at-a-glance verdict, rendered above Top Insight so the
+    # operator sees the day's mood before any detail. Strip Markdown bold
+    # markers for the plain-text variant.
+    try:
+        verdict = _build_verdict(summary, top_rows, capital_counts, _pulse_root())
+        if verdict:
+            a(_LINE)
+            a("  TODAY'S VERDICT")
+            a(_LINE)
+            a(f"  {verdict.replace('**', '')}")
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: verdict line failed — %s", exc)
+
     a(_LINE)
     a("  TOP INSIGHT")
     a(_LINE)
@@ -1776,6 +1887,17 @@ def build_daily_memo_md(
     if freshness:
         a(f"> ⚠ **Stale data warning:** {freshness}")
         a("")
+
+    # Two-second at-a-glance verdict, rendered above Top Insight.
+    try:
+        verdict = _build_verdict(summary, top_rows, capital_counts, _pulse_root())
+        if verdict:
+            a("## Today's Verdict")
+            a("")
+            a(f"> {verdict}")
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: verdict line (md) failed — %s", exc)
 
     a("## Top Insight")
     a("")
