@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from portfolio_automation.decision_outcome_tracker import (
     WAIT_CORRECT_THRESHOLD,
+    _augment_price_map_with_fmp,
     _extract_price_map,
     _get_validation_status,
     _is_direction_correct,
@@ -577,6 +578,50 @@ class TestExtractPriceMap(unittest.TestCase):
 
     def test_missing_results_key_returns_empty(self):
         self.assertEqual({}, _extract_price_map({"alerts": []}))
+
+
+class TestAugmentPriceMapWithFmp(unittest.TestCase):
+    """FMP augmentation fills in symbols missing from the watchlist-derived map."""
+
+    def test_no_missing_symbols_returns_original(self):
+        original = {"QQQ": 450.0}
+        result = _augment_price_map_with_fmp(original, {"QQQ"})
+        self.assertEqual(result, original)
+
+    def test_missing_symbol_filled_from_fmp(self):
+        from unittest.mock import MagicMock
+        fmp = MagicMock()
+        fmp.get_batch_quotes.return_value = {"VFH": {"price": 99.0}}
+        result = _augment_price_map_with_fmp(
+            {"QQQ": 450.0}, {"QQQ", "VFH"}, fmp_client=fmp,
+        )
+        self.assertEqual(result["QQQ"], 450.0)
+        self.assertEqual(result["VFH"], 99.0)
+
+    def test_fmp_exception_returns_original(self):
+        from unittest.mock import MagicMock
+        fmp = MagicMock()
+        fmp.get_batch_quotes.side_effect = RuntimeError("budget exhausted")
+        result = _augment_price_map_with_fmp(
+            {"QQQ": 450.0}, {"QQQ", "VFH"}, fmp_client=fmp,
+        )
+        # Original survives, missing symbol stays missing.
+        self.assertEqual(result, {"QQQ": 450.0})
+
+    def test_zero_or_null_price_not_added(self):
+        from unittest.mock import MagicMock
+        fmp = MagicMock()
+        fmp.get_batch_quotes.return_value = {
+            "AAA": {"price": 0},
+            "BBB": {"price": None},
+            "CCC": {"price": 10.5},
+        }
+        result = _augment_price_map_with_fmp(
+            {}, {"AAA", "BBB", "CCC"}, fmp_client=fmp,
+        )
+        self.assertNotIn("AAA", result)
+        self.assertNotIn("BBB", result)
+        self.assertEqual(result["CCC"], 10.5)
 
 
 # ---------------------------------------------------------------------------

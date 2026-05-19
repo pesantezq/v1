@@ -128,6 +128,57 @@ def _extract_price_map(watchlist_signals: dict[str, Any]) -> dict[str, float]:
     return price_map
 
 
+def _augment_price_map_with_fmp(
+    price_map: dict[str, float],
+    decision_symbols: set[str],
+    *,
+    fmp_client: Any = None,
+) -> dict[str, float]:
+    """
+    Fill in any decision symbol whose price is missing from the
+    watchlist-signals-derived price_map.
+
+    The watchlist scanner only covers ~22 tickers; a daily decision plan
+    can carry 40+ symbols (structural rebalances on holdings, market
+    momentum WAITs, etc). Without an augmented price snapshot, the
+    decision_outcome_tracker writes `price_at_decision: null` for every
+    non-watchlist symbol — which the resolver then permanently skips.
+
+    Best-effort: one batched FMP call for all missing symbols. Returns
+    the price_map unchanged when FMP is unavailable or returns nothing.
+    """
+    missing = [s for s in decision_symbols if s.upper() not in price_map]
+    if not missing:
+        return price_map
+
+    if fmp_client is None:
+        try:
+            from fmp_client import FMPClient
+            fmp_client = FMPClient()
+        except Exception as exc:
+            logger.debug("decision_outcome_tracker: no FMP client (%s)", exc)
+            return price_map
+
+    try:
+        quotes = fmp_client.get_batch_quotes(missing, ttl_hours=1) or {}
+    except Exception as exc:
+        logger.debug("decision_outcome_tracker: FMP batch_quotes failed (%s)", exc)
+        return price_map
+
+    augmented = dict(price_map)
+    added = 0
+    for sym, q in quotes.items():
+        price = _safe_float((q or {}).get("price"))
+        if price is not None and price > 0:
+            augmented[sym.upper()] = price
+            added += 1
+    logger.debug(
+        "decision_outcome_tracker: augmented %d/%d missing symbols via FMP",
+        added, len(missing),
+    )
+    return augmented
+
+
 def _try_build_price_fetcher() -> Callable[[list[str]], dict[str, float]] | None:
     """
     Try to build an FMP-backed price fetcher from environment variables.
@@ -599,6 +650,23 @@ def run_outcome_tracker(
     ai_validation = _safe_json_load(root_path.joinpath(*AI_VALIDATION_RELATIVE_PATH))
     watchlist_signals = _safe_json_load(root_path.joinpath(*WATCHLIST_SIGNALS_RELATIVE_PATH))
     price_snapshot = _extract_price_map(watchlist_signals)
+
+    # Augment the price map with FMP quotes for any decision symbol the
+    # watchlist scanner didn't cover. Without this, rows for non-watchlist
+    # decision symbols (most of them) get price_at_decision=null and stay
+    # forever unresolvable in decision_outcomes.jsonl.
+    decision_symbols = {
+        _safe_str(d.get("symbol") or "").upper()
+        for d in _safe_list((decision_plan or {}).get("decisions"))
+        if _safe_str(d.get("symbol"))
+    }
+    if decision_symbols:
+        try:
+            price_snapshot = _augment_price_map_with_fmp(
+                price_snapshot, decision_symbols
+            )
+        except Exception as exc:
+            logger.debug("OUTCOME TRACKER: price augmentation skipped (%s)", exc)
 
     # Step 1: snapshot
     if decision_plan:
