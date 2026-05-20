@@ -1,6 +1,6 @@
 # Evaluation And Learning Loop
 
-Last verified against `watchlist_scanner/performance_feedback.py`, `policy_evaluator/history_writer.py`, `policy_evaluator/evaluator.py`, `policy_evaluator/outcome_attributor.py`, and `profit_attribution/confidence_calibration.py`.
+Last verified against `watchlist_scanner/performance_feedback.py`, `policy_evaluator/history_writer.py`, `policy_evaluator/evaluator.py`, `policy_evaluator/outcome_attributor.py`, `profit_attribution/confidence_calibration.py`, `watchlist_scanner/outcome_evaluator.py`, `ml_history.py`, and `portfolio_automation/decision_outcome_tracker.py`. Last updated 2026-05-20.
 
 ## Two Separate Learning Loops
 
@@ -139,3 +139,40 @@ Fresh or sparse data can produce:
 - null or empty hit-rate/calibration outputs
 
 That is valid behavior and should remain non-fatal.
+
+## Resolver Data Flow (2026-05-19 hardening)
+
+Three coordinated changes pushed the resolved-outcome history past the
+volume needed to power downstream learning consumers:
+
+- `watchlist_scanner/outcome_evaluator.py` — `load_next_available_close`
+  composite. AV daily cache stays primary; FMP `get_historical_prices` is the
+  secondary path when the cache is empty. This unsticks weekend resolutions
+  and symbols outside the scanner's daily universe.
+- `ml_history.auto_resolve_pending_records` — natural-resolution path that
+  marks ml records resolved once their `rec_key` no longer surfaces in
+  today's adjustments. Also fixes a latent argument-order TypeError in
+  `update_record_resolution`.
+- `portfolio_automation/decision_outcome_tracker._augment_price_map_with_fmp` —
+  fills `price_at_decision` for non-watchlist decision symbols via
+  `FMPClient.get_batch_quotes`, so decision rows on tickers the scanner never
+  scored have an entry/exit pair available for resolution.
+
+## ml_advisor Status
+
+`ml_advisor` is enabled in `config.json` (and `config/base.json`) as of
+2026-05-18. Combined with the resolver fixes above, the resolved-decisions
+history now exceeds the advisor's `MIN_RECORDS_FOR_HIGH_CONFIDENCE = 30`
+threshold, so it produces real pattern outputs in
+`outputs/latest/ml_pattern_advisor.{json,md}` instead of the previous
+`status=insufficient_data` degraded state. The advisor remains observe-only;
+it does not mutate decisions, scores, or allocations.
+
+## Resolution-Due Probe
+
+`portfolio_automation/resolution_due_probe.py` (Stage 7e in the safe wrapper)
+surfaces rows in `outputs/performance/signal_outcomes.csv` whose 1d/3d/7d
+windows have elapsed but whose outcome columns are still null. The artifact
+`outputs/latest/decisions_due_for_resolution.{json,md}` should report a near-
+zero `stuck_count` on a healthy run. Persistent non-zero stuck counts are the
+operator's primary signal that the resolver has regressed.

@@ -466,3 +466,261 @@ Live resolved decision history is still sparse. Historical replay is planned to 
 - future calibration, attribution, and triage metrics must distinguish live vs replay results
 - architecture now documents replay as an offline path, not part of the live daily pipeline
 
+---
+
+## Allocation Gauge Tactical Retune
+
+### Date
+
+2026-05-18
+
+### Area
+
+allocation
+
+### Files / Functions
+
+- `allocation_engine.py:DEFAULT_CONFIG`
+- `watchlist_scanner/portfolio_construction.py:DEFAULT_PORTFOLIO_CONSTRUCTION_CONFIG`
+- `decision_engine.py:_ABSOLUTE_MAX_ALLOCATION_PCT`
+- `portfolio_automation/cash_deployment_plan.py:_MAX_POSITION_PCT`
+- `watchlist_scanner/allocation_preview.py:_DEFAULT_MAX_TICKER_PCT` / `_DEFAULT_MAX_SECTOR_PCT`
+- `tests/test_allocation_engine_tactical_retune.py` — new pin tests
+
+### Decision
+
+Operator-approved tactical retune of the sizing gauge (no scoring/decision-logic change):
+
+- `compounder_base_pct` `0.05` → `0.10`
+- `momentum_base_pct` `0.03` → `0.06`
+- `max_position_cap` `0.08` → `0.15`
+- `sector_cap` `0.20` → `0.35`
+- `low_confidence_multiplier` `0.50` → `0.65`
+
+Portfolio-construction defaults widened in lock-step:
+
+- `baseline_position_pct` `0.02` → `0.04`
+- `max_total_allocation` `0.10` → `0.30`
+- `max_ticker_allocation` `0.02` → `0.05`
+- `max_sector_allocation` `0.04` → `0.10`
+
+### Why
+
+Pre-retune sizing was producing recommendations that were too small to meaningfully
+move the portfolio for a long-horizon, max-profit operator. Conviction and
+confidence machinery, band selection, Kelly multipliers, and regime feedback are
+unchanged — only the dollar dial moved.
+
+### Invariants Preserved
+
+- `signal_score`, `confidence_score`, `conviction_score`, `final_rank_score`,
+  `recommendation_score` semantics unchanged
+- decision logic in `portfolio_automation/decision_engine.py` unchanged
+- output artifact schemas unchanged
+- band assignments and degradation behavior unchanged
+
+### Downstream Impact
+
+- `decision_plan.json` allocation values now scale up to the new ceilings
+- watchlist `portfolio_snapshot.json` normalized rows scale similarly
+- `retune_impact.json` records the diff vs the pre-retune baseline (`commit
+  4223654c`)
+
+---
+
+## Structural Caps Widened (Profit-Maximization)
+
+### Date
+
+2026-05-18
+
+### Area
+
+allocation
+
+### Files / Functions
+
+- `config.json:growth_mode.concentration_cap`
+- `config.json:growth_mode.leverage_cap`
+- `adjustment.py` and `guardrails.py` (consumers of these caps; logic unchanged)
+
+### Decision
+
+Operator-approved widening of the structural guard rules that emit SELL
+recommendations on cap breaches:
+
+- `concentration_cap` `0.40` → `0.60` (single-position max)
+- `leverage_cap` `0.15` → `0.25` (total leveraged exposure max)
+
+### Why
+
+The previous caps were calibrated for a more conservative risk posture; the
+widened caps align with the operator's explicit max-profit thesis and allow
+high-conviction positions to grow without immediately triggering a structural
+SELL.
+
+### Invariants Preserved
+
+- adjustment and guardrail logic is unchanged — only the threshold constants
+  moved
+- no scoring, conviction, or recommendation behavior changed
+- the daily memo's Risk Delta block (`risk_delta_advisor`) reports current
+  exposure against the new caps
+
+### Downstream Impact
+
+- `risk_delta.json` cap fields now read `0.60` / `0.25`
+- existing positions that would have breached the old caps no longer surface as
+  structural SELLs
+
+---
+
+## ml_advisor Enabled
+
+### Date
+
+2026-05-18
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `config/base.json:ml_advisor.enabled` (`false` → `true`)
+- `config.json:ml_advisor` (already `true` — config now matches)
+
+### Decision
+
+The pattern-recognition ML advisor is enabled in the official lane. Combined
+with the resolver fixes shipped 2026-05-19, the resolved-decisions history
+already exceeds the `MIN_RECORDS_FOR_HIGH_CONFIDENCE = 30` threshold the advisor
+uses to leave `status="insufficient_data"`.
+
+### Why
+
+The advisor was previously gated to keep ml outputs latent while resolution
+plumbing was being hardened. With the FMP-fallback resolver in `outcome_evaluator`,
+the natural-resolution path in `ml_history`, and the FMP price-snapshot
+augmentation in `decision_outcome_tracker`, the historical record set is now
+populated enough to produce informative pattern outputs.
+
+### Invariants Preserved
+
+- ml_advisor remains observe-only; it does not mutate decisions, scores, or
+  allocations
+- failure is non-blocking (independent try/except)
+- output schema (`outputs/latest/ml_pattern_advisor.{json,md}`) unchanged
+
+### Downstream Impact
+
+- the daily memo's Advisor Stack now shows an ml pattern line instead of
+  "ml_advisor disabled"
+- the GUI v2 Today page surfaces the ml pattern signal on the advisor card
+
+---
+
+## FMP Budget Bump (230 → 250)
+
+### Date
+
+2026-05-18
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `config.json:api_limits.fmp_daily_calls_budget` (`230` → `250`)
+
+### Decision
+
+Raised the FMP daily call budget by 20 calls to give the two news-intelligence
+runner stages (0 pre-pipeline + 8 post-pipeline cache refresh) and the expanded
+sandbox lane enough headroom without flipping `fmp_budget_status` to `near_cap`
+on a normal run.
+
+### Why
+
+The 17-stage wrapper has more producers reading FMP than the legacy 1-stage
+path. The old `230` ceiling was hitting `near_cap` more often than was healthy.
+
+### Invariants Preserved
+
+- FMP endpoint registry and compliance rules unchanged
+- no new endpoint usage introduced; only the budget ceiling moved
+- `fmp_budget_telemetry` continues to report status against the live config
+  value
+
+### Downstream Impact
+
+- `outputs/latest/fmp_budget_status.json` `budget` field now reads `250`
+- memo's "FMP budget" line reflects the new ceiling
+
+---
+
+## Outcome Resolver Fixes (FMP Fallback + Auto-Resolve + Price Snapshot)
+
+### Date
+
+2026-05-19
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `watchlist_scanner/outcome_evaluator.py` — new `_load_next_available_close_fmp`
+  and `load_next_available_close` composite
+- `ml_history.auto_resolve_pending_records` — natural-resolution path; fixes a
+  latent `update_record_resolution` TypeError
+- `portfolio_automation/decision_outcome_tracker._augment_price_map_with_fmp` —
+  fills in non-watchlist decision symbols via FMP `batch_quotes`
+
+### Decision
+
+Three coordinated resolver fixes so the observe-only outcome history actually
+fills in, instead of remaining sparse because of a missing AV cache or a
+non-watchlist decision symbol:
+
+1. **`outcome_evaluator` FMP fallback** — when the Alpha Vantage daily cache is
+   empty for a symbol, fall back to `FMPClient.get_historical_prices` to resolve
+   1d/3d/7d outcomes. The composite `load_next_available_close` keeps AV as
+   primary and FMP as secondary.
+2. **`ml_history` auto-resolve** — natural-resolution path that marks records
+   resolved when their `rec_key` no longer surfaces in today's adjustments. Also
+   fixes a latent argument-order bug in `update_record_resolution`.
+3. **`decision_outcome_tracker` FMP price augmentation** — fills the
+   `price_at_decision` field for non-watchlist decision symbols (which the
+   watchlist-scoped price map otherwise misses) by calling
+   `FMPClient.get_batch_quotes`.
+
+### Why
+
+The outcome resolver was leaving large fractions of the signal/decision history
+unresolved because (a) AV-cache-only resolution failed on weekends and for
+symbols outside the scanner's daily run; (b) historical adjustments that no
+longer appeared got stuck pending; and (c) decisions on tickers the scanner
+never scored had a null `price_at_decision`. With these fixes, the
+`auto_resolve_pending_records` path closes most natural exits, and 1d/3d/7d
+resolutions complete for the full decision universe.
+
+### Invariants Preserved
+
+- no scoring, decision, or allocation behavior changed
+- `decision_plan.json` and `signal_outcomes.csv` schemas unchanged
+- failure paths remain non-fatal (`auto_resolve` swallows exceptions per row)
+- FMP usage stays inside the registry/compliance contract
+
+### Downstream Impact
+
+- `outputs/policy/decision_outcomes.jsonl` row counts climb significantly
+- `outputs/performance/signal_outcomes.csv` `outcome_return_*` columns are
+  populated much more often
+- ml_advisor exceeds its `MIN_RECORDS_FOR_HIGH_CONFIDENCE = 30` threshold and
+  produces real pattern outputs
+- `outputs/latest/decisions_due_for_resolution.json` is now a meaningful probe;
+  if any window stays stuck, the resolver has a real bug to investigate
+

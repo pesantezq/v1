@@ -1,5 +1,7 @@
 # Cron And Preflight Runbook
 
+Last updated 2026-05-20.
+
 ## Purpose
 
 Use these wrappers for production-safe daily operation. They do not change scoring or execution behavior; they only gate the advisory pipeline behind environment, compliance, and regression checks.
@@ -20,7 +22,13 @@ What it validates:
 - `FMP_API_KEY` from environment or `.env`
 - `python -m fmp_endpoint_compliance` returns `RESULT: COMPLIANT`
 - `python -m pytest tests/ -k fmp -v` passes
-- targeted `py_compile` succeeds
+- targeted `py_compile` succeeds (now covers the six observability v2
+  modules: `risk_delta_advisor`, `retune_impact_tracker`,
+  `fmp_budget_telemetry`, `daily_run_status`, `resolution_due_probe`,
+  `news/run_news_intelligence`)
+- "Wrapper Syntax Check" — `bash -n scripts/run_daily_safe.sh`
+- "Advisor Smoke Imports" — imports each observability v2 module to catch
+  missing-symbol regressions before the safe-wrapper run starts
 
 ## Manual Daily Safe Run
 
@@ -41,8 +49,16 @@ Behavior:
 - creates `logs/daily_safe_YYYY-MM-DD.log` if needed
 - runs preflight first
 - stops immediately if preflight fails
-- only runs `python main.py --run-mode daily` after preflight passes
-- preserves the real process exit code
+- only runs `python main.py --run-mode daily` after preflight passes (Stage 1 —
+  the only fail-fast stage)
+- runs the 16 non-blocking post-pipeline stages after Stage 1 succeeds —
+  news intelligence (0/8/8b), weight tuning, policy evaluator, allocation
+  preview/simulation/activation, system summary, risk delta, retune
+  impact, FMP budget, resolution-due probe, automatic promotion governance,
+  sandbox lane status, daily memo + email, and daily run status. See
+  `docs/PIPELINE_RUNBOOK.md` for the full stage table.
+- preserves the real process exit code for Stage 1; subsequent stages do not
+  alter the exit code (failures are recorded in `daily_run_status.json`)
 - `DRY_RUN_MODE=1` passes `--dry-run` to `main.py`, but current watchlist components may still emit cache-only artifacts
 - for a strictly preflight-only, no-pipeline validation, run `bash scripts/preflight.sh` by itself
 

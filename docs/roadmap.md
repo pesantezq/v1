@@ -1017,3 +1017,82 @@ semantics of a score field listed under `protected_semantics` in
   (`allocation_engine.py`)
 
 Each item requires a per-item explicit user approval before scope unlock.
+
+Phase 4 status update (2026-05-20): all four items shipped under explicit
+per-item approval — P4.1 (commit 593c10cd), P4.4 (commit 428c1a54), P4.2
+(commit 3f2fa125), P4.3 (commit 5cf0e9e2).
+
+## Tactical Retune + Observability v2 (2026-05-18..20)
+
+A two-session hardening cycle landed across commits `4223654c..9ae0c45a`
+(14 commits). All changes are additive / observe-only; no scoring or decision
+semantics changed.
+
+### Allocation Gauge Tactical Retune (Complete — 2026-05-18)
+
+Operator-approved gauge-only retune across five surfaces (allocation_engine,
+portfolio_construction, decision_engine absolute cap, cash_deployment_plan,
+allocation_preview). Sizing dollars roughly double; conviction / band /
+Kelly / regime machinery is unchanged. See
+`docs/CHANGELOG_DECISIONS.md#allocation-gauge-tactical-retune` and
+`docs/ALLOCATION_POLICY.md`.
+
+### Structural Caps Widened (Complete — 2026-05-18)
+
+`config.json:growth_mode.concentration_cap 0.40→0.60`,
+`leverage_cap 0.15→0.25`. Cap-breach SELL rules are unchanged — only the
+thresholds moved.
+
+### ml_advisor Enabled (Complete — 2026-05-18)
+
+`config/base.json:ml_advisor.enabled false→true`. Now exceeds
+`MIN_RECORDS_FOR_HIGH_CONFIDENCE = 30` thanks to the resolver fixes.
+
+### Safe-Wrapper 17-Stage Build-Out (Complete — 2026-05-18..20)
+
+`scripts/run_daily_safe.sh` expanded from 1 stage to 17:
+`0, 1, 2, 3, 4, 5, 6, 7, 7b, 7c, 7d, 7e, 8, 8b, 9, 9b, 10, 11`. Stage 1
+(main pipeline) is the only fail-fast stage; everything after it is
+non-blocking. See `docs/PIPELINE_RUNBOOK.md` for the full table.
+
+### Observability v2 Modules (Complete — 2026-05-18..19)
+
+Six new observe-only modules under `portfolio_automation/`:
+
+- `risk_delta_advisor.py` — exposure vs caps + 1d 95% VaR
+- `retune_impact_tracker.py` — gauge fingerprint ledger + outcome attribution
+- `fmp_budget_telemetry.py` — daily FMP call usage + news outcome
+- `daily_run_status.py` — official-lane wrapper status
+- `resolution_due_probe.py` — stuck-resolution surface
+- `news/run_news_intelligence.py` — pipeline-facing news runner
+
+See `docs/ARCHITECTURE.md` and `docs/OUTPUT_ARTIFACT_CONTRACTS.md`.
+
+### GUI v2 Risk & Impact Tab (Complete — 2026-05-19)
+
+New route `GET /risk-impact` consolidating the four v2 artifacts. New
+Jinja filter `risk_severity`. Today page links to the panel via a
+clickable Risk & Impact summary card.
+
+### Outcome Resolver Fixes (Complete — 2026-05-19)
+
+Three coordinated fixes — FMP fallback in `outcome_evaluator`, natural
+resolution in `ml_history.auto_resolve_pending_records`, and FMP price
+augmentation in `decision_outcome_tracker`. See `docs/FEEDBACK_LOOP.md` and
+`docs/EVALUATION_AND_LEARNING_LOOP.md`.
+
+### Daily Memo Verdict + Pulse + Risk Delta + Advisor Stack (Complete — 2026-05-18..20)
+
+Memo now opens with Today's Verdict (mood ladder), shows a stale-data banner
+when artifacts are ≥2 days old, surfaces Portfolio Pulse, a Risk Delta block,
+and an Advisor Stack with FMP budget + retune impact 1d hit-rate lines.
+Top Decisions reason regex compacted; Top Movers <4 collapses to one line;
+Decision Hit Rate dedups adjacent identical entries; Discovery Research has
+a single-line empty state; System / Data Health rolls into counts. See
+`docs/daily_memo.md`.
+
+Tests: 5949 → 6056 passed across the cycle.
+
+Next official step: `observe_and_iterate` — let resolved-outcome history
+accumulate so `retune_impact_tracker.outcome_attribution` becomes
+statistically meaningful. No new module work is queued.

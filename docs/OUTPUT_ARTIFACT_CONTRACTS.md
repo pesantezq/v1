@@ -1,6 +1,6 @@
 # Output Artifact Contracts
 
-Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, `outputs/sandbox/discovery/`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_budget.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, `portfolio_automation/historical_replay/replay_reports.py`, and `portfolio_automation/discovery/discovery_reports.py`.
+Last verified against live files in `outputs/latest`, `outputs/portfolio`, `outputs/policy`, `outputs/performance`, `outputs/regime`, `outputs/backtest`, `outputs/sandbox/discovery/`, plus `gui_operator_data.py`, `watchlist_scanner/output_writers.py`, `portfolio_automation/ai_budget.py`, `portfolio_automation/ai_decision_validator.py`, `portfolio_automation/decision_outcome_tracker.py`, `portfolio_automation/historical_replay/replay_reports.py`, `portfolio_automation/discovery/discovery_reports.py`, `portfolio_automation/risk_delta_advisor.py`, `portfolio_automation/retune_impact_tracker.py`, `portfolio_automation/fmp_budget_telemetry.py`, `portfolio_automation/daily_run_status.py`, and `portfolio_automation/resolution_due_probe.py`. Last updated 2026-05-20.
 
 ## Contract Policy
 
@@ -1013,6 +1013,11 @@ Append-only log of every delivery attempt.  One JSON object per line.
 ### `outputs/latest/news_intelligence.json`
 
 Namespace: LATEST. Written by `portfolio_automation/news/fmp_news_intelligence.py`.
+The pipeline-facing entry point is `portfolio_automation/news/run_news_intelligence.py`,
+which collects the active ticker universe (holdings + watchlist + decision plan + sandbox
+discovery), calls `FMPClient.get_stock_news`, and invokes `run_fmp_news_intelligence`.
+Stages 0 (pre-pipeline) and 8 (post-pipeline cache refresh) in `scripts/run_daily_safe.sh`
+both invoke this runner.
 
 Top-level fields:
 
@@ -1359,3 +1364,189 @@ Human-readable Markdown summary with sections:
 - Coverage
 
 **Never contains**: BUY/SELL/HOLD trading instructions, official recommendations, broker/execution commands, score/allocation/watchlist mutation fields. The "Safety Boundary" section documents the forbidden tokens explicitly but is sanitizer-whitelisted as documentation.
+
+---
+
+## Observability v2 Artifacts (2026-05-18 → 2026-05-19)
+
+Five additive observability artifacts written by the post-pipeline non-blocking
+stages of `scripts/run_daily_safe.sh` (stages 7b, 7c, 7d, 7e, 11). All carry
+`observe_only: true` and never mutate decision, score, allocation, or
+recommendation state. Each producer wraps its own work in try/except so a single
+failure cannot break later stages.
+
+### `outputs/latest/risk_delta.json`
+
+Namespace: LATEST. Written by `portfolio_automation/risk_delta_advisor.py`. Surfaces
+single-position concentration, total leveraged exposure, and a benchmark-proxy
+1-day 95% VaR vs structural caps from `config.json:growth_mode`.
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `schema_version` | string | `"1"` |
+| `source` | string | `"risk_delta_advisor"` |
+| `overall_status` | string | `ok` / `near_cap` / `breach` — worst of concentration/leverage sub-status |
+| `portfolio_value` | number/null | Total portfolio dollar value used for the calculation |
+| `concentration` | object | `{available, cap_pct, top_holding, breach_count, near_cap_count, rows[]}` |
+| `leverage` | object | `{available, cap_pct, current_pct, headroom, status}` |
+| `var` | object | `{available, sigma_annual, horizon_days, z, dollar_var_1d_95}` |
+| `disclaimer` | string | Fixed safety disclaimer |
+
+Each `concentration.rows[]` entry includes `ticker, weight_pct, headroom, status`.
+`status` values are `ok`, `near_cap`, or `breach` (per-row and per-section). The
+2026-05-18 cap widening means the rendered cap text reads `60%` / `25%`, not the
+pre-retune `40%` / `15%`.
+
+### `outputs/latest/risk_delta.md`
+
+Namespace: LATEST. Human-readable Markdown render with overall-status badge,
+concentration table, leverage line, VaR estimate, and the fixed disclaimer.
+
+### `outputs/latest/retune_impact.json`
+
+Namespace: LATEST. Written by `portfolio_automation/retune_impact_tracker.py`.
+A gauge-fingerprint ledger that diffs the current gauge state (allocation_engine,
+portfolio_construction, growth_mode caps, ml_advisor.enabled) against a hardcoded
+baseline captured from commit `4223654c` (last commit before 2026-05-18 retune).
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `schema_version` | string | `"1"` |
+| `source` | string | `"retune_impact_tracker"` |
+| `baseline_label` | string | `"pre_retune_2026_05_18"` |
+| `baseline_commit` | string | `"4223654c"` |
+| `current_fingerprint` | string | Deterministic hash of the current gauge state |
+| `current_snapshot` | object | Nested current gauge values (allocation_engine, portfolio_construction, structural_caps, ml_advisor) |
+| `baseline_snapshot` | object | Same shape, pinned to the pre-retune commit |
+| `changes_vs_baseline` | array | Per-knob diff records (`{group, knob, baseline, current, delta, status}`) |
+| `changes_count` | int | Number of knobs differing from baseline |
+| `history_size` | int | Total rows in `data/gauge_versions.jsonl` |
+| `distinct_versions_seen` | int | Distinct fingerprints in the history file |
+| `outcome_attribution` | object | v2 join — see below |
+| `disclaimer` | string | Fixed safety disclaimer |
+
+`outcome_attribution` joins `outputs/performance/signal_outcomes.csv` to the
+gauge-version ledger by timestamp range, producing a 1d hit-rate / mean-return
+breakdown per gauge fingerprint. It degrades to `status="insufficient_data"`
+when either input is sparse.
+
+### `outputs/latest/retune_impact.md`
+
+Namespace: LATEST. Markdown render: current vs baseline table, change list,
+and the outcome-attribution rollup when present.
+
+### `data/gauge_versions.jsonl`
+
+Append-only JSONL ledger of distinct gauge fingerprints. One row per snapshot;
+the tracker only appends when today's fingerprint differs from the most recent
+row. Each row: `{fingerprint, snapshot, recorded_at}`. This file is the
+substrate that lets later outcome resolutions be attributed to the gauge state
+that produced them.
+
+### `outputs/latest/fmp_budget_status.json`
+
+Namespace: LATEST. Written by `portfolio_automation/fmp_budget_telemetry.py`.
+Daily FMP call usage and news-fetch outcome summary.
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `schema_version` | string | `"1"` |
+| `source` | string | `"fmp_budget_telemetry"` |
+| `overall_status` | string | `ok` / `near_cap` / `exhausted` / `news_empty` |
+| `budget` | object | `{available, date, count_today, budget, headroom, status}` |
+| `news` | object | `{available, article_count_raw, article_count_normalized, evidence_packet_count}` |
+| `discovery` | object | `{available, enriched_count, with_news_count, news_only_count}` |
+| `cache` | object | `{available, cache_dir, file_count, size_bytes}` |
+| `disclaimer` | string | Fixed safety disclaimer |
+
+The budget number comes from `config.json:api_limits.fmp_daily_calls_budget`
+(currently `250`).
+
+### `outputs/latest/fmp_budget_status.md`
+
+Namespace: LATEST. Markdown render with overall-status badge, budget bar,
+news/discovery counts, and the disclaimer.
+
+### `data/fmp_budget_history.jsonl`
+
+Append-only JSONL ledger of daily FMP budget snapshots. Deduplicated by
+`(date, count_today, article_count_raw, enriched_count)` so re-runs within the
+same day do not spam the ledger. Powers the memo's "FMP budget" line and any
+later cost-trend analysis.
+
+### `outputs/latest/daily_run_status.json`
+
+Namespace: LATEST. Written by `portfolio_automation/daily_run_status.py`. The
+official-lane analog of `outputs/sandbox/discovery/sandbox_run_status.json`.
+Scans `logs/daily_safe_YYYY-MM-DD.log` for stage banners and checks expected
+artifacts for freshness.
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `schema_version` | string | `"1"` |
+| `source` | string | `"daily_run_status"` |
+| `overall_status` | string | `ok` / `ok_with_warnings` / `partial` / `failed` / `no_log` |
+| `log_path` | string | Absolute path to the daily safe log file scanned |
+| `stage_summary` | object | `{total, ok, warn, failed}` counts |
+| `stages` | array | Per-stage records `{name, status, started_at, finished_at, ...}` |
+| `artifacts` | array | Per-artifact records `{path, required, exists, fresh_today}` |
+| `required_missing_count` | int | Number of required artifacts missing or stale today |
+| `optional_missing_count` | int | Number of optional artifacts missing or stale today |
+| `disclaimer` | string | Fixed safety disclaimer |
+
+### `outputs/latest/daily_run_status.md`
+
+Namespace: LATEST. Human-readable Markdown render with overall-status glyph,
+stage table, artifact freshness table, and the disclaimer.
+
+### `outputs/latest/decisions_due_for_resolution.json`
+
+Namespace: LATEST. Written by `portfolio_automation/resolution_due_probe.py`.
+Surfaces rows in `outputs/performance/signal_outcomes.csv` whose 1d/3d/7d
+windows have elapsed (with a calendar-day multiplier safety margin) but whose
+outcome columns are still null — i.e. resolutions the outcome resolver should
+have produced but did not.
+
+| Field | Type | Description |
+|---|---|---|
+| `generated_at` | string | ISO 8601 timestamp |
+| `observe_only` | bool | Always `true` |
+| `schema_version` | string | `"1"` |
+| `source` | string | `"resolution_due_probe"` |
+| `status` | string | `ok` / `insufficient_data` / `error` |
+| `windows_tracked` | array | `[1, 3, 7]` |
+| `cal_day_multiplier` | number | Safety margin applied to window length (default ~1.6) |
+| `total_signals` | int | Total rows scanned from `signal_outcomes.csv` |
+| `total_resolved_1d` | int | Rows with a non-null `outcome_return_1d` |
+| `stuck_count` | int | Total stuck (signal, window) pairs |
+| `stuck_by_window` | object | `{1: int, 3: int, 7: int}` |
+| `stuck_rows` | array | Up to 50 stuck-row records `{ticker, signal_time, window_days, gap_days}` |
+| `by_ticker` | array | Up to 30 per-ticker aggregates `{ticker, stuck_signals, windows_stuck, max_gap_days}` |
+| `disclaimer` | string | Fixed safety disclaimer |
+
+### `outputs/latest/decisions_due_for_resolution.md`
+
+Namespace: LATEST. Markdown render of stuck-row counts, top-ticker list, and
+the disclaimer.
+
+---
+
+## GUI v2 Risk & Impact Tab
+
+`gui_v2/app.py` exposes a new route `GET /risk-impact` that consolidates the
+four observability v2 artifacts (`risk_delta`, `retune_impact`,
+`daily_run_status`, `fmp_budget_status`) into a single page. Data assembly lives
+in `gui_v2/data/risk_impact.py:collect_risk_impact_view`. A new Jinja filter
+`risk_severity` maps `risk_delta` status strings (`ok` / `near_cap` / `breach`)
+to badge severities (OK / WARN / FAIL).
+
+The Today page (`/`) shows a clickable Risk & Impact summary card under the
+SELL/SCALE/BUY strip that links to the full panel.

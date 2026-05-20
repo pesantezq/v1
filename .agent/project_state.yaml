@@ -1,7 +1,9 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-16 (Phase 4 complete: P4.1 + P4.4 + P4.2 + P4.3 all shipped under user approval)
+# Last updated: 2026-05-20 (observe-and-iterate phase opened: gauge retune +
+# structural cap widen + 6 new observability modules + 17-stage wrapper +
+# GUI v2 risk-impact tab; ml_advisor enabled; resolver fixes shipped)
 
 project_name: portfolio_automation_system
 mode: advisory_only
@@ -60,36 +62,55 @@ completed_steps:
   - pnl_advisors_phase_4_p4_4_regime_aware_allocation  # 2026-05-16 — user-approved protected scope unlock
   - pnl_advisors_phase_4_p4_2_exit_advisor_decision_engine_override  # 2026-05-16 — user-approved protected scope unlock
   - pnl_advisors_phase_4_p4_3_multi_timeframe_signal_score_gate  # 2026-05-16 — user-approved protected scope unlock; full Phase 4 complete
+  - allocation_gauge_tactical_retune  # 2026-05-18 — operator-approved, gauge-only (no scoring/decision logic change)
+  - structural_caps_widened_max_profit  # 2026-05-18 — concentration_cap 0.40→0.60, leverage_cap 0.15→0.25
+  - ml_advisor_enabled  # 2026-05-18 — config flip + resolver fixes pushed history past MIN_RECORDS_FOR_HIGH_CONFIDENCE=30
+  - safe_wrapper_17_stages  # 2026-05-18..20 — 0,1,2,3,4,5,6,7,7b,7c,7d,7e,8,8b,9,9b,10,11 stages
+  - observability_v2_modules  # 2026-05-18..19 — risk_delta + retune_impact + fmp_budget_telemetry + daily_run_status + resolution_due_probe + news_intelligence runner
+  - gui_v2_risk_impact_tab  # 2026-05-19 — /risk-impact route + risk_severity Jinja filter + Today card link
+  - outcome_resolver_fixes  # 2026-05-19 — FMP fallback in outcome_evaluator + ml_history auto-resolve + decision_outcome_tracker FMP price augmentation
+  - daily_memo_verdict_upgrades  # 2026-05-18..20 — Today's Verdict, stale-data banner, Portfolio Pulse, Risk Delta, Advisor Stack with FMP budget + retune impact lines
 
 next_official_step:
-  primary: project_complete  # All identified roadmap items + all 4 Phase 4 protected-semantics items shipped
+  primary: observe_and_iterate  # All shipped code paths now need real-world outcome history to tune against; no new modules planned
   secondary: []
   note: >
-    All identified roadmap items are shipped.  The Streamlit operator
-    cockpit was superseded by gui_v2 (FastAPI + HTMX + Jinja2 + Tailwind,
-    port 8502).  Write surface decision resolved: CLIs.  The full
-    runbook for retiring Streamlit lives in docs/STREAMLIT_RETIREMENT.md.
+    The system is feature-complete for the operator's single-user, advisory-only
+    scope. The work shipped 2026-05-18..20 (tactical gauge retune + structural
+    cap widening + 6 new observability modules + 11 additional safe-wrapper
+    stages + a GUI v2 Risk & Impact tab + three resolver fixes + memo upgrades)
+    means the next valuable activity is operating the system day-to-day and
+    letting the resolved-outcome history accumulate. No new module work is
+    queued.
 
-    P&L Advisors Phases 1-3 are live and wired into main.py
-    (observe-only, non-fatal). See docs/PNL_ADVISORS.md for the catalogue.
-    Phase 4 is documented in docs/superpowers/specs/2026-05-15-pnl-maximization-roadmap.md
-    but remains gated: every Phase 4 item modifies a file in the
-    forbidden_changes list (conviction.py, decision_engine.py, scoring.py,
-    or allocation_engine.py) and requires explicit per-item user approval
-    before scope is unlocked.
+    Observe-and-iterate window — what the operator should watch:
+      - retune_impact.json — outcome attribution by gauge fingerprint
+      - decisions_due_for_resolution.json — should stay near zero if the
+        resolver fixes are healthy
+      - fmp_budget_status.json — should stay in 'ok' band on a normal run
+      - daily_run_status.json — should report overall_status=ok at end of day
+      - daily memo Today's Verdict + Advisor Stack lines
+
+    Earlier scope still applies:
+      - The Streamlit operator cockpit was superseded by gui_v2 (FastAPI +
+        HTMX + Jinja2 + Tailwind, port 8502). See docs/STREAMLIT_RETIREMENT.md.
+      - P&L Advisors Phases 1-3 are live and wired into main.py (observe-only).
+      - P&L Advisors Phase 4 (P4.1..P4.4) is fully shipped under explicit
+        per-item user approval — see commits 593c10cd, 428c1a54, 3f2fa125,
+        5cf0e9e2.
 
     Permanently-deferred items remain out of scope and are listed under
     `deferred_steps` below: auto-trading, broker integration, billing,
-    multi-tenant auth, redis event bus, external customer
-    productization, full discovery promotion engine.
+    multi-tenant auth, redis event bus, external customer productization,
+    full discovery promotion engine.
 
-    Operational items the project doesn't ship but that the operator
-    runs day-to-day:
+    Operational items the project doesn't ship but that the operator runs
+    day-to-day:
       - Streamlit retirement (when the operator chooses)
       - Compiled Tailwind (cosmetic; CDN is fine)
       - Slack integration for notify_status (today: email only)
 
-project_status: complete
+project_status: observe_and_iterate
 
 gui_v2_extras:
   basic_auth:           gated by GUI_V2_AUTH_USER + GUI_V2_AUTH_PASS env vars

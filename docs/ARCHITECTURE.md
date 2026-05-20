@@ -1,6 +1,46 @@
 # Architecture
 
-Last verified against code on 2026-05-15 (P&L advisors layer added).
+Last verified against code on 2026-05-20 (observability v2 modules + 17-stage safe wrapper + GUI v2 Risk & Impact tab added; P&L advisors layer was added 2026-05-15).
+
+## Observability v2 Layer (2026-05-18..19)
+
+Six observe-only producer modules added under `portfolio_automation/` (and
+`portfolio_automation/news/`). All are wired into `scripts/run_daily_safe.sh`
+as non-blocking post-pipeline stages (7b, 7c, 7d, 7e, 0/8, 11). Each carries
+`observe_only=True` hardcoded in every artifact, and each failure is contained
+in its own try/except so a single advisor cannot break later stages.
+
+- `risk_delta_advisor.py` — concentration, leverage, and 1-day 95% VaR vs the
+  structural caps in `config.json:growth_mode`. Artifacts:
+  `outputs/latest/risk_delta.{json,md}`.
+- `retune_impact_tracker.py` — gauge-fingerprint ledger with an outcome
+  attribution join. Compares the current gauge state (allocation_engine,
+  portfolio_construction, growth_mode caps, ml_advisor) against a hardcoded
+  pre-retune baseline pinned to commit `4223654c` (2026-05-18 retune). It is
+  effectively version control for the gauge: every distinct fingerprint is
+  appended to `data/gauge_versions.jsonl`, and resolved outcomes can later be
+  attributed to the gauge state that produced them. Artifacts:
+  `outputs/latest/retune_impact.{json,md}`, `data/gauge_versions.jsonl`.
+- `fmp_budget_telemetry.py` — daily FMP call usage + news fetch outcome.
+  Artifacts: `outputs/latest/fmp_budget_status.{json,md}`,
+  `data/fmp_budget_history.jsonl`.
+- `daily_run_status.py` — official-lane analog of `sandbox_run_status`. Scans
+  `logs/daily_safe_YYYY-MM-DD.log` and checks expected artifact freshness.
+  Artifacts: `outputs/latest/daily_run_status.{json,md}`.
+- `resolution_due_probe.py` — surfaces `signal_outcomes.csv` rows whose 1d/3d/7d
+  windows have elapsed but whose outcome columns are still null. Artifact:
+  `outputs/latest/decisions_due_for_resolution.{json,md}`.
+- `news/run_news_intelligence.py` — pipeline-facing runner that feeds the
+  pre-existing `fmp_news_intelligence` producer. Wired twice: Stage 0 takes
+  first claim on the FMP budget (one batched call), Stage 8 re-runs against
+  cache (zero budget) after the decision plan lands.
+
+The retune impact substrate (`data/gauge_versions.jsonl` + the outcome
+attribution join in `retune_impact_tracker`) is intended as the long-running
+record set the operator uses to answer "did the retune help?" once enough
+resolutions exist.
+
+See `docs/OUTPUT_ARTIFACT_CONTRACTS.md` for full per-artifact contracts.
 
 ## P&L Advisors Layer
 
@@ -634,6 +674,18 @@ No promote/approve buttons. No official watchlist writes. No portfolio state mut
 | `load_discovery_sandbox_status(root)` | `outputs/sandbox/discovery/*.json + .md` | SANDBOX |
 
 All four loaders are included in the bundle returned by `load_operator_dashboard_data(root)` under the keys `data_quality_report`, `ai_budget_summary`, `confidence_calibration_latest`, and `discovery_sandbox_status`.
+
+## GUI v2 Risk & Impact Tab (2026-05-19)
+
+`gui_v2/app.py` exposes a new route `GET /risk-impact` that consolidates the
+four observability v2 artifacts (`risk_delta`, `retune_impact`,
+`daily_run_status`, `fmp_budget_status`) into a single page. Data assembly lives
+in `gui_v2/data/risk_impact.py:collect_risk_impact_view`. A new Jinja filter
+`risk_severity` maps `risk_delta` statuses (`ok` / `near_cap` / `breach`) to
+badge severities (OK / WARN / FAIL). The Today page (`/`) shows a clickable
+Risk & Impact summary card under the SELL/SCALE/BUY strip that links to the
+full panel. All v2 surfaces remain read-only consumers of artifacts — no
+business logic, no broker calls, no decision recomputation.
 
 ## Next Implementation Step
 

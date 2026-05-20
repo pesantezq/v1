@@ -2,6 +2,13 @@
 
 Status: implemented, tested, and wired observe-only in the daily pipeline.
 
+Last updated 2026-05-20. Note: the *absolute* per-position allocation ceiling
+lives in `decision_engine.py:_ABSOLUTE_MAX_ALLOCATION_PCT` (root-level helper,
+not the `portfolio_automation/decision_engine.py` module this doc describes).
+That constant was raised from `0.08` to `0.15` on 2026-05-18 to mirror the
+allocation-engine retune; see `docs/ALLOCATION_POLICY.md` and the gauge retune
+entry in `docs/CHANGELOG_DECISIONS.md`.
+
 ## Purpose
 
 The Decision Engine is the unified advisory decision layer for the Portfolio Automation System. It converts multiple existing recommendation and signal streams into one ranked, observe-only action plan for operators, downstream UI, memo generation, and future explanation layers.

@@ -1,6 +1,8 @@
 # Daily Memo
 
-Last verified against code on 2026-04-28.
+Last verified against code on 2026-05-20 (Today's Verdict, stale-data banner,
+Portfolio Pulse, Risk Delta block, Advisor Stack with FMP budget + retune
+impact lines).
 
 ## Purpose
 
@@ -75,18 +77,51 @@ The memo is a brief decision-focused summary, not a data dump.
 
 Current section budget:
 
+- `Today's Verdict`
+  One-line synthesis using a five-rung mood ladder: `stale` /
+  `action_required` / `structural_risk` / `cautious` / `steady`. Drives the
+  memo's at-a-glance read.
+- `Stale-data banner`
+  Shown only when the freshest pipeline artifact is ≥2 days old. Surfaces the
+  precise gap and the artifact path so the operator knows why the rest of the
+  memo may be stale.
 - `Top Insight`
   One or two short sentences only.
 - `Top Decisions`
-  Maximum 5 ranked decisions.
+  Maximum 5 ranked decisions. Reason text is run through a compacting regex
+  so structural cap breaches render as `Leverage exceeds cap (X.X% vs cap).`
+  rather than as raw violation strings.
 - `Capital Actions`
   Grouped SELL / SCALE / BUY summary only.
+- `Portfolio Pulse`
+  Conviction allocation, top sector vs cap reference, and suggested
+  deployment. The cap reference (`(sector cap reference: N%)`) reads from
+  `allocation_engine.DEFAULT_CONFIG.sector_cap` rather than a hardcoded
+  number, so it stays in sync with the gauge.
+- `Risk Delta`
+  Three lines synthesizing `outputs/latest/risk_delta.json`:
+  concentration, leverage, and 1-day 95% VaR vs the structural caps in
+  `config.json:growth_mode`.
 - `Risk Focus`
   Maximum 3 items.
+- `Advisor Stack`
+  Pattern recognition + Kelly + vol regime status, plus an `FMP budget`
+  line from `fmp_budget_status.json` and a `Retune impact 1d hit-rate` line
+  from the `outcome_attribution` block in `retune_impact.json`.
+- `Top Movers`
+  Collapses to a single line when fewer than 4 movers exist.
+- `Decision Hit Rate`
+  Dedupes adjacent identical entries so the same hit-rate value does not
+  appear twice in consecutive windows.
+- `Discovery Research`
+  Renders a single-line empty-state message when the sandbox lane has no
+  enriched candidates; otherwise renders the existing detail block.
 - `What Changed`
   Maximum 3 bullets.
 - `System / Data Health`
-  Shown only when degraded or fallback conditions are active.
+  Rolled into severity counts; full paths remain in
+  `system_decision_summary.json`. Shown only when degraded or fallback
+  conditions are active.
 
 Memo constraints:
 

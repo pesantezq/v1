@@ -1,6 +1,6 @@
 # Feedback Loop
 
-Last verified against `portfolio_automation/decision_outcome_tracker.py`, `main.py`, and `gui/app.py` on 2026-04-29.
+Last verified against `portfolio_automation/decision_outcome_tracker.py`, `main.py`, `gui/app.py`, `watchlist_scanner/outcome_evaluator.py`, `ml_history.py`, and `portfolio_automation/resolution_due_probe.py` on 2026-05-20.
 
 ## Purpose
 
@@ -226,3 +226,36 @@ Source separation:
 | `"historical_replay"` | `outputs/backtest/decision_outcomes_historical.jsonl` | replay_runner.py |
 
 See `docs/HISTORICAL_REPLAY_BACKTEST.md` for full documentation.
+
+## Resolver Hardening (2026-05-19)
+
+Three coordinated fixes plug long-standing gaps where the resolver was leaving
+large fractions of history unresolved:
+
+1. **FMP fallback in `watchlist_scanner/outcome_evaluator.py`.** A new helper
+   `_load_next_available_close_fmp` and a composite `load_next_available_close`
+   keep Alpha Vantage as primary, fall back to `FMPClient.get_historical_prices`
+   when the AV daily cache is empty. This unsticks weekend resolutions and
+   symbols outside the scanner's daily universe.
+2. **Natural-resolution in `ml_history.auto_resolve_pending_records`.** Marks
+   ml records resolved when their `rec_key` no longer surfaces in today's
+   adjustments. Also fixes a latent argument-order TypeError in
+   `update_record_resolution`.
+3. **FMP price augmentation in
+   `portfolio_automation/decision_outcome_tracker._augment_price_map_with_fmp`.**
+   Fills in `price_at_decision` for non-watchlist decision symbols via
+   `FMPClient.get_batch_quotes`. Without this, decisions on tickers the scanner
+   never scored landed in `decision_outcomes.jsonl` with `price_at_decision=None`
+   and could never resolve.
+
+Net effect: resolved-row counts in `outputs/policy/decision_outcomes.jsonl` and
+`outputs/performance/signal_outcomes.csv` climb significantly. ml_advisor (now
+enabled — see `docs/CHANGELOG_DECISIONS.md`) crosses its
+`MIN_RECORDS_FOR_HIGH_CONFIDENCE = 30` threshold and emits real pattern outputs
+instead of the previous `insufficient_data` status.
+
+The new `portfolio_automation/resolution_due_probe.py` advisor is the
+forward-looking guardrail: any window that stays stuck past its expected
+resolution date (`1d`, `3d`, `7d` × calendar-day multiplier) appears in
+`outputs/latest/decisions_due_for_resolution.json` so the operator notices
+silent resolver failures. A healthy run leaves `stuck_count` at or near zero.
