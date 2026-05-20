@@ -100,6 +100,24 @@ class TestGroupByTicker(unittest.TestCase):
         self.assertEqual(a["max_gap_days"], 5.0)
         self.assertEqual(b["stuck_signals"], 1)
 
+    def test_sort_order_descending_by_stuck_then_max_gap(self):
+        # Locks the (-stuck_signals, -max_gap_days) ordering. Without this
+        # assertion, a reordering refactor would silently rearrange the
+        # "Top Stuck Tickers" table in the memo.
+        flagged = [
+            {"ticker": "LOW", "window_days": 1, "gap_calendar_days": 0.5},
+            {"ticker": "TIE_BIG_GAP", "window_days": 1, "gap_calendar_days": 9.0},
+            {"ticker": "TIE_SMALL_GAP", "window_days": 1, "gap_calendar_days": 1.0},
+            {"ticker": "TIE_BIG_GAP", "window_days": 3, "gap_calendar_days": 2.0},
+            {"ticker": "TIE_SMALL_GAP", "window_days": 3, "gap_calendar_days": 1.5},
+        ]
+        out = _group_by_ticker(flagged)
+        tickers_in_order = [r["ticker"] for r in out]
+        # TIE_BIG_GAP and TIE_SMALL_GAP both have 2 stuck signals; the one
+        # with the larger max_gap_days breaks the tie ahead.
+        self.assertEqual(tickers_in_order[:2], ["TIE_BIG_GAP", "TIE_SMALL_GAP"])
+        self.assertEqual(tickers_in_order[-1], "LOW")
+
 
 class TestBuildAndRun(unittest.TestCase):
     def _write_csv(self, root: Path, rows: list[dict]) -> None:
@@ -132,6 +150,83 @@ class TestBuildAndRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             payload = build_resolution_due(root=Path(td), now=_NOW)
             self.assertIs(payload["observe_only"], True)
+
+    def test_on_disk_payload_carries_invariants(self):
+        # Catches a writer that silently drops observe_only / schema_version /
+        # source from the on-disk artifact even when the in-memory payload
+        # has them.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_csv(root, [_row("X", days_ago=5.0)])
+            run_resolution_due_probe(root=root, now=_NOW)
+            artifact = root / "outputs" / "latest" / "decisions_due_for_resolution.json"
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            self.assertIs(payload["observe_only"], True)
+            self.assertEqual(payload["schema_version"], "1")
+            self.assertEqual(payload["source"], "resolution_due_probe")
+            self.assertEqual(payload["windows_tracked"], [1, 3, 7])
+            self.assertIn("disclaimer", payload)
+
+    def test_write_files_false_returns_no_artifacts_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_csv(root, [_row("X", days_ago=5.0)])
+            result = run_resolution_due_probe(root=root, now=_NOW, write_files=False)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["artifacts"], {})
+            self.assertFalse(
+                (root / "outputs" / "latest" / "decisions_due_for_resolution.json").exists()
+            )
+
+    def test_malformed_csv_returns_error_status(self):
+        # Garbage bytes in the CSV path → the producer must return a degraded
+        # dict, never raise. Without this, a corrupted CSV would bubble up as
+        # an unhandled exception in the wrapper stage.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
+            csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+            csv_path.write_bytes(b"\x00\xff\xfe garbage not csv")
+            # csv.DictReader on this returns a single dict; the resolver
+            # should not raise. Either status="ok" with stuck_count=0, or
+            # status="error". We accept either as long as nothing raises.
+            payload = build_resolution_due(root=root, now=_NOW)
+            self.assertIn(payload["status"], ("ok", "error", "insufficient_data"))
+            self.assertEqual(payload.get("stuck_count", 0), 0)
+
+    def test_sentinel_null_outcome_values_treated_as_unresolved(self):
+        # Real CSV producers occasionally emit "—" / "None" / "null" / "" in
+        # outcome cells. Each should be classified as unresolved by the
+        # probe, not silently treated as a number.
+        import datetime as _dt
+        ts = (_NOW - _dt.timedelta(days=5)).isoformat()
+        rows = [
+            {"ticker": "DASH", "signal_time": ts,
+             "outcome_return_1d": "—", "outcome_return_3d": "", "outcome_return_7d": ""},
+            {"ticker": "NONE_STR", "signal_time": ts,
+             "outcome_return_1d": "None", "outcome_return_3d": "", "outcome_return_7d": ""},
+            {"ticker": "NULL_STR", "signal_time": ts,
+             "outcome_return_1d": "null", "outcome_return_3d": "", "outcome_return_7d": ""},
+            {"ticker": "EMPTY", "signal_time": ts,
+             "outcome_return_1d": "", "outcome_return_3d": "", "outcome_return_7d": ""},
+        ]
+        out = scan_unresolved(rows, now=_NOW)
+        flagged_tickers = {r["ticker"] for r in out if r["window_days"] == 1}
+        self.assertEqual(flagged_tickers, {"DASH", "NONE_STR", "NULL_STR", "EMPTY"})
+
+    def test_timezone_aware_signal_time_parses_correctly(self):
+        # The parser strips tzinfo and converts to naive UTC. Lock this so a
+        # refactor doesn't accidentally compare a tz-aware datetime against a
+        # naive one (Python raises TypeError on that).
+        import datetime as _dt
+        from portfolio_automation.resolution_due_probe import _parse_signal_time
+        utc_z = "2026-05-15T00:00:00Z"
+        plus_offset = "2026-05-15T05:00:00+05:00"  # same instant in UTC
+        utc_naive = _parse_signal_time(utc_z)
+        utc_offset = _parse_signal_time(plus_offset)
+        self.assertEqual(utc_naive, _dt.datetime(2026, 5, 15, 0, 0, 0))
+        self.assertEqual(utc_offset, _dt.datetime(2026, 5, 15, 0, 0, 0))
+        self.assertIsNone(utc_naive.tzinfo)
 
 
 if __name__ == "__main__":

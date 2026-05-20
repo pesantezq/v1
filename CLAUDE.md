@@ -137,6 +137,33 @@ rationale for every allow/deny pattern.
   python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py
   ```
 
+## Agent + Skill Loading Behavior
+
+Repo-local agents live in `.claude/agents/*.md` and skills in
+`.claude/skills/<name>/SKILL.md`. They are loaded asymmetrically:
+
+- **Skills live-reload mid-session.** A new or edited skill is available
+  via the `Skill` tool within seconds of being written to disk.
+- **Agents are snapshotted at session start.** A new agent file written
+  during the session will NOT appear in the Agent dispatcher until the
+  next session. Refreshing an existing agent's body works fine because
+  the dispatcher routes by name, but the *list of available agent names*
+  is fixed for the life of the session.
+
+When you ship a new agent, write its file, commit/push it, and then
+either:
+1. Restart the session before claiming the agent is "usable", OR
+2. Tell the user explicitly that the new agent is committed but needs a
+   session restart to dispatch.
+
+Existing agents whose markdown body was edited can be smoke-tested
+immediately (the dispatcher picks up the refreshed body on the next call).
+
+This was learned the hard way on 2026-05-20 when three new agents
+(portfolio-resolver-investigator, portfolio-attribution-analyst,
+portfolio-render-reviewer) were created and could not be dispatched in
+the same session.
+
 ## Final Report Format
 
 End every implementation task with this report:
