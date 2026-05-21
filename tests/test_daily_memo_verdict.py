@@ -25,7 +25,14 @@ def _decisions(*specs):
 
 class TestBuildVerdict(unittest.TestCase):
 
-    def _summary(self, generated_at: str = "2026-05-19T01:00:00") -> dict:
+    def _summary(self, generated_at: str | None = None) -> dict:
+        # Default to "right now" so the test isn't fragile to wall-clock time —
+        # _freshness_banner fires at >=2 days old, which would silently flip
+        # every verdict to "Stale" once the calendar advanced past a hardcoded
+        # date by 2 days. (Pre-existing fragility caught 2026-05-21.)
+        if generated_at is None:
+            from datetime import datetime
+            generated_at = datetime.now().isoformat(timespec="seconds")
         return {"generated_at": generated_at}
 
     def test_steady_when_no_urgent_actions(self):

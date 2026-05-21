@@ -61,18 +61,27 @@ def _load_next_available_close_fmp(
     FMP fallback for _load_next_available_close.
 
     Returns the first close on or after target_date and on or before
-    as_of_date, sourced from fmp_client.get_historical_prices (which is
-    cached for 24h so repeated calls within a run are free). Returns None
+    as_of_date, sourced from fmp_client.get_historical_prices. Returns None
     when FMP returns nothing usable (budget exhausted, ticker unknown, etc).
 
     The historical endpoint returns rows newest-first with keys
     {date, open, high, low, close, adjClose, volume}. We treat "date" as
     ISO YYYY-MM-DD per FMP's stable contract.
+
+    Cache TTL note: passes ttl_days=0 to force a fresh fetch on every
+    cron run. The 09:01 UTC cron previously hit yesterday's 09:01 cache
+    just before it expired (TTL=24h boundary), so the resolver kept
+    seeing yesterday's "latest close" data — which lacked yesterday's
+    actual close needed to resolve the prior day's signals. ttl_days=0
+    bypasses that race. Within one cron, the resolver may call
+    get_historical_prices 3 times per ticker (1d/3d/7d windows); at
+    ~20 tickers that's ~60 FMP calls per cron, well within the
+    250-call budget.
     """
     if fmp_client is None or not symbol:
         return None
     try:
-        rows = fmp_client.get_historical_prices(symbol, years=1, ttl_days=1)
+        rows = fmp_client.get_historical_prices(symbol, years=1, ttl_days=0)
     except Exception as exc:
         logger.debug("FMP historical fetch failed for %s: %s", symbol, exc)
         return None
