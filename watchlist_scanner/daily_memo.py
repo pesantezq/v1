@@ -739,6 +739,37 @@ def _build_verdict(
     buy_n = int(capital_counts.get("BUY", 0) or 0)
     action_total = sell_n + scale_n + buy_n
 
+    # Retune validation milestone — once current-fp resolved samples cross
+    # the interpretable threshold (n>=30) AND the hit-rate delta is
+    # meaningful (>=10pp absolute), append a one-line milestone callout.
+    # Stale moods suppress this since the memo is already short-circuited.
+    milestone = ""
+    if mood != "stale":
+        try:
+            ri = _safe_load(root.joinpath(*_RETUNE_IMPACT_REL))
+            if isinstance(ri, dict):
+                att = ri.get("outcome_attribution") or {}
+                if att.get("available"):
+                    by_fp = att.get("by_fingerprint") or {}
+                    current_fp_id = ri.get("current_fingerprint")
+                    pre_label = att.get("pre_tracker_label") or "pre_tracker_unknown"
+                    cur = by_fp.get(current_fp_id) if current_fp_id else None
+                    pre = by_fp.get(pre_label)
+                    if cur and pre:
+                        cur_n = int(cur.get("resolved_1d") or 0)
+                        cur_hr = cur.get("hit_rate_1d")
+                        pre_hr = pre.get("hit_rate_1d")
+                        if cur_n >= 30 and cur_hr is not None and pre_hr is not None:
+                            delta_pp = (cur_hr - pre_hr) * 100
+                            if abs(delta_pp) >= 10:
+                                verdict_word = "validated" if delta_pp > 0 else "underperforming"
+                                milestone = (
+                                    f" Retune {verdict_word} — current-fp interpretable "
+                                    f"at n={cur_n} with {delta_pp:+.1f}pp lift."
+                                )
+        except Exception:
+            pass
+
     if mood == "stale":
         return "**Stale** — verdict suppressed; pipeline output is older than 2 days."
     if mood == "action_required":
@@ -746,14 +777,14 @@ def _build_verdict(
         if sell_n:  bits.append(f"{sell_n} SELL")
         if scale_n: bits.append(f"{scale_n} SCALE")
         if buy_n:   bits.append(f"{buy_n} BUY")
-        return f"**Action required** — {', '.join(bits) or 'urgent decisions present'}."
+        return f"**Action required** — {', '.join(bits) or 'urgent decisions present'}.{milestone}"
     if mood == "structural_risk":
         struct_syms = ", ".join(
             str(r.get("symbol") or "-")
             for r in decision_rows
             if str(r.get("source") or "").lower() == "structural"
         )[:60] or "concentration / leverage caps"
-        return f"**Structural risk** — {struct_syms} flagged at cap; review first."
+        return f"**Structural risk** — {struct_syms} flagged at cap; review first.{milestone}"
     if mood == "cautious":
         bits = []
         if overall_status == "near_cap":
@@ -761,9 +792,9 @@ def _build_verdict(
         if has_medium:
             bits.append(f"{action_total} advisory action(s)")
         body = "; ".join(bits) or "monitor today's exposures"
-        return f"**Cautious** — {body}."
+        return f"**Cautious** — {body}.{milestone}"
     if mood == "steady":
-        return f"**Steady** — no urgent actions; {action_total} advisory action(s) on the board."
+        return f"**Steady** — no urgent actions; {action_total} advisory action(s) on the board.{milestone}"
     return "**Unknown** — insufficient data to render a verdict."
 
 

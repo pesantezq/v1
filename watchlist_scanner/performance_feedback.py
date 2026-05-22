@@ -136,6 +136,37 @@ def evaluate_pending_signal_feedback(
             logger.debug("evaluate_pending_signal_feedback: no FMP fallback (%s)", exc)
             fmp_client = None
 
+    # Per-cron in-process cache for FMP historical-prices data. Collect the
+    # union of unique tickers across all windows, fetch each ONCE with
+    # ttl_days=0, and reuse for every (window, ticker) pair below. Drops FMP
+    # consumption from ~60 calls/cron (3 windows × 20 unique tickers) to ~20.
+    historical_cache: dict[str, list[dict]] = {}
+    if fmp_client is not None:
+        unique_tickers: set[str] = set()
+        try:
+            for window_days in windows:
+                _pending = store.list_pending_signal_feedback(window_days=window_days, limit=limit)
+                for r in _pending:
+                    t = str(r.get("ticker") or "").upper().strip()
+                    if t:
+                        unique_tickers.add(t)
+        except Exception as exc:
+            logger.debug("historical prefetch: pending enumeration failed (%s)", exc)
+        prefetch_failures = 0
+        for ticker in unique_tickers:
+            try:
+                rows = fmp_client.get_historical_prices(ticker, years=1, ttl_days=0)
+                if isinstance(rows, list) and rows:
+                    historical_cache[ticker] = rows
+            except Exception as exc:
+                prefetch_failures += 1
+                logger.debug("historical prefetch failed for %s: %s", ticker, exc)
+        logger.info(
+            "evaluate_pending_signal_feedback: prefetched %d/%d unique tickers "
+            "(%d failures); each ticker fetched once and reused across %d windows",
+            len(historical_cache), len(unique_tickers), prefetch_failures, len(windows),
+        )
+
     for window_days in windows:
         pending_rows = store.list_pending_signal_feedback(window_days=window_days, limit=limit)
         evaluated = 0
@@ -167,7 +198,9 @@ def evaluate_pending_signal_feedback(
                 continue
 
             next_close = load_next_available_close(
-                cache, ticker, due_date, as_of_date, fmp_client=fmp_client,
+                cache, ticker, due_date, as_of_date,
+                fmp_client=fmp_client,
+                historical_cache=historical_cache,
             )
             if next_close is None:
                 missing_price += 1

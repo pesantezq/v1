@@ -56,6 +56,8 @@ def _load_next_available_close_fmp(
     symbol: str,
     target_date: date,
     as_of_date: date,
+    *,
+    historical_cache: dict[str, list[dict]] | None = None,
 ) -> tuple[date, float] | None:
     """
     FMP fallback for _load_next_available_close.
@@ -68,23 +70,37 @@ def _load_next_available_close_fmp(
     {date, open, high, low, close, adjClose, volume}. We treat "date" as
     ISO YYYY-MM-DD per FMP's stable contract.
 
-    Cache TTL note: passes ttl_days=0 to force a fresh fetch on every
-    cron run. The 09:01 UTC cron previously hit yesterday's 09:01 cache
-    just before it expired (TTL=24h boundary), so the resolver kept
-    seeing yesterday's "latest close" data — which lacked yesterday's
-    actual close needed to resolve the prior day's signals. ttl_days=0
-    bypasses that race. Within one cron, the resolver may call
-    get_historical_prices 3 times per ticker (1d/3d/7d windows); at
-    ~20 tickers that's ~60 FMP calls per cron, well within the
-    250-call budget.
+    Caching strategy:
+    - When `historical_cache` is provided, look up the ticker's rows there
+      first. This is the per-cron in-process cache populated by
+      performance_feedback.evaluate_pending_signal_feedback's prefetch
+      pass. Within one cron, the resolver may need the same ticker's data
+      across 1d, 3d, and 7d windows; the prefetch fetches each ticker once
+      and the cache lets all three windows reuse the rows. Drops FMP
+      consumption from ~60 calls/cron to ~20.
+    - When `historical_cache` is empty/None or doesn't have the ticker,
+      fall back to a direct fmp_client.get_historical_prices call with
+      ttl_days=0. ttl_days=0 bypasses the 24h TTL race condition where
+      the 09:01 UTC cron previously hit yesterday's 09:01 cache just
+      before it expired, returning stale data without yesterday's close.
     """
-    if fmp_client is None or not symbol:
+    if not symbol:
         return None
-    try:
-        rows = fmp_client.get_historical_prices(symbol, years=1, ttl_days=0)
-    except Exception as exc:
-        logger.debug("FMP historical fetch failed for %s: %s", symbol, exc)
-        return None
+    sym_key = symbol.upper()
+    rows: list[dict] | None = None
+    if historical_cache is not None:
+        rows = historical_cache.get(sym_key)
+    if rows is None:
+        if fmp_client is None:
+            return None
+        try:
+            rows = fmp_client.get_historical_prices(symbol, years=1, ttl_days=0)
+        except Exception as exc:
+            logger.debug("FMP historical fetch failed for %s: %s", symbol, exc)
+            return None
+        # Opportunistic backfill so subsequent windows in this run reuse the fetch
+        if isinstance(rows, list) and rows and historical_cache is not None:
+            historical_cache[sym_key] = rows
     if not isinstance(rows, list) or not rows:
         return None
 
@@ -120,6 +136,7 @@ def load_next_available_close(
     as_of_date: date,
     *,
     fmp_client: Any = None,
+    historical_cache: dict[str, list[dict]] | None = None,
 ) -> tuple[date, float] | None:
     """
     Public composite: try AV cache first, then FMP historical fallback.
@@ -129,11 +146,17 @@ def load_next_available_close(
     legacy AV-only behavior. Returns the first usable (date, close) in
     the [target_date, as_of_date] window, or None when neither source
     has data.
+
+    `historical_cache` is the per-cron in-process cache for the FMP
+    fallback path. See _load_next_available_close_fmp for the rationale.
     """
     hit = _load_next_available_close(cache, symbol, target_date, as_of_date)
     if hit is not None:
         return hit
-    return _load_next_available_close_fmp(fmp_client, symbol, target_date, as_of_date)
+    return _load_next_available_close_fmp(
+        fmp_client, symbol, target_date, as_of_date,
+        historical_cache=historical_cache,
+    )
 
 
 def _label_return(return_pct: float) -> str:

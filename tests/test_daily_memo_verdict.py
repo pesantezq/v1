@@ -107,6 +107,84 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("Cautious", verdict)
             self.assertIn("near a cap", verdict)
 
+    def test_retune_milestone_appended_when_n_ge_30_and_delta_ge_10pp(self):
+        # When current-fp has crossed n=30 and the hit-rate delta exceeds
+        # 10pp, the verdict gets a trailing "Retune validated" callout
+        # regardless of mood (except stale).
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "fp_new",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "fp_new": {"resolved_1d": 44, "hit_rate_1d": 0.795},
+                        "pre_tracker_unknown": {"resolved_1d": 352, "hit_rate_1d": 0.406},
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            self.assertIn("Steady", verdict)
+            self.assertIn("Retune validated", verdict)
+            self.assertIn("n=44", verdict)
+
+    def test_retune_milestone_underperforming_when_negative_delta(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "fp_new",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "fp_new": {"resolved_1d": 35, "hit_rate_1d": 0.20},
+                        "pre_tracker_unknown": {"resolved_1d": 352, "hit_rate_1d": 0.40},
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            self.assertIn("Retune underperforming", verdict)
+
+    def test_retune_milestone_suppressed_when_n_below_30(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "fp_new",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "fp_new": {"resolved_1d": 22, "hit_rate_1d": 0.795},
+                        "pre_tracker_unknown": {"resolved_1d": 352, "hit_rate_1d": 0.406},
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            self.assertNotIn("Retune validated", verdict)
+            self.assertNotIn("Retune underperforming", verdict)
+
     def test_risk_delta_breach_promotes_to_structural_risk(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
