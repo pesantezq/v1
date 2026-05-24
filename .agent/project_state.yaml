@@ -112,6 +112,69 @@ next_official_step:
 
 project_status: observe_and_iterate
 
+# ---------------------------------------------------------------------------
+# Queued after gauge fingerprint f60e0b9d51bec808 reaches n=100 resolved 1d
+# outcomes (estimated Wed 2026-05-27 cron, accounting for Memorial Day
+# Mon 2026-05-25 delaying the Fri/Sat/Sun/Mon cohorts' resolution by one day).
+# Sequence reasoning: FMP Starter plan has ~99% headroom on calls/min and
+# bandwidth; sequencing post-n=100 ensures we keep the data substrate fixed
+# while the analyst confirms whether the +35.1pp retune lift is real.
+# ---------------------------------------------------------------------------
+
+queued_after_n100_confirmation:
+  precondition: >
+    portfolio-attribution-analyst, fired by the daily-check skill on n_100
+    threshold crossing, returns "promote" or "revert". If it returns
+    "hold longer" the sequence stays queued; if "revert" the sequence is
+    discarded (new fingerprint resets the deferral — see memory
+    /root/.claude/projects/-opt-stockbot/memory/defer_promotion_until_n100.md).
+
+  steps:
+    - id: raise_fmp_daily_budget
+      what: Raise fmp_daily_calls_budget from 250 to 500 in config/config.json
+      why: >
+        Current Starter plan capacity is 300 calls/MINUTE; the 250/day cap is
+        a self-imposed governance limit from an earlier plan tier. Raising to
+        500 unblocks ml_advisor and theme_discovery without taxing the plan.
+      risk: low
+      scope: config-only; no module changes
+      blocks_on: n_100 attribution returns promote-or-keep verdict
+
+    - id: weekend_historical_backfill_collector
+      what: >
+        New observe-only producer module that runs Sat/Sun only and pulls
+        5y daily price history for active watchlist tickers, writing to
+        outputs/backtest/historical/{ticker}_5y.json (HISTORICAL namespace).
+        Feeds portfolio_automation/historical_replay/replay_data_loader.py
+        which already accepts a years_needed parameter.
+      why: >
+        Live producers only need 1y of price history. Replay/backtesting
+        modules already exist but require manual data warming. Weekend
+        collection uses idle FMP capacity (~13 MB/20 GB monthly bandwidth
+        currently) to pre-warm the historical_replay cache without any
+        bandwidth pressure.
+      risk: low; observe-only and writes only to HISTORICAL namespace
+      scope: ~1 new module + cron entry + tests
+      blocks_on: raise_fmp_daily_budget shipped and one week of attribution data on raised budget
+
+    - id: quarterly_fundamentals_collector
+      what: >
+        Quarterly fundamentals (income statement, balance sheet, cash flow)
+        for watchlist tickers via FMP's annual-fundamentals endpoint.
+      why: >
+        Only build this when a downstream consumer exists — e.g., a
+        financial-health filter for sandbox discovery candidates or a
+        conviction-layer signal. Do NOT pre-collect without a consumer.
+      risk: low
+      scope: deferred until consumer is designed
+      blocks_on: weekend_historical_backfill_collector has been in production for 4+ weeks AND a fundamentals consumer is on the roadmap
+
+  invariants:
+    - all_three_steps_must_write_HISTORICAL_or_POLICY_namespace_only_never_LATEST
+    - all_three_steps_must_set_observe_only_true
+    - none_of_these_steps_modify_scoring_or_decision_or_recommendation_logic
+    - changing_data_substrate_during_an_open_gauge_attribution_window_is_forbidden
+
 gui_v2_extras:
   basic_auth:           gated by GUI_V2_AUTH_USER + GUI_V2_AUTH_PASS env vars
   news_evidence_panel:  on Today; reads outputs/latest/news_evidence_layer.json
