@@ -88,6 +88,8 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 - `portfolio_automation/*_advisor.py` `render_*_md` function modified
 - `gui_v2/templates/risk_impact.html` modified
 
+`portfolio-memo-reviewer` ALWAYS (no threshold gate) — reviews the produced memo artifacts against source JSONs for accuracy, internal consistency, clarity, and compact-contract compliance.
+
 ---
 
 ## Step 4 — Output (daily heartbeat — emit every run)
@@ -105,7 +107,7 @@ Headline grammar:
 
 1. Attribution snapshot (always): `"Attribution: current-fp n={N} at {H}% / pre-tracker n={N} at {H}% · Δ {sign}{pp}pp"`
 2. Risk-delta state (always): `"Risk: {top_symbol} {weight}% (cap {cap}%, +{headroom}pp); leverage {L}%"`
-3. Agent dispatch results (only if any fired) — one line per agent with its key finding quoted
+3. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired.
 4. For RED only: named action from the template library below
 5. For GREEN: `"No action required."`
 
