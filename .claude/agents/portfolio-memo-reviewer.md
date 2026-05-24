@@ -64,32 +64,41 @@ When invoked after a daily run:
 | `outputs/portfolio/portfolio_summary.md` | `outputs/portfolio/portfolio_snapshot.json` |
 | `outputs/regime/regime_performance.md` | `outputs/regime/regime_performance.json` |
 
-For historical mode, replace `outputs/latest/` with
-`outputs/history/<YYYY-MM-DD>/` and `outputs/portfolio/` /
-`outputs/regime/` with `outputs/history/<YYYY-MM-DD>/` where the date dir
-includes those files.
+**Historical mode path mapping:**
+
+When invoked with a date arg, look for each memo at
+`outputs/history/<YYYY-MM-DD>/<basename>` (the per-date archive flattens
+the `outputs/latest/`, `outputs/portfolio/`, and `outputs/regime/`
+namespaces into a single directory).
+
+- If a memo file is absent in the date dir, list it under "Missing required
+  artifacts" in the response and skip its checks. **Do not** fall back to
+  `outputs/latest/` — that would silently audit a different run than the
+  operator asked about.
+- If the entire date dir is absent, return a single response stating
+  `Date dir not found: outputs/history/<date>/` and stop.
 
 Other `outputs/latest/*.md` and `outputs/policy/*.md` files are **out of
 scope**.
 
 ## Unit Convention Reference
 
-Use the same canonical table as `portfolio-render-reviewer`:
+The canonical unit table lives in `.claude/agents/portfolio-render-reviewer.md`
+under "## Unit Convention Checklist (project-specific)". Treat that table as
+the single source of truth — if a memo number contradicts it after applying
+the documented convention, that is an Accuracy finding.
 
-| Source | Field | Unit | Render |
-|---|---|---|---|
-| `signal_outcomes.csv` | `outcome_return_Nd` | percent units (1.01 = 1.01%) | `:+.2f%` — no ×100 |
-| `retune_impact.json` | `outcome_attribution.by_fingerprint.<fp>.hit_rate_Nd` | decimal fraction (0.5 = 50%) | `*100` then `:.1f%` |
-| `retune_impact.json` | `outcome_attribution.by_fingerprint.<fp>.mean_return_Nd` | percent units | `:+.2f%` |
-| `risk_delta.json` | `concentration.top_position.weight` | decimal fraction | `*100` then `:.1f%` |
-| `risk_delta.json` | `concentration.top_position.headroom` | decimal pp | `*100` then `:+.1fpp` |
-| `risk_delta.json` | `var.var_pct` | decimal fraction | `*100` then `:.2f%` |
-| `risk_delta.json` | `var.var_dollar` | dollars | `$:,.0f` |
-| `risk_delta.json` | `leverage.total_exposure` | decimal fraction | `*100` then `:.1f%` |
-| `fmp_budget_status.json` | `budget.pct_used` | decimal fraction | `*100` then `:.1f%` |
+Memo-specific application notes (additive to the canonical table):
 
-If a memo number doesn't match its source within ±0.05% absolute (after
-applying the convention), that's an Accuracy finding.
+- A memo number that lands within ±0.05 percentage points of the source-derived
+  value (after applying the convention) is OK. Beyond that band is DRIFT.
+  This is the reviewer's working tolerance, not a documented contract — flag
+  it explicitly if your finding sits inside the band but still reads wrong.
+- For fields rendered as `*100 then :.1f%`, expect rounding to 1dp; do not flag
+  the missing 2nd decimal as drift.
+- For fields rendered as `:+.2f%` (percent units already), the source value
+  IS the displayed value — no ×100. Look for double-multiplication bugs here
+  first when an Accuracy finding fires.
 
 ## Compact Contract (per `docs/daily_memo.md`)
 
@@ -134,8 +143,12 @@ grep -nE "\bNone\b|\bnan\b|nan%|0e\+00" <memo>
 # Empty parens or trailing punctuation
 grep -nE "\(\)|\(,|, *\)|,,| \.\b" <memo>
 
-# Broken Markdown tables (header row with no separator row)
-awk '/\| / && !sep && getline next && next !~ /\|-/{print NR": header has no separator"} {sep=0} /\|-/{sep=1}' <memo>
+# Broken Markdown tables (header row with no separator row directly beneath)
+awk '
+  /^\|/ && header == 0 { header = NR; header_line = $0; next }
+  header > 0 && /^\| *-+/ { header = 0; next }
+  header > 0 { print header ": header has no separator row: " header_line; header = 0 }
+' <memo>
 ```
 
 ## Investigation Playbook
