@@ -1519,17 +1519,17 @@ have produced but did not.
 |---|---|---|
 | `generated_at` | string | ISO 8601 timestamp |
 | `observe_only` | bool | Always `true` |
-| `schema_version` | string | `"1"` |
+| `schema_version` | string | `"2"` (v2 switches `*_days` semantics from calendar to trading days) |
 | `source` | string | `"resolution_due_probe"` |
 | `status` | string | `ok` / `insufficient_data` / `error` |
 | `windows_tracked` | array | `[1, 3, 7]` |
-| `cal_day_multiplier` | number | Safety margin applied to window length (default ~1.6) |
+| `trading_day_multiplier` | number | Safety margin applied to window length in *trading-day* units (default 2.0; weekends contribute zero) |
 | `total_signals` | int | Total rows scanned from `signal_outcomes.csv` |
 | `total_resolved_1d` | int | Rows with a non-null `outcome_return_1d` |
 | `stuck_count` | int | Total stuck (signal, window) pairs |
 | `stuck_by_window` | object | `{1: int, 3: int, 7: int}` |
-| `stuck_rows` | array | Up to 50 stuck-row records `{ticker, signal_time, window_days, gap_days}` |
-| `by_ticker` | array | Up to 30 per-ticker aggregates `{ticker, stuck_signals, windows_stuck, max_gap_days}` |
+| `stuck_rows` | array | Up to 50 stuck-row records `{ticker, signal_time, window_days, age_trading_days, expected_trading_days, gap_trading_days, watchlist_source, signal_score, conviction_band}` |
+| `by_ticker` | array | Up to 30 per-ticker aggregates `{ticker, stuck_signals, windows_stuck, max_gap_days}` (gap is in trading days) |
 | `disclaimer` | string | Fixed safety disclaimer |
 
 ### `outputs/latest/decisions_due_for_resolution.md`

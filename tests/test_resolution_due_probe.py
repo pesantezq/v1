@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from portfolio_automation.resolution_due_probe import (
-    _CAL_DAY_MULTIPLIER,
+    _TRADING_DAY_MULTIPLIER,
     _WINDOWS,
     _group_by_ticker,
     build_resolution_due,
@@ -46,19 +46,22 @@ def _row(ticker: str, days_ago: float, *, outcomes: dict[str, str] | None = None
 
 class TestScanUnresolved(unittest.TestCase):
     def test_window_not_yet_elapsed_not_flagged(self):
-        # 1d window needs 2 cal days; row only 1 cal day old → skip.
+        # 1d window needs 2 trading days; row only 1 cal day old → skip.
+        # _NOW is Tue 12:00; days_ago=1.0 lands on Mon 12:00 → ~1.0 trading day.
         rows = [_row("X", days_ago=1.0)]
         out = scan_unresolved(rows, now=_NOW)
-        # No window has elapsed yet for a 1-day-old signal under 2x multiplier.
         self.assertEqual(out, [])
 
     def test_elapsed_and_null_outcome_flagged(self):
-        # 1d window elapsed (3 days > 2); outcome still null → flag.
-        rows = [_row("X", days_ago=3.0)]
+        # _NOW is Tue 12:00; days_ago=5.0 lands on Thu 12:00 prior week.
+        # Trading days elapsed = 0.5 (Thu PM) + 1 (Fri) + 1 (Mon) + 0.5 (Tue AM) = 3.0.
+        # 3.0 >= 2.0 (1d threshold) → flag 1d. 3.0 < 6.0 (3d threshold) → no flag 3d.
+        rows = [_row("X", days_ago=5.0)]
         out = scan_unresolved(rows, now=_NOW)
         names = {r["window_days"] for r in out}
         self.assertIn(1, names)
-        self.assertNotIn(7, names)  # 7-day window needs 14 cal days
+        self.assertNotIn(3, names)
+        self.assertNotIn(7, names)  # 7-day window needs 14 trading days
 
     def test_resolved_outcome_not_flagged(self):
         rows = [_row("X", days_ago=10.0,
@@ -70,8 +73,10 @@ class TestScanUnresolved(unittest.TestCase):
         self.assertEqual(out, [])
 
     def test_partial_resolution_only_flags_missing_windows(self):
-        # 15 cal days old, 1d resolved but 3d + 7d still null.
-        rows = [_row("X", days_ago=15.0,
+        # 22 cal days old → ~16 trading days. 1d resolved but 3d + 7d still null.
+        # 16 >= 14 (7d threshold) so 7d also flagged; 1d cell carries a value
+        # so it is excluded.
+        rows = [_row("X", days_ago=22.0,
                      outcomes={"outcome_return_1d": "0.02"})]
         out = scan_unresolved(rows, now=_NOW)
         flagged_windows = {r["window_days"] for r in out}
@@ -88,9 +93,9 @@ class TestScanUnresolved(unittest.TestCase):
 class TestGroupByTicker(unittest.TestCase):
     def test_aggregates_max_gap_and_window_set(self):
         flagged = [
-            {"ticker": "A", "window_days": 1, "gap_calendar_days": 5.0},
-            {"ticker": "A", "window_days": 3, "gap_calendar_days": 2.0},
-            {"ticker": "B", "window_days": 1, "gap_calendar_days": 1.0},
+            {"ticker": "A", "window_days": 1, "gap_trading_days": 5.0},
+            {"ticker": "A", "window_days": 3, "gap_trading_days": 2.0},
+            {"ticker": "B", "window_days": 1, "gap_trading_days": 1.0},
         ]
         out = _group_by_ticker(flagged)
         a = next(r for r in out if r["ticker"] == "A")
@@ -105,11 +110,11 @@ class TestGroupByTicker(unittest.TestCase):
         # assertion, a reordering refactor would silently rearrange the
         # "Top Stuck Tickers" table in the memo.
         flagged = [
-            {"ticker": "LOW", "window_days": 1, "gap_calendar_days": 0.5},
-            {"ticker": "TIE_BIG_GAP", "window_days": 1, "gap_calendar_days": 9.0},
-            {"ticker": "TIE_SMALL_GAP", "window_days": 1, "gap_calendar_days": 1.0},
-            {"ticker": "TIE_BIG_GAP", "window_days": 3, "gap_calendar_days": 2.0},
-            {"ticker": "TIE_SMALL_GAP", "window_days": 3, "gap_calendar_days": 1.5},
+            {"ticker": "LOW", "window_days": 1, "gap_trading_days": 0.5},
+            {"ticker": "TIE_BIG_GAP", "window_days": 1, "gap_trading_days": 9.0},
+            {"ticker": "TIE_SMALL_GAP", "window_days": 1, "gap_trading_days": 1.0},
+            {"ticker": "TIE_BIG_GAP", "window_days": 3, "gap_trading_days": 2.0},
+            {"ticker": "TIE_SMALL_GAP", "window_days": 3, "gap_trading_days": 1.5},
         ]
         out = _group_by_ticker(flagged)
         tickers_in_order = [r["ticker"] for r in out]
@@ -162,7 +167,7 @@ class TestBuildAndRun(unittest.TestCase):
             artifact = root / "outputs" / "latest" / "decisions_due_for_resolution.json"
             payload = json.loads(artifact.read_text(encoding="utf-8"))
             self.assertIs(payload["observe_only"], True)
-            self.assertEqual(payload["schema_version"], "1")
+            self.assertEqual(payload["schema_version"], "2")
             self.assertEqual(payload["source"], "resolution_due_probe")
             self.assertEqual(payload["windows_tracked"], [1, 3, 7])
             self.assertIn("disclaimer", payload)
@@ -227,6 +232,107 @@ class TestBuildAndRun(unittest.TestCase):
         self.assertEqual(utc_naive, _dt.datetime(2026, 5, 15, 0, 0, 0))
         self.assertEqual(utc_offset, _dt.datetime(2026, 5, 15, 0, 0, 0))
         self.assertIsNone(utc_naive.tzinfo)
+
+
+class TestTradingDayCalendar(unittest.TestCase):
+    """Trading-day awareness — signals emitted Friday should NOT be flagged
+    stuck on Sunday because no trading sessions have elapsed."""
+
+    def test_trading_days_elapsed_excludes_weekend(self):
+        # Fri 12:00 -> Mon 12:00 = 0.5 (Fri PM) + 0 (Sat) + 0 (Sun) + 0.5 (Mon AM)
+        from portfolio_automation.resolution_due_probe import _trading_days_elapsed
+        fri_noon = datetime(2026, 5, 22, 12, 0, 0)
+        mon_noon = datetime(2026, 5, 25, 12, 0, 0)
+        self.assertAlmostEqual(
+            _trading_days_elapsed(fri_noon, mon_noon), 1.0, places=5
+        )
+
+    def test_trading_days_elapsed_zero_over_weekend_only(self):
+        # Sat 00:00 -> Sun 23:59 = 0 trading days (both weekend).
+        from portfolio_automation.resolution_due_probe import _trading_days_elapsed
+        sat = datetime(2026, 5, 23, 0, 0, 0)
+        sun_end = datetime(2026, 5, 24, 23, 59, 59)
+        self.assertAlmostEqual(
+            _trading_days_elapsed(sat, sun_end), 0.0, places=3
+        )
+
+    def test_trading_days_elapsed_handles_reverse_or_equal(self):
+        from portfolio_automation.resolution_due_probe import _trading_days_elapsed
+        same = datetime(2026, 5, 22, 12, 0, 0)
+        self.assertEqual(_trading_days_elapsed(same, same), 0.0)
+        # If end < start, return 0 rather than negative.
+        later = datetime(2026, 5, 22, 13, 0, 0)
+        self.assertEqual(_trading_days_elapsed(later, same), 0.0)
+
+    def test_friday_signal_not_flagged_on_sunday_after_1d_window(self):
+        # Production bug from 2026-05-24: Friday 09:02 signals checked on
+        # Sunday 09:03. Calendar age = 2.0d -> previously flagged. Trading
+        # age = ~0.62d (Fri PM only) -> must NOT be flagged.
+        fri = datetime(2026, 5, 22, 9, 2, 0)
+        sun = datetime(2026, 5, 24, 9, 3, 0)
+        rows = [{
+            "ticker": "QQQ", "signal_time": fri.isoformat(),
+            "outcome_return_1d": "", "outcome_return_3d": "",
+            "outcome_return_7d": "",
+        }]
+        self.assertEqual(scan_unresolved(rows, now=sun), [])
+
+    def test_friday_signal_not_flagged_on_monday_morning(self):
+        # Mon 09:03 after Fri 09:02 = ~1.0 trading days; threshold for 1d
+        # window is 2.0 -> still NOT flagged. Gives the Monday cron its full
+        # cycle to populate outcomes.
+        fri = datetime(2026, 5, 22, 9, 2, 0)
+        mon = datetime(2026, 5, 25, 9, 3, 0)
+        rows = [{
+            "ticker": "QQQ", "signal_time": fri.isoformat(),
+            "outcome_return_1d": "", "outcome_return_3d": "",
+            "outcome_return_7d": "",
+        }]
+        self.assertEqual(scan_unresolved(rows, now=mon), [])
+
+    def test_friday_signal_flagged_on_tuesday_if_outcome_still_null(self):
+        # Tue 09:03 after Fri 09:02 = ~2.0 trading days; threshold met.
+        # Two cron cycles (Mon, Tue) have run; if outcome is still null the
+        # row is genuinely stuck and must be flagged.
+        fri = datetime(2026, 5, 22, 9, 2, 0)
+        tue = datetime(2026, 5, 26, 9, 3, 0)
+        rows = [{
+            "ticker": "QQQ", "signal_time": fri.isoformat(),
+            "outcome_return_1d": "", "outcome_return_3d": "",
+            "outcome_return_7d": "",
+        }]
+        out = scan_unresolved(rows, now=tue)
+        flagged_windows = {r["window_days"] for r in out}
+        self.assertIn(1, flagged_windows)
+        self.assertNotIn(3, flagged_windows)
+        self.assertNotIn(7, flagged_windows)
+
+    def test_payload_uses_trading_day_field_names(self):
+        # Stuck-row payload should expose `age_trading_days`,
+        # `expected_trading_days`, `gap_trading_days` (renamed from the
+        # earlier *_calendar_days variants). Base payload should expose
+        # `trading_day_multiplier` and schema_version "2".
+        fri = datetime(2026, 5, 22, 9, 2, 0)
+        next_fri = datetime(2026, 5, 29, 9, 3, 0)  # ~5 trading days later
+        rows = [{
+            "ticker": "X", "signal_time": fri.isoformat(),
+            "outcome_return_1d": "", "outcome_return_3d": "",
+            "outcome_return_7d": "",
+        }]
+        out = scan_unresolved(rows, now=next_fri)
+        self.assertGreaterEqual(len(out), 1)
+        row = out[0]
+        self.assertIn("age_trading_days", row)
+        self.assertIn("expected_trading_days", row)
+        self.assertIn("gap_trading_days", row)
+        self.assertNotIn("age_calendar_days", row)
+
+    def test_base_payload_carries_trading_day_multiplier_and_schema_v2(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = build_resolution_due(root=Path(td), now=_NOW)
+            self.assertEqual(payload["schema_version"], "2")
+            self.assertIn("trading_day_multiplier", payload)
+            self.assertNotIn("cal_day_multiplier", payload)
 
 
 if __name__ == "__main__":

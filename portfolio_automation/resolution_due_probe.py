@@ -13,19 +13,23 @@ emissions on resolved-decision counts. Each stuck signal is a free
 "unit of progress" the system is leaving on the table.
 
 This probe surfaces those stuck rows so an operator (or a future
-follow-up resolver) can investigate. v1 responsibilities:
+follow-up resolver) can investigate. Responsibilities:
 
   1. Read signal_outcomes.csv.
-  2. For each row, compute calendar age since signal_time.
-  3. Flag any row where calendar age exceeds 2x the resolution window
-     (1d -> 2 cal days, 3d -> 6 cal days, 7d -> 14 cal days) AND the
-     corresponding outcome_return_Nd is null.
+  2. For each row, compute *trading-day* age since signal_time
+     (Mon-Fri only; weekends contribute zero).
+  3. Flag any row where trading-day age exceeds 2x the resolution
+     window (1d -> 2 trading days, 3d -> 6 trading days,
+     7d -> 14 trading days) AND outcome_return_Nd is null.
   4. Group by (ticker, decision-window) and write a summary so the
      operator can scan for patterns (same ticker repeatedly stuck).
 
-The 2x multiplier on calendar days converts the trading-day windows
-into a forgiving wall-clock threshold so weekends/holidays don't
-generate false positives.
+The 2x multiplier in trading-day units gives the resolver one full
+cron cycle of grace after the window matures. Weekend days contribute
+zero trading time, so a Friday signal cannot false-fire on Sunday.
+Holiday awareness is not modeled (Mon-Fri is the calendar) — rare
+NYSE holidays may cause a 1-day false-positive but the 2x multiplier
+absorbs that.
 
 Hard guarantees:
   - observe_only=True hardcoded.
@@ -42,7 +46,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -54,13 +58,15 @@ from portfolio_automation.data_governance import (
 
 logger = logging.getLogger("stockbot.portfolio_automation.resolution_due_probe")
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 _SOURCE_LABEL = "resolution_due_probe"
 _OBSERVE_ONLY = True
 
-# How forgiving to be on calendar age before flagging an N-day window as stuck.
-# 2.0 means a 1-trading-day window only fires after 2 calendar days have passed.
-_CAL_DAY_MULTIPLIER = 2.0
+# How forgiving to be on trading-day age before flagging an N-day window
+# as stuck. 2.0 means a 1-trading-day window only fires after 2 trading
+# days have actually elapsed (weekends contribute zero), giving the
+# resolver one full cron cycle of grace.
+_TRADING_DAY_MULTIPLIER = 2.0
 
 # Windows tracked (must match outcome_return_Nd columns in signal_outcomes.csv).
 _WINDOWS = (1, 3, 7)
@@ -74,6 +80,30 @@ _DISCLAIMER = (
     "resolution window has elapsed but whose outcome_return_Nd is null. Does "
     "not call APIs, does not mutate any decision, score, or outcome state."
 )
+
+
+def _trading_days_elapsed(start: datetime, end: datetime) -> float:
+    """Count Mon-Fri time between `start` and `end`, in 24h-day units.
+
+    Both args must be timezone-naive. Weekend days contribute zero;
+    weekday fragments contribute proportionally. Returns 0 if end <= start.
+
+    Examples:
+      Fri 12:00 -> Mon 12:00 -> 1.0 (half of Fri + half of Mon, no Sat/Sun)
+      Sat 00:00 -> Sun 23:59 -> ~0.0 (both weekend)
+      Mon 09:00 -> Tue 09:00 -> 1.0 (one full weekday)
+    """
+    if end <= start:
+        return 0.0
+    total = 0.0
+    cur = start
+    while cur < end:
+        next_midnight = datetime.combine(cur.date(), datetime.min.time()) + timedelta(days=1)
+        chunk_end = min(next_midnight, end)
+        if cur.weekday() < 5:  # Mon=0..Fri=4
+            total += (chunk_end - cur).total_seconds() / 86400.0
+        cur = chunk_end
+    return total
 
 
 def _parse_signal_time(s: str) -> datetime | None:
@@ -104,7 +134,7 @@ def scan_unresolved(
 ) -> list[dict[str, Any]]:
     """
     Return flagged rows. Each entry: {ticker, signal_time, window_days,
-    age_calendar_days, expected_calendar_days, gap_calendar_days, source}.
+    age_trading_days, expected_trading_days, gap_trading_days, ...}.
     """
     if not rows:
         return []
@@ -117,10 +147,10 @@ def scan_unresolved(
         sig_time = _parse_signal_time(r.get("signal_time") or "")
         if sig_time is None:
             continue
-        age = (ref_now - sig_time).total_seconds() / 86400.0  # calendar days
+        age = _trading_days_elapsed(sig_time, ref_now)
         for w in _WINDOWS:
-            expected_cal_days = w * _CAL_DAY_MULTIPLIER
-            if age < expected_cal_days:
+            expected_trading_days = w * _TRADING_DAY_MULTIPLIER
+            if age < expected_trading_days:
                 continue  # window not elapsed yet, give it more time
             cell = r.get(f"outcome_return_{w}d")
             if not _is_null_outcome(cell):
@@ -129,9 +159,9 @@ def scan_unresolved(
                 "ticker": str(r.get("ticker") or "—"),
                 "signal_time": r.get("signal_time"),
                 "window_days": w,
-                "age_calendar_days": round(age, 2),
-                "expected_calendar_days": round(expected_cal_days, 2),
-                "gap_calendar_days": round(age - expected_cal_days, 2),
+                "age_trading_days": round(age, 2),
+                "expected_trading_days": round(expected_trading_days, 2),
+                "gap_trading_days": round(age - expected_trading_days, 2),
                 "watchlist_source": r.get("watchlist_source") or "",
                 "signal_score": r.get("signal_score") or "",
                 "conviction_band": r.get("conviction_band") or "",
@@ -152,7 +182,7 @@ def _group_by_ticker(flagged: list[dict[str, Any]]) -> list[dict[str, Any]]:
         })
         b["stuck_signals"] += 1
         b["windows_stuck"].add(row["window_days"])
-        b["max_gap_days"] = max(b["max_gap_days"], row["gap_calendar_days"])
+        b["max_gap_days"] = max(b["max_gap_days"], row["gap_trading_days"])
     out: list[dict[str, Any]] = []
     for t, b in by_ticker.items():
         out.append({
@@ -182,7 +212,7 @@ def build_resolution_due(
         "schema_version": _SCHEMA_VERSION,
         "source": _SOURCE_LABEL,
         "windows_tracked": list(_WINDOWS),
-        "cal_day_multiplier": _CAL_DAY_MULTIPLIER,
+        "trading_day_multiplier": _TRADING_DAY_MULTIPLIER,
         "disclaimer": _DISCLAIMER,
     }
 
@@ -265,14 +295,14 @@ def render_resolution_due_md(payload: dict[str, Any]) -> str:
     if stuck_rows:
         a("## Detail (first 50)")
         a("")
-        a("| Ticker | Signal time | Window | Age (cal days) | Gap |")
+        a("| Ticker | Signal time | Window | Age (trading days) | Gap |")
         a("|---|---|---|---|---|")
         for r in stuck_rows[:50]:
             a(
                 f"| `{r.get('ticker')}` | `{r.get('signal_time', '')[:19]}` "
                 f"| {r.get('window_days')}d | "
-                f"{r.get('age_calendar_days')} | "
-                f"+{r.get('gap_calendar_days')} |"
+                f"{r.get('age_trading_days')} | "
+                f"+{r.get('gap_trading_days')} |"
             )
         a("")
 
