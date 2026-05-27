@@ -831,6 +831,49 @@ class TestBuildDailyMemoFull:
         assert "Total recommended capital: $3,000.00" in result
         assert "Top actions:" not in result
 
+    def test_capital_actions_include_actions_outside_top_five(self):
+        # Regression: prior to fix, _capital_action_summary received only the
+        # top-5 decisions, silently dropping any SCALE/BUY/SELL below that cut.
+        # Fixture: 5 high-priority WAIT rows + 1 lower-priority SCALE. The
+        # SCALE must still appear in the Capital Actions roll-up.
+        summary = _full_summary()
+        plan = _decision_plan_payload()
+        plan["decisions"] = [
+            {
+                "symbol": f"WAIT{i}",
+                "decision": "WAIT",
+                "priority": 0.90,
+                "urgency": "medium",
+                "source": "market",
+                "recommended_action": f"Wait on WAIT{i}.",
+                "recommended_amount": None,
+                "reason": "Stand by.",
+                "risk_flags": [],
+                "confidence": 0.6,
+                "inputs_used": {},
+            }
+            for i in range(5)
+        ] + [
+            {
+                "symbol": "BURIED",
+                "decision": "SCALE",
+                "priority": 0.20,
+                "urgency": "low",
+                "source": "portfolio",
+                "recommended_action": "Add to BURIED.",
+                "recommended_amount": 777.0,
+                "reason": "Underweight contribution target.",
+                "risk_flags": [],
+                "confidence": 0.85,
+                "inputs_used": {},
+            }
+        ]
+        plan["total_decisions"] = len(plan["decisions"])
+        summary["_decision_plan"] = plan
+        result = build_daily_memo(summary)
+        assert "SELL=0, SCALE=1, BUY=0" in result
+        assert "Total recommended capital: $777.00" in result
+
     def test_what_changed_is_limited_to_three_bullets(self):
         summary = _full_summary(
             changes={
@@ -951,6 +994,46 @@ class TestBuildDailyMemoMd:
         assert "## Top Decisions" in result
         assert "## Capital Actions" in result
         assert "## Risk Focus" in result
+
+    def test_capital_actions_md_include_actions_outside_top_five(self):
+        # Regression mirror of the .txt-path test: the markdown Capital Actions
+        # section must reflect all SCALE/BUY/SELL rows, not just those that
+        # survived the Top Decisions top-5 truncation.
+        summary = _full_summary()
+        plan = _decision_plan_payload()
+        plan["decisions"] = [
+            {
+                "symbol": f"WAIT{i}",
+                "decision": "WAIT",
+                "priority": 0.90,
+                "urgency": "medium",
+                "source": "market",
+                "recommended_amount": None,
+                "reason": "Stand by.",
+                "risk_flags": [],
+                "confidence": 0.6,
+                "inputs_used": {},
+            }
+            for i in range(5)
+        ] + [
+            {
+                "symbol": "BURIED",
+                "decision": "SCALE",
+                "priority": 0.20,
+                "urgency": "low",
+                "source": "portfolio",
+                "recommended_amount": 777.0,
+                "reason": "Underweight contribution target.",
+                "risk_flags": [],
+                "confidence": 0.85,
+                "inputs_used": {},
+            }
+        ]
+        plan["total_decisions"] = len(plan["decisions"])
+        summary["_decision_plan"] = plan
+        result = build_daily_memo_md(summary)
+        assert "SELL: 0 | SCALE: 1 | BUY: 0" in result
+        assert "Total recommended capital: $777.00" in result
 
     def test_degraded_health_section_only_when_needed(self):
         degraded = _full_summary(

@@ -556,6 +556,14 @@ def _top_decision_rows(summary: dict[str, Any], limit: int = 5) -> list[dict[str
     return rows[:limit]
 
 
+def _action_decision_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    # Full non-suppressed decision list for the Capital Actions roll-up.
+    # _top_decision_rows truncates to N for the Top Decisions section; using
+    # that truncated list to count SCALE/BUY/SELL silently drops actions that
+    # sit below the cut and understates total recommended capital.
+    return [r for r in _decision_rows(summary) if not bool(r.get("suppressed"))]
+
+
 def _capital_action_summary(rows: list[dict[str, Any]]) -> tuple[dict[str, int], float | None]:
     counts = {"SELL": 0, "SCALE": 0, "BUY": 0}
     total_amount = 0.0
@@ -1721,7 +1729,7 @@ def build_daily_memo(
     dh = dict(summary.get("data_health") or {})
     ch = dict(summary.get("changes") or {})
     top_rows = _top_decision_rows(summary, limit=5)
-    capital_counts, capital_total = _capital_action_summary(top_rows)
+    capital_counts, capital_total = _capital_action_summary(_action_decision_rows(summary))
     risk_items = _risk_focus_items(top_rows)
     change_items = _change_items(ch)
     health_items = _health_items(dh)
@@ -1900,7 +1908,7 @@ def build_daily_memo_md(
     dh = dict(summary.get("data_health") or {})
     ch = dict(summary.get("changes") or {})
     top_rows = _top_decision_rows(summary, limit=5)
-    capital_counts, capital_total = _capital_action_summary(top_rows)
+    capital_counts, capital_total = _capital_action_summary(_action_decision_rows(summary))
     risk_items = _risk_focus_items(top_rows)
     change_items = _change_items(ch)
     health_items = _health_items(dh)
