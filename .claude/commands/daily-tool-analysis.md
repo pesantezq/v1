@@ -46,6 +46,7 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 11. `outputs/latest/gate_retune_suggestions.json` → available, auto_applicable_count, weight_proposals (lengths only), gate_proposal (added 2026-05-28)
 12. `data/retune_audit_log.jsonl` (tail) → count of apply entries in last 7d, any rollback entries (added 2026-05-28)
 13. `data/retune_auto_apply_state.json` → apply_enabled, max(monthly_drift.values()) (added 2026-05-28)
+14. `outputs/latest/historical_backfill_status.json` → universe_size, fetched, errored, skipped_budget (added 2026-05-28; weekend-cadence producer)
 
 **Compute**:
 

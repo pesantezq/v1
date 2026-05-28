@@ -137,6 +137,22 @@ def _check_top100_daily(payload: dict[str, Any]) -> tuple[str, int]:
     return (("ok" if n > 0 else "warn"), n)
 
 
+def _check_historical_backfill(payload: dict[str, Any]) -> tuple[str, int]:
+    """Historical backfill: weekend-only producer. Treats "no recent run"
+    as `unknown` (acceptable on weekdays). Warns only when a recorded
+    run actually errored on most of its universe — i.e., errored ≥
+    fetched + skipped_fresh. Reports fetched count."""
+    if "universe_size" not in payload:
+        return ("unknown", 0)
+    fetched = int(payload.get("fetched") or 0)
+    errored = int(payload.get("errored") or 0)
+    skipped_fresh = int(payload.get("skipped_fresh") or 0)
+    progress = fetched + skipped_fresh
+    if errored > 0 and errored >= max(progress, 1):
+        return ("warn", fetched)
+    return ("ok", fetched)
+
+
 def _check_pulse_cap_status(payload: dict[str, Any]) -> tuple[str, int]:
     """Discovery pulse: warn if any monthly cap is at or above 90% utilization.
     Reports the highest cap utilization seen, in integer percent."""
@@ -211,6 +227,14 @@ _CONTENT_LIVENESS_CHECKS: list[tuple[str, str, Any, str]] = [
         _check_top100_daily,
         "Universe sanitation produced an empty top100_daily — either no "
         "dynamic sources contributed tickers or the producer hit an error.",
+    ),
+    (
+        "outputs/latest/historical_backfill_status.json",
+        "historical_backfill.last_run",
+        _check_historical_backfill,
+        "Historical backfill's last run errored on most/all of its universe. "
+        "Likely FMP budget exhausted or auth issue. Check logs/historical_backfill_*.log "
+        "and verify FMP_API_KEY + raised fmp_daily_calls_budget.",
     ),
 ]
 

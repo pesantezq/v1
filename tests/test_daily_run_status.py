@@ -266,6 +266,39 @@ class TestContentLiveness(unittest.TestCase):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(payload))
 
+    def _write_historical_backfill_status(self, root: Path, payload: dict) -> None:
+        p = root / "outputs" / "latest" / "historical_backfill_status.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload))
+
+    def test_historical_backfill_fully_errored_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_historical_backfill_status(root, {
+                "universe_size": 10, "fetched": 0, "errored": 10, "skipped_fresh": 0,
+            })
+            row = next(r for r in scan_content_liveness(root)
+                       if r["name"] == "historical_backfill.last_run")
+            self.assertEqual(row["status"], "warn")
+
+    def test_historical_backfill_mixed_run_is_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_historical_backfill_status(root, {
+                "universe_size": 10, "fetched": 8, "errored": 2, "skipped_fresh": 0,
+            })
+            row = next(r for r in scan_content_liveness(root)
+                       if r["name"] == "historical_backfill.last_run")
+            self.assertEqual(row["status"], "ok")
+
+    def test_historical_backfill_missing_is_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            row = next(r for r in scan_content_liveness(root)
+                       if r["name"] == "historical_backfill.last_run")
+            # No artifact OR artifact without universe_size → unknown, not warn
+            self.assertIn(row["status"], ("unknown",))
+
     def test_pulse_last_run_age_fresh_is_ok(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
