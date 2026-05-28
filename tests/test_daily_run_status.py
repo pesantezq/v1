@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from portfolio_automation.daily_run_status import (
     build_daily_run_status,
     run_daily_run_status,
+    scan_content_liveness,
     scan_expected_artifacts,
     scan_log_stages,
 )
@@ -155,6 +156,213 @@ class TestOverallStatus(unittest.TestCase):
             payload = build_daily_run_status(root=root, log_path=log)
             self.assertEqual(payload["overall_status"], "partial")
             self.assertGreater(payload["required_missing_count"], 0)
+
+
+class TestContentLiveness(unittest.TestCase):
+    """Content-liveness checks: empty payloads downgrade to warn."""
+
+    def _write_theme_signals(self, root: Path, themes: list) -> None:
+        p = root / "outputs" / "latest" / "theme_signals.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"themes": themes}))
+
+    def test_empty_themes_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_theme_signals(root, themes=[])
+            results = scan_content_liveness(root)
+            theme_row = next(r for r in results if r["name"] == "theme_signals.themes")
+            self.assertEqual(theme_row["status"], "warn")
+            self.assertEqual(theme_row["observed"], 0)
+
+    def test_nonempty_themes_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_theme_signals(root, themes=[{"name": "AI"}, {"name": "Cyber"}])
+            results = scan_content_liveness(root)
+            theme_row = next(r for r in results if r["name"] == "theme_signals.themes")
+            self.assertEqual(theme_row["status"], "ok")
+            self.assertEqual(theme_row["observed"], 2)
+
+    def test_missing_artifact_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            results = scan_content_liveness(root)
+            theme_row = next(r for r in results if r["name"] == "theme_signals.themes")
+            self.assertEqual(theme_row["status"], "unknown")
+            self.assertEqual(theme_row.get("reason"), "artifact_missing")
+
+    def _write_news_intelligence(self, root: Path, articles: int) -> None:
+        p = root / "outputs" / "latest" / "news_intelligence.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"article_count_raw": articles}))
+
+    def _write_scraped_intel(self, root: Path, degraded: bool, evidence: int = 0) -> None:
+        p = root / "outputs" / "latest" / "scraped_intel_run_summary.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "degraded_mode": degraded,
+            "scraped_intel": {"total_evidence": evidence},
+        }))
+
+    def _write_ai_budget(self, root: Path, events: int) -> None:
+        p = root / "outputs" / "latest" / "ai_budget_summary.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"enabled": True, "event_count": events}))
+
+    def test_zero_news_articles_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_news_intelligence(root, articles=0)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "news_intelligence.article_count_raw")
+            self.assertEqual(row["status"], "warn")
+
+    def test_nonzero_news_articles_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_news_intelligence(root, articles=42)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "news_intelligence.article_count_raw")
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["observed"], 42)
+
+    def test_scraped_intel_degraded_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_scraped_intel(root, degraded=True, evidence=0)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "scraped_intel.degraded_mode")
+            self.assertEqual(row["status"], "warn")
+
+    def test_scraped_intel_healthy_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_scraped_intel(root, degraded=False, evidence=15)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "scraped_intel.degraded_mode")
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["observed"], 15)
+
+    def test_ai_budget_zero_events_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_ai_budget(root, events=0)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "ai_budget.event_count")
+            self.assertEqual(row["status"], "warn")
+
+    def test_ai_budget_with_events_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_ai_budget(root, events=3)
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "ai_budget.event_count")
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["observed"], 3)
+
+    def _write_pulse_status(self, root: Path, payload: dict) -> None:
+        p = root / "outputs" / "latest" / "discovery_pulse_status.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload))
+
+    def test_pulse_last_run_age_fresh_is_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            now = datetime.now(timezone.utc).isoformat()
+            self._write_pulse_status(root, {
+                "generated_at": now,
+                "last_run_at": now,
+                "usage": {"total_runs_month": 3},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.last_run_age")
+            self.assertEqual(row["status"], "ok")
+
+    def test_pulse_last_run_age_stale_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # 8 hours ago — beyond the 6h warn threshold
+            from datetime import timedelta
+            stale = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
+            self._write_pulse_status(root, {
+                "generated_at": stale,
+                "last_run_at": stale,
+                "usage": {"total_runs_month": 3},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.last_run_age")
+            self.assertEqual(row["status"], "warn")
+            self.assertGreater(row["observed"], 360)
+
+    def test_pulse_zero_runs_is_unknown_not_warn(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_pulse_status(root, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "usage": {"total_runs_month": 0},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.last_run_age")
+            self.assertEqual(row["status"], "unknown")
+
+    def test_pulse_cap_status_under_90_is_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_pulse_status(root, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "usage": {
+                    "openai_cost_usd_month": 1.0,
+                    "fmp_calls_month": 100,
+                    "total_runs_month": 5,
+                },
+                "caps": {"openai_cost_usd_max": 10.0, "fmp_calls_max": 5000},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.monthly_cap_status")
+            self.assertEqual(row["status"], "ok")
+            self.assertLess(row["observed"], 90)
+
+    def test_pulse_cap_status_over_90_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_pulse_status(root, {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "usage": {
+                    "openai_cost_usd_month": 9.5,  # 95% of $10
+                    "fmp_calls_month": 100,
+                    "total_runs_month": 5,
+                },
+                "caps": {"openai_cost_usd_max": 10.0, "fmp_calls_max": 5000},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.monthly_cap_status")
+            self.assertEqual(row["status"], "warn")
+            self.assertGreaterEqual(row["observed"], 90)
+
+    def test_empty_themes_escalates_overall_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log = root / "logs" / "test.log"
+            log.parent.mkdir(parents=True)
+            log.write_text(_FAKE_LOG)
+            for rel in [
+                "outputs/latest/decision_plan.json",
+                "outputs/latest/decision_plan.md",
+                "outputs/latest/system_decision_summary.json",
+                "outputs/latest/daily_memo.md",
+                "outputs/latest/daily_memo.txt",
+                "outputs/latest/news_intelligence.json",
+                "outputs/latest/risk_delta.json",
+                "outputs/portfolio/portfolio_snapshot.json",
+            ]:
+                p = root / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("{}")
+            self._write_theme_signals(root, themes=[])
+            payload = build_daily_run_status(root=root, log_path=log)
+            self.assertEqual(payload["overall_status"], "ok_with_warnings")
+            self.assertEqual(payload["content_warn_count"], 1)
 
 
 class TestRunOrchestrator(unittest.TestCase):

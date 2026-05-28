@@ -198,7 +198,14 @@ class TestCheckAiBudgetExceeded(unittest.TestCase):
         self.assertIn("Daily cost limit", event.blocked_reason)
 
     def test_non_observe_blocks_on_monthly_exceeded(self):
-        cfg = AIBudgetConfig(monthly_cost_limit_usd=0.001, observe_only=False)
+        # Explicitly disable the default daily_cost_limit_usd so this test
+        # exercises the monthly-cap path in isolation (else the daily-cap
+        # default of $2/day fires first on the $15 call cost).
+        cfg = AIBudgetConfig(
+            monthly_cost_limit_usd=0.001,
+            daily_cost_limit_usd=None,
+            observe_only=False,
+        )
         event = check_ai_budget("task", model="claude-opus-4-7",
                                 prompt_tokens=1_000_000, completion_tokens=0,
                                 config=cfg, _current_monthly_cost_usd=0.0)

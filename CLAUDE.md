@@ -132,10 +132,54 @@ rationale for every allow/deny pattern.
 
 - Add tests for every new module in `tests/`.
 - Run targeted tests before the full suite.
-- Full suite ignores known GUI health tests:
+- Full suite (now passing — 2026-05-28 datetime tz fix in gui_operator_data.py):
   ```
-  python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py
+  python -m pytest -q
   ```
+
+## Analysis + Health Coverage Requirement
+
+Any new function, producer, or feature shipped to this repo MUST be
+paired with an analysis-and-health check. The check goes EITHER into
+an existing agent/skill OR into a new one — never into nothing. Without
+this pairing the feature is considered incomplete and should not be
+merged.
+
+**Match the cadence to the feature's runtime cadence:**
+
+| Feature cadence | Owning skill | When to extend |
+|---|---|---|
+| Runs daily or sub-daily | `.claude/commands/daily-tool-analysis.md` | Add to Step 1 artifacts read + Step 3 dispatch logic + Step 4 body grammar. Add a content_liveness check if the producer can emit "looks-fresh-but-empty" failures. |
+| Runs weekly/monthly | `.claude/commands/monthly-tool-analysis.md` | Add to the monthly review's trend section + dispatch logic. |
+| Runs quarterly/yearly OR is lifetime-only | `.claude/commands/yearly-tool-analysis.md` | Add to the yearly retrospective + dispatch logic. |
+
+**Choose the lens(es) the new check should embody:**
+
+The system is now analyzed from four expert lenses, each implemented by
+one or more agents. When adding a check, pick the lens that fits and
+extend the corresponding agent (or create a new one in the same lens):
+
+- **Developer lens** — cron health, error rates, test coverage, dependency drift, silent zeros. Existing agents: `portfolio-resolver-investigator`, `portfolio-test-reviewer`, `portfolio-render-reviewer`, `portfolio-discovery-health`.
+- **Quant lens** — hit-rate, Sharpe, regime performance, pattern efficacy, gauge attribution. Existing agents: `portfolio-attribution-analyst`, `portfolio-learning-loop-health`.
+- **Process analyst lens** — workflow health, audit log activity, drift cap utilization, operator decision queue. Existing agents: `portfolio-learning-loop-health` (overlaps quant lens).
+- **Market expert lens** — sector rotation, regime calls, memo accuracy vs reality, decision-vs-outcome alignment. Existing agents: `portfolio-memo-reviewer`, `portfolio-attribution-analyst`.
+
+**Workflow when shipping a new feature:**
+
+1. Identify the feature's cadence → pick the owning skill.
+2. Pick the lens(es) the new check belongs to → identify the existing
+   agent OR draft a new agent under the right lens.
+3. Add: artifacts-read entry, computed signal(s), dispatch trigger,
+   body-grammar line, content_liveness check (if applicable),
+   RED-template line (if applicable).
+4. Add a test that asserts the new check produces the expected status
+   under both healthy and degraded fixture states.
+5. Confirm the full suite passes (`python -m pytest -q`).
+
+**The corollary:** every artifact under `outputs/latest/*.json` should
+be consumed by AT LEAST ONE check at the appropriate cadence. If no
+check reads it, either add one or delete the artifact. Producers
+without consumers are debt.
 
 ## Agent + Skill Loading Behavior
 

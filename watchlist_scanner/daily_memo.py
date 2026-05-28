@@ -1705,6 +1705,72 @@ def _pulse_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _pattern_confirmed_candidates(
+    root: Path,
+    *,
+    cadence: str = "monthly",
+    top_n: int = 5,
+    extended_n: int = 10,
+) -> tuple[list[str], list[str]]:
+    """Return (compact_lines, extended_lines) for pattern-confirmed candidate
+    surfacing. Joins pattern_efficacy_<cadence>.json winning tags with the
+    most recent top100_daily candidates. compact lines = top_n; extended lines
+    = up to extended_n (for the long-form text variant).
+
+    Returns ([], []) on any missing input — never raises.
+    """
+    try:
+        eff_path = root / "outputs" / "latest" / f"pattern_efficacy_{cadence}.json"
+        if not eff_path.exists():
+            return ([], [])
+        eff = json.loads(eff_path.read_text(encoding="utf-8", errors="replace"))
+        by_tag = eff.get("by_tag") or {}
+        # A tag "wins" if it has Δ ≥ 5pp AND n ≥ 30
+        winning_tags: set[str] = set()
+        for tag, stats in by_tag.items():
+            sig = stats.get("significance")
+            if sig in ("winner", "strong_winner") and (stats.get("n_samples") or 0) >= 30:
+                winning_tags.add(tag)
+
+        if not winning_tags:
+            return ([], [])
+
+        top_path = root / "outputs" / "latest" / "top100_daily.json"
+        if not top_path.exists():
+            return ([], [])
+        top = json.loads(top_path.read_text(encoding="utf-8", errors="replace"))
+        cands = top.get("candidates") or []
+
+        # Each candidate scored by count of winning tags it carries
+        ranked: list[tuple[int, dict]] = []
+        for c in cands:
+            tags = set(c.get("rationale_tags") or [])
+            win_overlap = tags & winning_tags
+            if not win_overlap:
+                continue
+            ranked.append((len(win_overlap), c))
+        ranked.sort(key=lambda kv: (-kv[0], -float(kv[1].get("score") or 0.0), kv[1].get("symbol", "")))
+
+        compact: list[str] = []
+        extended: list[str] = []
+        for i, (win_count, c) in enumerate(ranked[:extended_n], start=1):
+            sym = c.get("symbol", "?")
+            sector = c.get("sector", "?")
+            winning_overlap = sorted(set(c.get("rationale_tags") or []) & winning_tags)
+            tag_strs = ", ".join(t.replace("source:", "").replace("sector:", "") for t in winning_overlap[:3])
+            line = (
+                f"`{sym}` ({sector}) — {win_count} winning tag(s): "
+                f"{tag_strs}"
+            )
+            if i <= top_n:
+                compact.append(line)
+            extended.append(line)
+        return (compact, extended)
+    except Exception as exc:
+        logger.warning("daily_memo: pattern_confirmed lookup failed — %s", exc)
+        return ([], [])
+
+
 # ---------------------------------------------------------------------------
 # Compact memo builders
 # ---------------------------------------------------------------------------
@@ -1847,6 +1913,19 @@ def build_daily_memo(
             a(_LINE)
             for item in advisor_items:
                 a(f"  - {item}")
+            a("")
+
+        # Pattern-confirmed watch candidates (long-form: up to 10)
+        _, extended = _pattern_confirmed_candidates(
+            pulse_root, cadence="monthly", top_n=5, extended_n=10
+        )
+        if extended:
+            a(_LINE)
+            a("  WATCH LIST — PATTERN-CONFIRMED CANDIDATES (advisory)")
+            a(_LINE)
+            for line in extended:
+                # strip backticks for plain-text rendering
+                a(f"  - {line.replace('`', '')}")
             a("")
     except Exception as exc:
         logger.warning("daily_memo: pulse/advisor/risk sections failed — %s", exc)
@@ -2002,6 +2081,16 @@ def build_daily_memo_md(
             a("## Advisor Stack")
             for item in advisor_items:
                 a(f"- {item}")
+            a("")
+
+        # Pattern-confirmed watch candidates (top 5 in compact memo)
+        compact, _ = _pattern_confirmed_candidates(
+            pulse_root, cadence="monthly", top_n=5, extended_n=5
+        )
+        if compact:
+            a("## Watch list — pattern-confirmed candidates (advisory)")
+            for line in compact:
+                a(f"- {line}")
             a("")
     except Exception as exc:
         logger.warning("daily_memo: pulse/advisor/risk sections (md) failed — %s", exc)

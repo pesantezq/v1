@@ -7,7 +7,7 @@
 #      — always runs, no LLM dependency, no API key needed. Writes
 #      daily_checks/YYYY-MM-DD.md and updates data/daily_check_state.json.
 #   2) If stage 1 returns RED, optionally invoke `claude --print
-#      /daily-portfolio-check` to append LLM-driven agent dispatch +
+#      /daily-tool-analysis` to append LLM-driven agent dispatch +
 #      config-change proposals to the report. Best-effort; auth failures
 #      degrade gracefully (the Python report is still on disk).
 #
@@ -90,7 +90,7 @@ if [[ "${VERDICT}" == "RED" ]]; then
     PROMPT="The deterministic daily check (portfolio_automation.daily_check_runner) "
     PROMPT+="emitted a RED verdict for today (${DATE_UTC}). Read "
     PROMPT+="\`${REPORT_FILE}\` for the heartbeat + body, then follow Steps 2-3 of "
-    PROMPT+="\`.claude/commands/daily-portfolio-check.md\`: dispatch the relevant "
+    PROMPT+="\`.claude/commands/daily-tool-analysis.md\`: dispatch the relevant "
     PROMPT+="agents and, if the RED action is in the auto-proposable whitelist "
     PROMPT+="(budget exhausted, or delta_hit_rate_pp<=-10 AND n>=30), open a PR "
     PROMPT+="from a daily-check-proposals/${DATE_UTC}-<slug> branch with the "

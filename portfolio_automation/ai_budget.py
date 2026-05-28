@@ -77,8 +77,11 @@ class AIBudgetConfig:
     enabled: bool = True
     observe_only: bool = True
     daily_token_limit: int | None = None
-    daily_cost_limit_usd: float | None = None
-    monthly_cost_limit_usd: float | None = None
+    # Project-wide ceiling on OpenAI / LLM spend. Defaults set 2026-05-28 to
+    # $20/month, $2/day per operator constraint. Override via config.json
+    # ai_budget block if needed for future tier upgrades.
+    daily_cost_limit_usd: float | None = 2.0
+    monthly_cost_limit_usd: float | None = 20.0
     warn_at_daily_cost_pct: float = 0.80
     warn_at_monthly_cost_pct: float = 0.80
     default_provider: str | None = None

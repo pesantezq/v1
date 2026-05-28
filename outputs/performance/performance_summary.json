@@ -1,38 +1,280 @@
 {
-  "generated_at": "2026-05-16T03:34:11.212695",
+  "generated_at": "2026-05-28T09:01:34.736480",
   "windows": [
     1,
     3,
     7
   ],
   "primary_window_days": 3,
-  "tracked_signals": 198,
-  "resolved_signals": 0,
+  "tracked_signals": 572,
+  "resolved_signals": 484,
   "by_window": {
     "1d": {
-      "resolved_count": 0,
-      "avg_return_pct": 0.0,
-      "win_rate": 0.0
+      "resolved_count": 528,
+      "avg_return_pct": 0.45,
+      "win_rate": 0.506
     },
     "3d": {
-      "resolved_count": 0,
-      "avg_return_pct": 0.0,
-      "win_rate": 0.0
+      "resolved_count": 484,
+      "avg_return_pct": 1.003,
+      "win_rate": 0.566
     },
     "7d": {
-      "resolved_count": 0,
-      "avg_return_pct": 0.0,
-      "win_rate": 0.0
+      "resolved_count": 396,
+      "avg_return_pct": 2.471,
+      "win_rate": 0.586
     }
   },
-  "by_ticker": {},
-  "historically_strong_tickers": [],
-  "low_reliability_tickers": [],
+  "by_ticker": {
+    "RIOT": {
+      "avg_return_pct": 1.688,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.255,
+      "historical_performance_score": 0.626,
+      "signal_reliability": "mixed"
+    },
+    "CHAT": {
+      "avg_return_pct": 2.675,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.771,
+      "signal_reliability": "strong"
+    },
+    "XLE": {
+      "avg_return_pct": 0.518,
+      "win_rate": 0.455,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.594,
+      "historical_performance_score": 0.499,
+      "signal_reliability": "mixed"
+    },
+    "XLF": {
+      "avg_return_pct": 0.398,
+      "win_rate": 0.682,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.618,
+      "signal_reliability": "mixed"
+    },
+    "AMZN": {
+      "avg_return_pct": 0.237,
+      "win_rate": 0.545,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.516,
+      "historical_performance_score": 0.535,
+      "signal_reliability": "mixed"
+    },
+    "META": {
+      "avg_return_pct": 0.293,
+      "win_rate": 0.455,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.594,
+      "historical_performance_score": 0.488,
+      "signal_reliability": "mixed"
+    },
+    "QQQ": {
+      "avg_return_pct": 0.666,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.68,
+      "signal_reliability": "strong"
+    },
+    "IWM": {
+      "avg_return_pct": 0.62,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.578,
+      "signal_reliability": "mixed"
+    },
+    "MARA": {
+      "avg_return_pct": 3.581,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.567,
+      "historical_performance_score": 0.711,
+      "signal_reliability": "strong"
+    },
+    "PLTR": {
+      "avg_return_pct": 0.674,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.558,
+      "historical_performance_score": 0.58,
+      "signal_reliability": "mixed"
+    },
+    "XLK": {
+      "avg_return_pct": 1.231,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.456,
+      "historical_performance_score": 0.706,
+      "signal_reliability": "strong"
+    },
+    "SPY": {
+      "avg_return_pct": 0.333,
+      "win_rate": 0.818,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.222,
+      "historical_performance_score": 0.69,
+      "signal_reliability": "strong"
+    },
+    "TSLA": {
+      "avg_return_pct": -0.536,
+      "win_rate": 0.409,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.392,
+      "historical_performance_score": 0.426,
+      "signal_reliability": "mixed"
+    },
+    "AVGO": {
+      "avg_return_pct": -0.348,
+      "win_rate": 0.5,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.218,
+      "historical_performance_score": 0.484,
+      "signal_reliability": "mixed"
+    },
+    "GOOGL": {
+      "avg_return_pct": -0.438,
+      "win_rate": 0.409,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.659,
+      "historical_performance_score": 0.43,
+      "signal_reliability": "mixed"
+    },
+    "MSFT": {
+      "avg_return_pct": 0.693,
+      "win_rate": 0.364,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.717,
+      "historical_performance_score": 0.456,
+      "signal_reliability": "mixed"
+    },
+    "NVDA": {
+      "avg_return_pct": -1.336,
+      "win_rate": 0.227,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.458,
+      "historical_performance_score": 0.29,
+      "signal_reliability": "weak"
+    },
+    "COIN": {
+      "avg_return_pct": -4.289,
+      "win_rate": 0.0,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.032,
+      "signal_reliability": "weak"
+    },
+    "SMCI": {
+      "avg_return_pct": 4.3,
+      "win_rate": 0.636,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.147,
+      "historical_performance_score": 0.768,
+      "signal_reliability": "strong"
+    },
+    "AAPL": {
+      "avg_return_pct": 1.448,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.387,
+      "historical_performance_score": 0.715,
+      "signal_reliability": "strong"
+    },
+    "NASA": {
+      "avg_return_pct": 6.195,
+      "win_rate": 0.909,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.237,
+      "historical_performance_score": 0.95,
+      "signal_reliability": "strong"
+    },
+    "AMD": {
+      "avg_return_pct": 3.457,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.567,
+      "historical_performance_score": 0.706,
+      "signal_reliability": "strong"
+    }
+  },
+  "historically_strong_tickers": [
+    {
+      "ticker": "NASA",
+      "avg_return_pct": 6.195,
+      "win_rate": 0.909,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.237,
+      "historical_performance_score": 0.95,
+      "signal_reliability": "strong"
+    },
+    {
+      "ticker": "CHAT",
+      "avg_return_pct": 2.675,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.771,
+      "signal_reliability": "strong"
+    },
+    {
+      "ticker": "SMCI",
+      "avg_return_pct": 4.3,
+      "win_rate": 0.636,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.147,
+      "historical_performance_score": 0.768,
+      "signal_reliability": "strong"
+    },
+    {
+      "ticker": "AAPL",
+      "avg_return_pct": 1.448,
+      "win_rate": 0.773,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.387,
+      "historical_performance_score": 0.715,
+      "signal_reliability": "strong"
+    },
+    {
+      "ticker": "MARA",
+      "avg_return_pct": 3.581,
+      "win_rate": 0.591,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": -0.567,
+      "historical_performance_score": 0.711,
+      "signal_reliability": "strong"
+    }
+  ],
+  "low_reliability_tickers": [
+    {
+      "ticker": "COIN",
+      "avg_return_pct": -4.289,
+      "win_rate": 0.0,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": null,
+      "historical_performance_score": 0.032,
+      "signal_reliability": "weak"
+    },
+    {
+      "ticker": "NVDA",
+      "avg_return_pct": -1.336,
+      "win_rate": 0.227,
+      "signal_count": 22,
+      "confidence_accuracy_correlation": 0.458,
+      "historical_performance_score": 0.29,
+      "signal_reliability": "weak"
+    }
+  ],
   "global_metrics": {
-    "high_confidence_success_rate": null,
+    "high_confidence_success_rate": 0.566,
     "low_confidence_success_rate": null,
     "degraded_mode_success_rate": null,
-    "normal_mode_success_rate": null
+    "normal_mode_success_rate": 0.566
   },
   "future_activation": {
     "enabled": false,
@@ -44,26 +286,63 @@
     ]
   },
   "regime_performance": {
-    "generated_at": "2026-05-16T03:34:11.212798",
+    "generated_at": "2026-05-28T09:01:34.739112",
     "primary_window_days": 3,
-    "resolved_signals": 0,
-    "by_regime": {},
+    "resolved_signals": 484,
+    "by_regime": {
+      "neutral": {
+        "total_signals": 484,
+        "win_rate": 0.566,
+        "avg_return_pct": 1.003,
+        "avg_signal_score": 0.274,
+        "avg_conviction_score": null,
+        "avg_holding_outcome_pct": 0.0,
+        "avg_regime_confidence": 0.0,
+        "conviction_bands": {
+          "unknown": {
+            "signal_count": 484,
+            "win_rate": 0.566,
+            "avg_return_pct": 1.003,
+            "avg_conviction_score": null,
+            "avg_holding_outcome_pct": 0.0
+          }
+        },
+        "best_conviction_band": "unknown",
+        "worst_conviction_band": "unknown",
+        "degraded_mode_success_rate": null,
+        "normal_mode_success_rate": 0.566,
+        "degraded_data_impact_note": "no degraded data in this regime sample"
+      }
+    },
     "observability": {
-      "regime_vs_success_correlation": {},
-      "degraded_mode_vs_regime_reliability": {},
-      "confidence_vs_outcome_within_regime": {}
+      "regime_vs_success_correlation": {
+        "neutral": 0.566
+      },
+      "degraded_mode_vs_regime_reliability": {
+        "neutral": {
+          "avg_regime_confidence": 0.0,
+          "degraded_mode_success_rate": null
+        }
+      },
+      "confidence_vs_outcome_within_regime": {
+        "neutral": {
+          "high": 0.566,
+          "medium": null,
+          "low": null
+        }
+      }
     }
   },
   "theme_alignment_performance": {
-    "generated_at": "2026-05-16T03:34:11.212851",
+    "generated_at": "2026-05-28T09:01:34.739631",
     "primary_window_days": 3,
-    "total": 198,
+    "total": 572,
     "buckets": {
       "none": {
-        "count": 198,
-        "resolved": 0,
-        "avg_return": null,
-        "hit_rate": null,
+        "count": 572,
+        "resolved": 484,
+        "avg_return": 1.003,
+        "hit_rate": 0.566,
         "low_sample_warning": false
       },
       "weak": {
@@ -90,9 +369,9 @@
     }
   },
   "portfolio_fit_performance": {
-    "generated_at": "2026-05-16T03:34:11.212962",
+    "generated_at": "2026-05-28T09:01:34.740112",
     "primary_window_days": 3,
-    "total": 198,
+    "total": 572,
     "buckets": {
       "poor": {
         "count": 0,
@@ -103,71 +382,71 @@
       },
       "neutral": {
         "count": 11,
-        "resolved": 0,
-        "avg_return": null,
-        "hit_rate": null,
+        "resolved": 11,
+        "avg_return": 0.514,
+        "hit_rate": 0.636,
         "low_sample_warning": false
       },
       "good": {
-        "count": 187,
-        "resolved": 0,
-        "avg_return": null,
-        "hit_rate": null,
+        "count": 539,
+        "resolved": 458,
+        "avg_return": 1.011,
+        "hit_rate": 0.559,
         "low_sample_warning": false
       },
       "strong": {
-        "count": 0,
-        "resolved": 0,
-        "avg_return": null,
-        "hit_rate": null,
-        "low_sample_warning": true
+        "count": 22,
+        "resolved": 15,
+        "avg_return": 1.106,
+        "hit_rate": 0.733,
+        "low_sample_warning": false
       }
     }
   },
   "final_rank_performance": {
-    "generated_at": "2026-05-16T03:34:11.213105",
+    "generated_at": "2026-05-28T09:01:34.740741",
     "primary_window_days": 3,
-    "total": 198,
-    "scored": 198,
+    "total": 572,
+    "scored": 572,
     "quartiles": {
       "Q1": {
-        "count": 49,
-        "resolved": 0,
-        "avg_final_rank_score": 0.5298,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
+        "count": 143,
+        "resolved": 116,
+        "avg_final_rank_score": 0.5372,
+        "avg_return": 0.76,
+        "direction_correct_rate": 0.457,
+        "low_sample_warning": false
       },
       "Q2": {
-        "count": 49,
-        "resolved": 0,
-        "avg_final_rank_score": 0.4753,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
+        "count": 143,
+        "resolved": 124,
+        "avg_final_rank_score": 0.48,
+        "avg_return": 1.276,
+        "direction_correct_rate": 0.524,
+        "low_sample_warning": false
       },
       "Q3": {
-        "count": 49,
-        "resolved": 0,
-        "avg_final_rank_score": 0.4562,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
+        "count": 143,
+        "resolved": 123,
+        "avg_final_rank_score": 0.4626,
+        "avg_return": 1.059,
+        "direction_correct_rate": 0.699,
+        "low_sample_warning": false
       },
       "Q4": {
-        "count": 51,
-        "resolved": 0,
-        "avg_final_rank_score": 0.4363,
-        "avg_return": null,
-        "direction_correct_rate": null,
-        "low_sample_warning": true
+        "count": 143,
+        "resolved": 121,
+        "avg_final_rank_score": 0.4456,
+        "avg_return": 0.899,
+        "direction_correct_rate": 0.579,
+        "low_sample_warning": false
       }
     }
   },
   "theme_type_performance": {
-    "generated_at": "2026-05-16T03:34:11.213141",
+    "generated_at": "2026-05-28T09:01:34.740832",
     "primary_window_days": 3,
-    "total": 198,
+    "total": 572,
     "by_type": {
       "classified": {
         "count": 0,
@@ -184,10 +463,10 @@
         "low_sample_warning": true
       },
       "none": {
-        "count": 198,
-        "resolved": 0,
-        "avg_return": null,
-        "hit_rate": null,
+        "count": 572,
+        "resolved": 484,
+        "avg_return": 1.003,
+        "hit_rate": 0.566,
         "low_sample_warning": false
       }
     }

@@ -425,6 +425,40 @@ def _safe_int_csv(v: Any) -> int | None:
     return int(f) if f is not None else None
 
 
+_FMP_PROFILE_CACHE_REL = ("data", "fmp_cache")
+_UNKNOWN_SECTOR = "Unknown"
+
+
+def _load_ticker_sector(root: Path, ticker: str) -> str:
+    """Resolve a ticker's sector from the FMP profile cache (no hardcoded
+    mappings). Returns "Unknown" if the cache is missing or malformed.
+
+    Reads `data/fmp_cache/profile_stable_<TICKER>.json` and returns its
+    `data[0].sector` field. ETF profiles legitimately come back as
+    "Financial Services / Asset Management" because FMP classifies funds
+    that way — this is FMP-truth, not a mapping defect.
+    """
+    safe_ticker = (ticker or "").strip().upper()
+    if not safe_ticker:
+        return _UNKNOWN_SECTOR
+    cache_path = root.joinpath(*_FMP_PROFILE_CACHE_REL) / f"profile_stable_{safe_ticker}.json"
+    if not cache_path.exists():
+        return _UNKNOWN_SECTOR
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return _UNKNOWN_SECTOR
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, list) and data:
+        first = data[0]
+    elif isinstance(data, dict):
+        first = data
+    else:
+        first = payload if isinstance(payload, dict) else {}
+    sector = (first or {}).get("sector")
+    return sector.strip() if isinstance(sector, str) and sector.strip() else _UNKNOWN_SECTOR
+
+
 def compute_outcome_attribution(
     *,
     root: str | Path = ".",
@@ -457,6 +491,13 @@ def compute_outcome_attribution(
 
     by_fp: dict[str, dict[str, Any]] = {}
     total_signals = 0
+    sector_cache: dict[str, str] = {}
+
+    def _sector_for(ticker: str) -> str:
+        ticker = (ticker or "").strip().upper()
+        if ticker not in sector_cache:
+            sector_cache[ticker] = _load_ticker_sector(root_path, ticker)
+        return sector_cache[ticker]
 
     try:
         with csv_path.open("r", encoding="utf-8-sig", errors="replace") as f:
@@ -471,6 +512,8 @@ def compute_outcome_attribution(
                     "sum_return_1d": 0.0, "sum_return_3d": 0.0, "sum_return_7d": 0.0,
                     "first_signal_time": None,
                     "last_signal_time": None,
+                    "_tickers": set(),
+                    "_by_sector": {},
                 })
                 bucket["count"] += 1
                 st = row.get("signal_time") or ""
@@ -479,6 +522,21 @@ def compute_outcome_attribution(
                         bucket["first_signal_time"] = st
                     if bucket["last_signal_time"] is None or st > bucket["last_signal_time"]:
                         bucket["last_signal_time"] = st
+
+                ticker = (row.get("ticker") or "").strip().upper()
+                if ticker:
+                    bucket["_tickers"].add(ticker)
+                sector = _sector_for(ticker) if ticker else _UNKNOWN_SECTOR
+                sec_bucket = bucket["_by_sector"].setdefault(sector, {
+                    "count": 0,
+                    "resolved_1d": 0,
+                    "hits_1d": 0,
+                    "sum_return_1d": 0.0,
+                    "tickers": set(),
+                })
+                sec_bucket["count"] += 1
+                if ticker:
+                    sec_bucket["tickers"].add(ticker)
 
                 for w in ("1d", "3d", "7d"):
                     ret = _safe_float_csv(row.get(f"outcome_return_{w}"))
@@ -489,6 +547,11 @@ def compute_outcome_attribution(
                     correct = _safe_int_csv(row.get(f"direction_correct_{w}"))
                     if correct:
                         bucket[f"hits_{w}"] += 1
+                    if w == "1d":
+                        sec_bucket["resolved_1d"] += 1
+                        sec_bucket["sum_return_1d"] += ret
+                        if correct:
+                            sec_bucket["hits_1d"] += 1
     except Exception as exc:
         logger.warning("retune_impact: outcome attribution failed — %s", exc)
         return {"available": False, "reason": f"csv_parse_error: {exc}"}
@@ -501,6 +564,24 @@ def compute_outcome_attribution(
             sum_ret = b.pop(f"sum_return_{w}")
             b[f"hit_rate_{w}"] = round(hits / resolved, 4) if resolved else None
             b[f"mean_return_{w}"] = round(sum_ret / resolved, 6) if resolved else None
+
+        # Finalize sector composition: convert per-sector running sums to
+        # hit_rate / mean_return / ticker_count, and compute share-of-pool.
+        sector_rows: dict[str, dict[str, Any]] = {}
+        total_count = max(b["count"], 1)
+        for sector, sec in b.pop("_by_sector").items():
+            resolved = sec["resolved_1d"]
+            sector_rows[sector] = {
+                "count": sec["count"],
+                "pct_of_signals": round(sec["count"] / total_count, 4),
+                "distinct_tickers": len(sec["tickers"]),
+                "resolved_1d": resolved,
+                "hit_rate_1d": round(sec["hits_1d"] / resolved, 4) if resolved else None,
+                "mean_return_1d": round(sec["sum_return_1d"] / resolved, 6) if resolved else None,
+            }
+        b["sector_composition"] = sector_rows
+        b["distinct_tickers"] = len(b.pop("_tickers"))
+
         # Attach known snapshot for this fingerprint (if any).
         snapshot = next(
             (r.get("snapshot") for r in history if r.get("fingerprint") == fp),
@@ -522,6 +603,7 @@ def compute_outcome_attribution(
         "fingerprint_count": len(by_fp),
         "by_fingerprint": by_fp,
         "pre_tracker_label": _PRE_TRACKER_LABEL,
+        "sector_source": "fmp_profile_cache",
     }
 
 
@@ -671,8 +753,8 @@ def render_retune_impact_md(payload: dict[str, Any]) -> str:
         a("")
         by_fp = attribution.get("by_fingerprint") or {}
         if by_fp:
-            a("| Fingerprint | Count | Resolved 1d | Hit rate 1d | Mean return 1d |")
-            a("|---|---|---|---|---|")
+            a("| Fingerprint | Count | Tickers | Resolved 1d | Hit rate 1d | Mean return 1d |")
+            a("|---|---|---|---|---|---|")
             for fp, b in sorted(
                 by_fp.items(),
                 key=lambda kv: (kv[0] == _PRE_TRACKER_LABEL, -kv[1]["count"]),
@@ -686,9 +768,46 @@ def render_retune_impact_md(payload: dict[str, Any]) -> str:
                 mr_str = f"{mr:+.2f}%" if mr is not None else "—"
                 a(
                     f"| `{fp[:16]}` | {b.get('count', 0)} | "
+                    f"{b.get('distinct_tickers', 0)} | "
                     f"{b.get('resolved_1d', 0)} | {hr_str} | {mr_str} |"
                 )
             a("")
+
+            # Sector composition breakdown — discloses universe shape so
+            # readers can judge regime correlation, not just raw lift.
+            sector_source = attribution.get("sector_source", "fmp_profile_cache")
+            a(f"### Universe sector composition (per-fingerprint, source: `{sector_source}`)")
+            a("")
+            a(
+                "> Sector resolved dynamically from FMP profile cache. ETFs are "
+                "reported under FMP's classification (often Financial Services / "
+                "Asset Management) — interpret accordingly."
+            )
+            a("")
+            for fp, b in sorted(
+                by_fp.items(),
+                key=lambda kv: (kv[0] == _PRE_TRACKER_LABEL, -kv[1]["count"]),
+            ):
+                comp = b.get("sector_composition") or {}
+                if not comp:
+                    continue
+                a(f"**`{fp[:16]}`** — {b.get('distinct_tickers', 0)} distinct tickers, "
+                  f"{b.get('count', 0)} signals:")
+                a("")
+                a("| Sector | Signals | Share | Tickers | Resolved 1d | Hit rate 1d | Mean return 1d |")
+                a("|---|---|---|---|---|---|---|")
+                for sector, sec in sorted(comp.items(), key=lambda kv: -kv[1]["count"]):
+                    hr = sec.get("hit_rate_1d")
+                    mr = sec.get("mean_return_1d")
+                    hr_str = f"{hr * 100:.1f}%" if hr is not None else "—"
+                    mr_str = f"{mr:+.2f}%" if mr is not None else "—"
+                    pct = sec.get("pct_of_signals") or 0
+                    a(
+                        f"| {sector} | {sec.get('count', 0)} | {pct * 100:.1f}% | "
+                        f"{sec.get('distinct_tickers', 0)} | {sec.get('resolved_1d', 0)} | "
+                        f"{hr_str} | {mr_str} |"
+                    )
+                a("")
     else:
         a("## Outcome Attribution")
         a("")

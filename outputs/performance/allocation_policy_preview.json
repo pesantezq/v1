@@ -1,80 +1,78 @@
 {
-  "generated_at": "2026-04-28T20:55:27.405753",
+  "generated_at": "2026-05-28T09:01:37.649154",
   "observe_only": true,
   "not_applied": true,
   "confidence_threshold": 0.5,
   "candidate_count": 5,
-  "total_baseline_pct": 0.1,
-  "total_preview_pct": 0.08,
+  "total_baseline_pct": 0.2,
+  "total_preview_pct": 0.184,
   "opportunities": [
     {
       "ticker": "AAPL",
-      "final_rank_score": 0.6248,
+      "final_rank_score": 0.6621,
       "rank_label": "good",
       "rank_multiplier": 1.1,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
-      "capped_by": [
-        "max_position_cap"
-      ],
-      "sector": "TECHNOLOGY",
-      "confidence_score": 1.0,
-      "portfolio_fit_label": "good",
-      "reason": "Good rank score (0.625); portfolio fit: good; themes: AI; size multiplied \u00d71.10; capped by max_position_cap"
-    },
-    {
-      "ticker": "AVGO",
-      "final_rank_score": 0.5063,
-      "rank_label": "neutral",
-      "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
+      "baseline_size": 0.04,
+      "preview_size": 0.044,
       "capped_by": [],
       "sector": "TECHNOLOGY",
-      "confidence_score": 0.92,
-      "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.506); portfolio fit: good"
+      "confidence_score": 1.0,
+      "portfolio_fit_label": "strong",
+      "reason": "Good rank score (0.662); portfolio fit: strong; themes: AI; size multiplied \u00d71.10"
     },
     {
-      "ticker": "AMD",
-      "final_rank_score": 0.4878,
+      "ticker": "META",
+      "final_rank_score": 0.5195,
       "rank_label": "neutral",
       "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.0,
-      "capped_by": [
-        "sector_cap"
-      ],
-      "sector": "TECHNOLOGY",
+      "baseline_size": 0.04,
+      "preview_size": 0.04,
+      "capped_by": [],
+      "sector": "COMMUNICATION SERVICES",
       "confidence_score": 0.92,
       "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.488); portfolio fit: good; capped by sector_cap"
+      "reason": "Neutral rank score (0.519); portfolio fit: good"
+    },
+    {
+      "ticker": "NASA",
+      "final_rank_score": 0.4845,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.04,
+      "capped_by": [],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "strong",
+      "reason": "Neutral rank score (0.484); portfolio fit: strong"
     },
     {
       "ticker": "RIOT",
-      "final_rank_score": 0.4691,
+      "final_rank_score": 0.4786,
       "rank_label": "neutral",
       "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
-      "preview_size": 0.02,
+      "baseline_size": 0.04,
+      "preview_size": 0.04,
       "capped_by": [],
       "sector": "FINANCIAL SERVICES",
       "confidence_score": 0.92,
       "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.469); portfolio fit: good"
+      "reason": "Neutral rank score (0.479); portfolio fit: good"
     },
     {
-      "ticker": "CHAT",
-      "final_rank_score": 0.4514,
+      "ticker": "COIN",
+      "final_rank_score": 0.4576,
       "rank_label": "neutral",
       "rank_multiplier": 1.0,
-      "baseline_size": 0.02,
+      "baseline_size": 0.04,
       "preview_size": 0.02,
-      "capped_by": [],
+      "capped_by": [
+        "sector_cap"
+      ],
       "sector": "FINANCIAL SERVICES",
       "confidence_score": 0.92,
       "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.451); portfolio fit: good"
+      "reason": "Neutral rank score (0.458); portfolio fit: good; capped by sector_cap"
     }
   ]
 }

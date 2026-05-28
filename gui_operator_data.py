@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -210,10 +210,29 @@ def _format_timestamp(value: Any) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _to_naive_utc(dt: datetime | None) -> datetime | None:
+    """Normalize a datetime to tz-naive UTC for subtraction.
+
+    Artifact timestamps come from two sources with mixed tz handling:
+    file mtimes via ``datetime.fromtimestamp`` (tz-naive local) and ISO
+    strings via ``datetime.fromisoformat`` (often tz-aware UTC). Mixing
+    these in arithmetic raised ``TypeError: can't subtract offset-naive
+    and offset-aware datetimes``. Normalizing to naive UTC at the seam
+    keeps the arithmetic safe without forcing every call site to care.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _relative_age_from_dt(value: datetime | None, now: datetime) -> str:
     if value is None:
         return "Unknown"
-    age_seconds = max(0, int((now - value).total_seconds()))
+    v = _to_naive_utc(value)
+    n = _to_naive_utc(now)
+    age_seconds = max(0, int((n - v).total_seconds()))
     if age_seconds < 60:
         return "just now"
     if age_seconds < 3600:
@@ -233,7 +252,9 @@ def classify_freshness(updated_at: datetime | None, now: datetime | None = None)
     if updated_at is None:
         return "missing"
     now = now or datetime.now()
-    age_seconds = max(0, int((now - updated_at).total_seconds()))
+    u = _to_naive_utc(updated_at)
+    n = _to_naive_utc(now)
+    age_seconds = max(0, int((n - u).total_seconds()))
     if age_seconds < 6 * 3600:
         return "fresh"
     if age_seconds < 24 * 3600:

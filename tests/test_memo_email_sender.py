@@ -15,6 +15,7 @@ from portfolio_automation.memo_email_sender import (
     MemoEmailConfig,
     load_memo_email_config,
     build_memo_email_message,
+    render_memo_html,
     send_daily_memo_email,
     write_memo_delivery_status,
     append_memo_delivery_log,
@@ -189,6 +190,153 @@ class TestBuildMemoEmailMessage:
         msg = build_memo_email_message(self._cfg(), "txt", "", "rid", "2026-05-02")
         parts = list(msg.iter_attachments())
         assert len(parts) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestRenderMemoHtml — HTML alternative body
+# ---------------------------------------------------------------------------
+
+class TestRenderMemoHtml:
+    _SAMPLE_MD = (
+        "# Daily Investment Memo — 2026-05-24\n"
+        "**Date:** 2026-05-24\n\n"
+        "## Today's Verdict\n"
+        "> **Cautious** — portfolio near a cap.\n\n"
+        "## Top Decisions\n"
+        "- **SCALE** `QQQ` | priority `0.550`\n"
+        "  - Drift +21% vs ±12%.\n\n"
+        "## Portfolio Growth\n"
+        "- **Total value:** $7,712.12\n"
+        "- **Today vs prior:** +0.56%\n"
+        "- **Past 7 days:** -1.20%\n\n"
+        "---\n"
+        "_Advisory only._\n"
+    )
+
+    def test_empty_input_returns_empty_string(self):
+        assert render_memo_html("", "2026-05-24") == ""
+        assert render_memo_html("   \n  ", "2026-05-24") == ""
+
+    def test_contains_doctype_and_date_header(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        assert out.startswith("<!doctype html>")
+        assert "2026-05-24" in out
+        assert "Daily Investment Memo" in out
+
+    def test_section_headings_present(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        assert "Today's Verdict" in out
+        assert "Top Decisions" in out
+        assert "Portfolio Growth" in out
+
+    def test_h1_and_preamble_stripped(self):
+        """Our own header replaces the markdown's H1/metadata block."""
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        # H1 from source markdown should not appear as <h1>
+        assert "<h1" not in out
+
+    def test_trailing_footer_stripped(self):
+        """The `---` + `_Advisory only._` source footer is removed."""
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        # We render our own footer; the source italic footer should not survive
+        assert "Advisory only." not in out or out.count("Advisory only") <= 1
+
+    def test_verdict_section_uses_amber_accent(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        # Find the verdict card and confirm it carries the amber accent
+        assert "#f59e0b" in out
+
+    def test_growth_section_uses_emerald_accent(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        assert "#10b981" in out
+
+    def test_gain_percentage_colored_green(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        assert "#059669" in out
+        assert "+0.56%" in out
+
+    def test_loss_percentage_colored_red(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        assert "#dc2626" in out
+        assert "-1.20%" in out
+
+    def test_inline_styles_used_not_style_block(self):
+        """Email clients strip <style> blocks; everything must be inline."""
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        # No CSS <style> blocks in body (head <title> is fine)
+        assert "<style" not in out
+        # Section cards carry inline border-left
+        assert "border-left:4px solid" in out
+
+    def test_ticker_code_styled_as_pill(self):
+        out = render_memo_html(self._SAMPLE_MD, "2026-05-24")
+        # Inline-styled <code> for tickers
+        assert "<code style=" in out
+        assert "QQQ" in out
+
+    def test_html_escapes_date(self):
+        out = render_memo_html(self._SAMPLE_MD, "<bad>")
+        assert "<bad>" not in out
+        assert "&lt;bad&gt;" in out
+
+
+# ---------------------------------------------------------------------------
+# TestBuildMemoEmailMessage — HTML alternative wiring
+# ---------------------------------------------------------------------------
+
+class TestBuildMemoEmailMessageHtml:
+    def _cfg(self) -> MemoEmailConfig:
+        return MemoEmailConfig(from_addr="from@test.com", to_addrs=["to@test.com"])
+
+    _MD = "## Today's Verdict\n> Cautious.\n\n## Portfolio Growth\n- Today +0.50%\n"
+
+    def test_html_alternative_added_when_md_present(self):
+        msg = build_memo_email_message(self._cfg(), "plain text", self._MD, "rid", "2026-05-02")
+        # The body part should be multipart/alternative; iter over alternatives
+        html_parts = [
+            p for p in msg.walk()
+            if p.get_content_type() == "text/html"
+        ]
+        assert len(html_parts) == 1
+        html_body = html_parts[0].get_content()
+        assert "Today's Verdict" in html_body
+        assert "2026-05-02" in html_body
+
+    def test_no_html_alternative_when_md_empty(self):
+        msg = build_memo_email_message(self._cfg(), "plain text", "", "rid", "2026-05-02")
+        html_parts = [
+            p for p in msg.walk()
+            if p.get_content_type() == "text/html"
+        ]
+        assert html_parts == []
+
+    def test_plain_text_alternative_still_present(self):
+        msg = build_memo_email_message(self._cfg(), "plain world", self._MD, "rid", "2026-05-02")
+        text_parts = [
+            p for p in msg.walk()
+            if p.get_content_type() == "text/plain"
+        ]
+        assert len(text_parts) == 1
+        assert "plain world" in text_parts[0].get_content()
+
+    def test_md_attachment_still_present_alongside_html(self):
+        msg = build_memo_email_message(self._cfg(), "txt", self._MD, "rid", "2026-05-02")
+        names = [p.get_filename() for p in msg.iter_attachments()]
+        assert any(n and "daily_memo_2026-05-02.md" in n for n in names)
+
+    def test_html_render_failure_does_not_break_message(self):
+        """If render_memo_html raises, we still produce a valid plain-text email."""
+        from unittest.mock import patch
+        with patch(
+            "portfolio_automation.memo_email_sender.render_memo_html",
+            side_effect=RuntimeError("boom"),
+        ):
+            msg = build_memo_email_message(self._cfg(), "fallback text", self._MD, "rid", "2026-05-02")
+        # Plain-text part survives; no HTML part
+        text_parts = [p for p in msg.walk() if p.get_content_type() == "text/plain"]
+        html_parts = [p for p in msg.walk() if p.get_content_type() == "text/html"]
+        assert any("fallback text" in p.get_content() for p in text_parts)
+        assert html_parts == []
 
 
 # ---------------------------------------------------------------------------

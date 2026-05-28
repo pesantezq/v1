@@ -232,5 +232,100 @@ class TestOutcomeAttribution(unittest.TestCase):
             self.assertFalse(r["available"])
 
 
+class TestSectorComposition(unittest.TestCase):
+    """Sector composition uses FMP profile cache; no hardcoded ticker→sector
+    mappings. Missing cache → Unknown bucket."""
+
+    def _write_profile(self, root: Path, ticker: str, sector: str) -> None:
+        p = root / "data" / "fmp_cache" / f"profile_stable_{ticker}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stored_at": "x", "data": [{"symbol": ticker, "sector": sector}]}))
+
+    def _write_gauge_history(self, root: Path, rows: list[dict]) -> None:
+        (root / "data").mkdir(parents=True, exist_ok=True)
+        (root / "data" / "gauge_versions.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n"
+        )
+
+    def _write_signal_outcomes(self, root: Path, rows: list[dict]) -> None:
+        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
+        csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+        cols = [
+            "ticker", "signal_time",
+            "outcome_return_1d", "direction_correct_1d",
+            "outcome_return_3d", "direction_correct_3d",
+            "outcome_return_7d", "direction_correct_7d",
+        ]
+        import csv as _csv
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+
+    def test_sector_breakdown_from_profile_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_gauge_history(root, [
+                {"first_seen_at": "2026-05-19T00:00:00+00:00", "fingerprint": "AAAA"},
+            ])
+            self._write_signal_outcomes(root, [
+                {"ticker": "AAPL", "signal_time": "2026-05-19T01:00:00",
+                 "outcome_return_1d": "0.02", "direction_correct_1d": "1"},
+                {"ticker": "NVDA", "signal_time": "2026-05-19T02:00:00",
+                 "outcome_return_1d": "0.03", "direction_correct_1d": "1"},
+                {"ticker": "XOM",  "signal_time": "2026-05-19T03:00:00",
+                 "outcome_return_1d": "-0.01", "direction_correct_1d": "0"},
+            ])
+            self._write_profile(root, "AAPL", "Technology")
+            self._write_profile(root, "NVDA", "Technology")
+            self._write_profile(root, "XOM", "Energy")
+            r = compute_outcome_attribution(root=root)
+            self.assertEqual(r["sector_source"], "fmp_profile_cache")
+            comp = r["by_fingerprint"]["AAAA"]["sector_composition"]
+            self.assertIn("Technology", comp)
+            self.assertIn("Energy", comp)
+            self.assertEqual(comp["Technology"]["count"], 2)
+            self.assertEqual(comp["Technology"]["distinct_tickers"], 2)
+            self.assertAlmostEqual(comp["Technology"]["pct_of_signals"], 2/3, places=3)
+            self.assertEqual(comp["Energy"]["count"], 1)
+            self.assertAlmostEqual(comp["Energy"]["hit_rate_1d"], 0.0, places=4)
+            self.assertEqual(r["by_fingerprint"]["AAAA"]["distinct_tickers"], 3)
+
+    def test_missing_profile_falls_to_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_gauge_history(root, [
+                {"first_seen_at": "2026-05-19T00:00:00+00:00", "fingerprint": "AAAA"},
+            ])
+            self._write_signal_outcomes(root, [
+                {"ticker": "WEIRD", "signal_time": "2026-05-19T01:00:00",
+                 "outcome_return_1d": "0.05", "direction_correct_1d": "1"},
+            ])
+            # No profile cache for WEIRD
+            r = compute_outcome_attribution(root=root)
+            comp = r["by_fingerprint"]["AAAA"]["sector_composition"]
+            self.assertIn("Unknown", comp)
+            self.assertEqual(comp["Unknown"]["count"], 1)
+
+    def test_malformed_profile_falls_to_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_gauge_history(root, [
+                {"first_seen_at": "2026-05-19T00:00:00+00:00", "fingerprint": "AAAA"},
+            ])
+            self._write_signal_outcomes(root, [
+                {"ticker": "BAD", "signal_time": "2026-05-19T01:00:00",
+                 "outcome_return_1d": "0.01", "direction_correct_1d": "1"},
+            ])
+            # Write malformed profile (not parseable JSON)
+            p = root / "data" / "fmp_cache" / "profile_stable_BAD.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{this is not json")
+            r = compute_outcome_attribution(root=root)
+            comp = r["by_fingerprint"]["AAAA"]["sector_composition"]
+            self.assertIn("Unknown", comp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

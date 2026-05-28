@@ -27,9 +27,9 @@ follow-up resolver) can investigate. Responsibilities:
 The 2x multiplier in trading-day units gives the resolver one full
 cron cycle of grace after the window matures. Weekend days contribute
 zero trading time, so a Friday signal cannot false-fire on Sunday.
-Holiday awareness is not modeled (Mon-Fri is the calendar) — rare
-NYSE holidays may cause a 1-day false-positive but the 2x multiplier
-absorbs that.
+NYSE holiday awareness is modeled via _NYSE_HOLIDAYS: those dates
+contribute zero trading time too, so a Friday signal cannot false-fire
+on Tuesday if the only weekday between them was Memorial Day.
 
 Hard guarantees:
   - observe_only=True hardcoded.
@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -82,16 +82,58 @@ _DISCLAIMER = (
 )
 
 
-def _trading_days_elapsed(start: datetime, end: datetime) -> float:
-    """Count Mon-Fri time between `start` and `end`, in 24h-day units.
+# NYSE-closed dates. Markets are closed on these days, so they contribute
+# zero trading time. Treating them as trading days inflates
+# _trading_days_elapsed and causes the probe to flag Friday signals as
+# stuck a day early when a holiday Monday follows. Static set keeps this
+# self-contained — no new dependency.
+_NYSE_HOLIDAYS: frozenset[date] = frozenset({
+    date(2025, 1, 1),    # New Year's Day
+    date(2025, 1, 9),    # National Day of Mourning (Jimmy Carter)
+    date(2025, 1, 20),   # MLK Jr Day
+    date(2025, 2, 17),   # Presidents Day
+    date(2025, 4, 18),   # Good Friday
+    date(2025, 5, 26),   # Memorial Day
+    date(2025, 6, 19),   # Juneteenth
+    date(2025, 7, 4),    # Independence Day
+    date(2025, 9, 1),    # Labor Day
+    date(2025, 11, 27),  # Thanksgiving
+    date(2025, 12, 25),  # Christmas
+    date(2026, 1, 1),    # New Year's Day
+    date(2026, 1, 19),   # MLK Jr Day
+    date(2026, 2, 16),   # Presidents Day
+    date(2026, 4, 3),    # Good Friday
+    date(2026, 5, 25),   # Memorial Day
+    date(2026, 6, 19),   # Juneteenth (Friday)
+    date(2026, 7, 3),    # Independence Day observed (Jul 4 = Saturday)
+    date(2026, 9, 7),    # Labor Day
+    date(2026, 11, 26),  # Thanksgiving
+    date(2026, 12, 25),  # Christmas
+    date(2027, 1, 1),    # New Year's Day
+    date(2027, 1, 18),   # MLK Jr Day
+    date(2027, 2, 15),   # Presidents Day
+    date(2027, 3, 26),   # Good Friday
+    date(2027, 5, 31),   # Memorial Day
+    date(2027, 6, 18),   # Juneteenth observed (Jun 19 = Saturday)
+    date(2027, 7, 5),    # Independence Day observed (Jul 4 = Sunday)
+    date(2027, 9, 6),    # Labor Day
+    date(2027, 11, 25),  # Thanksgiving
+    date(2027, 12, 24),  # Christmas observed (Dec 25 = Saturday)
+})
 
-    Both args must be timezone-naive. Weekend days contribute zero;
-    weekday fragments contribute proportionally. Returns 0 if end <= start.
+
+def _trading_days_elapsed(start: datetime, end: datetime) -> float:
+    """Count NYSE-trading time between `start` and `end`, in 24h-day units.
+
+    Both args must be timezone-naive. Weekend days and NYSE holidays
+    contribute zero; weekday fragments contribute proportionally.
+    Returns 0 if end <= start.
 
     Examples:
       Fri 12:00 -> Mon 12:00 -> 1.0 (half of Fri + half of Mon, no Sat/Sun)
       Sat 00:00 -> Sun 23:59 -> ~0.0 (both weekend)
       Mon 09:00 -> Tue 09:00 -> 1.0 (one full weekday)
+      Fri 12:00 -> Tue 12:00 (Mon = Memorial Day) -> 1.0 (half-Fri + half-Tue)
     """
     if end <= start:
         return 0.0
@@ -100,7 +142,7 @@ def _trading_days_elapsed(start: datetime, end: datetime) -> float:
     while cur < end:
         next_midnight = datetime.combine(cur.date(), datetime.min.time()) + timedelta(days=1)
         chunk_end = min(next_midnight, end)
-        if cur.weekday() < 5:  # Mon=0..Fri=4
+        if cur.weekday() < 5 and cur.date() not in _NYSE_HOLIDAYS:
             total += (chunk_end - cur).total_seconds() / 86400.0
         cur = chunk_end
     return total

@@ -40,9 +40,11 @@ Governance:
 """
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
 import os
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass, field
@@ -50,6 +52,8 @@ from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+
+import markdown as _markdown
 
 from portfolio_automation.data_governance import (
     OutputNamespace,
@@ -160,6 +164,162 @@ def load_memo_email_config(
 
 
 # ---------------------------------------------------------------------------
+# HTML rendering (email body alternative)
+# ---------------------------------------------------------------------------
+
+_EMAIL_FONT = (
+    "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+)
+
+# Left-accent color per section. Matching is case-insensitive prefix.
+_SECTION_ACCENTS: dict[str, str] = {
+    "today's verdict":      "#f59e0b",   # amber
+    "top insight":          "#6366f1",   # indigo
+    "top decisions":        "#3b82f6",   # blue
+    "capital actions":      "#3b82f6",   # blue
+    "risk focus":           "#dc2626",   # red
+    "what changed":         "#64748b",   # slate
+    "portfolio pulse":      "#0ea5e9",   # sky
+    "risk delta":           "#dc2626",   # red
+    "advisor stack":        "#8b5cf6",   # violet
+    "portfolio growth":     "#10b981",   # emerald
+    "top movers":           "#10b981",   # emerald
+    "decision hit rate":    "#3b82f6",   # blue
+    "what to watch":        "#64748b",   # slate
+    "system / data health": "#64748b",   # slate
+    "discovery research":   "#64748b",   # slate
+}
+_DEFAULT_ACCENT = "#3b82f6"
+
+_SECTION_RE = re.compile(r"^## +(.+)$", re.MULTILINE)
+_PCT_GAIN_RE = re.compile(r"\+(\d+(?:\.\d+)?)%")
+_PCT_LOSS_RE = re.compile(r"(?<![\d.])-(\d+(?:\.\d+)?)%")
+
+
+def _accent_for_section(title: str) -> str:
+    key = " ".join(title.strip().lower().split())
+    for prefix, color in _SECTION_ACCENTS.items():
+        if key.startswith(prefix):
+            return color
+    return _DEFAULT_ACCENT
+
+
+def _colorize_percentages(html_str: str) -> str:
+    """Color +x.xx% green and -x.xx% red. Runs after markdown render so HTML tags are untouched."""
+    html_str = _PCT_GAIN_RE.sub(
+        r'<span style="color:#059669;font-weight:600">+\1%</span>',
+        html_str,
+    )
+    html_str = _PCT_LOSS_RE.sub(
+        r'<span style="color:#dc2626;font-weight:600">-\1%</span>',
+        html_str,
+    )
+    return html_str
+
+
+def _style_inline_tags(body_html: str) -> str:
+    """Apply inline styles to the tags produced by python-markdown."""
+    replacements = {
+        "<ul>": '<ul style="margin:6px 0 0 0;padding-left:20px;color:#334155;line-height:1.55;">',
+        "<ol>": '<ol style="margin:6px 0 0 0;padding-left:20px;color:#334155;line-height:1.55;">',
+        "<li>": '<li style="margin:4px 0;">',
+        "<p>":  '<p style="margin:6px 0 0 0;color:#334155;line-height:1.55;font-size:14px;">',
+        "<strong>": '<strong style="color:#0f172a;font-weight:600;">',
+        "<em>": '<em style="color:#334155;">',
+        "<code>": (
+            '<code style="background:#f1f5f9;color:#0f172a;padding:1px 6px;'
+            "border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;"
+            'font-size:12.5px;">'
+        ),
+        "<blockquote>": (
+            '<blockquote style="margin:6px 0 0 0;padding:10px 14px;background:#fefce8;'
+            "border-left:3px solid #f59e0b;color:#1f2937;font-size:14px;line-height:1.5;"
+            'border-radius:4px;">'
+        ),
+    }
+    for raw, styled in replacements.items():
+        body_html = body_html.replace(raw, styled)
+    return body_html
+
+
+def _render_section_body(md_body: str) -> str:
+    if not md_body.strip():
+        return ""
+    raw_html = _markdown.markdown(md_body.strip(), extensions=["extra"])
+    styled = _style_inline_tags(raw_html)
+    return _colorize_percentages(styled)
+
+
+def _split_sections(md_text: str) -> list[tuple[str, str]]:
+    """Split markdown into [(heading, body), ...] using `## ` as the boundary."""
+    parts = _SECTION_RE.split(md_text)
+    # parts[0] is preamble (anything before first ## heading) — discarded.
+    sections: list[tuple[str, str]] = []
+    it = iter(parts[1:])
+    for heading in it:
+        body = next(it, "")
+        sections.append((heading.strip(), body.strip()))
+    return sections
+
+
+def render_memo_html(memo_md: str, memo_date: str) -> str:
+    """Render daily_memo.md as a self-contained, inline-styled HTML email body.
+
+    Returns "" if memo_md is empty so callers can decide whether to add an
+    HTML alternative at all.
+    """
+    if not memo_md or not memo_md.strip():
+        return ""
+
+    # Drop everything before the first `## ` heading (title + metadata block).
+    lines = memo_md.splitlines()
+    first_section_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("## ")),
+        len(lines),
+    )
+    body_text = "\n".join(lines[first_section_idx:])
+    # Drop trailing horizontal-rule footer; we render our own.
+    body_text = re.sub(r"\n---\s*\n.*$", "", body_text, flags=re.DOTALL)
+
+    section_rows: list[str] = []
+    for heading, body in _split_sections(body_text):
+        accent = _accent_for_section(heading)
+        body_html = _render_section_body(body)
+        section_rows.append(
+            '<tr><td style="padding:0 0 12px 0;">'
+            '<div style="background:#ffffff;border:1px solid #e2e8f0;'
+            f"border-left:4px solid {accent};border-radius:6px;padding:14px 18px;\">"
+            '<div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;'
+            f'color:{accent};font-weight:700;">{_html.escape(heading, quote=False)}</div>'
+            f'<div style="margin-top:4px;">{body_html}</div>'
+            "</div></td></tr>"
+        )
+
+    safe_date = _html.escape(memo_date, quote=False)
+    sections_html = "\n".join(section_rows)
+    return (
+        "<!doctype html>"
+        '<html lang="en"><head><meta charset="utf-8">'
+        f"<title>Daily Investment Memo — {safe_date}</title></head>"
+        f'<body style="margin:0;padding:0;background:#f5f7fa;font-family:{_EMAIL_FONT};color:#0f172a;">'
+        '<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" '
+        'style="background:#f5f7fa;padding:24px 12px;"><tr><td align="center">'
+        '<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="640" '
+        'style="max-width:640px;width:100%;">'
+        '<tr><td style="padding:0 0 16px 0;">'
+        '<div style="background:#0f172a;color:#f8fafc;border-radius:8px;padding:18px 22px;">'
+        '<div style="font-size:20px;font-weight:700;letter-spacing:-0.01em;">Daily Investment Memo</div>'
+        f'<div style="margin-top:4px;font-size:13px;color:#cbd5e1;">{safe_date} · Advisory only — no trades executed</div>'
+        "</div></td></tr>"
+        f"{sections_html}"
+        '<tr><td style="padding:12px 4px 0 4px;font-size:11px;color:#94a3b8;text-align:center;">'
+        "Generated by the Portfolio Automation System · Advisory output only"
+        "</td></tr>"
+        "</table></td></tr></table></body></html>"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public: build message
 # ---------------------------------------------------------------------------
 
@@ -187,6 +347,14 @@ def build_memo_email_message(
     msg.set_content(memo_txt or "(No memo content available)")
 
     if memo_md:
+        try:
+            html_body = render_memo_html(memo_md, memo_date)
+        except Exception as exc:
+            logger.warning("MEMO EMAIL: HTML render failed, plain-text only — %s", exc)
+            html_body = ""
+        if html_body:
+            msg.add_alternative(html_body, subtype="html")
+
         msg.add_attachment(
             memo_md.encode("utf-8"),
             maintype="text",

@@ -49,6 +49,171 @@ _DISCLAIMER = (
     "score state."
 )
 
+# Content-liveness checks: artifacts whose mere presence isn't enough — they
+# also need non-empty payload to indicate the upstream pipeline produced
+# meaningful output. Each entry is (relative_path, name, payload_predicate, rationale).
+# The predicate receives the parsed JSON dict and returns (status, observed)
+# where status is one of "ok" | "warn" | "unknown".
+def _check_theme_signals(payload: dict[str, Any]) -> tuple[str, int]:
+    themes = payload.get("themes") or []
+    if not isinstance(themes, list):
+        return ("unknown", 0)
+    n = len(themes)
+    return (("ok" if n > 0 else "warn"), n)
+
+
+def _check_news_articles(payload: dict[str, Any]) -> tuple[str, int]:
+    """News intelligence: article_count_raw == 0 means RSS/news fetch returned
+    nothing. Could be a market-closed weekend or a broken news producer.
+    Returns "unknown" when the expected field is missing (malformed payload)."""
+    if "article_count_raw" not in payload:
+        return ("unknown", 0)
+    n = int(payload.get("article_count_raw") or 0)
+    return (("ok" if n > 0 else "warn"), n)
+
+
+def _check_scraped_intel_degraded(payload: dict[str, Any]) -> tuple[str, int]:
+    """Scraped intel: degraded_mode=True signals fallback path active. The
+    `observed` value reports total evidence count so operators see whether
+    the degraded run still produced anything useful. Returns "unknown" when
+    the degraded_mode field is missing (malformed payload)."""
+    if not payload.get("enabled", True):
+        return ("ok", 0)
+    if "degraded_mode" not in payload:
+        return ("unknown", 0)
+    si = payload.get("scraped_intel") or {}
+    evidence = int(si.get("total_evidence") or 0)
+    is_degraded = bool(payload.get("degraded_mode"))
+    return (("warn" if is_degraded else "ok"), evidence)
+
+
+def _check_ai_budget_events(payload: dict[str, Any]) -> tuple[str, int]:
+    """AI budget: event_count == 0 means no AI calls were logged. Once theme
+    engine or ai_decision_validator is wired to a remote LLM, we expect ≥1
+    event per day. Zero events under normal operation indicates the budget
+    tracker isn't being called from the LLM-using producers. Returns
+    "unknown" when event_count field is missing (malformed payload)."""
+    if not payload.get("enabled", True):
+        return ("ok", 0)
+    if "event_count" not in payload:
+        return ("unknown", 0)
+    n = int(payload.get("event_count") or 0)
+    return (("ok" if n > 0 else "warn"), n)
+
+
+def _check_pulse_last_run_age(payload: dict[str, Any]) -> tuple[str, int]:
+    """Discovery pulse: warn if last successful run is older than 6 hours
+    during expected operating windows (any UTC hour the cron schedules a
+    run). Reports observed age in minutes."""
+    from datetime import datetime as _dt, timezone as _tz
+    usage = payload.get("usage") or {}
+    if usage.get("total_runs_month") in (None, 0):
+        # No runs ever — could be brand new install. Return unknown rather
+        # than warn so a fresh deploy doesn't false-alarm.
+        return ("unknown", 0)
+    # Need last_run_at from payload; status artifact carries it via state file
+    # but payload itself includes generated_at as a proxy.
+    last_run = payload.get("last_run_at") or payload.get("generated_at")
+    try:
+        last_dt = _dt.fromisoformat(last_run)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=_tz.utc)
+        age_min = int((_dt.now(_tz.utc) - last_dt).total_seconds() // 60)
+    except Exception:
+        return ("unknown", 0)
+    # 6h = 360min; cadence is every 4h on weekdays so 6h gives one missed run of slack
+    if age_min > 360:
+        return ("warn", age_min)
+    return ("ok", age_min)
+
+
+def _check_top100_daily(payload: dict[str, Any]) -> tuple[str, int]:
+    """Universe sanitation: warn if top100_daily has zero candidates OR is
+    missing the candidates list. Reports the candidate count."""
+    cands = payload.get("candidates")
+    if not isinstance(cands, list):
+        return ("unknown", 0)
+    n = len(cands)
+    return (("ok" if n > 0 else "warn"), n)
+
+
+def _check_pulse_cap_status(payload: dict[str, Any]) -> tuple[str, int]:
+    """Discovery pulse: warn if any monthly cap is at or above 90% utilization.
+    Reports the highest cap utilization seen, in integer percent."""
+    usage = payload.get("usage") or {}
+    caps = payload.get("caps") or {}
+    cost = float(usage.get("openai_cost_usd_month") or 0.0)
+    fmp = int(usage.get("fmp_calls_month") or 0)
+    cost_cap = float(caps.get("openai_cost_usd_max") or 0.0)
+    fmp_cap = int(caps.get("fmp_calls_max") or 0)
+
+    pcts: list[float] = []
+    if cost_cap > 0:
+        pcts.append(cost / cost_cap)
+    if fmp_cap > 0:
+        pcts.append(fmp / fmp_cap)
+
+    max_pct_int = int(max(pcts) * 100) if pcts else 0
+    if not pcts:
+        return ("unknown", 0)
+    if max_pct_int >= 90:
+        return ("warn", max_pct_int)
+    return ("ok", max_pct_int)
+
+
+_CONTENT_LIVENESS_CHECKS: list[tuple[str, str, Any, str]] = [
+    (
+        "outputs/latest/theme_signals.json",
+        "theme_signals.themes",
+        _check_theme_signals,
+        "Theme engine emitted zero themes — likely upstream LLM unreachable or "
+        "no RSS headlines collected. Causes extended_watchlist to stay dormant.",
+    ),
+    (
+        "outputs/latest/news_intelligence.json",
+        "news_intelligence.article_count_raw",
+        _check_news_articles,
+        "News intelligence returned zero articles — RSS aggregator or FMP news "
+        "feed may be failing. Degrades news_packets and ml_advisor evidence.",
+    ),
+    (
+        "outputs/latest/scraped_intel_run_summary.json",
+        "scraped_intel.degraded_mode",
+        _check_scraped_intel_degraded,
+        "Scraped-intel pipeline is running in degraded/fallback mode. Usually "
+        "means top100_watchlist.json is stale; rebuild via weekly cron mode.",
+    ),
+    (
+        "outputs/latest/ai_budget_summary.json",
+        "ai_budget.event_count",
+        _check_ai_budget_events,
+        "AI budget tracker logged zero events today. Under normal operation, at "
+        "least theme_engine should log one event. Zero events implies the "
+        "LLM-using producers aren't calling check_ai_budget/record_ai_usage_event.",
+    ),
+    (
+        "outputs/latest/discovery_pulse_status.json",
+        "discovery_pulse.last_run_age",
+        _check_pulse_last_run_age,
+        "Discovery pulse hasn't run in > 6 hours. Expected cadence is 4h "
+        "weekday / 8h weekend. Check crontab and /var/lock/stockbot-discovery-pulse.lock.",
+    ),
+    (
+        "outputs/latest/discovery_pulse_status.json",
+        "discovery_pulse.monthly_cap_status",
+        _check_pulse_cap_status,
+        "Discovery pulse monthly cap > 90% utilized. Approaching the trip-wire; "
+        "remaining runs this month will skip when cap reaches 100%.",
+    ),
+    (
+        "outputs/latest/top100_daily.json",
+        "universe_sanitation.top100_daily",
+        _check_top100_daily,
+        "Universe sanitation produced an empty top100_daily — either no "
+        "dynamic sources contributed tickers or the producer hit an error.",
+    ),
+]
+
 # Expected artifacts the official-lane run should produce. Used to flag
 # missing-but-expected outputs in the status report. Tuple of
 # (relative_path, label, must_be_today).
@@ -212,6 +377,50 @@ def scan_expected_artifacts(root: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Content liveness
+# ---------------------------------------------------------------------------
+
+
+def scan_content_liveness(root: Path) -> list[dict[str, Any]]:
+    """Per-artifact content checks beyond presence/freshness.
+
+    Each result row: {name, path, status, observed, rationale}. status is
+    "ok" (content present), "warn" (file exists but content empty/degraded),
+    or "unknown" (file missing or parse failed). A "warn" here escalates
+    overall_status from "ok" to "ok_with_warnings".
+    """
+    results: list[dict[str, Any]] = []
+    for rel_path, name, predicate, rationale in _CONTENT_LIVENESS_CHECKS:
+        p = root / rel_path
+        row: dict[str, Any] = {
+            "name": name,
+            "path": rel_path,
+            "status": "unknown",
+            "observed": 0,
+            "rationale": rationale,
+        }
+        if not p.exists():
+            row["reason"] = "artifact_missing"
+            results.append(row)
+            continue
+        payload = _load_json_safe(p)
+        if payload is None:
+            row["reason"] = "parse_failed"
+            results.append(row)
+            continue
+        try:
+            status, observed = predicate(payload)
+        except Exception as exc:
+            row["reason"] = f"predicate_error:{type(exc).__name__}"
+            results.append(row)
+            continue
+        row["status"] = status
+        row["observed"] = observed
+        results.append(row)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Build artifact
 # ---------------------------------------------------------------------------
 
@@ -234,6 +443,7 @@ def build_daily_run_status(
 
     stages = scan_log_stages(log_path)
     artifacts = scan_expected_artifacts(root_path)
+    content_liveness = scan_content_liveness(root_path)
 
     stage_count = len(stages)
     ok_count = sum(1 for s in stages if s["status"] == "ok")
@@ -249,9 +459,11 @@ def build_daily_run_status(
         if not a["required"] and (not a["exists"] or not a["fresh_today"])
     ]
 
+    content_warn_count = sum(1 for c in content_liveness if c["status"] == "warn")
+
     if failed_count > 0 or required_missing:
         overall_status = "failed" if failed_count else "partial"
-    elif warn_count > 0:
+    elif warn_count > 0 or content_warn_count > 0:
         overall_status = "ok_with_warnings"
     elif stage_count == 0:
         overall_status = "no_log"
@@ -273,6 +485,8 @@ def build_daily_run_status(
         },
         "stages": stages,
         "artifacts": artifacts,
+        "content_liveness": content_liveness,
+        "content_warn_count": content_warn_count,
         "required_missing_count": len(required_missing),
         "optional_missing_count": len(optional_missing),
         "disclaimer": _DISCLAIMER,
@@ -341,6 +555,19 @@ def render_daily_run_status_md(payload: dict[str, Any]) -> str:
                 f"- `{art.get('path')}` — {status_tag} {req_tag} "
                 f"(mtime: `{mtime}`)"
             )
+        a("")
+
+    liveness = payload.get("content_liveness") or []
+    if liveness:
+        warn_n = payload.get("content_warn_count", 0)
+        a(f"## Content Liveness ({warn_n} warn)")
+        a("")
+        for c in liveness:
+            glyph = _status_glyph(c.get("status", "unknown"))
+            observed = c.get("observed", 0)
+            a(f"- {glyph} `{c.get('name')}` — {c.get('status')} (observed={observed})")
+            if c.get("status") == "warn":
+                a(f"    > {c.get('rationale', '')}")
         a("")
 
     a("---")

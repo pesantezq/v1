@@ -239,10 +239,11 @@ class TestTradingDayCalendar(unittest.TestCase):
     stuck on Sunday because no trading sessions have elapsed."""
 
     def test_trading_days_elapsed_excludes_weekend(self):
-        # Fri 12:00 -> Mon 12:00 = 0.5 (Fri PM) + 0 (Sat) + 0 (Sun) + 0.5 (Mon AM)
+        # Fri 12:00 -> Mon 12:00 (clean week, no holiday Mon) =
+        # 0.5 (Fri PM) + 0 (Sat) + 0 (Sun) + 0.5 (Mon AM)
         from portfolio_automation.resolution_due_probe import _trading_days_elapsed
-        fri_noon = datetime(2026, 5, 22, 12, 0, 0)
-        mon_noon = datetime(2026, 5, 25, 12, 0, 0)
+        fri_noon = datetime(2026, 5, 29, 12, 0, 0)
+        mon_noon = datetime(2026, 6, 1, 12, 0, 0)
         self.assertAlmostEqual(
             _trading_days_elapsed(fri_noon, mon_noon), 1.0, places=5
         )
@@ -291,11 +292,11 @@ class TestTradingDayCalendar(unittest.TestCase):
         self.assertEqual(scan_unresolved(rows, now=mon), [])
 
     def test_friday_signal_flagged_on_tuesday_if_outcome_still_null(self):
-        # Tue 09:03 after Fri 09:02 = ~2.0 trading days; threshold met.
-        # Two cron cycles (Mon, Tue) have run; if outcome is still null the
-        # row is genuinely stuck and must be flagged.
-        fri = datetime(2026, 5, 22, 9, 2, 0)
-        tue = datetime(2026, 5, 26, 9, 3, 0)
+        # Tue 09:03 after Fri 09:02 in a clean week (no holiday Mon) =
+        # ~2.0 trading days; threshold met. Two cron cycles (Mon, Tue)
+        # have run; if outcome is still null the row is genuinely stuck.
+        fri = datetime(2026, 5, 29, 9, 2, 0)
+        tue = datetime(2026, 6, 2, 9, 3, 0)
         rows = [{
             "ticker": "QQQ", "signal_time": fri.isoformat(),
             "outcome_return_1d": "", "outcome_return_3d": "",
@@ -306,6 +307,23 @@ class TestTradingDayCalendar(unittest.TestCase):
         self.assertIn(1, flagged_windows)
         self.assertNotIn(3, flagged_windows)
         self.assertNotIn(7, flagged_windows)
+
+    def test_friday_signal_not_flagged_on_tuesday_when_monday_is_holiday(self):
+        # Production bug from 2026-05-26: Fri 2026-05-22 signals were
+        # flagged stuck on Tue 2026-05-26 even though the only Mon between
+        # them was Memorial Day (US markets closed). With only 1 actual
+        # NYSE trading day elapsed (Fri PM fragment + Tue AM fragment) the
+        # resolver has not yet had a chance to populate from Mon's close
+        # (which does not exist), so the probe must NOT flag.
+        fri = datetime(2026, 5, 22, 9, 2, 0)
+        tue = datetime(2026, 5, 26, 9, 3, 0)
+        rows = [{
+            "ticker": "QQQ", "signal_time": fri.isoformat(),
+            "outcome_return_1d": "", "outcome_return_3d": "",
+            "outcome_return_7d": "",
+        }]
+        out = scan_unresolved(rows, now=tue)
+        self.assertEqual(out, [])
 
     def test_payload_uses_trading_day_field_names(self):
         # Stuck-row payload should expose `age_trading_days`,

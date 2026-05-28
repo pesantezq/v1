@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-05-15T13:52:15.421313+00:00",
+  "generated_at": "2026-05-28T10:33:04.574848+00:00",
   "run_mode": "discovery",
-  "run_id": "2026-05-15_automatic_promotion",
+  "run_id": "2026-05-28_automatic_promotion",
   "observe_only": true,
   "no_trade": true,
   "not_recommendation": true,
@@ -36,7 +36,7 @@
     },
     {
       "artifact": "news_candidate_evidence",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
@@ -46,17 +46,17 @@
     },
     {
       "artifact": "news_evidence_layer",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
       "artifact": "news_intelligence",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
       "artifact": "market_narrative_daily",
-      "available": false,
+      "available": true,
       "summary": ""
     },
     {
@@ -71,11 +71,7 @@
     }
   ],
   "missing_inputs": [
-    "news_candidate_evidence",
     "replay_results",
-    "news_evidence_layer",
-    "news_intelligence",
-    "market_narrative_daily",
     "approval_decisions"
   ],
   "gates": {

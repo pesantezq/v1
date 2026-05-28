@@ -19,6 +19,9 @@ mcp>=1.0.0
 # RSS feed parsing (theme engine)
 feedparser>=6.0.0
 
+# LLM provider client (theme engine — gpt-4o-mini for theme detection)
+openai>=1.40.0
+
 # Streamlit GUI
 streamlit>=1.35.0
 
