@@ -104,13 +104,13 @@ FMP_ENDPOINTS = {
     },
 
     "financial_growth": {
-        "endpoint": "/stable/financial-statement-growth",
+        "endpoint": "/stable/financial-growth",
         "method": "GET",
         "params": ["symbol"],
         "per_symbol": True,
         "starter_safe": True,
         "priority": "P1",
-        "usage": "revenue/EPS growth",
+        "usage": "revenue/EPS growth (revenueGrowth field)",
     },
 
     # =========================

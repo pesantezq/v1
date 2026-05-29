@@ -30,6 +30,7 @@ STABLE_METHOD_MAP: dict[str, tuple[str, str]] = {
     "get_stock_news":         ("news/stock",                   "stock_news"),
     "get_income_statement":   ("income-statement",             "income_statement"),
     "get_key_metrics":        ("key-metrics",                  "key_metrics"),
+    "get_financial_growth":   ("financial-growth",             "financial_growth"),
 }
 
 LEGACY_METHOD_MAP: dict[str, tuple[str, str]] = {
@@ -44,7 +45,6 @@ LEGACY_METHOD_MAP: dict[str, tuple[str, str]] = {
 NOT_YET_IMPLEMENTED: list[str] = [
     "balance_sheet",
     "cashflow_statement",
-    "financial_growth",
     "ratings_snapshot",
     "historical_ratings",
     "available_sectors",

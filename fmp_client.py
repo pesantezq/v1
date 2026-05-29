@@ -48,7 +48,7 @@ _EP_INCOME_STMT = "income-statement"
 _EP_KEY_METRICS = "key-metrics"
 _EP_BALANCE_SHEET = "balance-sheet-statement"
 _EP_CASHFLOW_STMT = "cashflow-statement"
-_EP_FIN_GROWTH = "financial-statement-growth"
+_EP_FIN_GROWTH = "financial-growth"  # stable endpoint; carries revenueGrowth
 _EP_RATINGS_SNAPSHOT = "ratings-snapshot"
 _EP_HISTORICAL_RATINGS = "historical-ratings"
 _EP_AVAILABLE_SECTORS = "available-sectors"
@@ -639,6 +639,55 @@ class FMPClient:
             stale = self._cache.get_stale(cache_key)
             return _unwrap(stale) if stale is not None else None
 
+    def get_financial_growth(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 1,
+        ttl_days: int = 30,
+    ) -> Optional[Dict]:
+        """
+        Fetch growth metrics for a single symbol via stable/financial-growth.
+
+        revenueGrowth lives here, NOT in stable/key-metrics (whose schema does
+        not carry it). Starter-plan safe (verified HTTP 200). Returns the most
+        recent growth dict, or None if unavailable. Cached for ttl_days.
+        """
+        if not symbol:
+            return None
+        sym = symbol.upper()
+        cache_key = f"fin_growth_stable_{sym}_{period}"
+        ttl_seconds = ttl_days * 86400
+
+        def _unwrap(raw: Any) -> Optional[Dict]:
+            if isinstance(raw, list):
+                return raw[0] if raw and isinstance(raw[0], dict) else None
+            return raw if isinstance(raw, dict) else None
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return _unwrap(cached)
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
+        try:
+            raw = self._raw_get(
+                _EP_FIN_GROWTH,
+                {"symbol": sym, "period": period, "limit": str(limit)},
+                base_url=FMP_STABLE_BASE_URL,
+            )
+            self._cache.set(cache_key, raw)
+            result = _unwrap(raw)
+            logger.debug("FMP stable/financial-growth %s: revenueGrowth=%s", sym,
+                         result.get("revenueGrowth") if result else "n/a")
+            return result
+        except (FMPError, Exception) as exc:
+            logger.warning("FMP get_financial_growth(%s) failed: %s", sym, exc)
+            stale = self._cache.get_stale(cache_key)
+            return _unwrap(stale) if stale is not None else None
+
     def get_income_statement(
         self,
         symbol: str,
@@ -708,7 +757,7 @@ class FMPClient:
         for symbol in symbols:
             row: Dict[str, Any] = {'symbol': symbol}
 
-            # Primary: stable/key-metrics
+            # Primary: stable/key-metrics (roe, pe, fcf_yield — NOT revenueGrowth)
             km = self.get_key_metrics(symbol, period="annual", ttl_days=ttl_days)
             if km:
                 row['roe'] = km.get('returnOnEquity') or km.get('roe')
@@ -716,7 +765,7 @@ class FMPClient:
                 row['freeCashFlowYield'] = km.get('freeCashFlowYield')
                 row['revenueGrowth'] = km.get('revenueGrowth')
             else:
-                # Fallback: v3 endpoints
+                # Fallback: v3 key-metrics for roe/pe/fcf when stable fails.
                 try:
                     km_data = self._get_cached(
                         f'km_v3_{symbol}',
@@ -732,17 +781,13 @@ class FMPClient:
                 except Exception:
                     pass
 
-                try:
-                    fg_data = self._get_cached(
-                        f'fin_growth_v3_{symbol}',
-                        f'{_EP_V3_FINANCIAL_GROWTH}/{symbol}',
-                        ttl_seconds=ttl_days * 86400,
-                        params={'limit': '1'},
-                    )
-                    if isinstance(fg_data, list) and fg_data:
-                        row['revenueGrowth'] = fg_data[0].get('revenueGrowth')
-                except Exception:
-                    pass
+            # revenueGrowth lives in stable/financial-growth, not key-metrics.
+            # Source it explicitly (Starter-safe) whenever key-metrics didn't
+            # supply it — this is what keeps weekly_refresh from zeroing out.
+            if row.get('revenueGrowth') is None:
+                fg = self.get_financial_growth(symbol, period="annual", ttl_days=ttl_days)
+                if fg:
+                    row['revenueGrowth'] = fg.get('revenueGrowth')
 
             result.append(row)
 

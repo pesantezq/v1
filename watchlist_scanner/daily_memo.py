@@ -1624,11 +1624,36 @@ def _advisor_stack_items(root: Path) -> list[str]:
     )
 
     kelly = _safe_load(root.joinpath(*_KELLY_REL))
-    kelly_status = str(kelly.get("status") or "unknown") if isinstance(kelly, dict) else "unknown"
-    kelly_n = int(_flt(kelly.get("resolved_decisions"), 0)) if isinstance(kelly, dict) else 0
+    # The kelly_sizing_advisor.json schema carries per-group rows under
+    # by_decision[] (each with status + n_resolved); there is no top-level
+    # `status` / `resolved_decisions`. Derive both from by_decision so the line
+    # reflects reality (e.g. SCALE at 19/20). Fall back to any legacy top-level
+    # fields if a future schema reintroduces them.
+    kelly_status = "unknown"
+    kelly_n = 0
+    kelly_ready = 0
+    kelly_groups = 0
+    if isinstance(kelly, dict):
+        by_decision = kelly.get("by_decision")
+        if isinstance(by_decision, list) and by_decision:
+            kelly_groups = len(by_decision)
+            for d in by_decision:
+                if not isinstance(d, dict):
+                    continue
+                kelly_n += int(_flt(d.get("n_resolved"), 0))
+                if str(d.get("status")) not in ("insufficient_data", "unknown", "None"):
+                    kelly_ready += 1
+            kelly_status = "ok" if kelly_ready > 0 else "insufficient_data"
+        else:
+            # Legacy / alternate schema fallback.
+            kelly_status = str(kelly.get("status") or "unknown")
+            kelly_n = int(_flt(kelly.get("resolved_decisions"), 0))
+    groups_bit = (
+        f", {kelly_ready}/{kelly_groups} groups ready" if kelly_groups else ""
+    )
     items.append(
         f"Conviction sizing (Kelly): status `{kelly_status}` — "
-        f"{kelly_n} resolved decision{'s' if kelly_n != 1 else ''}"
+        f"{kelly_n} resolved decision{'s' if kelly_n != 1 else ''}{groups_bit}"
     )
 
     vol = _safe_load(root.joinpath(*_VOL_REGIME_REL))

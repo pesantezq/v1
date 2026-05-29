@@ -35,6 +35,7 @@ from watchlist_scanner.daily_memo import (
     get_subject,
     send_email,
     send_test_email,
+    _advisor_stack_items,
 )
 
 
@@ -1944,3 +1945,63 @@ class TestLoadDiscoverySandboxData:
         # Main requirement: no exception
         # result could be None (all empty) or dict; both are valid
         assert result is None or isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Kelly advisor line in the Advisor Stack (regression: must derive from
+# by_decision, not non-existent top-level status/resolved_decisions keys).
+# ---------------------------------------------------------------------------
+
+class TestAdvisorStackKellyLine:
+    """The kelly_sizing_advisor.json schema carries per-group rows under
+    by_decision[] (each with status + n_resolved) and has NO top-level
+    `status` / `resolved_decisions` keys. The memo previously read those
+    absent keys and always rendered "unknown — 0 resolved decisions",
+    masking that decisions had in fact resolved (e.g. SCALE at 19/20)."""
+
+    def _write_kelly(self, tmp_path, by_decision):
+        import json as _json
+        latest = tmp_path / "outputs" / "latest"
+        latest.mkdir(parents=True, exist_ok=True)
+        (latest / "kelly_sizing_advisor.json").write_text(
+            _json.dumps({
+                "min_resolved_required": 20,
+                "summary_line": "Kelly sizing",
+                "by_decision": by_decision,
+            }),
+            encoding="utf-8",
+        )
+
+    def _kelly_line(self, tmp_path):
+        items = _advisor_stack_items(tmp_path)
+        kl = [i for i in items if "Kelly" in i]
+        assert kl, "no Kelly line emitted"
+        return kl[0]
+
+    def test_resolved_total_reflects_by_decision(self, tmp_path):
+        self._write_kelly(tmp_path, [
+            {"decision": "BUY", "status": "insufficient_data", "n_resolved": 0},
+            {"decision": "SCALE", "status": "insufficient_data", "n_resolved": 19},
+            {"decision": "SELL", "status": "insufficient_data", "n_resolved": 6},
+        ])
+        line = self._kelly_line(tmp_path)
+        # Real total is 25 resolved — NOT the buggy 0.
+        assert "25 resolved decision" in line
+        assert "unknown" not in line
+        assert "insufficient_data" in line
+
+    def test_status_ok_when_a_group_is_ready(self, tmp_path):
+        self._write_kelly(tmp_path, [
+            {"decision": "BUY", "status": "ok", "n_resolved": 22},
+            {"decision": "SCALE", "status": "insufficient_data", "n_resolved": 19},
+            {"decision": "SELL", "status": "insufficient_data", "n_resolved": 6},
+        ])
+        line = self._kelly_line(tmp_path)
+        assert "47 resolved decision" in line
+        assert "`ok`" in line
+
+    def test_missing_artifact_does_not_crash(self, tmp_path):
+        # No kelly file written → graceful unknown/0, no exception.
+        line = self._kelly_line(tmp_path)
+        assert "Kelly" in line
+

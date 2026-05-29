@@ -352,18 +352,29 @@ class TestNewsUsesStableEndpoint:
 
 class TestFundamentalsV3PrefersStable:
     def test_get_key_metrics_called_before_v3_fallback(self):
-        """When stable/key-metrics succeeds, v3/key-metrics must NOT be called."""
+        """When stable/key-metrics succeeds, the legacy v3 endpoints must NOT
+        be called. revenueGrowth is still sourced from stable/financial-growth
+        (key-metrics does not carry it)."""
         client = _make_client()
         km_stable = {"returnOnEquity": 0.18, "priceEarningsRatio": 28.0}
+        endpoints = []
+
+        def mock_raw(endpoint, params, **kwargs):
+            endpoints.append(endpoint)
+            if endpoint == "financial-growth":
+                return [{"revenueGrowth": 0.21}]
+            return []
 
         with patch.object(client, "get_key_metrics", return_value=km_stable) as mock_km, \
-             patch.object(client, "_raw_get") as mock_rg:
+             patch.object(client, "_raw_get", side_effect=mock_raw):
             result = client.get_fundamentals_v3(["AAPL"])
 
         mock_km.assert_called_once_with("AAPL", period="annual", ttl_days=7)
-        # _raw_get must NOT have been called (stable path served result)
-        mock_rg.assert_not_called()
+        # No legacy v3 endpoint may be hit when the stable path succeeds.
+        assert not any(str(e).startswith("v3/") for e in endpoints)
         assert result[0]["roe"] == 0.18
+        # revenueGrowth must come from the stable financial-growth endpoint.
+        assert result[0]["revenueGrowth"] == 0.21
 
     def test_v3_fallback_used_when_stable_returns_none(self):
         """When stable/key-metrics fails, v3 endpoints are tried as fallback."""

@@ -103,13 +103,13 @@ REGISTRY: dict[str, dict] = {
         "usage": "free cash flow, capex, operating CF",
     },
     "financial_growth": {
-        "endpoint":      "/stable/financial-statement-growth",
+        "endpoint":      "/stable/financial-growth",
         "per_symbol":    True,
         "starter_safe":  True,
         "priority":      "P1",
         "required_daily": False,
         "classification": "core_stable_ok",
-        "usage": "revenue/EPS/FCF growth rates",
+        "usage": "revenue/EPS/FCF growth rates (revenueGrowth field; verified HTTP 200 on Starter)",
     },
     # ── P2: Quality / reference ───────────────────────────────────────────────
     "ratings_snapshot": {

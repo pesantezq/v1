@@ -91,13 +91,16 @@ class TestHardFilters(unittest.TestCase):
             'OK', _profile(), _metrics(), _quote(price=80, avg200=100))
         self.assertTrue(passes)
 
-    def test_missing_rev_growth_fails(self):
-        """None revenueGrowth should be treated as a filter failure."""
+    def test_missing_rev_growth_passes(self):
+        """Missing (None) revenueGrowth is non-fatal — a data-source outage
+        must not silently disqualify every symbol. Only a present-but-low
+        value fails (see test_fails_below_min_rev_growth). Aligns rev_growth
+        with the pe / fcf_yield filters, which already skip on missing data."""
         s = _scanner()
         passes, failures = s._passes_hard_filters(
             'NA', _profile(), {}, _quote())
-        self.assertFalse(passes)
-        self.assertTrue(any('rev_growth' in f for f in failures))
+        self.assertTrue(passes)
+        self.assertFalse(any('rev_growth' in f for f in failures))
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +216,43 @@ class TestFullScan(unittest.TestCase):
         refreshed, _ = s.daily_refresh(watchlist, new_quotes)
         self.assertTrue(refreshed[0]['above_200dma'])
         self.assertAlmostEqual(refreshed[0]['score'], 70.0, places=1)
+
+
+# ---------------------------------------------------------------------------
+# save_watchlist destructive-overwrite guard
+# ---------------------------------------------------------------------------
+
+class TestSaveWatchlistGuard(unittest.TestCase):
+    """A degenerate (empty) refresh result must never silently destroy a
+    previously-populated watchlist — that is exactly the data-loss that a
+    broken fundamentals source caused on 2026-05-28."""
+
+    def _tmp_scanner(self):
+        import tempfile
+        path = Path(tempfile.mkdtemp()) / "top100_watchlist.json"
+        return _scanner(watchlist_path=path), path
+
+    def _cand(self, sym):
+        return {'symbol': sym, 'score': 50.0}
+
+    def test_refuses_empty_overwrite_of_populated(self):
+        s, path = self._tmp_scanner()
+        s.save_watchlist([self._cand('AAPL'), self._cand('MSFT'), self._cand('NVDA')])
+        s.save_watchlist([])  # degenerate result — must be refused
+        self.assertEqual(len(s.load_watchlist()), 3)
+
+    def test_allows_empty_when_already_empty(self):
+        s, path = self._tmp_scanner()
+        s.save_watchlist([])  # no prior content — empty save is allowed
+        self.assertEqual(s.load_watchlist(), [])
+        self.assertTrue(path.exists())
+
+    def test_normal_populated_overwrite(self):
+        s, path = self._tmp_scanner()
+        s.save_watchlist([self._cand('AAPL')])
+        s.save_watchlist([self._cand('MSFT'), self._cand('NVDA')])
+        syms = [c['symbol'] for c in s.load_watchlist()]
+        self.assertEqual(syms, ['MSFT', 'NVDA'])
 
 
 if __name__ == '__main__':

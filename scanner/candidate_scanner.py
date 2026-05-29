@@ -191,7 +191,24 @@ class CandidateScanner:
     # ------------------------------------------------------------------
 
     def save_watchlist(self, candidates: List[Dict]) -> None:
-        """Persist Top-k candidates to disk for daily/weekly reuse."""
+        """Persist Top-k candidates to disk for daily/weekly reuse.
+
+        Destructive-overwrite guard: a refresh that yields 0 candidates must
+        not silently replace a previously-populated watchlist. An empty result
+        almost always signals an upstream data outage (e.g. fundamentals source
+        down), not a genuine "no stock qualifies". When that happens we keep the
+        existing list and log loudly rather than wiping it.
+        """
+        if not candidates:
+            existing = self.load_watchlist()
+            if existing:
+                logger.error(
+                    "Watchlist refresh produced 0 candidates but %d already "
+                    "exist — refusing to overwrite (likely upstream data "
+                    "outage). Keeping the existing watchlist.",
+                    len(existing),
+                )
+                return
         self._watchlist_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             'updated_at': datetime.now().isoformat(),
@@ -240,11 +257,12 @@ class CandidateScanner:
                 f"mkt_cap={mkt_cap / 1e9:.1f}B < {self.min_mkt_cap / 1e9:.0f}B"
             )
 
-        # Revenue growth
+        # Revenue growth — missing data is non-fatal (mirrors pe / fcf_yield
+        # below). Only a present-but-low value disqualifies; a None means the
+        # fundamentals source was unavailable, which must not silently eject
+        # the whole universe.
         rev_growth = metrics.get('revenueGrowth')
-        if rev_growth is None:
-            failures.append("rev_growth=N/A")
-        elif float(rev_growth) < self.min_rev_growth:
+        if rev_growth is not None and float(rev_growth) < self.min_rev_growth:
             failures.append(
                 f"rev_growth={float(rev_growth):.1%} < {self.min_rev_growth:.0%}"
             )

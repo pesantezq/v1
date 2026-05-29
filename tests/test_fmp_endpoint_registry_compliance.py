@@ -227,6 +227,40 @@ class TestRegistryCoversCoreMethods:
 
 
 # ---------------------------------------------------------------------------
+# Regression: financial-growth endpoint correctness + coverage.
+#
+# revenueGrowth lives in stable/financial-growth (verified HTTP 200), NOT in
+# stable/financial-statement-growth (the stale, never-validated path that
+# zeroed the weekly watchlist on 2026-05-28). Lock both the registry endpoint
+# value and the fact that get_financial_growth is registered under compliance.
+# ---------------------------------------------------------------------------
+
+class TestFinancialGrowthEndpoint:
+    def test_registry_uses_verified_financial_growth_path(self):
+        spec = REGISTRY.get("financial_growth")
+        assert spec is not None, "financial_growth missing from REGISTRY"
+        assert spec["endpoint"] == "/stable/financial-growth", (
+            f"financial_growth must use the verified /stable/financial-growth "
+            f"endpoint, got {spec['endpoint']!r}"
+        )
+        assert spec.get("starter_safe") is True
+
+    def test_get_financial_growth_is_registered_stable(self):
+        assert "get_financial_growth" in STABLE_METHOD_MAP, (
+            "get_financial_growth is implemented and must be in STABLE_METHOD_MAP "
+            "so its endpoint is under compliance coverage"
+        )
+        ep_const, registry_key = STABLE_METHOD_MAP["get_financial_growth"]
+        assert ep_const == "financial-growth"
+        assert registry_key == "financial_growth"
+
+    def test_financial_growth_not_in_not_yet_implemented(self):
+        assert "financial_growth" not in NOT_YET_IMPLEMENTED, (
+            "financial_growth is now implemented as get_financial_growth"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 9. Daily scanner path doesn't call legacy v3 methods
 # ---------------------------------------------------------------------------
 
