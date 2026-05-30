@@ -25,11 +25,21 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
   "last_fingerprint": "...",
   "last_current_fp_resolved_1d": 0,
   "last_pre_tracker_hit_rate_1d": null,
-  "thresholds_crossed": []
+  "thresholds_crossed": [],
+  "applied_fixes": []
 }
 ```
 
 `thresholds_crossed` is a subset of `["n_10", "n_30", "n_50", "n_100"]`.
+
+`applied_fixes` is an append-only ledger of fixes this skill (or an operator)
+shipped in response to a prior run's findings. Each batch carries
+`{date, applied_at, commit, source_run, fixes:[...]}`; each fix carries
+`{id, lens, finding, fix, expect_next_run, verify}`. The `verify` block is a
+machine-checkable spec (see Compute below) that lets the *next* run confirm the
+fix held, catch a regression, or know it's not yet observable. `applied_at` is
+the ISO timestamp the fix went live — used to ignore artifacts generated before
+the fix.
 
 **Read artifacts** (degrade gracefully on any miss):
 
@@ -65,6 +75,12 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 - `retune_rollbacks_total` = count of audit entries with `applied_by == "rollback"`
 - `retune_drift_max_pct` = `max(retune_auto_apply_state.monthly_drift.values()) / 0.25 × 100` (or 0)
 - `retune_apply_enabled` = `retune_auto_apply_state.apply_enabled` (default `true`)
+- `applied_fix_verdicts` = verify recorded fixes against today's artifacts:
+  ```bash
+  python -c "import json; from portfolio_automation.applied_fix_verifier import verify_applied_fixes, summarize; s=json.load(open('data/daily_check_state.json')); v=verify_applied_fixes(s, '.'); print(json.dumps({'verdicts': v, 'summary': summarize(v)}, indent=2))"
+  ```
+  Each verdict is `{id, status, detail}` where status ∈ `{confirmed, regressed, pending, manual}`. The module applies an `applied_at` staleness guard, so a fix reads `pending` (not `regressed`) until the pipeline has regenerated artifacts *after* the fix went live.
+- `applied_fix_regressions` = verdicts with `status == "regressed"` (a shipped fix's original symptom is back)
 
 ---
 
@@ -82,6 +98,7 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 - `pulse_cap_pct < 80` (no pulse cap is near its trip-wire)
 - `retune_drift_max_pct < 60` (no auto-apply param burning through monthly drift)
 - `retune_apply_enabled == true` (learning loop not operator-paused)
+- `applied_fix_regressions` is empty (no shipped fix has regressed)
 - no unexpected fingerprint change
 - attribution presence consistent with fingerprint age (n=0 only acceptable when age <2 days)
 
@@ -95,6 +112,7 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 - `retune_drift_max_pct ∈ [60, 100)` (auto-apply approaching drift cap on some param)
 - `retune_apply_enabled == false` for ≤ 14 days (operator paused; still acceptable short-term)
 - `retune_auto_applicable_count ≥ 3` (unusually many proposals queued — worth a look)
+- `applied_fix_regressions` is non-empty (a shipped fix regressed — its original symptom is back; advisory, investigate via discovery-health)
 - attribution lag (age ≥2d AND n=0) — known cron-timing issue
 
 **RED** when any of:
@@ -138,6 +156,7 @@ Runs at 09:15 UTC, 14 min after production cron at 09:00. Working dir: `/opt/sto
 - `pulse_age_hours > 8` (discovery pulse cron not firing on schedule)
 - `pulse_cap_pct ≥ 80` (pulse approaching or past trip-wire — investigate which cap)
 - `ai_budget_pct_of_cap ≥ 80` (project-wide AI spend approaching $20/mo)
+- `applied_fix_regressions` contains any discovery-layer fix id (e.g. `persistence_7d_daily_mode`, `pulse_last_run_age_sla`, `extended_watchlist_cross_day_gate`) — a previously-shipped discovery fix has regressed; pass the verdict `detail` so the agent can pinpoint which signal reverted
 
 This agent audits the discovery layer: RSS feedparser availability, Ollama / LLM reachability, theme_signals emit-rate, extended_watchlist promotions, FMP profile-cache freshness, parallel FMP candidate-scanner wiring, **discovery_pulse cron health, AI budget cap utilization, and FMP monthly headroom**. Surfaces stacked silent-zero failures.
 
@@ -174,6 +193,7 @@ Headline grammar:
 3. Discovery pulse + AI spend (always, since they're project-wide health signals): `"Pulse: last={pulse_age_hours}h ago, {total_runs_month} runs MTD ({skipped_runs_month} skipped) · AI: ${monthly_cost_total_usd:.2f}/${monthly_cost_limit_usd:.0f} cap ({ai_budget_pct_of_cap}%)"`
 4. Learning loop snapshot (always when `pattern_efficacy_monthly.json` exists): `"Loop: match-rate {pattern_match_rate}% · {retune_applies_last_7d} applies/7d · drift max {retune_drift_max_pct}% of cap · apply_enabled={retune_apply_enabled}"`
 5. Content liveness (only when `content_warn_count > 0`): `"Liveness warns ({content_warn_count}): {csv list of warn names}"`
+5b. Applied-fix verification (only when `applied_fixes` is non-empty): `"Fixes: {confirmed} confirmed · {pending} pending · {manual} manual{, REGRESSED: <id(s)> if any}"`. List each regressed id explicitly with its `detail`. When a fix is `confirmed`, it is dropped from state in Step 5 (it held — stop re-checking).
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
@@ -210,6 +230,11 @@ Update `data/daily_check_state.json`:
 - `last_pre_tracker_hit_rate_1d` = today's value
 - Append `newly_crossed_thresholds` to `thresholds_crossed`
 - Reset `thresholds_crossed` to `[]` if `fingerprint_changed`
+- Prune `confirmed` fixes from `applied_fixes` (they held — stop re-checking); keep `pending` / `regressed` / `manual`. Use the module helper so empty batches are dropped:
+  ```bash
+  python -c "import json; from portfolio_automation.applied_fix_verifier import verify_applied_fixes, drop_resolved; p='data/daily_check_state.json'; s=json.load(open(p)); s2=drop_resolved(s, verify_applied_fixes(s, '.')); s.update(s2); json.dump(s, open(p,'w'), indent=2)"
+  ```
+  (Run this AFTER updating the telemetry fields above, or fold both writes together. Never drop `manual` fixes automatically — an operator clears those.)
 
 ---
 
