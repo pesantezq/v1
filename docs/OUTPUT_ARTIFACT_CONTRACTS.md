@@ -203,6 +203,7 @@ Expected theme item fields:
 - `evidence_items`
 - `direct_mentions`
 - `tickers`
+- `persistence_7d` — distinct prior run-dates (trailing 7d) the theme appeared on. Computed in **all** run modes since 2026-05-30 (previously hardcoded 0 in daily mode). 0 = first-seen.
 
 ### `outputs/latest/watch_candidates.json`
 
@@ -222,6 +223,20 @@ Expected item fields:
 - `confidence`
 - `rationale`
 - `timestamp`
+- `persistence_7d` — distinct days the candidate's theme(s) have been seen, prior days + today (first-ever = 1). Consumed by `extended_watchlist.evaluate_candidates` for the cross-day reinforcement gate (`reinforce_persistence_days`, default 3).
+
+### `data/daily_check_state.json` (state file — gitignored, local)
+
+Carry-over state for the `daily-tool-analysis` skill. Not an output artifact; local to each host and excluded from git. Top-level fields:
+
+- `last_run_at`, `last_fingerprint`, `last_current_fp_resolved_1d`, `last_pre_tracker_hit_rate_1d`
+- `thresholds_crossed` — subset of `["n_10","n_30","n_50","n_100"]`
+- `applied_fixes` — append-only ledger of shipped fixes. Each batch: `{date, applied_at, commit, source_run, fixes:[...]}`. Each fix: `{id, lens, finding, fix, expect_next_run, verify}`. The `verify` block is a machine-checkable spec consumed by `portfolio_automation/applied_fix_verifier.py`:
+  - `liveness_row_not_warn` — `{row, regression_below_observed}`
+  - `artifact_max_field_gt` — `{artifact, list_path, field, threshold}`
+  - any other / absent `kind` → `manual`
+
+Written and pruned by the `daily-tool-analysis` skill (Step 5). `confirmed` fixes are dropped; `pending` / `regressed` / `manual` are retained.
 
 ### `outputs/portfolio/portfolio_snapshot.json`
 

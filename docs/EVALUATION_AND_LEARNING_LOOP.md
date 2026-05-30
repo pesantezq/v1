@@ -176,3 +176,22 @@ windows have elapsed but whose outcome columns are still null. The artifact
 `outputs/latest/decisions_due_for_resolution.{json,md}` should report a near-
 zero `stuck_count` on a healthy run. Persistent non-zero stuck counts are the
 operator's primary signal that the resolver has regressed.
+
+## Applied-Fix Self-Audit Loop (2026-05-30)
+
+A meta-loop that learns whether the system's *own fixes* held. The
+`daily-tool-analysis` skill records each fix it ships into
+`data/daily_check_state.json:applied_fixes` with a machine-checkable `verify`
+spec. On the next run, `portfolio_automation/applied_fix_verifier.py` re-checks
+each fix against the regenerated artifacts and classifies it `confirmed` /
+`regressed` / `pending` / `manual`:
+
+- `confirmed` fixes are pruned from state (stop re-checking).
+- `regressed` fixes (the original symptom is back) block GREEN and dispatch
+  `portfolio-discovery-health`.
+- An `applied_at` staleness guard returns `pending` until the pipeline has
+  regenerated artifacts *after* the fix went live, so a fix never false-reads
+  `regressed` on its first run.
+
+Observe-only: the verifier writes no artifact; its verdicts are consumed
+in-process by the skill. See `docs/applied_fix_verifier.md`.

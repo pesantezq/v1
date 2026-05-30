@@ -724,3 +724,123 @@ resolutions complete for the full decision universe.
 - `outputs/latest/decisions_due_for_resolution.json` is now a meaningful probe;
   if any window stays stuck, the resolver has a real bug to investigate
 
+---
+
+## Discovery Persistence (Daily-Mode) + Cross-Day Reinforcement Gate + Pulse SLA
+
+### Date
+
+2026-05-30
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `theme_engine/__main__.py` — new `_apply_persistence(store, enriched_themes, watch_candidates, run_date)`; Step 5 now calls it in all run modes (was an inline weekly/monthly-only block)
+- `watchlist_scanner/extended_watchlist.py` — `ExtendedWatchlist.__init__` gains `reinforce_persistence_days` (default 3, const `_DEFAULT_REINFORCE_PERSISTENCE_DAYS`); `evaluate_candidates` reinforcement gate extended
+- `portfolio_automation/discovery_pulse.py`, `main.py` — both `evaluate_candidates` callers pass `reinforce_persistence_days` from `extended_watchlist` config
+- `portfolio_automation/daily_run_status.py` — `_check_pulse_last_run_age` warn threshold 360min → 840min
+- `tests/test_theme_engine.py::TestApplyPersistence` (3), `tests/test_extended_watchlist_promotion.py` (7), `tests/test_daily_run_status.py` pulse-age tests (1 new + 1 updated)
+
+### Decision
+
+Three coordinated discovery-layer fixes shipped together:
+
+1. **persistence_7d computed in daily mode.** `persistence_7d` was hardcoded to `0` for all themes in daily mode (only computed weekly/monthly), but the live pipeline runs the theme engine in **daily** mode — so persistence was always 0. `_apply_persistence` now computes trailing-7d theme persistence (distinct prior run-dates) in every mode, and additionally attaches per-candidate `persistence_7d` (prior distinct days + today; first-ever detection = 1).
+2. **Cross-day reinforcement gate.** The extended-watchlist promotion gate credited a candidate as reinforced only on `len(themes) >= 2 OR "direct" in sources`. Single-theme candidates recurring day after day under one theme (NOC/LMT/RTX under "Defense") never qualified. The gate now also credits `persistence_7d >= reinforce_persistence_days` (default 3). The multi-theme and direct-mention paths are unchanged; `reinforce_persistence_days=0` disables the new path.
+3. **Pulse SLA 6h → 14h.** `discovery_pulse.last_run_age` warned above 6h, but the longest by-design gap is the overnight window (weekend ~13.25h as seen at the 09:15 daily check), so it false-warned every morning. Threshold raised to 14h (840min).
+
+### Why
+
+The extended-watchlist promotion path has been dormant (0 rows lifetime). The discovery-health agent attributed this to `persistence_7d` being stuck at 0, but verification showed two *distinct* faults: persistence was genuinely always 0 (degrading `theme_alignment` scoring and the memo persistence label), AND the promotion gate never read persistence at all. Fixing both is what actually unblocks single-theme recurring candidates. The pulse SLA was a separate operator follow-up — a recurring benign morning warn.
+
+### Invariants Preserved
+
+- No `signal_score` / `confidence_score` / `conviction_score` / decision / allocation semantics changed
+- Theme-engine output contract (`theme_signals.json`, `watch_candidates.json`) shape unchanged — only `persistence_7d` values now populate in daily mode
+- Multi-theme and direct-mention reinforcement paths unchanged; new persistence path is additive and config-gated (default-on at 3)
+- SQLite schema unchanged
+
+### Downstream Impact
+
+- `outputs/latest/theme_signals.json` `themes[].persistence_7d` now non-zero once ≥1 prior day of data exists
+- `extended_watchlist` table may begin gaining rows for persistent single-theme candidates
+- `daily_run_status.json` `discovery_pulse.last_run_age` stops warning on the benign overnight gap; `content_warn_count` drops by 1 on affected mornings
+- Memo Top Insight persistence label is fed real values (see paired memo-label entry below)
+
+---
+
+## Applied-Fix Verification Loop (daily-tool-analysis consumer)
+
+### Date
+
+2026-05-30
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `portfolio_automation/applied_fix_verifier.py` — new (observe-only, pure): `verify_applied_fixes`, `summarize`, `drop_resolved`; check kinds `liveness_row_not_warn`, `artifact_max_field_gt`; `applied_at` staleness guard
+- `.claude/commands/daily-tool-analysis.md` — Step 1 computes `applied_fix_verdicts`; Step 2 blocks GREEN / raises AMBER on regression; Step 3 dispatches `portfolio-discovery-health` on a discovery-layer regression; Step 4 emits a "Fixes:" body line; Step 5 prunes confirmed fixes
+- `data/daily_check_state.json` — new `applied_fixes` ledger field (state file; gitignored) with per-fix `verify` spec + batch `applied_at`
+- `tests/test_applied_fix_verifier.py` (17)
+
+### Decision
+
+The daily-tool-analysis skill records fixes it ships into `daily_check_state.json:applied_fixes`. This was a passive audit record with no consumer. The new verifier re-checks each fix's machine-checkable `verify` spec against the next run's artifacts and classifies it `confirmed` / `regressed` / `pending` / `manual`. A `confirmed` fix is pruned from state (stop re-checking); a `regressed` fix blocks GREEN and dispatches discovery-health. An `applied_at` staleness guard returns `pending` (not a false `regressed`) until the pipeline has regenerated artifacts after the fix went live. By design, `artifact_max_field_gt` never emits `regressed` (a zero reading cannot distinguish "fix broke" from "first day of data").
+
+### Why
+
+Closes the producer-without-consumer debt on `daily_check_state.json:applied_fixes` (CLAUDE.md coverage requirement). Without it, a shipped fix that silently regresses would never be caught, and resolved findings would be re-flagged every run.
+
+### Invariants Preserved
+
+- Observe-only: the module writes no output artifact; it returns verdicts the skill consumes
+- No scoring / decision / allocation behavior changed
+- Backward compatible: a batch without `applied_at` skips the staleness guard; an unknown `verify.kind` yields `manual`
+
+### Downstream Impact
+
+- Daily heartbeat gains a "Fixes: N confirmed · N pending · N manual" line when `applied_fixes` is non-empty
+- New AMBER trigger (`applied_fix_regressions` non-empty) and discovery-health dispatch trigger
+- `data/daily_check_state.json` schema gains `applied_fixes`
+
+---
+
+## Memo Top-Insight Persistence Label Floor
+
+### Date
+
+2026-05-30
+
+### Area
+
+output_contract
+
+### Files / Functions
+
+- `watchlist_scanner/daily_memo.py` — `_build_top_insight` persistence label
+- `tests/test_daily_memo.py::TestTopInsightPersistenceLabel` (5)
+
+### Decision
+
+The Top Insight persistence label was binary (`persistence >= 0.5` → "strong", else "moderate"), so a first-seen theme with `top_theme.persistence == 0.0` rendered as "moderate persistence" — misleading. Replaced with a three-tier clause: strong (`>=0.5`) / moderate (`0 < p < 0.5`) / "newly emerging (no prior-day persistence yet)" (`p <= 0`).
+
+### Why
+
+Surfaced by the memo-reviewer agent during a daily-tool-analysis run. Complements the same-day persistence_7d daily-mode fix: that fix populates the value, this fix labels a genuine 0.0 honestly.
+
+### Invariants Preserved
+
+- No scoring / decision / allocation behavior changed
+- Memo compact contract unchanged (max 5 decisions / 3 risk / 3 changes); only the Top Insight wording for zero-persistence themes changed
+- Strong and moderate wording for non-zero persistence unchanged
+
+### Downstream Impact
+
+- `outputs/latest/daily_memo.md` Top Insight line reads "newly emerging …" instead of "moderate persistence" when the dominant theme is first-seen
+

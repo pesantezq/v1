@@ -86,7 +86,11 @@ Current section budget:
   precise gap and the artifact path so the operator knows why the rest of the
   memo may be stale.
 - `Top Insight`
-  One or two short sentences only.
+  One or two short sentences only. The dominant-theme persistence label
+  (`_build_top_insight`) is three-tier: `with strong persistence` (≥0.5) /
+  `with moderate persistence` (0 < p < 0.5) / `newly emerging (no prior-day
+  persistence yet)` (p ≤ 0). The zero floor (added 2026-05-30) prevents a
+  first-seen theme from being mislabelled "moderate persistence".
 - `Top Decisions`
   Maximum 5 ranked decisions. Reason text is run through a compacting regex
   so structural cap breaches render as `Leverage exceeds cap (X.X% vs cap).`
