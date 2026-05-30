@@ -853,10 +853,17 @@ def _build_top_insight(tt: dict[str, Any], to: dict[str, Any]) -> str:
     persistence = _flt(tt.get("persistence"))
 
     if theme_name and ticker:
-        strength = "strong" if persistence >= 0.5 else "moderate"
+        # Three-tier so a first-seen theme (persistence 0.0) reads as emerging
+        # rather than mislabelled "moderate persistence" (the prior binary bug).
+        if persistence >= 0.5:
+            persistence_clause = "with strong persistence"
+        elif persistence > 0:
+            persistence_clause = "with moderate persistence"
+        else:
+            persistence_clause = "newly emerging (no prior-day persistence yet)"
         fit_note = f" and {fit_label} portfolio fit" if fit_label and fit_label not in ("—", "neutral") else ""
         return (
-            f"{theme_name} is the dominant theme with {strength} persistence; "
+            f"{theme_name} is the dominant theme {persistence_clause}; "
             f"{ticker} leads opportunities with {conviction.lower() or 'notable'} conviction{fit_note}."
         )
     if theme_name:

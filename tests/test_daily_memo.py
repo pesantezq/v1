@@ -36,7 +36,41 @@ from watchlist_scanner.daily_memo import (
     send_email,
     send_test_email,
     _advisor_stack_items,
+    _build_top_insight,
 )
+
+
+class TestTopInsightPersistenceLabel:
+    """The Top Insight persistence label must have a zero/low floor — a theme
+    with persistence 0.0 must NOT render as 'moderate persistence' (the prior
+    binary >=0.5-else-moderate bug mislabelled first-seen themes)."""
+
+    def _tt(self, persistence):
+        return {"name": "Defense", "persistence": persistence}
+
+    def _to(self):
+        return {"ticker": "NOC", "conviction_band": "high", "portfolio_fit_label": "neutral"}
+
+    def test_zero_persistence_is_not_moderate(self):
+        s = _build_top_insight(self._tt(0.0), self._to())
+        assert "moderate persistence" not in s
+        assert "strong persistence" not in s
+
+    def test_zero_persistence_reads_as_emerging(self):
+        s = _build_top_insight(self._tt(0.0), self._to())
+        assert "emerging" in s.lower()
+
+    def test_low_positive_persistence_is_moderate(self):
+        s = _build_top_insight(self._tt(0.3), self._to())
+        assert "moderate persistence" in s
+
+    def test_high_persistence_is_strong(self):
+        s = _build_top_insight(self._tt(0.72), self._to())
+        assert "strong persistence" in s
+
+    def test_theme_and_ticker_still_present_at_zero(self):
+        s = _build_top_insight(self._tt(0.0), self._to())
+        assert "Defense" in s and "NOC" in s
 
 
 # ---------------------------------------------------------------------------
