@@ -237,6 +237,7 @@ def _run_tier_a_theme(root: Path) -> dict[str, Any]:
                     ttl_days=int(ew_cfg.get("ttl_days", 7)),
                     max_symbols=int(ew_cfg.get("max_symbols", 3)),
                     confidence_threshold=float(ew_cfg.get("confidence_threshold", 0.80)),
+                    reinforce_persistence_days=int(ew_cfg.get("reinforce_persistence_days", 3)),
                 )
                 ws_cfg = raw_cfg.get("watchlist_scanner") or {}
                 static_wl = ws_cfg.get("watchlist") or []

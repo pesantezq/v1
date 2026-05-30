@@ -938,5 +938,68 @@ class TestOllamaIntegration(unittest.TestCase):
             self.assertLessEqual(theme["confidence"], 1.0)
 
 
+class TestApplyPersistence(unittest.TestCase):
+    """_apply_persistence must compute trailing-7d persistence in ALL modes
+    (the daily-mode hardcoded-0 bug) and attach per-candidate persistence."""
+
+    def setUp(self):
+        from theme_engine.theme_store import ThemeStore
+        self.tmp = Path(tempfile.mkdtemp())
+        self.store = ThemeStore(
+            db_path=str(self.tmp / "test.db"),
+            output_dir=str(self.tmp / "out"),
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _theme(self, name, persistence_7d=0):
+        return {
+            "name": name, "confidence": 0.9, "rationale": "r",
+            "evidence_items": [], "direct_mentions": [], "tickers": [],
+            "persistence_7d": persistence_7d,
+        }
+
+    def test_theme_persistence_counts_distinct_prior_days(self):
+        from datetime import date, timedelta
+        from theme_engine.__main__ import _apply_persistence
+        today = date.today()
+        d1 = (today - timedelta(days=2)).isoformat()
+        d2 = (today - timedelta(days=1)).isoformat()
+        self.store.save_signals([self._theme("Defense")], [], d1)
+        self.store.save_signals([self._theme("Defense")], [], d2)
+
+        enriched = [self._theme("Defense")]
+        cands = []
+        _apply_persistence(self.store, enriched, cands, today.isoformat())
+        # Two distinct prior run-dates → persistence_7d == 2 (not hardcoded 0).
+        self.assertEqual(enriched[0]["persistence_7d"], 2)
+
+    def test_candidate_persistence_includes_today(self):
+        from datetime import date, timedelta
+        from theme_engine.__main__ import _apply_persistence
+        today = date.today()
+        d1 = (today - timedelta(days=2)).isoformat()
+        d2 = (today - timedelta(days=1)).isoformat()
+        self.store.save_signals([self._theme("Defense")], [], d1)
+        self.store.save_signals([self._theme("Defense")], [], d2)
+
+        enriched = [self._theme("Defense")]
+        cands = [{"ticker": "NOC", "themes": ["Defense"], "sources": ["theme"], "confidence": 0.9}]
+        _apply_persistence(self.store, enriched, cands, today.isoformat())
+        # 2 prior days + today = 3 distinct days for the candidate.
+        self.assertEqual(cands[0]["persistence_7d"], 3)
+
+    def test_first_ever_detection_candidate_persistence_is_one(self):
+        from datetime import date
+        from theme_engine.__main__ import _apply_persistence
+        today = date.today()
+        enriched = [self._theme("BrandNew")]
+        cands = [{"ticker": "ZZZ", "themes": ["BrandNew"], "sources": ["theme"], "confidence": 0.9}]
+        _apply_persistence(self.store, enriched, cands, today.isoformat())
+        self.assertEqual(enriched[0]["persistence_7d"], 0)   # no prior days
+        self.assertEqual(cands[0]["persistence_7d"], 1)      # today only
+
+
 if __name__ == "__main__":
     unittest.main()

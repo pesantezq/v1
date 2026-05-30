@@ -102,9 +102,11 @@ def _check_ai_budget_events(payload: dict[str, Any]) -> tuple[str, int]:
 
 
 def _check_pulse_last_run_age(payload: dict[str, Any]) -> tuple[str, int]:
-    """Discovery pulse: warn if last successful run is older than 6 hours
-    during expected operating windows (any UTC hour the cron schedules a
-    run). Reports observed age in minutes."""
+    """Discovery pulse: warn if last successful run is older than 14 hours.
+    The cron's longest *by-design* gap is the overnight window (weekday
+    23:00->11:00 = 12h; weekend 20:00->12:00 = 16h, observed as ~13.25h at
+    the 09:15 daily check), so a 14h SLA tolerates the legitimate overnight
+    gap and only fires on a genuinely missed cycle. Reports age in minutes."""
     from datetime import datetime as _dt, timezone as _tz
     usage = payload.get("usage") or {}
     if usage.get("total_runs_month") in (None, 0):
@@ -121,8 +123,10 @@ def _check_pulse_last_run_age(payload: dict[str, Any]) -> tuple[str, int]:
         age_min = int((_dt.now(_tz.utc) - last_dt).total_seconds() // 60)
     except Exception:
         return ("unknown", 0)
-    # 6h = 360min; cadence is every 4h on weekdays so 6h gives one missed run of slack
-    if age_min > 360:
+    # 14h = 840min; tolerates the legitimate overnight gap (worst case the
+    # weekend ~13.25h gap seen at the 09:15 check) and warns only on a real
+    # missed cycle.
+    if age_min > 840:
         return ("warn", age_min)
     return ("ok", age_min)
 

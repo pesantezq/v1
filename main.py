@@ -1522,6 +1522,9 @@ def run_portfolio_update(
                             confidence_threshold=float(
                                 _ew_cfg.get('confidence_threshold', 0.80)
                             ),
+                            reinforce_persistence_days=int(
+                                _ew_cfg.get('reinforce_persistence_days', 3)
+                            ),
                         )
                         _ws_static = (
                             (getattr(config, 'watchlist_scanner', None) or {})

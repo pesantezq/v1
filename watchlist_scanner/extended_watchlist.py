@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS extended_watchlist (
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.80
 _DEFAULT_TTL_DAYS = 7
 _DEFAULT_MAX_SYMBOLS = 3
+# Distinct days a single-theme candidate must persist to count as reinforced.
+# Set to 0 to disable the cross-day persistence path (pre-2026-05-30 behavior).
+_DEFAULT_REINFORCE_PERSISTENCE_DAYS = 3
 
 
 class ExtendedWatchlist:
@@ -72,11 +75,13 @@ class ExtendedWatchlist:
         ttl_days: int = _DEFAULT_TTL_DAYS,
         max_symbols: int = _DEFAULT_MAX_SYMBOLS,
         confidence_threshold: float = _DEFAULT_CONFIDENCE_THRESHOLD,
+        reinforce_persistence_days: int = _DEFAULT_REINFORCE_PERSISTENCE_DAYS,
     ) -> None:
         self.db_path = Path(db_path)
         self.ttl_days = ttl_days
         self.max_symbols = max_symbols
         self.confidence_threshold = confidence_threshold
+        self.reinforce_persistence_days = reinforce_persistence_days
         self._ensure_table()
 
     # ── DB helpers ─────────────────────────────────────────────────────────────
@@ -236,8 +241,18 @@ class ExtendedWatchlist:
             sources: list[str] = c.get("sources") or []
             primary_theme = themes[0] if themes else "unknown"
 
-            # Reinforcement evidence: multi-theme OR direct mention
-            is_reinforced = len(themes) >= 2 or "direct" in sources
+            # Reinforcement evidence: multi-theme OR direct mention OR a
+            # single-theme candidate that has persisted across enough distinct
+            # days (cross-day persistence — see _DEFAULT_REINFORCE_PERSISTENCE_DAYS).
+            persistence = int(c.get("persistence_7d", 0) or 0)
+            is_reinforced = (
+                len(themes) >= 2
+                or "direct" in sources
+                or (
+                    self.reinforce_persistence_days > 0
+                    and persistence >= self.reinforce_persistence_days
+                )
+            )
 
             if sym in active_set:
                 # Already promoted — refresh TTL and confidence

@@ -315,9 +315,11 @@ class TestContentLiveness(unittest.TestCase):
     def test_pulse_last_run_age_stale_warns(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            # 8 hours ago — beyond the 6h warn threshold
+            # 15 hours ago — beyond the 14h (840min) warn threshold, i.e. a
+            # genuinely missed cron cycle (longest legit gap is the ~13.25h
+            # weekend overnight gap as seen at the 09:15 daily check).
             from datetime import timedelta
-            stale = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
+            stale = (datetime.now(timezone.utc) - timedelta(hours=15)).isoformat()
             self._write_pulse_status(root, {
                 "generated_at": stale,
                 "last_run_at": stale,
@@ -326,7 +328,24 @@ class TestContentLiveness(unittest.TestCase):
             results = scan_content_liveness(root)
             row = next(r for r in results if r["name"] == "discovery_pulse.last_run_age")
             self.assertEqual(row["status"], "warn")
-            self.assertGreater(row["observed"], 360)
+            self.assertGreater(row["observed"], 840)
+
+    def test_pulse_last_run_age_overnight_gap_is_ok(self):
+        """The by-design overnight gap (weekday 23:00->11:00 = 12h; weekend
+        20:00->12:00 = 16h, seen as ~13h at the 09:15 daily check) must NOT
+        false-warn. 13h is below the 14h threshold."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            from datetime import timedelta
+            overnight = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+            self._write_pulse_status(root, {
+                "generated_at": overnight,
+                "last_run_at": overnight,
+                "usage": {"total_runs_month": 3},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "discovery_pulse.last_run_age")
+            self.assertEqual(row["status"], "ok")
 
     def test_pulse_zero_runs_is_unknown_not_warn(self):
         with tempfile.TemporaryDirectory() as td:

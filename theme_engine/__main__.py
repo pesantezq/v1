@@ -23,7 +23,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +98,42 @@ def _current_timestamp() -> str:
 
 def _build_run_id(prefix: str, mode: str) -> str:
     return f"{prefix}-{mode}-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}"
+
+
+def _apply_persistence(store, enriched_themes, watch_candidates, run_date):
+    """Compute trailing-7d persistence in EVERY run mode and attach it.
+
+    Previously persistence was only computed in weekly/monthly mode and
+    hardcoded to 0 in daily mode — but the live pipeline runs the theme
+    engine in daily mode, so persistence was always 0 (degrading theme
+    scoring and starving the extended-watchlist cross-day reinforcement
+    gate). Computing it unconditionally fixes both.
+
+    Semantics:
+      - theme["persistence_7d"]      = count of distinct *prior* run-dates
+        (within the trailing 7 days) the theme appeared on. Today is not yet
+        saved, so it is excluded — a brand-new theme reads 0.
+      - candidate["persistence_7d"]  = those prior distinct days PLUS today,
+        across all the candidate's themes — so a first-ever detection reads 1
+        and a candidate seen on N prior days reads N+1.
+    """
+    recent = store.get_recent_signals(days=7)
+    seen_days: dict[str, set] = {}
+    for row in recent:
+        rd = row.get("run_date")
+        if not rd or rd == run_date:
+            continue
+        seen_days.setdefault(row.get("theme_name", ""), set()).add(rd)
+
+    for theme in enriched_themes:
+        name = theme.get("name", "")
+        theme["persistence_7d"] = len(seen_days.get(name, set()))
+
+    for cand in watch_candidates:
+        prior_days: set = set()
+        for theme_name in (cand.get("themes") or []):
+            prior_days |= seen_days.get(theme_name, set())
+        cand["persistence_7d"] = len(prior_days) + 1
 
 
 def _git_commit_hash(root: Path) -> str | None:
@@ -308,22 +344,11 @@ def run(
     mapper = ThemeMapper(catalog_path=catalog_path, sp500_symbols=sp500_symbols)
     enriched_themes, watch_candidates = mapper.map_themes(raw_themes)
 
-    # ── Step 5: Compute persistence (weekly / monthly) ────────────────────────
+    # ── Step 5: Compute persistence (all modes) ───────────────────────────────
     from theme_engine.theme_store import ThemeStore
     store = ThemeStore(db_path=db_path, output_dir=resolved_output)
 
-    if mode in ("weekly", "monthly"):
-        recent = store.get_recent_signals(days=7)
-        seen_days: dict[str, set[str]] = {}
-        for row in recent:
-            seen_days.setdefault(row["theme_name"], set()).add(row["run_date"])
-        for theme in enriched_themes:
-            name = theme.get("name", "")
-            persistence = len(seen_days.get(name, set()))
-            theme["persistence_7d"] = persistence
-    else:
-        for theme in enriched_themes:
-            theme["persistence_7d"] = 0
+    _apply_persistence(store, enriched_themes, watch_candidates, date.today().isoformat())
 
     # Filter to themes meeting min_confidence (for audit; all themes are saved to DB)
     confident_themes = [t for t in enriched_themes if t.get("confidence", 0) >= min_confidence]
