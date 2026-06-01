@@ -10,6 +10,7 @@ import glob as _glob
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -192,3 +193,95 @@ def find_drift(root: str) -> list[Finding]:
                         current=current, expected=expected, line=lineno,
                     ))
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Status assembler + artifact writer
+# ---------------------------------------------------------------------------
+
+_DISCLAIMER = (
+    "Observe-only documentation audit. Reads docs + code + git; never "
+    "recomputes decisions or mutates portfolio, allocation, scoring, or "
+    "decision state."
+)
+
+
+def _finding_dict(f: Finding) -> dict:
+    return {
+        "dimension": f.dimension, "severity": f.severity, "doc": f.doc,
+        "detail": f.detail, "auto_fixable": f.auto_fixable, "anchor": f.anchor,
+        "current": f.current, "expected": f.expected, "line": f.line,
+    }
+
+
+def run_doc_audit(root: str, last_audited_sha: str | None,
+                  changed_files: list[str], existing_doc_paths: set[str]) -> dict:
+    """Assemble the full observe-only status dict. Pure over its inputs (the git
+    range is resolved by the caller and injected as changed_files)."""
+    findings: list[Finding] = []
+    try:
+        findings += find_drift(root)
+        findings += find_dead_refs(root)
+        findings += find_cross_doc_inconsistency(root)
+        findings += find_coverage_gaps(changed_files, existing_doc_paths)
+    except Exception as exc:  # never abort the pipeline
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "observe_only": True, "schema_version": "1", "source": "doc_audit",
+            "overall_status": "error", "error": str(exc), "findings": [],
+            "auto_fix_candidates": [], "coverage_gaps": [],
+            "disclaimer": _DISCLAIMER,
+        }
+
+    auto = [f for f in findings if f.auto_fixable]
+    gaps = [f for f in findings if f.dimension == "coverage"]
+    if any(f.dimension == "coverage" and f.severity == "high" for f in findings):
+        status = "coverage_gap"
+    elif auto or any(f.dimension == "drift" for f in findings):
+        status = "drift"
+    elif findings:
+        status = "ok_with_warnings"
+    else:
+        status = "ok"
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "observe_only": True, "schema_version": "1", "source": "doc_audit",
+        "last_audited_sha": last_audited_sha,
+        "overall_status": status,
+        "findings": [_finding_dict(f) for f in findings],
+        "auto_fix_candidates": [_finding_dict(f) for f in auto],
+        "coverage_gaps": [_finding_dict(f) for f in gaps],
+        "auto_fixes_applied": [],
+        "disclaimer": _DISCLAIMER,
+    }
+
+
+def write_doc_audit_status(result: dict, root: str) -> str:
+    """Write JSON + compact MD via OutputNamespace.LATEST. Returns the JSON path.
+
+    Uses safe_write_json with base_dir=Path(root)/"outputs" so the file lands
+    at <root>/outputs/latest/doc_audit_status.json — matching the LATEST
+    namespace convention (LATEST.value == "latest", base_dir == "outputs").
+    """
+    from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+
+    base_dir = Path(root) / "outputs"
+    json_path = safe_write_json(
+        OutputNamespace.LATEST, "doc_audit_status.json", result, base_dir=base_dir
+    )
+
+    md_lines = [
+        f"# Doc Audit — {result['generated_at'][:10]}",
+        f"\n**Status:** {result['overall_status']}  ",
+        f"**Findings:** {len(result['findings'])} "
+        f"({len(result['auto_fix_candidates'])} auto-fixable)\n",
+    ]
+    for f in result["findings"]:
+        md_lines.append(
+            f"- [{f['severity']}] {f['dimension']} · {f['doc']} — {f['detail']}"
+        )
+    md_path = Path(json_path).parent / "doc_audit_status.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+    return str(json_path)

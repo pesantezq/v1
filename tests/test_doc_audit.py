@@ -136,3 +136,38 @@ def test_find_cross_doc_inconsistency_flags_disagreement(tmp_path):
     findings = doc_audit.find_cross_doc_inconsistency(str(tmp_path))
     assert any(f.anchor == "pipeline_stage_count" for f in findings)
     assert all(f.dimension == "consistency" for f in findings)
+
+
+def test_run_doc_audit_assembles_status_dict(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
+    result = doc_audit.run_doc_audit(
+        str(tmp_path), last_audited_sha="abc123",
+        changed_files=["portfolio_automation/new_widget.py"],
+        existing_doc_paths={"docs/PIPELINE_RUNBOOK.md"},
+    )
+    assert result["observe_only"] is True
+    assert result["source"] == "doc_audit"
+    assert result["last_audited_sha"] == "abc123"
+    assert result["overall_status"] in {"drift", "coverage_gap", "ok_with_warnings"}
+    assert any(f["anchor"] == "pipeline_stage_count" for f in result["findings"])
+    assert any(f["auto_fixable"] for f in result["auto_fix_candidates"])
+
+
+def test_run_doc_audit_degrades_gracefully_on_empty_repo(tmp_path):
+    result = doc_audit.run_doc_audit(str(tmp_path), last_audited_sha=None,
+                                     changed_files=[], existing_doc_paths=set())
+    assert result["observe_only"] is True
+    assert result["overall_status"] == "ok"
+    assert result["findings"] == []
+
+
+def test_write_doc_audit_status_emits_json_and_md(tmp_path):
+    result = doc_audit.run_doc_audit(str(tmp_path), last_audited_sha=None,
+                                     changed_files=[], existing_doc_paths=set())
+    json_path = doc_audit.write_doc_audit_status(result, str(tmp_path))
+    assert Path(json_path).exists()
+    loaded = json.loads(Path(json_path).read_text())
+    assert loaded["source"] == "doc_audit"
+    assert (Path(json_path).parent / "doc_audit_status.md").exists()
