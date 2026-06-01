@@ -37,6 +37,7 @@ from watchlist_scanner.daily_memo import (
     send_test_email,
     _advisor_stack_items,
     _build_top_insight,
+    _build_memo_top_insight,
 )
 
 
@@ -71,6 +72,39 @@ class TestTopInsightPersistenceLabel:
     def test_theme_and_ticker_still_present_at_zero(self):
         s = _build_top_insight(self._tt(0.0), self._to())
         assert "Defense" in s and "NOC" in s
+
+
+class TestTopInsightThemeMembership:
+    """The memo Top Insight must only claim the lead opportunity is "inside the
+    {theme}" when that ticker is actually a member of top_theme.tickers. A
+    non-member ticker (e.g. MSFT vs an Energy Transition theme of XOM/CVX) must
+    NOT be asserted to belong to the theme — both facts are stated, unlinked."""
+
+    def _tt(self, tickers):
+        return {"name": "Energy Transition", "persistence": 0.57, "tickers": list(tickers)}
+
+    def _to(self, ticker):
+        return {"ticker": ticker, "conviction_band": "normal", "portfolio_fit_label": "strong"}
+
+    def test_member_ticker_asserts_theme_membership(self):
+        s = _build_memo_top_insight(self._tt(["XOM", "CVX"]), self._to("CVX"), [])
+        assert "inside the Energy Transition theme" in s
+
+    def test_non_member_ticker_does_not_assert_membership(self):
+        s = _build_memo_top_insight(self._tt(["XOM", "CVX"]), self._to("MSFT"), [])
+        assert "inside the Energy Transition theme" not in s
+        # both facts still present, just not falsely linked
+        assert "MSFT" in s
+        assert "Energy Transition" in s
+
+    def test_empty_theme_tickers_does_not_assert_membership(self):
+        s = _build_memo_top_insight(self._tt([]), self._to("MSFT"), [])
+        assert "inside the Energy Transition theme" not in s
+        assert "MSFT" in s and "Energy Transition" in s
+
+    def test_membership_is_case_insensitive(self):
+        s = _build_memo_top_insight(self._tt(["xom", "cvx"]), self._to("CVX"), [])
+        assert "inside the Energy Transition theme" in s
 
 
 # ---------------------------------------------------------------------------

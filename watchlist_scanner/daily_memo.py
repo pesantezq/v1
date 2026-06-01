@@ -820,8 +820,15 @@ def _build_memo_top_insight(
 
     theme_name = str(top_theme.get("name") or "").strip()
     ticker = str(top_opportunity.get("ticker") or "").strip()
+    theme_tickers = {str(t).strip().upper() for t in (top_theme.get("tickers") or []) if str(t).strip()}
+    ticker_in_theme = bool(ticker) and ticker.upper() in theme_tickers
     if theme_name and ticker:
-        return f"{first} {ticker} remains the lead opportunity inside the {theme_name} theme."
+        if ticker_in_theme:
+            # Membership verified against top_theme.tickers — safe to link them.
+            return f"{first} {ticker} remains the lead opportunity inside the {theme_name} theme."
+        # Lead opportunity is NOT a member of the top theme — state both facts
+        # without asserting a theme link the data does not support.
+        return f"{first} {ticker} remains the lead opportunity; {theme_name} remains the dominant theme."
     if theme_name:
         return f"{first} {theme_name} remains the dominant theme."
     if ticker and not structural_rows:
