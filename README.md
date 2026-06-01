@@ -1,6 +1,75 @@
 # Portfolio Automation System
 
-A production-ready, rules-based portfolio tracking and rebalancing automation tool with comprehensive finance recommendation scoring.
+A production-ready, **advisory-only** portfolio intelligence system. It tracks
+your holdings, scores opportunities and risks, and produces a ranked daily action
+plan plus a short operator brief — analysis and recommendations only. **It does
+not place trades, connect to a broker, or move money.**
+
+---
+
+## Start here (onboarding)
+
+**What it is.** Each day the system pulls market data, news, and your portfolio,
+runs deterministic rules-based scoring, and writes a single source-of-truth
+*decision plan* that a memo, a read-only GUI, and an email digest then present to
+you. All scoring/ranking/sizing math is plain Python (rules decide); the AI
+layers only explain, validate, and summarize (AI advises).
+
+**Who it's for.** The portfolio owner/operator who wants a disciplined daily
+read on what changed and what to consider — without any automated trading.
+
+**The 60-second model.**
+
+```
+market data + news + your portfolio
+        → scoring & signals + guardrails/drift
+        → DECISION ENGINE  →  outputs/latest/decision_plan.json  (source of truth)
+        → daily memo · operator GUI · email digest
+        → outcome tracking & confidence calibration (the learning loop)
+```
+
+**Read in this order:**
+
+1. [`docs/ARCHITECTURE_MAP.md`](docs/ARCHITECTURE_MAP.md) — one readable map of the whole system.
+2. This README — features, configuration, and how to run.
+3. [`docs/decision_engine.md`](docs/decision_engine.md) and [`docs/daily_memo.md`](docs/daily_memo.md) — the core output contracts.
+4. Maintainers: [`docs/TECH_DEBT_AUDIT.md`](docs/TECH_DEBT_AUDIT.md) and [`docs/PRODUCTION_READINESS_PLAN.md`](docs/PRODUCTION_READINESS_PLAN.md).
+
+**Run it safely (recommended first commands):**
+
+```bash
+bash scripts/preflight.sh        # environment & config checks
+python main.py --dry-run         # full run, no files written, no email
+bash scripts/run_daily_safe.sh   # the wrapped daily pipeline
+```
+
+**Repository map (current top-level layout):**
+
+| Path | What lives here |
+|---|---|
+| `main.py` | Daily pipeline entry point (`--run-mode daily\|weekly\|monthly`) |
+| `portfolio_automation/` | Core engine: decision engine, data governance, news, discovery, calibration |
+| `watchlist_scanner/` | Signal scanner, conviction, allocation preview, daily memo |
+| `policy_evaluator/` · `profit_attribution/` | Recommendation evaluation & P&L attribution |
+| `backtesting/` | Offline signal backtesting (and the POC simulation harness) |
+| `agent/` | Post-engine LLM layer (memos, escalation, maintainer patches) |
+| `gui/` (legacy Streamlit) · `gui_v2/` (FastAPI) | Read-only operator dashboards |
+| `config/` | `config.json`, `signal_registry.yaml`, profiles, schema |
+| `outputs/` | Generated artifacts by namespace (`latest/`, `policy/`, `portfolio/`, `sandbox/`, `backtest/`) |
+| `scripts/` | Operator scripts: `preflight.sh`, `run_daily_safe.sh`, cron install, etc. |
+| `docs/` | Full documentation set (start with `ARCHITECTURE_MAP.md`) |
+| `tests/` | Test suite (`python -m pytest -q`) |
+
+> The detailed module list in **Project Structure** further down is partly
+> historical (it predates the decision-engine/governance era); the table above
+> reflects the current top-level layout.
+
+> **Boundaries that define this system:** advisory-only (no trading), one
+> source of truth (`outputs/latest/decision_plan.json`), strict separation of
+> live vs. research outputs, and observe-only-by-default new layers. See
+> [`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md).
+
+---
 
 ## Features
 
@@ -503,13 +572,13 @@ logs/
 ### PowerShell Commands for Task Scheduler
 
 Create three scheduled tasks from PowerShell (run as Administrator).
-Replace `C:\PersonalWork\stock_bot\v1` with your actual project path and
+Replace `C:\PersonalWork\v1` with your actual project path and
 `C:\Python311\python.exe` with your Python interpreter path.
 
 ```powershell
 $python = "C:\Python311\python.exe"
-$script = "C:\PersonalWork\stock_bot\v1\main.py"
-$workdir = "C:\PersonalWork\stock_bot\v1"
+$script = "C:\PersonalWork\v1\main.py"
+$workdir = "C:\PersonalWork\v1"
 
 # ── Daily task (weekdays at 07:30) ──────────────────────────────────────────
 $dailyAction = New-ScheduledTaskAction `
@@ -861,7 +930,7 @@ Run the engine at 07:10, agent at 07:15 (5-minute gap ensures engine outputs are
 Scheduler-safe wrapper example:
 
 ```powershell
-$workdir = "C:\PersonalWork\stock_bot\v1"
+$workdir = "C:\PersonalWork\v1"
 Set-Location $workdir
 
 python -m tools.llm_smoke_test --provider ollama
@@ -879,7 +948,7 @@ exit $LASTEXITCODE
 
 ```powershell
 $python   = "C:\Python311\python.exe"
-$workdir  = "C:\PersonalWork\stock_bot\v1"
+$workdir  = "C:\PersonalWork\v1"
 
 # Engine — daily at 07:10
 $engineAction = New-ScheduledTaskAction `
@@ -903,7 +972,7 @@ Register-ScheduledTask -TaskName "StockBot-Agent-Daily" `
 Daily run on Ollama:
 
 ```powershell
-Set-Location C:\PersonalWork\stock_bot\v1
+Set-Location C:\PersonalWork\v1
 
 Remove-Item Env:\STOCKBOT_LLM_PROVIDER -ErrorAction SilentlyContinue
 $env:OLLAMA_BASE_URL = "http://localhost:11434/v1"
@@ -920,7 +989,7 @@ py -m agent --mode daily --provider ollama
 Monthly run on Anthropic:
 
 ```powershell
-Set-Location C:\PersonalWork\stock_bot\v1
+Set-Location C:\PersonalWork\v1
 
 Remove-Item Env:\STOCKBOT_LLM_PROVIDER -ErrorAction SilentlyContinue
 $env:ANTHROPIC_API_KEY = "your_anthropic_key_here"
@@ -933,7 +1002,7 @@ py -m agent --mode monthly --provider anthropic
 Monthly run on OpenAI:
 
 ```powershell
-Set-Location C:\PersonalWork\stock_bot\v1
+Set-Location C:\PersonalWork\v1
 
 Remove-Item Env:\STOCKBOT_LLM_PROVIDER -ErrorAction SilentlyContinue
 $env:OPENAI_API_KEY = "your_openai_key_here"
