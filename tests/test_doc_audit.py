@@ -1,0 +1,40 @@
+import json
+from pathlib import Path
+import pytest
+from portfolio_automation import doc_audit
+
+
+def _write(root: Path, rel: str, content: str):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def test_resolve_source_reads_nested_json_value(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    anchor = doc_audit.Anchor(
+        name="pipeline_stage_count",
+        source_artifact="outputs/latest/daily_run_status.json",
+        source_json_path="stage_summary.total",
+        doc_globs=("docs/PIPELINE_RUNBOOK.md",),
+        pattern=r"(\d+)\s+pipeline stages",
+        fmt="int",
+    )
+    assert doc_audit.resolve_source(anchor, str(tmp_path)) == "24"
+
+
+def test_resolve_source_returns_none_when_artifact_missing(tmp_path):
+    anchor = doc_audit.Anchor(
+        name="x", source_artifact="outputs/latest/missing.json",
+        source_json_path="a.b", doc_globs=("docs/X.md",), pattern=r"(\d+)",
+    )
+    assert doc_audit.resolve_source(anchor, str(tmp_path)) is None
+
+
+def test_registry_is_non_empty_and_well_formed():
+    assert len(doc_audit.ANCHOR_REGISTRY) >= 6
+    for a in doc_audit.ANCHOR_REGISTRY:
+        assert a.pattern.count("(") >= 1
+        assert a.fmt in {"int", "float2", "pct1", "usd0"}
