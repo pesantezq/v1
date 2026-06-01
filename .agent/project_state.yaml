@@ -122,6 +122,19 @@ project_status: observe_and_iterate
 # Observed-state log — last tool-analysis runs (informational; no scope change)
 # ---------------------------------------------------------------------------
 
+last_doc_audit_system_shipped:
+  date: 2026-06-01
+  note: >
+    Observe-only documentation-auditor system shipped (operator-requested, not a
+    roadmap step). Producer: portfolio_automation/doc_audit.py (4 check families:
+    drift/coverage_gap/dead_ref/cross_doc_consistency). State: .agent/doc_audit_state.yaml
+    (tracked, cross-workstation portable). Auto-fix bounded to ANCHOR_REGISTRY, capped
+    10/run, apply_enabled flag, pure substitution + path-containment + staleness guards.
+    Skills: /doc-audit weekly (Mon 09:45 UTC, auto-fix + state advance) and
+    /doc-audit-monthly (1st 09:15 UTC, read-only judgment via portfolio-doc-auditor agent).
+    daily-tool-analysis wired to consume doc_audit_status.json (AMBER on coverage_gap
+    or unfixed drift). Tests: 21 + 3 = 24. next_official_step unchanged = observe_and_iterate.
+
 last_monthly_analysis:
   date: 2026-06-01
   cadence: monthly

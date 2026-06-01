@@ -925,3 +925,77 @@ Surfaced by the always-on `portfolio-memo-reviewer` agent during the 2026-06-01 
 - `outputs/latest/daily_memo.md` and `daily_memo.txt` Top Insight line stops asserting theme membership for a non-member lead opportunity; both renderers share the single fixed function
 - Verified next-run by the always-on memo-reviewer dispatch (cross-artifact: `daily_memo.md` text vs `system_decision_summary.json` `top_theme.tickers` membership)
 
+## Observe-Only Documentation Auditor System
+
+### Date
+
+2026-06-01
+
+### Area
+
+architecture
+
+### Files / Functions
+
+- `portfolio_automation/doc_audit.py` — `Anchor`, `Finding`, `ANCHOR_REGISTRY`, `resolve_source`, `find_drift`, `find_coverage_gaps`, `find_dead_refs`, `find_cross_doc_inconsistency`, `run_doc_audit`, `write_doc_audit_status`, `apply_auto_fix`
+- `portfolio_automation/doc_audit_state.py` — `load_state`, `save_state`, `state_path`
+- `.agent/doc_audit_state.yaml` — committed cross-workstation auditor state
+- `.claude/commands/doc-audit.md` — weekly `/doc-audit` skill (producer + guardrailed auto-fix + state advance)
+- `.claude/commands/doc-audit-monthly.md` — monthly `/doc-audit-monthly` skill (producer + read-only judgment dispatch)
+- `.claude/agents/portfolio-doc-auditor.md` — read-only judgment agent (clarity / conciseness / redundancy / decomposition lens)
+- `scripts/run_doc_audit.sh`, `scripts/run_doc_audit_monthly.sh` — VPS cron wrapper scripts
+- `tests/test_doc_audit.py` (21 tests), `tests/test_doc_audit_state.py` (3 tests)
+- `docs/doc_audit.md`, `docs/doc_audit_state.md` — module documentation
+
+### Decision
+
+Shipped a complete observe-only documentation-auditor system.  The producer
+(`doc_audit.py`) runs four check families: factual drift against machine-readable
+source artifacts (auto-fixable, bounded to the anchor registry); coverage gaps
+(new source module without a `docs/<stem>.md`); dead references (backtick
+`.py` mentions that no longer resolve on disk); cross-document consistency
+(anchor value disagreement across docs).  Auto-fix is capped at 10/run, gated
+by `apply_enabled`, limited to pure captured-value substitution, and protected
+by path-containment and staleness guards.  State is committed to `.agent/`
+(tracked, cross-workstation portable) rather than `data/` (gitignored); rollback
+= `git revert`.
+
+Two cadence tiers: weekly Mon 09:45 UTC (`/doc-audit`, auto-fix + state advance)
+and monthly 1st 09:15 UTC (`/doc-audit-monthly`, read-only judgment via
+`portfolio-doc-auditor` agent).
+
+`daily-tool-analysis` was extended to consume `doc_audit_status.json` and signal
+AMBER on `coverage_gap` or unfixed drift.  `monthly-tool-analysis` received a
+documentation-lens hook.
+
+This is an operator-requested feature, not a roadmap step.  `next_official_step`
+remains `observe_and_iterate`.
+
+### Why
+
+Documentation drift is an invisible liability in an advisory system: a stale
+policy number in a doc becomes the operator's mental model even after the live
+configuration changes.  The anchor registry provides a permanent, low-noise
+bridge between machine-readable artifacts and prose documentation.  The weekly
+auto-fix tier handles rote numeric updates (caps, budgets, stage counts) without
+operator involvement; the monthly judgment tier catches structural problems
+(redundancy, missing sections, decomposition) that no regex can catch.  Committing
+the state file ensures the coverage gap check is reproducible on every workstation
+without manual SHA bookkeeping.
+
+### Invariants Preserved
+
+- `observe_only: true` hardcoded in all output artifacts
+- No scoring, decision, allocation, recommendation, or schema behavior changed
+- Auto-fix restricted to the anchor registry and to pure in-place substitution
+- All pipeline integration wrapped in `try/except` (non-blocking)
+- OutputNamespace.LATEST used for artifact writes; no writes to HISTORICAL or
+  other namespaces
+
+### Downstream Impact
+
+- `outputs/latest/doc_audit_status.json` and `.md` produced on each weekly run
+- `daily-tool-analysis` AMBER signal on coverage_gap or unfixed drift
+- `portfolio-doc-auditor` agent dispatched monthly for judgment-lens review
+- VPS cron entries: `scripts/run_doc_audit.sh` (Mon 09:45 UTC) + `scripts/run_doc_audit_monthly.sh` (1st 09:15 UTC)
+
