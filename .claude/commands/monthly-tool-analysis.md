@@ -109,6 +109,10 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - `sector_rotation_score < 0.5` (universe locked in one sector)
 - `pulse_skip_rate > 5%`
 
+- **Documentation lens** — invoke the `/doc-audit-monthly` skill (or read the latest
+  `outputs/latest/doc_audit_status.json`) and fold its verdict into the monthly heartbeat:
+  report standing coverage gaps + the doc-auditor's top decomposition recommendation.
+
 `portfolio-doc-writer` ALWAYS (no threshold) — updates roadmap + project_state.yaml with the month's shipped features + observed metrics. Persists the monthly findings to `docs/monthly_reports/<YYYY-MM>.md`.
 
 ---
