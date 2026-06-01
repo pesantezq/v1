@@ -38,3 +38,31 @@ def test_registry_is_non_empty_and_well_formed():
     for a in doc_audit.ANCHOR_REGISTRY:
         assert a.pattern.count("(") >= 1
         assert a.fmt in {"int", "float2", "pct1", "usd0"}
+
+
+def test_resolve_source_pct1_formats_as_integer_percent(tmp_path):
+    _write(tmp_path, "outputs/latest/retune_impact.json",
+           json.dumps({"current_snapshot": {"structural_caps": {"concentration_cap": 0.6}}}))
+    anchor = doc_audit.Anchor(
+        name="concentration_cap",
+        source_artifact="outputs/latest/retune_impact.json",
+        source_json_path="current_snapshot.structural_caps.concentration_cap",
+        doc_globs=("docs/ALLOCATION_POLICY.md",),
+        pattern=r"concentration cap[^\d]*(\d+)\s*%",
+        fmt="pct1",
+    )
+    assert doc_audit.resolve_source(anchor, str(tmp_path)) == "60"
+
+
+def test_resolve_source_usd0_formats_without_decimals(tmp_path):
+    _write(tmp_path, "outputs/latest/ai_budget_summary.json",
+           json.dumps({"monthly_cost_limit_usd": 20.0}))
+    anchor = doc_audit.Anchor(
+        name="ai_monthly_cap",
+        source_artifact="outputs/latest/ai_budget_summary.json",
+        source_json_path="monthly_cost_limit_usd",
+        doc_globs=("docs/AI_BUDGET.md",),
+        pattern=r"monthly[^\$]*\$(\d+)",
+        fmt="usd0",
+    )
+    assert doc_audit.resolve_source(anchor, str(tmp_path)) == "20"

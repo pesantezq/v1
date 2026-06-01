@@ -41,7 +41,7 @@ def _fmt_value(value, fmt: str) -> str:
     if fmt == "float2":
         return f"{float(value):.2f}"
     if fmt == "pct1":
-        return f"{float(value) * 100:.1f}"
+        return f"{float(value) * 100:.0f}"
     if fmt == "usd0":
         return f"{float(value):.0f}"
     return str(value)
