@@ -273,6 +273,8 @@ def apply_auto_fix(finding: Finding, root: str) -> bool:
     if anchor is None or finding.expected is None:
         return False
     path = Path(root) / finding.doc
+    if not path.resolve().is_relative_to(Path(root).resolve()):
+        return False  # refuse to write outside the repo tree
     if not path.exists():
         return False
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)

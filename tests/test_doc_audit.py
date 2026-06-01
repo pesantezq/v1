@@ -200,3 +200,18 @@ def test_apply_auto_fix_refuses_non_auto_fixable():
     f = doc_audit.Finding(dimension="dead_ref", severity="med",
                           doc="docs/X.md", detail="x", auto_fixable=False)
     assert doc_audit.apply_auto_fix(f, ".") is False
+
+
+def test_apply_auto_fix_refuses_path_escape(tmp_path):
+    # A doc path escaping root must be refused even when the target file exists.
+    outside = tmp_path.parent / "doc_audit_escape_target.md"
+    outside.write_text("Runs 17 pipeline stages.\n", encoding="utf-8")
+    try:
+        f = doc_audit.Finding(
+            dimension="drift", severity="med", doc=f"../{outside.name}",
+            detail="x", auto_fixable=True, anchor="pipeline_stage_count",
+            current="17", expected="24", line=1)
+        assert doc_audit.apply_auto_fix(f, str(tmp_path)) is False
+        assert outside.read_text() == "Runs 17 pipeline stages.\n"  # untouched
+    finally:
+        outside.unlink(missing_ok=True)
