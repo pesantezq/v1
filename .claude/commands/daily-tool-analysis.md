@@ -57,6 +57,7 @@ the fix.
 12. `data/retune_audit_log.jsonl` (tail) → count of apply entries in last 7d, any rollback entries (added 2026-05-28)
 13. `data/retune_auto_apply_state.json` → apply_enabled, max(monthly_drift.values()) (added 2026-05-28)
 14. `outputs/latest/historical_backfill_status.json` → universe_size, fetched, errored, skipped_budget (added 2026-05-28; weekend-cadence producer)
+15. `outputs/latest/doc_audit_status.json` → overall_status, len(coverage_gaps), count of unfixed `drift`/`consistency` findings (added 2026-06-01; weekly-cadence producer — may be absent until first /doc-audit run)
 
 **Compute**:
 
@@ -113,6 +114,7 @@ the fix.
 - `retune_apply_enabled == false` for ≤ 14 days (operator paused; still acceptable short-term)
 - `retune_auto_applicable_count ≥ 3` (unusually many proposals queued — worth a look)
 - `applied_fix_regressions` is non-empty (a shipped fix regressed — its original symptom is back; advisory, investigate via discovery-health)
+- `doc_audit_status.overall_status == "coverage_gap"` OR any unfixed `drift`/`consistency` finding present (docs lag code — advisory; resolved by the next `/doc-audit` run)
 - attribution lag (age ≥2d AND n=0) — known cron-timing issue
 
 **RED** when any of:
@@ -194,6 +196,7 @@ Headline grammar:
 4. Learning loop snapshot (always when `pattern_efficacy_monthly.json` exists): `"Loop: match-rate {pattern_match_rate}% · {retune_applies_last_7d} applies/7d · drift max {retune_drift_max_pct}% of cap · apply_enabled={retune_apply_enabled}"`
 5. Content liveness (only when `content_warn_count > 0`): `"Liveness warns ({content_warn_count}): {csv list of warn names}"`
 5b. Applied-fix verification (only when `applied_fixes` is non-empty): `"Fixes: {confirmed} confirmed · {pending} pending · {manual} manual{, REGRESSED: <id(s)> if any}"`. List each regressed id explicitly with its `detail`. When a fix is `confirmed`, it is dropped from state in Step 5 (it held — stop re-checking).
+6c. Docs (only when `doc_audit_status.json` exists): `"Docs: {overall_status} · {N} findings, {K} coverage gaps (last audit {last_audited_sha[:8]})"`
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
