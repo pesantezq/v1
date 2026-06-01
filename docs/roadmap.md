@@ -1096,3 +1096,47 @@ Tests: 5949 → 6056 passed across the cycle.
 Next official step: `observe_and_iterate` — let resolved-outcome history
 accumulate so `retune_impact_tracker.outcome_attribution` becomes
 statistically meaningful. No new module work is queued.
+
+---
+
+## Known Issues (Open Defects)
+
+Tracked open defects observed during operation. These do not change
+`next_official_step` (still `observe_and_iterate`); they are follow-up
+fixes to surface, not roadmap steps.
+
+### KI-1 — theme_engine OpenAI calls are not metered (discovery telemetry false-zero)
+
+- **Surfaced:** 2026-06-01 inaugural monthly-tool-analysis (AMBER), `portfolio-discovery-health`.
+- **Symptom:** `discovery_pulse_status.openai_cost_usd_month` and the FMP
+  discovery cost telemetry report **0.0**, falsely implying no discovery spend.
+- **Root cause:** `watchlist_scanner/theme_engine.py` never calls
+  `record_ai_usage` around its OpenAI call. Smoking gun: **zero** `theme_engine`
+  events in `outputs/policy/ai_usage_events.jsonl`.
+- **True state:** real OpenAI call confirmed (latency ~4153ms, key filled);
+  true spend is in `ai_budget_summary.json` (~$0.0007/mo, negligible).
+- **Follow-up:** wire `record_ai_usage_event` into `theme_engine.py` around
+  the OpenAI call (task_name `theme_engine.daily`). Until then, read true
+  OpenAI cost from `ai_budget_summary.json`, not the discovery pulse status.
+- **Severity:** low (telemetry-only; no decision/spend impact).
+
+### KI-2 — FMP scanner still in fallback (tier_b.evidence_count=0)
+
+- **Surfaced:** 2026-06-01 inaugural monthly-tool-analysis (AMBER), `portfolio-discovery-health`.
+- **Symptom:** `tier_b.evidence_count=0` and `fmp_calls_month=0` despite a
+  fresh `top100_watchlist.json`; the scanner path reports `fmp_succeeded:false`,
+  collapsing the active universe toward the static fallback set.
+- **Follow-up:** verify `FMP_API_KEY` and confirm `scanner/candidate_scanner.py`
+  is not silently catching the FMP failure (recurring `fmp_succeeded:false`).
+- **Severity:** medium (universe coverage degraded to fallback).
+
+### Self-healing (tracked, not a defect)
+
+- **Learning-loop outcome-maturation gap.** `pattern_learning.py:_match_outcome`
+  joins forward-only (`signal_time >= snapshot_date`); the earliest snapshot is
+  2026-05-29, so the 594 mature outcomes dated before that are structurally
+  unreachable and `pattern_efficacy_monthly` reads `resolved_1d=0` / null
+  `vs_baseline_pp` for every tag. **Not a code bug** — first non-null 1d efficacy
+  expected ~2026-06-05, 7d ~2026-06-09. A resolve-then-attribute back-join
+  (via `signal_outcomes` tags) is noted as a design enhancement to surface
+  efficacy earlier during each new gauge era.

@@ -2,30 +2,30 @@
   "enabled": true,
   "observe_only": true,
   "summary_label": "overweight financial services",
-  "summary_line": "Portfolio view: 19 actionable signals, 20.0% suggested, 20.0% normalized, 0 capped",
+  "summary_line": "Portfolio view: 16 actionable signals, 20.0% suggested, 20.0% normalized, 0 capped",
   "total_suggested_allocation": 0.2,
   "total_normalized_allocation": 0.2,
   "normalization_scale": 1.0,
   "capped_positions": 0,
   "sectors_capped": [],
   "allocation_by_sector": {
-    "Communication Services": 0.02,
-    "Financial Services": 0.09,
-    "Technology": 0.07,
-    "Consumer Cyclical": 0.02
+    "Technology": 0.08,
+    "Consumer Cyclical": 0.02,
+    "Communication Services": 0.01,
+    "Financial Services": 0.09
   },
   "allocation_by_conviction_band": {
     "defer": 0,
     "observe": 0,
-    "starter": 0.18,
-    "normal": 0.02,
+    "starter": 0.12,
+    "normal": 0.08,
     "high_conviction": 0
   },
   "top_sector": {
     "name": "Financial Services",
     "allocation_pct": 0.45
   },
-  "top_3_ticker_concentration_pct": 0.2,
+  "top_3_ticker_concentration_pct": 0.3,
   "warnings": [
     "overconcentration_top_sector:Financial Services:45.0%"
   ],
@@ -39,9 +39,9 @@
       {
         "name": "Communication Services",
         "count": 2,
-        "avg_conviction_score": 0.511,
-        "total_suggested_allocation": 0.02,
-        "total_normalized_allocation": 0.02,
+        "avg_conviction_score": 0.427,
+        "total_suggested_allocation": 0.01,
+        "total_normalized_allocation": 0.01,
         "tickers": [
           "META",
           "GOOGL"
@@ -50,7 +50,7 @@
       {
         "name": "Consumer Cyclical",
         "count": 2,
-        "avg_conviction_score": 0.4865,
+        "avg_conviction_score": 0.504,
         "total_suggested_allocation": 0.02,
         "total_normalized_allocation": 0.02,
         "tickers": [
@@ -61,36 +61,36 @@
       {
         "name": "Financial Services",
         "count": 11,
-        "avg_conviction_score": 0.4498,
+        "avg_conviction_score": 0.4632,
         "total_suggested_allocation": 0.09,
         "total_normalized_allocation": 0.09,
         "tickers": [
-          "NASA",
           "XLK",
+          "CHAT",
+          "RIOT",
           "QQQ",
           "SPY",
-          "CHAT",
           "MARA",
           "IWM",
           "XLF",
           "XLE",
-          "RIOT",
+          "NASA",
           "COIN"
         ]
       },
       {
         "name": "Technology",
         "count": 7,
-        "avg_conviction_score": 0.5554,
-        "total_suggested_allocation": 0.07,
-        "total_normalized_allocation": 0.07,
+        "avg_conviction_score": 0.5331,
+        "total_suggested_allocation": 0.08,
+        "total_normalized_allocation": 0.08,
         "tickers": [
           "AAPL",
+          "MSFT",
           "AMD",
+          "AVGO",
           "SMCI",
           "PLTR",
-          "AVGO",
-          "MSFT",
           "NVDA"
         ]
       }
@@ -99,7 +99,7 @@
       {
         "name": "AI",
         "count": 1,
-        "avg_conviction_score": 0.794,
+        "avg_conviction_score": 0.785,
         "total_suggested_allocation": 0.02,
         "total_normalized_allocation": 0.02,
         "tickers": [
@@ -109,30 +109,30 @@
       {
         "name": "Unspecified",
         "count": 21,
-        "avg_conviction_score": 0.478,
+        "avg_conviction_score": 0.4716,
         "total_suggested_allocation": 0.18,
         "total_normalized_allocation": 0.18,
         "tickers": [
+          "MSFT",
           "AMD",
-          "SMCI",
-          "NASA",
+          "AVGO",
           "XLK",
+          "CHAT",
+          "RIOT",
           "QQQ",
           "SPY",
-          "META",
-          "CHAT",
           "MARA",
-          "PLTR",
-          "AVGO",
           "AMZN",
-          "MSFT",
-          "GOOGL",
+          "META",
           "TSLA",
           "IWM",
           "XLF",
           "XLE",
+          "SMCI",
+          "NASA",
+          "PLTR",
+          "GOOGL",
           "NVDA",
-          "RIOT",
           "COIN"
         ]
       }
@@ -141,44 +141,44 @@
       {
         "name": "large",
         "count": 7,
-        "avg_conviction_score": 0.4053,
+        "avg_conviction_score": 0.4253,
         "total_suggested_allocation": 0.05,
         "total_normalized_allocation": 0.05,
         "tickers": [
-          "SMCI",
           "XLK",
+          "RIOT",
           "IWM",
           "XLF",
           "XLE",
-          "RIOT",
+          "SMCI",
           "COIN"
         ]
       },
       {
         "name": "mega",
         "count": 12,
-        "avg_conviction_score": 0.5303,
-        "total_suggested_allocation": 0.12,
-        "total_normalized_allocation": 0.12,
+        "avg_conviction_score": 0.5225,
+        "total_suggested_allocation": 0.13,
+        "total_normalized_allocation": 0.13,
         "tickers": [
           "AAPL",
+          "MSFT",
           "AMD",
+          "AVGO",
           "QQQ",
           "SPY",
-          "META",
-          "PLTR",
-          "AVGO",
           "AMZN",
-          "MSFT",
-          "GOOGL",
+          "META",
           "TSLA",
+          "PLTR",
+          "GOOGL",
           "NVDA"
         ]
       },
       {
         "name": "mid",
         "count": 1,
-        "avg_conviction_score": 0.519,
+        "avg_conviction_score": 0.533,
         "total_suggested_allocation": 0.01,
         "total_normalized_allocation": 0.01,
         "tickers": [
@@ -188,12 +188,12 @@
       {
         "name": "small",
         "count": 2,
-        "avg_conviction_score": 0.5555,
-        "total_suggested_allocation": 0.02,
-        "total_normalized_allocation": 0.02,
+        "avg_conviction_score": 0.4545,
+        "total_suggested_allocation": 0.01,
+        "total_normalized_allocation": 0.01,
         "tickers": [
-          "NASA",
-          "CHAT"
+          "CHAT",
+          "NASA"
         ]
       }
     ]
@@ -206,7 +206,24 @@
         "AI"
       ],
       "market_cap_bucket": "mega",
-      "conviction_score": 0.794,
+      "conviction_score": 0.785,
+      "conviction_band": "normal",
+      "sizing_recommendation": "normal",
+      "suggested_allocation": 0.02,
+      "normalized_allocation": 0.02,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "MSFT",
+      "sector": "Technology",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.676,
       "conviction_band": "normal",
       "sizing_recommendation": "normal",
       "suggested_allocation": 0.02,
@@ -223,45 +240,28 @@
         "Unspecified"
       ],
       "market_cap_bucket": "mega",
-      "conviction_score": 0.583,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
+      "conviction_score": 0.626,
+      "conviction_band": "normal",
+      "sizing_recommendation": "normal",
+      "suggested_allocation": 0.02,
+      "normalized_allocation": 0.02,
       "allocation_capped": false,
       "allocation_cap_reason": "",
       "data_mode": "live",
       "degraded_mode": false
     },
     {
-      "ticker": "SMCI",
+      "ticker": "AVGO",
       "sector": "Technology",
       "themes": [
         "Unspecified"
       ],
-      "market_cap_bucket": "large",
-      "conviction_score": 0.583,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "NASA",
-      "sector": "Financial Services",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "small",
-      "conviction_score": 0.583,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.602,
+      "conviction_band": "normal",
+      "sizing_recommendation": "normal",
+      "suggested_allocation": 0.02,
+      "normalized_allocation": 0.02,
       "allocation_capped": false,
       "allocation_cap_reason": "",
       "data_mode": "live",
@@ -274,7 +274,41 @@
         "Unspecified"
       ],
       "market_cap_bucket": "large",
-      "conviction_score": 0.535,
+      "conviction_score": 0.559,
+      "conviction_band": "starter",
+      "sizing_recommendation": "starter",
+      "suggested_allocation": 0.01,
+      "normalized_allocation": 0.01,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "CHAT",
+      "sector": "Financial Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "small",
+      "conviction_score": 0.542,
+      "conviction_band": "starter",
+      "sizing_recommendation": "starter",
+      "suggested_allocation": 0.01,
+      "normalized_allocation": 0.01,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "RIOT",
+      "sector": "Financial Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "large",
+      "conviction_score": 0.541,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
@@ -291,7 +325,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "mega",
-      "conviction_score": 0.532,
+      "conviction_score": 0.536,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
@@ -304,6 +338,40 @@
     {
       "ticker": "SPY",
       "sector": "Financial Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.536,
+      "conviction_band": "starter",
+      "sizing_recommendation": "starter",
+      "suggested_allocation": 0.01,
+      "normalized_allocation": 0.01,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "MARA",
+      "sector": "Financial Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "mid",
+      "conviction_score": 0.533,
+      "conviction_band": "starter",
+      "sizing_recommendation": "starter",
+      "suggested_allocation": 0.01,
+      "normalized_allocation": 0.01,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "AMZN",
+      "sector": "Consumer Cyclical",
       "themes": [
         "Unspecified"
       ],
@@ -325,126 +393,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "mega",
-      "conviction_score": 0.531,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "CHAT",
-      "sector": "Financial Services",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "small",
-      "conviction_score": 0.528,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "MARA",
-      "sector": "Financial Services",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mid",
-      "conviction_score": 0.519,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "PLTR",
-      "sector": "Technology",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mega",
-      "conviction_score": 0.501,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "AVGO",
-      "sector": "Technology",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mega",
-      "conviction_score": 0.5,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "AMZN",
-      "sector": "Consumer Cyclical",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mega",
-      "conviction_score": 0.497,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "MSFT",
-      "sector": "Technology",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mega",
-      "conviction_score": 0.493,
-      "conviction_band": "starter",
-      "sizing_recommendation": "starter",
-      "suggested_allocation": 0.01,
-      "normalized_allocation": 0.01,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "GOOGL",
-      "sector": "Communication Services",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "mega",
-      "conviction_score": 0.491,
+      "conviction_score": 0.503,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
@@ -478,7 +427,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "large",
-      "conviction_score": 0.467,
+      "conviction_score": 0.471,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
@@ -495,7 +444,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "large",
-      "conviction_score": 0.453,
+      "conviction_score": 0.464,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
@@ -512,11 +461,79 @@
         "Unspecified"
       ],
       "market_cap_bucket": "large",
-      "conviction_score": 0.436,
+      "conviction_score": 0.429,
       "conviction_band": "starter",
       "sizing_recommendation": "starter",
       "suggested_allocation": 0.01,
       "normalized_allocation": 0.01,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "SMCI",
+      "sector": "Technology",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "large",
+      "conviction_score": 0.396,
+      "conviction_band": "defer",
+      "sizing_recommendation": "defer",
+      "suggested_allocation": 0.0,
+      "normalized_allocation": 0.0,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "NASA",
+      "sector": "Financial Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "small",
+      "conviction_score": 0.367,
+      "conviction_band": "defer",
+      "sizing_recommendation": "defer",
+      "suggested_allocation": 0.0,
+      "normalized_allocation": 0.0,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "PLTR",
+      "sector": "Technology",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.36,
+      "conviction_band": "defer",
+      "sizing_recommendation": "defer",
+      "suggested_allocation": 0.0,
+      "normalized_allocation": 0.0,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "GOOGL",
+      "sector": "Communication Services",
+      "themes": [
+        "Unspecified"
+      ],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.351,
+      "conviction_band": "defer",
+      "sizing_recommendation": "defer",
+      "suggested_allocation": 0.0,
+      "normalized_allocation": 0.0,
       "allocation_capped": false,
       "allocation_cap_reason": "",
       "data_mode": "live",
@@ -529,24 +546,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "mega",
-      "conviction_score": 0.434,
-      "conviction_band": "observe",
-      "sizing_recommendation": "observe",
-      "suggested_allocation": 0.0,
-      "normalized_allocation": 0.0,
-      "allocation_capped": false,
-      "allocation_cap_reason": "",
-      "data_mode": "live",
-      "degraded_mode": false
-    },
-    {
-      "ticker": "RIOT",
-      "sector": "Financial Services",
-      "themes": [
-        "Unspecified"
-      ],
-      "market_cap_bucket": "large",
-      "conviction_score": 0.247,
+      "conviction_score": 0.287,
       "conviction_band": "defer",
       "sizing_recommendation": "defer",
       "suggested_allocation": 0.0,
@@ -563,7 +563,7 @@
         "Unspecified"
       ],
       "market_cap_bucket": "large",
-      "conviction_score": 0.116,
+      "conviction_score": 0.117,
       "conviction_band": "defer",
       "sizing_recommendation": "defer",
       "suggested_allocation": 0.0,
@@ -582,18 +582,18 @@
   },
   "market_regime": {
     "regime_label": "risk_on",
-    "regime_confidence": 0.85,
-    "regime_reasoning": "broad uptrend with supportive breadth; leadership is reasonably distributed",
-    "regime_summary_line": "Market regime: risk_on (confidence 0.85) - broad uptrend with supportive breadth; leadership is reasonably distributed",
+    "regime_confidence": 0.88,
+    "regime_reasoning": "broad uptrend with supportive breadth; leadership is reasonably distributed; average price change is positive",
+    "regime_summary_line": "Market regime: risk_on (confidence 0.88) - broad uptrend with supportive breadth; leadership is reasonably distributed; average price change is positive",
     "regime_data_quality": "full",
     "regime_held": false,
     "regime_raw_label": "risk_on",
     "regime_inputs": {
       "index_trend_state": "up",
-      "breadth_sma50": 0.864,
-      "breadth_sma20": 0.727,
-      "avg_price_change_pct": 0.116,
-      "volatility_proxy": 1.325,
+      "breadth_sma50": 0.909,
+      "breadth_sma20": 0.818,
+      "avg_price_change_pct": 1.192,
+      "volatility_proxy": 2.604,
       "sector_leadership_concentration": 0.45,
       "available_input_count": 6,
       "degraded_mode": false
@@ -601,5 +601,5 @@
     "regime_portfolio_fit": "aligned",
     "regime_portfolio_commentary": "Current normalized allocations look broadly aligned with a constructive regime. Concentration warnings active: overconcentration_top_sector:Financial Services:45.0%."
   },
-  "generated_at": "2026-05-28T09:01:34.781567+00:00"
+  "generated_at": "2026-06-01T09:01:12.010511+00:00"
 }

@@ -1,7 +1,10 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-05-20 (observe-and-iterate phase opened: gauge retune +
+# Last updated: 2026-06-01 (inaugural monthly-tool-analysis run logged: AMBER;
+# next_official_step unchanged = observe_and_iterate; see last_monthly_analysis
+# block below and docs/roadmap.md Known Issues for the two surfaced defects.
+# Prior milestone 2026-05-20: observe-and-iterate phase opened: gauge retune +
 # structural cap widen + 6 new observability modules + 17-stage wrapper +
 # GUI v2 risk-impact tab; ml_advisor enabled; resolver fixes shipped)
 
@@ -114,6 +117,46 @@ next_official_step:
       - Slack integration for notify_status (today: email only)
 
 project_status: observe_and_iterate
+
+# ---------------------------------------------------------------------------
+# Observed-state log — last tool-analysis runs (informational; no scope change)
+# ---------------------------------------------------------------------------
+
+last_monthly_analysis:
+  date: 2026-06-01
+  cadence: monthly
+  window: 2026-05-02..2026-06-01  # rolling 30d
+  verdict: AMBER
+  inaugural: true  # first monthly-tool-analysis run; no prior-month baseline
+  report: docs/monthly_reports/2026-05.md
+  next_official_step_unchanged: true  # remains observe_and_iterate
+  observed_metrics:
+    cron_health: 32/30 days archived with decision_plan
+    drift_cap_utilization: 0%
+    pulse_skip_rate: 6.7%  # 1 of 15 runs
+    universe_hit_rate_1d: 0.524  # n=594
+    universe_hit_rate_3d: 0.585  # n=528
+    decision_mix: WAIT 73.4% / actionable 9.7%  # within band
+    regime: neutral 100%  # no diversity, not whipsaw
+  gauge_eras:
+    prior_f60e0b9d:
+      status: 05-18 retune confirmed broad-based win
+      hit_rate_1d_delta: +28.8pp  # 40.6% -> 69.4%
+      mean_return_1d: sign-flipped (-0.31% -> +1.92%)
+      sectors: all 4 improved, none hurt (weakest Comm Services +0.27pp return)
+    current_d95e3096:
+      first_signal: 2026-05-29
+      evaluable: false  # 0 of 110 resolved
+      n100_expected: ~2026-06-04/05
+      action: HOLD + collect; re-run attribution 2026-06-02
+  discovery:
+    first_live_extended_watchlist_promotions: [XOM, CVX]  # Energy Transition, 2026-05-31
+    theme_engine_live: true  # real OpenAI call confirmed
+  open_defects_surfaced:  # tracked in docs/roadmap.md Known Issues
+    - theme_engine_ai_usage_unmetered  # discovery openai_cost/fmp telemetry false-zero; true spend in ai_budget_summary.json
+    - fmp_scanner_fallback  # tier_b.evidence_count=0, fmp_succeeded:false
+  self_healing:
+    - learning_loop_outcome_maturation_gap  # forward-only snapshot join in pattern_learning.py; self-heals ~2026-06-05
 
 # ---------------------------------------------------------------------------
 # Queued after gauge fingerprint f60e0b9d51bec808 reaches n=100 resolved 1d

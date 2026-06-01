@@ -1,6 +1,23 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-05-14
+# Last updated: 2026-06-01 (inaugural monthly-tool-analysis run logged — AMBER;
+# next step unchanged = observe_and_iterate. See observe_and_iterate block below,
+# .agent/project_state.yaml:last_monthly_analysis, docs/monthly_reports/2026-05.md.)
+
+# ---------------------------------------------------------------------------
+# Observe-and-iterate phase status (current)
+# ---------------------------------------------------------------------------
+
+observe_and_iterate:
+  status: active
+  next_official_step_unchanged: true
+  last_monthly_analysis:
+    date: 2026-06-01
+    verdict: AMBER
+    inaugural: true
+    report: docs/monthly_reports/2026-05.md
+    open_defects: [theme_engine_ai_usage_unmetered, fmp_scanner_fallback]
+    self_healing: [learning_loop_outcome_maturation_gap]  # ~2026-06-05
 
 # ---------------------------------------------------------------------------
 # Phase 0 — Infrastructure & Data Governance

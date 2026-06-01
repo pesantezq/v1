@@ -1,13 +1,13 @@
 # Regime Performance
 
-Generated: 2026-05-28T09:01:34.772219  
-Resolved signals: **484**  
+Generated: 2026-06-01T09:01:12.000180  
+Resolved signals: **528**  
 
 ## neutral
 
-- Total signals: **484**
-- Win rate: **56.6%**
-- Avg return: **+1.00%**
+- Total signals: **528**
+- Win rate: **58.5%**
+- Avg return: **+1.26%**
 - Avg signal score: **0.27**
 - Avg conviction score: n/a
 - Avg holding outcome: **+0.00%**

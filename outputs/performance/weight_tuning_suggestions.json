@@ -1,17 +1,17 @@
 {
-  "generated_at": "2026-05-28T09:01:37.519102",
+  "generated_at": "2026-06-01T09:01:22.247845",
   "observe_only": true,
   "primary_window_days": 3,
-  "total_rows": 572,
-  "resolved_rows": 484,
+  "total_rows": 726,
+  "resolved_rows": 528,
   "current_weights": {
     "augmented_signal_score": 0.4,
     "confidence_score": 0.25,
     "theme_alignment_score": 0.15,
     "portfolio_fit_score": 0.2
   },
-  "recommended_candidate": "balanced",
-  "recommendation_reason": "Best top-quartile hit rate (46.6%, avg return +1.10%) across 116 resolved signals",
+  "recommended_candidate": "portfolio_fit_heavy",
+  "recommendation_reason": "Best top-quartile hit rate (51.0%, avg return +1.83%) across 104 resolved signals",
   "candidates": [
     {
       "name": "current",
@@ -21,10 +21,10 @@
         "theme_alignment_score": 0.15,
         "portfolio_fit_score": 0.2
       },
-      "top_quartile_avg_return": 0.76,
-      "top_quartile_hit_rate": 0.457,
-      "top_quartile_direction_correct_rate": 0.457,
-      "sample_size": 116,
+      "top_quartile_avg_return": 1.299,
+      "top_quartile_hit_rate": 0.481,
+      "top_quartile_direction_correct_rate": 0.481,
+      "sample_size": 106,
       "low_sample_warning": false
     },
     {
@@ -35,10 +35,10 @@
         "theme_alignment_score": 0.35,
         "portfolio_fit_score": 0.15
       },
-      "top_quartile_avg_return": 0.76,
-      "top_quartile_hit_rate": 0.457,
-      "top_quartile_direction_correct_rate": 0.457,
-      "sample_size": 116,
+      "top_quartile_avg_return": 1.299,
+      "top_quartile_hit_rate": 0.481,
+      "top_quartile_direction_correct_rate": 0.481,
+      "sample_size": 106,
       "low_sample_warning": false
     },
     {
@@ -49,10 +49,10 @@
         "theme_alignment_score": 0.1,
         "portfolio_fit_score": 0.4
       },
-      "top_quartile_avg_return": 1.065,
-      "top_quartile_hit_rate": 0.443,
-      "top_quartile_direction_correct_rate": 0.443,
-      "sample_size": 115,
+      "top_quartile_avg_return": 1.826,
+      "top_quartile_hit_rate": 0.51,
+      "top_quartile_direction_correct_rate": 0.51,
+      "sample_size": 104,
       "low_sample_warning": false
     },
     {
@@ -63,10 +63,10 @@
         "theme_alignment_score": 0.1,
         "portfolio_fit_score": 0.15
       },
-      "top_quartile_avg_return": 0.76,
-      "top_quartile_hit_rate": 0.457,
-      "top_quartile_direction_correct_rate": 0.457,
-      "sample_size": 116,
+      "top_quartile_avg_return": 1.299,
+      "top_quartile_hit_rate": 0.481,
+      "top_quartile_direction_correct_rate": 0.481,
+      "sample_size": 106,
       "low_sample_warning": false
     },
     {
@@ -77,10 +77,10 @@
         "theme_alignment_score": 0.15,
         "portfolio_fit_score": 0.1
       },
-      "top_quartile_avg_return": 0.579,
-      "top_quartile_hit_rate": 0.445,
-      "top_quartile_direction_correct_rate": 0.445,
-      "sample_size": 119,
+      "top_quartile_avg_return": 1.192,
+      "top_quartile_hit_rate": 0.481,
+      "top_quartile_direction_correct_rate": 0.481,
+      "sample_size": 106,
       "low_sample_warning": false
     },
     {
@@ -91,10 +91,10 @@
         "theme_alignment_score": 0.25,
         "portfolio_fit_score": 0.25
       },
-      "top_quartile_avg_return": 1.099,
-      "top_quartile_hit_rate": 0.466,
-      "top_quartile_direction_correct_rate": 0.466,
-      "sample_size": 116,
+      "top_quartile_avg_return": 1.705,
+      "top_quartile_hit_rate": 0.486,
+      "top_quartile_direction_correct_rate": 0.486,
+      "sample_size": 105,
       "low_sample_warning": false
     }
   ]
