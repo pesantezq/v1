@@ -111,3 +111,28 @@ def test_find_coverage_gaps_silent_when_doc_exists():
 def test_find_coverage_gaps_ignores_non_source_changes():
     changed = ["README.md", "outputs/latest/foo.json"]
     assert doc_audit.find_coverage_gaps(changed, set()) == []
+
+
+def test_find_dead_refs_flags_missing_python_file(tmp_path):
+    _write(tmp_path, "docs/ARCHITECTURE.md",
+           "See `portfolio_automation/ghost_module.py` for details.\n")
+    findings = doc_audit.find_dead_refs(str(tmp_path))
+    assert any("ghost_module.py" in f.detail for f in findings)
+    assert all(f.dimension == "dead_ref" and f.auto_fixable is False for f in findings)
+
+
+def test_find_dead_refs_silent_for_existing_file(tmp_path):
+    _write(tmp_path, "portfolio_automation/real_module.py", "x = 1\n")
+    _write(tmp_path, "docs/ARCHITECTURE.md",
+           "See `portfolio_automation/real_module.py`.\n")
+    assert doc_audit.find_dead_refs(str(tmp_path)) == []
+
+
+def test_find_cross_doc_inconsistency_flags_disagreement(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
+    _write(tmp_path, "docs/ARCHITECTURE.md", "Runs 24 pipeline stages.\n")
+    findings = doc_audit.find_cross_doc_inconsistency(str(tmp_path))
+    assert any(f.anchor == "pipeline_stage_count" for f in findings)
+    assert all(f.dimension == "consistency" for f in findings)

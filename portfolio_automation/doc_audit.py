@@ -6,6 +6,7 @@ decisions; never mutates portfolio, allocation, scoring, or decision state.
 """
 from __future__ import annotations
 
+import glob as _glob
 import json
 import re
 from dataclasses import dataclass, field
@@ -115,14 +116,55 @@ def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str]) -
         if not f.endswith(".py") or f.startswith("tests/") or "/test_" in f:
             continue
         module = Path(f).stem
-        if module.startswith("_") or module == "__init__":
+        if module.startswith("_"):
             continue
         expected_doc = f"docs/{module}.md"
         if expected_doc not in existing_doc_paths:
             findings.append(Finding(
                 dimension="coverage", severity="med", doc=expected_doc,
-                detail=f"new module {f} shipped without {expected_doc}",
+                detail=f"module {f} has no documentation at {expected_doc}",
                 auto_fixable=False,
+            ))
+    return findings
+
+
+_PY_REF_RX = re.compile(r"`((?:portfolio_automation|watchlist_scanner|scanner)/[\w/]+\.py)`")
+
+
+def find_dead_refs(root: str) -> list[Finding]:
+    """Flag `path/to/file.py` references in docs that no longer exist on disk."""
+    findings: list[Finding] = []
+    for doc_path in sorted(_glob.glob(str(Path(root) / "docs" / "**" / "*.md"), recursive=True)):
+        rel_doc = str(Path(doc_path).relative_to(root))
+        for lineno, line in _iter_doc_lines(root, rel_doc):
+            for m in _PY_REF_RX.finditer(line):
+                ref = m.group(1)
+                if not (Path(root) / ref).exists():
+                    findings.append(Finding(
+                        dimension="dead_ref", severity="med", doc=rel_doc,
+                        detail=f"references missing file {ref}", line=lineno,
+                    ))
+    return findings
+
+
+def find_cross_doc_inconsistency(root: str) -> list[Finding]:
+    """For each anchor, collect the documented value seen across ALL its docs;
+    flag when two docs disagree (independent of whether the source resolves)."""
+    findings: list[Finding] = []
+    for anchor in ANCHOR_REGISTRY:
+        rx = re.compile(anchor.pattern, re.IGNORECASE)
+        seen: dict[str, str] = {}
+        for doc_rel in anchor.doc_globs:
+            for _lineno, line in _iter_doc_lines(root, doc_rel):
+                m = rx.search(line)
+                if m:
+                    seen[doc_rel] = m.group(1)
+                    break
+        if len(set(seen.values())) > 1:
+            findings.append(Finding(
+                dimension="consistency", severity="high", doc=", ".join(seen),
+                detail=f"{anchor.name} disagrees across docs: {seen}",
+                anchor=anchor.name,
             ))
     return findings
 
