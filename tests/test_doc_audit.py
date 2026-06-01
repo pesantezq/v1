@@ -66,3 +66,28 @@ def test_resolve_source_usd0_formats_without_decimals(tmp_path):
         fmt="usd0",
     )
     assert doc_audit.resolve_source(anchor, str(tmp_path)) == "20"
+
+
+def test_find_drift_flags_mismatch_and_marks_auto_fixable(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md",
+           "The wrapper runs 17 pipeline stages end to end.\n")
+    findings = doc_audit.find_drift(str(tmp_path))
+    drift = [f for f in findings if f.anchor == "pipeline_stage_count"]
+    assert len(drift) == 1
+    assert drift[0].current == "17" and drift[0].expected == "24"
+    assert drift[0].auto_fixable is True
+    assert drift[0].dimension == "drift"
+
+
+def test_find_drift_silent_when_doc_matches_source(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 24 pipeline stages.\n")
+    assert doc_audit.find_drift(str(tmp_path)) == []
+
+
+def test_find_drift_reports_only_when_source_unresolvable(tmp_path):
+    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
+    assert doc_audit.find_drift(str(tmp_path)) == []

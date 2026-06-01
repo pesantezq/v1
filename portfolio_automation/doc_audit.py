@@ -91,3 +91,36 @@ ANCHOR_REGISTRY: list[Anchor] = [
            "monthly_cost_limit_usd", ("docs/AI_BUDGET.md",),
            r"monthly[^\$]*\$(\d+)", "usd0"),
 ]
+
+
+def _iter_doc_lines(root: str, glob_rel: str):
+    p = Path(root) / glob_rel
+    if not p.exists():
+        return
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
+        yield i, line
+
+
+def find_drift(root: str) -> list[Finding]:
+    """Compare each anchor's documented value (in its authoritative docs) to its
+    source of truth. Only emits a finding when the source resolves AND differs."""
+    findings: list[Finding] = []
+    for anchor in ANCHOR_REGISTRY:
+        expected = resolve_source(anchor, root)
+        if expected is None:
+            continue  # cannot prove drift -> never guess
+        rx = re.compile(anchor.pattern, re.IGNORECASE)
+        for doc_rel in anchor.doc_globs:
+            for lineno, line in _iter_doc_lines(root, doc_rel):
+                m = rx.search(line)
+                if not m:
+                    continue
+                current = m.group(1)
+                if current != expected:
+                    findings.append(Finding(
+                        dimension="drift", severity="med", doc=doc_rel,
+                        detail=f"{anchor.name}: doc says {current}, source says {expected}",
+                        auto_fixable=True, anchor=anchor.name,
+                        current=current, expected=expected, line=lineno,
+                    ))
+    return findings
