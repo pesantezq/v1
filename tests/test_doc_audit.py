@@ -34,10 +34,34 @@ def test_resolve_source_returns_none_when_artifact_missing(tmp_path):
 
 
 def test_registry_is_non_empty_and_well_formed():
-    assert len(doc_audit.ANCHOR_REGISTRY) >= 6
+    names = {a.name for a in doc_audit.ANCHOR_REGISTRY}
+    assert len(doc_audit.ANCHOR_REGISTRY) >= 3
+    assert {"concentration_cap", "leverage_cap", "sector_cap"} <= names
+    # ambiguous anchors intentionally dropped in the 2026-06-01 calibration
+    assert {"pipeline_stage_count", "fmp_daily_budget", "ai_monthly_cap"}.isdisjoint(names)
     for a in doc_audit.ANCHOR_REGISTRY:
         assert a.pattern.count("(") >= 1
         assert a.fmt in {"int", "float2", "pct1", "usd0"}
+
+
+# Shared fixtures for the calibrated structural-cap anchors. The doc mirrors the
+# real ALLOCATION_POLICY.md shape: canonical "- `name = 0.NN`" bullet lines PLUS
+# nearby "Pre-retune baseline ..." lines that hold different numbers and must
+# never be matched/auto-fixed.
+def _caps_src(root, conc=0.60, lev=0.25, sec=0.35):
+    _write(root, "outputs/latest/retune_impact.json", json.dumps({
+        "current_snapshot": {
+            "structural_caps": {"concentration_cap": conc, "leverage_cap": lev},
+            "allocation_engine": {"sector_cap": sec}}}))
+
+
+def _alloc_doc(root, conc="0.60", lev="0.25", sec="0.35"):
+    _write(root, "docs/ALLOCATION_POLICY.md",
+           f"- `sector_cap = {sec}`\n"
+           f"Pre-retune baseline: `max_position_cap = 0.08`, `sector_cap = 0.20`.\n"
+           f"- `concentration_cap = {conc}` — max share of portfolio in a single position\n"
+           f"- `leverage_cap = {lev}` — max share of portfolio in leveraged exposure\n"
+           f"Pre-retune baseline (2026-05-18): `concentration_cap = 0.40`, `leverage_cap = 0.15`.\n")
 
 
 def test_resolve_source_pct1_formats_as_integer_percent(tmp_path):
@@ -69,28 +93,36 @@ def test_resolve_source_usd0_formats_without_decimals(tmp_path):
 
 
 def test_find_drift_flags_mismatch_and_marks_auto_fixable(tmp_path):
-    _write(tmp_path, "outputs/latest/daily_run_status.json",
-           json.dumps({"stage_summary": {"total": 24}}))
-    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md",
-           "The wrapper runs 17 pipeline stages end to end.\n")
+    _caps_src(tmp_path, conc=0.65)         # source bumped to 0.65
+    _alloc_doc(tmp_path, conc="0.60")       # doc bullet still says 0.60
     findings = doc_audit.find_drift(str(tmp_path))
-    drift = [f for f in findings if f.anchor == "pipeline_stage_count"]
-    assert len(drift) == 1
-    assert drift[0].current == "17" and drift[0].expected == "24"
+    drift = [f for f in findings if f.anchor == "concentration_cap"]
+    assert len(drift) == 1                  # exactly one — the baseline 0.40 line is NOT matched
+    assert drift[0].current == "0.60" and drift[0].expected == "0.65"
     assert drift[0].auto_fixable is True
     assert drift[0].dimension == "drift"
 
 
 def test_find_drift_silent_when_doc_matches_source(tmp_path):
-    _write(tmp_path, "outputs/latest/daily_run_status.json",
-           json.dumps({"stage_summary": {"total": 24}}))
-    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 24 pipeline stages.\n")
+    _caps_src(tmp_path)                      # 0.60 / 0.25 / 0.35
+    _alloc_doc(tmp_path)                     # bullets match source
     assert doc_audit.find_drift(str(tmp_path)) == []
 
 
 def test_find_drift_reports_only_when_source_unresolvable(tmp_path):
-    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
+    _alloc_doc(tmp_path)                     # doc present, but no retune_impact.json source
     assert doc_audit.find_drift(str(tmp_path)) == []
+
+
+def test_find_drift_never_matches_pre_retune_baseline_value(tmp_path):
+    # Calibration safety: the bullet anchor (^- `name = ...`) must exclude the
+    # "Pre-retune baseline ... concentration_cap = 0.40" line, so drift only ever
+    # reports the current bullet value (0.60), never the historical 0.40.
+    _caps_src(tmp_path, conc=0.65)
+    _alloc_doc(tmp_path, conc="0.60")
+    currents = [f.current for f in doc_audit.find_drift(str(tmp_path))
+                if f.anchor == "concentration_cap"]
+    assert currents == ["0.60"]              # never "0.40"
 
 
 def test_find_coverage_gaps_flags_new_module_without_doc():
@@ -129,29 +161,31 @@ def test_find_dead_refs_silent_for_existing_file(tmp_path):
 
 
 def test_find_cross_doc_inconsistency_flags_disagreement(tmp_path):
-    _write(tmp_path, "outputs/latest/daily_run_status.json",
-           json.dumps({"stage_summary": {"total": 24}}))
-    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
-    _write(tmp_path, "docs/ARCHITECTURE.md", "Runs 24 pipeline stages.\n")
-    findings = doc_audit.find_cross_doc_inconsistency(str(tmp_path))
-    assert any(f.anchor == "pipeline_stage_count" for f in findings)
+    # Inject a synthetic 2-doc anchor (decoupled from the live registry).
+    _write(tmp_path, "docs/A.md", "- `widget_cap = 0.10`\n")
+    _write(tmp_path, "docs/B.md", "- `widget_cap = 0.20`\n")
+    test_anchor = doc_audit.Anchor(
+        name="widget_cap", source_artifact="outputs/latest/x.json",
+        source_json_path="a", doc_globs=("docs/A.md", "docs/B.md"),
+        pattern=r"^- `widget_cap = (\d+\.\d+)`", fmt="float2")
+    findings = doc_audit.find_cross_doc_inconsistency(str(tmp_path), registry=[test_anchor])
+    assert any(f.anchor == "widget_cap" for f in findings)
     assert all(f.dimension == "consistency" for f in findings)
 
 
 def test_run_doc_audit_assembles_status_dict(tmp_path):
-    _write(tmp_path, "outputs/latest/daily_run_status.json",
-           json.dumps({"stage_summary": {"total": 24}}))
-    _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
+    _caps_src(tmp_path, conc=0.65)          # source bumped
+    _alloc_doc(tmp_path, conc="0.60")        # doc stale -> concentration_cap drift
     result = doc_audit.run_doc_audit(
         str(tmp_path), last_audited_sha="abc123",
         changed_files=["portfolio_automation/new_widget.py"],
-        existing_doc_paths={"docs/PIPELINE_RUNBOOK.md"},
+        existing_doc_paths={"docs/ALLOCATION_POLICY.md"},
     )
     assert result["observe_only"] is True
     assert result["source"] == "doc_audit"
     assert result["last_audited_sha"] == "abc123"
     assert result["overall_status"] in {"drift", "coverage_gap", "ok_with_warnings"}
-    assert any(f["anchor"] == "pipeline_stage_count" for f in result["findings"])
+    assert any(f["anchor"] == "concentration_cap" for f in result["findings"])
     assert any(f["auto_fixable"] for f in result["auto_fix_candidates"])
 
 
@@ -184,16 +218,17 @@ def test_run_doc_audit_coverage_gap_status_reachable(tmp_path):
 
 
 def test_apply_auto_fix_substitutes_only_the_captured_value(tmp_path):
-    _write(tmp_path, "outputs/latest/daily_run_status.json",
-           json.dumps({"stage_summary": {"total": 24}}))
-    doc = _write(tmp_path, "docs/PIPELINE_RUNBOOK.md",
-                 "Runs 17 pipeline stages. The 17 here is unrelated prose.\n")
-    f = doc_audit.find_drift(str(tmp_path))[0]
-    changed = doc_audit.apply_auto_fix(f, str(tmp_path))
+    _caps_src(tmp_path, conc=0.65)
+    doc = _write(tmp_path, "docs/ALLOCATION_POLICY.md",
+                 "- `concentration_cap = 0.60` — max share of portfolio in a single position\n"
+                 "Pre-retune baseline (2026-05-18): `concentration_cap = 0.40`.\n")
+    drift = [f for f in doc_audit.find_drift(str(tmp_path)) if f.anchor == "concentration_cap"]
+    assert len(drift) == 1
+    changed = doc_audit.apply_auto_fix(drift[0], str(tmp_path))
     assert changed is True
     text = doc.read_text()
-    assert "Runs 24 pipeline stages." in text
-    assert "The 17 here is unrelated prose." in text
+    assert "- `concentration_cap = 0.65`" in text                                   # current bullet fixed
+    assert "Pre-retune baseline (2026-05-18): `concentration_cap = 0.40`." in text   # baseline untouched
 
 
 def test_apply_auto_fix_refuses_non_auto_fixable():
@@ -209,8 +244,8 @@ def test_apply_auto_fix_refuses_path_escape(tmp_path):
     try:
         f = doc_audit.Finding(
             dimension="drift", severity="med", doc=f"../{outside.name}",
-            detail="x", auto_fixable=True, anchor="pipeline_stage_count",
-            current="17", expected="24", line=1)
+            detail="x", auto_fixable=True, anchor="concentration_cap",
+            current="0.60", expected="0.65", line=1)
         assert doc_audit.apply_auto_fix(f, str(tmp_path)) is False
         assert outside.read_text() == "Runs 17 pipeline stages.\n"  # untouched
     finally:

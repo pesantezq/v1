@@ -70,28 +70,41 @@ def resolve_source(anchor: Anchor, root: str) -> str | None:
         return None
 
 
-# Seeded by an upfront sweep of documented constants; growable. Each anchor is
-# authoritative ONLY in its doc_globs, and its pattern has exactly one capture
-# group = the documented value.
+# Calibrated 2026-06-01 against the real doc prose. Each anchor is authoritative
+# ONLY in its doc_globs; its `pattern` has exactly one capture group = the
+# documented value, and that value must render identically to resolve_source's
+# formatted output for an in-sync doc.
+#
+# The structural caps below are documented in ALLOCATION_POLICY.md as decimals in
+# canonical Markdown bullet lines, e.g. "- `concentration_cap = 0.60` — ...". The
+# `^- \`name = ` bullet anchor is deliberate: it EXCLUDES the nearby
+# "Pre-retune baseline: ... `concentration_cap = 0.40`" lines, so the auditor can
+# never rewrite the historical baseline record (a false-positive that an
+# unanchored pattern would cause).
+#
+# Intentionally NOT auto-fix anchors (would replace a correct statement with a
+# wrong one — kept out of the registry until/unless reconciled by an operator):
+#   * pipeline stage count — docs say "13-stage pipeline" (PIPELINE_RUNBOOK) and
+#     "17-stage safe wrapper" (ARCHITECTURE) while daily_run_status.total=24
+#     counts ALL wrapper steps; these are three different measures, not drift.
+#   * FMP daily budget — DATA_AND_FMP_ENDPOINTS.md documents the client DEFAULT
+#     (230) while fmp_budget_status.budget=500 is the configured LIVE value;
+#     default != live, so auto-fixing would be wrong.
+#   * AI monthly cap — AI_BUDGET.md shows `monthly_cost_limit_usd: null` as an
+#     illustrative default, not a live figure.
 ANCHOR_REGISTRY: list[Anchor] = [
-    Anchor("pipeline_stage_count", "outputs/latest/daily_run_status.json",
-           "stage_summary.total", ("docs/PIPELINE_RUNBOOK.md", "docs/ARCHITECTURE.md"),
-           r"(\d+)\s+pipeline stages", "int"),
     Anchor("concentration_cap", "outputs/latest/retune_impact.json",
            "current_snapshot.structural_caps.concentration_cap",
-           ("docs/ALLOCATION_POLICY.md",), r"concentration cap[^\d]*(\d+)\s*%", "pct1"),
+           ("docs/ALLOCATION_POLICY.md",),
+           r"^- `concentration_cap = (\d+\.\d+)`", "float2"),
     Anchor("leverage_cap", "outputs/latest/retune_impact.json",
            "current_snapshot.structural_caps.leverage_cap",
-           ("docs/ALLOCATION_POLICY.md",), r"leverage cap[^\d]*(\d+)\s*%", "pct1"),
+           ("docs/ALLOCATION_POLICY.md",),
+           r"^- `leverage_cap = (\d+\.\d+)`", "float2"),
     Anchor("sector_cap", "outputs/latest/retune_impact.json",
            "current_snapshot.allocation_engine.sector_cap",
-           ("docs/ALLOCATION_POLICY.md",), r"sector cap[^\d]*(\d+)\s*%", "pct1"),
-    Anchor("fmp_daily_budget", "outputs/latest/fmp_budget_status.json",
-           "budget.budget", ("docs/AI_BUDGET.md",),
-           r"fmp_daily_calls_budget[^\d]*(\d+)", "int"),
-    Anchor("ai_monthly_cap", "outputs/latest/ai_budget_summary.json",
-           "monthly_cost_limit_usd", ("docs/AI_BUDGET.md",),
-           r"monthly[^\$]*\$(\d+)", "usd0"),
+           ("docs/ALLOCATION_POLICY.md",),
+           r"^- `sector_cap = (\d+\.\d+)`", "float2"),
 ]
 
 
@@ -148,11 +161,13 @@ def find_dead_refs(root: str) -> list[Finding]:
     return findings
 
 
-def find_cross_doc_inconsistency(root: str) -> list[Finding]:
+def find_cross_doc_inconsistency(root: str, registry: list[Anchor] | None = None) -> list[Finding]:
     """For each anchor, collect the documented value seen across ALL its docs;
-    flag when two docs disagree (independent of whether the source resolves)."""
+    flag when two docs disagree (independent of whether the source resolves).
+
+    `registry` defaults to ANCHOR_REGISTRY; tests inject a custom list."""
     findings: list[Finding] = []
-    for anchor in ANCHOR_REGISTRY:
+    for anchor in (registry if registry is not None else ANCHOR_REGISTRY):
         rx = re.compile(anchor.pattern, re.IGNORECASE)
         seen: dict[str, str] = {}
         for doc_rel in anchor.doc_globs:
@@ -170,11 +185,13 @@ def find_cross_doc_inconsistency(root: str) -> list[Finding]:
     return findings
 
 
-def find_drift(root: str) -> list[Finding]:
+def find_drift(root: str, registry: list[Anchor] | None = None) -> list[Finding]:
     """Compare each anchor's documented value (in its authoritative docs) to its
-    source of truth. Only emits a finding when the source resolves AND differs."""
+    source of truth. Only emits a finding when the source resolves AND differs.
+
+    `registry` defaults to ANCHOR_REGISTRY; tests inject a custom list."""
     findings: list[Finding] = []
-    for anchor in ANCHOR_REGISTRY:
+    for anchor in (registry if registry is not None else ANCHOR_REGISTRY):
         expected = resolve_source(anchor, root)
         if expected is None:
             continue  # cannot prove drift -> never guess

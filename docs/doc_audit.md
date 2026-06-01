@@ -41,16 +41,45 @@ drift-check extracts the documented value with `pattern`, fetches the live value
 via `resolve_source(anchor, root)`, formats it with `fmt`, and emits a Finding
 when they differ.
 
+### Currently registered (calibrated 2026-06-01)
+
+Three structural-cap anchors, all in `docs/ALLOCATION_POLICY.md`, documented as
+decimals in canonical bullet lines:
+
+| Anchor | Source (`retune_impact.json`) | Pattern |
+|---|---|---|
+| `concentration_cap` | `current_snapshot.structural_caps.concentration_cap` | `` ^- `concentration_cap = (\d+\.\d+)` `` |
+| `leverage_cap` | `current_snapshot.structural_caps.leverage_cap` | `` ^- `leverage_cap = (\d+\.\d+)` `` |
+| `sector_cap` | `current_snapshot.allocation_engine.sector_cap` | `` ^- `sector_cap = (\d+\.\d+)` `` |
+
+The `` ^- `name = `` bullet anchor is deliberate: it excludes the nearby
+`Pre-retune baseline: ... concentration_cap = 0.40` lines so the auditor can
+never rewrite the historical record.
+
+**Deliberately NOT registered** (current-vs-reference ambiguities — auto-fixing
+would replace a correct statement with a wrong one): pipeline stage count
+("13-stage" pipeline vs "17-stage" wrapper vs `daily_run_status.total=24` —
+three different measures); FMP daily budget (`DATA_AND_FMP_ENDPOINTS.md`
+documents the client *default* 230, while 500 is the configured *live* value);
+AI monthly cap (`AI_BUDGET.md` shows `monthly_cost_limit_usd: null` as an
+example). These need manual operator reconciliation, not auto-fix.
+
 ### How to add an anchor
 
 1. Identify the source JSON artifact and the key path inside it.
-2. Identify the doc(s) where this value is documented.
-3. Write a regex whose sole capture group matches the numeric/string value as
-   it appears in prose (e.g. `r"concentration cap[^\d]*(\d+)\s*%"`).
-4. Append an `Anchor(...)` to `ANCHOR_REGISTRY` at the bottom of the list.
+2. Identify the doc(s) where this value is documented, and read the ACTUAL line —
+   match the format as it really appears (decimal vs percent, code-span vs prose).
+3. Anchor the regex to the canonical line (e.g. a Markdown bullet `^- \`name = ...\``)
+   so it does NOT also match baseline/example/historical mentions of the same key.
+   The captured group must render identically to `resolve_source`'s `fmt` output
+   when the doc is in sync (verify by running `find_drift` against the real repo).
+4. Append an `Anchor(...)` to `ANCHOR_REGISTRY`.
 
-The new anchor is auto-fix-eligible automatically — the fixer will substitute
-the captured group in-place the next time the audit runs with `apply_enabled`.
+A new anchor is auto-fix-eligible automatically — the fixer substitutes the
+captured group in-place the next time the audit runs with `apply_enabled`. Only
+register a value as an anchor if its source is the live truth (not a code default
+or illustrative example); otherwise it belongs in a report-only check, not the
+auto-fix registry.
 
 ---
 
