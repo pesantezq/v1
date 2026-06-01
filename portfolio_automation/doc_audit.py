@@ -101,6 +101,32 @@ def _iter_doc_lines(root: str, glob_rel: str):
         yield i, line
 
 
+_SOURCE_DIRS = ("portfolio_automation/", "watchlist_scanner/", "scanner/")
+
+
+def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str]) -> list[Finding]:
+    """Flag new source modules in changed_files that have no docs/<module>.md.
+    Pure function over the changed-file list + the set of existing doc paths,
+    so it is trivially testable; the git diff is injected by the caller."""
+    findings: list[Finding] = []
+    for f in changed_files:
+        if not any(f.startswith(d) for d in _SOURCE_DIRS):
+            continue
+        if not f.endswith(".py") or f.startswith("tests/") or "/test_" in f:
+            continue
+        module = Path(f).stem
+        if module.startswith("_") or module == "__init__":
+            continue
+        expected_doc = f"docs/{module}.md"
+        if expected_doc not in existing_doc_paths:
+            findings.append(Finding(
+                dimension="coverage", severity="med", doc=expected_doc,
+                detail=f"new module {f} shipped without {expected_doc}",
+                auto_fixable=False,
+            ))
+    return findings
+
+
 def find_drift(root: str) -> list[Finding]:
     """Compare each anchor's documented value (in its authoritative docs) to its
     source of truth. Only emits a finding when the source resolves AND differs."""

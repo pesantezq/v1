@@ -91,3 +91,23 @@ def test_find_drift_silent_when_doc_matches_source(tmp_path):
 def test_find_drift_reports_only_when_source_unresolvable(tmp_path):
     _write(tmp_path, "docs/PIPELINE_RUNBOOK.md", "Runs 17 pipeline stages.\n")
     assert doc_audit.find_drift(str(tmp_path)) == []
+
+
+def test_find_coverage_gaps_flags_new_module_without_doc():
+    changed = ["portfolio_automation/new_widget.py", "tests/test_new_widget.py"]
+    existing_docs = {"docs/ARCHITECTURE.md"}
+    gaps = doc_audit.find_coverage_gaps(changed, existing_docs)
+    names = [g.detail for g in gaps]
+    assert any("new_widget" in n for n in names)
+    assert all(g.dimension == "coverage" and g.auto_fixable is False for g in gaps)
+
+
+def test_find_coverage_gaps_silent_when_doc_exists():
+    changed = ["portfolio_automation/new_widget.py"]
+    existing_docs = {"docs/new_widget.md"}
+    assert doc_audit.find_coverage_gaps(changed, existing_docs) == []
+
+
+def test_find_coverage_gaps_ignores_non_source_changes():
+    changed = ["README.md", "outputs/latest/foo.json"]
+    assert doc_audit.find_coverage_gaps(changed, set()) == []
