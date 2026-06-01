@@ -171,3 +171,32 @@ def test_write_doc_audit_status_emits_json_and_md(tmp_path):
     loaded = json.loads(Path(json_path).read_text())
     assert loaded["source"] == "doc_audit"
     assert (Path(json_path).parent / "doc_audit_status.md").exists()
+
+
+def test_run_doc_audit_coverage_gap_status_reachable(tmp_path):
+    # a coverage gap alone -> overall_status == "coverage_gap"
+    result = doc_audit.run_doc_audit(
+        str(tmp_path), last_audited_sha=None,
+        changed_files=["portfolio_automation/orphan_mod.py"],
+        existing_doc_paths=set())
+    assert result["overall_status"] == "coverage_gap"
+    assert any(f["dimension"] == "coverage" for f in result["coverage_gaps"])
+
+
+def test_apply_auto_fix_substitutes_only_the_captured_value(tmp_path):
+    _write(tmp_path, "outputs/latest/daily_run_status.json",
+           json.dumps({"stage_summary": {"total": 24}}))
+    doc = _write(tmp_path, "docs/PIPELINE_RUNBOOK.md",
+                 "Runs 17 pipeline stages. The 17 here is unrelated prose.\n")
+    f = doc_audit.find_drift(str(tmp_path))[0]
+    changed = doc_audit.apply_auto_fix(f, str(tmp_path))
+    assert changed is True
+    text = doc.read_text()
+    assert "Runs 24 pipeline stages." in text
+    assert "The 17 here is unrelated prose." in text
+
+
+def test_apply_auto_fix_refuses_non_auto_fixable():
+    f = doc_audit.Finding(dimension="dead_ref", severity="med",
+                          doc="docs/X.md", detail="x", auto_fixable=False)
+    assert doc_audit.apply_auto_fix(f, ".") is False

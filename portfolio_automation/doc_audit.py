@@ -235,7 +235,7 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
 
     auto = [f for f in findings if f.auto_fixable]
     gaps = [f for f in findings if f.dimension == "coverage"]
-    if any(f.dimension == "coverage" and f.severity == "high" for f in findings):
+    if gaps:
         status = "coverage_gap"
     elif auto or any(f.dimension == "drift" for f in findings):
         status = "drift"
@@ -255,6 +255,38 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
         "auto_fixes_applied": [],
         "disclaimer": _DISCLAIMER,
     }
+
+
+def _anchor_by_name(name: str) -> Anchor | None:
+    for a in ANCHOR_REGISTRY:
+        if a.name == name:
+            return a
+    return None
+
+
+def apply_auto_fix(finding: Finding, root: str) -> bool:
+    """Replace ONLY the captured value on the finding's line, in-place. Returns
+    True if a substitution was made. Refuses anything not auto_fixable."""
+    if not finding.auto_fixable or finding.anchor is None or finding.line is None:
+        return False
+    anchor = _anchor_by_name(finding.anchor)
+    if anchor is None or finding.expected is None:
+        return False
+    path = Path(root) / finding.doc
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    idx = finding.line - 1
+    if idx < 0 or idx >= len(lines):
+        return False
+    rx = re.compile(anchor.pattern, re.IGNORECASE)
+    m = rx.search(lines[idx])
+    if not m or m.group(1) != finding.current:
+        return False  # line moved/changed since audit -> refuse
+    start, end = m.start(1), m.end(1)
+    lines[idx] = lines[idx][:start] + finding.expected + lines[idx][end:]
+    path.write_text("".join(lines), encoding="utf-8")
+    return True
 
 
 def write_doc_audit_status(result: dict, root: str) -> str:
