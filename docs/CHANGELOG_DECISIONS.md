@@ -844,3 +844,84 @@ Surfaced by the memo-reviewer agent during a daily-tool-analysis run. Complement
 
 - `outputs/latest/daily_memo.md` Top Insight line reads "newly emerging …" instead of "moderate persistence" when the dominant theme is first-seen
 
+---
+
+## Inaugural Monthly Tool Analysis (2026-05) — AMBER
+
+### Date
+
+2026-06-01
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `docs/monthly_reports/2026-05.md` — full retrospective (owned by monthly-tool-analysis skill)
+- `data/monthly_check_state.json` — monthly cadence state
+- Defect sources referenced (no code change in this entry, follow-up only):
+  - `watchlist_scanner/theme_engine.py` — OpenAI call site that never records an `ai_usage` event
+  - `scanner/candidate_scanner.py` — FMP scanner path returning `fmp_succeeded:false` / `tier_b.evidence_count=0`
+  - `portfolio_automation/pattern_learning.py:_match_outcome` — forward-only snapshot→outcome join
+
+### Decision
+
+First-ever monthly-tool-analysis run completed for 2026-05 (rolling 30d, 2026-05-02 → 2026-06-01) with verdict **AMBER**. Underlying system health is strong; AMBER is driven by three observability/maturation conditions, not a regression. The run surfaced two real defects for follow-up plus one self-healing maturation gap:
+
+- **(a) Discovery spend telemetry false-zero.** `theme_engine.py` never calls `record_ai_usage` around its OpenAI call, so `discovery_pulse_status.openai_cost_usd_month` and the FMP discovery telemetry read 0.0. True spend is metered elsewhere in `ai_budget_summary.json` (~$0.0007/mo, negligible). Smoking gun: zero `theme_engine` events in `outputs/policy/ai_usage_events.jsonl`.
+- **(b) FMP scanner still in fallback.** `tier_b.evidence_count=0` and `fmp_calls_month=0` despite a fresh `top100_watchlist.json`; the scanner path reports `fmp_succeeded:false`, collapsing the universe toward the static fallback set.
+- **(c) Learning-loop outcome-maturation gap (self-healing).** `pattern_learning.py:_match_outcome` joins forward-only (`signal_time >= snapshot_date`); the earliest snapshot is 2026-05-29, so the 594 mature outcomes dated before that are structurally unreachable and every `pattern_efficacy_monthly` tag reads `resolved_1d=0` with null `vs_baseline_pp`. Not a code bug — first non-null 1d efficacy expected ~2026-06-05, 7d ~2026-06-09. A resolve-then-attribute back-join is noted as a design enhancement.
+
+### Why
+
+Record the inaugural monthly verdict and the validated state of the learning/discovery loops so the next monthly run has a baseline, and so the two genuine defects are tracked in `docs/roadmap.md` Known Issues rather than being lost in the report body.
+
+### Invariants Preserved
+
+- Observe-only retrospective; no portfolio, allocation, scoring, decision, or recommendation state modified
+- No runtime behavior, test, or output-schema change in this entry — docs only
+- `next_official_step` unchanged (`observe_and_iterate`)
+
+### Downstream Impact
+
+- `.agent/project_state.yaml` gains a `last_monthly_analysis` observation block (2026-06-01, AMBER)
+- `docs/roadmap.md` gains a Known Issues section tracking defects (a) and (b)
+- Validated facts recorded for next-run comparison: prior gauge era `f60e0b9d` 05-18 retune confirmed broad-based win (+28.8pp 1d hit-rate, sign-flipped return, all 4 sectors improved, none hurt); current era `d95e3096` (first signal 2026-05-29) not yet evaluable (0/110 resolved); cron 32/30 days archived; drift cap 0%; pulse skip 6.7%; universe 1d hit 0.524 / 3d 0.585; first-ever live extended_watchlist promotions XOM/CVX (Energy Transition, 2026-05-31)
+
+---
+
+## Top Insight Theme-Membership Floor
+
+### Date
+
+2026-06-01
+
+### Area
+
+output_contract
+
+### Files / Functions
+
+- `watchlist_scanner/daily_memo.py` — `_build_memo_top_insight`
+- `tests/test_daily_memo.py` — `TestTopInsightThemeMembership` (4 tests)
+
+### Decision
+
+`_build_memo_top_insight` unconditionally appended `"{ticker} remains the lead opportunity inside the {theme} theme"` whenever a theme name and a ticker both existed — it never checked whether the ticker was a member of `top_theme.tickers`. On 2026-06-01 this rendered "MSFT … inside the Energy Transition theme" though Energy Transition = `[XOM, CVX]` and MSFT maps to Technology / theme "Unspecified". The "inside the {theme}" clause is now gated on case-insensitive membership in `top_theme.tickers`. Non-members and empty/unknown ticker lists render both facts un-linked: `"{ticker} remains the lead opportunity; {theme} remains the dominant theme."`
+
+### Why
+
+Surfaced by the always-on `portfolio-memo-reviewer` agent during the 2026-06-01 daily-tool-analysis run. The memo was stating a theme link the data does not support, which can mislead the operator about why a ticker is the lead opportunity. Commit `72800c06`.
+
+### Invariants Preserved
+
+- No scoring / decision / allocation / recommendation behavior changed — render layer only
+- Membership-positive output is byte-identical to before (backward compatible)
+- Memo compact contract unchanged (max 5 decisions / 3 risk / 3 changes); no list-count change
+
+### Downstream Impact
+
+- `outputs/latest/daily_memo.md` and `daily_memo.txt` Top Insight line stops asserting theme membership for a non-member lead opportunity; both renderers share the single fixed function
+- Verified next-run by the always-on memo-reviewer dispatch (cross-artifact: `daily_memo.md` text vs `system_decision_summary.json` `top_theme.tickers` membership)
+
