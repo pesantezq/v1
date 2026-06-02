@@ -1,0 +1,119 @@
+"""
+Analysis-health pairing for the Pattern-Improvement Loop  (additive | advisory-only | observe-only)
+
+Pattern-Improvement Loop — Step 6. Satisfies the repo rule (CLAUDE.md, "Analysis +
+Health Coverage Requirement") that every shipped feature is paired with a health
+check. The backtest loop runs at yearly/lifetime cadence, so this check is wired
+into `.claude/commands/yearly-tool-analysis.md` (Quant + Developer lens).
+
+Reads the loop's two output artifacts — `outputs/backtest/poc_simulation_results.json`
+(Steps 0–3) and `outputs/policy/signal_weight_proposals.json` (Step 4) — and flags:
+  - results_missing        (RED)   — no backtest artifact at all
+  - looks_fresh_but_empty  (RED)   — artifact present/recent but evaluated == 0
+                                     (the content_liveness failure mode)
+  - degenerate_regimes     (RED)   — every per-regime bucket is 'unknown'
+  - stale                  (AMBER) — generated_at older than max_age_days
+  - low_sample             (AMBER) — evaluated below min_evaluated
+  - calibration_slope_flipped (AMBER) — calibration slope went negative
+  - no_proposals / proposals_missing (AMBER) — Step 4 produced nothing to review
+
+Observe-only: reads artifacts and returns a status dict; writes nothing and touches
+no protected scoring/decision logic. Any read failure degrades to a flag, never raises.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+_OBSERVE_ONLY = True
+
+
+def _load_json(path: Path) -> Any | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def assess_backtest_health(
+    *,
+    backtest_dir: str = "outputs/backtest",
+    proposals_path: str = "outputs/policy/signal_weight_proposals.json",
+    now: datetime | None = None,
+    max_age_days: int = 400,
+    min_evaluated: int = 30,
+) -> dict[str, Any]:
+    """Assess the Pattern-Loop backtest artifacts and return
+    ``{observe_only, status, flags, details}`` where status is GREEN | AMBER | RED.
+    RED = a critical correctness/liveness failure; AMBER = a quality warning;
+    GREEN = healthy. Never raises (read failures become flags)."""
+    now = now or datetime.now(timezone.utc)
+    red: list[str] = []
+    amber: list[str] = []
+    details: dict[str, Any] = {}
+
+    results = _load_json(Path(backtest_dir) / "poc_simulation_results.json")
+    if not isinstance(results, dict):
+        red.append("results_missing")
+    else:
+        perf = results.get("performance") or {}
+        evaluated = perf.get("evaluated") or 0
+        details["evaluated"] = evaluated
+
+        if evaluated == 0:
+            # Present (and possibly recent) but nothing resolved → silent-zero.
+            red.append("looks_fresh_but_empty")
+        else:
+            per_regime = (results.get("added_metrics") or {}).get("per_regime") or []
+            regimes = [str(r.get("regime")) for r in per_regime if isinstance(r, dict)]
+            details["regimes"] = regimes
+            if regimes and all(r == "unknown" for r in regimes):
+                red.append("degenerate_regimes")
+            if evaluated < min_evaluated:
+                amber.append("low_sample")
+
+        generated = _parse_dt(results.get("generated_at"))
+        if generated is not None:
+            age_days = (now - generated).days
+            details["age_days"] = age_days
+            if age_days > max_age_days:
+                amber.append("stale")
+
+        slope = (results.get("calibration") or {}).get("calibration_slope")
+        details["calibration_slope"] = slope
+        if isinstance(slope, (int, float)) and slope < 0:
+            amber.append("calibration_slope_flipped")
+
+    proposals = _load_json(Path(proposals_path))
+    if not isinstance(proposals, dict):
+        amber.append("proposals_missing")
+    else:
+        proposed_count = (proposals.get("summary") or {}).get("proposed_count", 0)
+        details["proposed_count"] = proposed_count
+        if not proposed_count:
+            amber.append("no_proposals")
+
+    status = "RED" if red else ("AMBER" if amber else "GREEN")
+    return {
+        "observe_only": _OBSERVE_ONLY,
+        "status": status,
+        "flags": red + amber,
+        "details": details,
+    }
