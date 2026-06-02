@@ -126,6 +126,41 @@ existing metric path; synthetic still works. **Boundary:** observe-only.
 
 ---
 
+## Step 1b — Direction-aware outcome resolution (observe-only)
+
+**Goal:** score each signal against its *intended* direction. The base
+`FMPBacktester` counts any positive forward return as a "win" — wrong for bearish
+signals (e.g. `STRONG_MOVE_DOWN`, where a *down* move is the correct call).
+Resolve UP/DOWN per signal and label win/loss relative to that direction.
+
+> **Numbering note (authoritative):** this is the "direction resolution" the
+> `signal_sources.py` docstring refers to. It belongs *here*, right after
+> ingestion — it is **not** a replacement for Step 2. **Step 2 remains the
+> walk-forward / out-of-sample engine.** If a module docstring and this spec ever
+> disagree on step numbers, this spec wins.
+
+**Create:** `backtesting/direction_resolution.py`
+```python
+def signal_direction(signal: dict) -> str:
+    """Return 'up' | 'down' | 'neutral' from the signal's pattern/tags
+    (e.g. STRONG_MOVE_DOWN -> 'down'). Default 'up' for legacy long-only signals."""
+
+def directional_outcome(forward_return_pct: float | None, direction: str) -> str:
+    """'win' if the move agreed with the signal's direction, else 'loss';
+    'unknown' when forward_return_pct is None."""
+```
+**Modify:** the harness to use directional outcomes when a direction is present;
+fall back to existing long-only behavior otherwise (additive; no protected logic).
+
+**Tests:** `tests/test_direction_resolution.py` — healthy (a down-signal that
+falls = win; a down-signal that rises = loss) and degraded (missing/None
+direction → safe default, no crash).
+
+**Acceptance:** bearish signals scored correctly; long-only results unchanged.
+**Boundary:** observe-only. **Effort:** S.
+
+---
+
 ## Step 2 — Walk-forward / out-of-sample engine (observe-only)
 
 **Goal:** stop reporting in-sample numbers; evaluate only out-of-sample, with
@@ -256,14 +291,22 @@ for "looks-fresh-but-empty" backtest artifacts.
 
 ```
 Step 0 (baseline run)
-   └─> Step 1 (real signals) ─> Step 2 (walk-forward) ─> Step 3 (regime)
+   └─> Step 1 (real signals) ─> Step 1b (direction) ─> Step 2 (walk-forward) ─> Step 3 (regime)
                                           └─────────────┬─> Step 4 (proposals)
                                                          └─> Step 6 (health check)
                                                               Step 5 (apply) ⟵ owner approval, after Step 4
 ```
 
-Steps 1→2→3 are sequential; 4 and 6 depend on 3; 5 depends on 4 **and** explicit
-approval.
+Steps 1→1b→2→3 are sequential; 4 and 6 depend on 3; 5 depends on 4 **and**
+explicit approval.
+
+**Build-now vs. wait-for-history.** Steps 1b–2 are pure additive machinery —
+build them whenever; they need little history. Steps 4 (proposals) and especially
+5 (apply, protected) only become meaningful once **weeks of real outcome history**
+have accumulated through the daily pipeline (`observe_and_iterate`); tuning before
+then is tuning on noise. So: keep the pipeline running to accumulate outcomes,
+build the measurement steps (1b–3) in parallel, and hold proposal/apply until the
+evidence is statistically real.
 
 ---
 
