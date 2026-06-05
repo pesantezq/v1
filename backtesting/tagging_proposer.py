@@ -54,9 +54,24 @@ def _family_covered(family: str, registry_ids: set[str]) -> bool:
     return any(sid == family or sid.startswith(family + "_") for sid in registry_ids)
 
 
+def _family_of(sig: dict) -> str:
+    """Representative family for a signal, robust to BOTH representations:
+    a normalized harness signal carries `patterns`/`pattern` (alert_basis already
+    consumed by signal_sources._normalize_row), while a raw watchlist row carries
+    `alert_basis`. Falls through to UNKNOWN."""
+    patterns = sig.get("patterns")
+    if isinstance(patterns, (list, tuple)) and patterns:
+        return _representative_pattern([str(p).upper() for p in patterns])
+    pattern = sig.get("pattern")
+    if pattern:
+        return str(pattern).upper()
+    return _representative_pattern(_map_basis(sig.get("alert_basis")))
+
+
 def _is_untagged(sig: dict) -> bool:
-    ab = sig.get("alert_basis")
-    return not isinstance(ab, (list, tuple)) or not ab
+    """Untagged = the signal resolves to no informative family (UNKNOWN), whether it
+    arrived raw (empty alert_basis) or normalized (pattern UNKNOWN)."""
+    return _family_of(sig) == _UNKNOWN
 
 
 def propose_tagging_fixes(signals: list[dict], *,
@@ -82,7 +97,7 @@ def propose_tagging_fixes(signals: list[dict], *,
         untagged = sum(1 for s in signals if _is_untagged(s))
         backfillable = sum(1 for s in signals if _is_untagged(s) and s.get("signal_score") is not None)
 
-        fams = Counter(_representative_pattern(_map_basis(s.get("alert_basis"))) for s in signals)
+        fams = Counter(_family_of(s) for s in signals)
         family_distribution = dict(fams)
 
         mapped_families = [f for f in fams if f != _UNKNOWN]
