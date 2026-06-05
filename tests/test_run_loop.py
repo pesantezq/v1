@@ -217,3 +217,6 @@ class TestRunLoopOosWindow(unittest.TestCase):
         self.assertIn("calibration_proposal", out)
         self.assertIn("tagging_proposal", out)
         self.assertEqual(out["tagging_proposal"]["observe_only"], True)
+        # E — auto-apply rides inert (disabled by default)
+        self.assertIn("auto_apply", out)
+        self.assertEqual(out["auto_apply"]["status"], "disabled")
