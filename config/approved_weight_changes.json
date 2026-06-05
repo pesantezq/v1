@@ -1,0 +1,11 @@
+{
+  "approved_by": "operator: explicit 'apply STRONG_MOVE_UP' authorization 2026-06-05",
+  "generated_at": "2026-06-05T18:34:09.339694+00:00",
+  "rationale": "Reconstructed-evidence OOS: STRONG_MOVE_UP hit-rate 54.47% over n=3042, CI[52.7,56.23] (excludes 50%); look-ahead audit clean (211 dates, 0 mismatches). Bounded raise 0.45->0.4947 (delta +0.0447 < 0.05 cap).",
+  "changes": [
+    {
+      "signal_id": "STRONG_MOVE_UP",
+      "delta": 0.0447
+    }
+  ]
+}

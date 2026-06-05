@@ -21,7 +21,7 @@ signals:
     actionable: true
     discovery_only: false
     requires_corroboration: false
-    default_weight: 0.4947
+    default_weight: 0.45
     confidence_floor: 0.50
     description: >
       Daily price change >= strong_move_pct threshold (default 3%). Emitted by
