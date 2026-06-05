@@ -56,9 +56,12 @@ def assess_backtest_health(
     *,
     backtest_dir: str = "outputs/backtest",
     proposals_path: str = "outputs/policy/signal_weight_proposals.json",
+    calibration_proposal_path: str = "outputs/policy/calibration_correction_proposal.json",
+    tagging_proposal_path: str = "outputs/policy/signal_tagging_proposal.json",
     now: datetime | None = None,
     max_age_days: int = 400,
     min_evaluated: int = 30,
+    max_untagged_pct: float = 0.50,
     run_score_gate: bool = False,
     registry_path: str = "config/signal_registry.yaml",
 ) -> dict[str, Any]:
@@ -120,6 +123,20 @@ def assess_backtest_health(
         details["proposed_count"] = proposed_count
         if not proposed_count:
             amber.append("no_proposals")
+
+    # Sub-project D — feedback proposers (absence tolerated → no flag).
+    cal_prop = _load_json(Path(calibration_proposal_path))
+    if isinstance(cal_prop, dict) and cal_prop.get("inverted") is True:
+        details["calibration_inverted"] = True
+        amber.append("calibration_correction_available")
+
+    tag_prop = _load_json(Path(tagging_proposal_path))
+    if isinstance(tag_prop, dict):
+        untagged_pct = tag_prop.get("untagged_pct")
+        if isinstance(untagged_pct, (int, float)):
+            details["untagged_pct"] = untagged_pct
+            if untagged_pct >= max_untagged_pct:
+                amber.append("high_untagged_rate")
 
     if run_score_gate:
         try:

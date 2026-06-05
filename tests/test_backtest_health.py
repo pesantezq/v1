@@ -191,3 +191,61 @@ def test_oos_window_absent_tolerated(tmp_path):
     _write_proposals(prop, proposed_count=1)
     out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW)
     assert out["details"]["oos_window"] is None
+
+
+# --------------------------------------------------------------------------
+# Sub-project D — calibration + tagging proposer AMBER flags
+# --------------------------------------------------------------------------
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_d_flags_fire_on_degraded_proposals(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    cal = tmp_path / "policy" / "calibration_correction_proposal.json"
+    tag = tmp_path / "policy" / "signal_tagging_proposal.json"
+    _write_json(cal, {"inverted": True, "status": "ok"})
+    _write_json(tag, {"untagged_pct": 0.6, "status": "ok"})
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW,
+                                 calibration_proposal_path=str(cal),
+                                 tagging_proposal_path=str(tag))
+    assert out["status"] == "AMBER"
+    assert "calibration_correction_available" in out["flags"]
+    assert "high_untagged_rate" in out["flags"]
+
+
+def test_d_flags_absent_when_healthy(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    cal = tmp_path / "policy" / "calibration_correction_proposal.json"
+    tag = tmp_path / "policy" / "signal_tagging_proposal.json"
+    _write_json(cal, {"inverted": False, "status": "ok"})
+    _write_json(tag, {"untagged_pct": 0.05, "status": "ok"})
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW,
+                                 calibration_proposal_path=str(cal),
+                                 tagging_proposal_path=str(tag))
+    assert "calibration_correction_available" not in out["flags"]
+    assert "high_untagged_rate" not in out["flags"]
+
+
+def test_d_flags_tolerate_absent_artifacts(tmp_path):
+    # Default paths point at nonexistent files in tmp → no crash, no D flags.
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW,
+                                 calibration_proposal_path=str(tmp_path / "nope1.json"),
+                                 tagging_proposal_path=str(tmp_path / "nope2.json"))
+    assert "calibration_correction_available" not in out["flags"]
+    assert "high_untagged_rate" not in out["flags"]
