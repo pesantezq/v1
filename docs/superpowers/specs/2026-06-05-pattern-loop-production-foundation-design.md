@@ -16,11 +16,16 @@ First `real_signals_live` run (2026-06-05) confirmed correct behavior:
   ~38-day window.
 - The walk-forward OOS layer — which gates the weight proposals — correctly returned
   `oos_n=0` for every signal, so `proposed_count=0`. Root cause: real signal history
-  spans ~38 calendar days, far short of the `train_days=252 + test_days=63 = 315`
-  trading-day walk-forward window (`backtesting/walk_forward.py:136`,
-  `while cursor + train_days <= latest`).
+  spans ~38 calendar days, far short of the walk-forward window. NOTE: `walk_forward`
+  measures its window in **calendar-day ordinals** (`backtesting/walk_forward.py:126-136`
+  use `date.toordinal()`; `while cursor + train_days <= latest`), so `train_days=252`
+  and `test_days=63` are CALENDAR days, not trading days. The first fold's loop iterates
+  once span ≥ `train_days` (252 cal days); the first test window is fully inside observed
+  history once span ≥ `train_days + test_days` (315 cal days).
 - **Out-of-sample evidence — and therefore any actionable weight proposal — cannot
-  exist until signal history reaches ~315 trading days (~mid-2027).**
+  exist until signal history reaches ~315 calendar days. From the 2026-04-28 earliest
+  signal: first folds begin forming ~2027-01-05 (span 252), full first window ~2027-03-09
+  (span 315).**
 
 The roadmap's `next_official_step` is `observe_and_iterate`; this loop is the engine of
 that. "Adding it to production" is not about enabling changes — it is about scheduling
@@ -87,28 +92,38 @@ because `run_loop` and `walk_forward` are already on `main`.
 
 ### C1 — Maturity-countdown producer (deterministic)
 - **New pure function** `oos_window_status(signals, *, train_days=252, test_days=63,
-  today=None)` in `backtesting/walk_forward.py` (it owns the window math). Computes the
-  span between earliest and latest datable signal, estimates trading days
-  (business-day count), and returns:
+  today=None)` in `backtesting/walk_forward.py` (it owns the window math; reuses its
+  `_parse_date` and the same `scan_time`/`signal_date` keys). **Calendar-day based, to
+  match the engine** (`walk_forward` compares `date.toordinal()` values, so `train_days`/
+  `test_days` are calendar days). Computes the span between earliest and latest datable
+  signal and returns:
   ```json
   {
-    "trading_days_observed": 27,
-    "required_days": 315,
+    "calendar_days_observed": 38,
+    "first_fold_threshold_days": 252,
+    "full_window_days": 315,
     "folds_possible": false,
-    "days_remaining": 288,
-    "first_fold_eta": "2027-06-xx",
+    "days_until_full_window": 277,
+    "full_window_eta": "2027-03-09",
+    "earliest_signal": "2026-04-28",
+    "latest_signal": "2026-06-05",
     "estimate": true
   }
   ```
-  `today` is injectable for deterministic tests (no argless `datetime.now()` in the pure
-  core; the caller passes the date). `first_fold_eta` and `days_remaining` are labeled
-  estimates (calendar→business-day approximation) to avoid false precision.
-- **Modified `backtesting/run_loop.py`** — call `oos_window_status` on the loaded
-  signals and add an `oos_window` block to the returned summary AND to the written
-  `poc_simulation_results.json`.
-- **Modified `backtesting/backtest_health.py`** — surface `oos_window` in
-  `assess_backtest_health` output (so a consumer can read maturity without re-deriving).
-  No change to existing GREEN/AMBER/RED tiers.
+  where `folds_possible = calendar_days_observed >= train_days`,
+  `days_until_full_window = max(0, train_days + test_days - calendar_days_observed)`,
+  `full_window_eta = today + days_until_full_window`. `today` is injectable for
+  deterministic tests (caller passes `date.today()`; no argless `now()` in the pure
+  core). Empty/undatable signals → `calendar_days_observed: 0, folds_possible: false`
+  (never raises). The ETA is labeled `estimate: true` to avoid false precision.
+- **Modified `backtesting/poc_simulation_harness.py`** — `run_poc` gains an optional
+  `oos_window: dict | None = None` param; when provided it is added to `payload` before
+  the artifact is written. Default `None` keeps every existing caller byte-identical.
+- **Modified `backtesting/run_loop.py`** — compute `oos_window_status` on the loaded
+  signals, pass it to `run_poc(oos_window=...)`, and include the block in the returned
+  summary.
+- **Modified `backtesting/backtest_health.py`** — surface `results.get("oos_window")` in
+  `details["oos_window"]` (tolerates absence → `null`). No change to GREEN/AMBER/RED tiers.
 
 ### C2 — Self-monitoring wiring (cadence-match requirement)
 Because the loop now runs monthly (B), its health check moves to the monthly cadence per
@@ -166,6 +181,7 @@ the CLAUDE.md "Analysis + Health Coverage Requirement". Extend
 **Modified:**
 - `scripts/monthly_check.sh`
 - `backtesting/walk_forward.py` (additive: `oos_window_status`)
+- `backtesting/poc_simulation_harness.py` (additive: optional `oos_window` param on `run_poc`)
 - `backtesting/run_loop.py` (additive: `oos_window` in summary + artifact)
 - `backtesting/backtest_health.py` (additive: surface `oos_window`)
 - `.claude/commands/monthly-tool-analysis.md`
