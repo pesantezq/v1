@@ -50,6 +50,18 @@ fi
 
 {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] monthly_check.sh starting"
+} >> "${LOG_FILE}"
+
+# Refresh the Pattern-Loop artifacts (observe-only, FMP-only) so the analysis
+# below reads a current poc_simulation_results.json + signal_weight_proposals.json.
+# Non-blocking: a failure here must not stop the monthly analysis.
+{
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] running pattern_loop_recheck.sh (non-blocking)"
+} >> "${LOG_FILE}"
+"${REPO_ROOT}/scripts/pattern_loop_recheck.sh" >> "${LOG_FILE}" 2>&1 \
+  || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: pattern_loop_recheck.sh failed; continuing" >> "${LOG_FILE}"
+
+{
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] invoking claude --print /monthly-tool-analysis"
 } >> "${LOG_FILE}"
 
