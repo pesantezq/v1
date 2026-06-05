@@ -49,6 +49,17 @@ _DEFAULT_HISTORY = "outputs/history"
 _DEFAULT_REGISTRY = "config/signal_registry.yaml"
 
 
+def _auto_apply_enabled(config_path: str = "config.json") -> bool:
+    """Read backtesting.auto_apply.enabled from config.json. Default False (inert).
+    Any read/parse failure → False (fail-closed: never auto-enable)."""
+    try:
+        with open(config_path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        return bool(((cfg.get("backtesting") or {}).get("auto_apply") or {}).get("enabled", False))
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return False
+
+
 def registry_signal_id(signal: dict) -> str:
     """Map a normalized signal to the registry ``signal_id`` it scores against.
 
@@ -177,6 +188,34 @@ def run_loop(
         if write:
             write_proposals(proposals, base_dir=base_dir)
 
+        # Sub-project D — non-blocking feedback proposers (calibration + tagging).
+        # Observe-only, proposes-only; a failure here must never break the loop.
+        cal_prop = tag_prop = None
+        try:
+            from backtesting.calibration_proposer import (
+                propose_calibration_correction, write_calibration_proposal,
+            )
+            from backtesting.tagging_proposer import (
+                propose_tagging_fixes, write_tagging_proposal,
+            )
+            cal_prop = propose_calibration_correction(poc)
+            tag_prop = propose_tagging_fixes(signals, registry_path=registry_path)
+            if write:
+                write_calibration_proposal(cal_prop, base_dir=base_dir)
+                write_tagging_proposal(tag_prop, base_dir=base_dir)
+        except Exception:  # non-blocking feedback layer
+            pass
+
+        # Sub-project E — full auto-apply, default-INERT (enabled=False + OOS gate).
+        # Guaranteed no-op today; present so the path is exercised once activated.
+        auto = {"status": "disabled"}
+        try:
+            from backtesting.auto_apply import maybe_auto_apply
+            auto = maybe_auto_apply(enabled=_auto_apply_enabled(), poc=poc, proposals=proposals,
+                                    registry_path=registry_path, base_dir=base_dir, write=write)
+        except Exception:  # non-blocking; auto-apply must never break the loop
+            auto = {"status": "error"}
+
         perf = poc.get("performance") or {}
         return {
             "observe_only": _OBSERVE_ONLY,
@@ -192,6 +231,9 @@ def run_loop(
             "oos_window": window,
             "oos_groups": oos,
             "proposals_summary": proposals.get("summary"),
+            "calibration_proposal": cal_prop,
+            "tagging_proposal": tag_prop,
+            "auto_apply": auto,
         }
     except Exception as exc:  # degrade, never break the operator's run
         return {"observe_only": _OBSERVE_ONLY, "status": "error", "error": str(exc)}

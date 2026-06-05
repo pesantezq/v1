@@ -20,6 +20,24 @@ This repo is an advisory-only portfolio automation system. It produces analysis,
 - Do not modify `decision_engine.py`, scoring logic, or recommendation logic unless the user explicitly approves that scope.
 - Do not bypass FMP registry/compliance rules for endpoint work.
 
+### Sanctioned exception — Pattern-Loop auto-apply (operator-approved 2026-06-05)
+- `backtesting/auto_apply.py` is the ONE sanctioned path that may mutate protected
+  `signal_registry.yaml` `default_weight` values without a per-change human approval. When
+  (and only when) `config.json backtesting.auto_apply.enabled=true` AND every gate clears,
+  it authors `config/approved_weight_changes.json` and invokes the reversible protected
+  apply (`backtesting/registry_apply.py`), with a GPT approver layered on the deterministic
+  gates (veto / approve-the-pre-bounded-delta only — never widens a bound).
+- Scope of the exception is NARROW: registry `default_weight` data only. It does NOT permit
+  changing scoring math, `decision_engine.py`, or any of the score semantics above.
+- It ships INERT (`enabled=false`) and cannot fire until the walk-forward OOS window matures
+  (≈2027). Kill-switch: `config/auto_apply.DISABLED` file or `STOCKBOT_AUTO_APPLY_DISABLED=1`.
+- Oversight is PRESERVED, not suppressed: every `applied`/`rolled_back` event is recorded to
+  `outputs/policy/auto_apply_audit.json`, surfaced by `backtest_health` (RED
+  `auto_apply_rolled_back` / AMBER `auto_apply_active`), and routed to
+  `portfolio-backtest-health` by the daily + monthly skills for review. Health agents should
+  treat an auto-apply event as a thing to VERIFY, not as an observe-only violation to revert.
+- See `docs/PATTERN_LOOP_AUTO_APPLY.md` for gates, rollback, and the activation runbook.
+
 ## Working Style
 - Trace the exact source-to-artifact path before editing.
 - Name exact files and functions before changing behavior.
@@ -74,6 +92,9 @@ cat .agent/phase_status.yaml            # per-step roadmap status
 - All new observability layers must set `observe_only: true` as a hardcoded field in output artifacts.
 - Do not remove or make `observe_only` conditional unless explicitly approved.
 - Non-blocking pipeline integration: wrap all new calls in `try/except`.
+- Sole approved exception: `backtesting/auto_apply.py` emits `observe_only: false` by design —
+  it is the one gated mutating path (see Protected Semantics → Sanctioned exception). It is
+  default-inert and fully audited; this does not relax observe-only for any other module.
 
 ## Output Namespace Rules
 

@@ -77,6 +77,8 @@ completed_steps:
   - applied_fix_verification_loop  # 2026-05-30 — daily-tool-analysis consumes applied_fixes ledger; new portfolio_automation/applied_fix_verifier.py (observe-only) + skill Steps 1-5 wiring (commit 0f1741bc)
   - memo_persistence_label_floor  # 2026-05-30 — daily_memo Top Insight three-tier persistence label, zero floor prevents first-seen theme reading "moderate" (commit dc3faed8)
   - pattern_loop_production_foundation  # 2026-06-05 — monthly recompute (pattern_loop_recheck.sh via monthly_check.sh) + deterministic oos_window maturity countdown (walk_forward.oos_window_status → poc_simulation_results.json) + monthly-tool-analysis health dispatch; observe-only, next_official_step unchanged (observe_and_iterate)
+  - pattern_loop_D_feedback_proposers  # 2026-06-05 — observe-only calibration_proposer + tagging_proposer (outputs/policy/, OOS-gated/owner-gated apply); run_loop non-blocking integration; backtest_health AMBER flags; next_official_step unchanged
+  - pattern_loop_E_auto_apply_INERT  # 2026-06-05 — operator-approved full auto-apply (backtesting/auto_apply.py): 8 fail-closed gates + GPT approver + pre/post score-invariance gate + auto-rollback + kill-switch + audit. Ships enabled=false (config.json), inert until OOS maturity (~2027). NARROW sanctioned exception to owner-gated/observe-only invariant (registry default_weight data only); CLAUDE.md amended. next_official_step unchanged
 
 next_official_step:
   primary: observe_and_iterate  # All shipped code paths now need real-world outcome history to tune against; no new modules planned

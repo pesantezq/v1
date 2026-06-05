@@ -30,6 +30,9 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 11. `outputs/regime/regime_performance.json` → per-regime efficacy summary
 12. `outputs/backtest/poc_simulation_results.json` → Pattern-Loop OOS sim: read `oos_window` (maturity countdown), `performance.evaluated`, `calibration.calibration_slope`, `added_metrics.per_regime`
 13. `outputs/policy/signal_weight_proposals.json` → Step 4 weight proposals: read `summary.proposed_count`
+14. `outputs/policy/calibration_correction_proposal.json` → D1 calibration proposer: read `inverted`, `apply_gate` (provisional until OOS matures)
+15. `outputs/policy/signal_tagging_proposal.json` → D2 tagging proposer: read `untagged_pct`, `families_missing_registry_id`, `proposals`
+16. `outputs/policy/auto_apply_audit.json` → E auto-apply audit: read the last entry's `status` (disabled/oos_immature/gpt_vetoed/applied/rolled_back) + provenance
 
 ---
 
@@ -118,6 +121,8 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - every `added_metrics.per_regime[].regime == "unknown"` (degenerate output)
 - `calibration.calibration_slope < 0` (flipped calibration)
 - Do **NOT** dispatch merely because `proposed_count == 0` while `oos_window.folds_possible == false` — that is the expected pre-maturity state (accruing toward ~2027).
+- AMBER (no dispatch, surface in body) when the D feedback proposers flag `calibration_correction_available` (calibration inverted; the proposed map is PROVISIONAL until `apply_gate==ready`) or `high_untagged_rate` (`untagged_pct >= 0.50`; route the tagging proposal to the owner — backfill/registry-entry items improve attribution now).
+- `portfolio-backtest-health` + `portfolio-attribution-analyst` IF the E auto-apply audit last status is `rolled_back` (RED `auto_apply_rolled_back` — a coupling regression slipped the pre-gate; investigate immediately) OR `applied` (a registry weight was auto-changed — verify the applied change's outcome). NOTE: auto-apply is a SANCTIONED gated mutator (CLAUDE.md 2026-06-05 exception); `disabled`/`oos_immature` are the expected steady state and are NOT findings.
 
 - **Documentation lens** — invoke the `/doc-audit-monthly` skill (or read the latest
   `outputs/latest/doc_audit_status.json`) and fold its verdict into the monthly heartbeat:
@@ -143,6 +148,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 2. **Quant lens** (always):
    `"Tags this month: {N} winners, {M} losers, {K} insufficient. {P} new winners promoted. Fingerprint age {D} days."`
    `"Pattern-Loop OOS window: {calendar_days_observed}/315 cal days, folds_possible={bool}, first full window ~{full_window_eta}. Proposals: {proposed_count} (0 expected until window matures)."`
+   `"Feedback proposers — calibration: inverted={bool} (apply_gate={apply_gate}); tagging: {untagged_pct} untagged, families missing registry id: {families_missing_registry_id}."`
 3. **Process analyst lens** (always):
    `"Drift cap max {Z}% on {param}. Pending confirmations: {count} oldest {age}d. Burn pace ${P}/mo vs $20 cap."`
 4. **Market expert lens** (always):

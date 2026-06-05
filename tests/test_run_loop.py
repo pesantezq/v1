@@ -213,3 +213,10 @@ class TestRunLoopOosWindow(unittest.TestCase):
         self.assertIn("calendar_days_observed", ow)
         self.assertFalse(ow["folds_possible"])  # ~40-day spread is far short of 252
         self.assertEqual(ow["full_window_days"], 315)
+        # D — non-blocking feedback proposers ride the same run
+        self.assertIn("calibration_proposal", out)
+        self.assertIn("tagging_proposal", out)
+        self.assertEqual(out["tagging_proposal"]["observe_only"], True)
+        # E — auto-apply rides inert (disabled by default)
+        self.assertIn("auto_apply", out)
+        self.assertEqual(out["auto_apply"]["status"], "disabled")
