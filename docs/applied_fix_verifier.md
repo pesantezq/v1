@@ -39,16 +39,27 @@ an exception.
   `confirmed` if `max(field)` across the artifact's dotted `list_path` exceeds
   `threshold`; otherwise `pending`. **Never emits `regressed`** — a zero reading
   cannot distinguish "fix broke" from "first day of data".
+- **`file_contains`** `{path, contains?, absent?}` — for a **text** artifact
+  (e.g. `outputs/latest/daily_memo.md`) whose fix post-condition is a rendered
+  string, not a JSON field. `contains`/`absent` may each be a string or a list.
+  `regressed` if any `absent` (regression-marker) string is present; `confirmed`
+  if all `contains` strings are present (and no `absent` marker is); `pending`
+  if the file is missing, predates the fix, or a `contains` string isn't present
+  yet. **A missing `contains` marker is never `regressed`** — absence can't be
+  told apart from a legitimately not-applicable state (e.g. first-gauge era with
+  no prior gauge to render). Staleness uses **file mtime** (the text-file
+  equivalent of `generated_at`).
 - Any other / absent `kind` → `manual`.
 
 ## Staleness Guard
 
-A batch may carry `applied_at` (ISO timestamp the fix went live).
-Artifact-reading checks compare it to the artifact's `generated_at` and return
-`pending` ("artifact predates fix") when the artifact is older. Without this,
-every fix would false-read `regressed` on its first run, before the pipeline has
-regenerated artifacts under the new code. Backward compatible: a batch without
-`applied_at` skips the guard.
+A batch may carry `applied_at` (ISO timestamp the fix went live). JSON
+artifact-reading checks compare it to the artifact's `generated_at`; the
+`file_contains` check compares it to the file's **mtime**. Both return
+`pending` ("predates fix") when the artifact is older. Without this, every fix
+would false-read `regressed`/`confirmed` on its first run, before the pipeline
+has regenerated artifacts under the new code. Backward compatible: a batch
+without `applied_at` skips the guard.
 
 ## API
 
@@ -76,6 +87,8 @@ See `docs/OUTPUT_ARTIFACT_CONTRACTS.md` → `data/daily_check_state.json`
 
 ## Tests
 
-`tests/test_applied_fix_verifier.py` (17): both check kinds, the staleness guard
-(stale→pending, fresh→judged, no-`applied_at`→backward-compat), `manual`
+`tests/test_applied_fix_verifier.py` (27): all three check kinds, the staleness
+guard for both JSON (`generated_at`) and text (`mtime`) artifacts
+(stale→pending, fresh→judged, no-`applied_at`→backward-compat), `file_contains`
+`contains`/`absent`/list semantics and the never-false-regress rule, `manual`
 fallback, `summarize`, and `drop_resolved`.
