@@ -102,32 +102,18 @@ if new_events:
     print(block.rstrip())
     print("NOTIFY=1")
 
-    # Email push — reuses the existing memo-email SMTP plumbing + MEMO_EMAIL_* env.
-    # No-op (skip/dry-run) unless the operator has configured + enabled email, so the
-    # alert log above is always the reliable channel; email is best-effort on top.
+    # Email push — reuses the SAME working sender + env (SMTP_SERVER/EMAIL_USER/
+    # EMAIL_PASS/EMAIL_TO) that already delivers the daily memo. send_email returns
+    # False (never raises) if env is missing, so the alert log above stays the
+    # reliable channel; email is best-effort on top.
     try:
-        from email.message import EmailMessage
-        from portfolio_automation.memo_email_sender import (
-            load_memo_email_config, send_daily_memo_email,
-        )
-        cfg = load_memo_email_config()
-        if cfg.enabled and cfg.has_smtp_config() and cfg.has_valid_recipients():
-            msg = EmailMessage()
-            prefix = (cfg.subject_prefix + " ") if cfg.subject_prefix else ""
-            msg["Subject"] = f"{prefix}[StockBot] Pattern-Loop weight change ({len(new_events)})"
-            msg["From"] = cfg.from_addr
-            msg["To"] = ", ".join(cfg.to_addrs)
-            if cfg.cc_addrs:
-                msg["Cc"] = ", ".join(cfg.cc_addrs)
-            msg.set_content(
-                "The Pattern-Improvement Loop changed signal-registry weight(s).\n\n"
+        from watchlist_scanner.daily_memo import send_email
+        body = ("The Pattern-Improvement Loop changed signal-registry weight(s).\n\n"
                 + block
                 + "\nReview: /pattern-loop-analysis  |  Undo: registry_apply.revert_last"
                 + "  |  Halt autonomous: touch config/auto_apply.DISABLED\n")
-            res = send_daily_memo_email(cfg, msg)
-            print(f"EMAIL: sent={res.get('sent')} reason={res.get('reason') or res.get('error_class') or 'ok'}")
-        else:
-            print("EMAIL: skipped (MEMO_EMAIL_* not enabled/configured) — alert log is the channel")
+        ok = send_email(body, subject=f"[StockBot] Pattern-Loop weight change ({len(new_events)})")
+        print(f"EMAIL: sent={ok} (via daily_memo.send_email / SMTP_SERVER+EMAIL_* env)")
     except Exception as exc:  # email must never break the watcher
         print(f"EMAIL: error (non-fatal): {exc}")
 else:
