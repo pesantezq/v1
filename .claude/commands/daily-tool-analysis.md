@@ -178,6 +178,20 @@ This agent audits the learning loop: pattern_efficacy match-rate + tag count, re
 
 `portfolio-backtest-health` IF the E auto-apply audit (`outputs/policy/auto_apply_audit.json`) last status is `rolled_back` (RED — a post-apply score-invariance regression auto-reverted; investigate the coupling immediately) OR `applied` (a registry weight was auto-changed today — verify the change and its outcome). This is oversight of the sanctioned auto-apply mutator: every weight change it makes must be surfaced and reviewed.
 
+### Pattern-Loop operational sub-check (delegate to `/pattern-loop-analysis`)
+
+Run the `/pattern-loop-analysis` skill's Step-1 backbone as the daily tripwire for the
+Pattern-Improvement Loop tool (Foundation + D proposers + E auto-apply), and fold its one
+-line heartbeat into the daily body (Step 4, item: "pattern-loop: …"). Do NOT re-derive
+the loop's logic here — that skill owns it. Escalate the DAILY check to RED only on the
+loop's RED conditions (per `/pattern-loop-analysis` Step 3): auto-apply `applied`/`rolled_back`,
+a `*_offline` run mode when live was expected, `evaluated == 0`/degenerate regimes, or the
+monthly recompute missing > 45 days. The pre-maturity steady state (live mode, 0 proposals,
+inverted calibration, ~70% untagged, auto-apply inert) is GREEN/AMBER — report it, don't
+alert on it. The recompute itself is monthly, so day-to-day the evidence is unchanged; the
+daily value is catching auto-apply events same-day, a stalled recompute, or an offline
+fallback.
+
 ---
 
 ## Step 4 — Output (daily heartbeat — emit every run)
@@ -200,6 +214,7 @@ Headline grammar:
 5. Content liveness (only when `content_warn_count > 0`): `"Liveness warns ({content_warn_count}): {csv list of warn names}"`
 5b. Applied-fix verification (only when `applied_fixes` is non-empty): `"Fixes: {confirmed} confirmed · {pending} pending · {manual} manual{, REGRESSED: <id(s)> if any}"`. List each regressed id explicitly with its `detail`. When a fix is `confirmed`, it is dropped from state in Step 5 (it held — stop re-checking).
 6c. Docs (only when `doc_audit_status.json` exists): `"Docs: {overall_status} · {N} findings, {K} coverage gaps (last audit {last_audited_sha[:8]})"`
+6d. Pattern-loop (always, from the sub-check above): `"Pattern-loop: {mode}, OOS {observed}/315 (~{eta}), proposals {N}, auto-apply {state}"` — folds in the `/pattern-loop-analysis` heartbeat.
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
