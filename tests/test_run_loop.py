@@ -220,3 +220,42 @@ class TestRunLoopOosWindow(unittest.TestCase):
         # E — auto-apply rides inert (disabled by default)
         self.assertIn("auto_apply", out)
         self.assertEqual(out["auto_apply"]["status"], "disabled")
+
+
+class TestRunLoopReconstructionWiring(unittest.TestCase):
+    def test_reconstructed_evidence_passed_to_auto_apply(self):
+        """run_loop must tell auto_apply when evidence is reconstructed AND hand it the
+        look-ahead audit, so the F5 reconstruction_unverified gate is live (not dead code)."""
+        import backtesting.run_loop as rl
+        captured = {}
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            return {"status": "spied"}
+
+        with tempfile.TemporaryDirectory() as td:
+            # reconstructed snapshot (rows carry source) under a recon history dir
+            recon = Path(td) / "recon" / "2026-04-01"
+            recon.mkdir(parents=True)
+            rows = [{"ticker": f"S{i%5:02d}", "scan_time": "2026-04-01",
+                     "alert_basis": ["price_move"], "direction": "up",
+                     "source": "historical_reconstruction"} for i in range(20)]
+            (recon / "watchlist_signals.json").write_text(json.dumps({"results": rows}))
+            # a look-ahead audit under base_dir/backtest/
+            audit_dir = Path(td) / "backtest"; audit_dir.mkdir(parents=True)
+            (audit_dir / "reconstruction_audit.json").write_text(
+                json.dumps({"look_ahead_clean": True}))
+
+            orig = rl.__dict__.get("maybe_auto_apply")
+            import backtesting.auto_apply as aa
+            real = aa.maybe_auto_apply
+            aa.maybe_auto_apply = spy
+            try:
+                out = run_loop(history_dir=str(Path(td) / "recon"), signals_source=None,
+                               live=False, write=False, base_dir=td)
+            finally:
+                aa.maybe_auto_apply = real
+
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(captured.get("evidence_source"), "historical_reconstruction")
+        self.assertEqual((captured.get("reconstruction_audit") or {}).get("look_ahead_clean"), True)

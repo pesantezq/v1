@@ -67,7 +67,8 @@ def _assess(bt, prop):
         backtest_dir=bt, proposals_path=prop, now=_NOW, max_age_days=400, min_evaluated=30,
         calibration_proposal_path=str(policy / "calibration_correction_proposal.json"),
         tagging_proposal_path=str(policy / "signal_tagging_proposal.json"),
-        auto_apply_audit_path=str(policy / "auto_apply_audit.json"))
+        auto_apply_audit_path=str(policy / "auto_apply_audit.json"),
+        reconstruction_audit_path=str(Path(bt) / "reconstruction_audit.json"))
 
 
 # --------------------------------------------------------------------------
@@ -298,3 +299,35 @@ def test_auto_apply_audit_absent_no_flags(tmp_path):
                                  auto_apply_audit_path=str(tmp_path / "nope.json"))
     assert "auto_apply_rolled_back" not in out["flags"]
     assert "auto_apply_active" not in out["flags"]
+
+
+# --------------------------------------------------------------------------
+# Sub-project F — reconstruction look-ahead audit surfacing
+# --------------------------------------------------------------------------
+
+def test_reconstruction_audit_dirty_is_red(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    audit = bt / "reconstruction_audit.json"
+    _write_json(audit, {"look_ahead_clean": False, "mismatches": [{"ticker": "AAA"}]})
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW,
+                                 reconstruction_audit_path=str(audit))
+    assert out["status"] == "RED"
+    assert "reconstruction_lookahead_dirty" in out["flags"]
+    assert out["details"]["reconstruction"]["look_ahead_clean"] is False
+
+
+def test_reconstruction_audit_clean_no_flag(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    audit = bt / "reconstruction_audit.json"
+    _write_json(audit, {"look_ahead_clean": True, "mismatches": []})
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW,
+                                 reconstruction_audit_path=str(audit))
+    assert "reconstruction_lookahead_dirty" not in out["flags"]

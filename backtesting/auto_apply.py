@@ -188,6 +188,8 @@ def maybe_auto_apply(
     provider: str | None = None,
     model: str | None = None,
     approver: Callable[[str], str] | None = None,
+    evidence_source: str | None = None,
+    reconstruction_audit: dict | None = None,
     now_iso: str | None = None,
     write: bool = True,
 ) -> dict[str, Any]:
@@ -214,6 +216,14 @@ def maybe_auto_apply(
         # G2 — OOS maturity
         if not (poc.get("oos_window") or {}).get("folds_possible"):
             return _result("oos_immature", now_iso=now_iso, base_dir=base_dir, write=False)
+        # G2b — reconstructed evidence requires a clean look-ahead audit (fail-closed).
+        # Sub-project F: when the loop ran on historically-reconstructed signals, an
+        # unverified (or failed) look-ahead audit means the evidence may be hindsight-
+        # contaminated — refuse to act on it.
+        if evidence_source == "historical_reconstruction":
+            if not (reconstruction_audit or {}).get("look_ahead_clean"):
+                return _result("reconstruction_unverified", now_iso=now_iso,
+                               base_dir=base_dir, write=write)
         # G3 — actionable proposals
         actionable = _actionable_proposals(proposals)
         if not actionable:
