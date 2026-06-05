@@ -86,6 +86,7 @@ def assess_backtest_health(
         perf = results.get("performance") or {}
         evaluated = perf.get("evaluated") or 0
         details["evaluated"] = evaluated
+        details["oos_window"] = results.get("oos_window")
 
         if evaluated == 0:
             # Present (and possibly recent) but nothing resolved → silent-zero.
