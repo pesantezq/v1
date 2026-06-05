@@ -177,6 +177,24 @@ def run_loop(
         if write:
             write_proposals(proposals, base_dir=base_dir)
 
+        # Sub-project D — non-blocking feedback proposers (calibration + tagging).
+        # Observe-only, proposes-only; a failure here must never break the loop.
+        cal_prop = tag_prop = None
+        try:
+            from backtesting.calibration_proposer import (
+                propose_calibration_correction, write_calibration_proposal,
+            )
+            from backtesting.tagging_proposer import (
+                propose_tagging_fixes, write_tagging_proposal,
+            )
+            cal_prop = propose_calibration_correction(poc)
+            tag_prop = propose_tagging_fixes(signals, registry_path=registry_path)
+            if write:
+                write_calibration_proposal(cal_prop, base_dir=base_dir)
+                write_tagging_proposal(tag_prop, base_dir=base_dir)
+        except Exception:  # non-blocking feedback layer
+            pass
+
         perf = poc.get("performance") or {}
         return {
             "observe_only": _OBSERVE_ONLY,
@@ -192,6 +210,8 @@ def run_loop(
             "oos_window": window,
             "oos_groups": oos,
             "proposals_summary": proposals.get("summary"),
+            "calibration_proposal": cal_prop,
+            "tagging_proposal": tag_prop,
         }
     except Exception as exc:  # degrade, never break the operator's run
         return {"observe_only": _OBSERVE_ONLY, "status": "error", "error": str(exc)}
