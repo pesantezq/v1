@@ -199,3 +199,17 @@ class TestRunLoopEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRunLoopOosWindow(unittest.TestCase):
+    def test_run_loop_summary_includes_oos_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            art = Path(td) / "watchlist_signals.json"
+            _results_artifact(art, basis=["strong_move"], n=40)
+            out = run_loop(signals_source=str(art), history_dir=None, live=False,
+                           write=False, base_dir=td)
+        self.assertEqual(out["status"], "ok")
+        ow = out["oos_window"]
+        self.assertIn("calendar_days_observed", ow)
+        self.assertFalse(ow["folds_possible"])  # ~40-day spread is far short of 252
+        self.assertEqual(ow["full_window_days"], 315)
