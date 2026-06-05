@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date
 from typing import Any
 
 from backtesting.direction_resolution import signal_direction
@@ -40,7 +41,7 @@ from backtesting.signal_sources import (
     load_signals_from_artifact,
 )
 from backtesting.tuning_proposals import propose_weight_changes, write_proposals
-from backtesting.walk_forward import walk_forward
+from backtesting.walk_forward import oos_window_status, walk_forward
 
 _OBSERVE_ONLY = True  # hardcoded per repo observe-only policy (CLAUDE.md)
 _DEFAULT_SIGNALS = "outputs/latest/watchlist_signals.json"
@@ -150,8 +151,10 @@ def run_loop(
             }
 
         # Steps 1/1b/3 — POC simulation metrics artifact (reuses run_poc).
+        window = oos_window_status(signals, train_days=train_days, test_days=test_days,
+                                   today=date.today())
         poc = run_poc(signals=signals, live=live, seed=seed, forward_days=forward_days,
-                      write=write, base_dir=base_dir)
+                      write=write, base_dir=base_dir, oos_window=window)
 
         # Step 2 — per-signal OOS via walk-forward on the same kind of provider.
         if live:
@@ -186,6 +189,7 @@ def run_loop(
                 "hit_rate": perf.get("hit_rate"),
                 "calibration_slope": (poc.get("calibration") or {}).get("calibration_slope"),
             },
+            "oos_window": window,
             "oos_groups": oos,
             "proposals_summary": proposals.get("summary"),
         }

@@ -69,6 +69,47 @@ Explicitly note:
 
 ---
 
+## Pattern-Loop production Foundation (A+B+C)
+
+### Date
+
+`2026-06-05`
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `backtesting/walk_forward.py` — new `oos_window_status()` (calendar-day maturity countdown).
+- `backtesting/poc_simulation_harness.py` — `run_poc()` gains optional `oos_window` param.
+- `backtesting/run_loop.py` — computes `oos_window_status`, passes it to `run_poc`, adds it to the returned summary.
+- `backtesting/backtest_health.py` — surfaces `oos_window` in `details`.
+- `scripts/pattern_loop_recheck.sh` (new), `scripts/monthly_check.sh` (calls it, non-blocking).
+- `.claude/commands/monthly-tool-analysis.md` — reads the two Pattern-Loop artifacts, prints the OOS maturity countdown, dispatches `portfolio-backtest-health` on RED.
+
+### Decision
+
+Operationalize the observe-only Pattern-Improvement Loop: a monthly recompute (`run_loop --history --live`, FMP-only, no AI spend) wired before the monthly analysis, plus a deterministic OOS-window maturity countdown emitted as `poc_simulation_results.json.oos_window` and surfaced by the health layer. `proposed_count == 0` while `oos_window.folds_possible == false` is now explicitly treated as healthy/accruing, not a failure.
+
+### Why
+
+The first `real_signals_live` run (2026-06-05) confirmed the walk-forward OOS layer cannot produce evidence until signal history reaches ~315 calendar days (first folds ~2027-01, full window ~2027-03). Production value now is scheduled accrual + observability of that maturity, with every change still human/owner-gated.
+
+### Invariants Preserved
+
+No change to protected `signal_score`/`confidence_score`/`effective_score`/scoring/decision/allocation logic. Loop remains observe-only and proposes-only; Step 5 (governed apply) stays inert/owner-gated. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+New optional field `oos_window` on `poc_simulation_results.json` (older artifacts tolerated → null). New artifacts now consumed at monthly cadence. Tests: `tests/test_walk_forward.py`, `tests/test_poc_simulation_harness.py`, `tests/test_run_loop.py`, `tests/test_backtest_health.py` extended. No GUI/memo surface change.
+
+### Artifact Health Severity
+
+No severity change: `oos_window` is `optional_missing` (absence tolerated). `missing_artifact_count` unchanged. No GUI/memo/system-summary wording change. Producer: `backtesting.run_loop` (→ `poc_simulation_results.json`, HISTORICAL namespace).
+
+---
+
 ## FMP Stable Baseline (v1.0)
 
 ### Date
@@ -1035,3 +1076,48 @@ between Step 2 (walk-forward OOS) and Step 4 (tuning proposals).
 - New contracts documented in `docs/OUTPUT_ARTIFACT_CONTRACTS.md`.
 - Tests: `tests/test_run_loop.py` (11). Real-edge evidence still requires a
   `--live` run with FMP access + sufficient history (operator's complete env).
+
+---
+
+## 2026-06-05 — Step 5 protected-score value-regression gate (`backtesting/score_invariance_gate.py`)
+
+### Decision
+
+Build the documented Step 5 precondition #2 — a value-regression gate proving a
+registry `default_weight` apply is semantically safe for the six protected
+scores — WITHOUT enabling or executing any live apply (owner chose "build the
+gate"; a live apply was not authorized and has no evidence basis yet).
+
+### What it does
+
+- Copies the registry to a temp file, applies a candidate delta to the temp copy
+  via `registry_apply`, recomputes the protected scores over a fixed offline
+  fixture (real `scanner`/`confidence`/`alert_ranking` functions) before/after,
+  and asserts **bit-identical**. GREEN = weight moved, scores unchanged; RED =
+  coupling regression; inconclusive = apply no-op.
+- Wired opt-in into `backtest_health.assess_backtest_health(run_score_gate=True)`
+  → RED flag `score_coupling_regression` (yearly Quant-lens cadence).
+
+### Key architectural finding
+
+The registry `default_weight` is **decoupled from all six protected scores** —
+no scoring function reads it (`final_rank_score` uses `config/base.json`
+"ranking" coefficients; the 0.45 match with STRONG_MOVE_UP's weight is
+coincidental). Consequence: a Step 5 apply changes the YAML value but **changes
+no decision**. The loop's weight proposals have no scoring consumer yet. Wiring
+`default_weight` into scoring is protected scope requiring explicit owner
+approval — intentionally **not** done.
+
+### Guarantees
+
+- Observe-only; operates on a temp copy; live `config/signal_registry.yaml`
+  byte-identical (asserted). No scoring/decision logic modified.
+- `backtest_health` gained an opt-in param (default off); artifact-only path
+  unchanged.
+- Step 5 live apply remains owner-gated + inert; precondition #1 (owner-signed,
+  evidence-backed `approved_weight_changes.json`) still unmet.
+
+### Tests
+
+`tests/test_score_invariance_gate.py` (6) + 2 in `tests/test_backtest_health.py`.
+Full backtesting suite: 252 passed.

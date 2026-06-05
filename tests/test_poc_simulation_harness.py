@@ -83,3 +83,16 @@ def test_degraded_no_price_data_is_safe():
     rep = bt.simulate_signal_performance(signals, forward_days=10)
     assert rep["evaluated"] == 0
     assert rep["results"] == []
+
+
+def test_run_poc_includes_oos_window_when_provided():
+    from backtesting.poc_simulation_harness import run_poc
+    ow = {"calendar_days_observed": 38, "folds_possible": False}
+    payload = run_poc(n_signals=12, n_symbols=4, seed=1, write=False, oos_window=ow)
+    assert payload["oos_window"] == ow
+
+
+def test_run_poc_omits_oos_window_by_default():
+    from backtesting.poc_simulation_harness import run_poc
+    payload = run_poc(n_signals=12, n_symbols=4, seed=1, write=False)
+    assert "oos_window" not in payload

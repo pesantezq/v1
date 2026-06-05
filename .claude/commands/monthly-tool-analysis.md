@@ -28,6 +28,8 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 9. `outputs/history/<dates>/daily_memo.md` (last 30 dates) → memo top-decision retention rate (how often did decisions persist day-to-day)
 10. `outputs/performance/signal_outcomes.csv` (last 30d) → universe-level hit-rate, mean return
 11. `outputs/regime/regime_performance.json` → per-regime efficacy summary
+12. `outputs/backtest/poc_simulation_results.json` → Pattern-Loop OOS sim: read `oos_window` (maturity countdown), `performance.evaluated`, `calibration.calibration_slope`, `added_metrics.per_regime`
+13. `outputs/policy/signal_weight_proposals.json` → Step 4 weight proposals: read `summary.proposed_count`
 
 ---
 
@@ -44,6 +46,7 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 - **`winning_tag_count`** = tags with significance ∈ {winner, strong_winner} this month
 - **`new_winners_this_month`** = winning tags that were neutral/insufficient last month
 - **`fingerprint_stability`** = days since current gauge fingerprint first_seen_at
+- **`oos_window_maturity`** = from `poc_simulation_results.json.oos_window`: `calendar_days_observed`/`full_window_days` (315), `folds_possible`, `full_window_eta`. The Pattern-Loop walk-forward cannot emit out-of-sample evidence until the window matures (first folds ~2027-01, full window ~2027-03). **While `folds_possible == false`, `signal_weight_proposals.json.summary.proposed_count == 0` is EXPECTED and healthy** — report it as "accruing", never as a failure.
 
 ### Process analyst lens
 - **`drift_cap_utilization`** = for each parameter in monthly_drift, current_drift / 0.25 expressed as %
@@ -109,6 +112,13 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - `sector_rotation_score < 0.5` (universe locked in one sector)
 - `pulse_skip_rate > 5%`
 
+`portfolio-backtest-health` IF the Pattern-Loop artifact is RED:
+- `outputs/backtest/poc_simulation_results.json` missing
+- `performance.evaluated == 0` (looks-fresh-but-empty / content_liveness)
+- every `added_metrics.per_regime[].regime == "unknown"` (degenerate output)
+- `calibration.calibration_slope < 0` (flipped calibration)
+- Do **NOT** dispatch merely because `proposed_count == 0` while `oos_window.folds_possible == false` — that is the expected pre-maturity state (accruing toward ~2027).
+
 - **Documentation lens** — invoke the `/doc-audit-monthly` skill (or read the latest
   `outputs/latest/doc_audit_status.json`) and fold its verdict into the monthly heartbeat:
   report standing coverage gaps + the doc-auditor's top decomposition recommendation.
@@ -132,6 +142,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
    `"Cron health: {N}/30 days archived. Apply rate {X}/wk ({rollbacks}/30 rollbacks). Pulse skip rate {Y}%."`
 2. **Quant lens** (always):
    `"Tags this month: {N} winners, {M} losers, {K} insufficient. {P} new winners promoted. Fingerprint age {D} days."`
+   `"Pattern-Loop OOS window: {calendar_days_observed}/315 cal days, folds_possible={bool}, first full window ~{full_window_eta}. Proposals: {proposed_count} (0 expected until window matures)."`
 3. **Process analyst lens** (always):
    `"Drift cap max {Z}% on {param}. Pending confirmations: {count} oldest {age}d. Burn pace ${P}/mo vs $20 cap."`
 4. **Market expert lens** (always):

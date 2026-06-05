@@ -59,11 +59,21 @@ def assess_backtest_health(
     now: datetime | None = None,
     max_age_days: int = 400,
     min_evaluated: int = 30,
+    run_score_gate: bool = False,
+    registry_path: str = "config/signal_registry.yaml",
 ) -> dict[str, Any]:
     """Assess the Pattern-Loop backtest artifacts and return
     ``{observe_only, status, flags, details}`` where status is GREEN | AMBER | RED.
     RED = a critical correctness/liveness failure; AMBER = a quality warning;
-    GREEN = healthy. Never raises (read failures become flags)."""
+    GREEN = healthy. Never raises (read failures become flags).
+
+    ``run_score_gate`` (opt-in, default off so the cheap artifact-only path is
+    unchanged) additionally runs the Step 5 protected-score invariance gate
+    (``score_invariance_gate``) on a temp registry copy: a RED gate verdict means
+    a registry weight delta now moves a protected score (a coupling regression)
+    and adds the RED flag ``score_coupling_regression`` — a hard block on any
+    live Step 5 apply. Wire this on in the yearly Quant-lens review and before
+    approving any apply."""
     now = now or datetime.now(timezone.utc)
     red: list[str] = []
     amber: list[str] = []
@@ -76,6 +86,7 @@ def assess_backtest_health(
         perf = results.get("performance") or {}
         evaluated = perf.get("evaluated") or 0
         details["evaluated"] = evaluated
+        details["oos_window"] = results.get("oos_window")
 
         if evaluated == 0:
             # Present (and possibly recent) but nothing resolved → silent-zero.
@@ -109,6 +120,16 @@ def assess_backtest_health(
         details["proposed_count"] = proposed_count
         if not proposed_count:
             amber.append("no_proposals")
+
+    if run_score_gate:
+        try:
+            from backtesting.score_invariance_gate import assert_scores_invariant_across_apply
+            gate = assert_scores_invariant_across_apply(registry_path=registry_path)
+            details["score_invariance"] = gate.get("status")
+            if gate.get("status") == "RED":
+                red.append("score_coupling_regression")
+        except Exception as exc:  # never let the gate break the health read
+            details["score_invariance"] = f"error:{exc}"
 
     status = "RED" if red else ("AMBER" if amber else "GREEN")
     return {

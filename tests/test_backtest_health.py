@@ -24,7 +24,7 @@ _NOW = datetime(2026, 6, 2, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _write_results(backtest_dir: Path, *, generated_at: str, evaluated: int,
-                   regimes: list[str], slope: float) -> None:
+                   regimes: list[str], slope: float, oos_window: dict | None = None) -> None:
     backtest_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "observe_only": True,
@@ -37,6 +37,8 @@ def _write_results(backtest_dir: Path, *, generated_at: str, evaluated: int,
                            for r in regimes],
         },
     }
+    if oos_window is not None:
+        payload["oos_window"] = oos_window
     (backtest_dir / "poc_simulation_results.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -137,3 +139,55 @@ def test_calibration_flip_is_amber(tmp_path):
     rep = _assess(str(bt), str(prop))
     assert rep["status"] == "AMBER"
     assert "calibration_slope_flipped" in rep["flags"]
+
+
+def test_score_gate_opt_in_reports_invariance_green(tmp_path):
+    # Opt-in Step-5 protected-score invariance gate. Against the real registry the
+    # weight delta is score-invariant (default_weight is decoupled from scoring),
+    # so the gate is GREEN and no coupling-regression flag is raised. The
+    # artifact-only health status is unaffected by enabling the gate.
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.5)
+    prop = tmp_path / "policy" / "p.json"
+    _write_proposals(prop, proposed_count=1)
+    rep = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop),
+                                 now=_NOW, run_score_gate=True,
+                                 registry_path="config/signal_registry.yaml")
+    assert rep["details"].get("score_invariance") in ("GREEN", "inconclusive")
+    assert "score_coupling_regression" not in rep["flags"]
+
+
+def test_score_gate_off_by_default_keeps_artifact_only_path(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.5)
+    prop = tmp_path / "policy" / "p.json"
+    _write_proposals(prop, proposed_count=1)
+    rep = _assess(str(bt), str(prop))
+    assert "score_invariance" not in rep["details"]
+
+
+# --------------------------------------------------------------------------
+# oos_window surfacing (maturity countdown)
+# --------------------------------------------------------------------------
+
+def test_oos_window_surfaced_in_details(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3,
+                   oos_window={"calendar_days_observed": 38, "folds_possible": False})
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW)
+    assert out["details"]["oos_window"] == {"calendar_days_observed": 38, "folds_possible": False}
+
+
+def test_oos_window_absent_tolerated(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.3)
+    prop = tmp_path / "policy" / "signal_weight_proposals.json"
+    _write_proposals(prop, proposed_count=1)
+    out = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop), now=_NOW)
+    assert out["details"]["oos_window"] is None
