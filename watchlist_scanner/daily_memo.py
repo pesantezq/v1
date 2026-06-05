@@ -688,6 +688,62 @@ _VERDICT_PRIORITY = {
 }
 
 
+def _prior_gauge(
+    by_fp: dict[str, Any],
+    current_fp_id: str | None,
+    pre_label: str,
+) -> tuple[str | None, float | None]:
+    """
+    Return (fingerprint, hit_rate_1d) of the prior gauge era — the
+    by_fingerprint entry with the latest ``last_signal_time`` that is neither
+    the current fingerprint nor the stale pre_tracker baseline. Returns
+    (None, None) when no prior era exists (first gauge era).
+    """
+    best_key = ""
+    best_fp: str | None = None
+    best_hr: float | None = None
+    for fp, v in (by_fp or {}).items():
+        if fp == current_fp_id or fp == pre_label or not isinstance(v, dict):
+            continue
+        key = str(v.get("last_signal_time") or "")
+        if best_fp is None or key > best_key:
+            best_key, best_fp, best_hr = key, fp, v.get("hit_rate_1d")
+    return best_fp, best_hr
+
+
+def _retune_prior_gauge_delta(
+    by_fp: dict[str, Any],
+    current_fp_id: str | None,
+    pre_label: str,
+    cur: dict[str, Any],
+) -> tuple[str | None, float | None, bool]:
+    """
+    Decision-relevant retune assessment, shared by every render path so the
+    verdict sentence and the operator-facing Advisor Stack bullet can never
+    disagree about whether a retune is a trap.
+
+    Returns ``(prior_fp, prior_delta_pp, is_trap)`` where:
+      - ``prior_delta_pp`` is current-fp's 1d hit-rate delta vs the prior gauge
+        era (``None`` when no prior era exists — first gauge era);
+      - ``is_trap`` is True when the current gauge regressed vs the prior era
+        (prior_delta < -2pp) OR realised a negative mean 1d return. This is the
+        favorable-baseline trap: a +Δ vs the stale, never-ageing pre_tracker
+        baseline masking a real regression vs the gauge actually replaced.
+    """
+    prior_fp, prior_hr = _prior_gauge(by_fp, current_fp_id, pre_label)
+    cur_hr = cur.get("hit_rate_1d")
+    cur_mr = cur.get("mean_return_1d")
+    prior_delta = (
+        (cur_hr - prior_hr) * 100
+        if (prior_hr is not None and cur_hr is not None) else None
+    )
+    is_trap = (
+        (prior_delta is not None and prior_delta < -2)
+        or (cur_mr is not None and cur_mr < 0)
+    )
+    return prior_fp, prior_delta, is_trap
+
+
 def _build_verdict(
     summary: dict[str, Any],
     decision_rows: list[dict[str, Any]],
@@ -767,14 +823,61 @@ def _build_verdict(
                         cur_n = int(cur.get("resolved_1d") or 0)
                         cur_hr = cur.get("hit_rate_1d")
                         pre_hr = pre.get("hit_rate_1d")
+                        # Prior gauge era = the by_fingerprint entry with the
+                        # latest last_signal_time that is neither the current fp
+                        # nor the stale pre_tracker baseline. This is the
+                        # decision-relevant comparison: "did the last retune
+                        # beat the gauge it actually replaced?" — the stale
+                        # pre_tracker baseline never ages, so a +Δ against it
+                        # alone is the favorable-baseline trap.
+                        prior_fp, prior_delta, is_trap = _retune_prior_gauge_delta(
+                            by_fp, current_fp_id, pre_label, cur
+                        )
+                        cur_mr = cur.get("mean_return_1d")
                         if cur_n >= 30 and cur_hr is not None and pre_hr is not None:
                             delta_pp = (cur_hr - pre_hr) * 100
-                            if abs(delta_pp) >= 10:
-                                verdict_word = "validated" if delta_pp > 0 else "underperforming"
-                                milestone = (
-                                    f" Retune {verdict_word} — current-fp interpretable "
-                                    f"at n={cur_n} with {delta_pp:+.1f}pp lift."
-                                )
+                            # Report when the stale-baseline delta is itself
+                            # large, OR whenever a trap is detected — a trap can
+                            # hide behind a small (<10pp) favorable stale delta,
+                            # so the report gate must not key off that magnitude
+                            # alone.
+                            if abs(delta_pp) >= 10 or is_trap:
+                                if delta_pp < 0:
+                                    # Plain underperformance even vs the stale baseline.
+                                    milestone = (
+                                        f" Retune underperforming — current-fp interpretable "
+                                        f"at n={cur_n} with {delta_pp:+.1f}pp lift."
+                                    )
+                                else:
+                                    # Positive vs the stale baseline — but a regression
+                                    # vs the prior gauge (or a negative realised mean
+                                    # return) is the favorable-baseline trap. `is_trap`
+                                    # is computed once above and shared with the
+                                    # Advisor Stack line.
+                                    mr_clause = (
+                                        f", mean-return {cur_mr:+.2f}"
+                                        if cur_mr is not None else ""
+                                    )
+                                    if prior_delta is not None:
+                                        word = "NOT validated" if is_trap else "validated"
+                                        milestone = (
+                                            f" Retune {word} — current-fp {prior_delta:+.1f}pp "
+                                            f"vs prior gauge {prior_fp[:8]} at n={cur_n} "
+                                            f"({delta_pp:+.1f}pp vs stale baseline{mr_clause})."
+                                        )
+                                    elif is_trap:
+                                        # No prior gauge to compare, but mean-return is negative.
+                                        milestone = (
+                                            f" Retune NOT validated — current-fp {delta_pp:+.1f}pp "
+                                            f"vs stale baseline at n={cur_n} but mean-return "
+                                            f"{cur_mr:+.2f} negative."
+                                        )
+                                    else:
+                                        # First gauge era: nothing prior to regress against.
+                                        milestone = (
+                                            f" Retune validated — current-fp interpretable "
+                                            f"at n={cur_n} with {delta_pp:+.1f}pp lift."
+                                        )
         except Exception:
             pass
 
@@ -1708,14 +1811,43 @@ def _advisor_stack_items(root: Path) -> list[str]:
         if pre_n + cur_n > 0:
             pre_hr = (pre or {}).get("hit_rate_1d")
             cur_hr = (cur or {}).get("hit_rate_1d")
+            cur_mr = (cur or {}).get("mean_return_1d")
             # hit_rate_1d is a decimal fraction (0.5 = 50%).
             pre_str = f"{pre_hr * 100:.1f}%" if pre_hr is not None else "—"
             cur_str = f"{cur_hr * 100:.1f}%" if cur_hr is not None else "—"
-            note = " (n<10 in current version; too small to call)" if cur_n < 10 else ""
-            items.append(
-                f"Retune impact (1d hit rate): pre {pre_str} (n={pre_n}) → "
-                f"current {cur_str} (n={cur_n}){note}"
+            delta_pp = (
+                (cur_hr - pre_hr) * 100
+                if (cur_hr is not None and pre_hr is not None) else None
             )
+            # Decision-relevant comparison: did the retune beat the gauge it
+            # actually replaced? A +Δ vs the stale (never-ageing) pre_tracker
+            # baseline alone is the favorable-baseline trap. Shared helper keeps
+            # this line in lockstep with the verdict sentence.
+            prior_fp, prior_delta, is_trap = _retune_prior_gauge_delta(
+                by_fp, current_fp, pre_label, cur or {}
+            )
+            if prior_fp is not None and prior_delta is not None and cur_n >= 10:
+                word = "NOT validated" if is_trap else "validated"
+                mr_clause = (
+                    f", mean-return {cur_mr:+.2f}" if cur_mr is not None else ""
+                )
+                stale_clause = (
+                    f"; {cur_str} vs stale baseline {pre_str} ({delta_pp:+.1f}pp)"
+                    if delta_pp is not None else f"; current {cur_str}"
+                )
+                items.append(
+                    f"Retune impact: {word} — current-fp {prior_delta:+.1f}pp "
+                    f"vs prior gauge {prior_fp[:8]} (n={cur_n}{mr_clause})"
+                    f"{stale_clause}"
+                )
+            else:
+                # First gauge era (no prior to regress against) or n<10: keep
+                # the legacy pre→current framing — nothing to be trapped by.
+                note = " (n<10 in current version; too small to call)" if cur_n < 10 else ""
+                items.append(
+                    f"Retune impact (1d hit rate): pre {pre_str} (n={pre_n}) → "
+                    f"current {cur_str} (n={cur_n}){note}"
+                )
 
     return items[:5]
 
