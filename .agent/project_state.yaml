@@ -76,6 +76,7 @@ completed_steps:
   - discovery_persistence_and_cross_day_gate_fixes  # 2026-05-30 — persistence_7d computed in daily mode (was hardcoded 0) + extended_watchlist cross-day reinforcement gate (reinforce_persistence_days, default 3) + pulse last_run_age SLA 6h→14h (commit 7b282cb0)
   - applied_fix_verification_loop  # 2026-05-30 — daily-tool-analysis consumes applied_fixes ledger; new portfolio_automation/applied_fix_verifier.py (observe-only) + skill Steps 1-5 wiring (commit 0f1741bc)
   - memo_persistence_label_floor  # 2026-05-30 — daily_memo Top Insight three-tier persistence label, zero floor prevents first-seen theme reading "moderate" (commit dc3faed8)
+  - pattern_loop_production_foundation  # 2026-06-05 — monthly recompute (pattern_loop_recheck.sh via monthly_check.sh) + deterministic oos_window maturity countdown (walk_forward.oos_window_status → poc_simulation_results.json) + monthly-tool-analysis health dispatch; observe-only, next_official_step unchanged (observe_and_iterate)
 
 next_official_step:
   primary: observe_and_iterate  # All shipped code paths now need real-world outcome history to tune against; no new modules planned

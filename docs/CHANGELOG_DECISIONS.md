@@ -69,6 +69,47 @@ Explicitly note:
 
 ---
 
+## Pattern-Loop production Foundation (A+B+C)
+
+### Date
+
+`2026-06-05`
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `backtesting/walk_forward.py` — new `oos_window_status()` (calendar-day maturity countdown).
+- `backtesting/poc_simulation_harness.py` — `run_poc()` gains optional `oos_window` param.
+- `backtesting/run_loop.py` — computes `oos_window_status`, passes it to `run_poc`, adds it to the returned summary.
+- `backtesting/backtest_health.py` — surfaces `oos_window` in `details`.
+- `scripts/pattern_loop_recheck.sh` (new), `scripts/monthly_check.sh` (calls it, non-blocking).
+- `.claude/commands/monthly-tool-analysis.md` — reads the two Pattern-Loop artifacts, prints the OOS maturity countdown, dispatches `portfolio-backtest-health` on RED.
+
+### Decision
+
+Operationalize the observe-only Pattern-Improvement Loop: a monthly recompute (`run_loop --history --live`, FMP-only, no AI spend) wired before the monthly analysis, plus a deterministic OOS-window maturity countdown emitted as `poc_simulation_results.json.oos_window` and surfaced by the health layer. `proposed_count == 0` while `oos_window.folds_possible == false` is now explicitly treated as healthy/accruing, not a failure.
+
+### Why
+
+The first `real_signals_live` run (2026-06-05) confirmed the walk-forward OOS layer cannot produce evidence until signal history reaches ~315 calendar days (first folds ~2027-01, full window ~2027-03). Production value now is scheduled accrual + observability of that maturity, with every change still human/owner-gated.
+
+### Invariants Preserved
+
+No change to protected `signal_score`/`confidence_score`/`effective_score`/scoring/decision/allocation logic. Loop remains observe-only and proposes-only; Step 5 (governed apply) stays inert/owner-gated. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+New optional field `oos_window` on `poc_simulation_results.json` (older artifacts tolerated → null). New artifacts now consumed at monthly cadence. Tests: `tests/test_walk_forward.py`, `tests/test_poc_simulation_harness.py`, `tests/test_run_loop.py`, `tests/test_backtest_health.py` extended. No GUI/memo surface change.
+
+### Artifact Health Severity
+
+No severity change: `oos_window` is `optional_missing` (absence tolerated). `missing_artifact_count` unchanged. No GUI/memo/system-summary wording change. Producer: `backtesting.run_loop` (→ `poc_simulation_results.json`, HISTORICAL namespace).
+
+---
+
 ## FMP Stable Baseline (v1.0)
 
 ### Date
