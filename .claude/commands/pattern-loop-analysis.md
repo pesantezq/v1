@@ -53,6 +53,7 @@ Then read (degrade gracefully on any miss):
    `families_missing_registry_id`, `proposals`.
 5. `outputs/policy/auto_apply_audit.json` → last entry `status` + provenance (absent is normal).
 6. `config.json` → `backtesting.auto_apply.enabled` (expected `false` until activated).
+7. `outputs/backtest/reconstruction_audit.json` → F historical reconstruction: `look_ahead_clean`, `dates_checked`, `mismatches` (absent until the reconstruct runner has run).
 
 ---
 
@@ -104,6 +105,10 @@ Then read (degrade gracefully on any miss):
   A coupling slipped the pre-gate; investigate immediately.
 - `auto_apply_state == applied` AND the change is unreviewed — a registry weight was
   auto-changed; verify the applied delta and its outcome.
+- `reconstruction_audit.look_ahead_clean == false` (F) — the historical reconstruction leaked
+  future data; its evidence is contaminated. Auto-apply is fail-closed against it
+  (`reconstruction_unverified`), but the reconstruction itself must be fixed before its
+  proposals are trusted. (`backtest_health` flag: `reconstruction_lookahead_dirty`.)
 - `run_mode == "*_offline"` on a run that should be live (FMP failure → fake numbers).
 - `evaluated == 0` (looks-fresh-but-empty) OR `regime_degenerate`.
 - recheck-log missing for > 45 days (monthly recompute stopped) OR last line `exit != 0`.

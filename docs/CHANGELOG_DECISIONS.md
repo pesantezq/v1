@@ -69,6 +69,46 @@ Explicitly note:
 
 ---
 
+## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
+
+### Date
+
+`2026-06-05`
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `backtesting/historical_signal_recon.py` (new) — `reconstruct_signals` (point-in-time per ticker), `reconstruct_universe` (→ snapshot-compatible recon dir), `assert_no_lookahead` (truncation-equality audit), `write_reconstruction_audit`.
+- `backtesting/auto_apply.py` — gate G2b `reconstruction_unverified` (fail-closed on dirty/absent look-ahead audit when evidence is reconstructed).
+- `backtesting/backtest_health.py` — RED flag `reconstruction_lookahead_dirty`; `details.reconstruction`.
+- `scripts/pattern_loop_reconstruct.sh` (new) — backfill → reconstruct → audit → run_loop over recon history.
+- `.claude/commands/pattern-loop-analysis.md` — reads the reconstruction audit; `docs/PATTERN_LOOP_RECONSTRUCTION.md` (new).
+
+### Decision
+
+Reconstruct a multi-year historical signal set from the 5y FMP price archive, point-in-time, so the OOS window matures now instead of ~2027. Hybrid fidelity: pattern families (STRONG_MOVE_UP/DOWN, VOLUME_SPIKE) from `event_thresholds`; `signal_score`/`confidence` deferred (null). A truncation-equality **look-ahead audit** is the load-bearing safety; auto-apply is fail-closed against reconstructed evidence unless the audit is clean, after which (operator decision 2026-06-05) it runs full-auto.
+
+### Why
+
+The loop produces no proposals until the OOS window matures; reconstructing historical signals from prices we already can fetch yields real out-of-sample evidence now — but only if it is rigorously look-ahead-safe (else it tunes weights to hindsight → worse picks).
+
+### Invariants Preserved
+
+No scoring/`decision_engine.py` change. Reconstruction is observe-only. The only mutation is the existing E auto-apply (operator-approved), still gated + reversible + audited, now additionally fail-closed on the look-ahead audit. `next_official_step` unchanged.
+
+### Downstream Impact
+
+New artifacts under `outputs/backtest/`: `recon/<date>/watchlist_signals.json`, `reconstruction_audit.json`. Tests: `test_historical_signal_recon.py` (9), `test_lookahead_audit.py` (2), `test_recon_matures_window.py` (1), + `test_auto_apply.py` / `test_backtest_health.py` extensions. No GUI/memo change.
+
+### Artifact Health Severity
+
+`reconstruction_audit.json` is `optional_missing` (absent until the runner runs → no flag). New RED condition `reconstruction_lookahead_dirty`. Producer: `backtesting.historical_signal_recon` (via the reconstruct runner). No GUI/memo wording change.
+
+---
+
 ## Pattern-Loop sub-project E — Full Auto-Apply via GPT Approver (INERT)
 
 ### Date
