@@ -40,14 +40,24 @@ load_dotenv_file "${REPO_ROOT}/.env"
 
 [ -x "${PYTHON_BIN}" ] || { echo "[$(date -u +%FT%TZ)] FATAL: venv python missing" >> "${LOG_FILE}"; exit 0; }
 
-# --- deterministic detector: new applied/rolled_back events since last check -------------
+# --- deterministic detector: new weight changes (owner-gated OR autonomous) -------------
+# Watches BOTH ledgers so ANY registry mutation is caught — not just the autonomous path.
+# Also reports the armed-state every run so oversight never silently assumes the loop is on/off.
+RECON_CRON="$(crontab -l 2>/dev/null | grep -c 'pattern_loop_reconstruct.sh' || true)"
+export PL_RECON_CRON="${RECON_CRON}"
 "${PYTHON_BIN}" - <<'PY' >> "${LOG_FILE}" 2>&1
 import json, os
 from datetime import datetime, timezone
 
-AUDIT = "outputs/policy/auto_apply_audit.json"
 STATE = "data/pattern_loop_check_state.json"
 ALERT = "logs/pattern_loop_alerts.log"
+# (ledger_path, kind, status_field, predicate)
+LEDGERS = [
+    ("outputs/policy/auto_apply_audit.json", "autonomous",
+     lambda e: e.get("status") in ("applied", "rolled_back")),
+    ("outputs/policy/registry_apply_audit.json", "owner_gated",
+     lambda e: e.get("applied_by") in ("apply", "revert")),
+]
 
 def load(path, default):
     try:
@@ -55,31 +65,48 @@ def load(path, default):
     except Exception:
         return default
 
-audit = load(AUDIT, [])
-if not isinstance(audit, list):
-    audit = []
-consequential = [e for e in audit if isinstance(e, dict) and e.get("status") in ("applied", "rolled_back")]
-state = load(STATE, {})
-seen = int(state.get("seen_consequential", 0)) if isinstance(state, dict) else 0
-new = consequential[seen:]
-
 ts = datetime.now(timezone.utc).isoformat()
-if new:
-    lines = [f"[{ts}] PATTERN-LOOP ALERT: {len(new)} new auto-apply event(s)"]
-    for e in new:
-        chg = e.get("changes") or e.get("change") or e.get("applied")
-        lines.append(f"    status={e.get('status')} changes={json.dumps(chg)} ts={e.get('ts')}")
+state = load(STATE, {})
+if not isinstance(state, dict):
+    state = {}
+seen = state.get("seen") or {}
+
+# armed-state — so the operator always knows whether the autonomous loop is live
+enabled = bool(((load("config.json", {}) or {}).get("backtesting") or {}).get("auto_apply", {}).get("enabled", False))
+recon_cron = (os.environ.get("PL_RECON_CRON", "0").strip() not in ("", "0"))
+kill = os.path.exists("config/auto_apply.DISABLED")
+armed = enabled and recon_cron and not kill
+print(f"[{ts}] ARMED={armed} (enabled={enabled}, reconstruct_cron={recon_cron}, kill_switch={kill})")
+
+new_events = []
+new_seen = dict(seen)
+for path, kind, pred in LEDGERS:
+    ledger = load(path, [])
+    if not isinstance(ledger, list):
+        ledger = []
+    consequential = [e for e in ledger if isinstance(e, dict) and pred(e)]
+    prior = int(seen.get(kind, 0))
+    for e in consequential[prior:]:
+        new_events.append((kind, e))
+    new_seen[kind] = len(consequential)
+
+if new_events:
+    lines = [f"[{ts}] PATTERN-LOOP ALERT: {len(new_events)} new registry weight change(s)"]
+    for kind, e in new_events:
+        chg = e.get("changes") or e.get("applied") or e.get("restored_from")
+        who = e.get("approved_by") or e.get("applied_by") or kind
+        lines.append(f"    [{kind}] {json.dumps(chg)} by={who} ts={e.get('ts')}")
     block = "\n".join(lines) + "\n"
     with open(ALERT, "a") as fh:
         fh.write(block)
     print(block.rstrip())
     print("NOTIFY=1")
 else:
-    print(f"[{ts}] pattern-loop watcher: no new auto-apply events (seen={seen}).")
+    print(f"[{ts}] pattern-loop watcher: no new weight changes (seen={json.dumps(seen)}).")
     print("NOTIFY=0")
 
 os.makedirs("data", exist_ok=True)
-json.dump({"seen_consequential": len(consequential), "checked_at": ts}, open(STATE, "w"))
+json.dump({"seen": new_seen, "armed": armed, "checked_at": ts}, open(STATE, "w"))
 PY
 
 # --- rich readout via the analysis skill (best-effort; needs claude CLI) ------------------
