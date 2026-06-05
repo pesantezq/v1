@@ -72,3 +72,30 @@ def test_today_guard_excludes_future_dates():
 def test_empty_and_short_series_no_raise():
     assert reconstruct_signals("AAA", []) == []
     assert reconstruct_signals("AAA", [_row("2026-01-02", 100.0)]) == []
+
+
+# --------------------------------------------------------------------------
+# reconstruct_universe (archive → snapshot-compatible recon dir)
+# --------------------------------------------------------------------------
+
+def _archive(dirpath: Path, ticker: str, rows: list[dict]):
+    dirpath.mkdir(parents=True, exist_ok=True)
+    (dirpath / f"{ticker}_5y.json").write_text(json.dumps({"symbol": ticker, "rows": rows}))
+
+
+def test_reconstruct_universe_writes_snapshots(tmp_path):
+    arch = tmp_path / "historical"
+    _archive(arch, "AAA", [_row("2026-01-02", 100.0), _row("2026-01-03", 104.0)])
+    recon = tmp_path / "recon"
+    summary = reconstruct_universe(str(arch), str(recon))
+    assert summary["status"] == "ok"
+    assert summary["signals_total"] >= 1
+    snap = recon / "2026-01-03" / "watchlist_signals.json"
+    assert snap.exists()
+    doc = json.loads(snap.read_text())
+    assert doc["results"][0]["ticker"] == "AAA"
+
+
+def test_reconstruct_universe_no_archive(tmp_path):
+    summary = reconstruct_universe(str(tmp_path / "nope"), str(tmp_path / "recon"))
+    assert summary["status"] == "no_prices"
