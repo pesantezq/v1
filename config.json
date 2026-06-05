@@ -400,5 +400,12 @@
     "top_n": 20,
     "min_score": 30.0,
     "max_promoted": 30
+  },
+  "backtesting": {
+    "auto_apply": {
+      "enabled": false,
+      "max_monthly_drift": 0.10,
+      "max_abs_delta": 0.05
+    }
   }
 }

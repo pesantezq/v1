@@ -58,6 +58,7 @@ the fix.
 13. `data/retune_auto_apply_state.json` → apply_enabled, max(monthly_drift.values()) (added 2026-05-28)
 14. `outputs/latest/historical_backfill_status.json` → universe_size, fetched, errored, skipped_budget (added 2026-05-28; weekend-cadence producer)
 15. `outputs/latest/doc_audit_status.json` → overall_status, len(coverage_gaps), count of unfixed `drift`/`consistency` findings (added 2026-06-01; weekly-cadence producer — may be absent until first /doc-audit run)
+16. `outputs/policy/auto_apply_audit.json` → E auto-apply: last entry `status` (added 2026-06-05; default-inert mutator — absent or `disabled`/`oos_immature` is the expected steady state, NOT a finding)
 
 **Compute**:
 
@@ -174,6 +175,8 @@ This agent audits the discovery layer: RSS feedparser availability, Ollama / LLM
 This agent audits the learning loop: pattern_efficacy match-rate + tag count, retune_suggestions readiness, retune_auto_apply audit log activity, drift cap status, apply_enabled flag, pending confirmation queue. Surfaces stuck-confirmation loops and runaway auto-apply patterns.
 
 `portfolio-attribution-analyst` ADDITIONALLY analyzes (when dispatched) the new `sector_composition` field in `retune_impact.json:outcome_attribution.by_fingerprint.<fp>` — comparing current-fingerprint hit-rates across sectors against the pre-tracker baseline by sector. If the gauge's lift comes disproportionately from one sector (e.g., ETF cluster carrying 78% hit-rate vs single-name techs at 55%), that's surfaced as a regime-correlation caveat in the analyst report.
+
+`portfolio-backtest-health` IF the E auto-apply audit (`outputs/policy/auto_apply_audit.json`) last status is `rolled_back` (RED — a post-apply score-invariance regression auto-reverted; investigate the coupling immediately) OR `applied` (a registry weight was auto-changed today — verify the change and its outcome). This is oversight of the sanctioned auto-apply mutator: every weight change it makes must be surfaced and reviewed.
 
 ---
 

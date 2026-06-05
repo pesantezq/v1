@@ -69,6 +69,48 @@ Explicitly note:
 
 ---
 
+## Pattern-Loop sub-project E — Full Auto-Apply via GPT Approver (INERT)
+
+### Date
+
+`2026-06-05`
+
+### Area
+
+scoring, architecture
+
+### Files / Functions
+
+- `backtesting/auto_apply.py` (new) — `maybe_auto_apply()` fail-closed orchestrator (8 gates + GPT approver + pre/post score-invariance gate + auto-rollback + kill-switch + audit).
+- `backtesting/run_loop.py` — inert non-blocking integration (`_auto_apply_enabled()`, default False); `auto_apply` summary key.
+- `backtesting/backtest_health.py` — flags `auto_apply_rolled_back` (RED), `auto_apply_active` (AMBER).
+- `config.json` — `backtesting.auto_apply.{enabled:false, max_monthly_drift, max_abs_delta}`.
+- `CLAUDE.md` — sanctioned-exception clause (Protected Semantics + Observe-Only Default).
+- `.claude/commands/{daily,monthly}-tool-analysis.md` — dispatch review on every auto-apply event.
+- `docs/PATTERN_LOOP_AUTO_APPLY.md` (new) — gates, kill-switch, rollback, activation runbook.
+
+### Decision
+
+Operator-approved (2026-06-05) **full auto-apply**: when enabled AND all gates clear, the system authors `config/approved_weight_changes.json` and invokes the reversible protected registry apply WITHOUT a per-change human, with a GPT approver (veto/approve-bounded only) layered on the deterministic gates. **This relaxes the previously hard owner-gated / observe-only invariant — narrowly, for registry `default_weight` data only.** Ships INERT (`enabled=false`); cannot fire until OOS maturity (≈2027).
+
+### Why
+
+Closes the Pattern-Improvement Loop: once real out-of-sample evidence exists, bounded weight improvements can be applied without manual toil — but only behind every existing safety gate plus an LLM approver, kill-switch, audit, and auto-rollback.
+
+### Invariants Preserved
+
+No change to scoring math / `decision_engine.py` / score semantics. Apply remains reversible (byte-for-byte snapshot + `revert_last`). Observe-only preserved for every other module. Oversight preserved: every applied/rolled_back event is audited, health-flagged, and dispatched for review. `next_official_step` unchanged.
+
+### Downstream Impact
+
+New artifact `outputs/policy/auto_apply_audit.json`. New config block. Tests: `tests/test_auto_apply.py` (13) + `test_backtest_health.py` (3) + `test_run_loop.py` (inert key). No live behavior change (inert).
+
+### Artifact Health Severity
+
+New audit artifact is `optional_missing` (absent/`disabled`/`oos_immature` = expected steady state). `auto_apply_rolled_back` is a NEW RED condition; `auto_apply_active` a NEW AMBER. `missing_artifact_count` unchanged. Producer: `backtesting.auto_apply` (via run_loop, inert).
+
+---
+
 ## Pattern-Loop sub-project D — Feedback Proposers (calibration + tagging)
 
 ### Date
