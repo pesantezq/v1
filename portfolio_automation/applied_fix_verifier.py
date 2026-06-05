@@ -37,6 +37,20 @@ artifact_max_field_gt:
     threshold. PENDING otherwise — a single snapshot at/below threshold cannot
     distinguish "fix regressed" from "first day of data" (both read 0), so it
     is never reported as REGRESSED.
+
+file_contains:
+    {kind, path, contains?, absent?}
+    For a TEXT artifact (e.g. outputs/latest/daily_memo.md) where the fix's
+    post-condition is a rendered string, not a JSON field. `contains` and
+    `absent` may each be a string or a list of strings.
+    REGRESSED if any `absent` (regression-marker) string is present — the old
+    symptom's text is back. CONFIRMED if all `contains` strings are present
+    (and no `absent` marker is). PENDING if the file is missing, predates the
+    fix, or a `contains` string is not present yet — a missing `contains`
+    marker is never REGRESSED, since absence can't be told apart from a
+    legitimately not-applicable state (e.g. first-gauge era with no prior
+    gauge to compare). Staleness uses file mtime (the text-file equivalent of
+    a JSON artifact's generated_at).
 """
 from __future__ import annotations
 
@@ -81,6 +95,62 @@ def _artifact_is_stale(payload: Any, applied_at: str | None) -> bool:
         return datetime.fromisoformat(gen) < datetime.fromisoformat(applied_at)
     except Exception:
         return False
+
+
+def _file_is_stale(path: Path, applied_at: str | None) -> bool:
+    """True if the file's mtime predates the fix's applied_at — the text-file
+    equivalent of _artifact_is_stale's generated_at comparison. A file written
+    before the fix went live still reflects the pre-fix code and cannot judge
+    the fix."""
+    if not applied_at:
+        return False
+    try:
+        from datetime import datetime
+        return path.stat().st_mtime < datetime.fromisoformat(applied_at).timestamp()
+    except Exception:
+        return False
+
+
+def _as_marker_list(value: Any) -> list[str]:
+    """Normalise a contains/absent spec field to a list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(m) for m in value]
+
+
+def _check_file_contains(spec: dict, root: Path, applied_at: str | None) -> tuple[str, str]:
+    rel = spec.get("path", "")
+    path = root / rel
+    if not path.exists():
+        return (PENDING, f"{rel} missing")
+    if _file_is_stale(path, applied_at):
+        return (PENDING, "file predates fix (mtime < applied_at)")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return (PENDING, f"{rel} unreadable: {exc}")
+
+    absent = _as_marker_list(spec.get("absent"))
+    contains = _as_marker_list(spec.get("contains"))
+    if not absent and not contains:
+        return (PENDING, "file_contains: no contains/absent markers specified")
+
+    present_absent = [m for m in absent if m in text]
+    if present_absent:
+        return (REGRESSED, f"regression marker(s) present in {rel}: {present_absent}")
+
+    missing = [m for m in contains if m not in text]
+    if missing:
+        return (PENDING, f"marker(s) not present yet in {rel}: {missing}")
+    # All `contains` present (or only `absent` markers were specified and none
+    # are present) → the fix's post-condition holds.
+    detail = (
+        f"all marker(s) present in {rel}" if contains
+        else f"no regression marker(s) present in {rel}"
+    )
+    return (CONFIRMED, detail)
 
 
 def _check_liveness_row_not_warn(spec: dict, root: Path, applied_at: str | None) -> tuple[str, str]:
@@ -130,6 +200,7 @@ def _check_artifact_max_field_gt(spec: dict, root: Path, applied_at: str | None)
 _CHECKS = {
     "liveness_row_not_warn": _check_liveness_row_not_warn,
     "artifact_max_field_gt": _check_artifact_max_field_gt,
+    "file_contains": _check_file_contains,
 }
 
 

@@ -1565,3 +1565,42 @@ to badge severities (OK / WARN / FAIL).
 
 The Today page (`/`) shows a clickable Risk & Impact summary card under the
 SELL/SCALE/BUY strip that links to the full panel.
+
+---
+
+## Pattern-Improvement Loop (backtest) artifacts
+
+Produced on demand by `backtesting/run_loop.py` (Steps 1→4) — observe-only,
+proposes-only, yearly/lifetime cadence. Not written by the live daily pipeline.
+Consumed by `backtesting/backtest_health.py` (yearly-tool-analysis, Quant lens).
+
+### `outputs/backtest/poc_simulation_results.json`
+
+Namespace: HISTORICAL. Replay/backtest only — never written from the live
+pipeline. Written by `poc_simulation_harness.run_poc` (directly or via
+`run_loop`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `observe_only` | bool | Hardcoded `true` |
+| `mode` | string | `synthetic_offline` / `real_signals_offline` / `real_signals_live` / `live_fmp` |
+| `disclaimer` | string | Synthetic-data caveat (offline numbers are generated data, not a strategy claim) |
+| `performance` | object | `{evaluated, total_signals, hit_rate, avg_return, win_loss_ratio, results[]}` |
+| `calibration` | object | `{calibration_slope, well_calibrated, buckets[]}` |
+| `added_metrics` | object | `{sharpe_like, edge_vs_random_baseline_pct, baseline_avg_return_pct, per_pattern[], directional, per_regime[]}` |
+
+### `outputs/policy/signal_weight_proposals.json`
+
+Namespace: POLICY. Review artifact only — **never applied** (Step 5 is the
+protected, owner-gated apply path). Written by `tuning_proposals.write_proposals`
+(via `run_loop`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `observe_only` / `proposed_only` | bool | Both hardcoded `true` |
+| `method` | string | `oos_per_pattern_to_bounded_weight_delta` |
+| `params` | object | `{registry_path, min_n, max_abs_delta}` |
+| `proposals` | array | Per signal_id `{signal_id, current_weight, oos_n, oos_hit_rate, oos_hit_rate_ci95, avg_return, proposed_delta, proposed_weight, status, rationale}`; `status` ∈ `proposed` / `insufficient_evidence` / `no_significant_edge` / `unknown_signal` |
+| `summary` | object | `{evaluated, proposed_count, insufficient_evidence, no_significant_edge, unknown_signal}` |
+| `source` | string | `artifact:<path>` or `history:<dir>` (added by `run_loop`) |
+| `step_5_status` | string | `inert_owner_gated` (apply path not invoked) |

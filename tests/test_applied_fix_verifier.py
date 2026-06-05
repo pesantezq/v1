@@ -9,8 +9,10 @@ degraded fixtures (old symptom back) must yield regressed.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from portfolio_automation.applied_fix_verifier import (
@@ -42,6 +44,15 @@ class _Root:
         p = self.dir / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(payload), encoding="utf-8")
+
+    def write_text(self, rel, text, mtime_iso=None):
+        p = self.dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        if mtime_iso is not None:
+            ts = datetime.fromisoformat(mtime_iso).timestamp()
+            os.utime(p, (ts, ts))
+        return p
 
 
 class TestLivenessRowNotWarn(unittest.TestCase):
@@ -171,6 +182,138 @@ class TestArtifactPredatesFix(unittest.TestCase):
         # Backward compatible: without applied_at, judge the artifact as-is.
         v = verify_applied_fixes(_state(self.fix), self.root.dir)
         self.assertEqual(v[0]["status"], REGRESSED)
+
+
+class TestFileContains(unittest.TestCase):
+    """The file_contains kind verifies a TEXT artifact (e.g. daily_memo.md):
+    a `contains` marker present => confirmed; an `absent` (regression) marker
+    present => regressed; a missing `contains` marker is pending, never
+    regressed (absence can't be told apart from a legitimately not-applicable
+    state). Staleness uses file mtime (the text equivalent of generated_at)."""
+
+    def setUp(self):
+        self.root = _Root()
+        self.fix = {
+            "id": "memo_retune_trap_both_render_paths",
+            "verify": {
+                "kind": "file_contains",
+                "path": "outputs/latest/daily_memo.md",
+                "contains": "vs prior gauge",
+            },
+        }
+
+    def test_contains_marker_present_is_confirmed(self):
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "- Retune impact: NOT validated — current-fp -18.9pp vs prior gauge f60e0b9d",
+        )
+        v = verify_applied_fixes(_state(self.fix), self.root.dir)
+        self.assertEqual(v[0]["status"], CONFIRMED)
+
+    def test_contains_marker_missing_is_pending_not_regressed(self):
+        # Legacy "pre X -> current Y" framing (or a legit first-gauge era) lacks
+        # the marker. Absence alone must NOT be reported as regressed.
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "- Retune impact (1d hit rate): pre 40.6% (n=352) → current 50.0% (n=154)",
+        )
+        v = verify_applied_fixes(_state(self.fix), self.root.dir)
+        self.assertEqual(v[0]["status"], PENDING)
+
+    def test_absent_marker_present_is_regressed(self):
+        fix = {
+            "id": "demo",
+            "verify": {
+                "kind": "file_contains",
+                "path": "outputs/latest/daily_memo.md",
+                "absent": "Retune impact (1d hit rate): pre",
+            },
+        }
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "- Retune impact (1d hit rate): pre 40.6% → current 50.0%",
+        )
+        v = verify_applied_fixes(_state(fix), self.root.dir)
+        self.assertEqual(v[0]["status"], REGRESSED)
+
+    def test_absent_marker_not_present_is_confirmed(self):
+        fix = {
+            "id": "demo",
+            "verify": {
+                "kind": "file_contains",
+                "path": "outputs/latest/daily_memo.md",
+                "absent": "Retune impact (1d hit rate): pre",
+            },
+        }
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "- Retune impact: NOT validated — current-fp -18.9pp vs prior gauge f60e0b9d",
+        )
+        v = verify_applied_fixes(_state(fix), self.root.dir)
+        self.assertEqual(v[0]["status"], CONFIRMED)
+
+    def test_contains_list_all_present_is_confirmed(self):
+        fix = dict(self.fix)
+        fix["verify"] = {
+            "kind": "file_contains",
+            "path": "outputs/latest/daily_memo.md",
+            "contains": ["vs prior gauge", "NOT validated"],
+        }
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "Retune NOT validated — current-fp -18.9pp vs prior gauge f60e0b9d",
+        )
+        v = verify_applied_fixes(_state(fix), self.root.dir)
+        self.assertEqual(v[0]["status"], CONFIRMED)
+
+    def test_contains_list_partial_is_pending(self):
+        fix = dict(self.fix)
+        fix["verify"] = {
+            "kind": "file_contains",
+            "path": "outputs/latest/daily_memo.md",
+            "contains": ["vs prior gauge", "NOT validated"],
+        }
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "Retune validated — current-fp +2.0pp vs prior gauge bbbb2222",
+        )
+        v = verify_applied_fixes(_state(fix), self.root.dir)
+        self.assertEqual(v[0]["status"], PENDING)
+
+    def test_missing_file_is_pending(self):
+        v = verify_applied_fixes(_state(self.fix), self.root.dir)
+        self.assertEqual(v[0]["status"], PENDING)
+
+    def test_no_markers_specified_is_pending(self):
+        fix = {"id": "demo", "verify": {"kind": "file_contains", "path": "outputs/latest/daily_memo.md"}}
+        self.root.write_text("outputs/latest/daily_memo.md", "anything")
+        v = verify_applied_fixes(_state(fix), self.root.dir)
+        self.assertEqual(v[0]["status"], PENDING)
+
+    def test_stale_file_is_pending_not_confirmed(self):
+        # File written BEFORE the fix went live → still reflects pre-fix code.
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "vs prior gauge f60e0b9d",
+            mtime_iso="2026-06-04T09:03:00+00:00",
+        )
+        v = verify_applied_fixes(
+            _state(self.fix, applied_at="2026-06-05T13:00:00+00:00"), self.root.dir
+        )
+        self.assertEqual(v[0]["status"], PENDING)
+        self.assertIn("predates", v[0]["detail"])
+
+    def test_fresh_file_is_judged_normally(self):
+        # Same marker, but file mtime is AFTER applied_at → judge it.
+        self.root.write_text(
+            "outputs/latest/daily_memo.md",
+            "vs prior gauge f60e0b9d",
+            mtime_iso="2026-06-05T13:30:00+00:00",
+        )
+        v = verify_applied_fixes(
+            _state(self.fix, applied_at="2026-06-05T13:00:00+00:00"), self.root.dir
+        )
+        self.assertEqual(v[0]["status"], CONFIRMED)
 
 
 class TestManualAndAggregates(unittest.TestCase):

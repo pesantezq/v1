@@ -29,6 +29,8 @@ Working dir: `/opt/stockbot`.
 8. `outputs/latest/discovery_pulse_status.json` history → annualized cost: actual_spend_year_usd
 9. `outputs/portfolio/portfolio_snapshot.json` (current) + earliest archived snapshot → portfolio value change
 10. `data/themes_catalog.json` + `outputs/history/*/theme_signals.json` → which themes actually drove discoveries vs noise
+11. `outputs/backtest/poc_simulation_results.json` → Pattern-Loop backtest (Steps 0–3): evaluated count, per-regime efficacy, calibration slope, generated_at freshness
+12. `outputs/policy/signal_weight_proposals.json` → Pattern-Loop tuning proposals (Step 4): how many bounded weight deltas were proposed vs gated as insufficient/no-edge
 
 ---
 
@@ -45,6 +47,7 @@ Working dir: `/opt/stockbot`.
 - **`regime_x_tag_matrix`** — from pattern_efficacy_yearly.partitioned_by_fingerprint_regime: which (tag, regime) cells outperform; surface top 10 + bottom 10
 - **`gauge_era_efficacy`** — each gauge fingerprint's lifetime hit-rate, mean-return, sample count, duration in days
 - **`current_gauge_efficacy_vs_best`** — how does the live gauge compare to the best historical gauge?
+- **`backtest_loop_health`** — run `backtesting.backtest_health.assess_backtest_health()` over `outputs/backtest/` + `outputs/policy/signal_weight_proposals.json`; it returns GREEN/AMBER/RED with flags. **content_liveness:** a present-but-recent `poc_simulation_results.json` with `evaluated == 0` is the `looks_fresh_but_empty` silent-zero (RED), distinct from a missing artifact (`results_missing`); all-`unknown` per-regime buckets are `degenerate_regimes` (RED).
 
 ### Process analyst lens
 - **`audit_log_consistency`** — for each parameter, verify final config.json value equals (initial + sum of audit deltas)
@@ -88,6 +91,7 @@ truth so the operator can make annual planning decisions.
 - `current_gauge_efficacy_vs_best` shows current < 25th percentile (regression vs history)
 - `cost_per_resolved_signal` > 10× last year's value
 - `cron_uptime < 0.85`
+- `backtest_loop_health` returns RED (`looks_fresh_but_empty` or `degenerate_regimes`) — the efficacy evidence feeding any weight proposal is untrustworthy; do not act on Step 4 proposals until cleared
 
 ---
 
@@ -111,6 +115,8 @@ truth so the operator can make annual planning decisions.
 `portfolio-discovery-health`: IF discovery_yield_funnel shows < 5% top-to-bottom conversion → run a deep review of the discovery pipeline
 
 `portfolio-memo-reviewer`: IF `memo_top_decision_lifetime_hit_rate < 0.55` → review whether memo decision selection has been pulling from the right candidate pool
+
+`portfolio-attribution-analyst` (Quant lens, backtest loop): IF `backtest_loop_health` is AMBER/RED OR `signal_weight_proposals.json` has `proposed_count > 0` → review whether the OOS per-pattern efficacy behind each proposed weight delta is real (sample size, CI excludes 50%, regime stability) before any Step 5 apply. A new `portfolio-backtest-health` agent (committed; needs a session restart to dispatch) can own this lens once available; until then, run `backtesting.backtest_health.assess_backtest_health()` inline and report its status + flags.
 
 `portfolio-doc-writer` ALWAYS:
 - Generates `docs/yearly_reports/<YYYY>.md` — the canonical year-end document

@@ -33,7 +33,10 @@ import statistics
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+from backtesting.direction_resolution import directional_breakdown
 from backtesting.fmp_backtester import FMPBacktester
+from backtesting.regime_tagging import per_regime_breakdown
+from backtesting.signal_sources import load_signals_from_artifact
 
 # Labels mirror config/signal_registry.yaml (display only; no scoring touched).
 _PATTERNS = ["STRONG_MOVE_UP", "STRONG_MOVE_DOWN", "VOLUME_SPIKE", "BREAKOUT_PROXY"]
@@ -132,6 +135,19 @@ def _baseline_signals(n: int, provider: SyntheticPriceProvider, n_symbols: int, 
             for _ in range(n)]
 
 
+def _baseline_from_signals(signals: list[dict], seed: int) -> list[dict]:
+    """Dart-throw control matched to a real-signal set: random ticker + random
+    entry date drawn from the SAME universe and time span as `signals`, so the
+    edge-vs-baseline comparison stays apples-to-apples for replayed signals."""
+    rng = random.Random(f"{seed}:baseline_real")
+    tickers = sorted({str(s.get("ticker", "")).upper() for s in signals if s.get("ticker")})
+    dates = sorted({str(s.get("scan_time", ""))[:10] for s in signals if s.get("scan_time")})
+    if not tickers or not dates:
+        return []
+    return [{"ticker": rng.choice(tickers), "scan_time": rng.choice(dates)}
+            for _ in range(len(signals))]
+
+
 def _sharpe_like(returns_pct: list[float], forward_days: int) -> dict[str, Any]:
     """Per-signal Sharpe-like ratio = mean/stdev of forward returns, plus a naive
     annualized estimate (sqrt(252/forward_days)). Illustrative proxy, not a
@@ -166,11 +182,34 @@ def _per_pattern_breakdown(results: list[dict], signals: list[dict], forward_day
 
 def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years: int = 3,
             forward_days: int = 10, forward_days_long: int = 30, edge: float = 0.7,
-            live: bool = False, write: bool = True, base_dir: str = "outputs") -> dict[str, Any]:
-    """Run the POC simulation; optionally write artifacts to HISTORICAL. Returns payload."""
-    if live:
+            live: bool = False, write: bool = True, base_dir: str = "outputs",
+            signals_source: str | None = None,
+            signals: list[dict] | None = None) -> dict[str, Any]:
+    """Run the POC simulation; optionally write artifacts to HISTORICAL. Returns payload.
+
+    When `signals_source` is a path, replay the system's REAL emitted signals
+    from that artifact (via signal_sources.load_signals_from_artifact) instead
+    of the synthetic generator; synthetic remains the default (signals_source
+    None). `signals` accepts a pre-loaded REAL signal list directly (used by the
+    end-to-end run_loop driver to feed aggregated history) and takes precedence
+    over `signals_source`. Metric logic is unchanged either way.
+    """
+    if signals is not None or signals_source:
+        # Real-signal replay. Live → real FMP prices; offline → synthetic prices
+        # (deterministic, for wiring validation, not a real-strategy claim).
+        if signals is None:
+            signals = load_signals_from_artifact(signals_source)
+        baseline = _baseline_from_signals(signals, seed)
+        if live:
+            from fmp_client import FMPClient  # lazy: offline default needs no deps/keys
+            provider: Any = FMPClient()
+            mode = "real_signals_live"
+        else:
+            provider = SyntheticPriceProvider(seed=seed)
+            mode = "real_signals_offline"
+    elif live:
         from fmp_client import FMPClient  # lazy: offline default needs no deps/keys
-        provider: Any = FMPClient()
+        provider = FMPClient()
         mode = "live_fmp"
         syn = SyntheticPriceProvider(seed=seed)
         signals = generate_signals(syn, n_signals, n_symbols, seed, forward_days_long, edge=edge)
@@ -209,7 +248,8 @@ def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years:
                        "generated data, not the live strategy. No trades implied."),
         "params": {"n_signals": n_signals, "n_symbols": n_symbols, "seed": seed,
                    "years": years, "forward_days": forward_days,
-                   "forward_days_long": forward_days_long, "edge": edge},
+                   "forward_days_long": forward_days_long, "edge": edge,
+                   "signals_source": signals_source},
         "performance": perf,
         "calibration": calib,
         "added_metrics": {
@@ -217,6 +257,8 @@ def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years:
             "edge_vs_random_baseline_pct": edge_vs_baseline,
             "baseline_avg_return_pct": base_perf.get("avg_return", 0.0),
             "per_pattern": _per_pattern_breakdown(perf.get("results", []), signals, forward_days),
+            "directional": directional_breakdown(perf.get("results", []), signals, forward_days),
+            "per_regime": per_regime_breakdown(perf.get("results", []), bt, forward_days),
         },
     }
     if write:
@@ -247,6 +289,10 @@ def _markdown_summary(p: dict[str, Any]) -> str:
           "|---|---|---|---|"]
     for r in am["per_pattern"]:
         L.append(f"| {r['pattern']} | {r['count']} | {r['hit_rate']}% | {r['avg_return']}% |")
+    L += ["", "## Per-regime efficacy", "", "| Regime | Count | Hit rate | Avg return |",
+          "|---|---|---|---|"]
+    for r in am.get("per_regime", []):
+        L.append(f"| {r['regime']} | {r['count']} | {r['hit_rate']}% | {r['avg_return']}% |")
     return "\n".join(L) + "\n"
 
 
@@ -273,6 +319,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--edge", type=float, default=0.7,
                     help="synthetic confidence->drift coupling (0.0 = pure-noise control)")
     ap.add_argument("--live", action="store_true", help="use real FMPClient (needs FMP_API_KEY)")
+    ap.add_argument("--signals-source", type=str, default=None,
+                    help="replay real signals from this artifact "
+                         "(e.g. outputs/latest/watchlist_signals.json) instead of synthetic")
     ap.add_argument("--no-write", action="store_true")
     return ap
 
@@ -281,7 +330,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     a = _build_parser().parse_args(argv)
     p = run_poc(n_signals=a.signals, n_symbols=a.symbols, seed=a.seed, years=a.years,
                 forward_days=a.forward_days, forward_days_long=a.forward_days_long,
-                edge=a.edge, live=a.live, write=not a.no_write)
+                edge=a.edge, live=a.live, write=not a.no_write,
+                signals_source=a.signals_source)
     perf, am = p["performance"], p["added_metrics"]
     print("[poc] mode={m} evaluated={e}/{t} hit_rate={h}% avg_return={a}% sharpe={s} "
           "edge_vs_baseline={ed}% calib_slope={c}".format(
