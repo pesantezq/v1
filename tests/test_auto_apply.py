@@ -177,3 +177,26 @@ def test_live_registry_never_touched(env):
     before = Path(_LIVE_REGISTRY).read_bytes()
     _call(env, approver=_approve)
     assert Path(_LIVE_REGISTRY).read_bytes() == before
+
+
+# --------------------------------------------------------------------------
+# F5 — reconstructed-evidence gate (look-ahead audit must be clean)
+# --------------------------------------------------------------------------
+
+def test_reconstructed_evidence_blocked_when_audit_not_clean(env):
+    out = _call(env, evidence_source="historical_reconstruction",
+                reconstruction_audit={"look_ahead_clean": False}, approver=_approve)
+    assert out["status"] == "reconstruction_unverified"
+    assert _registry_unchanged(env)
+
+
+def test_reconstructed_evidence_proceeds_when_audit_clean(env):
+    out = _call(env, evidence_source="historical_reconstruction",
+                reconstruction_audit={"look_ahead_clean": True}, approver=_approve)
+    assert out["status"] == "applied", out
+
+
+def test_live_evidence_unaffected_by_recon_gate(env):
+    # No evidence_source → the recon gate is inert; normal apply path.
+    out = _call(env, approver=_approve)
+    assert out["status"] == "applied"
