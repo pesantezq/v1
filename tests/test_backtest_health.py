@@ -137,3 +137,30 @@ def test_calibration_flip_is_amber(tmp_path):
     rep = _assess(str(bt), str(prop))
     assert rep["status"] == "AMBER"
     assert "calibration_slope_flipped" in rep["flags"]
+
+
+def test_score_gate_opt_in_reports_invariance_green(tmp_path):
+    # Opt-in Step-5 protected-score invariance gate. Against the real registry the
+    # weight delta is score-invariant (default_weight is decoupled from scoring),
+    # so the gate is GREEN and no coupling-regression flag is raised. The
+    # artifact-only health status is unaffected by enabling the gate.
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.5)
+    prop = tmp_path / "policy" / "p.json"
+    _write_proposals(prop, proposed_count=1)
+    rep = assess_backtest_health(backtest_dir=str(bt), proposals_path=str(prop),
+                                 now=_NOW, run_score_gate=True,
+                                 registry_path="config/signal_registry.yaml")
+    assert rep["details"].get("score_invariance") in ("GREEN", "inconclusive")
+    assert "score_coupling_regression" not in rep["flags"]
+
+
+def test_score_gate_off_by_default_keeps_artifact_only_path(tmp_path):
+    bt = tmp_path / "backtest"
+    _write_results(bt, generated_at=_NOW.isoformat(), evaluated=120,
+                   regimes=["risk_on", "neutral"], slope=0.5)
+    prop = tmp_path / "policy" / "p.json"
+    _write_proposals(prop, proposed_count=1)
+    rep = _assess(str(bt), str(prop))
+    assert "score_invariance" not in rep["details"]

@@ -1035,3 +1035,48 @@ between Step 2 (walk-forward OOS) and Step 4 (tuning proposals).
 - New contracts documented in `docs/OUTPUT_ARTIFACT_CONTRACTS.md`.
 - Tests: `tests/test_run_loop.py` (11). Real-edge evidence still requires a
   `--live` run with FMP access + sufficient history (operator's complete env).
+
+---
+
+## 2026-06-05 — Step 5 protected-score value-regression gate (`backtesting/score_invariance_gate.py`)
+
+### Decision
+
+Build the documented Step 5 precondition #2 — a value-regression gate proving a
+registry `default_weight` apply is semantically safe for the six protected
+scores — WITHOUT enabling or executing any live apply (owner chose "build the
+gate"; a live apply was not authorized and has no evidence basis yet).
+
+### What it does
+
+- Copies the registry to a temp file, applies a candidate delta to the temp copy
+  via `registry_apply`, recomputes the protected scores over a fixed offline
+  fixture (real `scanner`/`confidence`/`alert_ranking` functions) before/after,
+  and asserts **bit-identical**. GREEN = weight moved, scores unchanged; RED =
+  coupling regression; inconclusive = apply no-op.
+- Wired opt-in into `backtest_health.assess_backtest_health(run_score_gate=True)`
+  → RED flag `score_coupling_regression` (yearly Quant-lens cadence).
+
+### Key architectural finding
+
+The registry `default_weight` is **decoupled from all six protected scores** —
+no scoring function reads it (`final_rank_score` uses `config/base.json`
+"ranking" coefficients; the 0.45 match with STRONG_MOVE_UP's weight is
+coincidental). Consequence: a Step 5 apply changes the YAML value but **changes
+no decision**. The loop's weight proposals have no scoring consumer yet. Wiring
+`default_weight` into scoring is protected scope requiring explicit owner
+approval — intentionally **not** done.
+
+### Guarantees
+
+- Observe-only; operates on a temp copy; live `config/signal_registry.yaml`
+  byte-identical (asserted). No scoring/decision logic modified.
+- `backtest_health` gained an opt-in param (default off); artifact-only path
+  unchanged.
+- Step 5 live apply remains owner-gated + inert; precondition #1 (owner-signed,
+  evidence-backed `approved_weight_changes.json`) still unmet.
+
+### Tests
+
+`tests/test_score_invariance_gate.py` (6) + 2 in `tests/test_backtest_health.py`.
+Full backtesting suite: 252 passed.
