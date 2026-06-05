@@ -58,6 +58,7 @@ def assess_backtest_health(
     proposals_path: str = "outputs/policy/signal_weight_proposals.json",
     calibration_proposal_path: str = "outputs/policy/calibration_correction_proposal.json",
     tagging_proposal_path: str = "outputs/policy/signal_tagging_proposal.json",
+    auto_apply_audit_path: str = "outputs/policy/auto_apply_audit.json",
     now: datetime | None = None,
     max_age_days: int = 400,
     min_evaluated: int = 30,
@@ -137,6 +138,17 @@ def assess_backtest_health(
             details["untagged_pct"] = untagged_pct
             if untagged_pct >= max_untagged_pct:
                 amber.append("high_untagged_rate")
+
+    # Sub-project E — auto-apply audit (absence tolerated → no flag).
+    audit = _load_json(Path(auto_apply_audit_path))
+    if isinstance(audit, list) and audit:
+        last = audit[-1] if isinstance(audit[-1], dict) else {}
+        last_status = last.get("status")
+        details["auto_apply"] = {"last_status": last_status, "entries": len(audit)}
+        if last_status == "rolled_back":
+            red.append("auto_apply_rolled_back")
+        elif last_status == "applied":
+            amber.append("auto_apply_active")
 
     if run_score_gate:
         try:
