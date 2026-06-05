@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from backtesting.direction_resolution import signal_direction
@@ -47,6 +48,26 @@ _OBSERVE_ONLY = True  # hardcoded per repo observe-only policy (CLAUDE.md)
 _DEFAULT_SIGNALS = "outputs/latest/watchlist_signals.json"
 _DEFAULT_HISTORY = "outputs/history"
 _DEFAULT_REGISTRY = "config/signal_registry.yaml"
+
+
+def _evidence_source(signals: list[dict]) -> str | None:
+    """Return 'historical_reconstruction' when the loaded signals are reconstructed
+    (any row carries that source), else None. Lets auto_apply apply its
+    reconstructed-evidence look-ahead gate (F5)."""
+    for s in signals:
+        if isinstance(s, dict) and s.get("source") == "historical_reconstruction":
+            return "historical_reconstruction"
+    return None
+
+
+def _load_reconstruction_audit(base_dir: str = "outputs") -> dict | None:
+    """Read the look-ahead audit written by historical_signal_recon. None on miss."""
+    p = Path(base_dir) / "backtest" / "reconstruction_audit.json"
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else None
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
 
 
 def _auto_apply_enabled(config_path: str = "config.json") -> bool:
@@ -211,8 +232,11 @@ def run_loop(
         auto = {"status": "disabled"}
         try:
             from backtesting.auto_apply import maybe_auto_apply
+            ev_source = _evidence_source(signals)
+            recon_audit = _load_reconstruction_audit(base_dir) if ev_source else None
             auto = maybe_auto_apply(enabled=_auto_apply_enabled(), poc=poc, proposals=proposals,
-                                    registry_path=registry_path, base_dir=base_dir, write=write)
+                                    registry_path=registry_path, base_dir=base_dir, write=write,
+                                    evidence_source=ev_source, reconstruction_audit=recon_audit)
         except Exception:  # non-blocking; auto-apply must never break the loop
             auto = {"status": "error"}
 

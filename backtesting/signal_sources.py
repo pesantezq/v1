@@ -72,7 +72,7 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any] | None:
     if not ticker:
         return None
     patterns = _map_basis(row.get("alert_basis"))
-    return {
+    out = {
         "ticker": str(ticker).upper(),
         "scan_time": row.get("scan_time") or row.get("signal_date"),
         "signal_score": row.get("signal_score"),
@@ -80,6 +80,11 @@ def _normalize_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "pattern": _representative_pattern(patterns),
         "patterns": patterns,
     }
+    # Preserve provenance when present (e.g. historical_reconstruction) so downstream
+    # consumers (auto_apply's reconstructed-evidence gate) can detect the source.
+    if row.get("source"):
+        out["source"] = row.get("source")
+    return out
 
 
 def load_signals_from_artifact(
