@@ -69,6 +69,46 @@ Explicitly note:
 
 ---
 
+## Pattern-Loop sub-project D — Feedback Proposers (calibration + tagging)
+
+### Date
+
+`2026-06-05`
+
+### Area
+
+evaluation
+
+### Files / Functions
+
+- `backtesting/calibration_proposer.py` (new) — `propose_calibration_correction()` + `write_calibration_proposal()`.
+- `backtesting/tagging_proposer.py` (new) — `propose_tagging_fixes()` + `write_tagging_proposal()`.
+- `backtesting/run_loop.py` — non-blocking integration after Step 4; `calibration_proposal`/`tagging_proposal` summary keys.
+- `backtesting/backtest_health.py` — AMBER flags `calibration_correction_available`, `high_untagged_rate`.
+- `.claude/commands/monthly-tool-analysis.md` — reads the two new POLICY artifacts; body line + dispatch note.
+
+### Decision
+
+Two observe-only/proposes-only proposers turn the two live-run defects (inverted confidence calibration; ~70% of signals untagged + `SIGNAL_SCORE` absent from the registry) into bounded, owner-gated review artifacts under `outputs/policy/`. Calibration apply is OOS-gated (`apply_gate` = `oos_unconfirmed` until the window matures, to avoid fitting a correction on the in-sample window). Tagging proposes a registry entry for unmapped families + a backfill-inference rule spec.
+
+### Why
+
+Both defects degrade attribution now, independent of the 2027 OOS clock — but a confident *fix* for either still needs validation, so they are proposed, not applied.
+
+### Invariants Preserved
+
+No mutation of `confidence_score`/scoring/`signal_registry.yaml`/the signal producer. Observe-only + owner-gated preserved; nothing is applied. `next_official_step` unchanged.
+
+### Downstream Impact
+
+New POLICY artifacts `calibration_correction_proposal.{json,md}`, `signal_tagging_proposal.{json,md}`. Tests added: `tests/test_calibration_proposer.py` (5), `tests/test_tagging_proposer.py` (4), + extensions to `test_run_loop.py`, `test_backtest_health.py`. No GUI/memo change.
+
+### Artifact Health Severity
+
+New artifacts are `optional_missing` (absence tolerated → no flag). `missing_artifact_count` unchanged. Producer: `backtesting.run_loop` (non-blocking). No GUI/memo/system-summary wording change.
+
+---
+
 ## Pattern-Loop production Foundation (A+B+C)
 
 ### Date
