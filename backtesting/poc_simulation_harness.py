@@ -184,7 +184,8 @@ def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years:
             forward_days: int = 10, forward_days_long: int = 30, edge: float = 0.7,
             live: bool = False, write: bool = True, base_dir: str = "outputs",
             signals_source: str | None = None,
-            signals: list[dict] | None = None) -> dict[str, Any]:
+            signals: list[dict] | None = None,
+            oos_window: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run the POC simulation; optionally write artifacts to HISTORICAL. Returns payload.
 
     When `signals_source` is a path, replay the system's REAL emitted signals
@@ -261,6 +262,8 @@ def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years:
             "per_regime": per_regime_breakdown(perf.get("results", []), bt, forward_days),
         },
     }
+    if oos_window is not None:
+        payload["oos_window"] = oos_window
     if write:
         _write_artifacts(payload, base_dir=base_dir)
     return payload
