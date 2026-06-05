@@ -101,6 +101,35 @@ if new_events:
         fh.write(block)
     print(block.rstrip())
     print("NOTIFY=1")
+
+    # Email push — reuses the existing memo-email SMTP plumbing + MEMO_EMAIL_* env.
+    # No-op (skip/dry-run) unless the operator has configured + enabled email, so the
+    # alert log above is always the reliable channel; email is best-effort on top.
+    try:
+        from email.message import EmailMessage
+        from portfolio_automation.memo_email_sender import (
+            load_memo_email_config, send_daily_memo_email,
+        )
+        cfg = load_memo_email_config()
+        if cfg.enabled and cfg.has_smtp_config() and cfg.has_valid_recipients():
+            msg = EmailMessage()
+            prefix = (cfg.subject_prefix + " ") if cfg.subject_prefix else ""
+            msg["Subject"] = f"{prefix}[StockBot] Pattern-Loop weight change ({len(new_events)})"
+            msg["From"] = cfg.from_addr
+            msg["To"] = ", ".join(cfg.to_addrs)
+            if cfg.cc_addrs:
+                msg["Cc"] = ", ".join(cfg.cc_addrs)
+            msg.set_content(
+                "The Pattern-Improvement Loop changed signal-registry weight(s).\n\n"
+                + block
+                + "\nReview: /pattern-loop-analysis  |  Undo: registry_apply.revert_last"
+                + "  |  Halt autonomous: touch config/auto_apply.DISABLED\n")
+            res = send_daily_memo_email(cfg, msg)
+            print(f"EMAIL: sent={res.get('sent')} reason={res.get('reason') or res.get('error_class') or 'ok'}")
+        else:
+            print("EMAIL: skipped (MEMO_EMAIL_* not enabled/configured) — alert log is the channel")
+    except Exception as exc:  # email must never break the watcher
+        print(f"EMAIL: error (non-fatal): {exc}")
 else:
     print(f"[{ts}] pattern-loop watcher: no new weight changes (seen={json.dumps(seen)}).")
     print("NOTIFY=0")
