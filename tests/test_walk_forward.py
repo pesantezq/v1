@@ -24,7 +24,7 @@ from datetime import date, timedelta
 
 from backtesting.fmp_backtester import FMPBacktester
 from backtesting.poc_simulation_harness import SyntheticPriceProvider
-from backtesting.walk_forward import walk_forward, wilson_interval
+from backtesting.walk_forward import oos_window_status, walk_forward, wilson_interval
 
 
 # --------------------------------------------------------------------------
@@ -160,3 +160,58 @@ def test_undatable_signals_no_crash():
     report = walk_forward(signals, _make_bt(), min_signals_per_fold=1)
     assert report["folds"] == []  # nothing datable → no folds, no crash
     assert report["aggregate"]["status"] == "insufficient"
+
+
+# --------------------------------------------------------------------------
+# oos_window_status — calendar-day maturity countdown (pure)
+# --------------------------------------------------------------------------
+
+class TestOosWindowStatus:
+    def _sig(self, iso: str) -> dict:
+        return {"ticker": "AAA", "scan_time": iso}
+
+    def test_short_history_not_yet_mature(self):
+        sigs = [self._sig("2026-04-28"), self._sig("2026-05-15"), self._sig("2026-06-05")]
+        ow = oos_window_status(sigs, today=date(2026, 6, 5))
+        assert ow["calendar_days_observed"] == 38
+        assert ow["first_fold_threshold_days"] == 252
+        assert ow["full_window_days"] == 315
+        assert ow["folds_possible"] is False
+        assert ow["days_until_full_window"] == 277
+        assert ow["full_window_eta"] == "2027-03-09"
+        assert ow["earliest_signal"] == "2026-04-28"
+        assert ow["latest_signal"] == "2026-06-05"
+        assert ow["estimate"] is True
+
+    def test_first_fold_boundary(self):
+        early = date(2026, 1, 1)
+        ow = oos_window_status(
+            [self._sig(early.isoformat()),
+             self._sig((early + timedelta(days=252)).isoformat())],
+            today=date(2026, 9, 10),
+        )
+        assert ow["calendar_days_observed"] == 252
+        assert ow["folds_possible"] is True
+        assert ow["days_until_full_window"] == 63
+
+    def test_mature_window_zero_remaining(self):
+        ow = oos_window_status(
+            [self._sig("2026-01-01"), self._sig("2027-01-01")],
+            today=date(2027, 1, 1),
+        )
+        assert ow["folds_possible"] is True
+        assert ow["days_until_full_window"] == 0
+        assert ow["full_window_eta"] == "2027-01-01"
+
+    def test_empty_signals_never_raises(self):
+        ow = oos_window_status([], today=date(2026, 6, 5))
+        assert ow["calendar_days_observed"] == 0
+        assert ow["folds_possible"] is False
+        assert ow["full_window_eta"] is None
+        assert ow["earliest_signal"] is None
+
+    def test_undatable_signals_treated_as_empty(self):
+        ow = oos_window_status([{"ticker": "AAA"}, {"scan_time": "not-a-date"}],
+                               today=date(2026, 6, 5))
+        assert ow["calendar_days_observed"] == 0
+        assert ow["folds_possible"] is False

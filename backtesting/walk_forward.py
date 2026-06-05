@@ -193,3 +193,59 @@ def walk_forward(
         "folds": folds,
         "aggregate": aggregate,
     }
+
+
+def oos_window_status(
+    signals: list[dict],
+    *,
+    train_days: int = 252,
+    test_days: int = 63,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Calendar-day maturity countdown for the walk-forward OOS window.
+
+    ``walk_forward`` measures its window in calendar-day ordinals (it compares
+    ``date.toordinal()`` values), so ``train_days``/``test_days`` are CALENDAR
+    days. The first fold's loop iterates once the observed span reaches
+    ``train_days``; the first test window sits fully inside observed history once
+    the span reaches ``train_days + test_days``. This reports how far the
+    accumulated signal history is from that point.
+
+    Pure and total: empty or undatable input yields ``calendar_days_observed=0``
+    and ``folds_possible=False`` and never raises. ``today`` is injectable for
+    deterministic tests (the caller passes ``date.today()``). The ETA is a
+    calendar-day projection, flagged ``estimate: True``.
+    """
+    full_window_days = train_days + test_days
+    dates = sorted(
+        d for d in (_parse_date(s.get("scan_time") or s.get("signal_date")) for s in signals)
+        if d is not None
+    )
+    if not dates:
+        return {
+            "calendar_days_observed": 0,
+            "first_fold_threshold_days": train_days,
+            "full_window_days": full_window_days,
+            "folds_possible": False,
+            "days_until_full_window": full_window_days,
+            "full_window_eta": None,
+            "earliest_signal": None,
+            "latest_signal": None,
+            "estimate": True,
+        }
+    earliest, latest = dates[0], dates[-1]
+    observed = latest.toordinal() - earliest.toordinal()
+    days_remaining = max(0, full_window_days - observed)
+    ref = today or date.today()
+    eta = date.fromordinal(ref.toordinal() + days_remaining).isoformat()
+    return {
+        "calendar_days_observed": observed,
+        "first_fold_threshold_days": train_days,
+        "full_window_days": full_window_days,
+        "folds_possible": observed >= train_days,
+        "days_until_full_window": days_remaining,
+        "full_window_eta": eta,
+        "earliest_signal": earliest.isoformat(),
+        "latest_signal": latest.isoformat(),
+        "estimate": True,
+    }
