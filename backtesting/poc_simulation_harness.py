@@ -183,18 +183,22 @@ def _per_pattern_breakdown(results: list[dict], signals: list[dict], forward_day
 def run_poc(*, n_signals: int = 200, n_symbols: int = 12, seed: int = 42, years: int = 3,
             forward_days: int = 10, forward_days_long: int = 30, edge: float = 0.7,
             live: bool = False, write: bool = True, base_dir: str = "outputs",
-            signals_source: str | None = None) -> dict[str, Any]:
+            signals_source: str | None = None,
+            signals: list[dict] | None = None) -> dict[str, Any]:
     """Run the POC simulation; optionally write artifacts to HISTORICAL. Returns payload.
 
     When `signals_source` is a path, replay the system's REAL emitted signals
     from that artifact (via signal_sources.load_signals_from_artifact) instead
     of the synthetic generator; synthetic remains the default (signals_source
-    None). Metric logic is unchanged either way.
+    None). `signals` accepts a pre-loaded REAL signal list directly (used by the
+    end-to-end run_loop driver to feed aggregated history) and takes precedence
+    over `signals_source`. Metric logic is unchanged either way.
     """
-    if signals_source:
+    if signals is not None or signals_source:
         # Real-signal replay. Live → real FMP prices; offline → synthetic prices
         # (deterministic, for wiring validation, not a real-strategy claim).
-        signals = load_signals_from_artifact(signals_source)
+        if signals is None:
+            signals = load_signals_from_artifact(signals_source)
         baseline = _baseline_from_signals(signals, seed)
         if live:
             from fmp_client import FMPClient  # lazy: offline default needs no deps/keys

@@ -999,3 +999,39 @@ without manual SHA bookkeeping.
 - `portfolio-doc-auditor` agent dispatched monthly for judgment-lens review
 - VPS cron entries: `scripts/run_doc_audit.sh` (Mon 09:45 UTC) + `scripts/run_doc_audit_monthly.sh` (1st 09:15 UTC)
 
+
+---
+
+## 2026-06-05 — Pattern-Improvement Loop end-to-end driver (`backtesting/run_loop.py`)
+
+### Decision
+
+Add a thin observe-only CLI driver that chains the loop's Steps 1→4 into one
+command (`python -m backtesting.run_loop`), so the loop is runnable end-to-end
+rather than only as composable library pieces. The missing connective tissue
+between Step 2 (walk-forward OOS) and Step 4 (tuning proposals).
+
+### What it does
+
+- Loads real emitted signals (single artifact or aggregated `outputs/history`).
+- Runs the POC simulation (`run_poc`) → `outputs/backtest/poc_simulation_results.json`.
+- Computes per-signal OOS efficacy via `walk_forward`, grouped by registry
+  `signal_id` (`STRONG_MOVE` direction-resolved to UP/DOWN).
+- Feeds OOS efficacy into `propose_weight_changes` → writes
+  `outputs/policy/signal_weight_proposals.json`.
+
+### Guarantees
+
+- Observe-only / proposes-only. **Step 5 (governed apply) is never invoked** —
+  `registry_apply.py` stays inert/owner-gated.
+- `config/signal_registry.yaml` byte-identical before/after (asserted in tests).
+- No protected scoring/decision/allocation logic touched; no schema changed.
+- `run_poc` gained one additive optional param (`signals=`); backward compatible.
+
+### Downstream impact
+
+- Writing the proposals artifact flips `backtest_health` off `proposals_missing`
+  (→ `no_proposals` when there's no real edge, the honest state).
+- New contracts documented in `docs/OUTPUT_ARTIFACT_CONTRACTS.md`.
+- Tests: `tests/test_run_loop.py` (11). Real-edge evidence still requires a
+  `--live` run with FMP access + sufficient history (operator's complete env).
