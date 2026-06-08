@@ -87,6 +87,108 @@ def required_artifacts(registry: dict | None = None) -> list[tuple[str, str, boo
     return out
 
 
+def _row_schema_ok(row: dict) -> bool:
+    """Return True iff the row has all required fields with valid enum values."""
+    return (isinstance(row, dict)
+            and all(f in row for f in _REQUIRED_ROW_FIELDS)
+            and row.get("lens") in LENSES and row.get("role") in ROLES
+            and row.get("cadence") in CADENCES
+            and row.get("severity_if_missing") in SEVERITIES
+            and isinstance(row.get("consumers"), list) and bool(row.get("consumers")))
+
+
+def validate_registry(registry: dict, artifacts_root, now) -> dict:
+    """Classify every cataloged artifact and roll up to an observe-only status dict."""
+    root = Path(artifacts_root)
+    arts = registry.get("artifacts", {})
+    rows = []
+    missing, stale, invalid_json, unattributed, schema_invalid = [], [], [], [], []
+    sev_counts: dict[str, int] = {"critical": 0, "warning": 0, "info": 0}
+    by_lens: dict[str, dict] = {}
+
+    for key, row in arts.items():
+        if not _row_schema_ok(row):
+            schema_invalid.append(key)
+            continue
+        path = root / (row.get("path") or f"outputs/latest/{key}")
+        sev = row.get("severity_if_missing", "info")
+        lens = row["lens"]
+        lens_bucket = by_lens.setdefault(lens, {"total": 0, "present": 0, "issues": 0})
+        lens_bucket["total"] += 1
+
+        if "UNATTRIBUTED" in row.get("consumers", []):
+            unattributed.append(key)
+
+        exists = path.exists()
+        is_missing = not exists
+        is_stale_flag = False
+        is_bad_json = False
+        if exists:
+            try:
+                age_h = (now.timestamp() - path.stat().st_mtime) / 3600.0
+                is_stale_flag = is_stale(row, age_h)
+                if is_stale_flag:
+                    stale.append({"artifact": key, "cadence": row["cadence"],
+                                  "age_hours": round(age_h, 1)})
+            except Exception:
+                pass
+            if str(path).endswith(".json"):
+                try:
+                    json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    is_bad_json = True
+                    invalid_json.append(key)
+
+        problem = is_missing or is_stale_flag or is_bad_json
+        if is_missing:
+            missing.append(key)
+        if problem:
+            lens_bucket["issues"] += 1
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        else:
+            lens_bucket["present"] += 1
+        rows.append((key, sev, problem))
+
+    if sev_counts["critical"] > 0:
+        overall = RED
+    elif sev_counts["warning"] > 0:
+        overall = AMBER
+    else:
+        overall = GREEN
+
+    present = sum(1 for _, _, prob in rows if not prob)
+    msg_bits = []
+    if missing:
+        msg_bits.append(f"{len(missing)} missing")
+    if stale:
+        msg_bits.append(f"{len(stale)} stale")
+    if invalid_json:
+        msg_bits.append(f"{len(invalid_json)} invalid-json")
+    if unattributed:
+        msg_bits.append(f"{len(unattributed)} unattributed")
+    operator_message = "; ".join(msg_bits) or "all artifacts present, fresh, attributed"
+
+    return {
+        "generated_at": now.isoformat(),
+        "observe_only": True,
+        "schema_version": "1",
+        "source": "artifact_registry",
+        "overall_status": overall,
+        "counts": {"total": len(arts), "present": present, "stale": len(stale),
+                   "invalid_json": len(invalid_json), "missing": len(missing),
+                   "missing_required": sum(1 for k in missing
+                                           if arts.get(k, {}).get("required")),
+                   "unattributed": len(unattributed), "schema_invalid": len(schema_invalid)},
+        "missing": missing, "stale": stale, "invalid_json": invalid_json,
+        "unattributed": unattributed, "schema_invalid": schema_invalid,
+        "severity": sev_counts, "by_lens": by_lens,
+        "operator_message": operator_message,
+        "disclaimer": ("Observe-only artifact-governance validator. Reads the registry "
+                       "+ artifact mtimes; classifies coverage/freshness. Does not call "
+                       "APIs or mutate any decision, allocation, score, or portfolio state."),
+    }
+
+
 def schema_errors(registry: dict) -> list[str]:
     """Return a list of human-readable schema problems (empty == valid)."""
     errs: list[str] = []

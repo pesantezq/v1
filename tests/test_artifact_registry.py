@@ -104,3 +104,89 @@ def test_shipped_registry_schema_valid():
     cataloged = {k[:-5] for k in arts if k.endswith(".json")}
     missing = expected_latest - cataloged
     assert missing == set(), f"uncataloged outputs/latest artifacts: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: validate_registry — classification + severity rollup
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+
+def _mini_registry():
+    return {"schema_version": 1, "daily_run_status_tracked": [],
+            "artifacts": {
+                "sot.json": {"path": "outputs/latest/sot.json", "label": "sot",
+                    "lens": "decision_core", "role": "source_of_truth", "required": True,
+                    "cadence": "daily", "producer": "p", "consumers": ["daily-tool-analysis"],
+                    "severity_if_missing": "critical"},
+                "probe.json": {"path": "outputs/latest/probe.json", "label": "probe",
+                    "lens": "quant_learning", "role": "probe", "required": True,
+                    "cadence": "daily", "producer": "p", "consumers": ["UNATTRIBUTED"],
+                    "severity_if_missing": "warning"},
+            }}
+
+
+def _write(p, obj):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(obj), encoding="utf-8")
+
+
+def test_validate_red_when_critical_missing(tmp_path):
+    reg = _mini_registry()
+    # only the probe exists, fresh; sot (critical) missing
+    _write(tmp_path / "outputs/latest/probe.json", {"x": 1})
+    now = ar.datetime.now(ar.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    assert st["overall_status"] == "red"
+    assert "sot.json" in st["missing"]
+    assert "probe.json" in st["unattributed"]
+
+
+def test_validate_green_when_all_present_fresh(tmp_path):
+    reg = _mini_registry()
+    reg["artifacts"]["probe.json"]["consumers"] = ["daily-tool-analysis"]  # attributed
+    _write(tmp_path / "outputs/latest/sot.json", {"x": 1})
+    _write(tmp_path / "outputs/latest/probe.json", {"x": 1})
+    now = ar.datetime.now(ar.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    assert st["overall_status"] == "green"
+    assert st["counts"]["present"] == 2
+
+
+def test_validate_amber_when_warning_stale(tmp_path):
+    reg = _mini_registry()
+    reg["artifacts"]["probe.json"]["consumers"] = ["daily-tool-analysis"]
+    _write(tmp_path / "outputs/latest/sot.json", {"x": 1})
+    pf = tmp_path / "outputs/latest/probe.json"
+    _write(pf, {"x": 1})
+    import os
+    old = (ar.datetime.now(ar.timezone.utc).timestamp()) - 60 * 3600  # 60h old
+    os.utime(pf, (old, old))
+    now = ar.datetime.now(ar.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    assert st["overall_status"] == "amber"
+    assert any(s["artifact"] == "probe.json" for s in st["stale"])
+
+
+def test_validate_invalid_json_listed(tmp_path):
+    reg = _mini_registry()
+    reg["artifacts"]["probe.json"]["consumers"] = ["daily-tool-analysis"]
+    reg["artifacts"]["probe.json"]["severity_if_missing"] = "info"
+    _write(tmp_path / "outputs/latest/sot.json", {"x": 1})
+    bad = tmp_path / "outputs/latest/probe.json"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("{not json", encoding="utf-8")
+    now = ar.datetime.now(ar.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    assert "probe.json" in st["invalid_json"]
+
+
+def test_validate_flags_schema_invalid_row(tmp_path):
+    reg = _mini_registry()
+    reg["artifacts"]["bad.json"] = {"path": "outputs/latest/bad.json", "lens": "nope",
+        "role": "probe", "required": False, "cadence": "daily", "producer": "p",
+        "consumers": ["x"], "severity_if_missing": "info"}
+    now = ar.datetime.now(ar.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    assert "bad.json" in st["schema_invalid"]
