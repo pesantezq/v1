@@ -15,8 +15,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
 import yaml
 
 GREEN, AMBER, RED = "green", "amber", "red"
@@ -30,7 +28,7 @@ LENSES = {"developer", "quant_learning", "market_discovery", "risk_action",
 ROLES = {"source_of_truth", "advisor", "probe", "telemetry", "narrative"}
 CADENCES = {"daily", "weekend", "weekly", "monthly", "yearly", "on_demand"}
 SEVERITIES = {"critical", "warning", "info"}
-_REQUIRED_ROW_FIELDS = ("lens", "role", "required", "cadence", "producer",
+_REQUIRED_ROW_FIELDS = ("path", "lens", "role", "required", "cadence", "producer",
                         "consumers", "severity_if_missing")
 
 
@@ -72,6 +70,8 @@ def schema_errors(registry: dict) -> list[str]:
             errs.append(f"{key}: bad cadence {row.get('cadence')!r}")
         if row.get("severity_if_missing") not in SEVERITIES:
             errs.append(f"{key}: bad severity {row.get('severity_if_missing')!r}")
+        if "required" in row and not isinstance(row["required"], bool):
+            errs.append(f"{key}: required must be a boolean")
         if not isinstance(row.get("consumers"), list) or not row.get("consumers"):
             errs.append(f"{key}: consumers must be a non-empty list")
     for key in registry.get("daily_run_status_tracked", []):

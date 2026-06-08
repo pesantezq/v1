@@ -36,12 +36,12 @@ artifacts:
     path: outputs/latest/decision_plan.md
     label: decision plan (md)
     lens: decision_core
-    role: source_of_truth
+    role: narrative
     required: true
     cadence: daily
     producer: decision_engine
     consumers: [UNATTRIBUTED]
-    severity_if_missing: critical
+    severity_if_missing: warning
 
   system_decision_summary.json:
     path: outputs/latest/system_decision_summary.json
@@ -253,6 +253,7 @@ artifacts:
     producer: quant_watch_probes
     consumers: [quant-watch-analysis, daily-tool-analysis]
     severity_if_missing: warning
+    notes: "consumers quant-watch-analysis + daily-tool-analysis land when feat/quant-watch-probes merges"
 
   # ── Market discovery ──────────────────────────────────────────────────────
   theme_signals.json:

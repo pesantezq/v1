@@ -48,7 +48,7 @@ def test_shipped_registry_schema_valid():
     # every row has the 7 required fields with in-enum values
     bad = ar.schema_errors(reg)
     assert bad == [], f"schema errors: {bad}"
-    # coverage: all 45 outputs/latest json names cataloged
+    # coverage: all 46 outputs/latest json names cataloged
     expected_latest = {
         "ai_budget_summary", "ai_decision_validation", "alpha_attribution_report",
         "cash_deployment_plan", "confidence_calibration", "correlation_risk_advisor",
