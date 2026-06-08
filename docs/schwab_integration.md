@@ -28,8 +28,9 @@ This is not a trading integration. The following invariants are enforced in code
 - **No trade methods exist anywhere** in `portfolio_automation/brokers/`. The module contains only
   `get_account_numbers()` and `get_accounts()` on `SchwabClient`. An AST test
   (`test_schwab_client.py::test_no_trading_capability_anywhere_in_brokers_package`) scans every
-  `.py` file in the package and fails if any function matching `order|trade|buy|sell|place_*` is
-  found.
+  `.py` file in the package and fails if any function or method whose name matches
+  `place_order`, `submit_order`, `buy`, `sell`, `execute_trade`, `cancel_order`, or any name
+  starting with `order` or `trade` is defined.
 - **`trading_enabled` is hardcoded `false`** in every `broker_sync_status.json` artifact, regardless
   of environment variables.
 - **`read_only_mode: true`** is hardcoded in the status artifact.
@@ -51,9 +52,12 @@ This is not a trading integration. The following invariants are enforced in code
 3. Fill in the app name and description. Choose "Individual Trader API" (not "Aggregator API").
 4. For **Callback URL (Redirect URI)**, enter a localhost redirect such as
    `https://127.0.0.1/callback`. This must match the value you set in `SCHWAB_REDIRECT_URI`.
-5. Under **API Products / Scopes**, select the **read-only** scopes: `openid`, `profile`,
-   `offline_access`, `readonly`. Do **not** request order-placement or trading scopes — they are not
-   needed and would widen the security footprint.
+5. Under **API Products / Scopes**, configure the read-only scopes in the Schwab Developer portal app
+   settings (e.g. `openid`, `profile`, `offline_access`, `readonly`). Scopes are bound to the app in
+   the portal — the authorize URL does **not** pass a `scope` parameter; whether one is required by
+   Schwab should be confirmed on the first live call (see "Confirm Field Names on First Live Call"
+   below). Do **not** request order-placement or trading scopes — they are not needed and would widen
+   the security footprint.
 6. Submit the app. Schwab reviews new apps; approved credentials (Client ID + Client Secret) appear
    in the app dashboard once approved.
 
@@ -61,7 +65,7 @@ This is not a trading integration. The following invariants are enforced in code
 
 Schwab uses an authorization-code flow. After credentials are approved:
 
-1. Set the five environment variables (see below).
+1. Set the three required environment variables (see below).
 2. Run:
    ```bash
    python3 -m portfolio_automation.brokers.schwab_sync --status
@@ -87,7 +91,8 @@ Schwab uses an authorization-code flow. After credentials are approved:
 
 ## Environment Variables
 
-Set these in `.env` (gitignored) or as system environment variables. Never hardcode credentials.
+Three environment variables are required; two are optional. Set them in `.env` (gitignored) or as
+system environment variables. Never hardcode credentials.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -115,10 +120,11 @@ TRADING_ENABLED=false
   gitignored at repo root, so the token file is automatically excluded from commits.
 - **File permissions:** the token file is written with mode `0600` (owner read/write only).
   Confirm this after first save with `ls -la data/schwab_token.json`.
-- **Tokens are never logged.** The `redact()` helper in `broker_models.py` scrubs the patterns
-  `access_token=`, `refresh_token=`, `client_secret=`, `code=`, `id_token=`, and `Authorization=`
-  from any string before it reaches a log statement or an artifact. Tests assert that no raw token
-  value appears in any written artifact.
+- **Tokens are never logged.** The `redact()` helper in `broker_models.py` scrubs both
+  snake_case (`access_token`, `refresh_token`, `client_secret`, `code`, `id_token`, `Authorization`)
+  and camelCase (`accessToken`, `refreshToken`, `clientSecret`, `idToken`) key patterns from any
+  string before it reaches a log statement or an artifact. Tests assert that no raw token value
+  appears in any written artifact.
 - **Account numbers are masked.** Every artifact and log line uses `mask_account()` which renders
   account numbers as `…NNNN` (last 4 characters). Full account numbers never appear in artifacts.
 - **Never commit** `data/schwab_token.json`, `.env`, or any file containing the client secret.
@@ -166,7 +172,7 @@ call fails. Never raises an exception to the caller.
 python3 -m portfolio_automation.brokers.schwab_sync --sync
 ```
 
-### `--reconcile` (requires a prior `--sync` snapshot)
+### `--reconcile` (reconciles from the latest cached snapshot)
 
 Loads the latest snapshot and positions artifacts from `outputs/latest/`, compares them against
 `config.json`, and writes:
@@ -174,15 +180,15 @@ Loads the latest snapshot and positions artifacts from `outputs/latest/`, compar
 - `outputs/latest/portfolio_reconciliation.json`
 - `outputs/latest/portfolio_config_update_proposal.json`
 
-```bash
-python3 -m portfolio_automation.brokers.schwab_sync --reconcile
-```
-
-To sync and reconcile in one step:
+**`--reconcile` alone does NOT trigger a live sync.** Run `--sync` first (or use
+`--sync --reconcile` together) so the cached snapshot is fresh.
 
 ```bash
-python3 -m portfolio_automation.brokers.schwab_sync --sync && \
+# reconcile from the cached snapshot (no network):
 python3 -m portfolio_automation.brokers.schwab_sync --reconcile
+
+# sync then reconcile in one invocation:
+python3 -m portfolio_automation.brokers.schwab_sync --sync --reconcile
 ```
 
 ---

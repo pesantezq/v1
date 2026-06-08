@@ -100,7 +100,9 @@ From a reconciliation, build `proposed_after` = local holdings adjusted toward S
 - Always prints "READ-ONLY MODE ACTIVE — no trading endpoints are called." Prints **no secrets**. Never calls trading endpoints (none exist).
 
 ## 11. Validation rules (proposal)
-No negative shares; no negative cash; target allocations sum-check if targets edited; symbol field required/non-empty; leverage & concentration guardrails respected (reuse `growth_mode.concentration_cap`/`leverage_cap` thresholds) — violations populate `validation.errors` and set `validation.ok=false` (proposal still emitted, flagged not-applyable).
+The proposal validator guards **data sanity only**: no negative shares; no negative cash; symbol field required/non-empty; duplicate symbols rejected; target-weight sum check (if any `target_weight` values are present, they must sum to ~1.0 within ±0.02). Violations populate `validation.errors` and set `validation.ok=false` (proposal still emitted, flagged not-applyable).
+
+**Concentration and leverage caps are NOT enforced here.** Those guardrails are enforced at allocation/decision time by the decision engine and allocation-policy layer — not on a shares-to-broker-reality sync proposal. The sync proposal reflects broker reality; it does not constrain it.
 
 ## 12. Masking & redaction
 `mask_account(num)` → `"…1234"` (last 4) or opaque short hash; applied in every artifact + log. `_redact(text)` scrubs token/secret/code substrings. Tests assert no full account number and no token/secret appears in any artifact or log line.
@@ -116,8 +118,8 @@ No negative shares; no negative cash; target allocations sum-check if targets ed
 3. `broker_models` parses fixture accounts/positions → normalized rows (defensive against missing fields).
 4. reconciliation: matched / quantity_mismatch / missing_in_local / missing_in_schwab / cash_delta.
 5. proposal generation: before/after, reason, validation pass + fail cases.
-6. validation failures: negative shares/cash, missing symbol, cap breach.
-7. **no trading capability**: assert the brokers package exposes no function/method whose name matches `order|trade|buy|sell|place` (AST/attribute scan), and `schwab_client` has no such method.
+6. validation failures: negative shares/cash, missing/duplicate symbol, target-weight sum out of range. (Concentration/leverage cap breaches are NOT tested here — they are not a validator concern; see §11.)
+7. **no trading capability**: assert the brokers package exposes no function/method whose name matches `place_order`, `submit_order`, `buy`, `sell`, `execute_trade`, `cancel_order`, or any name starting with `order`/`trade` (AST/attribute scan).
 8. account masking: no full account id in any artifact.
 9. artifact shapes match §7.
 10. `schwab_sync` never raises on degraded inputs (returns/-writes degraded status).
