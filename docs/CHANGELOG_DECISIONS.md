@@ -69,6 +69,47 @@ Explicitly note:
 
 ---
 
+## Registry Consumer-Debt Burn-Down
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `portfolio_automation/artifact_registry.yaml` — `consumer_status` field added to all 54 rows; `UNATTRIBUTED` sentinel removed; `consumers` relaxed to allow empty list for non-consumed rows.
+- `portfolio_automation/artifact_registry.py` — `CONSUMER_STATUSES` enum; `schema_errors` validates `consumer_status` + consumed-requires-non-empty-consumers invariant; `validate_registry` reports `classified`, `unjustified_debt`, `justified_no_consumer`, `by_consumer_status`, `debt_target_met`; degraded dict carries new fields; `unattributed` key removed.
+- `tests/test_artifact_registry.py` — 12 new tests: consumer_status schema (4), classification coverage (3), debt fields (3), validator immutability (1), proof-wire reference (1).
+- `tests/conftest.py` (new) — session-scoped autouse guard: snapshots `config/signal_registry.yaml`, `config/approved_weight_changes.json`, and `config/history/` before the test session; fails loudly and restores if any test mutates them.
+- `tests/test_registry_apply.py` — `test_no_approval_file_is_inert` made hermetic (uses `tmp_path` registry copy instead of live paths); fixes the live signal_registry.yaml mutation leak.
+- `.claude/commands/daily-tool-analysis.md` — Step 1 field list, Step 2 governance gate, Step 4 Coverage heartbeat updated: `unjustified_debt` / `classified` / `by_consumer_status` / `debt_target_met` replace `unattributed`.
+- `.claude/commands/monthly-tool-analysis.md` — `pattern_efficacy_weekly.json` trend read added.
+
+### Decision
+
+Shipped the registry consumer-debt burn-down: `consumer_status` (consumed / diagnostic_only / archive_only / deprecated_candidate) replaces the opaque `UNATTRIBUTED` sentinel; all 54 rows classified; target 100%/0-unjustified met (`debt_target_met: true`). The validator now reports structured debt fields (observe-only — never moves `overall_status`). Validator-immutability and a conftest protected-file guard fix the `test_no_approval_file_is_inert` live-registry leak. Proof-wired `confidence_calibration.json` (daily-tool-analysis) and `pattern_efficacy_weekly.json` (monthly-tool-analysis) as real named consumers. Consumer distribution: 45 consumed / 8 diagnostic_only / 1 archive_only / 0 deprecated_candidate.
+
+### Why
+
+The `UNATTRIBUTED` sentinel made it impossible to distinguish intentional diagnostic artifacts (no analysis consumer by design) from genuine debt (no consumer, no justification). Without a structured debt metric, producer-without-consumer rot was invisible. The conftest gap allowed `test_no_approval_file_is_inert` to silently mutate `config/signal_registry.yaml` whenever a residual approval file existed on disk.
+
+### Invariants Preserved
+
+No scoring/decision/allocation/recommendation logic changed. `overall_status` is unaffected by debt fields. `observe_only: true` preserved. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+`artifact_registry_status.json` gains `classified`, `unjustified_debt`, `justified_no_consumer`, `by_consumer_status`, `debt_target_met` fields; `unattributed` key removed. Daily heartbeat Coverage line updated. Tests: 12 new in `tests/test_artifact_registry.py`. `tests/conftest.py` now guards the live registry from all test-suite mutations.
+
+**Spec:** `docs/superpowers/specs/2026-06-08-registry-consumer-debt-burndown-design.md`
+**Plan:** `docs/superpowers/plans/2026-06-08-registry-consumer-debt-burndown.md`
+
+---
+
 ## Artifact Registry & Probe Governance Layer
 
 ### Date

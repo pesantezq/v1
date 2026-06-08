@@ -34,3 +34,16 @@ and confidence — they never independently create or override a buy/sell/hold.
 skill reads `artifact_registry_status.json` first and gates confidence by `role`.
 
 Observe-only: mutates only its status artifact; never decision/score/allocation state.
+
+## Consumer status & debt
+Every row carries `consumer_status`: `consumed` (≥1 real consumer; consumers list non-empty),
+`diagnostic_only` (intentional operator/debug read, no analysis consumer), `archive_only`
+(retained for history/retrospective), or `deprecated_candidate` (no consumer, no justification
+— flagged for removal). `consumers` is the factual reader list (empty allowed); the old
+`UNATTRIBUTED` sentinel is gone.
+
+Debt = `deprecated_candidate` rows OR `consumed` rows with empty consumers (invariant
+violation). `diagnostic_only`/`archive_only` are justified, not debt. The validator reports
+`classified`, `unjustified_debt`, `justified_no_consumer`, `by_consumer_status`, and
+`debt_target_met` (target: 100% classified AND zero unjustified). Debt is observe-only — it
+never changes `overall_status`.
