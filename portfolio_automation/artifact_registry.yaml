@@ -1,0 +1,626 @@
+# Artifact governance contract. One row per tracked artifact. Hand-edited on every
+# new artifact. Consumed by portfolio_automation/artifact_registry.py (validator)
+# and daily_run_status.py (required_artifacts). See docs/artifact_registry.md.
+schema_version: 1
+
+# Exact subset + ORDER that daily_run_status emits (was _EXPECTED_ARTIFACTS).
+# Do not reorder without updating the golden-output fixture.
+daily_run_status_tracked:
+  - decision_plan.json
+  - decision_plan.md
+  - system_decision_summary.json
+  - daily_memo.md
+  - daily_memo.txt
+  - news_intelligence.json
+  - risk_delta.json
+  - portfolio_snapshot.json
+  - approved_ranking_config.json
+  - approved_allocation_policy.json
+  - theme_opportunities.json
+
+artifacts:
+
+  # ── Decision core ─────────────────────────────────────────────────────────
+  decision_plan.json:
+    path: outputs/latest/decision_plan.json
+    label: decision plan
+    lens: decision_core
+    role: source_of_truth
+    required: true
+    cadence: daily
+    producer: decision_engine
+    consumers: [daily-tool-analysis, portfolio-memo-reviewer, portfolio-resolver-investigator, portfolio-architect]
+    severity_if_missing: critical
+
+  decision_plan.md:
+    path: outputs/latest/decision_plan.md
+    label: decision plan (md)
+    lens: decision_core
+    role: source_of_truth
+    required: true
+    cadence: daily
+    producer: decision_engine
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: critical
+
+  system_decision_summary.json:
+    path: outputs/latest/system_decision_summary.json
+    label: system decision summary
+    lens: decision_core
+    role: source_of_truth
+    required: true
+    cadence: daily
+    producer: decision_engine
+    consumers: [portfolio-resolver-investigator, portfolio-memo-reviewer]
+    severity_if_missing: critical
+
+  decision_explanations.json:
+    path: outputs/latest/decision_explanations.json
+    label: decision explanations
+    lens: decision_core
+    role: advisor
+    required: false
+    cadence: daily
+    producer: decision_explainer
+    consumers: [today.py]
+    severity_if_missing: info
+
+  decision_triage.json:
+    path: outputs/latest/decision_triage.json
+    label: decision triage
+    lens: decision_core
+    role: advisor
+    required: false
+    cadence: daily
+    producer: decision_triage
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  # ── Risk action ───────────────────────────────────────────────────────────
+  risk_delta.json:
+    path: outputs/latest/risk_delta.json
+    label: risk delta panel
+    lens: risk_action
+    role: advisor
+    required: true
+    cadence: daily
+    producer: risk_delta_advisor
+    consumers: [portfolio-resolver-investigator, daily-tool-analysis, portfolio-memo-reviewer, portfolio-render-reviewer]
+    severity_if_missing: warning
+
+  correlation_risk_advisor.json:
+    path: outputs/latest/correlation_risk_advisor.json
+    label: correlation risk advisor
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: correlation_risk_advisor
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  vol_regime_advisor.json:
+    path: outputs/latest/vol_regime_advisor.json
+    label: vol regime advisor
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: vol_regime_advisor
+    consumers: [portfolio-resolver-investigator]
+    severity_if_missing: info
+
+  earnings_gate.json:
+    path: outputs/latest/earnings_gate.json
+    label: earnings gate
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: earnings_gate
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  exit_advisor.json:
+    path: outputs/latest/exit_advisor.json
+    label: exit advisor
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: exit_advisor
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  cash_deployment_plan.json:
+    path: outputs/latest/cash_deployment_plan.json
+    label: cash deployment plan
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: cash_deployment_plan
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  tax_harvest_advisor.json:
+    path: outputs/latest/tax_harvest_advisor.json
+    label: tax harvest advisor
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: tax_harvest_advisor
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  # ── Quant learning ────────────────────────────────────────────────────────
+  retune_impact.json:
+    path: outputs/latest/retune_impact.json
+    label: retune impact
+    lens: quant_learning
+    role: advisor
+    required: true
+    cadence: daily
+    producer: retune_impact_tracker
+    consumers: [portfolio-resolver-investigator, portfolio-memo-reviewer, portfolio-attribution-analyst, daily-tool-analysis, portfolio-render-reviewer]
+    severity_if_missing: warning
+
+  pattern_efficacy_monthly.json:
+    path: outputs/latest/pattern_efficacy_monthly.json
+    label: pattern efficacy monthly
+    lens: quant_learning
+    role: advisor
+    required: true
+    cadence: monthly
+    producer: pattern_learning
+    consumers: [daily-tool-analysis, monthly-tool-analysis]
+    severity_if_missing: warning
+
+  pattern_efficacy_weekly.json:
+    path: outputs/latest/pattern_efficacy_weekly.json
+    label: pattern efficacy weekly
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: pattern_learning
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  pattern_efficacy_yearly.json:
+    path: outputs/latest/pattern_efficacy_yearly.json
+    label: pattern efficacy yearly
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: yearly
+    producer: pattern_learning
+    consumers: [yearly-tool-analysis]
+    severity_if_missing: info
+
+  gate_retune_suggestions.json:
+    path: outputs/latest/gate_retune_suggestions.json
+    label: gate retune suggestions
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: daily
+    producer: retune_suggestions
+    consumers: [monthly-tool-analysis, portfolio-learning-loop-health, daily-tool-analysis]
+    severity_if_missing: info
+
+  confidence_calibration.json:
+    path: outputs/latest/confidence_calibration.json
+    label: confidence calibration
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: daily
+    producer: confidence_calibration
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  alpha_attribution_report.json:
+    path: outputs/latest/alpha_attribution_report.json
+    label: alpha attribution report
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: daily
+    producer: alpha_attribution_report
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  kelly_sizing_advisor.json:
+    path: outputs/latest/kelly_sizing_advisor.json
+    label: kelly sizing advisor
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: daily
+    producer: kelly_sizing_advisor
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  quant_watch_status.json:
+    path: outputs/latest/quant_watch_status.json
+    label: quant watch status
+    lens: quant_learning
+    role: probe
+    required: true
+    cadence: daily
+    producer: quant_watch_probes
+    consumers: [quant-watch-analysis, daily-tool-analysis]
+    severity_if_missing: warning
+
+  # ── Market discovery ──────────────────────────────────────────────────────
+  theme_signals.json:
+    path: outputs/latest/theme_signals.json
+    label: theme signals
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: theme_engine
+    consumers: [yearly-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+
+  watch_candidates.json:
+    path: outputs/latest/watch_candidates.json
+    label: watch candidates
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: discovery_pulse
+    consumers: [portfolio-discovery-health]
+    severity_if_missing: info
+
+  watchlist_signals.json:
+    path: outputs/latest/watchlist_signals.json
+    label: watchlist signals
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: watchlist_scanner
+    consumers: [portfolio-resolver-investigator]
+    severity_if_missing: info
+
+  top100_daily.json:
+    path: outputs/latest/top100_daily.json
+    label: top100 daily
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: universe_sanitation
+    consumers: [portfolio-learning-loop-health]
+    severity_if_missing: info
+
+  top100_weekly.json:
+    path: outputs/latest/top100_weekly.json
+    label: top100 weekly
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: universe_sanitation
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  top100_monthly.json:
+    path: outputs/latest/top100_monthly.json
+    label: top100 monthly
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: monthly
+    producer: universe_sanitation
+    consumers: [monthly-tool-analysis]
+    severity_if_missing: info
+
+  market_opportunities.json:
+    path: outputs/latest/market_opportunities.json
+    label: market opportunities
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: main
+    consumers: [today.py]
+    severity_if_missing: info
+    notes: producer-unverified
+
+  market_narrative_daily.json:
+    path: outputs/latest/market_narrative_daily.json
+    label: market narrative daily
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: daily
+    producer: market_narratives
+    consumers: [today.py]
+    severity_if_missing: info
+
+  market_narrative_weekly.json:
+    path: outputs/latest/market_narrative_weekly.json
+    label: market narrative weekly
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: weekly
+    producer: market_narratives
+    consumers: [today.py]
+    severity_if_missing: info
+
+  market_narrative_monthly.json:
+    path: outputs/latest/market_narrative_monthly.json
+    label: market narrative monthly
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: monthly
+    producer: market_narratives
+    consumers: [today.py]
+    severity_if_missing: info
+
+  news_intelligence.json:
+    path: outputs/latest/news_intelligence.json
+    label: news intelligence
+    lens: market_discovery
+    role: advisor
+    required: true
+    cadence: daily
+    producer: run_news_intelligence
+    consumers: [portfolio-resolver-investigator]
+    severity_if_missing: warning
+
+  news_evidence_layer.json:
+    path: outputs/latest/news_evidence_layer.json
+    label: news evidence layer
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: news_evidence_layer
+    consumers: [today.py]
+    severity_if_missing: info
+
+  scraped_intel_comparison.json:
+    path: outputs/latest/scraped_intel_comparison.json
+    label: scraped intel comparison
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: discovery_pulse
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  scraped_intel_run_summary.json:
+    path: outputs/latest/scraped_intel_run_summary.json
+    label: scraped intel run summary
+    lens: market_discovery
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: discovery_pulse
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  discovery_pulse_status.json:
+    path: outputs/latest/discovery_pulse_status.json
+    label: discovery pulse status
+    lens: market_discovery
+    role: telemetry
+    required: true
+    cadence: daily
+    producer: discovery_pulse
+    consumers: [yearly-tool-analysis, monthly-tool-analysis, daily-tool-analysis]
+    severity_if_missing: warning
+
+  # ── Developer telemetry ───────────────────────────────────────────────────
+  daily_run_status.json:
+    path: outputs/latest/daily_run_status.json
+    label: daily run status
+    lens: developer
+    role: telemetry
+    required: true
+    cadence: daily
+    producer: daily_run_status
+    consumers: [portfolio-resolver-investigator, daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: warning
+
+  pipeline_run_status.json:
+    path: outputs/latest/pipeline_run_status.json
+    label: pipeline run status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: run_status
+    consumers: [today.py]
+    severity_if_missing: info
+
+  fmp_budget_status.json:
+    path: outputs/latest/fmp_budget_status.json
+    label: fmp budget status
+    lens: developer
+    role: telemetry
+    required: true
+    cadence: daily
+    producer: fmp_budget_telemetry
+    consumers: [daily-tool-analysis, portfolio-render-reviewer, portfolio-resolver-investigator, portfolio-memo-reviewer]
+    severity_if_missing: warning
+
+  ai_budget_summary.json:
+    path: outputs/latest/ai_budget_summary.json
+    label: ai budget summary
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: ai_budget
+    consumers: [monthly-tool-analysis, daily-tool-analysis]
+    severity_if_missing: info
+
+  decisions_due_for_resolution.json:
+    path: outputs/latest/decisions_due_for_resolution.json
+    label: decisions due for resolution
+    lens: developer
+    role: probe
+    required: false
+    cadence: daily
+    producer: resolution_due_probe
+    consumers: [portfolio-resolver-investigator, daily-tool-analysis]
+    severity_if_missing: info
+
+  historical_backfill_status.json:
+    path: outputs/latest/historical_backfill_status.json
+    label: historical backfill status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: weekend
+    producer: historical_backfill
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+
+  memo_delivery_status.json:
+    path: outputs/latest/memo_delivery_status.json
+    label: memo delivery status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: memo_email_sender
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  data_quality_report.json:
+    path: outputs/latest/data_quality_report.json
+    label: data quality report
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: data_quality_monitor
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  theme_engine_llm_metadata.json:
+    path: outputs/latest/theme_engine_llm_metadata.json
+    label: theme engine llm metadata
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: theme_engine
+    consumers: [portfolio-discovery-health]
+    severity_if_missing: info
+
+  ai_decision_validation.json:
+    path: outputs/latest/ai_decision_validation.json
+    label: ai decision validation
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: ai_decision_validator
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+
+  # ── Meta governance ───────────────────────────────────────────────────────
+  doc_audit_status.json:
+    path: outputs/latest/doc_audit_status.json
+    label: doc audit status
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: doc_audit
+    consumers: [monthly-tool-analysis, daily-tool-analysis, portfolio-doc-auditor]
+    severity_if_missing: info
+
+  artifact_registry_status.json:
+    path: outputs/latest/artifact_registry_status.json
+    label: artifact registry status
+    lens: meta_governance
+    role: telemetry
+    required: true
+    cadence: daily
+    producer: artifact_registry
+    consumers: [daily-tool-analysis]
+    severity_if_missing: warning
+
+  # ── Extra tracked (non-outputs/latest) ────────────────────────────────────
+  daily_memo.md:
+    path: outputs/latest/daily_memo.md
+    label: daily memo (md)
+    lens: decision_core
+    role: narrative
+    required: true
+    cadence: daily
+    producer: daily_memo
+    consumers: [daily-tool-analysis, monthly-tool-analysis, portfolio-memo-reviewer, portfolio-learning-loop-health, portfolio-render-reviewer]
+    severity_if_missing: warning
+
+  daily_memo.txt:
+    path: outputs/latest/daily_memo.txt
+    label: daily memo (txt)
+    lens: decision_core
+    role: narrative
+    required: true
+    cadence: daily
+    producer: daily_memo
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: warning
+
+  portfolio_snapshot.json:
+    path: outputs/portfolio/portfolio_snapshot.json
+    label: portfolio snapshot
+    lens: risk_action
+    role: advisor
+    required: true
+    cadence: daily
+    producer: portfolio_snapshot
+    consumers: [yearly-tool-analysis, portfolio-render-reviewer, portfolio-test-reviewer, portfolio-resolver-investigator, portfolio-memo-reviewer]
+    severity_if_missing: warning
+    notes: producer-unverified
+
+  approved_ranking_config.json:
+    path: outputs/performance/approved_ranking_config.json
+    label: approved ranking config
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: allocation_policy_activation
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+    notes: producer-unverified
+
+  approved_allocation_policy.json:
+    path: outputs/performance/approved_allocation_policy.json
+    label: approved allocation policy
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: allocation_policy_activation
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
+    notes: producer-unverified
+
+  theme_opportunities.json:
+    path: outputs/latest/theme_opportunities.json
+    label: theme opportunities
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: theme_engine
+    consumers: [UNATTRIBUTED]
+    severity_if_missing: info
