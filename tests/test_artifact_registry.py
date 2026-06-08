@@ -1,4 +1,6 @@
 """Tests for portfolio_automation/artifact_registry.py (Tasks 1 & 2)."""
+import json as _json
+import os
 from pathlib import Path
 
 from portfolio_automation import artifact_registry as ar
@@ -110,8 +112,6 @@ def test_shipped_registry_schema_valid():
 # Task 5: validate_registry — classification + severity rollup
 # ---------------------------------------------------------------------------
 
-import json as _json
-
 
 def _mini_registry():
     return {"schema_version": 1, "daily_run_status_tracked": [],
@@ -160,7 +160,6 @@ def test_validate_amber_when_warning_stale(tmp_path):
     _write(tmp_path / "outputs/latest/sot.json", {"x": 1})
     pf = tmp_path / "outputs/latest/probe.json"
     _write(pf, {"x": 1})
-    import os
     old = (ar.datetime.now(ar.timezone.utc).timestamp()) - 60 * 3600  # 60h old
     os.utime(pf, (old, old))
     now = ar.datetime.now(ar.timezone.utc)
@@ -180,6 +179,7 @@ def test_validate_invalid_json_listed(tmp_path):
     now = ar.datetime.now(ar.timezone.utc)
     st = ar.validate_registry(reg, tmp_path, now)
     assert "probe.json" in st["invalid_json"]
+    assert st["overall_status"] == "green"  # severity_if_missing=info → no status escalation
 
 
 def test_validate_flags_schema_invalid_row(tmp_path):
@@ -213,4 +213,4 @@ def test_run_degrades_on_bad_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(ar, "load_registry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     st = ar.run_artifact_registry(root=tmp_path, write_files=False)
     assert st["observe_only"] is True
-    assert st["overall_status"] == "green"  # degraded-but-valid
+    assert st["overall_status"] == "amber"

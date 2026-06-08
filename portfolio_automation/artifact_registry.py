@@ -99,11 +99,16 @@ def _row_schema_ok(row: dict) -> bool:
             and isinstance(row.get("consumers"), list) and bool(row.get("consumers")))
 
 
-def validate_registry(registry: dict, artifacts_root, now) -> dict:
-    """Classify every cataloged artifact and roll up to an observe-only status dict."""
+def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime) -> dict:
+    """Classify every cataloged artifact and roll up to an observe-only status dict.
+
+    now must be timezone-aware (UTC).
+    """
     root = Path(artifacts_root)
-    arts = registry.get("artifacts", {})
-    rows = []
+    arts = registry.get("artifacts") or {}
+    if not isinstance(arts, dict):
+        arts = {}
+    present = 0
     missing, stale, invalid_json, unattributed, schema_invalid = [], [], [], [], []
     sev_counts: dict[str, int] = {"critical": 0, "warning": 0, "info": 0}
     by_lens: dict[str, dict] = {}
@@ -126,14 +131,16 @@ def validate_registry(registry: dict, artifacts_root, now) -> dict:
         is_stale_flag = False
         is_bad_json = False
         if exists:
+            age_h = None
             try:
                 age_h = (now.timestamp() - path.stat().st_mtime) / 3600.0
+            except OSError:
+                age_h = None
+            if age_h is not None:
                 is_stale_flag = is_stale(row, age_h)
                 if is_stale_flag:
                     stale.append({"artifact": key, "cadence": row["cadence"],
                                   "age_hours": round(age_h, 1)})
-            except Exception:
-                pass
             if str(path).endswith(".json"):
                 try:
                     json.loads(path.read_text(encoding="utf-8"))
@@ -149,7 +156,7 @@ def validate_registry(registry: dict, artifacts_root, now) -> dict:
             sev_counts[sev] = sev_counts.get(sev, 0) + 1
         else:
             lens_bucket["present"] += 1
-        rows.append((key, sev, problem))
+            present += 1
 
     if sev_counts["critical"] > 0:
         overall = RED
@@ -157,8 +164,6 @@ def validate_registry(registry: dict, artifacts_root, now) -> dict:
         overall = AMBER
     else:
         overall = GREEN
-
-    present = sum(1 for _, _, prob in rows if not prob)
     msg_bits = []
     if missing:
         msg_bits.append(f"{len(missing)} missing")
@@ -235,7 +240,7 @@ def run_artifact_registry(*, root: str | Path = ".", now=None,
     except Exception as exc:
         return {"generated_at": ts.isoformat(), "observe_only": True,
                 "schema_version": "1", "source": "artifact_registry",
-                "overall_status": GREEN, "counts": {}, "missing": [], "stale": [],
+                "overall_status": AMBER, "counts": {}, "missing": [], "stale": [],
                 "invalid_json": [], "unattributed": [], "schema_invalid": [],
                 "severity": {"critical": 0, "warning": 0, "info": 0}, "by_lens": {},
                 "operator_message": f"degraded: {exc}",
