@@ -69,6 +69,50 @@ Explicitly note:
 
 ---
 
+## Artifact Registry & Probe Governance Layer
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `portfolio_automation/artifact_registry.yaml` (new) — declarative YAML contract for ~52 artifacts; one row per artifact with `lens`, `role`, `required`, `cadence`, `producer`, `consumers`, `severity_if_missing`.
+- `portfolio_automation/artifact_registry.py` (new) — `load_registry()`, `schema_errors()`, `required_artifacts()`, `max_age_hours()`, `is_stale()`, `validate_registry()`, `run_artifact_registry()` (never raises; writes `outputs/latest/artifact_registry_status.json`).
+- `portfolio_automation/daily_run_status.py` — `_EXPECTED_ARTIFACTS` replaced by `_expected_artifacts()` registry feed + `_FALLBACK_EXPECTED_ARTIFACTS` built-in copy; no schema break (golden-output guard in tests).
+- `.claude/commands/daily-tool-analysis.md` — `artifact_registry_status.json` read first in Step 1; governance confidence-gate in Step 2 (source_of_truth missing/stale → cap at AMBER); coverage heartbeat in Step 4 (always first item).
+- `tests/test_artifact_registry.py` (new) — 15 tests covering loader, schema, required-equivalence, cadence-staleness, validator (red/amber/green/invalid/schema_invalid), orchestrator, degraded, golden.
+- `tests/fixtures/daily_run_status_golden.json` (new) — 11-row captured pre-invert payload for equivalence guard.
+
+### Decision
+
+Shipped the artifact registry & probe governance layer: a declarative YAML contract describes every tracked artifact; a cadence-aware validator (`run_artifact_registry`) classifies the live corpus and writes `outputs/latest/artifact_registry_status.json`; `daily_run_status` is inverted to read `required_artifacts()` from the registry instead of a hardcoded list; the observe-only invariant is codified via the `role` field (`source_of_truth` = official action, `advisor`/`probe`/`telemetry`/`narrative` = confidence/explanation only); `daily-tool-analysis` gates confidence by governance (source_of_truth missing/stale → AMBER cap).
+
+### Why
+
+~52 `outputs/latest` artifacts had no single governed description: no machine-readable ownership, no cadence-aware staleness, no consumer attribution, no schema enforcement. The hardcoded `_EXPECTED_ARTIFACTS` list in `daily_run_status.py` was a standalone manual copy with no link to the rest of the corpus. The registry unifies all of this into one contract and one validator, making producer-without-consumer gaps visible and staleness classification correct for weekly/monthly artifacts.
+
+### Invariants Preserved
+
+No scoring/decision/allocation/recommendation logic changed. No `decision_engine.py` change. `daily_run_status` output schema is byte-identical (golden-output test enforces this). `observe_only: true` hardcoded in the status artifact. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+New artifact `outputs/latest/artifact_registry_status.json` (observe-only; `meta_governance` lens). `daily-tool-analysis` reads it first and gates confidence. No GUI/memo wording change. Tests: `tests/test_artifact_registry.py` (15).
+
+### Artifact Health Severity
+
+New artifact `artifact_registry_status.json` is `required: true`, `cadence: daily`, `severity_if_missing: warning`. Self-describing: its own `overall_status` rolls up critical/warning/info across the whole corpus. Producer: `artifact_registry`. Consumer: `daily-tool-analysis`.
+
+**Spec:** `docs/superpowers/specs/2026-06-08-artifact-registry-governance-design.md`
+**Plan:** `docs/superpowers/plans/2026-06-08-artifact-registry-governance.md`
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date
