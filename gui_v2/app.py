@@ -115,6 +115,40 @@ def _risk_severity(status: str | None) -> str:
 templates.env.filters["risk_severity"] = _risk_severity
 
 
+# Mapping of raw snake_case enum values to human-readable labels (M3 fix).
+_STATUS_LABEL_MAP: dict[str, str] = {
+    "near_cap": "Near cap",
+    "ok_with_warnings": "OK · warnings",
+    "coverage_gap": "Coverage gap",
+    "unconfigured": "Unconfigured",
+    "exhausted": "Exhausted",
+    "not_configured": "Not configured",
+    "ok": "OK",
+    "failed": "Failed",
+    "partial": "Partial",
+    "degraded": "Degraded",
+    "unknown": "Unknown",
+}
+
+
+def _status_label(value: str | None) -> str:
+    """Convert a raw snake_case enum string to a human-readable label.
+
+    Known enums are mapped explicitly; unknown values are title-cased with
+    underscores replaced by spaces so they stay readable.
+    """
+    if not value:
+        return ""
+    mapped = _STATUS_LABEL_MAP.get(str(value).strip().lower())
+    if mapped is not None:
+        return mapped
+    # Fallback: title-case, replace underscores
+    return str(value).replace("_", " ").title()
+
+
+templates.env.filters["status_label"] = _status_label
+
+
 def _overall_severity_for_nav() -> str:
     """Compute overall severity for the nav badge. Best-effort; never raises."""
     try:

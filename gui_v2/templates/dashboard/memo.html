@@ -58,29 +58,28 @@
              class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
       <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">{{ section.title }}</h2>
       <div class="space-y-1">
-        {% for line in section.lines %}
+        {% for idx in range(section.lines | length) %}
+        {% set line = section.lines[idx] %}
+        {% set rendered = section.rendered_lines[idx] %}
         {# Skip the title line (# Daily Investment Memo…) and horizontal rules #}
         {% if not line.startswith('# ') and line != '---' %}
         {% if line.startswith('>') %}
-        {# Blockquote — verdict / insight callout #}
+        {# Blockquote — verdict / insight callout; rendered_lines strips the > #}
         <blockquote class="border-l-2 border-emerald-500/50 pl-3 text-sm text-zinc-300 italic">
-          {{ line[1:].strip() }}
+          {{ rendered[1:] | safe }}
         </blockquote>
-        {% elif line.startswith('- **') or line.startswith('* **') %}
-        {# Bold-prefixed list item (e.g. decision lines) #}
-        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ line[2:] }}</div>
         {% elif line.startswith('  - ') or line.startswith('  * ') %}
-        {# Indented sub-list item #}
-        <div class="text-xs text-zinc-400 leading-relaxed pl-4">{{ line.strip()[2:] }}</div>
+        {# Indented sub-list item — rendered_lines has HTML-escaped + bold/code #}
+        <div class="text-xs text-zinc-400 leading-relaxed pl-4">{{ rendered | safe }}</div>
         {% elif line.startswith('- ') or line.startswith('* ') %}
-        {# Regular list item #}
-        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ line[2:] }}</div>
+        {# List item (bold-prefixed or plain) #}
+        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ rendered | safe }}</div>
         {% elif line.startswith('**') and line.endswith('**') %}
-        {# Bold standalone label #}
+        {# Bold standalone label — strip outer ** for heading style #}
         <div class="text-sm font-semibold text-zinc-200 mt-1">{{ line[2:-2] }}</div>
         {% elif line.strip() %}
-        {# Plain text #}
-        <div class="text-sm text-zinc-300 leading-relaxed">{{ line }}</div>
+        {# Plain text / inline-md — rendered_lines has HTML-escaped + bold/code #}
+        <div class="text-sm text-zinc-300 leading-relaxed">{{ rendered | safe }}</div>
         {% endif %}
         {% endif %}
         {% endfor %}

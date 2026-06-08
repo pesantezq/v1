@@ -41,15 +41,15 @@
         <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
         {# Severity badge #}
         {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ (c.label or c.status) | status_label }}</span>
         {% endif %}
       </div>
       {% if c.summary %}

@@ -21,6 +21,52 @@ from gui_v2.data.risk_impact import collect_risk_impact_view as _risk_data
 
 
 # ---------------------------------------------------------------------------
+# Holdings from real snapshot keys (H1 fix)
+# ---------------------------------------------------------------------------
+
+def _holdings_from_real_snapshot(root: Path) -> list[dict[str, Any]]:
+    """
+    Build holdings rows directly from outputs/portfolio/portfolio_snapshot.json
+    using the real producer keys (ticker/suggested_allocation/conviction_score/
+    conviction_band/normalized_allocation/sector).
+
+    Each row: {symbol, suggested_allocation_pct, normalized_allocation_pct,
+               conviction, band, sector}.
+
+    Returns [] on any error or absent snapshot.
+    """
+    snap_path = Path(root) / "outputs" / "portfolio" / "portfolio_snapshot.json"
+    snap = _read_json(snap_path)
+    if not isinstance(snap, dict):
+        return []
+    rows_raw = snap.get("rows") or []
+    if not isinstance(rows_raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows_raw:
+        if not isinstance(row, dict):
+            continue
+        ticker = row.get("ticker")
+        if not ticker:
+            continue
+        suggested = row.get("suggested_allocation")
+        normalized = row.get("normalized_allocation")
+        out.append({
+            "symbol": ticker,
+            "suggested_allocation_pct": (
+                round(float(suggested) * 100, 1) if suggested is not None else None
+            ),
+            "normalized_allocation_pct": (
+                round(float(normalized) * 100, 1) if normalized is not None else None
+            ),
+            "conviction": row.get("conviction_score"),
+            "band": row.get("conviction_band"),
+            "sector": row.get("sector"),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -151,13 +197,20 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         total = (dp.get("total_decisions") or len((dp.get("decisions") or [])))
         ctx = dp.get("portfolio_context") or {}
         run_mode = dp.get("run_mode") or "unknown"
+        # cash may be under "cash_available" or "cash"
+        _cash_val = None
+        if isinstance(ctx, dict):
+            _cash_val = ctx.get("cash_available") or ctx.get("cash")
+        _cash_str = (
+            f"Cash available: ${float(_cash_val):,.2f}" if _cash_val is not None else ""
+        )
         cards.append(card(
             "Decision Queue",
             status="ok",
             label=f"{total} advisory actions",
             summary=(
                 f"{total} advisory actions (mode: {run_mode}). "
-                + (f"Cash available: {ctx.get('cash_available')}" if isinstance(ctx, dict) and ctx.get("cash_available") else "")
+                + _cash_str
             ),
             source_artifacts=["decision_plan.json"],
             updated_at=dp.get("generated_at"),
@@ -255,7 +308,7 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     cap_parts: list[str] = []
     if cash:
         cap_parts.append(
-            f"Cash available: {cash_avail}" if cash_avail is not None
+            f"Cash available: ${float(cash_avail):,.2f}" if cash_avail is not None
             else f"Deployed: ${cash_deployed:,.0f}"
         )
     if tax:
@@ -339,17 +392,19 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     ))
 
     # ------------------------------------------------------------------
-    # Reuse existing portfolio data source for holdings + watchlist rows
+    # Holdings: built directly from the real snapshot keys (H1 fix)
+    # Watchlist / recent_signals from existing portfolio collector
     # ------------------------------------------------------------------
     portfolio_data = _portfolio_data(root)
+    holdings = _holdings_from_real_snapshot(root)
 
     return {
         "cards": cards,
         "persona": "portfolio",
         # Decision rows for the decision_card component (decision-core only)
         "decisions": decisions,
-        # Holdings / watchlist from existing portfolio collector
-        "holdings": portfolio_data.get("holdings") or [],
+        # Holdings from real snapshot keys (H1 fix — not from legacy portfolio.py)
+        "holdings": holdings,
         "allocation": portfolio_data.get("allocation") or {},
         "watchlist": portfolio_data.get("watchlist") or [],
         "recent_signals": portfolio_data.get("recent_signals") or [],

@@ -20,6 +20,7 @@ Decision lines from the memo pipeline are rendered as-is (text only).
 """
 from __future__ import annotations
 
+import html as _html_mod
 import re
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,11 @@ from gui_v2.data.shared import _read_json  # noqa: F401 (imported for symmetry; 
 # Regex: exactly 16 hex characters as a standalone token (fingerprint hashes).
 # Strips tokens like ``f60e0b9d51bec808`` so the mobile memo stays clean.
 _HEX_HASH_RE = re.compile(r"\b[0-9a-f]{16}\b", re.IGNORECASE)
+
+# Inline-markdown conversion patterns (M2 fix).
+# Applied AFTER HTML-escaping so markup delimiters are safe.
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_CODE_RE = re.compile(r"`([^`]+)`")
 
 # Mapping from normalised header text → section key
 # Matching is case-insensitive, substring-based.
@@ -78,6 +84,24 @@ _SECTION_ORDER: list[str] = [
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _render_inline_md(text: str) -> str:
+    """
+    Convert a single line of memo text to safe HTML (M2 fix).
+
+    Steps:
+    1. HTML-escape the entire string (prevents XSS).
+    2. Convert ``**x**`` → ``<strong>x</strong>`` (bold).
+    3. Convert `` `x` `` → ``<code>x</code>`` (inline code).
+
+    The result is marked safe for template rendering via ``| safe``.
+    """
+    escaped = _html_mod.escape(text)
+    escaped = _BOLD_RE.sub(r"<strong>\1</strong>", escaped)
+    escaped = _CODE_RE.sub(r"<code>\1</code>", escaped)
+    return escaped
+
 
 def _map_header(header_text: str) -> str | None:
     """Return the section key for a ``##`` header, or None to skip it."""
@@ -192,11 +216,17 @@ def collect_memo_view(root: Path) -> dict[str, Any]:
     # ---------- parse sections ----------
     parsed = _parse_memo(raw)
 
-    # Build ordered sections list; include every named section even if empty
+    # Build ordered sections list; include every named section even if empty.
+    # Each section gets both raw `lines` (for template prefix-based branching)
+    # and `rendered_lines` (HTML-escaped + inline-md converted, safe to | safe).
     sections: list[dict[str, Any]] = []
     for title in _SECTION_ORDER:
         lines = parsed.get(title, [])
-        sections.append({"title": title, "lines": lines})
+        sections.append({
+            "title": title,
+            "lines": lines,
+            "rendered_lines": [_render_inline_md(ln) for ln in lines],
+        })
 
     return {
         "sections": sections,

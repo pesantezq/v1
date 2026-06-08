@@ -56,4 +56,4 @@ def collect_today_view(root: Path) -> dict:
         source_artifacts=["risk_delta.json"],
     ))
 
-    return {"cards": cards, "persona": "today"}
+    return {"cards": cards, "persona": "today", "observe_only": True}

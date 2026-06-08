@@ -34,15 +34,15 @@
         <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
         {# Severity badge #}
         {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ (c.label or c.status) | status_label }}</span>
         {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ (c.label or c.status) | status_label }}</span>
         {% endif %}
       </div>
       {% if c.summary %}
@@ -105,12 +105,10 @@
         <thead>
           <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
             <th class="py-2 pr-4">Symbol</th>
-            <th class="py-2 pr-4 text-right">Shares</th>
-            <th class="py-2 pr-4 text-right">Price</th>
-            <th class="py-2 pr-4 text-right">Value</th>
-            <th class="py-2 pr-4 text-right">Alloc %</th>
-            <th class="py-2 pr-4 text-right">Target %</th>
-            <th class="py-2 pr-4 text-right">Drift %</th>
+            <th class="py-2 pr-4 text-right">Suggested %</th>
+            <th class="py-2 pr-4 text-right">Normalized %</th>
+            <th class="py-2 pr-4 text-right">Conviction</th>
+            <th class="py-2 pr-4">Band</th>
             <th class="py-2">Sector</th>
           </tr>
         </thead>
@@ -118,23 +116,16 @@
           {% for h in holdings %}
           <tr class="hover:bg-zinc-900/50">
             <td class="py-2 pr-4 font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</td>
-            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">{{ h.shares if h.shares is not none else "—" }}</td>
             <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.price is not none %}${{ "%.2f" | format(h.price | float) }}{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.value is not none %}${{ "{:,.0f}".format(h.value | float) }}{% else %}—{% endif %}
+              {% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}
             </td>
             <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.alloc_pct is not none %}{{ "%.1f" | format(h.alloc_pct | float) }}%{% else %}—{% endif %}
+              {% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}
             </td>
             <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.target_alloc_pct is not none %}{{ "%.1f" | format(h.target_alloc_pct | float) }}%{% else %}—{% endif %}
+              {% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}
             </td>
-            <td class="py-2 pr-4 text-right font-mono
-              {% if h.drift_pct is not none and h.drift_pct | float | abs >= 0.1 %}text-amber-300{% else %}text-zinc-300{% endif %}">
-              {% if h.drift_pct is not none %}{{ "%.1f" | format(h.drift_pct | float) }}%{% else %}—{% endif %}
-            </td>
+            <td class="py-2 pr-4 text-xs text-zinc-400">{{ h.band or "—" }}</td>
             <td class="py-2 text-zinc-400 text-xs">{{ h.sector or "—" }}</td>
           </tr>
           {% endfor %}
@@ -153,25 +144,21 @@
           {% endif %}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
-          <div class="text-zinc-500">Shares</div>
-          <div class="text-zinc-300 font-mono text-right">{{ h.shares if h.shares is not none else "—" }}</div>
-          <div class="text-zinc-500">Price</div>
+          <div class="text-zinc-500">Suggested %</div>
           <div class="text-zinc-300 font-mono text-right">
-            {% if h.price is not none %}${{ "%.2f" | format(h.price | float) }}{% else %}—{% endif %}
+            {% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}
           </div>
-          <div class="text-zinc-500">Value</div>
+          <div class="text-zinc-500">Normalized %</div>
           <div class="text-zinc-300 font-mono text-right">
-            {% if h.value is not none %}${{ "{:,.0f}".format(h.value | float) }}{% else %}—{% endif %}
+            {% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}
           </div>
-          <div class="text-zinc-500">Alloc</div>
+          <div class="text-zinc-500">Conviction</div>
           <div class="text-zinc-300 font-mono text-right">
-            {% if h.alloc_pct is not none %}{{ "%.1f" | format(h.alloc_pct | float) }}%{% else %}—{% endif %}
+            {% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}
           </div>
-          {% if h.drift_pct is not none %}
-          <div class="text-zinc-500">Drift</div>
-          <div class="font-mono text-right {% if h.drift_pct | float | abs >= 0.1 %}text-amber-300{% else %}text-zinc-300{% endif %}">
-            {{ "%.1f" | format(h.drift_pct | float) }}%
-          </div>
+          {% if h.band %}
+          <div class="text-zinc-500">Band</div>
+          <div class="text-zinc-400 text-right">{{ h.band }}</div>
           {% endif %}
         </div>
       </div>
