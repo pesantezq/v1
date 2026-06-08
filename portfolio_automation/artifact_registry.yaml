@@ -77,7 +77,7 @@ artifacts:
     required: false
     cadence: daily
     producer: decision_triage
-    consumers: [portfolio-attribution-analyst]
+    consumers: [decision_performance_attribution]
     severity_if_missing: info
     consumer_status: consumed
 
@@ -199,9 +199,9 @@ artifacts:
     required: false
     cadence: weekly
     producer: pattern_learning
-    consumers: [monthly-tool-analysis]
+    consumers: []
     severity_if_missing: info
-    consumer_status: consumed
+    consumer_status: diagnostic_only
 
   pattern_efficacy_yearly.json:
     path: outputs/latest/pattern_efficacy_yearly.json
