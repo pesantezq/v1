@@ -497,10 +497,15 @@ def _eval_prior_gauge(probe, retune, efficacy, current_fp, now_iso) -> dict:
         return _resolved(probe, "sample_collapsed", "resolved_1d == 0", now_iso)
     cur_hr = cur.get("hit_rate_1d")
     pre_hr = _pre_tracker_entry(retune).get("hit_rate_1d")
-    # escalate BEFORE resolve — a worsening probe must not silently resolve
+    # escalate BEFORE resolve — a worsening probe must not silently resolve.
+    # Downside-only gate: this probe tracks UNDERperformance, so it escalates only
+    # when current-fp drops >= PRETRACKER_RED_GATE_PP BELOW pre_tracker. Recovery to
+    # OUTperformance is resolution (handled below), not escalation — a symmetric
+    # abs() gate would wrongly escalate a recovered probe. (The detector's creation
+    # guard above stays abs() — don't even create a probe daily RED owns, either way.)
     if cur_hr is not None and pre_hr is not None:
         delta_pre = round((cur_hr - pre_hr) * 100, 1)
-        if abs(delta_pre) >= PRETRACKER_RED_GATE_PP and resolved >= MIN_RESOLVED_1D:
+        if delta_pre <= -PRETRACKER_RED_GATE_PP and resolved >= MIN_RESOLVED_1D:
             return _escalated(
                 probe, f"crossed daily RED gate: {delta_pre:+.1f}pp vs pre_tracker "
                        f"at n={resolved}", now_iso)
