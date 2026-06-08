@@ -186,7 +186,7 @@ def detect_prior_gauge_underperformance(
     }
 
 
-def _eval_prior_gauge(probe, retune, efficacy, current_fp, now_iso) -> dict:
+def _eval_prior_gauge(probe: dict, retune: dict, efficacy: dict | None, current_fp: str | None, now_iso: str) -> dict:
     scope = probe.get("scope_key")
     if current_fp and scope != current_fp:
         return _resolved(probe, "scope_changed", f"current fp now {str(current_fp)[:8]}", now_iso)
@@ -252,7 +252,7 @@ def detect_negative_mean_return_persistence(
     }
 
 
-def _eval_neg_return(probe, retune, efficacy, current_fp, now_iso) -> dict:
+def _eval_neg_return(probe: dict, retune: dict, efficacy: dict | None, current_fp: str | None, now_iso: str) -> dict:
     scope = probe.get("scope_key")
     if current_fp and scope != current_fp:
         return _resolved(probe, "scope_changed", f"current fp now {str(current_fp)[:8]}", now_iso)
@@ -266,7 +266,10 @@ def _eval_neg_return(probe, retune, efficacy, current_fp, now_iso) -> dict:
     if _age_days(probe.get("created_at"), now_iso) >= MAX_PROBE_AGE_DAYS:
         return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
     mean_ret = cur.get("mean_return_1d")
-    if mean_ret is not None and mean_ret >= 0:
+    if mean_ret is None:
+        return _active(probe, "mean_return_1d absent (degraded artifact)", now_iso,
+                       {"run": now_iso[:10], "mean_return_1d": None})
+    if mean_ret >= 0:
         return _resolved(probe, "recovered", f"mean_return_1d {mean_ret:.2f} >= 0", now_iso)
     return _active(probe, f"mean_return_1d {mean_ret:.2f}", now_iso,
                    {"run": now_iso[:10], "mean_return_1d": mean_ret})
@@ -303,12 +306,13 @@ def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str) -> list[d
     return probes
 
 
-def _eval_sector_drag(probe, retune, efficacy, current_fp, now_iso) -> dict:
+def _eval_sector_drag(probe: dict, retune: dict, efficacy: dict | None, current_fp: str | None, now_iso: str) -> dict:
     sector = probe.get("scope_key")
     by_tag = (efficacy or {}).get("by_tag") or {}
     row = by_tag.get(f"sector:{sector}")
     if not isinstance(row, dict):
-        return _resolved(probe, "recovered", "sector tag absent", now_iso)
+        return _resolved(probe, "scope_changed", "sector tag absent", now_iso)
+    # n_samples is intentionally NOT rechecked post-creation; 'significance' (Wilson-CI classification) is the sole resolution signal.
     if row.get("significance") != "loser":
         return _resolved(probe, "recovered",
                          f"sector no longer loser (now {row.get('significance')})", now_iso)

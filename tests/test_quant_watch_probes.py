@@ -248,3 +248,54 @@ def test_d3_eval_stays_active_when_still_loser():
     t = qwp._eval_sector_drag(probe, None, _efficacy_fixture(), "d95e",
                               "2026-06-09T09:00:00+00:00")
     assert t["status"] == "active"
+
+
+def test_d1_eval_does_not_escalate_on_outperformance_vs_pretracker():
+    # cur=0.55 vs pre_hr=0.40 → delta_pre +15pp (outperformance); must NOT escalate
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    t = qwp._eval_prior_gauge(probe, _retune_fixture(cur_hr=0.55, pre_hr=0.40),
+                              None, "d95e", "2026-06-20T09:00:00+00:00")
+    assert t["status"] != "escalated"
+
+
+def test_d2_eval_resolves_on_scope_change():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    t = qwp._eval_neg_return(probe, _retune_fixture(current_fp="NEWFP"),
+                             None, "NEWFP", "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "scope_changed"
+
+
+def test_d2_eval_active_when_mean_return_absent():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    # artifact regenerated with mean_return_1d missing → stay active, no crash
+    fix = _retune_fixture()
+    fix["outcome_attribution"]["by_fingerprint"]["d95e"]["mean_return_1d"] = None
+    t = qwp._eval_neg_return(probe, fix, None, "d95e", "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "active"
+
+
+def test_d2_eval_ttl_expires():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    # 100 days later, still negative → TTL (60d) expires it
+    t = qwp._eval_neg_return(probe, _retune_fixture(mean_ret=-1.0), None, "d95e",
+                             "2026-09-16T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "ttl_expired"
+
+
+def test_d3_eval_ttl_expires():
+    probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
+    # 100 days later, still loser → TTL expires
+    t = qwp._eval_sector_drag(probe, None, _efficacy_fixture(), "d95e",
+                              "2026-09-16T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "ttl_expired"
+
+
+def test_d3_eval_tag_absent_is_scope_changed():
+    probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
+    t = qwp._eval_sector_drag(probe, None, {"by_tag": {}}, "d95e",
+                              "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "scope_changed"
