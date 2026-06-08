@@ -1,0 +1,10 @@
+{# Mobile status bar — compact severity summary, visible only on small screens. #}
+<div class="md:hidden flex items-center justify-between px-4 py-1.5 bg-zinc-900 border-b border-zinc-800 text-xs text-zinc-400">
+  <span>StockBot</span>
+  <span class="flex items-center gap-1.5">
+    <span role="status"
+          title="Overall: {{ nav_severity }}"
+          class="inline-block w-2 h-2 rounded-full {{ nav_severity | severity_classes }}"></span>
+    <span class="font-mono">{{ nav_severity }}</span>
+  </span>
+</div>

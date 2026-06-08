@@ -6,7 +6,7 @@ import secrets
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
@@ -134,44 +134,43 @@ from gui_v2.data.portfolio import collect_portfolio_view
 from gui_v2.data.research import collect_research_view
 from gui_v2.data.operations import collect_operations_view
 from gui_v2.data.risk_impact import collect_risk_impact_view
+from gui_v2.data.dash_today import collect_today_view as _dash_today
+from gui_v2.data.shared import REDIRECT_MAP
 
 
-@app.get("/", response_class=HTMLResponse)
-def page_today(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
-    return _render(request, "today.html", **collect_today_view(REPO_ROOT))
+# ---------------------------------------------------------------------------
+# Persona dashboard routes (canonical)
+# ---------------------------------------------------------------------------
 
 
-@app.get("/portfolio", response_class=HTMLResponse)
-def page_portfolio(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
-    return _render(request, "portfolio.html", **collect_portfolio_view(REPO_ROOT))
-
-
-@app.get("/research", response_class=HTMLResponse)
-def page_research(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
-    return _render(request, "research.html", **collect_research_view(REPO_ROOT))
-
-
-@app.get("/health", response_class=HTMLResponse)
-def page_health(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
-    view = collect_health_view(REPO_ROOT)
-    return _render(request, "health.html", overall=overall_severity(view), **view)
-
-
-@app.get("/operations", response_class=HTMLResponse)
-def page_operations(
-    request: Request,
-    log: str | None = None,
-    tail: int = 200,
-    _auth: str | None = Depends(_require_auth),
+@app.get("/dashboard/today", response_class=HTMLResponse)
+def page_dash_today(
+    request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    # Clamp tail to a sane range so a hostile querystring can't OOM the host.
-    tail = max(10, min(5000, int(tail or 200)))
-    return _render(
-        request, "operations.html",
-        **collect_operations_view(REPO_ROOT, log_tail_n=tail, log_name=log),
-    )
+    return _render(request, "dashboard/today.html", **_dash_today(REPO_ROOT))
 
 
-@app.get("/risk-impact", response_class=HTMLResponse)
-def page_risk_impact(request: Request, _auth: str | None = Depends(_require_auth)) -> HTMLResponse:
-    return _render(request, "risk_impact.html", **collect_risk_impact_view(REPO_ROOT))
+# ---------------------------------------------------------------------------
+# Root redirect: / → /dashboard/today
+# ---------------------------------------------------------------------------
+
+
+@app.get("/")
+def root_redirect(_a: str | None = Depends(_require_auth)):
+    return RedirectResponse("/dashboard/today", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Old-route redirects via REDIRECT_MAP
+# ---------------------------------------------------------------------------
+
+
+def _mk_redirect(target: str):
+    """Factory returning a redirect handler for a given target path."""
+    def _handler(_a: str | None = Depends(_require_auth)):
+        return RedirectResponse(target, status_code=302)
+    return _handler
+
+
+for _old_path, _new_target in REDIRECT_MAP.items():
+    app.get(_old_path)(_mk_redirect(_new_target))
