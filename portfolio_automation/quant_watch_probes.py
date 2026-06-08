@@ -320,3 +320,42 @@ def _eval_sector_drag(probe: dict, retune: dict, efficacy: dict | None, current_
         return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
     return _active(probe, f"still loser ({row.get('vs_baseline_pp')}pp)", now_iso,
                    {"run": now_iso[:10], "vs_baseline_pp": row.get("vs_baseline_pp")})
+
+
+# ── Task 7: Aggregators — detect(), evaluate(), evaluator dispatch ────────────
+
+_EVALUATORS = {
+    DETECTOR_PRIOR_GAUGE: _eval_prior_gauge,
+    DETECTOR_NEG_RETURN: _eval_neg_return,
+    DETECTOR_SECTOR_DRAG: _eval_sector_drag,
+}
+
+
+def detect(retune, efficacy, ledger, now_iso, created_run) -> list[dict]:
+    """Run every detector; return NEW probes whose id is not already active."""
+    active_ids = {p.get("id") for p in (ledger.get("active") or [])}
+    found: list[dict] = []
+    p1 = detect_prior_gauge_underperformance(retune, now_iso, created_run)
+    if p1:
+        found.append(p1)
+    p2 = detect_negative_mean_return_persistence(retune, now_iso, created_run)
+    if p2:
+        found.append(p2)
+    found.extend(detect_sector_drag(efficacy, now_iso, created_run))
+    return [p for p in found if p["id"] not in active_ids]
+
+
+def evaluate(retune, efficacy, current_fp, ledger, now_iso) -> list[dict]:
+    """Re-check each active probe; return one transition per probe. Probes whose
+    detector has no evaluator (e.g. manual) stay active until cleared by hand."""
+    out: list[dict] = []
+    for probe in (ledger.get("active") or []):
+        ev = _EVALUATORS.get(probe.get("detector"))
+        if ev is None:
+            out.append(_active(probe, "manual — operator clears", now_iso, None))
+            continue
+        try:
+            out.append(ev(probe, retune, efficacy, current_fp, now_iso))
+        except Exception as exc:  # never let one bad probe abort the run
+            out.append(_active(probe, f"eval error: {exc}", now_iso, None))
+    return out

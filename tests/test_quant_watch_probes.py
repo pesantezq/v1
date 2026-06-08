@@ -299,3 +299,33 @@ def test_d3_eval_tag_absent_is_scope_changed():
     t = qwp._eval_sector_drag(probe, None, {"by_tag": {}}, "d95e",
                               "2026-06-20T09:00:00+00:00")
     assert t["status"] == "resolved" and t["resolution"] == "scope_changed"
+
+
+# ── Task 7: detect() / evaluate() aggregators ────────────────────────────────
+
+def test_detect_aggregates_and_dedupes_active():
+    retune = _retune_fixture()
+    efficacy = _efficacy_fixture()
+    ledger = qwp._empty_ledger()
+    new1 = qwp.detect(retune, efficacy, ledger, "2026-06-08T09:00:00+00:00", "r")
+    ids = {p["id"] for p in new1}
+    assert "prior_gauge_underperformance:d95e" in ids
+    assert "negative_mean_return_persistence:d95e" in ids
+    assert "sector_drag:Consumer_Cyclical" in ids
+    # now mark them active; re-running detect yields no duplicates
+    ledger["active"] = new1
+    new2 = qwp.detect(retune, efficacy, ledger, "2026-06-09T09:00:00+00:00", "r")
+    assert new2 == []
+
+
+def test_evaluate_dispatches_per_detector_and_manual_stays_active():
+    retune = _retune_fixture()
+    efficacy = _efficacy_fixture()
+    ledger = qwp._empty_ledger()
+    ledger["active"] = qwp.detect(retune, efficacy, ledger, "2026-06-08T09:00:00+00:00", "r")
+    ledger["active"].append({"id": "manual:foo", "detector": "manual",
+                             "scope_key": "foo", "created_at": "2026-06-08T09:00:00+00:00"})
+    transitions = qwp.evaluate(retune, efficacy, "d95e", ledger, "2026-06-09T09:00:00+00:00")
+    by_id = {t["id"]: t for t in transitions}
+    assert by_id["prior_gauge_underperformance:d95e"]["status"] == "active"
+    assert by_id["manual:foo"]["status"] == "active"  # never auto-resolved
