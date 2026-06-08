@@ -2,9 +2,10 @@
 
 Single machine-readable contract (artifact_registry.yaml) describing every
 tracked artifact: lens, role, required, cadence, producer, consumers, severity.
-The validator classifies the live corpus (present / stale / invalid / unattributed)
-and writes outputs/latest/artifact_registry_status.json. daily_run_status consumes
-required_artifacts() instead of a hardcoded list — single source of truth.
+The validator classifies the live corpus (present / stale / invalid) and reports
+debt fields (classified, unjustified_debt, by_consumer_status, debt_target_met).
+daily_run_status consumes required_artifacts() instead of a hardcoded list —
+single source of truth.
 
 Observe-only: reads the registry + artifact mtimes; writes only its status
 artifact. Never mutates decision/score/allocation/portfolio state. See
@@ -113,11 +114,32 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
     if not isinstance(arts, dict):
         arts = {}
     present = 0
-    missing, stale, invalid_json, unattributed, schema_invalid = [], [], [], [], []
+    missing, stale, invalid_json, schema_invalid = [], [], [], []
     sev_counts: dict[str, int] = {"critical": 0, "warning": 0, "info": 0}
     by_lens: dict[str, dict] = {}
+    by_consumer_status: dict[str, int] = {}
+    unjustified_debt: list[str] = []
+    justified_no_consumer = 0
+    classified = 0
 
     for key, row in arts.items():
+        if not isinstance(row, dict):
+            schema_invalid.append(key)
+            continue
+
+        # Debt tally runs for every row that has a recognizable consumer_status,
+        # even rows that fail other schema checks (e.g. consumed + empty consumers
+        # is both schema-invalid AND unjustified debt).
+        cs = row.get("consumer_status")
+        if cs in CONSUMER_STATUSES:
+            classified += 1
+            by_consumer_status[cs] = by_consumer_status.get(cs, 0) + 1
+            consumers = row.get("consumers") or []
+            if cs == "deprecated_candidate" or (cs == "consumed" and not consumers):
+                unjustified_debt.append(key)
+            elif cs in ("diagnostic_only", "archive_only"):
+                justified_no_consumer += 1
+
         if not _row_schema_ok(row):
             schema_invalid.append(key)
             continue
@@ -126,9 +148,6 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
         lens = row["lens"]
         lens_bucket = by_lens.setdefault(lens, {"total": 0, "present": 0, "issues": 0})
         lens_bucket["total"] += 1
-
-        if "UNATTRIBUTED" in row.get("consumers", []):
-            unattributed.append(key)
 
         exists = path.exists()
         is_missing = not exists
@@ -175,9 +194,9 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
         msg_bits.append(f"{len(stale)} stale")
     if invalid_json:
         msg_bits.append(f"{len(invalid_json)} invalid-json")
-    if unattributed:
-        msg_bits.append(f"{len(unattributed)} unattributed")
-    operator_message = "; ".join(msg_bits) or "all artifacts present, fresh, attributed"
+    if unjustified_debt:
+        msg_bits.append(f"{len(unjustified_debt)} unjustified_debt")
+    operator_message = "; ".join(msg_bits) or "all artifacts present, fresh, no unjustified debt"
 
     return {
         "generated_at": now.isoformat(),
@@ -189,14 +208,21 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
                    "invalid_json": len(invalid_json), "missing": len(missing),
                    "missing_required": sum(1 for k in missing
                                            if arts.get(k, {}).get("required")),
-                   "unattributed": len(unattributed), "schema_invalid": len(schema_invalid)},
+                   "unjustified_debt": len(unjustified_debt),
+                   "schema_invalid": len(schema_invalid)},
         "missing": missing, "stale": stale, "invalid_json": invalid_json,
-        "unattributed": unattributed, "schema_invalid": schema_invalid,
+        "schema_invalid": schema_invalid,
+        "classified": classified,
+        "unjustified_debt": unjustified_debt,
+        "justified_no_consumer": justified_no_consumer,
+        "by_consumer_status": by_consumer_status,
+        "debt_target_met": (classified == len(arts) and not unjustified_debt),
         "severity": sev_counts, "by_lens": by_lens,
         "operator_message": operator_message,
         "disclaimer": ("Observe-only artifact-governance validator. Reads the registry "
-                       "+ artifact mtimes; classifies coverage/freshness. Does not call "
-                       "APIs or mutate any decision, allocation, score, or portfolio state."),
+                       "+ artifact mtimes; classifies coverage/freshness/debt. Does not "
+                       "call APIs or mutate any decision, allocation, score, or portfolio "
+                       "state."),
     }
 
 
@@ -250,7 +276,9 @@ def run_artifact_registry(*, root: str | Path = ".", now=None,
         return {"generated_at": ts.isoformat(), "observe_only": True,
                 "schema_version": "1", "source": "artifact_registry",
                 "overall_status": AMBER, "counts": {}, "missing": [], "stale": [],
-                "invalid_json": [], "unattributed": [], "schema_invalid": [],
+                "invalid_json": [], "schema_invalid": [],
+                "classified": 0, "unjustified_debt": [], "justified_no_consumer": 0,
+                "by_consumer_status": {}, "debt_target_met": False,
                 "severity": {"critical": 0, "warning": 0, "info": 0}, "by_lens": {},
                 "operator_message": f"degraded: {exc}",
                 "disclaimer": "Observe-only artifact-governance validator (degraded)."}

@@ -140,7 +140,9 @@ def test_validate_red_when_critical_missing(tmp_path):
     st = ar.validate_registry(reg, tmp_path, now)
     assert st["overall_status"] == "red"
     assert "sot.json" in st["missing"]
-    assert "probe.json" in st["unattributed"]
+    # probe.json has consumer_status "consumed" with a non-empty consumers list →
+    # classified (not unjustified debt), even though the consumer is the UNATTRIBUTED sentinel
+    assert "probe.json" not in st["unjustified_debt"]
 
 
 def test_validate_green_when_all_present_fresh(tmp_path):
@@ -290,7 +292,7 @@ def test_every_row_has_valid_consumer_status():
     assert bad == {}, f"rows missing/invalid consumer_status: {bad}"
 
 
-def test_no_unattributed_sentinel_remains():
+def test_no_legacy_sentinel_in_consumers():
     reg = ar.load_registry()
     leftover = [k for k, r in reg["artifacts"].items()
                 if "UNATTRIBUTED" in (r.get("consumers") or [])]
@@ -303,3 +305,57 @@ def test_consumed_rows_have_real_consumers():
            if r.get("consumer_status") == "consumed"
            and not (isinstance(r.get("consumers"), list) and r.get("consumers"))]
     assert bad == [], f"consumed rows with empty consumers: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: validate_registry debt fields
+# ---------------------------------------------------------------------------
+
+
+def _debt_registry():
+    def r(status, consumers, sev="info"):
+        return {"path": f"outputs/latest/{status}.json", "label": status,
+                "lens": "developer", "role": "telemetry", "required": False,
+                "cadence": "daily", "producer": "p", "consumers": consumers,
+                "severity_if_missing": sev, "consumer_status": status}
+    return {"daily_run_status_tracked": [], "artifacts": {
+        "consumed.json": r("consumed", ["daily-tool-analysis"]),
+        "diagnostic_only.json": r("diagnostic_only", []),
+        "archive_only.json": r("archive_only", []),
+        "deprecated_candidate.json": r("deprecated_candidate", []),
+    }}
+
+
+def test_validate_reports_debt_fields(tmp_path):
+    # make all four present + fresh so presence rules don't interfere
+    import json as J
+    for name in ["consumed", "diagnostic_only", "archive_only", "deprecated_candidate"]:
+        p = tmp_path / "outputs/latest" / f"{name}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(J.dumps({"x": 1}), encoding="utf-8")
+    st = ar.validate_registry(_debt_registry(), tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert st["classified"] == 4
+    assert st["counts"]["total"] == 4
+    assert set(st["unjustified_debt"]) == {"deprecated_candidate.json"}
+    assert st["justified_no_consumer"] == 2  # diagnostic_only + archive_only
+    assert st["by_consumer_status"] == {"consumed": 1, "diagnostic_only": 1,
+                                        "archive_only": 1, "deprecated_candidate": 1}
+    assert st["debt_target_met"] is False  # one deprecated_candidate
+
+
+def test_validate_debt_does_not_change_overall_status(tmp_path):
+    import json as J
+    for name in ["consumed", "diagnostic_only", "archive_only", "deprecated_candidate"]:
+        p = tmp_path / "outputs/latest" / f"{name}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(J.dumps({"x": 1}), encoding="utf-8")
+    st = ar.validate_registry(_debt_registry(), tmp_path, ar.datetime.now(ar.timezone.utc))
+    # all present+fresh, only info severity → debt must NOT make it red/amber
+    assert st["overall_status"] == "green"
+
+
+def test_validate_consumed_empty_is_unjustified(tmp_path):
+    reg = _debt_registry()
+    reg["artifacts"]["consumed.json"]["consumers"] = []  # invariant violation at runtime
+    st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert "consumed.json" in st["unjustified_debt"]
