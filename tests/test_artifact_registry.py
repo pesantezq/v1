@@ -56,6 +56,24 @@ def test_required_artifacts_matches_legacy_expected():
     assert ar.required_artifacts() == legacy
 
 
+def test_max_age_hours_by_cadence():
+    assert ar.max_age_hours({"cadence": "daily"}) == 30
+    assert ar.max_age_hours({"cadence": "weekly"}) == 192
+    assert ar.max_age_hours({"cadence": "monthly"}) == 768
+    assert ar.max_age_hours({"cadence": "weekend"}) == 100
+    assert ar.max_age_hours({"cadence": "yearly"}) == 9000
+    assert ar.max_age_hours({"cadence": "on_demand"}) is None
+    # override wins
+    assert ar.max_age_hours({"cadence": "daily", "staleness_hours_override": 50}) == 50
+
+
+def test_is_stale_respects_cadence():
+    # weekly artifact 40h old is NOT stale; daily artifact 51h old IS stale
+    assert ar.is_stale({"cadence": "weekly"}, age_hours=40) is False
+    assert ar.is_stale({"cadence": "daily"}, age_hours=51) is True
+    assert ar.is_stale({"cadence": "on_demand"}, age_hours=10_000) is False
+
+
 def test_shipped_registry_schema_valid():
     reg = ar.load_registry()  # the real artifact_registry.yaml
     assert reg, "registry failed to load"

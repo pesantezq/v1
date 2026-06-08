@@ -51,6 +51,27 @@ def load_registry(path: str | Path = DEFAULT_REGISTRY_PATH) -> dict:
         return {}
 
 
+CADENCE_MAX_AGE_HOURS: dict[str, int | None] = {
+    "daily": 30, "weekend": 100, "weekly": 192,
+    "monthly": 768, "yearly": 9000, "on_demand": None,
+}
+
+
+def max_age_hours(row: dict) -> int | None:
+    """Staleness window for a row: explicit override, else cadence default,
+    else None (never auto-stale)."""
+    ov = row.get("staleness_hours_override")
+    if isinstance(ov, (int, float)):
+        return int(ov)
+    return CADENCE_MAX_AGE_HOURS.get(row.get("cadence"), None)
+
+
+def is_stale(row: dict, age_hours: float) -> bool:
+    """Return True if age_hours exceeds the row's max_age_hours; on_demand never stale."""
+    mx = max_age_hours(row)
+    return mx is not None and age_hours > mx
+
+
 def required_artifacts(registry: dict | None = None) -> list[tuple[str, str, bool]]:
     """Return (rel_path, label, required) triples for the daily_run_status-tracked
     subset, in tracked order — the exact shape of the legacy _EXPECTED_ARTIFACTS."""
