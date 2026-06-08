@@ -43,6 +43,7 @@ the fix.
 
 **Read artifacts** (degrade gracefully on any miss):
 
+0. `outputs/latest/artifact_registry_status.json` → overall_status, counts, missing[], stale[], invalid_json[], unattributed[], severity, operator_message (added 2026-06-08; artifact-governance validator — READ FIRST, it gates confidence in everything below). If absent, fall back to daily_run_status as before and note the registry validator did not run.
 1. `outputs/latest/daily_run_status.json` → overall_status, stage_summary, required_missing_count, **content_liveness, content_warn_count** (added 2026-05-28)
 2. `outputs/latest/daily_memo.md` (first 50 lines)
 3. `outputs/latest/retune_impact.json` → outcome_attribution.by_fingerprint, **sector_composition per fingerprint** (added 2026-05-28)
@@ -87,6 +88,12 @@ the fix.
 ---
 
 ## Step 2 — Triage
+
+**Artifact-governance gate (run before GREEN/AMBER/RED):**
+- Read `artifact_registry_status.json` first. If a `role: source_of_truth` artifact is in `missing` or `stale` → **downgrade confidence and cap the run at AMBER at best** (the decision core is not trustworthy); never infer portfolio actions from a degraded decision core.
+- If a `required` `role: probe` artifact is missing/stale → mark the analysis **partial** for that lens.
+- `unattributed` entries are debt, not failures: note them, route to `portfolio-discovery-health` if non-empty, do not change status on their account.
+- Only `source_of_truth` artifacts represent official actions; probe/advisor/telemetry/narrative artifacts inform confidence and explanation only.
 
 **GREEN** when all of:
 - `overall_status == "ok"` (NOT `ok_with_warnings`)
@@ -207,6 +214,7 @@ Headline grammar:
 
 **Body, under 250 words**:
 
+0. Artifact governance (always, first): `"Coverage: {present}/{total} present · {missing} missing ({missing_required} required) · {stale} stale · {unattributed} unattributed · {overall_status}"` — from artifact_registry_status.json. RED here (critical/source-of-truth missing) forces the daily lead line to RED.
 1. Attribution snapshot (always): `"Attribution: current-fp n={N} at {H}% / pre-tracker n={N} at {H}% · Δ {sign}{pp}pp · top sector {gauge_top_sector}"`
 2. Risk-delta state (always): `"Risk: {top_symbol} {weight}% (cap {cap}%, +{headroom}pp); leverage {L}%"`
 3. Discovery pulse + AI spend (always, since they're project-wide health signals): `"Pulse: last={pulse_age_hours}h ago, {total_runs_month} runs MTD ({skipped_runs_month} skipped) · AI: ${monthly_cost_total_usd:.2f}/${monthly_cost_limit_usd:.0f} cap ({ai_budget_pct_of_cap}%)"`
