@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block title %}Portfolio &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="dashboard-portfolio-content"
+     hx-get="/dashboard/portfolio"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-portfolio-content"
+     hx-select="#dashboard-portfolio-content"
+     hx-swap="outerHTML"
+     class="space-y-6">
+
+  <header class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold">Portfolio</h1>
+      <p class="text-sm text-zinc-400">Portfolio Manager view &mdash; advisory read-only</p>
+    </div>
+    <button hx-get="/dashboard/portfolio"
+            hx-target="#dashboard-portfolio-content"
+            hx-select="#dashboard-portfolio-content"
+            hx-swap="outerHTML"
+            class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+      Refresh
+    </button>
+  </header>
+
+  {# ------------------------------------------------------------------ #}
+  {# Status cards grid — one per data domain                             #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Portfolio status cards"
+           class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for c in cards %}
+    <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
+        {# Severity badge #}
+        {% if c.severity == "green" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "yellow" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "red" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "blue" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
+        {% else %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
+        {% endif %}
+      </div>
+      {% if c.summary %}
+      <p class="text-sm text-zinc-300">{{ c.summary }}</p>
+      {% endif %}
+      {% if c.updated_at %}
+      <p class="text-xs text-zinc-500 font-mono">{{ c.updated_at }}</p>
+      {% endif %}
+      {% if c.source_artifacts %}
+        {% with source_artifacts=c.source_artifacts %}
+          {% include "components/evidence_drawer.html" %}
+        {% endwith %}
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="col-span-3">
+      {% with heading="No portfolio data available",
+              body="Run the daily pipeline to generate portfolio cards." %}
+        {% include "components/empty_state.html" %}
+      {% endwith %}
+    </div>
+    {% endfor %}
+  </section>
+
+  {# ------------------------------------------------------------------ #}
+  {# Decision Queue — advisory actions from decision_plan.json only     #}
+  {# (decision-core is the sole source of advisory action language)     #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Advisory decision queue">
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Advisory Decisions</h2>
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
+    </div>
+    {% if decisions %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for d in decisions %}
+        {% include "components/decision_card.html" %}
+      {% endfor %}
+    </div>
+    {% else %}
+    {% with heading="No advisory decisions available",
+            body="decision_plan.json absent or empty — run the daily pipeline." %}
+      {% include "components/empty_state.html" %}
+    {% endwith %}
+    {% endif %}
+  </section>
+
+  {# ------------------------------------------------------------------ #}
+  {# Holdings — desktop table (hidden on mobile) +                      #}
+  {# mobile stacked cards (hidden on md+)                               #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Holdings">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400 mb-3">Holdings</h2>
+
+    {% if holdings %}
+
+    {# Desktop table — hidden on small screens #}
+    <div class="hidden md:block overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2 pr-4">Symbol</th>
+            <th class="py-2 pr-4 text-right">Shares</th>
+            <th class="py-2 pr-4 text-right">Price</th>
+            <th class="py-2 pr-4 text-right">Value</th>
+            <th class="py-2 pr-4 text-right">Alloc %</th>
+            <th class="py-2 pr-4 text-right">Target %</th>
+            <th class="py-2 pr-4 text-right">Drift %</th>
+            <th class="py-2">Sector</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for h in holdings %}
+          <tr class="hover:bg-zinc-900/50">
+            <td class="py-2 pr-4 font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</td>
+            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">{{ h.shares if h.shares is not none else "—" }}</td>
+            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
+              {% if h.price is not none %}${{ "%.2f" | format(h.price | float) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
+              {% if h.value is not none %}${{ "{:,.0f}".format(h.value | float) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
+              {% if h.alloc_pct is not none %}{{ "%.1f" | format(h.alloc_pct | float) }}%{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
+              {% if h.target_alloc_pct is not none %}{{ "%.1f" | format(h.target_alloc_pct | float) }}%{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-right font-mono
+              {% if h.drift_pct is not none and h.drift_pct | float | abs >= 0.1 %}text-amber-300{% else %}text-zinc-300{% endif %}">
+              {% if h.drift_pct is not none %}{{ "%.1f" | format(h.drift_pct | float) }}%{% else %}—{% endif %}
+            </td>
+            <td class="py-2 text-zinc-400 text-xs">{{ h.sector or "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Mobile stacked cards — shown only on small screens #}
+    <div class="md:hidden space-y-3">
+      {% for h in holdings %}
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</span>
+          {% if h.sector %}
+          <span class="text-xs text-zinc-500">{{ h.sector }}</span>
+          {% endif %}
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+          <div class="text-zinc-500">Shares</div>
+          <div class="text-zinc-300 font-mono text-right">{{ h.shares if h.shares is not none else "—" }}</div>
+          <div class="text-zinc-500">Price</div>
+          <div class="text-zinc-300 font-mono text-right">
+            {% if h.price is not none %}${{ "%.2f" | format(h.price | float) }}{% else %}—{% endif %}
+          </div>
+          <div class="text-zinc-500">Value</div>
+          <div class="text-zinc-300 font-mono text-right">
+            {% if h.value is not none %}${{ "{:,.0f}".format(h.value | float) }}{% else %}—{% endif %}
+          </div>
+          <div class="text-zinc-500">Alloc</div>
+          <div class="text-zinc-300 font-mono text-right">
+            {% if h.alloc_pct is not none %}{{ "%.1f" | format(h.alloc_pct | float) }}%{% else %}—{% endif %}
+          </div>
+          {% if h.drift_pct is not none %}
+          <div class="text-zinc-500">Drift</div>
+          <div class="font-mono text-right {% if h.drift_pct | float | abs >= 0.1 %}text-amber-300{% else %}text-zinc-300{% endif %}">
+            {{ "%.1f" | format(h.drift_pct | float) }}%
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% else %}
+    {# Holdings empty state — renders on both desktop and mobile #}
+    {% with heading="No holdings data",
+            body="Portfolio snapshot unavailable. Check outputs/portfolio/portfolio_snapshot.json." %}
+      {% include "components/empty_state.html" %}
+    {% endwith %}
+    {% endif %}
+  </section>
+
+  {# ------------------------------------------------------------------ #}
+  {# Watchlist signals summary — evidence layer, no advisory actions    #}
+  {# ------------------------------------------------------------------ #}
+  {% if recent_signals %}
+  <section aria-label="Watchlist signals">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400 mb-3">Watchlist Signals <span class="text-zinc-600 font-normal normal-case">(evidence only)</span></h2>
+    <div class="hidden md:block overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2 pr-4">Symbol</th>
+            <th class="py-2 pr-4 text-right">Signal Score</th>
+            <th class="py-2 pr-4 text-right">Confidence</th>
+            <th class="py-2 pr-4">Alert</th>
+            <th class="py-2">Sector</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for sig in recent_signals %}
+          <tr class="hover:bg-zinc-900/50">
+            <td class="py-2 pr-4 font-mono font-semibold text-zinc-100">{{ sig.symbol or "—" }}</td>
+            <td class="py-2 pr-4 text-right font-mono text-zinc-300">
+              {% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-right font-mono text-zinc-300">
+              {% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-2 pr-4 text-xs text-zinc-400">{{ sig.alert or "—" }}</td>
+            <td class="py-2 text-xs text-zinc-400">{{ sig.sector or "—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {# Mobile stacked — md:hidden #}
+    <div class="md:hidden space-y-3">
+      {% for sig in recent_signals %}
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ sig.symbol or "—" }}</span>
+          {% if sig.alert %}
+          <span class="text-xs text-zinc-400">{{ sig.alert }}</span>
+          {% endif %}
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+          <div class="text-zinc-500">Signal score</div>
+          <div class="text-zinc-300 font-mono text-right">
+            {% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}
+          </div>
+          <div class="text-zinc-500">Confidence</div>
+          <div class="text-zinc-300 font-mono text-right">
+            {% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}
+          </div>
+          {% if sig.sector %}
+          <div class="text-zinc-500">Sector</div>
+          <div class="text-zinc-400 text-right">{{ sig.sector }}</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+</div>
+{% endblock %}
