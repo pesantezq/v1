@@ -196,3 +196,55 @@ def test_d2_eval_stays_active_when_still_negative():
                              "2026-06-09T09:00:00+00:00")
     assert t["status"] == "active"
     assert t["observation"]["mean_return_1d"] == -0.9
+
+
+# ── Task 6: D3 sector_drag ───────────────────────────────────────────────────
+
+def _efficacy_fixture(sector="sector:Consumer_Cyclical", sig="loser", n=42,
+                      vs_baseline=-37.67):
+    return {"by_tag": {
+        sector: {"significance": sig, "n_samples": n, "vs_baseline_pp": vs_baseline,
+                 "hit_rate_1d": 0.07},
+        "sector:Technology": {"significance": "winner", "n_samples": 77,
+                              "vs_baseline_pp": 6.21, "hit_rate_1d": 0.51},
+    }}
+
+
+def test_d3_fires_on_sector_loser_at_min_n():
+    probes = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    assert len(probes) == 1
+    assert probes[0]["id"] == "sector_drag:Consumer_Cyclical"
+    assert probes[0]["scope_key"] == "Consumer_Cyclical"
+    assert probes[0]["trigger_snapshot"]["vs_baseline_pp"] == -37.67
+
+
+def test_d3_quiet_when_loser_below_min_n():
+    probes = qwp.detect_sector_drag(_efficacy_fixture(n=12), "2026-06-08T09:00:00+00:00", "r")
+    assert probes == []
+
+
+def test_d3_quiet_when_no_loser():
+    probes = qwp.detect_sector_drag(_efficacy_fixture(sig="neutral"),
+                                    "2026-06-08T09:00:00+00:00", "r")
+    assert probes == []
+
+
+def test_d3_eval_resolves_when_no_longer_loser():
+    probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
+    t = qwp._eval_sector_drag(probe, None, _efficacy_fixture(sig="neutral"), "d95e",
+                              "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "recovered"
+
+
+def test_d3_eval_resolves_when_tag_absent():
+    probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
+    t = qwp._eval_sector_drag(probe, None, {"by_tag": {}}, "d95e",
+                              "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved"
+
+
+def test_d3_eval_stays_active_when_still_loser():
+    probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
+    t = qwp._eval_sector_drag(probe, None, _efficacy_fixture(), "d95e",
+                              "2026-06-09T09:00:00+00:00")
+    assert t["status"] == "active"

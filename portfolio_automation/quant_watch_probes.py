@@ -270,3 +270,49 @@ def _eval_neg_return(probe, retune, efficacy, current_fp, now_iso) -> dict:
         return _resolved(probe, "recovered", f"mean_return_1d {mean_ret:.2f} >= 0", now_iso)
     return _active(probe, f"mean_return_1d {mean_ret:.2f}", now_iso,
                    {"run": now_iso[:10], "mean_return_1d": mean_ret})
+
+
+# ── Task 6: D3 — sector_drag ─────────────────────────────────────────────────
+
+def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str) -> list[dict]:
+    by_tag = (efficacy or {}).get("by_tag") or {}
+    probes: list[dict] = []
+    for tag, row in by_tag.items():
+        if not (isinstance(tag, str) and tag.startswith("sector:") and isinstance(row, dict)):
+            continue
+        if row.get("significance") != "loser" or (row.get("n_samples") or 0) < SECTOR_MIN_N:
+            continue
+        sector = tag.split("sector:", 1)[1]
+        probes.append({
+            "id": f"{DETECTOR_SECTOR_DRAG}:{sector}",
+            "detector": DETECTOR_SECTOR_DRAG,
+            "lens": "quant",
+            "scope_key": sector,
+            "created_at": now_iso,
+            "created_run": created_run,
+            "severity": "amber",
+            "concern": (f"sector {sector} is a loser ({row.get('vs_baseline_pp')}pp vs "
+                        f"baseline) at n={row.get('n_samples')}"),
+            "trigger_snapshot": {"vs_baseline_pp": row.get("vs_baseline_pp"),
+                                 "n_samples": row.get("n_samples"),
+                                 "hit_rate_1d": row.get("hit_rate_1d")},
+            "resolve_hint": "sector no longer flagged 'loser' or the tag disappears",
+            "last_evaluated_at": now_iso,
+            "observations": [{"run": now_iso[:10], "vs_baseline_pp": row.get("vs_baseline_pp")}],
+        })
+    return probes
+
+
+def _eval_sector_drag(probe, retune, efficacy, current_fp, now_iso) -> dict:
+    sector = probe.get("scope_key")
+    by_tag = (efficacy or {}).get("by_tag") or {}
+    row = by_tag.get(f"sector:{sector}")
+    if not isinstance(row, dict):
+        return _resolved(probe, "recovered", "sector tag absent", now_iso)
+    if row.get("significance") != "loser":
+        return _resolved(probe, "recovered",
+                         f"sector no longer loser (now {row.get('significance')})", now_iso)
+    if _age_days(probe.get("created_at"), now_iso) >= MAX_PROBE_AGE_DAYS:
+        return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
+    return _active(probe, f"still loser ({row.get('vs_baseline_pp')}pp)", now_iso,
+                   {"run": now_iso[:10], "vs_baseline_pp": row.get("vs_baseline_pp")})
