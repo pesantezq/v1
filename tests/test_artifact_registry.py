@@ -190,3 +190,27 @@ def test_validate_flags_schema_invalid_row(tmp_path):
     now = ar.datetime.now(ar.timezone.utc)
     st = ar.validate_registry(reg, tmp_path, now)
     assert "bad.json" in st["schema_invalid"]
+
+
+# ---------------------------------------------------------------------------
+# Task 6: run_artifact_registry orchestrator + status write
+# ---------------------------------------------------------------------------
+
+
+def test_run_writes_status_and_never_raises(tmp_path):
+    # point the orchestrator at the SHIPPED registry but a tmp artifacts root
+    st = ar.run_artifact_registry(root=tmp_path, write_files=True)
+    assert st["observe_only"] is True
+    assert st["source"] == "artifact_registry"
+    # most artifacts absent under tmp root → status produced, no raise
+    out = tmp_path / "outputs/latest/artifact_registry_status.json"
+    assert out.exists()
+    written = _json.loads(out.read_text())
+    assert written["overall_status"] in ("green", "amber", "red")
+
+
+def test_run_degrades_on_bad_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(ar, "load_registry", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    st = ar.run_artifact_registry(root=tmp_path, write_files=False)
+    assert st["observe_only"] is True
+    assert st["overall_status"] == "green"  # degraded-but-valid

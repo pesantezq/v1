@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import yaml
 
+from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+
 GREEN, AMBER, RED = "green", "amber", "red"
 
 DEFAULT_REGISTRY_PATH = Path(__file__).with_name("artifact_registry.yaml")
@@ -216,3 +218,25 @@ def schema_errors(registry: dict) -> list[str]:
         if key not in arts:
             errs.append(f"tracked key not in artifacts: {key}")
     return errs
+
+
+def run_artifact_registry(*, root: str | Path = ".", now=None,
+                          write_files: bool = True) -> dict:
+    """Load registry → validate corpus → write status artifact. Never raises."""
+    root_path = Path(root).resolve()
+    ts = now or datetime.now(timezone.utc)
+    try:
+        registry = load_registry()
+        status = validate_registry(registry, root_path, ts)
+        if write_files:
+            safe_write_json(OutputNamespace.LATEST, _STATUS_REL, status,
+                            base_dir=root_path / "outputs")
+        return status
+    except Exception as exc:
+        return {"generated_at": ts.isoformat(), "observe_only": True,
+                "schema_version": "1", "source": "artifact_registry",
+                "overall_status": GREEN, "counts": {}, "missing": [], "stale": [],
+                "invalid_json": [], "unattributed": [], "schema_invalid": [],
+                "severity": {"critical": 0, "warning": 0, "info": 0}, "by_lens": {},
+                "operator_message": f"degraded: {exc}",
+                "disclaimer": "Observe-only artifact-governance validator (degraded)."}
