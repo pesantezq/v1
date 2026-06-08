@@ -16,7 +16,7 @@
         </p>
       </div>
       <div class="flex items-center gap-3">
-        {% with severity=overall_status|risk_severity, label="Overall " ~ overall_status %}
+        {% with severity=overall_status|risk_severity, label="Overall · " ~ (overall_status|status_label) %}
           {% include "components/severity_badge.html" %}
         {% endwith %}
         <button hx-get="/risk-impact"
@@ -54,8 +54,8 @@
             <div class="flex items-center justify-between">
               <div class="text-xs uppercase tracking-wide text-zinc-400">Concentration</div>
               {% if conc and conc.available %}
-                {% with severity=(conc.top_position.status if conc.top_position else "ok")|risk_severity,
-                        label=(conc.top_position.status if conc.top_position else "ok") %}
+                {% set _conc_status = conc.top_position.status if conc.top_position else "ok" %}
+                {% with severity=_conc_status|risk_severity, label=_conc_status|status_label %}
                   {% include "components/severity_badge.html" %}
                 {% endwith %}
               {% endif %}
@@ -81,7 +81,7 @@
             <div class="flex items-center justify-between">
               <div class="text-xs uppercase tracking-wide text-zinc-400">Leverage</div>
               {% if lev and lev.available %}
-                {% with severity=(lev.status or "ok")|risk_severity, label=(lev.status or "ok") %}
+                {% with severity=(lev.status or "ok")|risk_severity, label=(lev.status or "ok")|status_label %}
                   {% include "components/severity_badge.html" %}
                 {% endwith %}
               {% endif %}
@@ -129,14 +129,12 @@
             <ul class="mt-2 space-y-1">
               {% for p in risk_delta.concentration.positions %}
                 <li class="bg-zinc-900/50 rounded-md border border-zinc-800 px-3 py-2 flex items-center gap-3 text-sm">
-                  {% with severity=(p.status or "ok")|risk_severity, label=p.status or "ok" %}
+                  {% with severity=(p.status or "ok")|risk_severity, label=(p.status or "ok")|status_label %}
                     {% include "components/severity_badge.html" %}
                   {% endwith %}
                   <span class="font-mono">{{ p.symbol }}</span>
-                  <span>{{ "%.1f%%"|format((p.weight or 0) * 100) }}</span>
-                  <span class="text-zinc-500 text-xs">
-                    headroom {{ "%+.1f"|format((p.headroom or 0) * 100) }}pp
-                  </span>
+                  {# D-M4: distinguish weight from headroom so "21.3%" vs "+38.7pp" aren't confused #}
+                  <span>weight {{ "%.1f%%"|format((p.weight or 0) * 100) }} · cap headroom {{ "%+.1f"|format((p.headroom or 0) * 100) }}pp</span>
                 </li>
               {% endfor %}
             </ul>
@@ -240,7 +238,7 @@
           <ul class="mt-2 space-y-1">
             {% for s in daily_run_status.stages %}
               <li class="bg-zinc-900/50 rounded-md border border-zinc-800 px-3 py-2 flex items-center gap-3 text-sm">
-                {% with severity=(s.status or "unknown")|risk_severity, label=s.status %}
+                {% with severity=(s.status or "unknown")|risk_severity, label=(s.status or "unknown")|status_label %}
                   {% include "components/severity_badge.html" %}
                 {% endwith %}
                 <span class="font-mono">{{ s.name }}</span>
@@ -264,8 +262,10 @@
         {% set n = fmp_budget_status.news %}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
           {% if b and b.available %}
-            {% with label="Calls used", value="%s / %s" | format(b.count_today, b.budget),
-                    caption="status: " ~ b.status %}{% include "components/metric_card.html" %}{% endwith %}
+            {# D-M3: surface pct_used so operator sees "298 / 500 (60%)" not just raw counts #}
+            {% with label="Calls used",
+                    value="%s / %s (%s%%)" | format(b.count_today, b.budget, "%.0f"|format((b.pct_used or 0)*100)),
+                    caption="status: " ~ (b.status|status_label) %}{% include "components/metric_card.html" %}{% endwith %}
             {% with label="Headroom", value=b.headroom %}{% include "components/metric_card.html" %}{% endwith %}
           {% endif %}
           {% if n and n.available %}
