@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,7 +27,8 @@ def _write(root: Path, name: str, payload: dict) -> Path:
 
 def _read_json(root: Path, name: str) -> Any:
     try:
-        return json.loads((root / "outputs/latest" / name).read_text(encoding="utf-8"))
+        data = json.loads((root / "outputs/latest" / name).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
@@ -88,15 +88,19 @@ def run_reconcile(*, root: Path = Path("."), now: str | None = None) -> dict:
         config = json.loads((root / "config.json").read_text(encoding="utf-8"))
     except Exception:
         config = {}
-    recon = brec.reconcile(snap, pos, config)
-    recon.setdefault("generated_at", ts)
-    proposal = brec.build_proposal(recon, config, now_iso=ts)
     try:
-        _write(root, "portfolio_reconciliation.json", recon)
-        _write(root, "portfolio_config_update_proposal.json", proposal)
-    except Exception:
-        pass
-    return recon
+        recon = brec.reconcile(snap, pos, config)
+        recon.setdefault("generated_at", ts)
+        proposal = brec.build_proposal(recon, config, now_iso=ts)
+        try:
+            _write(root, "portfolio_reconciliation.json", recon)
+            _write(root, "portfolio_config_update_proposal.json", proposal)
+        except Exception:
+            pass
+        return recon
+    except Exception as exc:
+        return {"generated_at": ts, "source": "schwab", "summary_status": "error",
+                "operator_review_message": bm.redact(str(exc))}
 
 
 def _archive(root: Path, ts: str, *payloads: dict) -> None:
