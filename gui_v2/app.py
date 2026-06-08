@@ -139,6 +139,7 @@ from gui_v2.data.dash_portfolio import collect_portfolio_view as _dash_portfolio
 from gui_v2.data.dash_quant import collect_quant_view as _dash_quant
 from gui_v2.data.dash_system import collect_system_view as _dash_system
 from gui_v2.data.dash_memo import collect_memo_view as _dash_memo
+from gui_v2.data.dash_portfolio_sync import collect_portfolio_sync_view as _dash_portfolio_sync
 from gui_v2.data.shared import REDIRECT_MAP
 
 
@@ -180,6 +181,48 @@ def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
     return _render(request, "dashboard/memo.html", **_dash_memo(REPO_ROOT))
+
+
+@app.get("/dashboard/portfolio-sync", response_class=HTMLResponse)
+def page_dash_portfolio_sync(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    return _render(
+        request,
+        "dashboard/portfolio_sync.html",
+        **_dash_portfolio_sync(REPO_ROOT),
+    )
+
+
+@app.post("/dashboard/portfolio-sync/reconcile", response_class=HTMLResponse)
+def page_dash_portfolio_sync_reconcile(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """
+    Read-only reconcile: compares Schwab account to local config and writes the
+    proposal artifact only.  Never mutates config.json.
+
+    If the brokers module is not importable (this branch), returns the view with
+    a "not installed" message and the button still disabled.
+    """
+    reconcile_message: str | None = None
+
+    try:
+        from portfolio_automation.brokers.schwab_sync import run_reconcile
+        try:
+            run_reconcile(root=REPO_ROOT)
+            reconcile_message = "Reconcile completed. Proposal artifact updated."
+        except Exception as exc:
+            reconcile_message = f"Reconcile failed: {exc}"
+    except ImportError:
+        reconcile_message = (
+            "Schwab sync layer not installed on this build "
+            "(merge feat/schwab-readonly-sync)."
+        )
+
+    view = _dash_portfolio_sync(REPO_ROOT)
+    view["reconcile_message"] = reconcile_message
+    return _render(request, "dashboard/portfolio_sync.html", **view)
 
 
 # ---------------------------------------------------------------------------
