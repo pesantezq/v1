@@ -40,7 +40,7 @@ PRETRACKER_RED_GATE_PP = 10.0  # daily RED gate (|delta vs pre_tracker| >= this)
 SECTOR_MIN_N = 30              # min n_samples for a sector:* loser to fire D3
 MAX_PROBE_AGE_DAYS = 60        # TTL: stale probe auto-expires
 MAX_OBSERVATIONS = 14          # cap per-probe observation trail
-MAX_ARCHIVE = 200             # cap archive length (FIFO roll-off)
+MAX_ARCHIVE = 200              # cap archive length (FIFO roll-off)
 
 _LEDGER_REL = "data/quant_watch_ledger.json"
 _STATUS_REL = "quant_watch_status.json"  # under outputs/latest/
@@ -67,8 +67,6 @@ def load_ledger(path: str | Path) -> dict:
         if not isinstance(data["active"], list) or not isinstance(data["archive"], list):
             return _empty_ledger()
         return data
-    except FileNotFoundError:
-        return _empty_ledger()
     except Exception:
         return _empty_ledger()
 
@@ -98,6 +96,8 @@ def _select_prior_gauge(
 
 
 def _active(probe: dict, detail: str, now_iso: str, observation: dict | None) -> dict:
+    # now_iso is accepted for call-site symmetry with _resolved/_escalated; the
+    # active-probe timestamp (last_evaluated_at) is stamped in update_ledger, not here.
     return {"id": probe.get("id"), "status": ACTIVE, "detail": detail,
             "observation": observation}
 
@@ -118,6 +118,10 @@ def _age_days(created_at: str | None, now_iso: str) -> int:
     try:
         c = datetime.fromisoformat(created_at)
         n = datetime.fromisoformat(now_iso)
+        if c.tzinfo is None:
+            c = c.replace(tzinfo=timezone.utc)
+        if n.tzinfo is None:
+            n = n.replace(tzinfo=timezone.utc)
         return (n - c).days
     except Exception:
         return 0

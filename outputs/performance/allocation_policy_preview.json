@@ -1,69 +1,69 @@
 {
-  "generated_at": "2026-06-01T09:01:22.369700",
+  "generated_at": "2026-06-08T09:01:48.918357",
   "observe_only": true,
   "not_applied": true,
   "confidence_threshold": 0.5,
-  "candidate_count": 9,
-  "total_baseline_pct": 0.36,
-  "total_preview_pct": 0.224,
+  "candidate_count": 18,
+  "total_baseline_pct": 0.72,
+  "total_preview_pct": 0.3,
   "opportunities": [
     {
-      "ticker": "MSFT",
-      "final_rank_score": 0.7743,
-      "rank_label": "strong",
-      "rank_multiplier": 1.25,
-      "baseline_size": 0.04,
-      "preview_size": 0.05,
-      "capped_by": [],
-      "sector": "TECHNOLOGY",
-      "confidence_score": 0.989,
-      "portfolio_fit_label": "strong",
-      "reason": "Strong rank score (0.774); portfolio fit: strong; size multiplied \u00d71.25"
-    },
-    {
-      "ticker": "GOOGL",
-      "final_rank_score": 0.7147,
-      "rank_label": "good",
-      "rank_multiplier": 1.1,
-      "baseline_size": 0.04,
-      "preview_size": 0.044,
-      "capped_by": [],
-      "sector": "COMMUNICATION SERVICES",
-      "confidence_score": 0.989,
-      "portfolio_fit_label": "strong",
-      "reason": "Good rank score (0.715); portfolio fit: strong; size multiplied \u00d71.10"
-    },
-    {
       "ticker": "NVDA",
-      "final_rank_score": 0.7077,
+      "final_rank_score": 0.74,
       "rank_label": "good",
       "rank_multiplier": 1.1,
       "baseline_size": 0.04,
       "preview_size": 0.044,
       "capped_by": [],
       "sector": "TECHNOLOGY",
-      "confidence_score": 0.989,
+      "confidence_score": 0.9936,
+      "portfolio_fit_label": "strong",
+      "reason": "Good rank score (0.740); portfolio fit: strong; size multiplied \u00d71.10"
+    },
+    {
+      "ticker": "AMD",
+      "final_rank_score": 0.7199,
+      "rank_label": "good",
+      "rank_multiplier": 1.1,
+      "baseline_size": 0.04,
+      "preview_size": 0.044,
+      "capped_by": [],
+      "sector": "TECHNOLOGY",
+      "confidence_score": 0.9936,
       "portfolio_fit_label": "good",
-      "reason": "Good rank score (0.708); portfolio fit: good; size multiplied \u00d71.10"
+      "reason": "Good rank score (0.720); portfolio fit: good; size multiplied \u00d71.10"
     },
     {
       "ticker": "AAPL",
-      "final_rank_score": 0.6541,
+      "final_rank_score": 0.6628,
       "rank_label": "good",
       "rank_multiplier": 1.1,
       "baseline_size": 0.04,
-      "preview_size": 0.006,
+      "preview_size": 0.012,
       "capped_by": [
         "sector_cap"
       ],
       "sector": "TECHNOLOGY",
       "confidence_score": 1.0,
       "portfolio_fit_label": "strong",
-      "reason": "Good rank score (0.654); portfolio fit: strong; themes: AI; size multiplied \u00d71.10; capped by sector_cap"
+      "reason": "Good rank score (0.663); portfolio fit: strong; themes: AI; size multiplied \u00d71.10; capped by sector_cap"
+    },
+    {
+      "ticker": "AMZN",
+      "final_rank_score": 0.6537,
+      "rank_label": "good",
+      "rank_multiplier": 1.1,
+      "baseline_size": 0.04,
+      "preview_size": 0.044,
+      "capped_by": [],
+      "sector": "CONSUMER CYCLICAL",
+      "confidence_score": 0.989,
+      "portfolio_fit_label": "good",
+      "reason": "Good rank score (0.654); portfolio fit: good; size multiplied \u00d71.10"
     },
     {
       "ticker": "AVGO",
-      "final_rank_score": 0.5804,
+      "final_rank_score": 0.5546,
       "rank_label": "good",
       "rank_multiplier": 1.1,
       "baseline_size": 0.04,
@@ -73,29 +73,40 @@
       ],
       "sector": "TECHNOLOGY",
       "confidence_score": 0.92,
-      "portfolio_fit_label": "strong",
-      "reason": "Good rank score (0.580); portfolio fit: strong; size multiplied \u00d71.10; capped by sector_cap"
+      "portfolio_fit_label": "good",
+      "reason": "Good rank score (0.555); portfolio fit: good; size multiplied \u00d71.10; capped by sector_cap"
     },
     {
-      "ticker": "PLTR",
-      "final_rank_score": 0.5793,
-      "rank_label": "good",
-      "rank_multiplier": 1.1,
+      "ticker": "META",
+      "final_rank_score": 0.5344,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
       "baseline_size": 0.04,
-      "preview_size": 0.0,
-      "capped_by": [
-        "sector_cap"
-      ],
-      "sector": "TECHNOLOGY",
+      "preview_size": 0.04,
+      "capped_by": [],
+      "sector": "COMMUNICATION SERVICES",
       "confidence_score": 0.92,
-      "portfolio_fit_label": "strong",
-      "reason": "Good rank score (0.579); portfolio fit: strong; size multiplied \u00d71.10; capped by sector_cap"
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.534); portfolio fit: good"
+    },
+    {
+      "ticker": "QQQ",
+      "final_rank_score": 0.5202,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.04,
+      "capped_by": [],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.520); portfolio fit: good"
     },
     {
       "ticker": "SMCI",
-      "final_rank_score": 0.5508,
-      "rank_label": "good",
-      "rank_multiplier": 1.1,
+      "final_rank_score": 0.5193,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
       "baseline_size": 0.04,
       "preview_size": 0.0,
       "capped_by": [
@@ -104,11 +115,11 @@
       "sector": "TECHNOLOGY",
       "confidence_score": 0.92,
       "portfolio_fit_label": "strong",
-      "reason": "Good rank score (0.551); portfolio fit: strong; size multiplied \u00d71.10; capped by sector_cap"
+      "reason": "Neutral rank score (0.519); portfolio fit: strong; capped by sector_cap"
     },
     {
-      "ticker": "NASA",
-      "final_rank_score": 0.5109,
+      "ticker": "XLK",
+      "final_rank_score": 0.5175,
       "rank_label": "neutral",
       "rank_multiplier": 1.0,
       "baseline_size": 0.04,
@@ -117,20 +128,142 @@
       "sector": "FINANCIAL SERVICES",
       "confidence_score": 0.92,
       "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.511); portfolio fit: good"
+      "reason": "Neutral rank score (0.517); portfolio fit: good"
+    },
+    {
+      "ticker": "PLTR",
+      "final_rank_score": 0.506,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "TECHNOLOGY",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.506); portfolio fit: good; capped by sector_cap"
     },
     {
       "ticker": "COIN",
-      "final_rank_score": 0.4524,
+      "final_rank_score": 0.5043,
       "rank_label": "neutral",
       "rank_multiplier": 1.0,
       "baseline_size": 0.04,
-      "preview_size": 0.04,
-      "capped_by": [],
+      "preview_size": 0.02,
+      "capped_by": [
+        "sector_cap"
+      ],
       "sector": "FINANCIAL SERVICES",
       "confidence_score": 0.92,
       "portfolio_fit_label": "good",
-      "reason": "Neutral rank score (0.452); portfolio fit: good"
+      "reason": "Neutral rank score (0.504); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "CHAT",
+      "final_rank_score": 0.5033,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.503); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "SPY",
+      "final_rank_score": 0.4976,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.498); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "TSLA",
+      "final_rank_score": 0.4791,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.016,
+      "capped_by": [
+        "total_cap"
+      ],
+      "sector": "CONSUMER CYCLICAL",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.479); portfolio fit: good; capped by total_cap"
+    },
+    {
+      "ticker": "NASA",
+      "final_rank_score": 0.4784,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.478); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "RIOT",
+      "final_rank_score": 0.4742,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.474); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "MARA",
+      "final_rank_score": 0.4717,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.472); portfolio fit: good; capped by sector_cap"
+    },
+    {
+      "ticker": "IWM",
+      "final_rank_score": 0.467,
+      "rank_label": "neutral",
+      "rank_multiplier": 1.0,
+      "baseline_size": 0.04,
+      "preview_size": 0.0,
+      "capped_by": [
+        "sector_cap"
+      ],
+      "sector": "FINANCIAL SERVICES",
+      "confidence_score": 0.92,
+      "portfolio_fit_label": "good",
+      "reason": "Neutral rank score (0.467); portfolio fit: good; capped by sector_cap"
     }
   ]
 }

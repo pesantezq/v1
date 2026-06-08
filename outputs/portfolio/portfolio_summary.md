@@ -1,58 +1,56 @@
 # Portfolio Construction View
 
-Summary: **overweight financial services**  
-Portfolio view: 16 actionable signals, 20.0% suggested, 20.0% normalized, 0 capped  
+Summary: **overweight technology**  
+Portfolio view: 6 actionable signals, 9.0% suggested, 9.0% normalized, 0 capped  
 Observe-only: **yes**  
-Suggested allocation: **20.0%**  
-Normalized allocation: **20.0%**  
+Suggested allocation: **9.0%**  
+Normalized allocation: **9.0%**  
 Capped positions: **0**  
 Sectors capped: **none**  
 
 ## Market Regime View
 
-- Market regime: risk_on (confidence 0.88) - broad uptrend with supportive breadth; leadership is reasonably distributed; average price change is positive
-- Portfolio fit: aligned
-- Commentary: Current normalized allocations look broadly aligned with a constructive regime. Concentration warnings active: overconcentration_top_sector:Financial Services:45.0%.
+- Market regime: high_volatility (confidence 0.86) - elevated cross-signal volatility; leadership is concentrated in one sector; average price change is negative
+- Portfolio fit: stretched
+- Commentary: Elevated volatility makes the current concentration profile worth monitoring closely. Concentration warnings active: overconcentration_top_sector:Technology:77.8%.
 
 ## Concentration Warnings
 
-- overconcentration_top_sector:Financial Services:45.0%
+- overconcentration_top_sector:Technology:77.8%
 
 ## Exposure Summary
 
-- Top sector: Financial Services (45.0%)
-- Top 3 ticker concentration: 30.0%
+- Top sector: Technology (77.8%)
+- Top 3 ticker concentration: 66.7%
 
 ## Allocation By Sector
 
-- Financial Services: 9.0%
-- Technology: 8.0%
-- Consumer Cyclical: 2.0%
-- Communication Services: 1.0%
+- Technology: 7.0%
+- Financial Services: 2.0%
 
 ## Ticker Allocations
 
 | Ticker | Conviction | Suggested | Normalized | Cap Reason |
 |--------|------------|-----------|------------|------------|
 | AAPL | normal | 2.0% | 2.0% | - |
-| MSFT | normal | 2.0% | 2.0% | - |
 | AMD | normal | 2.0% | 2.0% | - |
-| AVGO | normal | 2.0% | 2.0% | - |
-| XLK | starter | 1.0% | 1.0% | - |
-| CHAT | starter | 1.0% | 1.0% | - |
-| RIOT | starter | 1.0% | 1.0% | - |
-| QQQ | starter | 1.0% | 1.0% | - |
-| SPY | starter | 1.0% | 1.0% | - |
-| MARA | starter | 1.0% | 1.0% | - |
-| AMZN | starter | 1.0% | 1.0% | - |
-| META | starter | 1.0% | 1.0% | - |
-| TSLA | starter | 1.0% | 1.0% | - |
-| IWM | starter | 1.0% | 1.0% | - |
+| NVDA | normal | 2.0% | 2.0% | - |
+| MSFT | starter | 1.0% | 1.0% | - |
 | XLF | starter | 1.0% | 1.0% | - |
 | XLE | starter | 1.0% | 1.0% | - |
+| GOOGL | observe | 0.0% | 0.0% | - |
 | SMCI | defer | 0.0% | 0.0% | - |
-| NASA | defer | 0.0% | 0.0% | - |
+| XLK | defer | 0.0% | 0.0% | - |
+| QQQ | defer | 0.0% | 0.0% | - |
+| CHAT | defer | 0.0% | 0.0% | - |
+| SPY | defer | 0.0% | 0.0% | - |
+| AVGO | defer | 0.0% | 0.0% | - |
+| RIOT | defer | 0.0% | 0.0% | - |
 | PLTR | defer | 0.0% | 0.0% | - |
-| GOOGL | defer | 0.0% | 0.0% | - |
-| NVDA | defer | 0.0% | 0.0% | - |
+| NASA | defer | 0.0% | 0.0% | - |
+| MARA | defer | 0.0% | 0.0% | - |
+| META | defer | 0.0% | 0.0% | - |
+| IWM | defer | 0.0% | 0.0% | - |
+| AMZN | defer | 0.0% | 0.0% | - |
 | COIN | defer | 0.0% | 0.0% | - |
+| TSLA | defer | 0.0% | 0.0% | - |
