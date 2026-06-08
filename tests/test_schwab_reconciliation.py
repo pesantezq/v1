@@ -35,3 +35,24 @@ def test_reconcile_missing_in_local():
 def test_reconcile_no_broker_data():
     r = rec.reconcile({"totals": {}}, {"positions": []}, _CFG)
     assert r["summary_status"] == "no_broker_data"
+
+
+def test_validate_rejects_negative_and_missing_symbol():
+    v = rec.validate_proposed_holdings(
+        [{"symbol": "QQQ", "shares": -1}, {"symbol": "", "shares": 5}], -10.0, _CFG)
+    assert v["ok"] is False
+    joined = " ".join(v["errors"]).lower()
+    assert "negative" in joined and ("symbol" in joined or "cash" in joined)
+
+
+def test_build_proposal_is_proposal_only():
+    r = rec.reconcile(_SNAP, _POS, _CFG)
+    prop = rec.build_proposal(r, _CFG, now_iso="2026-06-08T12:00:00+00:00")
+    assert prop["operator_approval_required"] is True
+    assert prop["auto_applied"] is False
+    assert "before" in prop and "proposed_after" in prop
+    # proposed_after aligns GLD toward schwab qty (4)
+    after = {h["symbol"]: h["shares"] for h in prop["proposed_after"]["holdings"]}
+    assert after["GLD"] == 4
+    assert prop["validation"]["ok"] in (True, False)
+    assert "manual_portfolio_update" in prop["apply_instructions"]
