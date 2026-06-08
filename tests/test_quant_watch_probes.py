@@ -395,3 +395,34 @@ def test_update_ledger_does_not_mutate_input():
     qwp.update_ledger(ledger, [], transitions, now)
     assert ledger["active"][0]["id"] == "a"  # original untouched
     assert ledger["archive"] == []
+
+
+# ── Task 9: overall_status() + render_status() + ledger_liveness ─────────────
+
+def test_overall_status_mapping():
+    assert qwp.overall_status({"active": []}, []) == qwp.GREEN
+    assert qwp.overall_status({"active": [{"id": "a"}]}, []) == qwp.AMBER
+    esc = [{"id": "a", "status": "escalated"}]
+    assert qwp.overall_status({"active": []}, esc) == qwp.RED
+
+
+def test_render_status_shape():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "prior_gauge_underperformance:d95e", "detector": "prior_gauge_underperformance",
+         "concern": "bad", "severity": "amber", "created_at": "2026-06-08T09:00:00+00:00",
+         "observations": [{"run": "2026-06-09", "delta_vs_prior_pp": -24.1}]}],
+        "archive": []}
+    new_probes = [{"id": "prior_gauge_underperformance:d95e"}]
+    transitions = [{"id": "x", "status": "resolved", "resolution": "recovered"},
+                   {"id": "y", "status": "escalated", "resolution": "escalated_to_red"}]
+    status = qwp.render_status(ledger, new_probes, transitions, now)
+    assert status["observe_only"] is True
+    assert status["source"] == "quant_watch_probes"
+    assert status["overall_status"] == "red"   # an escalation this run
+    assert status["active_count"] == 1
+    assert status["registered_today"] == ["prior_gauge_underperformance:d95e"]
+    assert status["resolved_today"] == [{"id": "x", "resolution": "recovered"}]
+    assert status["escalated_today"] == [{"id": "y", "resolution": "escalated_to_red"}]
+    assert status["ledger_liveness"]["status"] == "ok"
+    assert status["active"][0]["age_days"] == 1

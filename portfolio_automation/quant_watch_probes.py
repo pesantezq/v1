@@ -403,3 +403,52 @@ def update_ledger(ledger, new_probes, transitions, now_iso) -> dict:
 
     archive = archive[-MAX_ARCHIVE:]
     return {"schema_version": "1", "active": new_active, "archive": archive}
+
+
+# ── Task 9: overall_status() + render_status() + ledger_liveness ─────────────
+
+def overall_status(ledger, transitions) -> str:
+    if any(t.get("status") == ESCALATED for t in (transitions or [])):
+        return RED
+    if ledger.get("active"):
+        return AMBER
+    return GREEN
+
+
+def render_status(ledger, new_probes, transitions, now_iso) -> dict:
+    active = ledger.get("active") or []
+    new_ids = [p.get("id") for p in (new_probes or [])]
+    resolved_today = [{"id": t.get("id"), "resolution": t.get("resolution")}
+                      for t in (transitions or []) if t.get("status") == RESOLVED]
+    escalated_today = [{"id": t.get("id"), "resolution": t.get("resolution")}
+                       for t in (transitions or []) if t.get("status") == ESCALATED]
+    # liveness: an active probe is "stale" if it has no observation this run;
+    # new probes (registered this run) are never stale.
+    new_id_set = set(new_ids)
+    stale = sum(1 for p in active
+                if p.get("id") not in new_id_set
+                and (p.get("last_evaluated_at") or p.get("created_at")) != now_iso
+                and now_iso not in (p.get("last_evaluated_at") or ""))
+    return {
+        "generated_at": now_iso,
+        "observe_only": True,
+        "schema_version": "1",
+        "source": "quant_watch_probes",
+        "overall_status": overall_status(ledger, transitions),
+        "active_count": len(active),
+        "active": [{
+            "id": p.get("id"), "detector": p.get("detector"),
+            "concern": p.get("concern"), "severity": p.get("severity"),
+            "age_days": _age_days(p.get("created_at"), now_iso),
+            "last_observation": (p.get("observations") or [None])[-1],
+        } for p in active],
+        "registered_today": new_ids,
+        "resolved_today": resolved_today,
+        "escalated_today": escalated_today,
+        "ledger_liveness": {"status": "ok" if stale == 0 else "warn",
+                            "active_count": len(active), "stale_active": stale},
+        "disclaimer": (
+            "Observe-only quant watch ledger. Tracks sub-RED quant concerns; "
+            "re-checks and auto-retires them. Does not modify portfolio, "
+            "allocation, scoring, or decision state."),
+    }
