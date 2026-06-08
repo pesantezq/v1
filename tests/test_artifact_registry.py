@@ -224,3 +224,17 @@ def test_daily_run_status_tracks_same_artifacts_via_registry():
     rows = d.scan_expected_artifacts(Path("."))
     got = [{"path": r["path"], "label": r["label"], "required": r["required"]} for r in rows]
     assert got == golden
+
+
+def test_critical_severity_iff_source_of_truth():
+    # The daily-tool-analysis governance gate derives "source_of_truth degraded"
+    # from overall_status==red, which is only valid while critical severity is
+    # used by, and only by, source_of_truth rows. Guard that biconditional.
+    reg = ar.load_registry()
+    arts = reg["artifacts"]
+    source_of_truth = {k for k, r in arts.items() if r.get("role") == "source_of_truth"}
+    critical = {k for k, r in arts.items() if r.get("severity_if_missing") == "critical"}
+    assert source_of_truth == critical, (
+        f"critical⟺source_of_truth broken: "
+        f"sot-not-critical={source_of_truth - critical}, "
+        f"critical-not-sot={critical - source_of_truth}")
