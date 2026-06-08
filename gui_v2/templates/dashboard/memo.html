@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Memo &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="dashboard-memo-content"
+     hx-get="/dashboard/memo"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-memo-content"
+     hx-select="#dashboard-memo-content"
+     hx-swap="outerHTML"
+     class="space-y-5">
+
+  <header class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold">Memo</h1>
+      {% if memo_date %}
+      <p class="text-sm text-zinc-400">{{ memo_date }} &mdash; advisory read-only</p>
+      {% else %}
+      <p class="text-sm text-zinc-400">Daily investment memo &mdash; advisory read-only</p>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+      {# Copy-to-clipboard button — inline JS only, no server side action #}
+      <button type="button"
+              id="memo-copy-btn"
+              title="Copy memo URL"
+              onclick="(function(){try{navigator.clipboard.writeText(window.location.href).then(function(){var b=document.getElementById('memo-copy-btn');var orig=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=orig;},1500);})}catch(e){}})();"
+              class="px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
+        Copy link
+      </button>
+      <button hx-get="/dashboard/memo"
+              hx-target="#dashboard-memo-content"
+              hx-select="#dashboard-memo-content"
+              hx-swap="outerHTML"
+              class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  {# ------------------------------------------------------------------ #}
+  {# Empty state                                                          #}
+  {# ------------------------------------------------------------------ #}
+  {% if empty %}
+  <div class="rounded-lg bg-zinc-900 border border-zinc-800 px-5 py-10 text-center space-y-2">
+    <div class="text-zinc-400 font-medium">{{ empty_message }}</div>
+    <div class="text-xs text-zinc-500">The daily pipeline produces <span class="font-mono">daily_memo.md</span> each morning.</div>
+  </div>
+
+  {% else %}
+
+  {# ------------------------------------------------------------------ #}
+  {# Memo sections — stacked, phone-readable                             #}
+  {# ------------------------------------------------------------------ #}
+  <div class="space-y-4">
+    {% for section in sections %}
+    {% if section.lines %}
+    <section aria-label="{{ section.title }}"
+             class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
+      <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">{{ section.title }}</h2>
+      <div class="space-y-1">
+        {% for line in section.lines %}
+        {# Skip the title line (# Daily Investment Memo…) and horizontal rules #}
+        {% if not line.startswith('# ') and line != '---' %}
+        {% if line.startswith('>') %}
+        {# Blockquote — verdict / insight callout #}
+        <blockquote class="border-l-2 border-emerald-500/50 pl-3 text-sm text-zinc-300 italic">
+          {{ line[1:].strip() }}
+        </blockquote>
+        {% elif line.startswith('- **') or line.startswith('* **') %}
+        {# Bold-prefixed list item (e.g. decision lines) #}
+        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ line[2:] }}</div>
+        {% elif line.startswith('  - ') or line.startswith('  * ') %}
+        {# Indented sub-list item #}
+        <div class="text-xs text-zinc-400 leading-relaxed pl-4">{{ line.strip()[2:] }}</div>
+        {% elif line.startswith('- ') or line.startswith('* ') %}
+        {# Regular list item #}
+        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ line[2:] }}</div>
+        {% elif line.startswith('**') and line.endswith('**') %}
+        {# Bold standalone label #}
+        <div class="text-sm font-semibold text-zinc-200 mt-1">{{ line[2:-2] }}</div>
+        {% elif line.strip() %}
+        {# Plain text #}
+        <div class="text-sm text-zinc-300 leading-relaxed">{{ line }}</div>
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+    {% else %}
+    {# Section defined but no content lines — show placeholder #}
+    <section aria-label="{{ section.title }}"
+             class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1 opacity-50">
+      <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">{{ section.title }}</h2>
+      <p class="text-xs text-zinc-500">No data for this section today.</p>
+    </section>
+    {% endfor %}
+  </div>
+
+  {# ------------------------------------------------------------------ #}
+  {# Footer — source artifact + download link                            #}
+  {# ------------------------------------------------------------------ #}
+  <div class="flex items-center justify-between text-xs text-zinc-500 pt-1 pb-4">
+    <span class="font-mono">daily_memo.md</span>
+    <a href="/outputs/latest/daily_memo.md"
+       download
+       class="text-sky-400 hover:text-sky-300 underline underline-offset-2">
+      Download memo
+    </a>
+  </div>
+
+  {% endif %}
+
+</div>
+{% endblock %}
