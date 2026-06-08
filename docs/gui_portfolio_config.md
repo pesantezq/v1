@@ -24,9 +24,10 @@ If any condition is unmet:
 - `POST /dashboard/portfolio-config/save` returns HTTP 403 with an error message
   explaining which conditions are unmet.
 
-The gate is evaluated at **request time** (not startup), so toggling
-`GUI_V2_PORTFOLIO_EDIT` in the environment takes effect on the next request after a
-service restart.
+The gate is evaluated at **request time** (not startup), so the in-process check
+always reflects the current environment. However, environment variables are loaded
+from `.env` at **process start** — a change to `.env` requires a `systemctl
+restart stockbot-dashboard` before it takes effect.
 
 **Default state:** All three conditions are unset; editing is disabled by default.
 The dashboard can be read without any of these variables. The edit capability is
@@ -59,8 +60,18 @@ Never hardcode credentials in source files.
 Submitting the form triggers `POST /dashboard/portfolio-config/validate`. This
 endpoint:
 - Parses the submitted holdings and cash.
-- Runs `gui_v2/portfolio_config_writer.validate_config_edit()` — checks symbol
-  format, numeric bounds, optional target-weight sum, holding count cap.
+- Runs `gui_v2/portfolio_config_writer.validate_config_edit()` — checks:
+  - **Symbol format:** must match `^[A-Z][A-Z0-9.\-]{0,9}$` (1–10 uppercase
+    letters/digits, optionally `.` or `-`; examples: `AAPL`, `BRK.B`, `BRK-B`).
+  - **Duplicate symbols:** each symbol may appear only once.
+  - **Non-negative shares and cash:** `shares >= 0`, `cash_available >= 0`.
+  - **Target-weight bounds:** each `target_weight` in `[0, 1]`.
+  - **Target-weight sum ≈ 1.0:** when any weights are provided, their sum must
+    be within ±0.02 of 1.0.
+  - **`concentration_cap` from `growth_mode`:** no single `target_weight` may
+    exceed the `growth_mode.concentration_cap` value in `config.json`.
+  - **`leverage_cap` from `growth_mode`:** sum of `target_weight` for all
+    `is_leveraged=true` positions may not exceed `growth_mode.leverage_cap`.
 - If validation fails: returns an error fragment via HTMX with the exact errors
   listed. Nothing is written.
 - If validation passes: computes a dry-run diff (old vs. proposed holdings) and
@@ -91,12 +102,14 @@ A separate "Confirm and Save" submit button sends the same form to
 
 ## Backup and Audit
 
-Every save operation (successful or not) leaves a recoverable trail:
+Every save that **passes validation** writes a timestamped backup (before
+`config.json` is touched) and an audit record. A validation-rejected save
+writes nothing — no backup file and no audit entry are created.
 
 | Artifact | Location | Purpose |
 |---|---|---|
 | Pre-save backup | `outputs/policy/portfolio_backups/config.<timestamp>.json` | Restore to previous state |
-| Audit record | `outputs/policy/manual_portfolio_updates.jsonl` | Append-only log of every change |
+| Audit record | `outputs/policy/manual_portfolio_updates.jsonl` | Append-only log of every successful change |
 
 The backup is taken **before** `config.json` is written, so a crash during write
 leaves the original backup intact.
