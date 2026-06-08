@@ -270,12 +270,12 @@
       "model": "gpt-4o-mini"
     },
     "rss_feeds": [
-      "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-      "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-      "https://feeds.bloomberg.com/markets/news.rss",
-      "https://www.ft.com/?format=rss",
-      "https://www.reutersagency.com/feed/?best-topics=business-finance",
-      "https://seekingalpha.com/market_currents.xml"
+  	"https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+  	"https://www.cnbc.com/id/100003114/device/rss/rss.html",
+  	"https://feeds.bloomberg.com/markets/news.rss",
+  	"https://www.ft.com/?format=rss",
+  	"https://www.reutersagency.com/feed/?best-topics=business-finance",
+  	"https://seekingalpha.com/market_currents.xml"
     ],
     "max_items_per_run": 30,
     "ollama_model": "qwen2.5:7b-instruct",
@@ -285,12 +285,12 @@
     "testing_mode": false
   },
   "holding_rationale": {
-    "QQQ": "long-term US growth engine \u2014 top 100 Nasdaq companies",
-    "NASA": "space & aerospace sector ETF \u2014 long-term thematic growth exposure",
-    "VFH": "US financial sector diversification \u2014 cyclical exposure",
-    "VXUS": "international equity \u2014 reduces single-country concentration risk",
+    "QQQ": "long-term US growth engine — top 100 Nasdaq companies",
+    "NASA": "space & aerospace sector ETF — long-term thematic growth exposure",
+    "VFH": "US financial sector diversification — cyclical exposure",
+    "VXUS": "international equity — reduces single-country concentration risk",
     "GLD": "inflation hedge and portfolio ballast during stress periods",
-    "QLD": "2\u00d7 leveraged Nasdaq \u2014 tactical growth amplifier, hard-capped at 5%"
+    "QLD": "2× leveraged Nasdaq — tactical growth amplifier, hard-capped at 5%"
   },
   "opportunity_cost": {
     "idle_cash_threshold": 2000.0,
@@ -403,8 +403,8 @@
   },
   "backtesting": {
     "auto_apply": {
-      "enabled": true,
-      "max_monthly_drift": 0.1,
+      "enabled": false,
+      "max_monthly_drift": 0.10,
       "max_abs_delta": 0.05
     }
   }

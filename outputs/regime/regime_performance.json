@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-06-08T09:01:37.816443",
+  "generated_at": "2026-06-01T09:01:12.000180",
   "primary_window_days": 3,
-  "resolved_signals": 748,
+  "resolved_signals": 528,
   "by_regime": {
     "neutral": {
-      "total_signals": 748,
-      "win_rate": 0.566,
-      "avg_return_pct": 0.794,
-      "avg_signal_score": 0.28,
+      "total_signals": 528,
+      "win_rate": 0.585,
+      "avg_return_pct": 1.265,
+      "avg_signal_score": 0.273,
       "avg_conviction_score": null,
       "avg_holding_outcome_pct": 0.0,
       "avg_regime_confidence": 0.0,
       "conviction_bands": {
         "unknown": {
-          "signal_count": 748,
-          "win_rate": 0.566,
-          "avg_return_pct": 0.794,
+          "signal_count": 528,
+          "win_rate": 0.585,
+          "avg_return_pct": 1.265,
           "avg_conviction_score": null,
           "avg_holding_outcome_pct": 0.0
         }
@@ -23,13 +23,13 @@
       "best_conviction_band": "unknown",
       "worst_conviction_band": "unknown",
       "degraded_mode_success_rate": null,
-      "normal_mode_success_rate": 0.566,
+      "normal_mode_success_rate": 0.585,
       "degraded_data_impact_note": "no degraded data in this regime sample"
     }
   },
   "observability": {
     "regime_vs_success_correlation": {
-      "neutral": 0.566
+      "neutral": 0.585
     },
     "degraded_mode_vs_regime_reliability": {
       "neutral": {
@@ -39,7 +39,7 @@
     },
     "confidence_vs_outcome_within_regime": {
       "neutral": {
-        "high": 0.566,
+        "high": 0.585,
         "medium": null,
         "low": null
       }

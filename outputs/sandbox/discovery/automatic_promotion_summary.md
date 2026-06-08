@@ -1,8 +1,8 @@
 # Automatic Promotion Governance _(Sandbox Research Only)_
 
-**Generated:** 2026-06-08T10:33:52.508869+00:00
+**Generated:** 2026-06-01T10:34:45.210121+00:00
 **Run mode:** discovery
-**Run id:** 2026-06-08_automatic_promotion
+**Run id:** 2026-06-01_automatic_promotion
 
 > **This is sandbox research governance only, not a buy/sell/hold recommendation. Candidates are classified into research-monitor states for further review; this layer cannot alter official portfolio, watchlist, allocation, scoring, recommendation, or decision state.**
 
