@@ -373,3 +373,18 @@ def test_shipped_registry_meets_debt_target():
     assert st["classified"] == st["counts"]["total"], "not every row is classified"
     assert st["unjustified_debt"] == [], f"unjustified debt present: {st['unjustified_debt']}"
     assert st["debt_target_met"] is True
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Validator immutability guard
+# ---------------------------------------------------------------------------
+
+
+def test_run_does_not_mutate_the_registry_contract(tmp_path):
+    import hashlib
+    from pathlib import Path
+    reg_path = Path(ar.DEFAULT_REGISTRY_PATH)
+    before = hashlib.sha256(reg_path.read_bytes()).hexdigest()
+    ar.run_artifact_registry(root=tmp_path, write_files=True)  # full run incl. status write
+    after = hashlib.sha256(reg_path.read_bytes()).hexdigest()
+    assert before == after, "run_artifact_registry must never modify artifact_registry.yaml"
