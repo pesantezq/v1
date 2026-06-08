@@ -426,3 +426,45 @@ def test_render_status_shape():
     assert status["escalated_today"] == [{"id": "y", "resolution": "escalated_to_red"}]
     assert status["ledger_liveness"]["status"] == "ok"
     assert status["active"][0]["age_days"] == 1
+
+
+def test_update_ledger_observation_is_deepcopied():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": []}], "archive": []}
+    obs = {"run": "2026-06-09", "v": 1}
+    transitions = [qwp._active({"id": "a"}, "x", now, obs)]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    obs["v"] = 999  # mutate the source AFTER update_ledger
+    assert out["active"][0]["observations"][-1]["v"] == 1  # ledger unaffected
+
+
+def test_update_ledger_archive_fifo_keeps_newest():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [],
+              "archive": [{"id": f"old{i}"} for i in range(qwp.MAX_ARCHIVE)]}
+    # archive a fresh probe → oldest evicted, newest kept
+    led2 = {"schema_version": "1", "active": [
+        {"id": "fresh", "detector": "d", "created_at": now, "observations": []}],
+        "archive": ledger["archive"]}
+    transitions = [qwp._resolved({"id": "fresh"}, "recovered", "x", now)]
+    out = qwp.update_ledger(led2, [], transitions, now)
+    archive_ids = [a["id"] for a in out["archive"]]
+    assert len(out["archive"]) == qwp.MAX_ARCHIVE
+    assert "old0" not in archive_ids        # oldest evicted
+    assert "fresh" in archive_ids           # newest kept
+
+
+def test_evaluate_error_path_keeps_probe_active(monkeypatch):
+    retune = _retune_fixture()
+    ledger = qwp._empty_ledger()
+    ledger["active"] = [qwp.detect_prior_gauge_underperformance(
+        retune, "2026-06-08T09:00:00+00:00", "r")]
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+    monkeypatch.setitem(qwp._EVALUATORS, qwp.DETECTOR_PRIOR_GAUGE, boom)
+    transitions = qwp.evaluate(retune, {}, "d95e", ledger, "2026-06-09T09:00:00+00:00")
+    assert len(transitions) == 1
+    assert transitions[0]["status"] == "active"
+    assert "eval error" in transitions[0]["detail"]

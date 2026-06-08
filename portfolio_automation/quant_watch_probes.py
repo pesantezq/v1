@@ -13,6 +13,7 @@ docs/superpowers/specs/2026-06-08-quant-watch-probes-design.md.
 """
 from __future__ import annotations
 
+import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,7 +168,7 @@ def detect_prior_gauge_underperformance(
         "scope_key": current_fp,
         "created_at": now_iso,
         "created_run": created_run,
-        "severity": "amber",
+        "severity": AMBER,
         "concern": (
             f"current-fp {current_fp[:8]} {delta_prior:+.1f}pp vs prior gauge "
             f"{prior_fp[:8]} at n={resolved}, mean_return_1d "
@@ -242,7 +243,7 @@ def detect_negative_mean_return_persistence(
         "scope_key": current_fp,
         "created_at": now_iso,
         "created_run": created_run,
-        "severity": "amber",
+        "severity": AMBER,
         "concern": (f"current-fp {current_fp[:8]} mean_return_1d {mean_ret:.2f} "
                     f"(< 0) at n={resolved}"),
         "trigger_snapshot": {"mean_return_1d": mean_ret, "resolved_1d": resolved},
@@ -293,7 +294,7 @@ def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str) -> list[d
             "scope_key": sector,
             "created_at": now_iso,
             "created_run": created_run,
-            "severity": "amber",
+            "severity": AMBER,
             "concern": (f"sector {sector} is a loser ({row.get('vs_baseline_pp')}pp vs "
                         f"baseline) at n={row.get('n_samples')}"),
             "trigger_snapshot": {"vs_baseline_pp": row.get("vs_baseline_pp"),
@@ -371,7 +372,6 @@ def update_ledger(ledger, new_probes, transitions, now_iso) -> dict:
         appended (capped at MAX_OBSERVATIONS);
       - new_probes are appended to active;
       - archive is FIFO-capped at MAX_ARCHIVE."""
-    import copy
     active_in = {p.get("id"): copy.deepcopy(p) for p in (ledger.get("active") or [])}
     archive = [copy.deepcopy(a) for a in (ledger.get("archive") or [])]
     by_id = {t.get("id"): t for t in transitions}
@@ -382,7 +382,7 @@ def update_ledger(ledger, new_probes, transitions, now_iso) -> dict:
         if t is None:
             new_active.append(probe)  # no transition (shouldn't happen) → keep
             continue
-        if t["status"] in (RESOLVED, ESCALATED):
+        if t.get("status", "") in (RESOLVED, ESCALATED):
             probe["resolved_at"] = t.get("resolved_at", now_iso)
             probe["resolved_run"] = now_iso[:10]
             probe["resolution"] = t.get("resolution")
@@ -394,7 +394,7 @@ def update_ledger(ledger, new_probes, transitions, now_iso) -> dict:
             obs = t.get("observation")
             if obs:
                 trail = list(probe.get("observations") or [])
-                trail.append(obs)
+                trail.append(copy.deepcopy(obs))
                 probe["observations"] = trail[-MAX_OBSERVATIONS:]
             new_active.append(probe)
 
@@ -427,8 +427,7 @@ def render_status(ledger, new_probes, transitions, now_iso) -> dict:
     new_id_set = set(new_ids)
     stale = sum(1 for p in active
                 if p.get("id") not in new_id_set
-                and (p.get("last_evaluated_at") or p.get("created_at")) != now_iso
-                and now_iso not in (p.get("last_evaluated_at") or ""))
+                and (p.get("last_evaluated_at") or p.get("created_at")) != now_iso)
     return {
         "generated_at": now_iso,
         "observe_only": True,
