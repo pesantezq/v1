@@ -37,4 +37,4 @@ def test_client_get_uses_bearer_and_returns_json(monkeypatch):
     out = c.get_accounts(positions=True)
     assert out == [{"ok": True}]
     assert captured["headers"]["Authorization"] == "Bearer TOK"
-    assert "fields=positions" in captured["url"] or captured.get("url", "").endswith("/accounts") is False
+    assert "fields=positions" in captured["url"]

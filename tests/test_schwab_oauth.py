@@ -33,3 +33,32 @@ def test_token_save_load_roundtrip_and_perms(tmp_path, monkeypatch):
 def test_load_token_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "nope.json")
     assert oa.load_token() is None
+
+
+def test_valid_access_token_none_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "nope.json")
+    assert oa.valid_access_token() is None
+
+
+def test_valid_access_token_returns_fresh_token(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    oa.save_token({"access_token": "FRESH", "refresh_token": "r", "expires_at": int(time.time()) + 3600})
+    assert oa.valid_access_token() == "FRESH"  # not near expiry -> no refresh
+
+
+def test_valid_access_token_refreshes_when_near_expiry(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    oa.save_token({"access_token": "OLD", "refresh_token": "r", "expires_at": int(time.time()) + 10})
+    monkeypatch.setattr(oa, "_post_token", lambda data: {"access_token": "NEW", "expires_at": int(time.time()) + 3600})
+    assert oa.valid_access_token() == "NEW"  # near expiry -> refreshed
+
+
+def test_valid_access_token_none_when_refresh_fails(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    oa.save_token({"access_token": "OLD", "refresh_token": "r", "expires_at": int(time.time()) - 5})
+    def boom(data): raise RuntimeError("refresh failed")
+    monkeypatch.setattr(oa, "_post_token", boom)
+    assert oa.valid_access_token() is None  # expired + refresh fails -> None
