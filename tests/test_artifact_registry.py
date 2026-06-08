@@ -119,11 +119,11 @@ def _mini_registry():
                 "sot.json": {"path": "outputs/latest/sot.json", "label": "sot",
                     "lens": "decision_core", "role": "source_of_truth", "required": True,
                     "cadence": "daily", "producer": "p", "consumers": ["daily-tool-analysis"],
-                    "severity_if_missing": "critical"},
+                    "severity_if_missing": "critical", "consumer_status": "consumed"},
                 "probe.json": {"path": "outputs/latest/probe.json", "label": "probe",
                     "lens": "quant_learning", "role": "probe", "required": True,
                     "cadence": "daily", "producer": "p", "consumers": ["UNATTRIBUTED"],
-                    "severity_if_missing": "warning"},
+                    "severity_if_missing": "warning", "consumer_status": "consumed"},
             }}
 
 
@@ -276,3 +276,30 @@ def test_critical_severity_iff_source_of_truth():
         f"critical⟺source_of_truth broken: "
         f"sot-not-critical={source_of_truth - critical}, "
         f"critical-not-sot={critical - source_of_truth}")
+
+
+# ---------------------------------------------------------------------------
+# Task 2: 100% classified, UNATTRIBUTED removed, consumed rows non-empty
+# ---------------------------------------------------------------------------
+
+
+def test_every_row_has_valid_consumer_status():
+    reg = ar.load_registry()
+    bad = {k: r.get("consumer_status") for k, r in reg["artifacts"].items()
+           if r.get("consumer_status") not in ar.CONSUMER_STATUSES}
+    assert bad == {}, f"rows missing/invalid consumer_status: {bad}"
+
+
+def test_no_unattributed_sentinel_remains():
+    reg = ar.load_registry()
+    leftover = [k for k, r in reg["artifacts"].items()
+                if "UNATTRIBUTED" in (r.get("consumers") or [])]
+    assert leftover == [], f"UNATTRIBUTED sentinel still present: {leftover}"
+
+
+def test_consumed_rows_have_real_consumers():
+    reg = ar.load_registry()
+    bad = [k for k, r in reg["artifacts"].items()
+           if r.get("consumer_status") == "consumed"
+           and not (isinstance(r.get("consumers"), list) and r.get("consumers"))]
+    assert bad == [], f"consumed rows with empty consumers: {bad}"

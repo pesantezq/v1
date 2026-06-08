@@ -31,6 +31,7 @@ artifacts:
     producer: decision_engine
     consumers: [daily-tool-analysis, portfolio-memo-reviewer, portfolio-resolver-investigator, portfolio-architect]
     severity_if_missing: critical
+    consumer_status: consumed
 
   decision_plan.md:
     path: outputs/latest/decision_plan.md
@@ -40,8 +41,9 @@ artifacts:
     required: true
     cadence: daily
     producer: decision_engine
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: warning
+    consumer_status: diagnostic_only
 
   system_decision_summary.json:
     path: outputs/latest/system_decision_summary.json
@@ -53,6 +55,7 @@ artifacts:
     producer: decision_engine
     consumers: [portfolio-resolver-investigator, portfolio-memo-reviewer]
     severity_if_missing: critical
+    consumer_status: consumed
 
   decision_explanations.json:
     path: outputs/latest/decision_explanations.json
@@ -64,6 +67,7 @@ artifacts:
     producer: decision_explainer
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   decision_triage.json:
     path: outputs/latest/decision_triage.json
@@ -73,8 +77,9 @@ artifacts:
     required: false
     cadence: daily
     producer: decision_triage
-    consumers: [UNATTRIBUTED]
+    consumers: [portfolio-attribution-analyst]
     severity_if_missing: info
+    consumer_status: consumed
 
   # ── Risk action ───────────────────────────────────────────────────────────
   risk_delta.json:
@@ -87,6 +92,7 @@ artifacts:
     producer: risk_delta_advisor
     consumers: [portfolio-resolver-investigator, daily-tool-analysis, portfolio-memo-reviewer, portfolio-render-reviewer]
     severity_if_missing: warning
+    consumer_status: consumed
 
   correlation_risk_advisor.json:
     path: outputs/latest/correlation_risk_advisor.json
@@ -96,8 +102,9 @@ artifacts:
     required: false
     cadence: daily
     producer: correlation_risk_advisor
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   vol_regime_advisor.json:
     path: outputs/latest/vol_regime_advisor.json
@@ -109,6 +116,7 @@ artifacts:
     producer: vol_regime_advisor
     consumers: [portfolio-resolver-investigator]
     severity_if_missing: info
+    consumer_status: consumed
 
   earnings_gate.json:
     path: outputs/latest/earnings_gate.json
@@ -118,8 +126,9 @@ artifacts:
     required: false
     cadence: daily
     producer: earnings_gate
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   exit_advisor.json:
     path: outputs/latest/exit_advisor.json
@@ -129,8 +138,9 @@ artifacts:
     required: false
     cadence: daily
     producer: exit_advisor
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   cash_deployment_plan.json:
     path: outputs/latest/cash_deployment_plan.json
@@ -140,8 +150,9 @@ artifacts:
     required: false
     cadence: daily
     producer: cash_deployment_plan
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   tax_harvest_advisor.json:
     path: outputs/latest/tax_harvest_advisor.json
@@ -151,8 +162,9 @@ artifacts:
     required: false
     cadence: daily
     producer: tax_harvest_advisor
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   # ── Quant learning ────────────────────────────────────────────────────────
   retune_impact.json:
@@ -165,6 +177,7 @@ artifacts:
     producer: retune_impact_tracker
     consumers: [portfolio-resolver-investigator, portfolio-memo-reviewer, portfolio-attribution-analyst, daily-tool-analysis, portfolio-render-reviewer]
     severity_if_missing: warning
+    consumer_status: consumed
 
   pattern_efficacy_monthly.json:
     path: outputs/latest/pattern_efficacy_monthly.json
@@ -176,6 +189,7 @@ artifacts:
     producer: pattern_learning
     consumers: [daily-tool-analysis, monthly-tool-analysis]
     severity_if_missing: warning
+    consumer_status: consumed
 
   pattern_efficacy_weekly.json:
     path: outputs/latest/pattern_efficacy_weekly.json
@@ -185,8 +199,9 @@ artifacts:
     required: false
     cadence: weekly
     producer: pattern_learning
-    consumers: [UNATTRIBUTED]
+    consumers: [monthly-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   pattern_efficacy_yearly.json:
     path: outputs/latest/pattern_efficacy_yearly.json
@@ -198,6 +213,7 @@ artifacts:
     producer: pattern_learning
     consumers: [yearly-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   gate_retune_suggestions.json:
     path: outputs/latest/gate_retune_suggestions.json
@@ -209,6 +225,7 @@ artifacts:
     producer: retune_suggestions
     consumers: [monthly-tool-analysis, portfolio-learning-loop-health, daily-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   confidence_calibration.json:
     path: outputs/latest/confidence_calibration.json
@@ -218,8 +235,9 @@ artifacts:
     required: false
     cadence: daily
     producer: confidence_calibration
-    consumers: [UNATTRIBUTED]
+    consumers: [watchlist_scanner.memo_enrichment]
     severity_if_missing: info
+    consumer_status: consumed
 
   alpha_attribution_report.json:
     path: outputs/latest/alpha_attribution_report.json
@@ -229,8 +247,9 @@ artifacts:
     required: false
     cadence: daily
     producer: alpha_attribution_report
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   kelly_sizing_advisor.json:
     path: outputs/latest/kelly_sizing_advisor.json
@@ -240,8 +259,9 @@ artifacts:
     required: false
     cadence: daily
     producer: kelly_sizing_advisor
-    consumers: [UNATTRIBUTED]
+    consumers: [watchlist_scanner.__main__, watchlist_scanner.daily_memo]
     severity_if_missing: info
+    consumer_status: consumed
 
   quant_watch_status.json:
     path: outputs/latest/quant_watch_status.json
@@ -253,6 +273,7 @@ artifacts:
     producer: quant_watch_probes
     consumers: [quant-watch-analysis, daily-tool-analysis]
     severity_if_missing: warning
+    consumer_status: consumed
     notes: "consumers quant-watch-analysis + daily-tool-analysis land when feat/quant-watch-probes merges"
 
   # ── Market discovery ──────────────────────────────────────────────────────
@@ -266,6 +287,7 @@ artifacts:
     producer: theme_engine
     consumers: [yearly-tool-analysis, portfolio-discovery-health]
     severity_if_missing: info
+    consumer_status: consumed
 
   watch_candidates.json:
     path: outputs/latest/watch_candidates.json
@@ -277,6 +299,7 @@ artifacts:
     producer: discovery_pulse
     consumers: [portfolio-discovery-health]
     severity_if_missing: info
+    consumer_status: consumed
 
   watchlist_signals.json:
     path: outputs/latest/watchlist_signals.json
@@ -288,6 +311,7 @@ artifacts:
     producer: watchlist_scanner
     consumers: [portfolio-resolver-investigator]
     severity_if_missing: info
+    consumer_status: consumed
 
   top100_daily.json:
     path: outputs/latest/top100_daily.json
@@ -299,6 +323,7 @@ artifacts:
     producer: universe_sanitation
     consumers: [portfolio-learning-loop-health]
     severity_if_missing: info
+    consumer_status: consumed
 
   top100_weekly.json:
     path: outputs/latest/top100_weekly.json
@@ -308,8 +333,9 @@ artifacts:
     required: false
     cadence: weekly
     producer: universe_sanitation
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: archive_only
 
   top100_monthly.json:
     path: outputs/latest/top100_monthly.json
@@ -321,6 +347,7 @@ artifacts:
     producer: universe_sanitation
     consumers: [monthly-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   market_opportunities.json:
     path: outputs/latest/market_opportunities.json
@@ -332,6 +359,7 @@ artifacts:
     producer: main
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
     notes: producer-unverified
 
   market_narrative_daily.json:
@@ -344,6 +372,7 @@ artifacts:
     producer: market_narratives
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   market_narrative_weekly.json:
     path: outputs/latest/market_narrative_weekly.json
@@ -355,6 +384,7 @@ artifacts:
     producer: market_narratives
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   market_narrative_monthly.json:
     path: outputs/latest/market_narrative_monthly.json
@@ -366,6 +396,7 @@ artifacts:
     producer: market_narratives
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   news_intelligence.json:
     path: outputs/latest/news_intelligence.json
@@ -377,6 +408,7 @@ artifacts:
     producer: run_news_intelligence
     consumers: [portfolio-resolver-investigator]
     severity_if_missing: warning
+    consumer_status: consumed
 
   news_evidence_layer.json:
     path: outputs/latest/news_evidence_layer.json
@@ -388,6 +420,7 @@ artifacts:
     producer: news_evidence_layer
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   scraped_intel_comparison.json:
     path: outputs/latest/scraped_intel_comparison.json
@@ -397,8 +430,9 @@ artifacts:
     required: false
     cadence: daily
     producer: discovery_pulse
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   scraped_intel_run_summary.json:
     path: outputs/latest/scraped_intel_run_summary.json
@@ -408,8 +442,9 @@ artifacts:
     required: false
     cadence: daily
     producer: discovery_pulse
-    consumers: [UNATTRIBUTED]
+    consumers: [daily_run_status]
     severity_if_missing: info
+    consumer_status: consumed
 
   discovery_pulse_status.json:
     path: outputs/latest/discovery_pulse_status.json
@@ -421,6 +456,7 @@ artifacts:
     producer: discovery_pulse
     consumers: [yearly-tool-analysis, monthly-tool-analysis, daily-tool-analysis]
     severity_if_missing: warning
+    consumer_status: consumed
 
   # ── Developer telemetry ───────────────────────────────────────────────────
   daily_run_status.json:
@@ -433,6 +469,7 @@ artifacts:
     producer: daily_run_status
     consumers: [portfolio-resolver-investigator, daily-tool-analysis, portfolio-discovery-health]
     severity_if_missing: warning
+    consumer_status: consumed
 
   pipeline_run_status.json:
     path: outputs/latest/pipeline_run_status.json
@@ -444,6 +481,7 @@ artifacts:
     producer: run_status
     consumers: [today.py]
     severity_if_missing: info
+    consumer_status: consumed
 
   fmp_budget_status.json:
     path: outputs/latest/fmp_budget_status.json
@@ -455,6 +493,7 @@ artifacts:
     producer: fmp_budget_telemetry
     consumers: [daily-tool-analysis, portfolio-render-reviewer, portfolio-resolver-investigator, portfolio-memo-reviewer]
     severity_if_missing: warning
+    consumer_status: consumed
 
   ai_budget_summary.json:
     path: outputs/latest/ai_budget_summary.json
@@ -466,6 +505,7 @@ artifacts:
     producer: ai_budget
     consumers: [monthly-tool-analysis, daily-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   decisions_due_for_resolution.json:
     path: outputs/latest/decisions_due_for_resolution.json
@@ -477,6 +517,7 @@ artifacts:
     producer: resolution_due_probe
     consumers: [portfolio-resolver-investigator, daily-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   historical_backfill_status.json:
     path: outputs/latest/historical_backfill_status.json
@@ -488,6 +529,7 @@ artifacts:
     producer: historical_backfill
     consumers: [daily-tool-analysis]
     severity_if_missing: info
+    consumer_status: consumed
 
   memo_delivery_status.json:
     path: outputs/latest/memo_delivery_status.json
@@ -497,8 +539,9 @@ artifacts:
     required: false
     cadence: daily
     producer: memo_email_sender
-    consumers: [UNATTRIBUTED]
+    consumers: []
     severity_if_missing: info
+    consumer_status: diagnostic_only
 
   data_quality_report.json:
     path: outputs/latest/data_quality_report.json
@@ -508,8 +551,9 @@ artifacts:
     required: false
     cadence: daily
     producer: data_quality_monitor
-    consumers: [UNATTRIBUTED]
+    consumers: [portfolio_automation.confidence_calibration, portfolio_automation.market_narratives]
     severity_if_missing: info
+    consumer_status: consumed
 
   theme_engine_llm_metadata.json:
     path: outputs/latest/theme_engine_llm_metadata.json
@@ -521,6 +565,7 @@ artifacts:
     producer: theme_engine
     consumers: [portfolio-discovery-health]
     severity_if_missing: info
+    consumer_status: consumed
 
   ai_decision_validation.json:
     path: outputs/latest/ai_decision_validation.json
@@ -530,8 +575,9 @@ artifacts:
     required: false
     cadence: daily
     producer: ai_decision_validator
-    consumers: [UNATTRIBUTED]
+    consumers: [gui_v2.data.today]
     severity_if_missing: info
+    consumer_status: consumed
 
   # ── Meta governance ───────────────────────────────────────────────────────
   doc_audit_status.json:
@@ -544,6 +590,7 @@ artifacts:
     producer: doc_audit
     consumers: [monthly-tool-analysis, daily-tool-analysis, portfolio-doc-auditor]
     severity_if_missing: info
+    consumer_status: consumed
 
   artifact_registry_status.json:
     path: outputs/latest/artifact_registry_status.json
@@ -555,6 +602,7 @@ artifacts:
     producer: artifact_registry
     consumers: [daily-tool-analysis]
     severity_if_missing: warning
+    consumer_status: consumed
 
   # ── Extra tracked (non-outputs/latest) ────────────────────────────────────
   daily_memo.md:
@@ -567,6 +615,7 @@ artifacts:
     producer: daily_memo
     consumers: [daily-tool-analysis, monthly-tool-analysis, portfolio-memo-reviewer, portfolio-learning-loop-health, portfolio-render-reviewer]
     severity_if_missing: warning
+    consumer_status: consumed
 
   daily_memo.txt:
     path: outputs/latest/daily_memo.txt
@@ -576,8 +625,9 @@ artifacts:
     required: true
     cadence: daily
     producer: daily_memo
-    consumers: [UNATTRIBUTED]
+    consumers: [memo_email_sender]
     severity_if_missing: warning
+    consumer_status: consumed
 
   portfolio_snapshot.json:
     path: outputs/portfolio/portfolio_snapshot.json
@@ -589,6 +639,7 @@ artifacts:
     producer: portfolio_snapshot
     consumers: [yearly-tool-analysis, portfolio-render-reviewer, portfolio-test-reviewer, portfolio-resolver-investigator, portfolio-memo-reviewer]
     severity_if_missing: warning
+    consumer_status: consumed
     notes: producer-unverified
 
   approved_ranking_config.json:
@@ -599,8 +650,9 @@ artifacts:
     required: false
     cadence: on_demand
     producer: allocation_policy_activation
-    consumers: [UNATTRIBUTED]
+    consumers: [watchlist_scanner.approved_config_loader]
     severity_if_missing: info
+    consumer_status: consumed
     notes: producer-unverified
 
   approved_allocation_policy.json:
@@ -611,8 +663,9 @@ artifacts:
     required: false
     cadence: on_demand
     producer: allocation_policy_activation
-    consumers: [UNATTRIBUTED]
+    consumers: [watchlist_scanner.approved_allocation_policy_loader]
     severity_if_missing: info
+    consumer_status: consumed
     notes: producer-unverified
 
   theme_opportunities.json:
@@ -623,5 +676,6 @@ artifacts:
     required: false
     cadence: on_demand
     producer: theme_engine
-    consumers: [UNATTRIBUTED]
+    consumers: [watchlist_scanner.theme_alignment, watchlist_scanner.system_summary]
     severity_if_missing: info
+    consumer_status: consumed
