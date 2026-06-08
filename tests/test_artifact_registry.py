@@ -359,3 +359,17 @@ def test_validate_consumed_empty_is_unjustified(tmp_path):
     reg["artifacts"]["consumed.json"]["consumers"] = []  # invariant violation at runtime
     st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
     assert "consumed.json" in st["unjustified_debt"]
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Live debt sanity + invariant on the shipped registry
+# ---------------------------------------------------------------------------
+
+
+def test_shipped_registry_meets_debt_target():
+    # The shipped registry must be 100% classified with zero unjustified debt.
+    from pathlib import Path
+    st = ar.run_artifact_registry(root=".", write_files=False)
+    assert st["classified"] == st["counts"]["total"], "not every row is classified"
+    assert st["unjustified_debt"] == [], f"unjustified debt present: {st['unjustified_debt']}"
+    assert st["debt_target_met"] is True
