@@ -7,12 +7,23 @@ def test_mask_account_keeps_last4():
     assert bm.mask_account(None) == "…"
 
 
+def test_mask_account_never_reveals_full_id():
+    # ids with length <= 4: full id must NOT appear in the mask
+    for raw in ("12", "1234", "ABCD"):
+        assert raw not in bm.mask_account(raw)
+
+
 def test_redact_scrubs_tokens_and_secrets():
     s = "access_token=abc123 refresh_token=zzz client_secret=shh code=qqq ok"
     out = bm.redact(s)
     for leak in ("abc123", "zzz", "shh", "qqq"):
         assert leak not in out
     assert "ok" in out
+
+
+def test_redact_covers_camelcase_token_keys():
+    for s in ("accessToken=SEKRET", "refreshToken: SEKRET", '"clientSecret":"SEKRET"'):
+        assert "SEKRET" not in bm.redact(s)
 
 
 def test_redact_handles_non_string():
@@ -79,3 +90,12 @@ def test_normalize_is_defensive_on_missing_fields():
     snap = bm.normalize_accounts([{"securitiesAccount": {}}], [], now_iso="t")
     assert len(snap.accounts) == 1
     assert snap.accounts[0].positions == []
+
+
+def test_normalize_represents_short_as_negative():
+    raw = [{"securitiesAccount": {"accountNumber": "99999", "positions": [
+        {"instrument": {"symbol": "tsla"}, "shortQuantity": 5}
+    ]}}]
+    snap = bm.normalize_accounts(raw, [], now_iso="t")
+    p = snap.accounts[0].positions[0]
+    assert p.symbol == "TSLA" and p.quantity == -5.0

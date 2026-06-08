@@ -122,12 +122,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reconcile", action="store_true")
     args = ap.parse_args(argv)
     print("READ-ONLY MODE ACTIVE — no trading endpoints are called.")
-    if args.sync:
+    if args.sync and args.reconcile:
+        # combined: live sync then reconcile from the just-written snapshot
+        st = run_sync()
+        run_reconcile()
+    elif args.sync:
         st = run_sync()
     elif args.reconcile:
-        run_sync()
-        st = run_status()
+        # reconcile-only: use cached snapshot/positions; no network sync
         run_reconcile()
+        st = run_status()
     else:
         st = run_status()
     # print status WITHOUT secrets

@@ -7,7 +7,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-_SECRET_KEYS = ("access_token", "refresh_token", "client_secret", "code", "id_token", "Authorization")
+_SECRET_KEYS = (
+    "access_token", "refresh_token", "client_secret", "code", "id_token", "Authorization",
+    # camelCase variants used in OAuth JSON responses and JS-style headers:
+    "accessToken", "refreshToken", "clientSecret", "idToken",
+)
 _KEY_ALT = "|".join(re.escape(k) for k in _SECRET_KEYS)
 # Match an optionally-quoted secret key, a : or = separator, then the value, which
 # may be: a double/single-quoted string, an auth scheme + token (Bearer/Basic <tok>),
@@ -29,9 +33,15 @@ def redact(text: Any) -> str:
 
 
 def mask_account(account: Any) -> str:
-    """Mask an account identifier to its last 4 chars (e.g. '…6789')."""
+    """Mask an account identifier to its last 4 chars (e.g. '…6789').
+    When the id length is <= 4 the whole id would be revealed, so return a
+    fully-opaque mask instead (never reveals a short id in full)."""
     s = "" if account is None else str(account)
-    return "…" + s[-4:] if s else "…"
+    if not s:
+        return "…"
+    if len(s) <= 4:
+        return "…"  # fully opaque: too short to show last-4 safely
+    return "…" + s[-4:]
 
 
 @dataclass
@@ -118,7 +128,7 @@ def snapshot_dict(snap: BrokerSnapshot) -> dict:
     mv = sum(a.total_market_value or 0.0 for a in snap.accounts)
     cash = sum(a.cash or 0.0 for a in snap.accounts)
     return {
-        "generated_at": snap.snapshot_timestamp, "source": "schwab",
+        "generated_at": snap.snapshot_timestamp, "observe_only": True, "source": "schwab",
         "snapshot_timestamp": snap.snapshot_timestamp,
         "accounts": [{
             "account_id_masked": a.account_id_masked, "account_type": a.account_type,
@@ -138,4 +148,4 @@ def positions_dict(snap: BrokerSnapshot) -> dict:
                 "average_cost": p.average_cost, "asset_type": p.asset_type,
                 "account_ref_masked": p.account_ref_masked, "source_timestamp": p.source_timestamp,
             })
-    return {"generated_at": snap.snapshot_timestamp, "source": "schwab", "positions": rows}
+    return {"generated_at": snap.snapshot_timestamp, "observe_only": True, "source": "schwab", "positions": rows}

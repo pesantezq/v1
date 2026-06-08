@@ -58,6 +58,16 @@ def test_build_proposal_is_proposal_only():
     assert "manual_portfolio_update" in prop["apply_instructions"]
 
 
+def test_validate_flags_duplicate_and_target_weight_sum():
+    # duplicate symbol must fail
+    assert rec.validate_proposed_holdings(
+        [{"symbol": "Q", "shares": 1}, {"symbol": "Q", "shares": 2}], 0, {})["ok"] is False
+    # target weights that sum to >1.02 must fail
+    assert rec.validate_proposed_holdings(
+        [{"symbol": "A", "shares": 1, "target_weight": 0.5},
+         {"symbol": "B", "shares": 1, "target_weight": 0.9}], 0, {})["ok"] is False
+
+
 def test_build_proposal_retains_local_only_holdings():
     """missing_in_schwab symbols must NOT be dropped from proposed_after and
     the reason string must surface them for operator review."""

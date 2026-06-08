@@ -68,3 +68,84 @@ def test_reconcile_does_not_raise_on_non_dict_artifact(tmp_path):
     (tmp_path / "outputs/latest/schwab_positions.json").write_text(json.dumps("garbage"))
     out = sync.run_reconcile(root=tmp_path)  # must NOT raise
     assert "summary_status" in out
+
+
+def test_all_artifacts_carry_observe_only(tmp_path, monkeypatch):
+    """ALL five written artifacts must carry observe_only=True after a sync+reconcile run."""
+    monkeypatch.setenv("SCHWAB_CLIENT_ID", "cid")
+    monkeypatch.setenv("SCHWAB_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1/cb")
+    monkeypatch.setattr(sync.oauth, "valid_access_token", lambda: "TOK")
+
+    import portfolio_automation.brokers.broker_models as bm_mod
+    from portfolio_automation.brokers.broker_models import BrokerSnapshot, BrokerAccount
+
+    fake_snap = BrokerSnapshot(snapshot_timestamp="t", accounts=[
+        BrokerAccount(account_id_masked="…6789", account_type="MARGIN",
+                      total_market_value=1000.0, cash=100.0, positions=[])
+    ])
+    import portfolio_automation.brokers.schwab_client as cl
+    monkeypatch.setattr(cl.SchwabClient, "get_account_numbers", lambda self: [])
+    monkeypatch.setattr(cl.SchwabClient, "get_accounts", lambda self, **kw: [])
+    monkeypatch.setattr(bm_mod, "normalize_accounts", lambda *a, **kw: fake_snap)
+
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"portfolio": {"cash_available": 100.0, "holdings": []}}))
+
+    sync.run_sync(root=tmp_path)
+    sync.run_reconcile(root=tmp_path)
+
+    artifact_names = [
+        "broker_sync_status.json",
+        "schwab_portfolio_snapshot.json",
+        "schwab_positions.json",
+        "portfolio_reconciliation.json",
+        "portfolio_config_update_proposal.json",
+    ]
+    for name in artifact_names:
+        p = tmp_path / "outputs/latest" / name
+        assert p.exists(), f"artifact missing: {name}"
+        data = json.loads(p.read_text())
+        assert data.get("observe_only") is True, f"observe_only not True in {name}"
+
+
+def test_reconcile_only_does_not_call_run_sync(tmp_path, monkeypatch):
+    """--reconcile alone must NOT trigger a live sync (network-free)."""
+    # monkeypatch run_sync to raise if called
+    def _no_sync(**kw):
+        raise AssertionError("run_sync must NOT be called when only --reconcile is passed")
+
+    monkeypatch.setattr(sync, "run_sync", _no_sync)
+
+    # seed cached artifacts so reconcile has something to work with
+    (tmp_path / "outputs/latest").mkdir(parents=True)
+    (tmp_path / "outputs/latest/schwab_portfolio_snapshot.json").write_text(
+        json.dumps({"generated_at": "t", "totals": {"market_value": 0, "cash": 0}}))
+    (tmp_path / "outputs/latest/schwab_positions.json").write_text(
+        json.dumps({"positions": []}))
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"portfolio": {"cash_available": 0, "holdings": []}}))
+
+    # patch run_reconcile and run_status to be root-aware
+    orig_reconcile = sync.run_reconcile
+    orig_status = sync.run_status
+    monkeypatch.setattr(sync, "run_reconcile", lambda **kw: orig_reconcile(root=tmp_path, **kw))
+    monkeypatch.setattr(sync, "run_status", lambda **kw: orig_status(root=tmp_path, **kw))
+    monkeypatch.delenv("SCHWAB_CLIENT_ID", raising=False)
+
+    result = sync.main(["--reconcile"])
+    assert result == 0  # must succeed without calling run_sync
+
+
+def test_reconcile_does_not_mutate_config(tmp_path):
+    """run_reconcile is proposal-only: config.json must be byte-for-byte unchanged."""
+    (tmp_path / "outputs/latest").mkdir(parents=True)
+    (tmp_path / "outputs/latest/schwab_portfolio_snapshot.json").write_text(
+        json.dumps({"totals": {"cash": 1}}))
+    (tmp_path / "outputs/latest/schwab_positions.json").write_text(
+        json.dumps({"positions": [{"symbol": "QQQ", "quantity": 6}]}))
+    cfg = {"portfolio": {"cash_available": 1, "holdings": [{"symbol": "QQQ", "shares": 5}]}}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    before = (tmp_path / "config.json").read_bytes()
+    sync.run_reconcile(root=tmp_path)
+    assert (tmp_path / "config.json").read_bytes() == before  # proposal-only: config untouched

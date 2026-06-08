@@ -61,7 +61,7 @@ def reconcile(snapshot: dict, positions: dict, config: dict) -> dict:
     }[summary]
 
     return {
-        "generated_at": snapshot.get("generated_at"), "source": "schwab",
+        "generated_at": snapshot.get("generated_at"), "observe_only": True, "source": "schwab",
         "summary_status": summary,
         "matched": matched, "quantity_mismatches": mismatches,
         "missing_in_local": missing_local, "missing_in_schwab": missing_schwab,
@@ -122,7 +122,7 @@ def build_proposal(reconciliation: dict, config: dict, *, now_iso: str) -> dict:
 
     validation = validate_proposed_holdings(after_holdings, after_cash, config)
     return {
-        "generated_at": now_iso, "source": "schwab",
+        "generated_at": now_iso, "observe_only": True, "source": "schwab",
         "source_snapshot_timestamp": reconciliation.get("generated_at"),
         "before": {"holdings": before_holdings, "cash": before_cash},
         "proposed_after": {"holdings": after_holdings, "cash": after_cash},
