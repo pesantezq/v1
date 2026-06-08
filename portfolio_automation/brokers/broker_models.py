@@ -4,21 +4,28 @@ no trade logic. Observe-only."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Any
 
 _SECRET_KEYS = ("access_token", "refresh_token", "client_secret", "code", "id_token", "Authorization")
+_KEY_ALT = "|".join(re.escape(k) for k in _SECRET_KEYS)
+# Match an optionally-quoted secret key, a : or = separator, then the value, which
+# may be: a double/single-quoted string, an auth scheme + token (Bearer/Basic <tok>),
+# or a bare token. Over-redaction is acceptable; under-redaction (a leak) is not.
 _SECRET_RE = re.compile(
-    r"(?i)\b(" + "|".join(re.escape(k) for k in _SECRET_KEYS) + r")\b\s*[=:]\s*\S+"
+    r"""(?xi)
+    ( ["']? \b (?:""" + _KEY_ALT + r""") \b ["']? \s* [:=] \s* )
+    ( "[^"]*" | '[^']*' | (?:bearer|basic)\s+[^\s,;}"']+ | [^\s,;}"'&]+ )
+    """
 )
 
 
 def redact(text: Any) -> str:
-    """Scrub token/secret/code values from any text before logging/persisting."""
+    """Scrub token/secret/code VALUES from any text (incl. JSON / dict-repr / Bearer
+    headers) before logging or persisting. Over-redaction is fine; leaks are not."""
     if text is None:
         return ""
-    s = str(text)
-    return _SECRET_RE.sub(lambda m: f"{m.group(1)}=<redacted>", s)
+    return _SECRET_RE.sub(lambda m: m.group(1) + "<redacted>", str(text))
 
 
 def mask_account(account: Any) -> str:

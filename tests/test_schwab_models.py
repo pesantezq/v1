@@ -20,6 +20,27 @@ def test_redact_handles_non_string():
     assert "5" in bm.redact(5)
 
 
+def test_redact_scrubs_bearer_authorization_header():
+    out = bm.redact("Authorization: Bearer abc.def.ghi")
+    assert "abc.def.ghi" not in out and "ghi" not in out
+
+
+def test_redact_scrubs_json_and_dict_repr_quoted_keys():
+    assert "shh" not in bm.redact('"client_secret": "shh"')
+    # use a value that is NOT a substring of any key name to avoid false substring matches
+    assert "s3cr3t" not in bm.redact(str({"access_token": "s3cr3t"}))
+    both = bm.redact('{"client_secret": "shh", "access_token": "s3cr3t"}')
+    assert "shh" not in both and "s3cr3t" not in both
+
+
+def test_redact_preserves_non_secret_text():
+    # the existing space-separated case must still preserve trailing 'ok'
+    out = bm.redact("access_token=abc123 refresh_token=zzz client_secret=shh code=qqq ok")
+    for leak in ("abc123", "zzz", "shh", "qqq"):
+        assert leak not in out
+    assert "ok" in out
+
+
 import json
 from pathlib import Path
 
