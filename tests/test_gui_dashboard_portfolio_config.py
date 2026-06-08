@@ -651,6 +651,52 @@ def test_apply_backup_created_before_write(tmp_path):
     assert backup_path.exists(), f"Backup file missing: {backup_path}"
 
 
+def test_apply_backup_precedes_write_on_failure(monkeypatch, tmp_path):
+    """
+    When _atomic_write_json raises, apply must:
+      - return ok=False
+      - have created the backup before attempting the write
+      - report backup_path pointing at an existing file whose contents
+        equal the pre-edit config
+      - leave config.json byte-unchanged (no corruption)
+    """
+    from gui_v2 import portfolio_config_writer as writer_mod
+    from gui_v2.portfolio_config_writer import apply_config_edit
+
+    cfg_path, policy_dir = _setup_apply_env(tmp_path)
+    pre_edit_config = json.loads(cfg_path.read_text(encoding="utf-8"))
+    original_bytes = cfg_path.read_bytes()
+
+    def _raise_on_write(path, payload):
+        raise OSError("simulated write failure")
+
+    # Monkeypatch the name as imported inside portfolio_config_writer
+    monkeypatch.setattr(writer_mod, "_atomic_write_json", _raise_on_write)
+
+    holdings = [{"symbol": "SPY", "shares": 10}]
+    result = apply_config_edit(tmp_path, holdings, 999.0)
+
+    # Must have failed cleanly
+    assert result["ok"] is False, "apply should return ok=False on write failure"
+
+    # Backup must exist (was created before the write attempt)
+    backup_path_str = result.get("backup_path")
+    assert backup_path_str is not None, "backup_path should be set even on failure"
+    backup_path = Path(backup_path_str)
+    assert backup_path.exists(), f"Backup file missing after failure: {backup_path}"
+
+    # Backup must equal pre-edit config
+    backup_content = json.loads(backup_path.read_text(encoding="utf-8"))
+    assert backup_content == pre_edit_config, (
+        "Backup does not match the pre-edit config"
+    )
+
+    # Live config.json must be byte-unchanged (no partial write / corruption)
+    assert cfg_path.read_bytes() == original_bytes, (
+        "config.json was corrupted by a failed write — backup-before-write ordering broken"
+    )
+
+
 def test_apply_backup_matches_pre_edit_config(tmp_path):
     """Backup contents must equal the config BEFORE the edit."""
     from gui_v2.portfolio_config_writer import apply_config_edit
@@ -932,6 +978,61 @@ def test_post_validate_does_not_write_config(monkeypatch, tmp_path):
         assert r.status_code == 200
         assert cfg_path.read_bytes() == original_bytes, (
             "config.json was mutated by /validate — this must never happen"
+        )
+    finally:
+        monkeypatch.setattr(mod, "REPO_ROOT", orig)
+
+
+# ---------------------------------------------------------------------------
+# Partial growth_mode — regression guard against Jinja UndefinedError / 500
+# ---------------------------------------------------------------------------
+
+
+def _sample_config_partial_growth_mode(missing: tuple[str, ...]) -> dict:
+    """Build a config whose growth_mode omits the given key(s)."""
+    gm: dict = {
+        "mode": "accumulation_aggressive",
+        "concentration_cap": 0.6,
+        "leverage_cap": 0.25,
+    }
+    for key in missing:
+        gm.pop(key, None)
+    cfg = _sample_config()
+    cfg["growth_mode"] = gm
+    return cfg
+
+
+def test_edit_page_200_with_growth_mode_missing_leverage_cap(monkeypatch, tmp_path):
+    """
+    GET /dashboard/portfolio-config (edit enabled) with a config whose
+    growth_mode lacks leverage_cap must return 200, not 500 (UndefinedError).
+    """
+    cfg = _sample_config_partial_growth_mode(("leverage_cap",))
+    _write_config(tmp_path, cfg)
+    client, orig, mod = _client_with_root(monkeypatch, tmp_path, auth=True, edit_flag=True)
+    try:
+        r = client.get("/dashboard/portfolio-config", auth=("testuser", "testpass"))
+        assert r.status_code == 200, (
+            f"Expected 200 with partial growth_mode (no leverage_cap), got {r.status_code}. "
+            f"Body: {r.text[:400]}"
+        )
+    finally:
+        monkeypatch.setattr(mod, "REPO_ROOT", orig)
+
+
+def test_edit_page_200_with_growth_mode_empty_dict(monkeypatch, tmp_path):
+    """
+    GET /dashboard/portfolio-config (edit enabled) with a config whose
+    growth_mode is an empty dict must return 200, not 500.
+    """
+    cfg = _sample_config_partial_growth_mode(("concentration_cap", "leverage_cap"))
+    _write_config(tmp_path, cfg)
+    client, orig, mod = _client_with_root(monkeypatch, tmp_path, auth=True, edit_flag=True)
+    try:
+        r = client.get("/dashboard/portfolio-config", auth=("testuser", "testpass"))
+        assert r.status_code == 200, (
+            f"Expected 200 with empty growth_mode dict, got {r.status_code}. "
+            f"Body: {r.text[:400]}"
         )
     finally:
         monkeypatch.setattr(mod, "REPO_ROOT", orig)

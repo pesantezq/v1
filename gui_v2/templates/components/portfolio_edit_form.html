@@ -155,11 +155,11 @@
   {% if growth_mode %}
   <div class="rounded-md bg-zinc-800/50 border border-zinc-700 px-4 py-3 text-xs text-zinc-400 space-y-1">
     <p class="font-semibold text-zinc-300">Active growth mode constraints</p>
-    {% if growth_mode.concentration_cap is not none %}
-    <p>Concentration cap: {{ "%.0f%%" | format(growth_mode.concentration_cap * 100) }} per position</p>
+    {% if growth_mode.get('concentration_cap') is not none %}
+    <p>Concentration cap: {{ "%.0f%%" | format(growth_mode.get('concentration_cap') * 100) }} per position</p>
     {% endif %}
-    {% if growth_mode.leverage_cap is not none %}
-    <p>Leverage cap: {{ "%.0f%%" | format(growth_mode.leverage_cap * 100) }} total leveraged exposure</p>
+    {% if growth_mode.get('leverage_cap') is not none %}
+    <p>Leverage cap: {{ "%.0f%%" | format(growth_mode.get('leverage_cap') * 100) }} total leveraged exposure</p>
     {% endif %}
   </div>
   {% endif %}
