@@ -95,3 +95,29 @@ def _select_prior_gauge(
         return None, None
     fp, entry = max(candidates, key=lambda kv: kv[1].get("last_signal_time") or "")
     return fp, entry
+
+
+def _active(probe: dict, detail: str, now_iso: str, observation: dict | None) -> dict:
+    return {"id": probe.get("id"), "status": ACTIVE, "detail": detail,
+            "observation": observation}
+
+
+def _resolved(probe: dict, resolution: str, detail: str, now_iso: str) -> dict:
+    return {"id": probe.get("id"), "status": RESOLVED, "resolution": resolution,
+            "detail": detail, "resolved_at": now_iso, "observation": None}
+
+
+def _escalated(probe: dict, detail: str, now_iso: str) -> dict:
+    return {"id": probe.get("id"), "status": ESCALATED, "resolution": "escalated_to_red",
+            "detail": detail, "resolved_at": now_iso, "observation": None}
+
+
+def _age_days(created_at: str | None, now_iso: str) -> int:
+    if not created_at:
+        return 0
+    try:
+        c = datetime.fromisoformat(created_at)
+        n = datetime.fromisoformat(now_iso)
+        return (n - c).days
+    except Exception:
+        return 0

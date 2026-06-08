@@ -50,3 +50,21 @@ def test_select_prior_gauge_none_when_only_current_and_pretracker():
     }
     fp, entry = qwp._select_prior_gauge(by_fp, "CUR")
     assert fp is None and entry is None
+
+
+def test_transition_builders_shape():
+    probe = {"id": "d:scope"}
+    now = "2026-06-08T09:00:00+00:00"
+    a = qwp._active(probe, "still bad", now, {"run": "2026-06-08", "v": 1})
+    assert a == {"id": "d:scope", "status": "active", "detail": "still bad",
+                 "observation": {"run": "2026-06-08", "v": 1}}
+    r = qwp._resolved(probe, "recovered", "delta +1pp", now)
+    assert r["status"] == "resolved" and r["resolution"] == "recovered"
+    assert r["resolved_at"] == now
+    e = qwp._escalated(probe, "crossed gate", now)
+    assert e["status"] == "escalated" and e["resolution"] == "escalated_to_red"
+
+
+def test_age_days():
+    assert qwp._age_days("2026-06-01T00:00:00+00:00", "2026-06-08T00:00:00+00:00") == 7
+    assert qwp._age_days(None, "2026-06-08T00:00:00+00:00") == 0
