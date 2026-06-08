@@ -68,3 +68,92 @@ def test_transition_builders_shape():
 def test_age_days():
     assert qwp._age_days("2026-06-01T00:00:00+00:00", "2026-06-08T00:00:00+00:00") == 7
     assert qwp._age_days(None, "2026-06-08T00:00:00+00:00") == 0
+
+
+# ── Task 4: D1 prior_gauge_underperformance ──────────────────────────────────
+
+def _retune_fixture(cur_hr=0.4489, prior_hr=0.6894, pre_hr=0.4062,
+                    resolved=176, mean_ret=-1.18, current_fp="d95e"):
+    return {
+        "current_fingerprint": current_fp,
+        "outcome_attribution": {
+            "pre_tracker_label": "pre_tracker_unknown",
+            "by_fingerprint": {
+                current_fp: {"resolved_1d": resolved, "hit_rate_1d": cur_hr,
+                             "mean_return_1d": mean_ret,
+                             "last_signal_time": "2026-06-08T09:00:00"},
+                "f60e": {"resolved_1d": 264, "hit_rate_1d": prior_hr,
+                         "last_signal_time": "2026-05-29T09:00:00"},
+                "pre_tracker_unknown": {"resolved_1d": 352, "hit_rate_1d": pre_hr,
+                                        "last_signal_time": "2026-05-19T01:00:00"},
+            },
+        },
+    }
+
+
+def test_d1_fires_on_prior_gauge_underperformance():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "test-run")
+    assert probe is not None
+    assert probe["id"] == "prior_gauge_underperformance:d95e"
+    assert probe["detector"] == qwp.DETECTOR_PRIOR_GAUGE
+    assert probe["scope_key"] == "d95e"
+    assert probe["lens"] == "quant"
+    assert "vs prior gauge" in probe["concern"]
+    assert probe["trigger_snapshot"]["delta_vs_prior_pp"] == -24.1
+
+
+def test_d1_quiet_when_within_resolve_band():
+    # current 0.68 vs prior 0.69 → delta -1pp, above the -10 fire gate
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(cur_hr=0.68), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is None
+
+
+def test_d1_quiet_when_daily_red_would_own_it():
+    # delta vs pre_tracker is large (|0.30-0.55|=25pp >= 10) → daily RED owns it
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(cur_hr=0.30, pre_hr=0.55), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is None
+
+
+def test_d1_quiet_below_min_sample():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(resolved=10), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is None
+
+
+def test_d1_eval_resolves_on_scope_change():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    # current fingerprint is now something else
+    t = qwp._eval_prior_gauge(probe, _retune_fixture(current_fp="NEWFP"),
+                              None, "NEWFP", "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "scope_changed"
+
+
+def test_d1_eval_resolves_on_recovery():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    recovered = _retune_fixture(cur_hr=0.68)  # delta vs prior -1pp >= -2
+    t = qwp._eval_prior_gauge(probe, recovered, None, "d95e",
+                              "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "recovered"
+
+
+def test_d1_eval_escalates_when_crosses_daily_red_gate():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    worse = _retune_fixture(cur_hr=0.30, pre_hr=0.55)  # |delta vs pre|=25pp
+    t = qwp._eval_prior_gauge(probe, worse, None, "d95e",
+                              "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "escalated"
+
+
+def test_d1_eval_stays_active_when_still_bad():
+    probe = qwp.detect_prior_gauge_underperformance(
+        _retune_fixture(), "2026-06-08T09:00:00+00:00", "r")
+    t = qwp._eval_prior_gauge(probe, _retune_fixture(), None, "d95e",
+                              "2026-06-09T09:00:00+00:00")
+    assert t["status"] == "active"
+    assert t["observation"]["delta_vs_prior_pp"] == -24.1

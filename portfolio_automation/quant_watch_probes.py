@@ -125,3 +125,97 @@ def _age_days(created_at: str | None, now_iso: str) -> int:
         return (n - c).days
     except Exception:
         return 0
+
+
+# ── Task 4: D1 — prior_gauge_underperformance ────────────────────────────────
+
+def _pre_tracker_entry(retune: dict) -> dict:
+    attr = (retune or {}).get("outcome_attribution") or {}
+    by_fp = attr.get("by_fingerprint") or {}
+    return by_fp.get(attr.get("pre_tracker_label") or "pre_tracker_unknown") or {}
+
+
+def detect_prior_gauge_underperformance(
+    retune: dict, now_iso: str, created_run: str,
+) -> dict | None:
+    attr = (retune or {}).get("outcome_attribution") or {}
+    by_fp = attr.get("by_fingerprint") or {}
+    current_fp = (retune or {}).get("current_fingerprint")
+    cur = by_fp.get(current_fp) if current_fp else None
+    if not isinstance(cur, dict):
+        return None
+    resolved = cur.get("resolved_1d") or 0
+    if resolved < MIN_RESOLVED_1D:
+        return None
+    prior_fp, prior = _select_prior_gauge(by_fp, current_fp)
+    if not prior:
+        return None
+    cur_hr, prior_hr = cur.get("hit_rate_1d"), prior.get("hit_rate_1d")
+    if cur_hr is None or prior_hr is None:
+        return None
+    delta_prior = round((cur_hr - prior_hr) * 100, 1)
+    if delta_prior > PRIOR_GAUGE_FIRE_PP:
+        return None
+    pre_hr = _pre_tracker_entry(retune).get("hit_rate_1d")
+    delta_pre = round((cur_hr - pre_hr) * 100, 1) if pre_hr is not None else None
+    if delta_pre is not None and abs(delta_pre) >= PRETRACKER_RED_GATE_PP:
+        return None  # daily RED owns it — not our band
+    return {
+        "id": f"{DETECTOR_PRIOR_GAUGE}:{current_fp}",
+        "detector": DETECTOR_PRIOR_GAUGE,
+        "lens": "quant",
+        "scope_key": current_fp,
+        "created_at": now_iso,
+        "created_run": created_run,
+        "severity": "amber",
+        "concern": (
+            f"current-fp {current_fp[:8]} {delta_prior:+.1f}pp vs prior gauge "
+            f"{prior_fp[:8]} at n={resolved}, mean_return_1d "
+            f"{cur.get('mean_return_1d', 0):.2f}"
+        ),
+        "trigger_snapshot": {
+            "current_hit_rate_1d": cur_hr, "prior_hit_rate_1d": prior_hr,
+            "delta_vs_prior_pp": delta_prior, "delta_vs_pretracker_pp": delta_pre,
+            "resolved_1d": resolved, "mean_return_1d": cur.get("mean_return_1d"),
+            "prior_fp": prior_fp,
+        },
+        "resolve_hint": f"delta vs prior gauge recovers to >= {PRIOR_GAUGE_RESOLVE_PP}pp, "
+                        f"fingerprint changes, or sample collapses",
+        "last_evaluated_at": now_iso,
+        "observations": [{"run": now_iso[:10], "delta_vs_prior_pp": delta_prior}],
+    }
+
+
+def _eval_prior_gauge(probe, retune, efficacy, current_fp, now_iso) -> dict:
+    scope = probe.get("scope_key")
+    if current_fp and scope != current_fp:
+        return _resolved(probe, "scope_changed", f"current fp now {str(current_fp)[:8]}", now_iso)
+    by_fp = ((retune or {}).get("outcome_attribution") or {}).get("by_fingerprint") or {}
+    cur = by_fp.get(scope)
+    if not isinstance(cur, dict):
+        return _resolved(probe, "scope_changed", "fingerprint no longer present", now_iso)
+    resolved = cur.get("resolved_1d") or 0
+    if resolved == 0:
+        return _resolved(probe, "sample_collapsed", "resolved_1d == 0", now_iso)
+    cur_hr = cur.get("hit_rate_1d")
+    pre_hr = _pre_tracker_entry(retune).get("hit_rate_1d")
+    # escalate BEFORE resolve — a worsening probe must not silently resolve
+    # gate fires only when current underperforms pre_tracker (negative delta);
+    # overperformance vs pre_tracker is not a RED condition.
+    if cur_hr is not None and pre_hr is not None:
+        delta_pre = round((cur_hr - pre_hr) * 100, 1)
+        if delta_pre <= -PRETRACKER_RED_GATE_PP and resolved >= MIN_RESOLVED_1D:
+            return _escalated(
+                probe, f"crossed daily RED gate: {delta_pre:+.1f}pp vs pre_tracker "
+                       f"at n={resolved}", now_iso)
+    if _age_days(probe.get("created_at"), now_iso) >= MAX_PROBE_AGE_DAYS:
+        return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
+    prior_fp, prior = _select_prior_gauge(by_fp, scope)
+    if not prior or prior.get("hit_rate_1d") is None or cur_hr is None:
+        return _resolved(probe, "scope_changed", "no prior gauge to compare", now_iso)
+    delta_prior = round((cur_hr - prior["hit_rate_1d"]) * 100, 1)
+    if delta_prior >= PRIOR_GAUGE_RESOLVE_PP:
+        return _resolved(probe, "recovered",
+                         f"delta vs prior {delta_prior:+.1f}pp >= {PRIOR_GAUGE_RESOLVE_PP}", now_iso)
+    return _active(probe, f"delta vs prior {delta_prior:+.1f}pp", now_iso,
+                   {"run": now_iso[:10], "delta_vs_prior_pp": delta_prior})
