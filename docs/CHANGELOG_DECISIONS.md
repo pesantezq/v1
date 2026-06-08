@@ -91,7 +91,7 @@ architecture, output_contract
 
 ### Decision
 
-Shipped the registry consumer-debt burn-down: `consumer_status` (consumed / diagnostic_only / archive_only / deprecated_candidate) replaces the opaque `UNATTRIBUTED` sentinel; all 54 rows classified; target 100%/0-unjustified met (`debt_target_met: true`). The validator now reports structured debt fields (observe-only — never moves `overall_status`). Validator-immutability and a conftest protected-file guard fix the `test_no_approval_file_is_inert` live-registry leak. Proof-wired `confidence_calibration.json` (daily-tool-analysis) and `pattern_efficacy_weekly.json` (monthly-tool-analysis) as real named consumers. Consumer distribution: 45 consumed / 8 diagnostic_only / 1 archive_only / 0 deprecated_candidate.
+Shipped the registry consumer-debt burn-down: `consumer_status` (consumed / diagnostic_only / archive_only / deprecated_candidate) replaces the opaque `UNATTRIBUTED` sentinel; all 54 rows classified; target 100%/0-unjustified met (`debt_target_met: true`). The validator now reports structured debt fields (observe-only — never moves `overall_status`). Validator-immutability and a conftest protected-file guard fix the `test_no_approval_file_is_inert` live-registry leak. Proof-wired `correlation_risk_advisor.json` (daily-tool-analysis) and `pattern_efficacy_weekly.json` (monthly-tool-analysis) from `diagnostic_only` to `consumed` (`confidence_calibration.json` turned out already-consumed by `watchlist_scanner.memo_enrichment`, so it was not a proof-wire target). Consumer distribution: 45 consumed / 8 diagnostic_only / 1 archive_only / 0 deprecated_candidate.
 
 ### Why
 
