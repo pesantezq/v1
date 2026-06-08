@@ -54,5 +54,18 @@ def test_build_proposal_is_proposal_only():
     # proposed_after aligns GLD toward schwab qty (4)
     after = {h["symbol"]: h["shares"] for h in prop["proposed_after"]["holdings"]}
     assert after["GLD"] == 4
-    assert prop["validation"]["ok"] in (True, False)
+    assert prop["validation"]["ok"] is True
     assert "manual_portfolio_update" in prop["apply_instructions"]
+
+
+def test_build_proposal_retains_local_only_holdings():
+    """missing_in_schwab symbols must NOT be dropped from proposed_after and
+    the reason string must surface them for operator review."""
+    r = rec.reconcile(_SNAP, _POS, _CFG)
+    # NASA is missing_in_schwab (local-only)
+    assert any(m["symbol"] == "NASA" for m in r["missing_in_schwab"])
+    prop = rec.build_proposal(r, _CFG, now_iso="2026-06-08T12:00:00+00:00")
+    after_syms = {h["symbol"] for h in prop["proposed_after"]["holdings"]}
+    assert "NASA" in after_syms, "local-only symbol must be retained, not auto-removed"
+    assert "NASA" in prop["reason"], "reason must surface retained local-only holdings"
+    assert "operator review" in prop["reason"].lower()

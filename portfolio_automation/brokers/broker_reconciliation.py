@@ -3,8 +3,6 @@
 PROPOSAL-ONLY config-update artifact. No config writes. Observe-only."""
 from __future__ import annotations
 
-from typing import Any
-
 _QTY_EPS = 1e-6
 _CASH_EPS = 0.01
 
@@ -88,8 +86,9 @@ def validate_proposed_holdings(holdings: list[dict], cash: float, config: dict) 
         seen.add(sym)
         if float(h.get("shares") or 0) < 0:
             errors.append(f"negative shares for {sym}")
-    # guardrails (advisory): concentration/leverage caps from config.growth_mode
-    gm = config.get("growth_mode") or {}
+    # Concentration/leverage caps are enforced at allocation/decision time (decision engine / allocation policy),
+    # NOT on a shares-to-broker-reality sync proposal — this validator only guards data sanity
+    # (negatives, missing/dup symbols, target-weight sum).
     # target weights sum check only if any target_weight present
     tws = [float(h["target_weight"]) for h in (holdings or []) if h.get("target_weight") is not None]
     if tws and abs(sum(tws) - 1.0) > 0.02:
@@ -112,13 +111,22 @@ def build_proposal(reconciliation: dict, config: dict, *, now_iso: str) -> dict:
     after_holdings = list(after.values())
     after_cash = reconciliation.get("cash", {}).get("schwab", before_cash)
 
+    missing_in_schwab = reconciliation.get("missing_in_schwab") or []
+    reason = "Align local StockBot config to Schwab actual holdings/cash (observe-only)."
+    if missing_in_schwab:
+        retained = ", ".join(sorted(m["symbol"] for m in missing_in_schwab))
+        reason += (
+            f" Local-only holdings absent from Schwab ({retained}) are retained for"
+            " operator review (not auto-removed)."
+        )
+
     validation = validate_proposed_holdings(after_holdings, after_cash, config)
     return {
         "generated_at": now_iso, "source": "schwab",
         "source_snapshot_timestamp": reconciliation.get("generated_at"),
         "before": {"holdings": before_holdings, "cash": before_cash},
         "proposed_after": {"holdings": after_holdings, "cash": after_cash},
-        "reason": "Align local StockBot config to Schwab actual holdings/cash (observe-only).",
+        "reason": reason,
         "validation": validation,
         "operator_approval_required": True,
         "auto_applied": False,
