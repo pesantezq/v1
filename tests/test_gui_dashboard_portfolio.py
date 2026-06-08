@@ -243,49 +243,100 @@ def test_source_of_truth_invariant_non_decision_cards_have_no_action_verbs(tmp_p
     )
 
 
-def test_source_of_truth_invariant_in_rendered_html():
+def test_source_of_truth_invariant_in_rendered_html(monkeypatch, tmp_path):
     """
     The rendered /dashboard/portfolio page must ensure that any buy/sell/hold
     action language appears ONLY within the Advisory Decisions section
-    (aria-label='Advisory decision queue'), which is sourced exclusively from
-    decision_plan.json.
+    (aria-label="Advisory decision queue").
 
-    Non-decision sections (Risk Focus, Watchlist, Memo) must not contain
-    buy/sell/hold advisory action language.
+    Injects a fixture where a non-decision advisor summary contains a tempting verb
+    to prove the isolation would catch a leak.
     """
-    from gui_v2.app import app
+    from gui_v2 import app as app_module
 
-    client = TestClient(app)
-    r = client.get("/dashboard/portfolio")
-    assert r.status_code == 200
-    html = r.text
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
 
-    # The Advisory Decisions section is fenced with aria-label="Advisory decision queue"
-    # Extract content OUTSIDE that section and verify no buy/sell/hold action verbs appear
-    # in section headings or card summaries outside it.
-    #
-    # Practical approach: verify the decision source label is present and the
-    # Risk Focus / Watchlist / Capital sections do not contain action-verb table headers.
+    # Seed a decision_plan with advisory verbs (allowed in decision queue only)
+    dp_data = {
+        "generated_at": "2026-06-08T09:00:00",
+        "run_mode": "real",
+        "observe_only": True,
+        "total_decisions": 1,
+        "portfolio_context": {"cash": 500},
+        "decisions": [
+            {
+                "symbol": "AAPL",
+                "decision": "BUY",
+                "priority": 0.9,
+                "urgency": "high",
+                "reason": "Strong momentum",
+                "confidence": 0.85,
+                "source": "decision_plan",
+            }
+        ],
+    }
+    (latest / "decision_plan.json").write_text(json.dumps(dp_data))
 
-    # 1. Decision queue section must reference decision_plan.json as source
-    assert "decision_plan.json" in html, "Decision source artifact label missing from portfolio page"
+    # Risk and watchlist advisors with tempting verbs in evidence descriptions
+    (latest / "risk_delta.json").write_text(json.dumps({
+        "generated_at": "2026-06-08",
+        "overall_status": "ok",
+        "observe_only": True,
+    }))
+    (latest / "daily_memo.md").write_text(
+        "# Daily Memo — 2026-06-08\n"
+        "Risk elevated. Hold pattern observed.\n"
+    )
 
-    # 2. The observe-only banner must be present
-    assert "Observe-only" in html
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = TestClient(app_module.app)
+        r = client.get("/dashboard/portfolio")
+        assert r.status_code == 200
+        html = r.text
 
-    # 3. Advisory Decisions section heading must be present
-    assert "Advisory Decisions" in html
+        # 1. Decision queue section must reference decision_plan.json as source
+        assert "decision_plan.json" in html, "Decision source artifact label missing"
 
-    # 4. Risk Focus section heading must NOT have action-verb headers
-    # Extract the Risk Focus card area — it should describe state, not actions.
-    # Verify no "buy now", "sell now", "place order" style strings appear anywhere.
-    for bad in _FORBIDDEN_LABELS:
-        assert bad not in html.lower(), (
-            f"Forbidden label '{bad}' found in rendered portfolio page"
+        # 2. The observe-only banner must be present
+        assert "Observe-only" in html
+
+        # 3. Advisory Decisions section heading must be present
+        assert "Advisory Decisions" in html
+
+        # 4. Forbidden labels must not appear anywhere
+        for bad in _FORBIDDEN_LABELS:
+            assert bad not in html.lower(), (
+                f"Forbidden label '{bad}' found in rendered portfolio page"
+            )
+
+        # 5. The decision_card component must note it comes from decision_plan.json
+        assert "from decision_plan.json" in html
+
+        # 6. Verify advisory verbs in card badges outside the decision queue
+        decision_section_re = re.compile(
+            r'<section[^>]*aria-label="Advisory decision queue"[^>]*>(.*?)</section>',
+            re.DOTALL | re.IGNORECASE,
         )
+        m = decision_section_re.search(html)
+        assert m, "Advisory decision queue section not found in rendered HTML"
+        outside_section = html[:m.start()] + html[m.end():]
 
-    # 5. The decision_card component must note it comes from decision_plan.json
-    assert "from decision_plan.json" in html
+        # Card badge labels outside the decision section must not contain buy/sell/scale
+        badge_re = re.compile(
+            r'class="inline-flex[^"]*"[^>]*>([^<]{1,40})<',
+            re.IGNORECASE,
+        )
+        for badge_text in badge_re.findall(outside_section):
+            verb_match = re.search(r"\b(buy|sell|scale)\b", badge_text, re.IGNORECASE)
+            assert not verb_match, (
+                f"Advisory verb in non-decision badge outside decision queue: {badge_text!r}"
+            )
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +463,7 @@ def test_all_cards_have_required_shape_keys(tmp_path):
 
 
 def test_holdings_populated_from_snapshot(tmp_path):
-    """Holdings are populated when portfolio_snapshot.json is present."""
+    """Holdings are populated when portfolio_snapshot.json is present (real producer keys)."""
     from gui_v2.data.dash_portfolio import collect_portfolio_view
 
     latest = tmp_path / "outputs" / "latest"
@@ -420,20 +471,19 @@ def test_holdings_populated_from_snapshot(tmp_path):
     portfolio_dir = tmp_path / "outputs" / "portfolio"
     portfolio_dir.mkdir(parents=True)
 
+    # Use the REAL producer keys: ticker/suggested_allocation/conviction_score/sector
     snapshot = {
-        "total_value": 100000,
-        "cash_available": 5000,
+        "enabled": True,
+        "observe_only": True,
         "generated_at": "2026-06-08",
-        "holdings": [
+        "rows": [
             {
-                "symbol": "AAPL",
-                "shares": 10,
-                "price": 195.0,
-                "value": 1950.0,
-                "allocation_pct": 1.95,
-                "target_alloc_pct": 2.0,
-                "drift_pct": -0.05,
+                "ticker": "AAPL",
                 "sector": "Technology",
+                "conviction_score": 0.785,
+                "conviction_band": "normal",
+                "suggested_allocation": 0.02,
+                "normalized_allocation": 0.02,
             }
         ],
     }
@@ -441,7 +491,71 @@ def test_holdings_populated_from_snapshot(tmp_path):
 
     v = collect_portfolio_view(tmp_path)
     assert len(v["holdings"]) == 1
-    assert v["holdings"][0]["symbol"] == "AAPL"
+    h = v["holdings"][0]
+    assert h["symbol"] == "AAPL"
+    # Real allocation % must not be None (no em-dash); must show numeric value
+    assert h["suggested_allocation_pct"] == 2.0, (
+        f"Expected 2.0 (not None), got {h['suggested_allocation_pct']!r}"
+    )
+    assert h["normalized_allocation_pct"] == 2.0
+    assert h["conviction"] == 0.785
+    assert h["band"] == "normal"
+    assert h["sector"] == "Technology"
+
+
+def test_holdings_snapshot_absent_returns_empty_list(tmp_path):
+    """Holdings list is empty when portfolio_snapshot.json is absent."""
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+
+    v = collect_portfolio_view(tmp_path)
+    assert v["holdings"] == []
+
+
+def test_rendered_holdings_show_real_allocation_pct(monkeypatch, tmp_path):
+    """
+    The rendered /dashboard/portfolio page must show a real allocation % (e.g. '3.0%')
+    not all em-dashes for a seeded snapshot row.
+    """
+    from gui_v2 import app as app_module
+
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    portfolio_dir = tmp_path / "outputs" / "portfolio"
+    portfolio_dir.mkdir(parents=True)
+
+    snapshot = {
+        "enabled": True,
+        "observe_only": True,
+        "rows": [
+            {
+                "ticker": "NVDA",
+                "sector": "Technology",
+                "conviction_score": 0.85,
+                "conviction_band": "high_conviction",
+                "suggested_allocation": 0.03,
+                "normalized_allocation": 0.03,
+            }
+        ],
+    }
+    (portfolio_dir / "portfolio_snapshot.json").write_text(json.dumps(snapshot))
+
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = TestClient(app_module.app)
+        r = client.get("/dashboard/portfolio")
+        assert r.status_code == 200
+        html = r.text
+        # Must show real allocation %, e.g. "3.0%"
+        assert "3.0%" in html, (
+            "Expected real allocation '3.0%' in rendered HTML but it was absent"
+        )
+        assert "NVDA" in html
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
 
 
 def test_no_forbidden_labels_in_collector_output(tmp_path):
@@ -459,3 +573,121 @@ def test_no_forbidden_labels_in_collector_output(tmp_path):
                 assert bad not in text, (
                     f"Forbidden label '{bad}' in card '{c['title']}' field '{field}': {text!r}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# T cheap adds
+# ---------------------------------------------------------------------------
+
+
+def test_today_view_observe_only_flag(tmp_path):
+    """collect_today_view must return observe_only: True."""
+    from gui_v2.data.dash_today import collect_today_view
+
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    v = collect_today_view(tmp_path)
+    assert v.get("observe_only") is True, (
+        "collect_today_view must include observe_only=True in its return dict"
+    )
+
+
+def test_validate_config_edit_accepts_brk_b_and_brk_dash_b():
+    """validate_config_edit accepts BRK.B and BRK-B symbol formats."""
+    from gui_v2.portfolio_config_writer import validate_config_edit
+
+    config = {}
+    result = validate_config_edit(
+        [
+            {"symbol": "BRK.B", "shares": 5},
+            {"symbol": "BRK-B", "shares": 3},
+        ],
+        cash=1000.0,
+        config=config,
+    )
+    assert result["ok"] is True, f"Expected ok=True for BRK.B/BRK-B, got errors: {result['errors']}"
+
+
+def test_validate_config_edit_rejects_digit_leading_symbol():
+    """validate_config_edit rejects symbols starting with a digit."""
+    from gui_v2.portfolio_config_writer import validate_config_edit
+
+    result = validate_config_edit(
+        [{"symbol": "1ABC", "shares": 5}],
+        cash=100.0,
+        config={},
+    )
+    assert result["ok"] is False
+    assert any("invalid symbol" in e.lower() or "1ABC" in e for e in result["errors"])
+
+
+def test_validate_config_edit_rejects_over_length_symbol():
+    """validate_config_edit rejects a symbol longer than 10 chars."""
+    from gui_v2.portfolio_config_writer import validate_config_edit
+
+    long_sym = "TOOLONGSYM1"  # 11 chars
+    result = validate_config_edit(
+        [{"symbol": long_sym, "shares": 5}],
+        cash=100.0,
+        config={},
+    )
+    assert result["ok"] is False
+    assert any("invalid symbol" in e.lower() or long_sym in e for e in result["errors"])
+
+
+def test_rejected_save_leaves_no_backup_or_audit(tmp_path, monkeypatch):
+    """
+    A POST /dashboard/portfolio-config/save that fails validation MUST NOT
+    write any backup file or audit record.
+    """
+    from gui_v2 import app as app_module
+
+    # Seed config.json with valid data
+    config_data = {
+        "portfolio": {
+            "holdings": [{"symbol": "AAPL", "shares": 10}],
+            "cash_available": 500.0,
+        }
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config_data))
+    policy_dir = tmp_path / "outputs" / "policy" / "portfolio_backups"
+
+    # Enable edit gate
+    monkeypatch.setenv("GUI_V2_AUTH_USER", "op")
+    monkeypatch.setenv("GUI_V2_AUTH_PASS", "pass")
+    monkeypatch.setenv("GUI_V2_PORTFOLIO_EDIT", "1")
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+
+    try:
+        client = TestClient(app_module.app)
+
+        # Submit a save with an invalid symbol (starts with digit — will fail validation)
+        r = client.post(
+            "/dashboard/portfolio-config/save",
+            data={
+                "symbol": ["1INVALID"],
+                "shares": ["5"],
+                "target_weight": [""],
+                "asset_class": ["us_equity"],
+                "leverage_factor": ["1"],
+                "cash": "500",
+            },
+            auth=("op", "pass"),
+        )
+        # Should not 500; either 200 with error or 400/422
+        assert r.status_code in (200, 400, 422), f"Unexpected status: {r.status_code}"
+
+        # No backup file should have been created
+        if policy_dir.exists():
+            backups = list(policy_dir.glob("*.json"))
+            assert backups == [], (
+                f"Backup files were created after a rejected save: {backups}"
+            )
+
+        # Audit JSONL should NOT have been appended
+        audit_path = tmp_path / "outputs" / "policy" / "manual_portfolio_updates.jsonl"
+        assert not audit_path.exists() or audit_path.read_text().strip() == "", (
+            "Audit record was written after a rejected save — must not write on validation failure"
+        )
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)

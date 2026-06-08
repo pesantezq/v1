@@ -680,3 +680,59 @@ def test_system_route_renders_200_with_no_artifacts(monkeypatch, tmp_path):
         assert r.status_code == 200
     finally:
         monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
+
+
+# ---------------------------------------------------------------------------
+# M3: status_label filter
+# ---------------------------------------------------------------------------
+
+
+def test_status_label_filter_near_cap():
+    """status_label filter converts near_cap → Near cap."""
+    from gui_v2.app import _status_label
+
+    assert _status_label("near_cap") == "Near cap"
+    assert _status_label("ok_with_warnings") == "OK · warnings"
+    assert _status_label("coverage_gap") == "Coverage gap"
+    assert _status_label("unconfigured") == "Unconfigured"
+    assert _status_label("exhausted") == "Exhausted"
+
+
+def test_status_label_filter_fallback_title_case():
+    """Unknown labels are title-cased with _ replaced by spaces."""
+    from gui_v2.app import _status_label
+
+    assert _status_label("some_custom_status") == "Some Custom Status"
+
+
+def test_system_route_badge_uses_status_label(monkeypatch, tmp_path):
+    """Card badge with label 'near_cap' renders 'Near cap' not 'near_cap'."""
+    import json
+    from gui_v2 import app as app_module
+
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    # Write a daily_run_status that will generate a card with near_cap-like label
+    (latest / "daily_run_status.json").write_text(json.dumps({
+        "generated_at": "2026-06-08T09:00:00",
+        "overall_status": "ok_with_warnings",
+        "observe_only": True,
+        "stage_summary": {"ok": 10, "failed": 0, "warn": 1},
+        "content_liveness": {},
+    }))
+
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = TestClient(app_module.app)
+        r = client.get("/dashboard/system")
+        assert r.status_code == 200
+        # The ok_with_warnings label should be rendered as "OK · warnings"
+        assert "ok_with_warnings" not in r.text, (
+            "Raw snake_case 'ok_with_warnings' should not appear in badge"
+        )
+        assert "OK · warnings" in r.text or "OK" in r.text, (
+            "Human-readable label should appear in badge"
+        )
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)

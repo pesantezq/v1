@@ -51,8 +51,8 @@ _FORBIDDEN_LABELS = (
     "auto-approve",
 )
 
-# Full account number pattern: 8-9 consecutive digits (masked forms like …1234 are safe)
-_FULL_ACCOUNT_RE = re.compile(r"(?<!\d)\d{8,9}(?!\d)")
+# Full account number pattern: 8+ consecutive digits (masked forms like …1234 are safe)
+_FULL_ACCOUNT_RE = re.compile(r"(?<!\d)\d{8,}(?!\d)")
 
 
 # ---------------------------------------------------------------------------
@@ -799,5 +799,57 @@ def test_portfolio_sync_mismatch_rows_shown_in_page(monkeypatch, tmp_path):
         assert r.status_code == 200
         assert "NVDA" in r.text, "Mismatch symbol NVDA not found in rendered page"
         assert "META" in r.text, "Mismatch symbol META not found in rendered page"
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
+
+
+# ---------------------------------------------------------------------------
+# T-HIGH: 10-digit account number masking
+# ---------------------------------------------------------------------------
+
+
+def test_account_masking_10_digit_suppressed_in_rendered_html(monkeypatch, tmp_path):
+    """
+    A 10-digit account number in an artifact MUST NOT appear in the rendered HTML.
+    The defensive _mask_account_fields call in collect_portfolio_sync_view must
+    catch IDs wider than 9 digits (the old r'\\d{8,9}' regex missed them).
+    """
+    from gui_v2 import app as app_module
+
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+
+    # Write a broker_sync_status with an unmasked 10-digit account ID in a string field
+    unmasked_10_digit = "1234567890"
+    _write(
+        latest,
+        "broker_sync_status.json",
+        {
+            "generated_at": "2026-06-08T12:00:00Z",
+            "observe_only": True,
+            "source": "schwab",
+            "enabled": True,
+            "configured": True,
+            "authenticated": True,
+            "read_only_mode": True,
+            "trading_enabled": False,
+            "last_success_at": "2026-06-08T10:00:00Z",
+            "last_error": None,
+            # Simulates an upstream artifact that leaked a 10-digit account number
+            "account_id_masked": unmasked_10_digit,
+            "overall_status": "ok",
+        },
+    )
+
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = TestClient(app_module.app)
+        r = client.get("/dashboard/portfolio-sync")
+        assert r.status_code == 200
+        # The 10-digit raw string must NOT appear in the rendered page
+        assert unmasked_10_digit not in r.text, (
+            f"Unmasked 10-digit account number '{unmasked_10_digit}' leaked into rendered HTML"
+        )
     finally:
         monkeypatch.setattr(app_module, "REPO_ROOT", original_root)

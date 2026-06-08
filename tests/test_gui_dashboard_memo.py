@@ -376,3 +376,57 @@ def test_no_forbidden_action_labels_in_memo_template():
     text = template_path.read_text(encoding="utf-8").lower()
     offenders = [label for label in _FORBIDDEN_LABELS if label in text]
     assert offenders == [], f"Forbidden labels in memo.html: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# M2: inline-markdown conversion tests
+# ---------------------------------------------------------------------------
+
+
+def test_render_inline_md_bold_and_code():
+    """_render_inline_md converts **x** to <strong>x</strong> and `x` to <code>x</code>."""
+    from gui_v2.data.dash_memo import _render_inline_md
+
+    result = _render_inline_md("**BUY** `CSX`")
+    assert "<strong>BUY</strong>" in result, f"Expected <strong>BUY</strong> in: {result!r}"
+    assert "<code>CSX</code>" in result, f"Expected <code>CSX</code> in: {result!r}"
+    assert "**" not in result
+
+
+def test_render_inline_md_xss_protection():
+    """_render_inline_md HTML-escapes raw < > & characters — no XSS."""
+    from gui_v2.data.dash_memo import _render_inline_md
+
+    result = _render_inline_md("<script>alert('xss')</script>")
+    assert "<script>" not in result, "XSS: raw <script> survived HTML escaping"
+    assert "&lt;script&gt;" in result
+
+
+def test_memo_route_renders_strong_and_code_for_bold_text(tmp_path, monkeypatch):
+    """Rendered memo page shows <strong> and <code> for **bold** and `code` in memo lines."""
+    import json as _json
+    from gui_v2 import app as app_module
+    from fastapi.testclient import TestClient as _TestClient
+
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "daily_memo.md").write_text(
+        "# Daily Investment Memo — 2026-06-08\n\n"
+        "## Today's Verdict\n"
+        "- **BUY** `CSX` on momentum signal\n"
+    )
+
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = _TestClient(app_module.app)
+        r = client.get("/dashboard/memo")
+        assert r.status_code == 200
+        html = r.text
+        assert "<strong>BUY</strong>" in html, (
+            f"Expected <strong>BUY</strong> in rendered memo; literal ** present: {'**' in html}"
+        )
+        assert "<code>CSX</code>" in html, "Expected <code>CSX</code> in rendered memo"
+        assert "**BUY**" not in html
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
