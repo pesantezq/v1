@@ -29,3 +29,24 @@ def test_load_ledger_backfills_missing_keys(tmp_path):
     assert led["schema_version"] == "1"
     assert led["active"] == [{"id": "x"}]
     assert led["archive"] == []
+
+
+def test_select_prior_gauge_picks_latest_non_current_non_pretracker():
+    by_fp = {
+        "CUR": {"last_signal_time": "2026-06-08T09:00:00", "hit_rate_1d": 0.45},
+        "OLDGAUGE": {"last_signal_time": "2026-05-29T09:00:00", "hit_rate_1d": 0.69},
+        "OLDERGAUGE": {"last_signal_time": "2026-05-20T09:00:00", "hit_rate_1d": 0.55},
+        "pre_tracker_unknown": {"last_signal_time": "2026-05-19T01:00:00", "hit_rate_1d": 0.40},
+    }
+    fp, entry = qwp._select_prior_gauge(by_fp, "CUR")
+    assert fp == "OLDGAUGE"
+    assert entry["hit_rate_1d"] == 0.69
+
+
+def test_select_prior_gauge_none_when_only_current_and_pretracker():
+    by_fp = {
+        "CUR": {"last_signal_time": "2026-06-08T09:00:00"},
+        "pre_tracker_unknown": {"last_signal_time": "2026-05-19T01:00:00"},
+    }
+    fp, entry = qwp._select_prior_gauge(by_fp, "CUR")
+    assert fp is None and entry is None

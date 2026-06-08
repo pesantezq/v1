@@ -78,3 +78,20 @@ def _load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return None
+
+
+def _select_prior_gauge(
+    by_fp: dict, current_fp: str | None,
+    pretracker_label: str = "pre_tracker_unknown",
+) -> tuple[str | None, dict | None]:
+    """Return (fp, entry) of the gauge era immediately preceding the current
+    one: the by_fingerprint entry that is neither current nor pre_tracker, with
+    the latest last_signal_time. (None, None) if no such entry."""
+    candidates = [
+        (k, v) for k, v in (by_fp or {}).items()
+        if k not in (current_fp, pretracker_label) and isinstance(v, dict)
+    ]
+    if not candidates:
+        return None, None
+    fp, entry = max(candidates, key=lambda kv: kv[1].get("last_signal_time") or "")
+    return fp, entry
