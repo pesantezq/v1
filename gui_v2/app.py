@@ -136,6 +136,7 @@ from gui_v2.data.operations import collect_operations_view
 from gui_v2.data.risk_impact import collect_risk_impact_view
 from gui_v2.data.dash_today import collect_today_view as _dash_today
 from gui_v2.data.dash_portfolio import collect_portfolio_view as _dash_portfolio
+from gui_v2.data.dash_quant import collect_quant_view as _dash_quant
 from gui_v2.data.shared import REDIRECT_MAP
 
 
@@ -156,6 +157,13 @@ def page_dash_portfolio(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
     return _render(request, "dashboard/portfolio.html", **_dash_portfolio(REPO_ROOT))
+
+
+@app.get("/dashboard/quant", response_class=HTMLResponse)
+def page_dash_quant(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    return _render(request, "dashboard/quant.html", **_dash_quant(REPO_ROOT))
 
 
 # ---------------------------------------------------------------------------
