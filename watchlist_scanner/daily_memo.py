@@ -1861,8 +1861,8 @@ def _advisor_stack_items(root: Path) -> list[str]:
                     if delta_pp is not None else f"current {cur_str}"
                 )
                 items.append(
-                    f"Retune impact: {word} — "
-                    f"vs the prior gauge it replaced (n={cur_n}); {stale_clause}"
+                    f"Retune impact: {word} vs the prior gauge it replaced "
+                    f"(n={cur_n}); {stale_clause}"
                 )
             else:
                 # First gauge era (no prior to regress against) or n<10: keep
