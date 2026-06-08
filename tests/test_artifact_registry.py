@@ -38,6 +38,24 @@ def test_load_registry_parses_minimal(tmp_path):
     assert reg["artifacts"]["a.json"]["lens"] == "developer"
 
 
+def test_required_artifacts_matches_legacy_expected():
+    # The exact tuples daily_run_status historically used (order matters).
+    legacy = [
+        ("outputs/latest/decision_plan.json", "decision plan", True),
+        ("outputs/latest/decision_plan.md", "decision plan (md)", True),
+        ("outputs/latest/system_decision_summary.json", "system decision summary", True),
+        ("outputs/latest/daily_memo.md", "daily memo (md)", True),
+        ("outputs/latest/daily_memo.txt", "daily memo (txt)", True),
+        ("outputs/latest/news_intelligence.json", "news intelligence", True),
+        ("outputs/latest/risk_delta.json", "risk delta panel", True),
+        ("outputs/portfolio/portfolio_snapshot.json", "portfolio snapshot", True),
+        ("outputs/performance/approved_ranking_config.json", "approved ranking config", False),
+        ("outputs/performance/approved_allocation_policy.json", "approved allocation policy", False),
+        ("outputs/latest/theme_opportunities.json", "theme opportunities", False),
+    ]
+    assert ar.required_artifacts() == legacy
+
+
 def test_shipped_registry_schema_valid():
     reg = ar.load_registry()  # the real artifact_registry.yaml
     assert reg, "registry failed to load"

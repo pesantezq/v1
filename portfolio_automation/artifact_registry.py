@@ -51,6 +51,21 @@ def load_registry(path: str | Path = DEFAULT_REGISTRY_PATH) -> dict:
         return {}
 
 
+def required_artifacts(registry: dict | None = None) -> list[tuple[str, str, bool]]:
+    """Return (rel_path, label, required) triples for the daily_run_status-tracked
+    subset, in tracked order — the exact shape of the legacy _EXPECTED_ARTIFACTS."""
+    reg = registry if registry is not None else load_registry()
+    arts = reg.get("artifacts", {})
+    out: list[tuple[str, str, bool]] = []
+    for key in reg.get("daily_run_status_tracked", []):
+        row = arts.get(key)
+        if not isinstance(row, dict):
+            continue
+        path = row.get("path") or f"outputs/latest/{key}"
+        out.append((path, row.get("label", key), bool(row.get("required", False))))
+    return out
+
+
 def schema_errors(registry: dict) -> list[str]:
     """Return a list of human-readable schema problems (empty == valid)."""
     errs: list[str] = []
