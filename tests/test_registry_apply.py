@@ -88,9 +88,9 @@ def test_apply_within_caps_changes_only_approved(tmp_path):
     approval = _write_approval(tmp_path, [{"signal_id": "STRONG_MOVE_UP", "delta": 0.05}])
     rep = _apply(reg, approval, tmp_path, max_abs_delta=0.05)
     assert rep["status"] == "applied"
-    after = _weights(reg)
-    assert after["STRONG_MOVE_UP"] == 0.50  # 0.45 + 0.05
     baseline = _baseline_weights()
+    after = _weights(reg)
+    assert abs(after["STRONG_MOVE_UP"] - (baseline["STRONG_MOVE_UP"] + 0.05)) < 1e-9  # baseline + delta (baseline-relative; owner-applied weight drifts)
     for sid, w in after.items():
         if sid != "STRONG_MOVE_UP":
             assert w == baseline[sid], f"{sid} weight changed but was not approved"
