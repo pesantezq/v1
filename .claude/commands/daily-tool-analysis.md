@@ -60,6 +60,7 @@ the fix.
 14. `outputs/latest/historical_backfill_status.json` → universe_size, fetched, errored, skipped_budget (added 2026-05-28; weekend-cadence producer)
 15. `outputs/latest/doc_audit_status.json` → overall_status, len(coverage_gaps), count of unfixed `drift`/`consistency` findings (added 2026-06-01; weekly-cadence producer — may be absent until first /doc-audit run)
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply: last entry `status` (added 2026-06-05; default-inert mutator — absent or `disabled`/`oos_immature` is the expected steady state, NOT a finding)
+17. `outputs/latest/correlation_risk_advisor.json` → risk lens: read `high_correlation_pairs`, `concentration_risk_score`, `recommendations` — flags when portfolio positions are highly correlated and concentration risk is elevated (added 2026-06-08; risk-lens consumer)
 
 **Compute**:
 

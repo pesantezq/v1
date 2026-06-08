@@ -102,9 +102,9 @@ artifacts:
     required: false
     cadence: daily
     producer: correlation_risk_advisor
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
+    consumer_status: consumed
 
   vol_regime_advisor.json:
     path: outputs/latest/vol_regime_advisor.json
@@ -199,9 +199,9 @@ artifacts:
     required: false
     cadence: weekly
     producer: pattern_learning
-    consumers: []
+    consumers: [monthly-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
+    consumer_status: consumed
 
   pattern_efficacy_yearly.json:
     path: outputs/latest/pattern_efficacy_yearly.json

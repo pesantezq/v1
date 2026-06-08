@@ -33,6 +33,7 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 14. `outputs/policy/calibration_correction_proposal.json` → D1 calibration proposer: read `inverted`, `apply_gate` (provisional until OOS matures)
 15. `outputs/policy/signal_tagging_proposal.json` → D2 tagging proposer: read `untagged_pct`, `families_missing_registry_id`, `proposals`
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply audit: read the last entry's `status` (disabled/oos_immature/gpt_vetoed/applied/rolled_back) + provenance
+17. `outputs/latest/pattern_efficacy_weekly.json` → per-tag weekly efficacy for the 4-week drift trend; compare each tag's `vs_baseline_pp` week-over-week to surface accelerating winners or deteriorating signals (added 2026-06-08; quant-trend consumer)
 
 ---
 

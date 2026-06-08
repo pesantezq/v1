@@ -388,3 +388,26 @@ def test_run_does_not_mutate_the_registry_contract(tmp_path):
     ar.run_artifact_registry(root=tmp_path, write_files=True)  # full run incl. status write
     after = hashlib.sha256(reg_path.read_bytes()).hexdigest()
     assert before == after, "run_artifact_registry must never modify artifact_registry.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Task 7: Proof-wire — correlation_risk_advisor + pattern_efficacy_weekly
+# ---------------------------------------------------------------------------
+
+import re as _re
+from pathlib import Path as _Path
+
+
+def test_proof_wired_artifacts_are_referenced_by_their_consumer():
+    reg = ar.load_registry()
+    for art in ("pattern_efficacy_weekly.json", "correlation_risk_advisor.json"):
+        row = reg["artifacts"][art]
+        assert row["consumer_status"] == "consumed", \
+            f"{art} should be consumed but is {row['consumer_status']!r}"
+        assert row["consumers"], f"{art} consumed but no consumers listed"
+        # every listed skill/agent consumer file must actually reference the artifact
+        for c in row["consumers"]:
+            hits = list(_Path(".claude").rglob(f"{c}.md"))
+            assert hits, f"consumer file {c}.md not found for {art}"
+            assert any(art in h.read_text(encoding="utf-8") for h in hits), \
+                f"{c}.md does not reference {art}"
