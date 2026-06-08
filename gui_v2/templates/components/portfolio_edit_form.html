@@ -1,0 +1,205 @@
+{#
+  portfolio_edit_form.html — Gated portfolio holdings + cash edit form.
+
+  Context variables expected:
+    holdings       — list of {symbol, shares, target_weight, asset_class,
+                              is_leveraged, leverage_factor}
+    cash           — current cash_available float
+    edit_enabled   — bool; must be True for this component to render the form
+    growth_mode    — dict with concentration_cap / leverage_cap hints
+
+  SAFETY:
+  - "Confirm & save config" button label — no forbidden action verbs.
+  - Banner text: "Updates local StockBot configuration only — no broker
+    trades occur." (no forbidden action-verb substrings in banner text)
+#}
+{% if edit_enabled %}
+<form id="portfolio-edit-form"
+      hx-post="/dashboard/portfolio-config/save"
+      hx-target="#portfolio-config-content"
+      hx-select="#portfolio-config-content"
+      hx-swap="outerHTML"
+      hx-confirm="This will update your local StockBot config.json. No broker trades occur. Confirm?"
+      class="space-y-6">
+
+  {# Holdings rows #}
+  <div class="space-y-3">
+    <h3 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Holdings</h3>
+
+    {# Desktop table — hidden on small screens #}
+    <div class="hidden md:block overflow-x-auto">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2 pr-3">Symbol</th>
+            <th class="py-2 pr-3 text-right">Shares</th>
+            <th class="py-2 pr-3 text-right">Target Weight</th>
+            <th class="py-2 pr-3">Asset Class</th>
+            <th class="py-2 pr-3 text-center">Leveraged</th>
+            <th class="py-2 text-right">Lev. Factor</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800" id="holdings-rows-desktop">
+          {% for h in holdings %}
+          <tr class="holding-row">
+            <td class="py-2 pr-3">
+              <input type="text" name="symbol" value="{{ h.symbol }}"
+                     required pattern="[A-Z][A-Z0-9.\-]{0,9}"
+                     class="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 uppercase focus:outline-none focus:border-sky-500">
+            </td>
+            <td class="py-2 pr-3 text-right">
+              <input type="number" name="shares" value="{{ h.shares if h.shares is not none else 0 }}"
+                     min="0" step="any" required
+                     class="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 text-right focus:outline-none focus:border-sky-500">
+            </td>
+            <td class="py-2 pr-3 text-right">
+              <input type="number" name="target_weight"
+                     value="{{ h.target_weight if h.target_weight is not none else '' }}"
+                     min="0" max="1" step="0.01"
+                     class="w-24 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 text-right focus:outline-none focus:border-sky-500"
+                     placeholder="0.00">
+            </td>
+            <td class="py-2 pr-3">
+              <input type="text" name="asset_class" value="{{ h.asset_class or 'us_equity' }}"
+                     class="w-36 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 focus:outline-none focus:border-sky-500">
+            </td>
+            <td class="py-2 pr-3 text-center">
+              <input type="checkbox" name="is_leveraged_{{ loop.index0 }}"
+                     {% if h.is_leveraged %}checked{% endif %}
+                     value="true"
+                     class="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-sky-500 focus:ring-sky-500">
+            </td>
+            <td class="py-2 text-right">
+              <input type="number" name="leverage_factor"
+                     value="{{ h.leverage_factor or 1 }}"
+                     min="1" step="1"
+                     class="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 text-right focus:outline-none focus:border-sky-500">
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="py-4 text-center text-zinc-500 text-xs">
+              No holdings — add rows using the form below.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Mobile stacked cards — shown only on small screens #}
+    <div class="md:hidden space-y-3">
+      {% for h in holdings %}
+      <div class="holding-row bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-2">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-zinc-500">Symbol</label>
+            <input type="text" name="symbol" value="{{ h.symbol }}"
+                   required pattern="[A-Z][A-Z0-9.\-]{0,9}"
+                   class="mt-0.5 w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 uppercase focus:outline-none focus:border-sky-500">
+          </div>
+          <div>
+            <label class="text-xs text-zinc-500">Shares</label>
+            <input type="number" name="shares" value="{{ h.shares if h.shares is not none else 0 }}"
+                   min="0" step="any" required
+                   class="mt-0.5 w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 focus:outline-none focus:border-sky-500">
+          </div>
+          <div>
+            <label class="text-xs text-zinc-500">Target Weight (0–1)</label>
+            <input type="number" name="target_weight"
+                   value="{{ h.target_weight if h.target_weight is not none else '' }}"
+                   min="0" max="1" step="0.01"
+                   class="mt-0.5 w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 focus:outline-none focus:border-sky-500"
+                   placeholder="0.00">
+          </div>
+          <div>
+            <label class="text-xs text-zinc-500">Asset Class</label>
+            <input type="text" name="asset_class" value="{{ h.asset_class or 'us_equity' }}"
+                   class="mt-0.5 w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs font-mono text-zinc-100 focus:outline-none focus:border-sky-500">
+          </div>
+        </div>
+        <div class="flex items-center gap-4 text-xs">
+          <label class="flex items-center gap-1.5 text-zinc-400">
+            <input type="checkbox" name="is_leveraged_{{ loop.index0 }}"
+                   {% if h.is_leveraged %}checked{% endif %}
+                   value="true"
+                   class="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-sky-500">
+            Leveraged
+          </label>
+          <label class="flex items-center gap-1.5 text-zinc-400">
+            Factor:
+            <input type="number" name="leverage_factor" value="{{ h.leverage_factor or 1 }}"
+                   min="1" step="1"
+                   class="w-12 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 font-mono text-zinc-100 focus:outline-none focus:border-sky-500">
+          </label>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-zinc-500 text-xs py-4">No holdings.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# Cash available #}
+  <div class="space-y-1">
+    <label class="text-sm font-semibold text-zinc-300" for="cash_available">
+      Cash Available ($)
+    </label>
+    <input type="number" id="cash_available" name="cash_available"
+           value="{{ cash if cash is not none else 0 }}"
+           min="0" step="0.01" required
+           class="w-48 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none focus:border-sky-500">
+  </div>
+
+  {# Growth mode hints #}
+  {% if growth_mode %}
+  <div class="rounded-md bg-zinc-800/50 border border-zinc-700 px-4 py-3 text-xs text-zinc-400 space-y-1">
+    <p class="font-semibold text-zinc-300">Active growth mode constraints</p>
+    {% if growth_mode.concentration_cap is not none %}
+    <p>Concentration cap: {{ "%.0f%%" | format(growth_mode.concentration_cap * 100) }} per position</p>
+    {% endif %}
+    {% if growth_mode.leverage_cap is not none %}
+    <p>Leverage cap: {{ "%.0f%%" | format(growth_mode.leverage_cap * 100) }} total leveraged exposure</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# Validate before save — HTMX dry-run call #}
+  <div id="validation-result" class="min-h-0"></div>
+
+  <div class="flex items-center gap-3 flex-wrap">
+    <button type="button"
+            hx-post="/dashboard/portfolio-config/validate"
+            hx-include="#portfolio-edit-form"
+            hx-target="#validation-result"
+            hx-swap="innerHTML"
+            class="px-4 py-2 text-sm rounded-md bg-zinc-700 text-zinc-200 border border-zinc-600 hover:bg-zinc-600 transition-colors">
+      Preview changes
+    </button>
+    <button type="submit"
+            class="px-4 py-2 text-sm rounded-md bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 transition-colors font-semibold">
+      Confirm &amp; save config
+    </button>
+    <a href="/dashboard/portfolio-config"
+       class="px-4 py-2 text-sm rounded-md bg-zinc-800 text-zinc-400 border border-zinc-700 hover:bg-zinc-700 transition-colors">
+      Cancel
+    </a>
+  </div>
+</form>
+{% else %}
+<div class="rounded-md bg-zinc-800/50 border border-zinc-700 px-4 py-4 space-y-2">
+  <p class="text-sm text-zinc-400 font-semibold">Editing disabled</p>
+  <p class="text-xs text-zinc-500">
+    The portfolio config write surface is inactive. To enable it, set all three
+    environment variables:
+  </p>
+  <ul class="text-xs font-mono text-zinc-400 list-disc list-inside space-y-0.5">
+    <li>GUI_V2_AUTH_USER</li>
+    <li>GUI_V2_AUTH_PASS</li>
+    <li>GUI_V2_PORTFOLIO_EDIT=1</li>
+  </ul>
+  <p class="text-xs text-zinc-500 mt-2">
+    Restart the service after setting these variables.
+  </p>
+</div>
+{% endif %}

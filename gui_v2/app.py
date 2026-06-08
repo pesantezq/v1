@@ -1,11 +1,13 @@
 """GUI v2 — FastAPI application."""
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
@@ -140,7 +142,103 @@ from gui_v2.data.dash_quant import collect_quant_view as _dash_quant
 from gui_v2.data.dash_system import collect_system_view as _dash_system
 from gui_v2.data.dash_memo import collect_memo_view as _dash_memo
 from gui_v2.data.dash_portfolio_sync import collect_portfolio_sync_view as _dash_portfolio_sync
+from gui_v2.data.dash_portfolio_config import collect_portfolio_config_view as _dash_portfolio_config
 from gui_v2.data.shared import REDIRECT_MAP
+
+
+# ---------------------------------------------------------------------------
+# Portfolio config edit gating
+# ---------------------------------------------------------------------------
+
+
+def _edit_enabled() -> bool:
+    """
+    Returns True only when BOTH auth env vars are set AND
+    GUI_V2_PORTFOLIO_EDIT=1.  Evaluated at request time so env changes
+    (with process restart) take effect without code changes.
+    """
+    expected_user = os.environ.get("GUI_V2_AUTH_USER", "").strip()
+    expected_pass = os.environ.get("GUI_V2_AUTH_PASS", "").strip()
+    auth_configured = bool(expected_user and expected_pass)
+    edit_flag = os.environ.get("GUI_V2_PORTFOLIO_EDIT", "").strip() == "1"
+    return auth_configured and edit_flag
+
+
+def _parse_holdings_from_form(form_data) -> list[dict[str, Any]]:
+    """
+    Parse multi-value form data into a list of holding dicts.
+
+    The form sends parallel arrays: ``symbol[]``, ``shares[]``, etc.
+    FastAPI FormData supports ``getlist`` to retrieve all values for a key.
+    """
+    symbols = form_data.getlist("symbol")
+    shares_list = form_data.getlist("shares")
+    target_weights = form_data.getlist("target_weight")
+    asset_classes = form_data.getlist("asset_class")
+    leverage_factors = form_data.getlist("leverage_factor")
+
+    # is_leveraged checkboxes: keyed as is_leveraged_0, is_leveraged_1, ...
+    # Build a set of indices that are checked
+    checked_indices: set[int] = set()
+    for key in form_data.keys():
+        if key.startswith("is_leveraged_"):
+            try:
+                idx = int(key.split("_", 2)[2])
+                checked_indices.add(idx)
+            except (ValueError, IndexError):
+                pass
+
+    holdings: list[dict[str, Any]] = []
+    for i, sym in enumerate(symbols):
+        sym = str(sym or "").strip().upper()
+        if not sym:
+            continue
+
+        def _get(lst, idx, default=""):
+            try:
+                return lst[idx] if idx < len(lst) else default
+            except (IndexError, TypeError):
+                return default
+
+        shares_raw = _get(shares_list, i, "0")
+        try:
+            shares = float(shares_raw)
+        except (TypeError, ValueError):
+            shares = 0.0
+
+        tw_raw = _get(target_weights, i, "")
+        target_weight = None
+        if str(tw_raw).strip() not in ("", "None"):
+            try:
+                target_weight = float(tw_raw)
+            except (TypeError, ValueError):
+                target_weight = None
+
+        asset_class = str(_get(asset_classes, i, "us_equity")).strip() or "us_equity"
+
+        lf_raw = _get(leverage_factors, i, "1")
+        try:
+            leverage_factor = int(float(lf_raw))
+            if leverage_factor < 1:
+                leverage_factor = 1
+        except (TypeError, ValueError):
+            leverage_factor = 1
+
+        is_leveraged = i in checked_indices
+
+        row: dict[str, Any] = {
+            "symbol": sym,
+            "shares": shares,
+            "asset_class": asset_class,
+            "is_leveraged": is_leveraged,
+            "leverage_factor": leverage_factor,
+        }
+        if target_weight is not None:
+            row["target_weight"] = target_weight
+
+        holdings.append(row)
+
+    return holdings
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +321,120 @@ def page_dash_portfolio_sync_reconcile(
     view = _dash_portfolio_sync(REPO_ROOT)
     view["reconcile_message"] = reconcile_message
     return _render(request, "dashboard/portfolio_sync.html", **view)
+
+
+@app.get("/dashboard/portfolio-config", response_class=HTMLResponse)
+def page_dash_portfolio_config(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """
+    GET /dashboard/portfolio-config
+
+    When editing is enabled (auth + GUI_V2_PORTFOLIO_EDIT=1): renders the
+    holdings + cash edit form.
+    When editing is disabled: renders a read-only "editing disabled" state.
+    """
+    enabled = _edit_enabled()
+    view = _dash_portfolio_config(REPO_ROOT, edit_enabled=enabled)
+    return _render(request, "dashboard/portfolio_config.html", **view)
+
+
+@app.post("/dashboard/portfolio-config/validate", response_class=HTMLResponse)
+async def page_dash_portfolio_config_validate(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """
+    POST /dashboard/portfolio-config/validate (HTMX)
+
+    Validates the submitted form data and returns a dry-run diff fragment.
+    Never writes anything.
+    """
+    from gui_v2.portfolio_config_writer import validate_config_edit, diff_config_edit
+
+    form_data = await request.form()
+    holdings = _parse_holdings_from_form(form_data)
+
+    cash_raw = form_data.get("cash_available", "0")
+    try:
+        cash = float(str(cash_raw).strip() or "0")
+    except (TypeError, ValueError):
+        cash = 0.0
+
+    # Load config for cap checking
+    config_path = REPO_ROOT / "config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    except Exception:
+        config = {}
+
+    validation = validate_config_edit(holdings, cash, config)
+
+    diff = None
+    if validation["ok"]:
+        diff = diff_config_edit(config, holdings, cash)
+
+    ctx = {"validation": validation, "diff": diff}
+    return templates.TemplateResponse(
+        request,
+        "components/validation_errors.html",
+        ctx,
+    )
+
+
+@app.post("/dashboard/portfolio-config/save", response_class=HTMLResponse)
+async def page_dash_portfolio_config_save(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """
+    POST /dashboard/portfolio-config/save
+
+    Gated: if NOT _edit_enabled() → 403 refused (no write).
+    If enabled: validate, backup, write, audit → success page.
+    """
+    from gui_v2.portfolio_config_writer import validate_config_edit, apply_config_edit
+
+    if not _edit_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Portfolio config editing is disabled. "
+                "Set GUI_V2_AUTH_USER, GUI_V2_AUTH_PASS, and "
+                "GUI_V2_PORTFOLIO_EDIT=1 to enable."
+            ),
+        )
+
+    form_data = await request.form()
+    holdings = _parse_holdings_from_form(form_data)
+
+    cash_raw = form_data.get("cash_available", "0")
+    try:
+        cash = float(str(cash_raw).strip() or "0")
+    except (TypeError, ValueError):
+        cash = 0.0
+
+    # Load config for cap checking
+    config_path = REPO_ROOT / "config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    except Exception:
+        config = {}
+
+    # Validate before writing
+    validation = validate_config_edit(holdings, cash, config)
+    if not validation["ok"]:
+        # Re-render the form with validation errors shown
+        enabled = _edit_enabled()
+        view = _dash_portfolio_config(REPO_ROOT, edit_enabled=enabled)
+        view["save_result"] = {"ok": False, "error": "; ".join(validation["errors"])}
+        return _render(request, "dashboard/portfolio_config.html", **view)
+
+    # Apply
+    result = apply_config_edit(REPO_ROOT, holdings, cash)
+
+    enabled = _edit_enabled()
+    view = _dash_portfolio_config(REPO_ROOT, edit_enabled=enabled)
+    view["save_result"] = result
+    return _render(request, "dashboard/portfolio_config.html", **view)
 
 
 # ---------------------------------------------------------------------------

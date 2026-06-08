@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Portfolio Config &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="portfolio-config-content"
+     class="space-y-6">
+
+  <header class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold">Portfolio Config</h1>
+      <p class="text-sm text-zinc-400">Local holdings &amp; cash configuration &mdash; advisory system only</p>
+    </div>
+    <a href="/dashboard/portfolio-config"
+       class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+      Refresh
+    </a>
+  </header>
+
+  {# ------------------------------------------------------------------ #}
+  {# Safety banner — required on every config screen                     #}
+  {# No forbidden action labels permitted in this banner.                #}
+  {# ------------------------------------------------------------------ #}
+  <div class="rounded-md bg-sky-500/10 border border-sky-500/20 px-4 py-2 text-xs text-sky-300">
+    Updates local StockBot configuration only &mdash; no broker trades occur.
+    This is an advisory-only system. No orders are submitted to any broker or exchange.
+  </div>
+
+  {# Save result message (shown after successful POST /save) #}
+  {% if save_result %}
+  <div class="rounded-md {% if save_result.ok %}bg-emerald-500/10 border border-emerald-500/30 text-emerald-300{% else %}bg-rose-500/10 border border-rose-500/30 text-rose-300{% endif %} px-4 py-3 space-y-1">
+    {% if save_result.ok %}
+    <p class="text-sm font-semibold">Config saved successfully.</p>
+    <p class="text-xs">
+      Backup written to: <code class="font-mono text-xs">{{ save_result.backup_path }}</code>
+    </p>
+    <p class="text-xs text-zinc-400">
+      To revert: copy the backup file back to <code class="font-mono text-xs">config.json</code>.
+    </p>
+    {% else %}
+    <p class="text-sm font-semibold">Save failed.</p>
+    <p class="text-xs">{{ save_result.error }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ------------------------------------------------------------------ #}
+  {# Status cards grid                                                    #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Portfolio config status cards"
+           class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for c in cards %}
+    <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
+        {% if c.severity == "green" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "yellow" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "red" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
+        {% elif c.severity == "blue" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
+        {% else %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
+        {% endif %}
+      </div>
+      {% if c.summary %}
+      <p class="text-sm text-zinc-300">{{ c.summary }}</p>
+      {% endif %}
+      {% if c.source_artifacts %}
+        {% with source_artifacts=c.source_artifacts %}
+          {% include "components/evidence_drawer.html" %}
+        {% endwith %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+
+  {# ------------------------------------------------------------------ #}
+  {# Edit form or disabled state                                          #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Portfolio edit form">
+    <div class="flex items-center gap-3 mb-3">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+        Holdings &amp; Cash
+      </h2>
+      {% if edit_enabled %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">write enabled</span>
+      {% else %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">read-only</span>
+      {% endif %}
+    </div>
+
+    <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4">
+      {% include "components/portfolio_edit_form.html" %}
+    </div>
+  </section>
+
+</div>
+{% endblock %}
