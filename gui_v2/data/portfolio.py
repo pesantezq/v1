@@ -55,13 +55,23 @@ def collect_portfolio_stub(repo_root: Path) -> dict[str, Any]:
     }
 
 
+_HOLDINGS_NO_DOLLAR_DATA = "__no_per_position_dollar_data__"
+
+
 def _holdings_from_snapshot(snapshot: dict | None) -> list[dict[str, Any]]:
-    """Normalised holdings projection: symbol, qty, price, value, alloc_pct, drift_pct."""
+    """Normalised holdings projection: symbol, qty, price, value, alloc_pct, drift_pct.
+
+    When the snapshot rows lack per-position dollar/drift fields (e.g. the
+    allocation-advisor snapshot that stores conviction/allocation scores but
+    no live price/value/drift), returns a single sentinel row so the template
+    can render an honest empty-state note instead of a table of blank cells.
+    """
     if not isinstance(snapshot, dict):
         return []
     rows = snapshot.get("rows") or snapshot.get("holdings") or []
     if not isinstance(rows, list):
         return []
+
     out: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -76,6 +86,18 @@ def _holdings_from_snapshot(snapshot: dict | None) -> list[dict[str, Any]]:
             "drift_pct": row.get("drift_pct") or row.get("drift"),
             "sector": row.get("sector"),
         })
+
+    # D-H1 honest empty-state: if every row is missing dollar/drift data,
+    # signal that to the template rather than showing a blank table.
+    if out and all(
+        r.get("value") is None
+        and r.get("shares") is None
+        and r.get("price") is None
+        and r.get("drift_pct") is None
+        for r in out
+    ):
+        return [{"_no_dollar_data": True}]
+
     return out
 
 
@@ -132,6 +154,10 @@ def _recent_signals(repo_root: Path, max_rows: int = 10) -> list[dict[str, Any]]
 
 
 def _allocation_summary(holdings: list[dict[str, Any]]) -> dict[str, Any]:
+    # D-H1: suppress misleading $0 sector totals when snapshot has no dollar data.
+    if holdings and holdings[0].get("_no_dollar_data"):
+        return {"total_value": None, "by_sector_value": {}, "drift_warnings": []}
+
     total_value = sum(float(h.get("value") or 0) for h in holdings)
     by_sector: dict[str, float] = {}
     over_target: list[dict[str, Any]] = []
