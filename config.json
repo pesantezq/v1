@@ -403,7 +403,7 @@
   },
   "backtesting": {
     "auto_apply": {
-      "enabled": false,
+      "enabled": true,
       "max_monthly_drift": 0.10,
       "max_abs_delta": 0.05
     }
