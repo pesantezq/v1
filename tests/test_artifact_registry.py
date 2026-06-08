@@ -214,3 +214,13 @@ def test_run_degrades_on_bad_registry(tmp_path, monkeypatch):
     st = ar.run_artifact_registry(root=tmp_path, write_files=False)
     assert st["observe_only"] is True
     assert st["overall_status"] == "amber"
+
+
+def test_daily_run_status_tracks_same_artifacts_via_registry():
+    import json as J
+    from pathlib import Path
+    from portfolio_automation import daily_run_status as d
+    golden = J.loads(Path("tests/fixtures/daily_run_status_golden.json").read_text())
+    rows = d.scan_expected_artifacts(Path("."))
+    got = [{"path": r["path"], "label": r["label"], "required": r["required"]} for r in rows]
+    assert got == golden

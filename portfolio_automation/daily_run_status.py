@@ -245,7 +245,10 @@ _CONTENT_LIVENESS_CHECKS: list[tuple[str, str, Any, str]] = [
 # Expected artifacts the official-lane run should produce. Used to flag
 # missing-but-expected outputs in the status report. Tuple of
 # (relative_path, label, must_be_today).
-_EXPECTED_ARTIFACTS = [
+#
+# Sourced from the artifact registry (single source of truth); falls back to
+# a built-in copy if the registry is unavailable so this module never hard-fails.
+_FALLBACK_EXPECTED_ARTIFACTS = [
     ("outputs/latest/decision_plan.json",                  "decision plan",                True),
     ("outputs/latest/decision_plan.md",                    "decision plan (md)",           True),
     ("outputs/latest/system_decision_summary.json",        "system decision summary",      True),
@@ -260,6 +263,19 @@ _EXPECTED_ARTIFACTS = [
     ("outputs/performance/approved_allocation_policy.json","approved allocation policy",   False),
     ("outputs/latest/theme_opportunities.json",            "theme opportunities",          False),
 ]
+
+
+def _expected_artifacts() -> list[tuple[str, str, bool]]:
+    """Return the tracked artifact tuples from the registry; fall back to the
+    built-in copy if the registry is unavailable or returns empty."""
+    try:
+        from portfolio_automation.artifact_registry import required_artifacts
+        rows = required_artifacts()
+        if rows:
+            return rows
+    except Exception:
+        pass
+    return _FALLBACK_EXPECTED_ARTIFACTS
 
 # Stage section marker in the daily_safe log.
 _STAGE_HEADER_RE = re.compile(r"^==\s+(?P<name>.+?)\s+==$")
@@ -380,7 +396,7 @@ def scan_expected_artifacts(root: Path) -> list[dict[str, Any]]:
     """
     today = datetime.now(timezone.utc).date().isoformat()
     results: list[dict[str, Any]] = []
-    for rel_path, label, required in _EXPECTED_ARTIFACTS:
+    for rel_path, label, required in _expected_artifacts():
         p = root / rel_path
         row: dict[str, Any] = {
             "path": rel_path,
