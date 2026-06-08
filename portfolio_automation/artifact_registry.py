@@ -30,8 +30,9 @@ LENSES = {"developer", "quant_learning", "market_discovery", "risk_action",
 ROLES = {"source_of_truth", "advisor", "probe", "telemetry", "narrative"}
 CADENCES = {"daily", "weekend", "weekly", "monthly", "yearly", "on_demand"}
 SEVERITIES = {"critical", "warning", "info"}
+CONSUMER_STATUSES = {"consumed", "diagnostic_only", "archive_only", "deprecated_candidate"}
 _REQUIRED_ROW_FIELDS = ("path", "lens", "role", "required", "cadence", "producer",
-                        "consumers", "severity_if_missing")
+                        "consumers", "severity_if_missing", "consumer_status")
 
 
 def _now_iso() -> str:
@@ -96,7 +97,10 @@ def _row_schema_ok(row: dict) -> bool:
             and row.get("lens") in LENSES and row.get("role") in ROLES
             and row.get("cadence") in CADENCES
             and row.get("severity_if_missing") in SEVERITIES
-            and isinstance(row.get("consumers"), list) and bool(row.get("consumers")))
+            and isinstance(row.get("consumers"), list)
+            and row.get("consumer_status") in CONSUMER_STATUSES
+            and not (row.get("consumer_status") == "consumed"
+                     and not (isinstance(row.get("consumers"), list) and row.get("consumers"))))
 
 
 def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime) -> dict:
@@ -217,8 +221,13 @@ def schema_errors(registry: dict) -> list[str]:
             errs.append(f"{key}: bad severity {row.get('severity_if_missing')!r}")
         if "required" in row and not isinstance(row["required"], bool):
             errs.append(f"{key}: required must be a boolean")
-        if not isinstance(row.get("consumers"), list) or not row.get("consumers"):
-            errs.append(f"{key}: consumers must be a non-empty list")
+        if not isinstance(row.get("consumers"), list):
+            errs.append(f"{key}: consumers must be a list")
+        if row.get("consumer_status") not in CONSUMER_STATUSES:
+            errs.append(f"{key}: bad consumer_status {row.get('consumer_status')!r}")
+        if (row.get("consumer_status") == "consumed"
+                and not (isinstance(row.get("consumers"), list) and row.get("consumers"))):
+            errs.append(f"{key}: consumer_status 'consumed' requires non-empty consumers")
     for key in registry.get("daily_run_status_tracked", []):
         if key not in arts:
             errs.append(f"tracked key not in artifacts: {key}")

@@ -226,6 +226,44 @@ def test_daily_run_status_tracks_same_artifacts_via_registry():
     assert got == golden
 
 
+# ---------------------------------------------------------------------------
+# Task 1: consumer_status schema validation
+# ---------------------------------------------------------------------------
+
+
+def _row(**over):
+    base = {"path": "outputs/latest/x.json", "label": "x", "lens": "developer",
+            "role": "telemetry", "required": False, "cadence": "daily",
+            "producer": "p", "consumers": ["daily-tool-analysis"],
+            "severity_if_missing": "info", "consumer_status": "consumed"}
+    base.update(over)
+    return base
+
+
+def test_schema_errors_flags_missing_consumer_status():
+    reg = {"artifacts": {"a.json": _row(consumer_status=None)}, "daily_run_status_tracked": []}
+    del reg["artifacts"]["a.json"]["consumer_status"]
+    errs = ar.schema_errors(reg)
+    assert any("consumer_status" in e for e in errs)
+
+
+def test_schema_errors_flags_bad_consumer_status():
+    reg = {"artifacts": {"a.json": _row(consumer_status="nope")}, "daily_run_status_tracked": []}
+    assert any("consumer_status" in e for e in ar.schema_errors(reg))
+
+
+def test_schema_errors_flags_consumed_with_empty_consumers():
+    reg = {"artifacts": {"a.json": _row(consumer_status="consumed", consumers=[])},
+           "daily_run_status_tracked": []}
+    assert any("consumed" in e and "consumers" in e for e in ar.schema_errors(reg))
+
+
+def test_schema_errors_allows_diagnostic_only_with_empty_consumers():
+    reg = {"artifacts": {"a.json": _row(consumer_status="diagnostic_only", consumers=[])},
+           "daily_run_status_tracked": []}
+    assert ar.schema_errors(reg) == []
+
+
 def test_critical_severity_iff_source_of_truth():
     # The daily-tool-analysis governance gate derives "source_of_truth degraded"
     # from overall_status==red, which is only valid while critical severity is
