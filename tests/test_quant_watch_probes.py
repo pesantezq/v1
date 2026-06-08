@@ -329,3 +329,69 @@ def test_evaluate_dispatches_per_detector_and_manual_stays_active():
     by_id = {t["id"]: t for t in transitions}
     assert by_id["prior_gauge_underperformance:d95e"]["status"] == "active"
     assert by_id["manual:foo"]["status"] == "active"  # never auto-resolved
+
+
+# ── Task 8: update_ledger() ───────────────────────────────────────────────────
+
+def test_update_ledger_adds_new_and_archives_resolved():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": []},
+        {"id": "b", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": []},
+    ], "archive": []}
+    new_probes = [{"id": "c", "detector": "d", "created_at": now, "observations": []}]
+    transitions = [
+        qwp._active({"id": "a"}, "still bad", now, {"run": "2026-06-09", "v": 1}),
+        qwp._resolved({"id": "b"}, "recovered", "ok now", now),
+    ]
+    out = qwp.update_ledger(ledger, new_probes, transitions, now)
+    active_ids = {p["id"] for p in out["active"]}
+    archive_ids = {p["id"] for p in out["archive"]}
+    assert active_ids == {"a", "c"}          # b archived, c added
+    assert archive_ids == {"b"}
+    arch_b = out["archive"][0]
+    assert arch_b["resolution"] == "recovered"
+    assert arch_b["resolved_at"] == now
+    assert arch_b["lifetime_days"] == 8
+    # a got its observation appended + last_evaluated_at bumped
+    a = next(p for p in out["active"] if p["id"] == "a")
+    assert a["observations"][-1] == {"run": "2026-06-09", "v": 1}
+    assert a["last_evaluated_at"] == now
+
+
+def test_update_ledger_escalated_goes_to_archive_with_reason():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": []}], "archive": []}
+    transitions = [qwp._escalated({"id": "a"}, "crossed gate", now)]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    assert out["active"] == []
+    assert out["archive"][0]["resolution"] == "escalated_to_red"
+
+
+def test_update_ledger_caps_observations_and_archive():
+    now = "2026-06-09T09:00:00+00:00"
+    probe = {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+             "observations": [{"run": f"d{i}"} for i in range(qwp.MAX_OBSERVATIONS)]}
+    ledger = {"schema_version": "1", "active": [probe],
+              "archive": [{"id": f"old{i}"} for i in range(qwp.MAX_ARCHIVE)]}
+    transitions = [qwp._active({"id": "a"}, "x", now, {"run": "new"})]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    a = out["active"][0]
+    assert len(a["observations"]) == qwp.MAX_OBSERVATIONS  # capped
+    assert a["observations"][-1] == {"run": "new"}
+    assert len(out["archive"]) == qwp.MAX_ARCHIVE          # capped (FIFO)
+
+
+def test_update_ledger_does_not_mutate_input():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": now, "observations": []}],
+        "archive": []}
+    transitions = [qwp._resolved({"id": "a"}, "recovered", "x", now)]
+    qwp.update_ledger(ledger, [], transitions, now)
+    assert ledger["active"][0]["id"] == "a"  # original untouched
+    assert ledger["archive"] == []

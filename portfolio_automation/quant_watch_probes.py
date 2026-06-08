@@ -359,3 +359,47 @@ def evaluate(retune, efficacy, current_fp, ledger, now_iso) -> list[dict]:
         except Exception as exc:  # never let one bad probe abort the run
             out.append(_active(probe, f"eval error: {exc}", now_iso, None))
     return out
+
+
+# ── Task 8: update_ledger() ──────────────────────────────────────────────────
+
+def update_ledger(ledger, new_probes, transitions, now_iso) -> dict:
+    """Return a NEW ledger (input not mutated):
+      - resolved/escalated probes move to archive with resolved_at + resolution
+        + lifetime_days;
+      - still-active probes get last_evaluated_at bumped and their observation
+        appended (capped at MAX_OBSERVATIONS);
+      - new_probes are appended to active;
+      - archive is FIFO-capped at MAX_ARCHIVE."""
+    import copy
+    active_in = {p.get("id"): copy.deepcopy(p) for p in (ledger.get("active") or [])}
+    archive = [copy.deepcopy(a) for a in (ledger.get("archive") or [])]
+    by_id = {t.get("id"): t for t in transitions}
+
+    new_active: list[dict] = []
+    for pid, probe in active_in.items():
+        t = by_id.get(pid)
+        if t is None:
+            new_active.append(probe)  # no transition (shouldn't happen) → keep
+            continue
+        if t["status"] in (RESOLVED, ESCALATED):
+            probe["resolved_at"] = t.get("resolved_at", now_iso)
+            probe["resolved_run"] = now_iso[:10]
+            probe["resolution"] = t.get("resolution")
+            probe["resolution_detail"] = t.get("detail")
+            probe["lifetime_days"] = _age_days(probe.get("created_at"), now_iso)
+            archive.append(probe)
+        else:  # active
+            probe["last_evaluated_at"] = now_iso
+            obs = t.get("observation")
+            if obs:
+                trail = list(probe.get("observations") or [])
+                trail.append(obs)
+                probe["observations"] = trail[-MAX_OBSERVATIONS:]
+            new_active.append(probe)
+
+    for p in (new_probes or []):
+        new_active.append(copy.deepcopy(p))
+
+    archive = archive[-MAX_ARCHIVE:]
+    return {"schema_version": "1", "active": new_active, "archive": archive}
