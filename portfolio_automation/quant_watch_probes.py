@@ -446,12 +446,14 @@ def run_quant_watch(*, root: str | Path = ".", now_iso: str | None = None,
         status = render_status(new_ledger, new_probes, transitions, now)
 
         if write_files:
+            # ledger is the durable state — write it first, then the consumer-facing status artifact
             write_ledger(root_path / _LEDGER_REL, new_ledger)
             safe_write_json(OutputNamespace.LATEST, _STATUS_REL, status,
                             base_dir=root_path / "outputs")
         return status
     except Exception as exc:
-        return {"generated_at": now, "observe_only": True, "source": "quant_watch_probes",
+        return {"generated_at": now, "observe_only": True, "schema_version": "1",
+                "source": "quant_watch_probes",
                 "overall_status": GREEN, "active_count": 0, "active": [],
                 "registered_today": [], "resolved_today": [], "escalated_today": [],
                 "ledger_liveness": {"status": "warn", "error": str(exc)},

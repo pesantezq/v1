@@ -495,6 +495,7 @@ def test_run_quant_watch_end_to_end(tmp_path):
         (root / "outputs" / "latest" / "quant_watch_status.json").read_text())
     assert status["observe_only"] is True
     assert status["active_count"] == 3
+    assert status["schema_version"] == "1"
 
     # second run same inputs → idempotent (no new probes, still 3 active)
     result2 = qwp.run_quant_watch(root=root, now_iso="2026-06-09T09:00:00+00:00",
@@ -509,3 +510,4 @@ def test_run_quant_watch_degrades_when_artifacts_missing(tmp_path):
                                  created_run="r", write_files=False)
     assert result["overall_status"] == "green"
     assert result["active_count"] == 0
+    assert result["schema_version"] == "1"
