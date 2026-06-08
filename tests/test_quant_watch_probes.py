@@ -468,3 +468,44 @@ def test_evaluate_error_path_keeps_probe_active(monkeypatch):
     assert len(transitions) == 1
     assert transitions[0]["status"] == "active"
     assert "eval error" in transitions[0]["detail"]
+
+
+# ── Task 10: run_quant_watch() orchestrator ───────────────────────────────────
+
+def test_run_quant_watch_end_to_end(tmp_path):
+    # arrange artifacts under a fake root
+    root = tmp_path
+    (root / "outputs" / "latest").mkdir(parents=True)
+    (root / "data").mkdir()
+    (root / "outputs" / "latest" / "retune_impact.json").write_text(
+        json.dumps(_retune_fixture()), encoding="utf-8")
+    (root / "outputs" / "latest" / "pattern_efficacy_monthly.json").write_text(
+        json.dumps(_efficacy_fixture()), encoding="utf-8")
+
+    result = qwp.run_quant_watch(root=root, now_iso="2026-06-08T09:00:00+00:00",
+                                 created_run="test-run", write_files=True)
+
+    assert result["overall_status"] == "amber"
+    assert result["active_count"] == 3
+    # ledger written
+    led = json.loads((root / "data" / "quant_watch_ledger.json").read_text())
+    assert len(led["active"]) == 3
+    # status artifact written
+    status = json.loads(
+        (root / "outputs" / "latest" / "quant_watch_status.json").read_text())
+    assert status["observe_only"] is True
+    assert status["active_count"] == 3
+
+    # second run same inputs → idempotent (no new probes, still 3 active)
+    result2 = qwp.run_quant_watch(root=root, now_iso="2026-06-09T09:00:00+00:00",
+                                  created_run="test-run", write_files=True)
+    assert result2["registered_today"] == []
+    assert result2["active_count"] == 3
+
+
+def test_run_quant_watch_degrades_when_artifacts_missing(tmp_path):
+    (tmp_path / "data").mkdir()
+    result = qwp.run_quant_watch(root=tmp_path, now_iso="2026-06-08T09:00:00+00:00",
+                                 created_run="r", write_files=False)
+    assert result["overall_status"] == "green"
+    assert result["active_count"] == 0

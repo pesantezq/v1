@@ -415,6 +415,49 @@ def overall_status(ledger, transitions) -> str:
     return GREEN
 
 
+# ── Task 10: write_ledger() + run_quant_watch() orchestrator ─────────────────
+
+def write_ledger(path: str | Path, ledger: dict) -> None:
+    """Write the ledger JSON to path; creates parent directory if needed."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(ledger, indent=2, default=str), encoding="utf-8")
+
+
+def run_quant_watch(*, root: str | Path = ".", now_iso: str | None = None,
+                    created_run: str = "quant-watch-analysis",
+                    write_files: bool = True) -> dict:
+    """Load ledger + source artifacts → evaluate → detect → update → render.
+    Writes the ledger and the status artifact when write_files=True. Returns the
+    status dict. Never raises — degrades to an empty-but-valid status on error."""
+    root_path = Path(root).resolve()
+    now = now_iso or _now_iso()
+    try:
+        ledger = load_ledger(root_path / _LEDGER_REL)
+        retune = _load_json(root_path / "outputs/latest/retune_impact.json") or {}
+        efficacy = _load_json(root_path / "outputs/latest/pattern_efficacy_monthly.json") or {}
+        current_fp = retune.get("current_fingerprint")
+
+        transitions = evaluate(retune, efficacy, current_fp, ledger, now)
+        new_probes = detect(retune, efficacy, ledger, now, created_run)
+        # CRITICAL: update_ledger first, then render_status on the post-update ledger
+        # so active_count reflects newly-registered probes and excludes archived ones.
+        new_ledger = update_ledger(ledger, new_probes, transitions, now)
+        status = render_status(new_ledger, new_probes, transitions, now)
+
+        if write_files:
+            write_ledger(root_path / _LEDGER_REL, new_ledger)
+            safe_write_json(OutputNamespace.LATEST, _STATUS_REL, status,
+                            base_dir=root_path / "outputs")
+        return status
+    except Exception as exc:
+        return {"generated_at": now, "observe_only": True, "source": "quant_watch_probes",
+                "overall_status": GREEN, "active_count": 0, "active": [],
+                "registered_today": [], "resolved_today": [], "escalated_today": [],
+                "ledger_liveness": {"status": "warn", "error": str(exc)},
+                "disclaimer": "Observe-only quant watch ledger (degraded)."}
+
+
 def render_status(ledger, new_probes, transitions, now_iso) -> dict:
     active = ledger.get("active") or []
     new_ids = [p.get("id") for p in (new_probes or [])]
