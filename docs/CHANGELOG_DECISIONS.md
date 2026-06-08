@@ -69,6 +69,103 @@ Explicitly note:
 
 ---
 
+## Schwab Read-Only Broker Sync
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+New package `portfolio_automation/brokers/`:
+- `__init__.py` — package marker
+- `broker_models.py` — `BrokerAccount`, `BrokerPosition`, `BrokerSnapshot` dataclasses; `mask_account`; `redact`; `normalize_accounts` (defensive); `snapshot_dict`; `positions_dict`
+- `broker_status.py` — `build_status()` → `broker_sync_status` shape; `read_only_mode` and `trading_enabled` hardcoded
+- `broker_reconciliation.py` — `reconcile` (snapshot vs config); `validate_proposed_holdings`; `build_proposal` (proposal-only, no config write)
+- `schwab_oauth.py` — `build_authorize_url`; `exchange_code`; `refresh`; `save_token` / `load_token` (gitignored `data/schwab_token.json`, mode 0600); `valid_access_token`; `is_configured`
+- `schwab_client.py` — `SchwabClient.get_account_numbers` / `get_accounts` (read-only GET only; no trade methods)
+- `schwab_sync.py` — `run_status` / `run_sync` / `run_reconcile` orchestrators; CLI (`--status` / `--sync` / `--reconcile`); archive writer; never raises
+
+New tests: `tests/test_schwab_models.py`, `tests/test_schwab_status.py`, `tests/test_schwab_reconciliation.py`, `tests/test_schwab_oauth.py`, `tests/test_schwab_client.py`, `tests/test_schwab_sync.py` (35 tests total).
+
+New fixtures: `tests/fixtures/schwab/accounts_positions.json`, `tests/fixtures/schwab/account_numbers.json`.
+
+New docs: `docs/schwab_integration.md`.
+
+Reference spec: `docs/superpowers/specs/2026-06-08-schwab-readonly-sync-design.md`.
+Reference plan: `docs/superpowers/plans/2026-06-08-schwab-readonly-sync.md`.
+
+### Decision
+
+Shipped a **read-only** Schwab Trader API broker-sync layer. The layer authenticates via OAuth 2.0
+(authorization-code + refresh), pulls account numbers and positions (read-only GETs only), normalizes
+the response into masked/redacted artifacts, reconciles actual Schwab holdings against the local
+`config.json` portfolio, and emits a proposal-only config-update artifact for operator review.
+No trades, no config writes, no decision-core mutation. CLI entry point:
+`python -m portfolio_automation.brokers.schwab_sync --status|--sync|--reconcile`.
+
+### Why
+
+The local `config.json` holdings can drift from what is actually held at Schwab (manual trades,
+cash adjustments, rebalances). Without a sync layer there is no systematic way to detect or surface
+these gaps. The broker-sync layer makes them visible as a reconciliation artifact, from which the
+operator can generate and review a safe-writer proposal.
+
+### Invariants Preserved
+
+- **Observe-only.** No decision-core artifacts (`decision_plan`, `system_decision_summary`,
+  `decision_explanations`, `decision_triage`) are read or written by the broker layer.
+- **No trade execution.** No order/trade/buy/sell methods exist anywhere in the package.
+  `trading_enabled` is hardcoded `false`. An AST test enforces this invariant.
+- **Proposal-only.** `config.json` is never written automatically. The proposal artifact sets
+  `operator_approval_required:true` and `auto_applied:false`. Apply requires a reviewed manual
+  step via `tools/manual_portfolio_update.py`.
+- **No scoring/ranking change.** `signal_score`, `confidence_score`, `effective_score`,
+  `conviction_score`, `final_rank_score`, `recommendation_score` are unchanged.
+- **No `decision_engine.py` change.**
+- **Secrets never logged or committed.** `redact()` scrubs token/secret/code values from all
+  strings before logging or artifact write. Token stored gitignored `data/schwab_token.json`
+  at mode 0600.
+
+### Downstream Impact
+
+**5 new `outputs/latest/` artifacts** (all `observe_only: true`, `source: "schwab"`):
+- `broker_sync_status.json` — always producible (even unconfigured)
+- `schwab_portfolio_snapshot.json` — produced after `--sync`
+- `schwab_positions.json` — produced after `--sync`
+- `portfolio_reconciliation.json` — produced after `--reconcile`
+- `portfolio_config_update_proposal.json` — produced after `--reconcile`
+
+**Archive:** `outputs/archive/broker_sync/<YYYY-MM-DD>/` (snapshot + positions copies per sync run).
+
+**Tests:** 35 new tests covering all five modules + the no-trade AST invariant + no-secrets-in-artifacts + masking + proposal validation.
+
+**GUI:** no change this slice (GUI `/dashboard/portfolio-sync` is deferred — see Deferred section).
+
+**Artifact registry:** no change this slice (registration deferred until `feat/artifact-registry-governance` merges — see Deferred section).
+
+### Artifact Health Severity
+
+- `broker_sync_status.json` — **always-producible** (the orchestrator writes it even when
+  unconfigured; the CLI `--status` command always succeeds). Severity: `optional_missing` only if
+  the cron never ran at all.
+- `schwab_portfolio_snapshot.json`, `schwab_positions.json`, `portfolio_reconciliation.json`,
+  `portfolio_config_update_proposal.json` — **present only after a successful `--sync` /
+  `--reconcile` run**. Their absence before the first run is expected and should NOT trigger a
+  `critical_missing` flag. Treat as `optional_missing`.
+- `missing_artifact_count`: no change to the existing daily pipeline count (broker artifacts are not
+  yet registered in the artifact registry — registration is deferred).
+- **Producer step:** `portfolio_automation.brokers.schwab_sync` (CLI / callable). Not part of the
+  main cron pipeline in this slice; operator-triggered.
+- **Deferred:** GUI `/dashboard/portfolio-sync` view; artifact-registry registration of all 5
+  artifacts (lands once `feat/artifact-registry-governance` merges to `main`).
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date
