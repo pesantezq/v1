@@ -157,3 +157,42 @@ def test_d1_eval_stays_active_when_still_bad():
                               "2026-06-09T09:00:00+00:00")
     assert t["status"] == "active"
     assert t["observation"]["delta_vs_prior_pp"] == -24.1
+
+
+# ── Task 5: D2 negative_mean_return_persistence ──────────────────────────────
+
+def test_d2_fires_on_negative_mean_return():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is not None
+    assert probe["id"] == "negative_mean_return_persistence:d95e"
+    assert probe["trigger_snapshot"]["mean_return_1d"] == -1.18
+
+
+def test_d2_quiet_when_positive():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=0.5), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is None
+
+
+def test_d2_quiet_below_min_sample():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.0, resolved=5), "2026-06-08T09:00:00+00:00", "r")
+    assert probe is None
+
+
+def test_d2_eval_resolves_when_return_recovers():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    t = qwp._eval_neg_return(probe, _retune_fixture(mean_ret=0.2), None, "d95e",
+                             "2026-06-20T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "recovered"
+
+
+def test_d2_eval_stays_active_when_still_negative():
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
+    t = qwp._eval_neg_return(probe, _retune_fixture(mean_ret=-0.9), None, "d95e",
+                             "2026-06-09T09:00:00+00:00")
+    assert t["status"] == "active"
+    assert t["observation"]["mean_return_1d"] == -0.9

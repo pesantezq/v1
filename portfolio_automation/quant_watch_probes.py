@@ -219,3 +219,54 @@ def _eval_prior_gauge(probe, retune, efficacy, current_fp, now_iso) -> dict:
                          f"delta vs prior {delta_prior:+.1f}pp >= {PRIOR_GAUGE_RESOLVE_PP}", now_iso)
     return _active(probe, f"delta vs prior {delta_prior:+.1f}pp", now_iso,
                    {"run": now_iso[:10], "delta_vs_prior_pp": delta_prior})
+
+
+# ── Task 5: D2 — negative_mean_return_persistence ────────────────────────────
+
+def detect_negative_mean_return_persistence(
+    retune: dict, now_iso: str, created_run: str,
+) -> dict | None:
+    by_fp = ((retune or {}).get("outcome_attribution") or {}).get("by_fingerprint") or {}
+    current_fp = (retune or {}).get("current_fingerprint")
+    cur = by_fp.get(current_fp) if current_fp else None
+    if not isinstance(cur, dict):
+        return None
+    resolved = cur.get("resolved_1d") or 0
+    mean_ret = cur.get("mean_return_1d")
+    if resolved < MIN_RESOLVED_1D or mean_ret is None or mean_ret >= 0:
+        return None
+    return {
+        "id": f"{DETECTOR_NEG_RETURN}:{current_fp}",
+        "detector": DETECTOR_NEG_RETURN,
+        "lens": "quant",
+        "scope_key": current_fp,
+        "created_at": now_iso,
+        "created_run": created_run,
+        "severity": "amber",
+        "concern": (f"current-fp {current_fp[:8]} mean_return_1d {mean_ret:.2f} "
+                    f"(< 0) at n={resolved}"),
+        "trigger_snapshot": {"mean_return_1d": mean_ret, "resolved_1d": resolved},
+        "resolve_hint": "mean_return_1d recovers to >= 0, or fingerprint changes",
+        "last_evaluated_at": now_iso,
+        "observations": [{"run": now_iso[:10], "mean_return_1d": mean_ret}],
+    }
+
+
+def _eval_neg_return(probe, retune, efficacy, current_fp, now_iso) -> dict:
+    scope = probe.get("scope_key")
+    if current_fp and scope != current_fp:
+        return _resolved(probe, "scope_changed", f"current fp now {str(current_fp)[:8]}", now_iso)
+    by_fp = ((retune or {}).get("outcome_attribution") or {}).get("by_fingerprint") or {}
+    cur = by_fp.get(scope)
+    if not isinstance(cur, dict):
+        return _resolved(probe, "scope_changed", "fingerprint no longer present", now_iso)
+    resolved = cur.get("resolved_1d") or 0
+    if resolved == 0:
+        return _resolved(probe, "sample_collapsed", "resolved_1d == 0", now_iso)
+    if _age_days(probe.get("created_at"), now_iso) >= MAX_PROBE_AGE_DAYS:
+        return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
+    mean_ret = cur.get("mean_return_1d")
+    if mean_ret is not None and mean_ret >= 0:
+        return _resolved(probe, "recovered", f"mean_return_1d {mean_ret:.2f} >= 0", now_iso)
+    return _active(probe, f"mean_return_1d {mean_ret:.2f}", now_iso,
+                   {"run": now_iso[:10], "mean_return_1d": mean_ret})
