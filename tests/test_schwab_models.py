@@ -18,3 +18,43 @@ def test_redact_scrubs_tokens_and_secrets():
 def test_redact_handles_non_string():
     assert bm.redact(None) == ""
     assert "5" in bm.redact(5)
+
+
+import json
+from pathlib import Path
+
+_FIX = Path("tests/fixtures/schwab")
+
+
+def test_normalize_accounts_from_fixture():
+    raw = json.loads((_FIX / "accounts_positions.json").read_text())
+    nums = json.loads((_FIX / "account_numbers.json").read_text())
+    snap = bm.normalize_accounts(raw, nums, now_iso="2026-06-08T12:00:00+00:00")
+    assert len(snap.accounts) == 1
+    acct = snap.accounts[0]
+    assert acct.account_id_masked == "…6789"   # masked, no full number
+    assert acct.account_type == "MARGIN"
+    assert acct.total_market_value == 15000.50
+    assert acct.cash == 464.16
+    assert {p.symbol for p in acct.positions} == {"QQQ", "GLD"}
+    qqq = next(p for p in acct.positions if p.symbol == "QQQ")
+    assert qqq.quantity == 6 and qqq.market_value == 4200.0 and qqq.average_cost == 600.0
+    assert qqq.account_ref_masked == "…6789"
+
+
+def test_snapshot_and_positions_dicts_have_no_raw_account():
+    raw = json.loads((_FIX / "accounts_positions.json").read_text())
+    nums = json.loads((_FIX / "account_numbers.json").read_text())
+    snap = bm.normalize_accounts(raw, nums, now_iso="2026-06-08T12:00:00+00:00")
+    sd = bm.snapshot_dict(snap)
+    pr = bm.positions_dict(snap)
+    blob = json.dumps(sd) + json.dumps(pr)
+    assert "123456789" not in blob           # no full account number leaks
+    assert sd["totals"]["market_value"] == 15000.50
+    assert len(pr["positions"]) == 2
+
+
+def test_normalize_is_defensive_on_missing_fields():
+    snap = bm.normalize_accounts([{"securitiesAccount": {}}], [], now_iso="t")
+    assert len(snap.accounts) == 1
+    assert snap.accounts[0].positions == []

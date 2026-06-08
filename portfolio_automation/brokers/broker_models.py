@@ -51,3 +51,84 @@ class BrokerAccount:
 class BrokerSnapshot:
     snapshot_timestamp: str
     accounts: list[BrokerAccount] = field(default_factory=list)
+
+
+def _f(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_accounts(raw_accounts: Any, account_numbers: Any, *, now_iso: str) -> BrokerSnapshot:
+    """Defensively normalize Schwab accounts+positions JSON into a BrokerSnapshot.
+    Uses candidate key names; never raises on missing/odd shapes."""
+    # map plain account number -> masked (we never store the plain number)
+    num_to_masked: dict[str, str] = {}
+    for entry in account_numbers if isinstance(account_numbers, list) else []:
+        if isinstance(entry, dict):
+            n = entry.get("accountNumber")
+            if n is not None:
+                num_to_masked[str(n)] = mask_account(n)
+
+    accounts: list[BrokerAccount] = []
+    for item in raw_accounts if isinstance(raw_accounts, list) else []:
+        sa = (item or {}).get("securitiesAccount") or item or {}
+        if not isinstance(sa, dict):
+            continue
+        num = sa.get("accountNumber") or sa.get("accountId")
+        masked = num_to_masked.get(str(num)) if num is not None else None
+        masked = masked or mask_account(num)
+        bal = sa.get("currentBalances") or sa.get("balances") or {}
+        positions: list[BrokerPosition] = []
+        for p in (sa.get("positions") or []):
+            if not isinstance(p, dict):
+                continue
+            instr = p.get("instrument") or {}
+            qty = p.get("longQuantity")
+            if qty in (None, 0) and p.get("shortQuantity"):
+                qty = -_f(p.get("shortQuantity"))  # represent short as negative
+            positions.append(BrokerPosition(
+                symbol=str(instr.get("symbol") or p.get("symbol") or "").upper(),
+                quantity=_f(qty) or 0.0,
+                market_value=_f(p.get("marketValue")),
+                average_cost=_f(p.get("averagePrice") or p.get("averageCost")),
+                asset_type=instr.get("assetType") or p.get("assetType"),
+                account_ref_masked=masked,
+                source_timestamp=now_iso,
+            ))
+        accounts.append(BrokerAccount(
+            account_id_masked=masked,
+            account_type=sa.get("type") or sa.get("accountType"),
+            total_market_value=_f(bal.get("liquidationValue") or bal.get("totalMarketValue")),
+            cash=_f(bal.get("cashBalance") or bal.get("cashAvailableForTrading") or bal.get("cash")),
+            positions=positions,
+        ))
+    return BrokerSnapshot(snapshot_timestamp=now_iso, accounts=accounts)
+
+
+def snapshot_dict(snap: BrokerSnapshot) -> dict:
+    mv = sum(a.total_market_value or 0.0 for a in snap.accounts)
+    cash = sum(a.cash or 0.0 for a in snap.accounts)
+    return {
+        "generated_at": snap.snapshot_timestamp, "source": "schwab",
+        "snapshot_timestamp": snap.snapshot_timestamp,
+        "accounts": [{
+            "account_id_masked": a.account_id_masked, "account_type": a.account_type,
+            "total_market_value": a.total_market_value, "cash": a.cash,
+            "positions_count": len(a.positions),
+        } for a in snap.accounts],
+        "totals": {"market_value": mv, "cash": cash},
+    }
+
+
+def positions_dict(snap: BrokerSnapshot) -> dict:
+    rows = []
+    for a in snap.accounts:
+        for p in a.positions:
+            rows.append({
+                "symbol": p.symbol, "quantity": p.quantity, "market_value": p.market_value,
+                "average_cost": p.average_cost, "asset_type": p.asset_type,
+                "account_ref_masked": p.account_ref_masked, "source_timestamp": p.source_timestamp,
+            })
+    return {"generated_at": snap.snapshot_timestamp, "source": "schwab", "positions": rows}

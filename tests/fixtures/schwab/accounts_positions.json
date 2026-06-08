@@ -1,0 +1,7 @@
+[{"securitiesAccount": {
+  "accountNumber": "123456789", "type": "MARGIN",
+  "currentBalances": {"liquidationValue": 15000.50, "cashBalance": 464.16},
+  "positions": [
+    {"instrument": {"symbol": "QQQ", "assetType": "EQUITY"}, "longQuantity": 6, "marketValue": 4200.0, "averagePrice": 600.0},
+    {"instrument": {"symbol": "GLD", "assetType": "EQUITY"}, "longQuantity": 4, "marketValue": 1200.0, "averagePrice": 280.0}
+  ]}}]
