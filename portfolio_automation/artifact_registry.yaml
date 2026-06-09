@@ -679,3 +679,421 @@ artifacts:
     consumers: [watchlist_scanner.theme_alignment, watchlist_scanner.system_summary]
     severity_if_missing: info
     consumer_status: consumed
+
+  # ── Next-stage workstreams (planned; producers ship per phase) ──────────
+  universe_scan_candidates.json:
+    path: outputs/sandbox/universe_scan_candidates.json
+    label: universe scan candidates
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: universe_scanner
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 5 — producer not yet shipped
+
+  opportunity_radar.json:
+    path: outputs/sandbox/opportunity_radar.json
+    label: opportunity radar
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: universe_scanner
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 6 — producer not yet shipped
+
+  private_ipo_watchlist.json:
+    path: outputs/sandbox/private_ipo_watchlist.json
+    label: private ipo watchlist
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: universe_scanner
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 5 — producer not yet shipped
+
+  theme_candidates.json:
+    path: outputs/sandbox/theme_candidates.json
+    label: theme candidates
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: universe_scanner
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 5 — producer not yet shipped
+
+  market_opportunity_prompts.json:
+    path: outputs/sandbox/market_opportunity_prompts.json
+    label: market opportunity prompts
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: market_opportunity_prompts
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 8 — producer not yet shipped
+
+  market_opportunity_review_cards.json:
+    path: outputs/sandbox/market_opportunity_review_cards.json
+    label: market opportunity review cards
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: market_opportunity_prompts
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 8 — producer not yet shipped
+
+  opportunity_approval_queue.json:
+    path: outputs/sandbox/opportunity_approval_queue.json
+    label: opportunity approval queue
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 8 — producer not yet shipped
+
+  shadow_opportunity_tracking.json:
+    path: outputs/sandbox/shadow_opportunity_tracking.json
+    label: shadow opportunity tracking
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: shadow_tracker
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 7 — producer not yet shipped
+
+  shadow_portfolios.json:
+    path: outputs/sandbox/shadow_portfolios.json
+    label: shadow portfolios
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: shadow_tracker
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 7 — producer not yet shipped
+
+  strategy_comparison.json:
+    path: outputs/sandbox/strategy_comparison.json
+    label: strategy comparison
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: strategy_comparator
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 7 — producer not yet shipped
+
+  candidate_promotion_review.json:
+    path: outputs/sandbox/candidate_promotion_review.json
+    label: candidate promotion review
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: shadow_tracker
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 7 — producer not yet shipped
+
+  strategy_profiles.json:
+    path: outputs/sandbox/strategy_profiles.json
+    label: strategy profiles
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: strategy_profiles
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  strategy_shadow_results.json:
+    path: outputs/sandbox/strategy_shadow_results.json
+    label: strategy shadow results
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: strategy_comparator
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  strategy_risk_scorecard.json:
+    path: outputs/sandbox/strategy_risk_scorecard.json
+    label: strategy risk scorecard
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: strategy_comparator
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  strategy_tax_scorecard.json:
+    path: outputs/sandbox/strategy_tax_scorecard.json
+    label: strategy tax scorecard
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: tax_scorecard
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  broker_aware_portfolio.json:
+    path: outputs/portfolio/broker_aware_portfolio.json
+    label: broker aware portfolio
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: holdings_resolver
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 10 — producer not yet shipped
+
+  system_improvement_ideas.json:
+    path: outputs/latest/system_improvement_ideas.json
+    label: system improvement ideas
+    lens: developer
+    role: advisor
+    required: false
+    cadence: daily
+    producer: system_improvement
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 3 — producer not yet shipped
+
+  system_improvement_brief.md:
+    path: outputs/latest/system_improvement_brief.md
+    label: system improvement brief
+    lens: developer
+    role: narrative
+    required: false
+    cadence: daily
+    producer: system_improvement
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 3 — producer not yet shipped
+
+  system_improvement_scorecard.json:
+    path: outputs/latest/system_improvement_scorecard.json
+    label: system improvement scorecard
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: system_improvement
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 3 — producer not yet shipped
+
+  operator_action_queue.json:
+    path: outputs/latest/operator_action_queue.json
+    label: operator action queue
+    lens: meta_governance
+    role: advisor
+    required: false
+    cadence: daily
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 4 — producer not yet shipped
+
+  system_improvement_action_queue.json:
+    path: outputs/latest/system_improvement_action_queue.json
+    label: system improvement action queue
+    lens: meta_governance
+    role: advisor
+    required: false
+    cadence: daily
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 4 — producer not yet shipped
+
+  strategy_review_queue.json:
+    path: outputs/latest/strategy_review_queue.json
+    label: strategy review queue
+    lens: meta_governance
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  pattern_events.jsonl:
+    path: outputs/policy/pattern_events.jsonl
+    label: pattern events
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: event_store
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11 — producer not yet shipped
+
+  opportunity_events.jsonl:
+    path: outputs/policy/opportunity_events.jsonl
+    label: opportunity events
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: event_store
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11 — producer not yet shipped
+
+  outcome_events.jsonl:
+    path: outputs/policy/outcome_events.jsonl
+    label: outcome events
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: event_store
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11 — producer not yet shipped
+
+  user_action_log.jsonl:
+    path: outputs/policy/user_action_log.jsonl
+    label: user action log
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11 — producer not yet shipped
+
+  user_decisions.jsonl:
+    path: outputs/policy/user_decisions.jsonl
+    label: user decisions
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 4 — producer not yet shipped
+
+  system_improvement_history.jsonl:
+    path: outputs/policy/system_improvement_history.jsonl
+    label: system improvement history
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: system_improvement
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 3 — producer not yet shipped
+
+  system_improvement_decisions.jsonl:
+    path: outputs/policy/system_improvement_decisions.jsonl
+    label: system improvement decisions
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 4 — producer not yet shipped
+
+  system_improvement_outcomes.jsonl:
+    path: outputs/policy/system_improvement_outcomes.jsonl
+    label: system improvement outcomes
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: system_improvement
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 15 — producer not yet shipped
+
+  strategy_decisions.jsonl:
+    path: outputs/policy/strategy_decisions.jsonl
+    label: strategy decisions
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: approval_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
+  strategy_outcomes.jsonl:
+    path: outputs/policy/strategy_outcomes.jsonl
+    label: strategy outcomes
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: strategy_comparator
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: next-stage Phase 11A — producer not yet shipped
+
