@@ -175,10 +175,15 @@ def _evaluate_symbol(record: dict, config: DataQualityConfig) -> DataQualitySymb
     cached = data_quality == "cached"
 
     # ── Fallback ─────────────────────────────────────────────────────────────
+    # NOTE: a fallback_reason indicates fallback only when it is a non-empty
+    # string. The watchlist scanner emits ``fallback_reason: ""`` (empty string,
+    # not None) for live symbols with no fallback (watchlist_scanner/scanner.py),
+    # so testing ``is not None`` here spuriously flagged every live symbol as
+    # FALLBACK_USED — cascading to EXCESSIVE_FALLBACK_RATE and DEGRADED_MODE.
     fallback_used = bool(
         record.get("fallback_used")
         or data_mode == "fallback"
-        or record.get("fallback_reason") is not None
+        or _safe_str(record.get("fallback_reason"))
         or record.get("data_fallback_triggered")
     )
 

@@ -297,6 +297,73 @@ class TestFallbackUsed(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Empty-string fallback_reason (real scanner shape) — must NOT flag fallback
+# ---------------------------------------------------------------------------
+
+def _scanner_shape_record(ticker: str = "AAPL", fallback_reason: str = "") -> dict:
+    """Mirror watchlist_scanner.scanner per-symbol result shape for a *live* symbol.
+
+    The scanner emits ``fallback_reason: ""`` (empty string, not None) when no
+    fallback occurred (watchlist_scanner/scanner.py:1165). A live, healthy
+    symbol must not be reported as having used a fallback source.
+    """
+    return {
+        "ticker": ticker,
+        "price": 150.0,
+        "data_quality": "fresh",
+        "data_mode": "live",
+        "price_data_source": "fmp",
+        "fundamentals": {"sector": "Technology", "market_cap": 3_000_000_000},
+        "fundamentals_source": "fmp",
+        "news": {"headline_count": 5},
+        "news_count": 5,
+        "fallback_used": False,
+        "fallback_reason": fallback_reason,
+    }
+
+
+class TestEmptyStringFallbackReason(unittest.TestCase):
+    """Regression: empty-string fallback_reason must not be treated as fallback.
+
+    Root cause: data_quality_monitor used ``fallback_reason is not None``, but
+    the scanner uses ``""`` (not None) as its no-fallback sentinel, so every
+    live symbol was spuriously flagged FALLBACK_USED — cascading to
+    EXCESSIVE_FALLBACK_RATE and DEGRADED_MODE across the whole universe.
+    """
+
+    def test_empty_string_fallback_reason_not_flagged(self):
+        summary = evaluate_data_quality([_scanner_shape_record()])
+        issues = _issues_of_type(summary, ISSUE_FALLBACK_USED)
+        self.assertEqual(len(issues), 0)
+
+    def test_whitespace_fallback_reason_not_flagged(self):
+        summary = evaluate_data_quality([_scanner_shape_record(fallback_reason="   ")])
+        issues = _issues_of_type(summary, ISSUE_FALLBACK_USED)
+        self.assertEqual(len(issues), 0)
+
+    def test_scanner_shape_symbol_is_healthy(self):
+        summary = evaluate_data_quality([_scanner_shape_record()])
+        self.assertEqual(summary.healthy_symbols, 1)
+        self.assertEqual(summary.fallback_count, 0)
+
+    def test_live_universe_no_spurious_aggregate_warnings(self):
+        records = [_scanner_shape_record(t) for t in ("AAPL", "MSFT", "NVDA", "AMZN", "GOOGL")]
+        summary = evaluate_data_quality(records)
+        agg_types = [i.issue_type for i in summary.issues]
+        self.assertNotIn(ISSUE_EXCESSIVE_FALLBACK_RATE, agg_types)
+        self.assertNotIn(ISSUE_DEGRADED_MODE, agg_types)
+        self.assertEqual(summary.warning_symbols, 0)
+        self.assertEqual(summary.healthy_symbols, 5)
+
+    def test_nonempty_fallback_reason_still_flags(self):
+        """A genuine fallback reason must still be detected (no over-correction)."""
+        rec = _scanner_shape_record(fallback_reason="AV OHLCV budget exhausted")
+        summary = evaluate_data_quality([rec])
+        issues = _issues_of_type(summary, ISSUE_FALLBACK_USED)
+        self.assertEqual(len(issues), 1)
+
+
+# ---------------------------------------------------------------------------
 # Missing fundamentals
 # ---------------------------------------------------------------------------
 
