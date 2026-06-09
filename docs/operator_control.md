@@ -171,11 +171,12 @@ daily-cadence feature. A complementary line in
 recommended but, because it edits a `.claude/commands/*` oversight file around a
 worker-adjacent feature, is left for explicit operator sign-off.
 
-## Recommended Phase 2 — Claude Code worker runner
+## Phase 2 — Claude Code worker runner (shipped)
 
-A separate, opt-in runner that: claims a `queued`/`approved` work order →
-renders the prompt → launches a Claude Code worker in an isolated
-sandbox/worktree → runs the skill's `required_tests` → writes the result report
-to `reports/{work_order_id}.md` → transitions the order to `completed`/`failed`
-→ surfaces the report on the dashboard for human review. It must keep every
-boundary in this document, run outside the web process, and remain default-off.
+The CLI-only runner that consumes `queued`/`approved` work orders. By default it
+*scaffolds* an isolated git worktree + prompt for a human to run; an autonomous
+headless path is available behind a default-off, three-part hard gate
+(`config.json` flag + `STOCKBOT_OPERATOR_WORKER_AUTONOMOUS=1` + no
+`config/operator_worker.DISABLED`). It never merges or pushes; deterministic
+protected-path + test guards quarantine bad runs. Full details, CLI, and the
+review/merge workflow: **`docs/operator_control_worker_runner.md`**.

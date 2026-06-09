@@ -20,6 +20,7 @@ from typing import Any
 from operator_control.probe_registry import probes_for_view
 from operator_control.skill_registry import skill_for_probe_action
 from operator_control import work_orders as wo
+from gui_v2.data.shared import card
 
 # Human labels for the action buttons (the only place mode → label happens).
 _ACTION_LABELS = {
@@ -104,7 +105,7 @@ def operator_control_context(root: Path | str, view: str) -> dict[str, Any]:
 
     view_orders = [o for o in all_orders if o.get("source_view") == view][:_RECENT_LIMIT]
 
-    return {
+    ctx: dict[str, Any] = {
         "operator_probes": _operator_probes(view),
         "operator_work_orders": view_orders,
         "operator_summary": _summarize(all_orders),
@@ -112,6 +113,49 @@ def operator_control_context(root: Path | str, view: str) -> dict[str, Any]:
         "operator_post_url": "/dashboard/operator/create",
         "operator_observe_only": True,
     }
+    # The Phase 2 worker-runner status is a System-tab (developer) concern only.
+    if view == "system":
+        ctx["operator_runner"] = worker_runner_status(root)
+    return ctx
+
+
+def worker_runner_status(root: Path | str) -> dict[str, Any]:
+    """Read-only Phase 2 worker-runner summary card for the System tab.
+
+    Best-effort: any failure yields a neutral card so the System tab never
+    breaks if the runner module is unavailable.
+    """
+    try:
+        from operator_control import worker_runner
+        st = worker_runner.status(root)
+    except Exception:
+        st = {"by_status": {}, "worktrees": [], "autonomous_enabled": False}
+
+    by = st.get("by_status", {})
+    completed = by.get("completed", 0)
+    failed = by.get("failed", 0)
+    running = by.get("running", 0)
+    claimed = by.get("claimed", 0)
+    worktrees = [w for w in st.get("worktrees", []) if ".worktrees" in str(w)]
+
+    if failed:
+        status = "red"
+    elif running or claimed:
+        status = "warning"
+    else:
+        status = "ok"
+    label = "autonomous ON" if st.get("autonomous_enabled") else "scaffold-only"
+
+    return card(
+        "Worker Runner",
+        status=status,
+        label=label,
+        summary=(
+            f"{completed} completed; {failed} failed; {running} running; "
+            f"{claimed} claimed; {len(worktrees)} worktrees"
+        ),
+        source_artifacts=["outputs/operator_control/work_orders.jsonl"],
+    )
 
 
 def today_operator_summary(root: Path | str) -> dict[str, Any]:
@@ -130,4 +174,8 @@ def today_operator_summary(root: Path | str) -> dict[str, Any]:
     }
 
 
-__all__ = ["operator_control_context", "today_operator_summary"]
+__all__ = [
+    "operator_control_context",
+    "today_operator_summary",
+    "worker_runner_status",
+]

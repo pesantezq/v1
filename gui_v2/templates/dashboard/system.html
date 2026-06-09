@@ -123,6 +123,17 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
+  {# Worker Runner (Phase 2) — read-only status. CLI-driven; no        #}
+  {# controls here. Severity reflects failed/running/claimed orders.   #}
+  {# --------------------------------------------------------------- #}
+  {% if operator_runner %}
+  <section aria-label="Worker runner">
+    {{ ui.section_header("Worker Runner", "Phase 2 — observe-only; CLI-driven", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{{ ui.status_card(operator_runner) }}</div>
+  </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
   {# Operator actions — create diagnostic/repair work orders.          #}
   {# Create-only: no execution, no shell, no broker/trade controls.    #}
   {# --------------------------------------------------------------- #}

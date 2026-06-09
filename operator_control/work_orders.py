@@ -274,6 +274,35 @@ def attach_prompt_path(
     return new_record
 
 
+def attach_report_path(
+    root: Path | str, work_order_id: str, report_path: str, actor: str
+) -> dict[str, Any]:
+    """Record the worker's result-report path on the work order (append-only).
+
+    Does NOT change status — Phase 2's worker_runner drives transitions
+    separately. Used by both the manual and autonomous paths.
+    """
+    current = get_work_order(root, work_order_id)
+    if current is None:
+        raise policy.WorkOrderValidationError(
+            f"unknown work_order_id: {work_order_id!r}"
+        )
+    new_record = dict(current)
+    new_record["result_report_path"] = report_path
+    _append_record(root, new_record)
+    audit_log.record_event(
+        root,
+        event_type="report_attached",
+        actor=actor,
+        work_order_id=work_order_id,
+        probe_id=current.get("probe_id"),
+        skill_id=current.get("skill_id"),
+        mode=current.get("mode"),
+        details={"report_path": report_path},
+    )
+    return new_record
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -397,5 +426,6 @@ __all__ = [
     "get_work_order",
     "transition_work_order",
     "attach_prompt_path",
+    "attach_report_path",
     "main",
 ]

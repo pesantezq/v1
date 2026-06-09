@@ -177,3 +177,9 @@ def test_empty_operator_state_renders_cleanly(client_root):
     # No work orders created yet → the queue shows its empty state, page is 200.
     body = client.get("/dashboard/system").text
     assert "No work orders yet" in body
+
+
+def test_system_tab_shows_runner_card(client_root):
+    client, _ = client_root
+    body = client.get("/dashboard/system").text
+    assert "Worker Runner" in body

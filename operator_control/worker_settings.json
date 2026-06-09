@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(npm install:*)",
+      "Bash(systemctl:*)",
+      "Bash(sudo:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./config.json)",
+      "Edit(./config/signal_registry.yaml)",
+      "Edit(./decision_engine.py)",
+      "Edit(./scoring.py)",
+      "Edit(./portfolio_decision_engine.py)"
+    ]
+  }
+}

@@ -10,11 +10,20 @@
   append-only work orders + audit, worker-prompt generation, CLI); GUI adapter
   + `operator_panel.html` wired into all five persona tabs; 50 new tests. See
   `docs/operator_control.md`.
-- **Phase 2 — recommended next.** A separate, default-off **Claude Code worker
-  runner** that claims a queued/approved order → renders the prompt → runs a
-  worker in an isolated sandbox/worktree → runs the skill's required tests →
-  writes a result report → transitions the order for human review. Must preserve
-  every Phase-1 boundary and run outside the web process.
+- **Phase 2 — shipped (branch `operator-control-worker-runner`).** CLI-only
+  **worker runner** (`operator_control/worker_runner.py`). Default = scaffolding
+  (isolated `git worktree` + prompt for a human to run). Autonomous headless path
+  is hybrid/default-inert behind a three-part gate (config flag +
+  `STOCKBOT_OPERATOR_WORKER_AUTONOMOUS=1` + no `config/operator_worker.DISABLED`
+  kill-switch), modeled on `auto_apply`. Autonomous may run any mode incl.
+  `safe_repair`, contained by worktree + never-merge/never-push + a deterministic
+  protected-path diff guard + the skill's test gate + single-flight lock. New:
+  `protected_paths.py`, `worktree.py`, `worker_runner.py`, `worker_settings.json`,
+  read-only System-tab runner card; 24 new tests (claude subprocess mocked). See
+  `docs/operator_control_worker_runner.md`.
+- **Phase 3 — recommended next.** A default-off scheduled drain (cron) that runs
+  eligible orders through the (already-gated) autonomous path, with its own
+  sign-off; plus surfacing worker reports/diffs in the GUI for review.
 - **Follow-up (operator sign-off).** Add a `work_orders.jsonl` / `audit_log.jsonl`
   liveness line to `.claude/commands/daily-tool-analysis.md` (flag a growing
   `failed` / long-`awaiting_approval` queue). Left for explicit sign-off because
