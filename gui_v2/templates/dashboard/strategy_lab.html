@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block title %}Strategy Lab &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="dashboard-strategy-lab-content"
+     hx-get="/dashboard/strategy-lab"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-strategy-lab-content"
+     hx-select="#dashboard-strategy-lab-content"
+     hx-swap="outerHTML"
+     class="space-y-7">
+
+  {{ ui.page_header("Strategy Lab", "Opportunity radar · strategy comparison · improvement backlog — advisory, observe-only",
+                    "/dashboard/strategy-lab", "dashboard-strategy-lab-content") }}
+
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+    Research / sandbox + operational-improvement lanes. Nothing here trades, rebalances,
+    or changes the official decision plan. Approving an item only routes it to review or
+    generates a Claude Code prompt to copy.
+  </div>
+
+  {% if cards %}
+  <section aria-label="Strategy lab summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
+  </section>
+  {% endif %}
+
+  {# ── Strategy comparison ─────────────────────────────────────────────── #}
+  {% if strategies %}
+  <section aria-label="Strategy comparison">
+    {{ ui.section_header("Strategy Comparison", "risk-adjusted, after-tax framing", "strategy_comparison.json") }}
+    <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+          <th class="py-2.5 px-4">Strategy</th><th class="py-2.5 px-4 text-right">Rank</th>
+          <th class="py-2.5 px-4 text-right">Obj. fit</th><th class="py-2.5 px-4 text-right">Risk</th>
+          <th class="py-2.5 px-4 text-right">Max DD</th><th class="py-2.5 px-4 text-right">Tax eff.</th>
+          <th class="py-2.5 px-4 text-right">Opp. capture</th></tr></thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for m in strategies %}
+          <tr class="hover:bg-zinc-900/50">
+            <td class="py-2.5 px-4 text-zinc-100">{{ m.name }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_objective_fit) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_risk_level) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.max_drawdown_estimate) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.tax_efficiency) }}{% if m.after_tax_degraded %} <span class="text-amber-400" title="no tax-lot data">*</span>{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.opportunity_capture_score) }}</td>
+          </tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="md:hidden space-y-3">
+      {% for m in strategies %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3">
+        <div class="flex items-center justify-between"><span class="text-zinc-100 font-medium">{{ m.name }}</span>
+          <span class="font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</span></div>
+        <div class="text-xs text-zinc-500 mt-1">risk {{ "%.2f"|format(m.expected_risk_level) }} · taxeff {{ "%.2f"|format(m.tax_efficiency) }} · maxDD {{ "%.2f"|format(m.max_drawdown_estimate) }}</div>
+      </div>{% endfor %}
+    </div>
+    <p class="text-[11px] text-zinc-600 mt-2">* after-tax estimate degraded (no broker cost-basis/tax-lot data).</p>
+  </section>
+  {% endif %}
+
+  {# ── Opportunity radar ───────────────────────────────────────────────── #}
+  {% if radar %}
+  <section aria-label="Opportunity radar">
+    {{ ui.section_header("Opportunity Radar", "sandbox — review only", "opportunity_radar.json") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for o in radar %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ o.candidate }}</span>
+          {{ ui.badge("blue" if o.final_status in ("QUALIFIED","APPROVED_WATCHLIST_REVIEW") else "gray", o.final_status) }}
+        </div>
+        <div class="text-xs text-zinc-500">{{ o.theme or o.candidate_type }}</div>
+        <div class="text-xs text-zinc-400 font-mono">opp {{ "%.2f"|format(o.opportunity_score or 0) }} · boom {{ "%.2f"|format(o.boom_score or 0) }} · risk {{ "%.2f"|format(o.risk_score or 0) }}</div>
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ── System improvement backlog + queue ──────────────────────────────── #}
+  {% if improvement_ideas %}
+  <section aria-label="System improvement ideas">
+    {{ ui.section_header("System Improvement Backlog", "engineering/ops — not market advice", "system_improvement_ideas.json") }}
+    <div class="space-y-2">
+      {% for i in improvement_ideas %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <span class="text-zinc-200 text-sm">{{ i.title }}</span>
+          {{ ui.badge("blue", i.category) }}
+          <span class="text-xs text-zinc-500 font-mono ml-auto">{{ i.priority }} · {{ "%.2f"|format(i.final_rank_score) }}</span>
+        </div>
+        {% if i.summary %}<p class="text-xs text-zinc-500 mt-1">{{ i.summary }}</p>{% endif %}
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ── Approval queues (review-only; actions execute nothing) ───────────── #}
+  {% if opportunity_queue or improvement_queue or strategy_review_queue %}
+  <section aria-label="Approval queues">
+    {{ ui.section_header("Approval Queues", "artifact-based · approving executes nothing", "") }}
+    {% for grp, items, src in [("Market opportunities", opportunity_queue, "operator_action_queue.json"),
+                               ("System improvements", improvement_queue, "system_improvement_action_queue.json"),
+                               ("Strategy profiles", strategy_review_queue, "strategy_review_queue.json")] %}
+    {% if items %}
+    <div class="mb-3">
+      <div class="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">{{ grp }} <span class="font-mono normal-case">({{ src }})</span></div>
+      <div class="space-y-2">
+        {% for it in items %}
+        <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5 text-sm">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <span class="text-zinc-200">{{ it.candidate or it.title or it.name or it.id }}</span>
+            <span class="text-[11px] text-zinc-500">allow: {{ (it.allowed_actions or [])|join(", ") }}</span>
+          </div>
+          <div class="text-[11px] text-rose-300/70 mt-1">blocked: {{ (it.blocked_actions or [])|join(", ") }}</div>
+        </div>{% endfor %}
+      </div>
+    </div>
+    {% endif %}{% endfor %}
+  </section>
+  {% endif %}
+
+  {# ── Broker-aware side-panel ──────────────────────────────────────────── #}
+  {% if broker_aware and broker_aware.holdings_source %}
+  <section aria-label="Broker-aware portfolio">
+    {{ ui.section_header("Broker-Aware Portfolio", "read-only side-panel · never feeds decisions", "broker_aware_portfolio.json") }}
+    <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 text-sm text-zinc-300">
+      Source: <span class="font-mono">{{ broker_aware.holdings_source }}</span>
+      {% if broker_aware.degraded_mode %}<span class="text-amber-400">· degraded (no live prices)</span>{% endif %}
+      {% if broker_aware.cash_drag is not none %} · cash drag {{ "%.1f"|format((broker_aware.cash_drag or 0)*100) }}%{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not cards %}
+  {{ ui.empty_state("Strategy Lab not yet produced",
+                    "Run the sandbox/research lane to populate the radar, strategies, and improvement backlog.") }}
+  {% endif %}
+
+</div>
+{% endblock %}

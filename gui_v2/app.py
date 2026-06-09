@@ -410,6 +410,20 @@ def page_dash_system(
     return _render(request, "dashboard/system.html", **ctx)
 
 
+@app.get("/dashboard/strategy-lab", response_class=HTMLResponse)
+def page_dash_strategy_lab(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    # Next-stage research/strategy/improvement surface (observe-only, tolerant of
+    # absent artifacts). Additive — does not alter the existing persona tabs.
+    try:
+        from gui_v2.data.dash_next_stage import collect_strategy_lab_view
+        ctx = collect_strategy_lab_view(REPO_ROOT)
+    except Exception:
+        ctx = {"persona": "strategy_lab", "observe_only": True, "cards": []}
+    return _render(request, "dashboard/strategy_lab.html", **ctx)
+
+
 @app.get("/dashboard/memo", response_class=HTMLResponse)
 def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
