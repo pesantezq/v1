@@ -21,9 +21,16 @@
   `protected_paths.py`, `worktree.py`, `worker_runner.py`, `worker_settings.json`,
   read-only System-tab runner card; 24 new tests (claude subprocess mocked). See
   `docs/operator_control_worker_runner.md`.
-- **Phase 3 — recommended next.** A default-off scheduled drain (cron) that runs
-  eligible orders through the (already-gated) autonomous path, with its own
-  sign-off; plus surfacing worker reports/diffs in the GUI for review.
+- **Phase 3 — shipped (branch `operator-control-worker-runner`).** Completes the
+  arc. Default-inert **drain** (`worker_runner drain` + `scripts/operator_worker_drain.sh`)
+  that runs eligible orders through the already-gated autonomous path in a
+  bounded loop — a NO-OP unless autonomous is enabled; crontab line documented,
+  not installed. Read-only **report-review** surface
+  (`GET /dashboard/operator/report/<id>`, regex-guarded against traversal) plus
+  queue links from completed/failed orders. See
+  `docs/operator_control_worker_runner.md`. The operator-control system
+  (create → run → schedule+review) is now feature-complete; further work is
+  optional polish.
 - **Follow-up (operator sign-off).** Add a `work_orders.jsonl` / `audit_log.jsonl`
   liveness line to `.claude/commands/daily-tool-analysis.md` (flag a growing
   `failed` / long-`awaiting_approval` queue). Left for explicit sign-off because

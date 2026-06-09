@@ -79,7 +79,7 @@
     <tbody class="divide-y divide-zinc-800">
       {% for o in work_orders %}
       <tr class="hover:bg-zinc-900/50">
-        <td class="py-2 px-3 font-mono text-[11px] text-zinc-300">{{ o.work_order_id }}</td>
+        <td class="py-2 px-3 font-mono text-[11px] text-zinc-300">{% if o.status in ("completed", "failed") %}<a href="/dashboard/operator/report/{{ o.work_order_id }}" class="text-sky-400 hover:text-sky-300 underline underline-offset-2">{{ o.work_order_id }}</a>{% else %}{{ o.work_order_id }}{% endif %}</td>
         <td class="py-2 px-3 text-zinc-300">{{ o.probe_id }} <span class="text-zinc-600">→</span> {{ o.skill_id }}</td>
         <td class="py-2 px-3 font-mono text-xs text-zinc-400">{{ o.mode }}</td>
         <td class="py-2 px-3">{{ ui.badge(_wo_sev(o.status), o.status | status_label) }}</td>

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -596,6 +597,38 @@ async def page_create_work_order(
 
     # POST→redirect→GET so a refresh does not resubmit.
     return RedirectResponse(f"/dashboard/{source_view}", status_code=303)
+
+
+# Work-order ids look like wo_<timestamp>_<hex>. Validate strictly before using
+# the id in a filesystem path — blocks any traversal into reports/.
+_WO_ID_RE = re.compile(r"^wo_[0-9A-Za-z_]+$")
+
+
+@app.get("/dashboard/operator/report/{work_order_id}", response_class=HTMLResponse)
+def page_operator_report(
+    work_order_id: str, request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """
+    GET /dashboard/operator/report/{id} — read-only view of a worker's result
+    report (Phase 3). No controls. The id is regex-validated so it can never be
+    used to traverse out of outputs/operator_control/reports/.
+    """
+    if not _WO_ID_RE.match(work_order_id):
+        raise HTTPException(status_code=404, detail="not found")
+    from operator_control import work_orders as _wo, report_path
+
+    order = _wo.get_work_order(REPO_ROOT, work_order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="work order not found")
+    rp = report_path(REPO_ROOT, work_order_id)
+    report_text = rp.read_text(encoding="utf-8") if rp.exists() else ""
+    return _render(
+        request,
+        "dashboard/operator_report.html",
+        work_order=order,
+        report_text=report_text,
+        work_order_id=work_order_id,
+    )
 
 
 # ---------------------------------------------------------------------------

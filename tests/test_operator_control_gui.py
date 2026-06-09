@@ -183,3 +183,40 @@ def test_system_tab_shows_runner_card(client_root):
     client, _ = client_root
     body = client.get("/dashboard/system").text
     assert "Worker Runner" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — read-only report review route
+# ---------------------------------------------------------------------------
+
+
+def test_report_route_renders_for_completed_order(client_root):
+    client, root = client_root
+    from operator_control import work_orders as wo, report_path
+
+    order = wo.create_work_order(
+        root, probe_id="data_quality.warnings",
+        skill_id="diagnose_data_quality_warnings", mode="diagnose", created_by="t",
+    )
+    wid = order["work_order_id"]
+    rp = report_path(root, wid)
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text("# Worker report\n\nStatus: **completed**\nFINDINGS HERE\n")
+
+    resp = client.get(f"/dashboard/operator/report/{wid}")
+    assert resp.status_code == 200
+    assert "FINDINGS HERE" in resp.text
+    # Read-only: no forms / execution controls in the report view.
+    assert "<form" not in resp.text.lower()
+
+
+def test_report_route_404_for_unknown_id(client_root):
+    client, _ = client_root
+    assert client.get("/dashboard/operator/report/wo_does_not_exist").status_code == 404
+
+
+def test_report_route_rejects_path_traversal(client_root):
+    client, _ = client_root
+    # Regex guard blocks anything that isn't wo_<alnum/underscore>.
+    resp = client.get("/dashboard/operator/report/wo_..%2f..%2fconfig", follow_redirects=False)
+    assert resp.status_code == 404

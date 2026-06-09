@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block title %}Worker Report &mdash; StockBot{% endblock %}
+{% block content %}
+<div class="space-y-6">
+
+  {{ ui.page_header("Worker Report", work_order_id, "/dashboard/system", "x") }}
+
+  {# Read-only notice — this view never executes anything. #}
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+    Read-only worker report. Observe-only &middot; no execution controls. Review the
+    branch with <code class="font-mono">git -C .worktrees/{{ work_order_id }} diff main</code>;
+    integrate by hand.
+  </div>
+
+  {% if work_order %}
+  <section aria-label="Work order metadata" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+    {{ ui.hero_stat("Status", work_order.status | status_label,
+                    ("red" if work_order.status in ("failed","rejected")
+                     else "green" if work_order.status == "completed" else "blue"),
+                    work_order.mode) }}
+    {{ ui.hero_stat("Probe", work_order.probe_id, "gray", work_order.skill_id) }}
+    {{ ui.hero_stat("Risk", work_order.risk_level, "gray", "risk level") }}
+    {{ ui.hero_stat("Created", work_order.created_at | human_time, "gray", work_order.created_by) }}
+  </section>
+  {% endif %}
+
+  <section aria-label="Report body">
+    {{ ui.section_header("Report", "", "outputs/operator_control/reports/" ~ work_order_id ~ ".md") }}
+    {% if report_text %}
+    {# Autoescaped — raw report shown verbatim, no markdown execution, no injection. #}
+    <pre class="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-4 text-xs text-zinc-200 whitespace-pre-wrap leading-relaxed">{{ report_text }}</pre>
+    {% else %}
+    {{ ui.empty_state("No report yet", "This work order has not produced a result report. The worker writes it to outputs/operator_control/reports/" ~ work_order_id ~ ".md on completion.") }}
+    {% endif %}
+  </section>
+
+  <a href="/dashboard/system" class="inline-flex items-center gap-1.5 text-sm text-sky-400 hover:text-sky-300">&larr; Back to System</a>
+</div>
+{% endblock %}

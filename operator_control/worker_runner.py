@@ -264,6 +264,28 @@ def fail(root, work_order_id, actor="cli", note="") -> dict:
     )
 
 
+def drain(root, max_orders: int = 10, actor: str = "cron") -> dict:
+    """Run eligible orders through the autonomous path until none remain / max hit.
+
+    NO-OP unless the autonomous worker is enabled (Phase 2 three-part gate) —
+    unattended *scaffolding* is useless, so the drain only acts when autonomous
+    is on. Bounded by ``max_orders``; each order goes through :func:`run` (which
+    holds the single-flight lock). Never merges or pushes.
+    """
+    root = Path(root)
+    if not autonomous_enabled(root):
+        return {"drained": 0, "status": "inert",
+                "reason": "autonomous worker disabled"}
+    results = []
+    for _ in range(max(0, int(max_orders))):
+        elig = [o for o in wo.list_work_orders(root) if _eligible(o)]
+        if not elig:
+            break
+        # Oldest-created first (list_work_orders is newest-first).
+        results.append(run(root, elig[-1]["work_order_id"], actor=actor))
+    return {"drained": len(results), "status": "ran", "results": results}
+
+
 def status(root) -> dict:
     root = Path(root)
     orders = wo.list_work_orders(root)
@@ -299,6 +321,9 @@ def _build_parser():
     spf.add_argument("--note", default="")
     spn = sub.add_parser("run-next")
     spn.add_argument("--actor", default="cli")
+    spd = sub.add_parser("drain")
+    spd.add_argument("--max", type=int, default=10)
+    spd.add_argument("--actor", default="cron")
     sub.add_parser("status")
     return p
 
@@ -326,6 +351,9 @@ def main(argv=None) -> int:
         if args.command == "fail":
             print(json.dumps(fail(root, args.id, actor=args.actor, note=args.note), indent=2))
             return 0
+        if args.command == "drain":
+            print(json.dumps(drain(root, max_orders=args.max, actor=args.actor), indent=2))
+            return 0
         if args.command == "status":
             print(json.dumps(status(root), indent=2))
             return 0
@@ -345,6 +373,7 @@ __all__ = [
     "run",
     "complete",
     "fail",
+    "drain",
     "status",
     "main",
     "WorkerRunnerError",

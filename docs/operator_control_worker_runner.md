@@ -80,7 +80,26 @@ remove with `git worktree remove --force .worktrees/<id>`.
 3. Ensure `config/operator_worker.DISABLED` does not exist.
    To halt instantly at any time: `touch config/operator_worker.DISABLED`.
 
-## What Phase 2 does NOT do
+## Phase 3 — scheduled drain & report review
+
+- **Drain (`worker_runner drain` / `scripts/operator_worker_drain.sh`):** runs
+  eligible orders through the autonomous path in a bounded loop (`--max`,
+  default 10). It is a **NO-OP unless the autonomous worker is enabled** (the
+  same three-part gate) — so it ships doubly-inert. Never merges/pushes. The
+  crontab line is documented in the script header but **not installed**;
+  installing cron is an explicit operator action taken only after enabling the
+  autonomous worker:
+  ```bash
+  bash scripts/operator_worker_drain.sh 10        # manual; inert unless gated on
+  ```
+- **Report review (read-only GUI):** `GET /dashboard/operator/report/<id>`
+  renders a completed/failed order's report + metadata (the report markdown is
+  shown escaped in a `<pre>` — no execution, no controls). The work-order queue
+  links the id of any `completed`/`failed` order to its report. The id is
+  regex-validated (`^wo_[0-9A-Za-z_]+$`) so it can never traverse out of
+  `outputs/operator_control/reports/`.
+
+## What Phase 2/3 does NOT do
 
 - Never merges to `main`, never pushes to any remote.
 - No cron/schedule — manual CLI trigger only.

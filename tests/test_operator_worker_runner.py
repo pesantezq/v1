@@ -237,3 +237,38 @@ def test_cli_status_and_scaffold(repo, capsys):
     assert "worktree" in capsys.readouterr().out.lower()
     rc = worker_runner.main(["--root", str(repo), "status"])
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — scheduled drain
+# ---------------------------------------------------------------------------
+
+
+def test_drain_is_inert_when_autonomous_disabled(repo, monkeypatch):
+    from operator_control import worker_runner
+
+    monkeypatch.delenv("STOCKBOT_OPERATOR_WORKER_AUTONOMOUS", raising=False)
+    _order(repo)  # an eligible order exists
+    res = worker_runner.drain(repo, max_orders=5, actor="cron")
+    assert res["status"] == "inert"
+    assert res["drained"] == 0
+    # the order is untouched (still queued — never claimed)
+    orders = wo_mod.list_work_orders(repo)
+    assert all(o["status"] == "queued" for o in orders)
+
+
+def test_drain_runs_eligible_orders_when_enabled(repo, monkeypatch):
+    from operator_control import worker_runner
+
+    _enable_autonomous(repo, monkeypatch)
+    o1 = _order(repo)
+    o2 = _order(repo, probe="pipeline.run_status", skill="diagnose_pipeline_status")
+    monkeypatch.setattr(worker_runner, "_invoke_claude", lambda wt, p: {"ok": True, "stdout": ""})
+    monkeypatch.setattr(worker_runner.worktree, "changed_files", lambda wt, base="main": [])
+    monkeypatch.setattr(worker_runner, "_run_tests", lambda wt, tests: {"passed": True, "output": "ok"})
+    res = worker_runner.drain(repo, max_orders=10, actor="cron")
+    assert res["status"] == "ran"
+    assert res["drained"] == 2
+    statuses = {o["work_order_id"]: o["status"] for o in wo_mod.list_work_orders(repo)}
+    assert statuses[o1["work_order_id"]] == "completed"
+    assert statuses[o2["work_order_id"]] == "completed"
