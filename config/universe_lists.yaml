@@ -1,0 +1,40 @@
+# Universe lists for the broad-market opportunity scanner (spec §7, seeds §23.4).
+# Sandbox/research only — candidates derived from these lists are scored into the
+# opportunity radar and NEVER enter decision_plan.json. Operator-editable.
+schema_version: 1
+
+broad_market_etfs: [SPY, QQQ, VTI, VXUS]
+
+sector_etfs: [XLK, XLE, XLF, XLV, XLI, XLU, XLP, XLY, XLB, XLRE, XLC]
+
+commodity_proxies: [GLD, SLV, USO, URA, DBC]
+
+# Theme baskets: each maps a theme to public proxy tickers (ETFs / suppliers).
+theme_baskets:
+  AI Infrastructure: [NVDA, AMD, SMCI, AVGO, TSM]
+  Space Economy: [RKLB, LMT, NOC, ARKX]
+  Oil Supply Shock: [XLE, USO, XOM, CVX]
+  Uranium / Nuclear: [URA, CCJ, UEC]
+  Defense: [LMT, NOC, RTX, GD, ITA]
+  Robotics: [BOTZ, ROBO, ISRG, ABB]
+  Cybersecurity: [CRWD, PANW, ZS, CIBR]
+  Data Centers / Power Demand: [VST, NRG, DLR, EQIX]
+  Financials Rotation: [XLF, JPM, GS, BAC]
+  International Recovery: [VXUS, EFA, EEM]
+
+# Private / pre-IPO watch items. candidate_type=private_ipo — NEVER tradeable
+# tickers. Each declares its access route(s) and any public proxies.
+private_ipo_watch:
+  - name: SpaceX
+    theme: Space Economy
+    access_route: proxy
+    proxies: [RKLB, ARKX]      # public exposure proxies only
+    note: Private; no direct equity. Watch via suppliers/ETFs or an eventual IPO.
+  - name: OpenAI
+    theme: AI Infrastructure
+    access_route: public_supplier
+    proxies: [MSFT, NVDA]
+    note: Private; indirect exposure via partners/suppliers only.
+
+# Operator-defined opportunity themes (free-form; empty by default).
+user_themes: []
