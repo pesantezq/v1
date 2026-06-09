@@ -28,6 +28,8 @@ EVENT_TYPES = (
     "report_attached",
     "worker_protected_path_violation",
     "worker_production_impact",
+    "deploy_update_requested",
+    "deploy_update_applied",
 )
 
 

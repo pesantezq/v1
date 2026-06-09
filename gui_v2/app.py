@@ -22,6 +22,28 @@ app = FastAPI(title="StockBot Dashboard v2")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+@app.on_event("startup")
+def _stamp_running_sha() -> None:
+    """Record the git SHA this dashboard process is serving (for deploy status)."""
+    try:
+        from gui_v2.data.deploy_status import write_running_sha
+        write_running_sha(REPO_ROOT)
+    except Exception:
+        pass
+
+
+def _deploy_apply_enabled() -> bool:
+    """Phase C gate for the one-click 'Apply update' button. Default OFF.
+
+    Requires GUI_V2_DEPLOY_APPLY=1 AND no kill-switch file. Mirrors the
+    autonomous-worker gating: detection/Mode-B work without this; only the
+    privileged self-restart apply is gated.
+    """
+    if (REPO_ROOT / "config" / "dashboard_update.DISABLED").exists():
+        return False
+    return os.environ.get("GUI_V2_DEPLOY_APPLY", "").strip() == "1"
+
+
 # ---------------------------------------------------------------------------
 # Optional HTTP basic auth
 # ---------------------------------------------------------------------------
@@ -375,10 +397,17 @@ def page_dash_quant(
 def page_dash_system(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(
-        request, "dashboard/system.html",
-        **_with_operator(_dash_system(REPO_ROOT), "system"),
-    )
+    ctx = _with_operator(_dash_system(REPO_ROOT), "system")
+    # Deploy status (auto-update detection) — read-only; surfaced on System.
+    try:
+        from gui_v2.data import deploy_status as _ds
+        st = _ds.collect_deploy_status(REPO_ROOT)
+        ctx["deploy_status"] = st
+        ctx["deploy_card"] = _ds.deploy_card(st)
+        ctx["deploy_apply_enabled"] = _deploy_apply_enabled()
+    except Exception:
+        pass
+    return _render(request, "dashboard/system.html", **ctx)
 
 
 @app.get("/dashboard/memo", response_class=HTMLResponse)
@@ -670,6 +699,94 @@ async def page_dispatch_worker(
         )
 
     return RedirectResponse(f"/dashboard/{source_view}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Auto-update with manual intervention (Phase B record-only + Phase C apply)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/dashboard/operator/request-update")
+async def page_request_update(
+    request: Request, _a: str | None = Depends(_require_auth)
+):
+    """
+    Mode B (zero privilege): record that the operator wants to update. Executes
+    NOTHING — it only appends an audit event so the intent is logged. The
+    operator runs the documented git-pull + restart command themselves.
+    """
+    try:
+        from operator_control import audit_log
+        from gui_v2.data import deploy_status as _ds
+        st = _ds.collect_deploy_status(REPO_ROOT, fetch=False)
+        audit_log.record_event(
+            REPO_ROOT, event_type="deploy_update_requested",
+            actor=(_a or "dashboard"),
+            details={"running_sha": st.get("running_sha"),
+                     "latest_sha": st.get("latest_sha"),
+                     "state": st.get("state")},
+            safety_result="recorded_intent_only_no_execution",
+        )
+    except Exception:
+        pass
+    return RedirectResponse("/dashboard/system", status_code=303)
+
+
+@app.post("/dashboard/operator/apply-update")
+async def page_apply_update(
+    request: Request, _a: str | None = Depends(_require_auth)
+):
+    """
+    Mode C (gated): the one-click "Apply update" button. Spawns a DETACHED
+    privileged updater (scripts/dashboard_update.sh) that fast-forwards to
+    origin/main and restarts the service. The web process never restarts itself.
+
+    Gated by _deploy_apply_enabled() (GUI_V2_DEPLOY_APPLY=1 + no kill-switch).
+    Refuses unless the running code is a clean fast-forward behind origin/main.
+    """
+    if not _deploy_apply_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=("One-click apply is disabled. Set GUI_V2_DEPLOY_APPLY=1 "
+                    "(and remove config/dashboard_update.DISABLED), or use the "
+                    "manual command shown on the Deployment card."),
+        )
+
+    from gui_v2.data import deploy_status as _ds
+    from operator_control import audit_log
+
+    st = _ds.collect_deploy_status(REPO_ROOT)
+    if st.get("state") != "update_available" or not st.get("fast_forward"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"refusing apply: state={st.get('state')} (need a clean "
+                   f"fast-forward update). Resolve manually.",
+        )
+
+    script = REPO_ROOT / "scripts" / "dashboard_update.sh"
+    log_dir = REPO_ROOT / "outputs" / "operator_control"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(log_dir / "dashboard_update.log", "ab") as logf:
+            subprocess.Popen(
+                ["bash", str(script)],
+                cwd=str(REPO_ROOT), stdout=logf, stderr=logf,
+                start_new_session=True,
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to launch updater: {exc}",
+        )
+
+    audit_log.record_event(
+        REPO_ROOT, event_type="deploy_update_applied",
+        actor=(_a or "dashboard"),
+        details={"from_sha": st.get("running_sha"), "to_sha": st.get("latest_sha")},
+        safety_result="ff_only_detached_restart",
+    )
+    # The service will restart momentarily; redirect (the new process answers).
+    return RedirectResponse("/dashboard/system", status_code=303)
 
 
 # Work-order ids look like wo_<timestamp>_<hex>. Validate strictly before using

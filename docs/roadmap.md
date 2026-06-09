@@ -46,6 +46,15 @@
   heavy `safe_repair` reliance. See `docs/operator_control_worker_runner.md`.
 - **Analysis+health pairing — done.** operator-control liveness wired into the
   daily / monthly / yearly tiers (process-analyst lens).
+- **Dashboard auto-update with manual intervention — shipped.** The dashboard
+  auto-detects when its served code is behind `origin/main` (startup SHA stamp
+  vs a throttled read-only fetch) and surfaces a Deployment card + banner
+  (Phase A, read-only). Phase B shows the exact manual update command + records
+  a `deploy_update_requested` audit (zero privilege). Phase C (default-inert,
+  gated by `GUI_V2_DEPLOY_APPLY=1` + kill-switch) adds a one-click "Apply update
+  & restart" that spawns a detached fast-forward-only updater
+  (`scripts/dashboard_update.sh`) — never unattended, never non-ff, the web
+  process never restarts itself. See `docs/dashboard_auto_update.md`.
 
 ## Phase 0 — Infrastructure & Data Governance (In Progress)
 

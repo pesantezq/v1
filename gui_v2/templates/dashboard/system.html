@@ -20,6 +20,64 @@
     Read-only system health view. All data is observe-only — no repair or rerun controls here.
   </div>
 
+  {# --------------------------------------------------------------- #}
+  {# Auto-update banner — shown when the served code is behind main.   #}
+  {# Detection is automatic; the apply is a manual intervention.       #}
+  {# --------------------------------------------------------------- #}
+  {% if deploy_status and deploy_status.state in ("update_available", "divergent") %}
+  <section aria-label="Dashboard update" class="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 space-y-2">
+    <div class="flex items-start gap-2.5 text-sm text-amber-200">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        {% if deploy_status.state == "update_available" %}
+        <strong>Dashboard update available</strong> — serving
+        <span class="font-mono">{{ deploy_status.running_short }}</span>,
+        latest <span class="font-mono">{{ deploy_status.latest_short }}</span>
+        ({{ deploy_status.commits_behind }} commit(s) behind). A restart is required to serve the new code.
+        {% else %}
+        <strong>Served code is divergent</strong> from origin/main
+        (<span class="font-mono">{{ deploy_status.running_short }}</span>) — not a fast-forward; resolve manually.
+        {% endif %}
+      </div>
+    </div>
+
+    {% if deploy_status.state == "update_available" %}
+    {# Mode B (always): the exact manual command + record-intent button. #}
+    <div class="text-[11px] text-amber-200/80 space-y-1">
+      <div>Manual update (copy-paste):</div>
+      <pre class="overflow-x-auto rounded-md bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-300 whitespace-pre-wrap">cd /opt/stockbot &amp;&amp; git fetch origin &amp;&amp; git merge --ff-only origin/main &amp;&amp; sudo systemctl restart stockbot-dashboard.service</pre>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 pt-1">
+      <form method="post" action="/dashboard/operator/request-update" class="inline">
+        <button type="submit" title="Record that an update was requested (logs intent; executes nothing)"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20 transition active:scale-95">
+          Mark update requested
+        </button>
+      </form>
+      {% if deploy_apply_enabled %}
+      <form method="post" action="/dashboard/operator/apply-update" class="inline"
+            onsubmit="return confirm('Fast-forward to origin/main and restart the dashboard now? The page will briefly drop while it restarts.');">
+        <button type="submit" title="Fast-forward + restart the dashboard service (gated)"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20 transition active:scale-95">
+          Apply update &amp; restart <span class="opacity-60">· auto</span>
+        </button>
+      </form>
+      {% else %}
+      <span class="text-[11px] text-zinc-500">One-click apply is off (set <span class="font-mono">GUI_V2_DEPLOY_APPLY=1</span> to enable).</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# Deployment status card — always shown (green when up to date). #}
+  {% if deploy_card %}
+  <section aria-label="Deployment">
+    {{ ui.section_header("Deployment", "served code vs origin/main", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{{ ui.status_card(deploy_card) }}</div>
+  </section>
+  {% endif %}
+
   {# Named card lookups. #}
   {% set _by = {} %}
   {% for c in cards %}{% set _ = _by.__setitem__(c.title, c) %}{% endfor %}
