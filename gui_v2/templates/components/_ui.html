@@ -1,0 +1,168 @@
+{# =====================================================================
+   Shared UI macro library — StockBot command-center design system.
+
+   Import once per template:   {% import "components/_ui.html" as ui %}
+
+   These macros centralize the markup that was previously copy-pasted across
+   every dashboard template (the 5-branch severity badge, status cards, the
+   evidence drawer, etc.). They are presentation-only and consume the SAME
+   loader data contract — no data shape changes.
+
+   Observe-only invariant: none of these macros emit trade-execution verbs.
+   Action verbs (BUY/SELL/SCALE/...) are only rendered by `decision_chip` /
+   `decision_card`, which the templates place exclusively inside the
+   `aria-label="Advisory decision queue"` section.
+   ===================================================================== #}
+
+{# --- severity → tailwind class tokens (single source of truth) --------- #}
+{% macro _sev_classes(severity) -%}
+{%- if severity == "green" -%}bg-emerald-500/15 text-emerald-300 border-emerald-500/30
+{%- elif severity == "yellow" -%}bg-amber-500/15 text-amber-300 border-amber-500/30
+{%- elif severity == "red" -%}bg-rose-500/15 text-rose-300 border-rose-500/30
+{%- elif severity == "blue" -%}bg-sky-500/15 text-sky-300 border-sky-500/30
+{%- else -%}bg-zinc-800 text-zinc-400 border-zinc-700
+{%- endif -%}
+{%- endmacro %}
+
+{# A small severity dot — used in heroes and section headers. #}
+{% macro sev_dot(severity) -%}
+<span class="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0
+  {%- if severity == 'green' %} bg-emerald-400
+  {%- elif severity == 'yellow' %} bg-amber-400
+  {%- elif severity == 'red' %} bg-rose-400
+  {%- elif severity == 'blue' %} bg-sky-400
+  {%- else %} bg-zinc-500{% endif %}"></span>
+{%- endmacro %}
+
+{# Status badge — the canonical pill. `label` is humanized via status_label. #}
+{% macro status_badge(severity, label) -%}
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ (label or severity) | status_label }}</span>
+{%- endmacro %}
+
+{# Plain (already-humanized) badge — skips the status_label filter. #}
+{% macro badge(severity, label) -%}
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ label }}</span>
+{%- endmacro %}
+
+{# Page header — title, subtitle, and an HTMX refresh button wired to the
+   given content container id. Optional `actions` caller block for extra
+   buttons (e.g. memo copy-link). #}
+{% macro page_header(title, subtitle, route, target_id) -%}
+<header class="flex items-start justify-between gap-4">
+  <div class="min-w-0">
+    <h1 class="text-2xl font-semibold tracking-tight">{{ title }}</h1>
+    <p class="text-sm text-zinc-400 mt-0.5">{{ subtitle }}</p>
+  </div>
+  <div class="flex items-center gap-2 flex-shrink-0">
+    {{ caller() if caller }}
+    <button hx-get="{{ route }}"
+            hx-target="#{{ target_id }}"
+            hx-select="#{{ target_id }}"
+            hx-swap="outerHTML"
+            title="Reload this view"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 active:scale-95 transition">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
+      Refresh
+    </button>
+  </div>
+</header>
+{%- endmacro %}
+
+{# Section header — uppercase label + optional source-artifact tag pill. #}
+{% macro section_header(title, note, tag) -%}
+<div class="flex items-center gap-3 mb-3 flex-wrap">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">{{ title }}</h2>
+  {% if note %}<span class="text-xs text-zinc-600 normal-case font-normal">{{ note }}</span>{% endif %}
+  {% if tag %}<span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-zinc-800/80 text-zinc-400 border border-zinc-700">{{ tag }}</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Human timestamp — friendly label with the raw ISO available on hover. #}
+{% macro timestamp(updated_at) -%}
+{% if updated_at %}<span class="inline-flex items-center gap-1 text-xs text-zinc-500" title="{{ updated_at }}">
+  <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 7v5l3 2"/></svg>
+  {{ updated_at | human_time }}
+</span>{% endif %}
+{%- endmacro %}
+
+{# Evidence disclosure — compact, low-noise. Collapsed by default; expands to
+   the list of source artifacts. Replaces the repeated "Sources (n)" clutter. #}
+{% macro evidence(source_artifacts) -%}
+{% if source_artifacts %}
+<details class="group mt-1">
+  <summary class="flex items-center gap-1 cursor-pointer text-[11px] text-zinc-600 hover:text-zinc-400 select-none list-none">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    Evidence · {{ source_artifacts | length }}
+  </summary>
+  <ul class="mt-1.5 flex flex-wrap gap-1 pl-1">
+    {% for artifact in source_artifacts %}
+    <li class="font-mono text-[11px] text-zinc-500 bg-zinc-800/70 rounded px-1.5 py-0.5">{{ artifact }}</li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+{%- endmacro %}
+
+{# Status card — the workhorse grid cell. Left severity rail conveys priority
+   at a glance; title, badge, summary, timestamp, and evidence drawer.
+   `emphasis` optionally promotes a card visually (primary cards). #}
+{% macro status_card(c, emphasis=False) -%}
+<div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 {{ 'ring-1 ring-zinc-700/60' if emphasis else '' }} px-4 py-4 space-y-2 hover:border-zinc-700 transition">
+  <span class="absolute left-0 top-0 bottom-0 w-1
+    {%- if c.severity == 'green' %} bg-emerald-500/70
+    {%- elif c.severity == 'yellow' %} bg-amber-500/70
+    {%- elif c.severity == 'red' %} bg-rose-500/70
+    {%- elif c.severity == 'blue' %} bg-sky-500/60
+    {%- else %} bg-zinc-700{% endif %}"></span>
+  <div class="flex items-start justify-between gap-2 pl-1.5">
+    <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">{{ c.title }}</span>
+    {{ status_badge(c.severity, c.label or c.status) }}
+  </div>
+  {% if c.summary %}<p class="text-sm text-zinc-300 leading-snug pl-1.5">{{ c.summary }}</p>{% endif %}
+  <div class="flex items-center justify-between gap-2 pl-1.5">
+    {{ timestamp(c.updated_at) }}
+    {{ evidence(c.source_artifacts) }}
+  </div>
+</div>
+{%- endmacro %}
+
+{# Empty state — neutral, instructive. #}
+{% macro empty_state(heading, body, icon=True) -%}
+<div class="bg-zinc-900/60 rounded-xl border border-dashed border-zinc-700 px-6 py-10 text-center">
+  {% if icon %}<svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 mx-auto text-zinc-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2h7M9 9h6M9 13h4"/></svg>{% endif %}
+  <div class="text-zinc-300 font-medium">{{ heading }}</div>
+  {% if body %}<div class="text-xs text-zinc-500 mt-1.5 max-w-sm mx-auto">{{ body }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Compact success state — used when a "queue" is happily empty. #}
+{% macro all_clear(heading, body) -%}
+<div class="flex items-center gap-3 bg-emerald-500/5 rounded-xl border border-emerald-500/20 px-4 py-3">
+  <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-emerald-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  <div>
+    <div class="text-sm font-medium text-emerald-200">{{ heading }}</div>
+    {% if body %}<div class="text-xs text-emerald-300/60">{{ body }}</div>{% endif %}
+  </div>
+</div>
+{%- endmacro %}
+
+{# Hero stat — one cell of the Today status strip. #}
+{% macro hero_stat(label, value, severity, sub) -%}
+<div class="flex flex-col gap-1 px-4 py-3 rounded-xl border {{ _sev_classes(severity) }}">
+  <span class="text-[11px] uppercase tracking-wide opacity-70">{{ label }}</span>
+  <span class="flex items-center gap-2 text-base font-semibold">{{ sev_dot(severity) }} {{ value }}</span>
+  {% if sub %}<span class="text-[11px] opacity-60">{{ sub }}</span>{% endif %}
+</div>
+{%- endmacro %}
+
+{# Advisory action chip — the ONLY macro that emits action verbs.
+   Color-coded by direction. Must only be used inside the advisory queue. #}
+{% macro action_chip(action) -%}
+{% set act = (action or "") | upper %}
+{% if act == "BUY" %}{{ badge("green", act) }}
+{% elif act == "SELL" %}{{ badge("red", act) }}
+{% elif act == "HOLD" %}{{ badge("blue", act) }}
+{% elif act in ("SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT") %}{{ badge("yellow", act.replace("_", " ")) }}
+{% elif act == "WAIT" %}{{ badge("gray", act) }}
+{% else %}{{ badge("gray", act or "—") }}{% endif %}
+{%- endmacro %}

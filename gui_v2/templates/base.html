@@ -44,20 +44,27 @@
   </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen">
-  {# Observe-only safety banner #}
-  <div class="bg-amber-500/10 text-amber-300 text-center text-xs py-1">Observe-only &middot; No trade execution</div>
+  {# Observe-only safety banner — persistent, lock icon reinforces no-execution #}
+  <div class="bg-amber-500/10 text-amber-300 text-center text-[11px] tracking-wide py-1 flex items-center justify-center gap-1.5 border-b border-amber-500/10">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+    Observe-only &middot; No trade execution
+  </div>
+  {% set _path = request.url.path if request else "" %}
   {% include "components/mobile_status_bar.html" %}
   <header class="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur border-b border-zinc-800">
     <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
       <div class="flex items-center gap-6">
-        <span class="font-semibold tracking-tight">StockBot</span>
+        <span class="font-semibold tracking-tight flex items-center gap-2">
+          <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>StockBot
+        </span>
         {# Desktop persona top-nav — hidden on mobile (md:hidden sibling provides bottom-nav) #}
-        <nav class="hidden md:flex gap-4 text-sm">
-          <a href="/dashboard/today" class="hover:text-emerald-400">Today</a>
-          <a href="/dashboard/portfolio" class="hover:text-emerald-400">Portfolio</a>
-          <a href="/dashboard/quant" class="hover:text-emerald-400">Quant</a>
-          <a href="/dashboard/system" class="hover:text-emerald-400">System</a>
-          <a href="/dashboard/memo" class="hover:text-emerald-400">Memo</a>
+        <nav class="hidden md:flex gap-1 text-sm">
+          {% for _n in [("/dashboard/today","Today"),("/dashboard/portfolio","Portfolio"),("/dashboard/quant","Quant"),("/dashboard/system","System"),("/dashboard/memo","Memo")] %}
+          {% set _active = _path.startswith(_n[0]) %}
+          <a href="{{ _n[0] }}"
+             {% if _active %}aria-current="page"{% endif %}
+             class="px-3 py-1.5 rounded-md transition {{ 'bg-zinc-800 text-zinc-100 font-medium' if _active else 'text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900' }}">{{ _n[1] }}</a>
+          {% endfor %}
         </nav>
       </div>
       <div class="flex items-center gap-3">
@@ -102,7 +109,7 @@
       });
     })();
   </script>
-  <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-8">
     {% block content %}{% endblock %}
   </main>
   <footer class="max-w-7xl mx-auto px-6 py-6 text-xs text-zinc-500 mb-16 md:mb-0">

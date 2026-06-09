@@ -1,10 +1,14 @@
-{# Mobile status bar — compact severity summary, visible only on small screens. #}
-<div class="md:hidden flex items-center justify-between px-4 py-1.5 bg-zinc-900 border-b border-zinc-800 text-xs text-zinc-400">
-  <span>StockBot</span>
-  <span class="flex items-center gap-1.5">
+{# Mobile status bar — compact severity summary, visible only on small screens.
+   Sits directly under the observe-only banner; sticky so status is always one
+   glance away on a phone. nav_severity is OK/INFO/WARN/FAIL (uppercase). #}
+<div class="md:hidden sticky top-0 z-20 flex items-center justify-between px-4 py-2 bg-zinc-950/95 backdrop-blur border-b border-zinc-800 text-sm">
+  <span class="font-semibold tracking-tight flex items-center gap-2">
+    <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>StockBot
+  </span>
+  <span class="flex items-center gap-1.5 text-xs">
     <span role="status"
           title="Overall: {{ nav_severity }}"
-          class="inline-block w-2 h-2 rounded-full {{ nav_severity | severity_classes }}"></span>
-    <span class="font-mono">{{ nav_severity }}</span>
+          class="inline-block w-2.5 h-2.5 rounded-full {{ nav_severity | severity_classes }}"></span>
+    <span class="font-medium text-zinc-300">{{ nav_severity }}</span>
   </span>
 </div>

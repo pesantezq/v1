@@ -154,6 +154,43 @@ def _status_label(value: str | None) -> str:
 templates.env.filters["status_label"] = _status_label
 
 
+def _human_time(value: str | None) -> str:
+    """Humanize a raw timestamp for display (presentation-only).
+
+    Accepts ISO-8601 datetimes ("2026-06-08T09:00:00", with or without a
+    trailing "Z"/offset) or date-only strings ("2026-06-08") as emitted by the
+    artifact ``generated_at`` fields. Returns a compact, scannable label like
+    "Jun 08, 09:00" (datetime) or "Jun 08, 2026" (date-only).
+
+    On any parse failure the raw input is returned unchanged so nothing is ever
+    hidden from the operator. Empty/None yields "". The raw value remains
+    available to templates for a tooltip (``title=``) alongside this label.
+    """
+    if not value:
+        return ""
+    raw = str(value).strip()
+    from datetime import datetime
+
+    iso = raw.replace("Z", "+00:00")
+    # Full datetime first, then date-only.
+    try:
+        dt = datetime.fromisoformat(iso)
+        # Date-only inputs parse to midnight; show just the date in that case.
+        if "T" not in raw and " " not in raw:
+            return dt.strftime("%b %d, %Y")
+        return dt.strftime("%b %d, %H:%M")
+    except (ValueError, TypeError):
+        pass
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d")
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return raw
+
+
+templates.env.filters["human_time"] = _human_time
+
+
 def _overall_severity_for_nav() -> str:
     """Compute overall severity for the nav badge. Best-effort; never raises."""
     try:

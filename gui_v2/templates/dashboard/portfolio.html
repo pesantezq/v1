@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
 {% block title %}Portfolio &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-portfolio-content"
@@ -7,230 +8,234 @@
      hx-target="#dashboard-portfolio-content"
      hx-select="#dashboard-portfolio-content"
      hx-swap="outerHTML"
-     class="space-y-6">
+     class="space-y-7">
 
-  <header class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold">Portfolio</h1>
-      <p class="text-sm text-zinc-400">Portfolio Manager view &mdash; advisory read-only</p>
-    </div>
-    <button hx-get="/dashboard/portfolio"
-            hx-target="#dashboard-portfolio-content"
-            hx-select="#dashboard-portfolio-content"
-            hx-swap="outerHTML"
-            class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
-      Refresh
-    </button>
-  </header>
+  {{ ui.page_header("Portfolio", "Portfolio Manager view — advisory, read-only",
+                    "/dashboard/portfolio", "dashboard-portfolio-content") }}
 
-  {# ------------------------------------------------------------------ #}
-  {# Status cards grid — one per data domain                             #}
-  {# ------------------------------------------------------------------ #}
-  <section aria-label="Portfolio status cards"
-           class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-    {% for c in cards %}
-    <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
-      <div class="flex items-center justify-between gap-2 flex-wrap">
-        <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
-        {# Severity badge #}
-        {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ (c.label or c.status) | status_label }}</span>
-        {% endif %}
+  {# Named card lookups (loader supplies all six; we re-present them). #}
+  {% set insight_card  = cards | selectattr("title", "equalto", "Top Insight") | list | first %}
+  {% set dq_card       = cards | selectattr("title", "equalto", "Decision Queue") | list | first %}
+  {% set risk_card     = cards | selectattr("title", "equalto", "Risk Focus") | list | first %}
+  {% set capital_card  = cards | selectattr("title", "equalto", "Capital / Allocation") | list | first %}
+  {% set watch_card    = cards | selectattr("title", "equalto", "Watchlist / Opportunities") | list | first %}
+  {% set memo_card     = cards | selectattr("title", "equalto", "Memo Summary") | list | first %}
+
+  {# --------------------------------------------------------------- #}
+  {# PM brief hero — theme / verdict + actionable insight             #}
+  {# (Top Insight is decision-core sourced; rendered as prose, not a   #}
+  {#  badge, so it never trips the outside-queue verb guard.)          #}
+  {# --------------------------------------------------------------- #}
+  {% if insight_card %}
+  <section aria-label="Portfolio manager brief"
+           class="relative overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-900/40 px-5 py-5">
+    <span class="absolute left-0 top-0 bottom-0 w-1.5
+      {%- if insight_card.severity == 'green' %} bg-emerald-500/70
+      {%- elif insight_card.severity == 'yellow' %} bg-amber-500/70
+      {%- elif insight_card.severity == 'red' %} bg-rose-500/70
+      {%- elif insight_card.severity == 'blue' %} bg-sky-500/60
+      {%- else %} bg-zinc-700{% endif %}"></span>
+    <div class="pl-2 space-y-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">PM Brief</span>
+        {{ ui.status_badge(insight_card.severity, insight_card.label or insight_card.status) }}
       </div>
-      {% if c.summary %}
-      <p class="text-sm text-zinc-300">{{ c.summary }}</p>
-      {% endif %}
-      {% if c.updated_at %}
-      <p class="text-xs text-zinc-500 font-mono">{{ c.updated_at }}</p>
-      {% endif %}
-      {% if c.source_artifacts %}
-        {% with source_artifacts=c.source_artifacts %}
-          {% include "components/evidence_drawer.html" %}
-        {% endwith %}
-      {% endif %}
+      <p class="text-base text-zinc-100 leading-snug">
+        {{ insight_card.summary or "No portfolio verdict available yet — run the daily pipeline." }}
+      </p>
+      <div class="flex items-center gap-4 pt-1">
+        {% if dq_card %}
+        <a href="#advisory-decisions" class="inline-flex items-center gap-1.5 text-sm text-emerald-300 hover:text-emerald-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+          {{ (dq_card.label or "review") | status_label }}
+        </a>
+        {% endif %}
+        {{ ui.timestamp(insight_card.updated_at) }}
+      </div>
     </div>
-    {% else %}
-    <div class="col-span-3">
-      {% with heading="No portfolio data available",
-              body="Run the daily pipeline to generate portfolio cards." %}
-        {% include "components/empty_state.html" %}
-      {% endwith %}
-    </div>
-    {% endfor %}
   </section>
+  {% endif %}
 
-  {# ------------------------------------------------------------------ #}
-  {# Decision Queue — advisory actions from decision_plan.json only     #}
-  {# (decision-core is the sole source of advisory action language)     #}
-  {# ------------------------------------------------------------------ #}
-  <section aria-label="Advisory decision queue">
-    <div class="flex items-center gap-3 mb-3">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Advisory Decisions</h2>
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
+  {# --------------------------------------------------------------- #}
+  {# Advisory Decision Queue — THE main working area.                 #}
+  {# Grouped by action. decision_plan.json is the sole source of      #}
+  {# advisory action language; all verb badges live inside here.      #}
+  {# --------------------------------------------------------------- #}
+  <section id="advisory-decisions" aria-label="Advisory decision queue">
+    <div class="flex items-center gap-3 mb-3 flex-wrap">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Decisions</h2>
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
+      <span class="inline-flex items-center gap-1 text-[11px] text-amber-300/80">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        Advisory only &mdash; no execution
+      </span>
     </div>
+
     {% if decisions %}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for d in decisions %}
-        {% include "components/decision_card.html" %}
+    {% set _order = ["BUY", "SELL", "SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT", "HOLD", "WAIT"] %}
+    <div class="space-y-5">
+      {# Known action groups, in priority order #}
+      {% for act in _order %}
+      {% set _group = decisions | selectattr("action", "equalto", act) | list %}
+      {% if _group %}
+      <div class="space-y-2.5">
+        <div class="flex items-center gap-2">
+          {{ ui.action_chip(act) }}
+          <span class="text-xs text-zinc-500">{{ _group | length }} {{ "position" if _group | length == 1 else "positions" }}</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for d in _group %}{% include "components/decision_card.html" %}{% endfor %}
+        </div>
+      </div>
+      {% endif %}
       {% endfor %}
+      {# Any actions not in the known order (defensive — keeps nothing hidden) #}
+      {% set _other = decisions | rejectattr("action", "in", _order) | list %}
+      {% if _other %}
+      <div class="space-y-2.5">
+        <div class="flex items-center gap-2"><span class="text-xs uppercase tracking-wide text-zinc-500">Other</span></div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for d in _other %}{% include "components/decision_card.html" %}{% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% else %}
-    {% with heading="No advisory decisions available",
-            body="decision_plan.json absent or empty — run the daily pipeline." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
+    {{ ui.empty_state("No advisory decisions available",
+                      "decision_plan.json is absent or empty — run the daily pipeline.") }}
     {% endif %}
   </section>
 
-  {# ------------------------------------------------------------------ #}
-  {# Holdings — desktop table (hidden on mobile) +                      #}
-  {# mobile stacked cards (hidden on md+)                               #}
-  {# ------------------------------------------------------------------ #}
+  {# --------------------------------------------------------------- #}
+  {# Evidence panels — Risk / Capital / Watchlist / Memo (state only) #}
+  {# These are NOT advisory actions; badges show status, never verbs. #}
+  {# --------------------------------------------------------------- #}
+  <section aria-label="Portfolio evidence panels">
+    {{ ui.section_header("Risk, Capital &amp; Opportunities", "evidence — observe only", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {% for c in [risk_card, capital_card, watch_card] %}
+        {% if c %}{{ ui.status_card(c) }}{% endif %}
+      {% endfor %}
+      {# Memo summary preview links out to the full report #}
+      {% if memo_card %}
+      <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-4 space-y-2 hover:border-zinc-700 transition">
+        <span class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500/60"></span>
+        <div class="flex items-start justify-between gap-2 pl-1.5">
+          <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">{{ memo_card.title }}</span>
+          {{ ui.status_badge(memo_card.severity, memo_card.label or memo_card.status) }}
+        </div>
+        {% if memo_card.summary %}<p class="text-sm text-zinc-300 leading-snug pl-1.5 line-clamp-3">{{ memo_card.summary }}</p>{% endif %}
+        <a href="/dashboard/memo" class="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 pl-1.5">
+          Read full memo
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {# --------------------------------------------------------------- #}
+  {# Holdings — desktop table (hidden md:block) + mobile cards (md:hidden) #}
+  {# --------------------------------------------------------------- #}
   <section aria-label="Holdings">
-    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400 mb-3">Holdings</h2>
+    {{ ui.section_header("Holdings", "", "portfolio_snapshot.json") }}
 
     {% if holdings %}
-
-    {# Desktop table — hidden on small screens #}
-    <div class="hidden md:block overflow-x-auto">
+    <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
       <table class="w-full text-sm border-collapse">
         <thead>
-          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
-            <th class="py-2 pr-4">Symbol</th>
-            <th class="py-2 pr-4 text-right">Suggested %</th>
-            <th class="py-2 pr-4 text-right">Normalized %</th>
-            <th class="py-2 pr-4 text-right">Conviction</th>
-            <th class="py-2 pr-4">Band</th>
-            <th class="py-2">Sector</th>
+          <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2.5 px-4">Symbol</th>
+            <th class="py-2.5 px-4 text-right">Suggested %</th>
+            <th class="py-2.5 px-4 text-right">Normalized %</th>
+            <th class="py-2.5 px-4 text-right">Conviction</th>
+            <th class="py-2.5 px-4">Band</th>
+            <th class="py-2.5 px-4">Sector</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800">
           {% for h in holdings %}
           <tr class="hover:bg-zinc-900/50">
-            <td class="py-2 pr-4 font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</td>
-            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-right text-zinc-300 font-mono">
-              {% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-xs text-zinc-400">{{ h.band or "—" }}</td>
-            <td class="py-2 text-zinc-400 text-xs">{{ h.sector or "—" }}</td>
+            <td class="py-2.5 px-4 font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</td>
+            <td class="py-2.5 px-4 text-right text-zinc-300 font-mono">{% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right text-zinc-300 font-mono">{% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right text-zinc-300 font-mono">{% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-xs text-zinc-400">{{ h.band or "—" }}</td>
+            <td class="py-2.5 px-4 text-zinc-400 text-xs">{{ h.sector or "—" }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
 
-    {# Mobile stacked cards — shown only on small screens #}
     <div class="md:hidden space-y-3">
       {% for h in holdings %}
-      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1.5">
         <div class="flex items-center justify-between">
           <span class="font-mono font-semibold text-zinc-100">{{ h.symbol or "—" }}</span>
-          {% if h.sector %}
-          <span class="text-xs text-zinc-500">{{ h.sector }}</span>
-          {% endif %}
+          {% if h.sector %}<span class="text-xs text-zinc-500">{{ h.sector }}</span>{% endif %}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
           <div class="text-zinc-500">Suggested %</div>
-          <div class="text-zinc-300 font-mono text-right">
-            {% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}
-          </div>
+          <div class="text-zinc-300 font-mono text-right">{% if h.suggested_allocation_pct is not none %}{{ h.suggested_allocation_pct }}%{% else %}—{% endif %}</div>
           <div class="text-zinc-500">Normalized %</div>
-          <div class="text-zinc-300 font-mono text-right">
-            {% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}
-          </div>
+          <div class="text-zinc-300 font-mono text-right">{% if h.normalized_allocation_pct is not none %}{{ h.normalized_allocation_pct }}%{% else %}—{% endif %}</div>
           <div class="text-zinc-500">Conviction</div>
-          <div class="text-zinc-300 font-mono text-right">
-            {% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}
-          </div>
-          {% if h.band %}
-          <div class="text-zinc-500">Band</div>
-          <div class="text-zinc-400 text-right">{{ h.band }}</div>
-          {% endif %}
+          <div class="text-zinc-300 font-mono text-right">{% if h.conviction is not none %}{{ "%.3f" | format(h.conviction | float) }}{% else %}—{% endif %}</div>
+          {% if h.band %}<div class="text-zinc-500">Band</div><div class="text-zinc-400 text-right">{{ h.band }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
-
     {% else %}
-    {# Holdings empty state — renders on both desktop and mobile #}
-    {% with heading="No holdings data",
-            body="Portfolio snapshot unavailable. Check outputs/portfolio/portfolio_snapshot.json." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
+    {{ ui.empty_state("No holdings data",
+                      "Portfolio snapshot unavailable. Check outputs/portfolio/portfolio_snapshot.json.") }}
     {% endif %}
   </section>
 
-  {# ------------------------------------------------------------------ #}
-  {# Watchlist signals summary — evidence layer, no advisory actions    #}
-  {# ------------------------------------------------------------------ #}
+  {# --------------------------------------------------------------- #}
+  {# Watchlist signals — evidence layer, no advisory actions          #}
+  {# --------------------------------------------------------------- #}
   {% if recent_signals %}
   <section aria-label="Watchlist signals">
-    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400 mb-3">Watchlist Signals <span class="text-zinc-600 font-normal normal-case">(evidence only)</span></h2>
-    <div class="hidden md:block overflow-x-auto">
+    {{ ui.section_header("Watchlist Signals", "evidence only", "") }}
+    <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
       <table class="w-full text-sm border-collapse">
         <thead>
-          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
-            <th class="py-2 pr-4">Symbol</th>
-            <th class="py-2 pr-4 text-right">Signal Score</th>
-            <th class="py-2 pr-4 text-right">Confidence</th>
-            <th class="py-2 pr-4">Alert</th>
-            <th class="py-2">Sector</th>
+          <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2.5 px-4">Symbol</th>
+            <th class="py-2.5 px-4 text-right">Signal Score</th>
+            <th class="py-2.5 px-4 text-right">Confidence</th>
+            <th class="py-2.5 px-4">Alert</th>
+            <th class="py-2.5 px-4">Sector</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800">
           {% for sig in recent_signals %}
           <tr class="hover:bg-zinc-900/50">
-            <td class="py-2 pr-4 font-mono font-semibold text-zinc-100">{{ sig.symbol or "—" }}</td>
-            <td class="py-2 pr-4 text-right font-mono text-zinc-300">
-              {% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-right font-mono text-zinc-300">
-              {% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}
-            </td>
-            <td class="py-2 pr-4 text-xs text-zinc-400">{{ sig.alert or "—" }}</td>
-            <td class="py-2 text-xs text-zinc-400">{{ sig.sector or "—" }}</td>
+            <td class="py-2.5 px-4 font-mono font-semibold text-zinc-100">{{ sig.symbol or "—" }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-xs text-zinc-400">{{ sig.alert or "—" }}</td>
+            <td class="py-2.5 px-4 text-xs text-zinc-400">{{ sig.sector or "—" }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-    {# Mobile stacked — md:hidden #}
     <div class="md:hidden space-y-3">
       {% for sig in recent_signals %}
-      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1.5">
         <div class="flex items-center justify-between">
           <span class="font-mono font-semibold text-zinc-100">{{ sig.symbol or "—" }}</span>
-          {% if sig.alert %}
-          <span class="text-xs text-zinc-400">{{ sig.alert }}</span>
-          {% endif %}
+          {% if sig.alert %}<span class="text-xs text-zinc-400">{{ sig.alert }}</span>{% endif %}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
           <div class="text-zinc-500">Signal score</div>
-          <div class="text-zinc-300 font-mono text-right">
-            {% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}
-          </div>
+          <div class="text-zinc-300 font-mono text-right">{% if sig.signal_score is not none %}{{ "%.3f" | format(sig.signal_score | float) }}{% else %}—{% endif %}</div>
           <div class="text-zinc-500">Confidence</div>
-          <div class="text-zinc-300 font-mono text-right">
-            {% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}
-          </div>
-          {% if sig.sector %}
-          <div class="text-zinc-500">Sector</div>
-          <div class="text-zinc-400 text-right">{{ sig.sector }}</div>
-          {% endif %}
+          <div class="text-zinc-300 font-mono text-right">{% if sig.confidence is not none %}{{ "%.2f" | format(sig.confidence | float) }}{% else %}—{% endif %}</div>
+          {% if sig.sector %}<div class="text-zinc-500">Sector</div><div class="text-zinc-400 text-right">{{ sig.sector }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}

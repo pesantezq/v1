@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
 {% block title %}System &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-system-content"
@@ -7,127 +8,66 @@
      hx-target="#dashboard-system-content"
      hx-select="#dashboard-system-content"
      hx-swap="outerHTML"
-     class="space-y-6">
+     class="space-y-7">
 
-  <header class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold">System</h1>
-      <p class="text-sm text-zinc-400">Developer / System view &mdash; pipeline health &amp; infrastructure status</p>
-    </div>
-    <button hx-get="/dashboard/system"
-            hx-target="#dashboard-system-content"
-            hx-select="#dashboard-system-content"
-            hx-swap="outerHTML"
-            class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
-      Refresh
-    </button>
-  </header>
+  {{ ui.page_header("System", "Operator runbook — pipeline health & infrastructure",
+                    "/dashboard/system", "dashboard-system-content") }}
 
-  {# ------------------------------------------------------------------ #}
-  {# Notice banner — read-only view, no repair controls                  #}
-  {# ------------------------------------------------------------------ #}
-  <div class="rounded-md bg-sky-500/10 border border-sky-500/20 px-4 py-2 text-xs text-sky-300">
-    Read-only system health view. All data is observe-only. No repair or rerun controls are available in this view.
+  {# Read-only notice — no repair / rerun controls in this view. #}
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 flex items-center gap-2.5 text-xs text-sky-200">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+    Read-only system health view. All data is observe-only — no repair or rerun controls here.
   </div>
 
-  {# ------------------------------------------------------------------ #}
-  {# Status cards grid                                                   #}
-  {# ------------------------------------------------------------------ #}
-  <section aria-label="System status cards"
-           class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-    {% for c in cards %}
-    <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
-      <div class="flex items-center justify-between gap-2 flex-wrap">
-        <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
-        {# Severity badge #}
-        {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ (c.label or c.status) | status_label }}</span>
-        {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ (c.label or c.status) | status_label }}</span>
-        {% endif %}
-      </div>
-      {% if c.summary %}
-      <p class="text-sm text-zinc-300">{{ c.summary }}</p>
-      {% endif %}
-      {% if c.updated_at %}
-      <p class="text-xs text-zinc-500 font-mono">{{ c.updated_at }}</p>
-      {% endif %}
-      {% if c.source_artifacts %}
-        {% with source_artifacts=c.source_artifacts %}
-          {% include "components/evidence_drawer.html" %}
-        {% endwith %}
-      {% endif %}
-    </div>
-    {% else %}
-    <div class="col-span-3">
-      {% with heading="No system data available",
-              body="Run the daily pipeline to generate system health cards." %}
-        {% include "components/empty_state.html" %}
-      {% endwith %}
-    </div>
+  {# Named card lookups. #}
+  {% set _by = {} %}
+  {% for c in cards %}{% set _ = _by.__setitem__(c.title, c) %}{% endfor %}
+
+  {# --------------------------------------------------------------- #}
+  {# Operator status bar — the four numbers an operator checks first. #}
+  {# --------------------------------------------------------------- #}
+  {% if cards %}
+  <section aria-label="Operator status bar" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {% for _t in ["Daily Run Status", "Pipeline Run Status", "Failure Queue", "Data Quality"] %}
+    {% set c = _by.get(_t) %}
+    {% if c %}{{ ui.hero_stat(_t, (c.label or c.status) | status_label, c.severity, c.title) }}{% endif %}
     {% endfor %}
   </section>
+  {% endif %}
 
-  {# ------------------------------------------------------------------ #}
-  {# Failure Queue — failed/warn stages — desktop table + mobile cards   #}
-  {# ------------------------------------------------------------------ #}
+  {# --------------------------------------------------------------- #}
+  {# Failure Queue — loud on failure, compact all-clear when healthy.  #}
+  {# --------------------------------------------------------------- #}
   <section aria-label="Failure queue">
-    <div class="flex items-center gap-3 mb-3">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Failure Queue</h2>
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">daily_run_status.json</span>
-    </div>
+    {{ ui.section_header("Failure Queue", "", "daily_run_status.json") }}
 
     {% if failed_stages %}
-
-    {# Desktop table — hidden on small screens #}
-    <div class="hidden md:block overflow-x-auto">
+    <div class="hidden md:block overflow-x-auto rounded-xl border border-rose-500/30">
       <table class="w-full text-sm border-collapse">
         <thead>
-          <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
-            <th class="py-2 pr-4">Stage</th>
-            <th class="py-2 pr-4">Status</th>
-            <th class="py-2 text-right">Output Lines</th>
+          <tr class="bg-rose-500/10 text-rose-300/80 text-xs uppercase tracking-wide text-left">
+            <th class="py-2.5 px-4">Stage</th>
+            <th class="py-2.5 px-4">Status</th>
+            <th class="py-2.5 px-4 text-right">Output Lines</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-zinc-800">
           {% for s in failed_stages %}
           <tr class="hover:bg-zinc-900/50">
-            <td class="py-2 pr-4 font-mono text-zinc-100">{{ s.name }}</td>
-            <td class="py-2 pr-4">
-              {% if s.status == "failed" %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ s.status }}</span>
-              {% elif s.status == "warn" %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ s.status }}</span>
-              {% else %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ s.status }}</span>
-              {% endif %}
-            </td>
-            <td class="py-2 text-right font-mono text-zinc-300">{{ s.output_lines_count }}</td>
+            <td class="py-2.5 px-4 font-mono text-zinc-100">{{ s.name }}</td>
+            <td class="py-2.5 px-4">{% if s.status == "failed" %}{{ ui.badge("red", "Failed") }}{% elif s.status == "warn" %}{{ ui.badge("yellow", "Warning") }}{% else %}{{ ui.badge("gray", s.status | status_label) }}{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ s.output_lines_count }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
-
-    {# Mobile stacked cards — shown only on small screens #}
     <div class="md:hidden space-y-3">
       {% for s in failed_stages %}
-      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+      <div class="bg-zinc-900 rounded-xl border border-rose-500/30 px-4 py-3 space-y-1.5">
         <div class="flex items-center justify-between">
           <span class="font-mono text-zinc-100">{{ s.name }}</span>
-          {% if s.status == "failed" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ s.status }}</span>
-          {% elif s.status == "warn" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ s.status }}</span>
-          {% else %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ s.status }}</span>
-          {% endif %}
+          {% if s.status == "failed" %}{{ ui.badge("red", "Failed") }}{% elif s.status == "warn" %}{{ ui.badge("yellow", "Warning") }}{% else %}{{ ui.badge("gray", s.status | status_label) }}{% endif %}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
           <div class="text-zinc-500">Output lines</div>
@@ -136,14 +76,50 @@
       </div>
       {% endfor %}
     </div>
-
     {% else %}
-    {% with heading="No failed or warned stages",
-            body="All pipeline stages completed without failures." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
+    {# Compact success — failure queue is happily empty. #}
+    {{ ui.all_clear("No failed or warned stages", "All pipeline stages completed cleanly.") }}
     {% endif %}
   </section>
+
+  {# --------------------------------------------------------------- #}
+  {# Grouped operator sections — organized like a runbook.            #}
+  {# --------------------------------------------------------------- #}
+  {% set _groups = [
+      ("Run Health", ["Daily Run Status", "Pipeline Run Status", "Analysis Loop Status"]),
+      ("Data Quality", ["Data Quality", "Artifact Registry"]),
+      ("Budget / API Usage", ["FMP Budget", "AI Budget"]),
+      ("Integrations & Delivery", ["Schwab Broker Health", "Memo Delivery"]),
+      ("Maintenance", ["Doc Audit", "Historical Backfill"])
+  ] %}
+  {% set ns = namespace(shown=[]) %}
+
+  {% if cards %}
+  {% for _title, _members in _groups %}
+  {% set _grp = cards | selectattr("title", "in", _members) | list %}
+  {% if _grp %}
+  <section aria-label="{{ _title }}">
+    {{ ui.section_header(_title, "", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {% for c in _grp %}{{ ui.status_card(c) }}{% set ns.shown = ns.shown + [c.title] %}{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+  {% endfor %}
+
+  {% set _rest = cards | rejectattr("title", "in", ns.shown) | list %}
+  {% if _rest %}
+  <section aria-label="Other system status">
+    {{ ui.section_header("Other Status", "", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {% for c in _rest %}{{ ui.status_card(c) }}{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+  {% else %}
+  {{ ui.empty_state("No system data available",
+                    "Run the daily pipeline to generate system health cards.") }}
+  {% endif %}
 
 </div>
 {% endblock %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
 {% block title %}Today &mdash; StockBot{% endblock %}
 {% block content %}
   <div id="dashboard-today-content"
@@ -9,59 +10,69 @@
        hx-swap="outerHTML"
        class="space-y-6">
 
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold">Today</h1>
-        <p class="text-sm text-zinc-400">System snapshot — advisory view</p>
-      </div>
-      <button hx-get="/dashboard/today"
-              hx-target="#dashboard-today-content"
-              hx-select="#dashboard-today-content"
-              hx-swap="outerHTML"
-              class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
-        Refresh
-      </button>
-    </header>
+    {{ ui.page_header("Today", "Can I trust today's run? — advisory snapshot",
+                      "/dashboard/today", "dashboard-today-content") }}
 
-    <!-- Status cards grid -->
-    <section class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+    {# --------------------------------------------------------------- #}
+    {# Hero status strip — overall / freshness / decision plan / risk   #}
+    {# Derived in-template from the loader's cards (no new data keys).   #}
+    {# --------------------------------------------------------------- #}
+    {% set _rank = {"red": 4, "yellow": 3, "blue": 2, "green": 1, "gray": 0} %}
+    {% set ns = namespace(worst="green", worst_rank=-1, latest="") %}
+    {% for c in cards %}
+      {% if _rank.get(c.severity, 0) > ns.worst_rank %}
+        {% set ns.worst = c.severity %}{% set ns.worst_rank = _rank.get(c.severity, 0) %}
+      {% endif %}
+      {% if c.updated_at and c.updated_at > ns.latest %}{% set ns.latest = c.updated_at %}{% endif %}
+    {% endfor %}
+    {% set _overall_label = {"green":"Healthy","yellow":"Warnings","red":"Action needed","blue":"Informational","gray":"Unknown"}.get(ns.worst, "Unknown") %}
+    {% set health_card   = cards | selectattr("title", "equalto", "System health") | list | first %}
+    {% set decision_card = cards | selectattr("title", "equalto", "Decision core") | list | first %}
+    {% set risk_card     = cards | selectattr("title", "equalto", "Risk") | list | first %}
+
+    {% if cards %}
+    <section aria-label="Today status strip" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {{ ui.hero_stat("Overall", _overall_label, ns.worst, "across all checks") }}
+      {{ ui.hero_stat("Latest run", (ns.latest | human_time) or "—", ("gray" if not ns.latest else "green"), "freshness") }}
+      {{ ui.hero_stat("Decision plan",
+                      (decision_card.label or decision_card.status) | status_label if decision_card else "—",
+                      decision_card.severity if decision_card else "gray", "decision_plan.json") }}
+      {{ ui.hero_stat("Risk",
+                      (risk_card.label or risk_card.status) | status_label if risk_card else "—",
+                      risk_card.severity if risk_card else "gray", "risk posture") }}
+    </section>
+    {% endif %}
+
+    {# --------------------------------------------------------------- #}
+    {# Primary cards — System Health / Decision Core / Risk Summary     #}
+    {# --------------------------------------------------------------- #}
+    {% if cards %}
+    <section aria-label="Primary status cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {% for c in cards %}
-      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
-        <div class="flex items-center justify-between">
-          <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
-          {% if c.severity == "green" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
-          {% elif c.severity == "yellow" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
-          {% elif c.severity == "red" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
-          {% elif c.severity == "blue" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
-          {% else %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
-          {% endif %}
-        </div>
-        {% if c.summary %}
-        <p class="text-sm text-zinc-300">{{ c.summary }}</p>
-        {% endif %}
-        {% if c.updated_at %}
-        <p class="text-xs text-zinc-500 font-mono">{{ c.updated_at }}</p>
-        {% endif %}
-        {% if c.source_artifacts %}
-          {% with source_artifacts=c.source_artifacts %}
-            {% include "components/evidence_drawer.html" %}
-          {% endwith %}
-        {% endif %}
-      </div>
-      {% else %}
-      <div class="col-span-3">
-        {% with heading="No status data available",
-                body="Run the daily pipeline to generate status cards." %}
-          {% include "components/empty_state.html" %}
-        {% endwith %}
-      </div>
+        {{ ui.status_card(c, emphasis=True) }}
       {% endfor %}
     </section>
+    {% else %}
+    {{ ui.empty_state("No status data available",
+                      "Run the daily pipeline to generate today's status cards.") }}
+    {% endif %}
+
+    {# --------------------------------------------------------------- #}
+    {# What changed since last run — shown only when the loader supplies #}
+    {# a `changes` list (additive-ready; absent today → omitted).        #}
+    {# --------------------------------------------------------------- #}
+    {% if changes %}
+    <section aria-label="What changed since last run">
+      {{ ui.section_header("What changed since last run", "vs. previous run", "") }}
+      <ul class="space-y-2">
+        {% for ch in changes %}
+        <li class="flex items-start gap-2 bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-2.5 text-sm text-zinc-300">
+          {{ ui.sev_dot(ch.severity or "blue") }}<span>{{ ch.text }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
 
   </div>
 {% endblock %}

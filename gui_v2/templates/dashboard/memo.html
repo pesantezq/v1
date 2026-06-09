@@ -9,103 +9,112 @@
      hx-swap="outerHTML"
      class="space-y-5">
 
-  <header class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold">Memo</h1>
-      {% if memo_date %}
-      <p class="text-sm text-zinc-400">{{ memo_date }} &mdash; advisory read-only</p>
-      {% else %}
-      <p class="text-sm text-zinc-400">Daily investment memo &mdash; advisory read-only</p>
-      {% endif %}
+  {# --------------------------------------------------------------- #}
+  {# Header + sticky mini-toolbar (copy link / print / refresh).      #}
+  {# --------------------------------------------------------------- #}
+  <header class="flex items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h1 class="text-2xl font-semibold tracking-tight">Daily Memo</h1>
+      <p class="text-sm text-zinc-400 mt-0.5">
+        {% if memo_date %}{{ memo_date }} &mdash; {% endif %}advisory investment report, read-only
+      </p>
     </div>
-    <div class="flex items-center gap-2">
-      {# Copy-to-clipboard button — inline JS only, no server side action #}
-      <button type="button"
-              id="memo-copy-btn"
-              title="Copy memo URL"
-              onclick="(function(){try{navigator.clipboard.writeText(window.location.href).then(function(){var b=document.getElementById('memo-copy-btn');var orig=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=orig;},1500);})}catch(e){}})();"
-              class="px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
-        Copy link
+    <div class="flex items-center gap-2 flex-shrink-0 print:hidden">
+      <button type="button" id="memo-copy-btn" title="Copy memo URL"
+              onclick="(function(){try{navigator.clipboard.writeText(window.location.href).then(function(){var b=document.getElementById('memo-copy-btn');var o=b.getAttribute('data-label');b.querySelector('span').textContent='Copied';setTimeout(function(){b.querySelector('span').textContent=o;},1500);})}catch(e){}})();"
+              data-label="Copy link"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 11-5.656-5.656l1.5-1.5m6.656-2.828a4 4 0 00-5.656 0l-3 3"/></svg>
+        <span>Copy link</span>
       </button>
-      <button hx-get="/dashboard/memo"
-              hx-target="#dashboard-memo-content"
-              hx-select="#dashboard-memo-content"
-              hx-swap="outerHTML"
-              class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+      <button type="button" title="Print / save as PDF" onclick="window.print()"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+        Print
+      </button>
+      <button hx-get="/dashboard/memo" hx-target="#dashboard-memo-content"
+              hx-select="#dashboard-memo-content" hx-swap="outerHTML"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
         Refresh
       </button>
     </div>
   </header>
 
-  {# ------------------------------------------------------------------ #}
-  {# Empty state                                                          #}
-  {# ------------------------------------------------------------------ #}
   {% if empty %}
-  <div class="rounded-lg bg-zinc-900 border border-zinc-800 px-5 py-10 text-center space-y-2">
-    <div class="text-zinc-400 font-medium">{{ empty_message }}</div>
+  <div class="rounded-xl bg-zinc-900 border border-dashed border-zinc-700 px-5 py-12 text-center space-y-2">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 mx-auto text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+    <div class="text-zinc-300 font-medium">{{ empty_message }}</div>
     <div class="text-xs text-zinc-500">The daily pipeline produces <span class="font-mono">daily_memo.md</span> each morning.</div>
   </div>
 
   {% else %}
 
-  {# ------------------------------------------------------------------ #}
-  {# Memo sections — stacked, phone-readable                             #}
-  {# ------------------------------------------------------------------ #}
-  <div class="space-y-4">
+  {# Quick section nav — jump links for a report feel (chips, not a table). #}
+  <nav aria-label="Memo sections" class="flex flex-wrap gap-2 print:hidden">
     {% for section in sections %}
     {% if section.lines %}
-    <section aria-label="{{ section.title }}"
-             class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
-      <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">{{ section.title }}</h2>
-      <div class="space-y-1">
+    <a href="#memo-{{ loop.index }}" class="text-xs px-2.5 py-1 rounded-full bg-zinc-800/70 text-zinc-400 border border-zinc-700 hover:text-zinc-200 hover:border-zinc-600">{{ section.title }}</a>
+    {% endif %}
+    {% endfor %}
+  </nav>
+
+  {% set _captions = {
+      "Top Insight": "The verdict",
+      "Risk Focus": "Exposure & risk posture",
+      "Portfolio Decisions": "Advisory actions",
+      "Data Quality": "System & data health",
+      "Quant Notes": "Patterns, calibration & retune",
+      "Watchlist Notes": "Opportunities & discovery"
+  } %}
+
+  {# Document body — stacked report sections. #}
+  <article class="space-y-4">
+    {% for section in sections %}
+    {% if section.lines %}
+    <section id="memo-{{ loop.index }}" aria-label="{{ section.title }}"
+             class="bg-zinc-900 rounded-xl border border-zinc-800 px-5 py-4 space-y-2 scroll-mt-24">
+      <div class="border-b border-zinc-800 pb-2 mb-1">
+        <h2 class="text-base font-semibold text-zinc-100">{{ section.title }}</h2>
+        {% if _captions.get(section.title) %}<p class="text-xs text-zinc-500">{{ _captions.get(section.title) }}</p>{% endif %}
+      </div>
+      <div class="space-y-1.5">
         {% for idx in range(section.lines | length) %}
         {% set line = section.lines[idx] %}
         {% set rendered = section.rendered_lines[idx] %}
-        {# Skip the title line (# Daily Investment Memo…) and horizontal rules #}
         {% if not line.startswith('# ') and line != '---' %}
         {% if line.startswith('>') %}
-        {# Blockquote — verdict / insight callout; rendered_lines strips the > #}
-        <blockquote class="border-l-2 border-emerald-500/50 pl-3 text-sm text-zinc-300 italic">
-          {{ rendered[1:] | safe }}
-        </blockquote>
+        {# rendered is the html-escaped line, so the leading '>' is '&gt;'.
+           Strip that one escaped marker (keeping inline bold/code intact)
+           instead of slicing one char, which used to leave a 'gt;' artifact. #}
+        <blockquote class="border-l-2 border-emerald-500/50 pl-3 py-1 text-sm text-zinc-200 italic">{{ rendered | replace("&gt;", "", 1) | trim | safe }}</blockquote>
         {% elif line.startswith('  - ') or line.startswith('  * ') %}
-        {# Indented sub-list item — rendered_lines has HTML-escaped + bold/code #}
-        <div class="text-xs text-zinc-400 leading-relaxed pl-4">{{ rendered | safe }}</div>
+        <div class="flex gap-2 text-xs text-zinc-400 leading-relaxed pl-5"><span class="text-zinc-600">&middot;</span><span>{{ rendered | safe }}</span></div>
         {% elif line.startswith('- ') or line.startswith('* ') %}
-        {# List item (bold-prefixed or plain) #}
-        <div class="text-sm text-zinc-300 leading-relaxed pl-1">{{ rendered | safe }}</div>
+        <div class="flex gap-2 text-sm text-zinc-300 leading-relaxed"><span class="text-emerald-500/60 mt-0.5">&bull;</span><span>{{ rendered | safe }}</span></div>
         {% elif line.startswith('**') and line.endswith('**') %}
-        {# Bold standalone label — strip outer ** for heading style #}
-        <div class="text-sm font-semibold text-zinc-200 mt-1">{{ line[2:-2] }}</div>
+        <div class="text-sm font-semibold text-zinc-200 mt-2">{{ line[2:-2] }}</div>
         {% elif line.strip() %}
-        {# Plain text / inline-md — rendered_lines has HTML-escaped + bold/code #}
         <div class="text-sm text-zinc-300 leading-relaxed">{{ rendered | safe }}</div>
         {% endif %}
         {% endif %}
         {% endfor %}
       </div>
     </section>
-    {% endif %}
     {% else %}
-    {# Section defined but no content lines — show placeholder #}
-    <section aria-label="{{ section.title }}"
-             class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1 opacity-50">
-      <h2 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">{{ section.title }}</h2>
-      <p class="text-xs text-zinc-500">No data for this section today.</p>
+    <section id="memo-{{ loop.index }}" aria-label="{{ section.title }}"
+             class="bg-zinc-900/40 rounded-xl border border-zinc-800/60 px-5 py-3">
+      <h2 class="text-sm font-semibold text-zinc-500">{{ section.title }}</h2>
+      <p class="text-xs text-zinc-600 mt-0.5">No data for this section today.</p>
     </section>
+    {% endif %}
     {% endfor %}
-  </div>
+  </article>
 
-  {# ------------------------------------------------------------------ #}
-  {# Footer — source artifact + download link                            #}
-  {# ------------------------------------------------------------------ #}
   <div class="flex items-center justify-between text-xs text-zinc-500 pt-1 pb-4">
     <span class="font-mono">daily_memo.md</span>
-    <a href="/outputs/latest/daily_memo.md"
-       download
-       class="text-sky-400 hover:text-sky-300 underline underline-offset-2">
-      Download memo
-    </a>
+    <a href="/outputs/latest/daily_memo.md" download
+       class="text-sky-400 hover:text-sky-300 underline underline-offset-2">Download memo</a>
   </div>
 
   {% endif %}
