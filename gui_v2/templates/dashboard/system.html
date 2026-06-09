@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/_ui.html" as ui %}
+{% import "components/operator_panel.html" as op %}
 {% block title %}System &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-system-content"
@@ -119,6 +120,15 @@
   {% else %}
   {{ ui.empty_state("No system data available",
                     "Run the daily pipeline to generate system health cards.") }}
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Operator actions — create diagnostic/repair work orders.          #}
+  {# Create-only: no execution, no shell, no broker/trade controls.    #}
+  {# --------------------------------------------------------------- #}
+  {% if operator_probes is defined %}
+  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                       operator_post_url) }}
   {% endif %}
 
 </div>

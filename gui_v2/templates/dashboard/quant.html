@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/_ui.html" as ui %}
+{% import "components/operator_panel.html" as op %}
 {% block title %}Quant &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-quant-content"
@@ -123,6 +124,15 @@
       {% endfor %}
     </div>
   </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Operator actions — proposal-only work orders (create-only).       #}
+  {# --------------------------------------------------------------- #}
+  {% if operator_probes is defined %}
+  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                       operator_post_url, proposal_only=operator_proposal_only,
+                       heading="Operator Actions (proposal-only)") }}
   {% endif %}
 
 </div>

@@ -44,6 +44,21 @@
     {% endif %}
 
     {# --------------------------------------------------------------- #}
+    {# Operator work-order summary — quick freshness/queue glance only. #}
+    {# Detail + actions live on the System tab.                          #}
+    {# --------------------------------------------------------------- #}
+    {% if operator_open_count is defined %}
+    <a href="/dashboard/system"
+       class="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm hover:border-zinc-700 transition">
+      <span class="text-zinc-300">Operator work orders</span>
+      <span class="flex items-center gap-2 text-xs text-zinc-400">
+        {% if operator_open_count %}{{ ui.badge("blue", operator_open_count ~ " open") }}{% else %}{{ ui.badge("green", "none open") }}{% endif %}
+        <span class="text-zinc-600">{{ operator_total_count }} total · observe-only</span>
+      </span>
+    </a>
+    {% endif %}
+
+    {# --------------------------------------------------------------- #}
     {# Primary cards — System Health / Decision Core / Risk Summary     #}
     {# --------------------------------------------------------------- #}
     {% if cards %}

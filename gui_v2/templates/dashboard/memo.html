@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/operator_panel.html" as op %}
 {% block title %}Memo &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-memo-content"
@@ -117,6 +118,16 @@
        class="text-sky-400 hover:text-sky-300 underline underline-offset-2">Download memo</a>
   </div>
 
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Operator actions — memo-support work orders (create-only).        #}
+  {# Diagnose formatting or regenerate memo from existing artifacts;   #}
+  {# never sends email.                                                #}
+  {# --------------------------------------------------------------- #}
+  {% if operator_probes is defined %}
+  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                       operator_post_url, heading="Operator Actions") }}
   {% endif %}
 
 </div>

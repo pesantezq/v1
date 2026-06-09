@@ -219,6 +219,7 @@ from gui_v2.data.dash_system import collect_system_view as _dash_system
 from gui_v2.data.dash_memo import collect_memo_view as _dash_memo
 from gui_v2.data.dash_portfolio_sync import collect_portfolio_sync_view as _dash_portfolio_sync
 from gui_v2.data.dash_portfolio_config import collect_portfolio_config_view as _dash_portfolio_config
+from gui_v2.data.operator_control import operator_control_context, today_operator_summary
 from gui_v2.data.shared import REDIRECT_MAP
 
 
@@ -322,39 +323,69 @@ def _parse_holdings_from_form(form_data) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _with_operator(view_ctx: dict[str, Any], view: str) -> dict[str, Any]:
+    """Merge operator-control keys into a persona view context (additive, safe).
+
+    Best-effort: any failure leaves the persona view untouched so the
+    operator-control plane can never break an existing dashboard page.
+    """
+    try:
+        view_ctx.update(operator_control_context(REPO_ROOT, view))
+    except Exception:
+        pass
+    return view_ctx
+
+
 @app.get("/dashboard/today", response_class=HTMLResponse)
 def page_dash_today(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(request, "dashboard/today.html", **_dash_today(REPO_ROOT))
+    ctx = _dash_today(REPO_ROOT)
+    try:
+        ctx.update(today_operator_summary(REPO_ROOT))
+    except Exception:
+        pass
+    return _render(request, "dashboard/today.html", **ctx)
 
 
 @app.get("/dashboard/portfolio", response_class=HTMLResponse)
 def page_dash_portfolio(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(request, "dashboard/portfolio.html", **_dash_portfolio(REPO_ROOT))
+    return _render(
+        request, "dashboard/portfolio.html",
+        **_with_operator(_dash_portfolio(REPO_ROOT), "portfolio"),
+    )
 
 
 @app.get("/dashboard/quant", response_class=HTMLResponse)
 def page_dash_quant(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(request, "dashboard/quant.html", **_dash_quant(REPO_ROOT))
+    return _render(
+        request, "dashboard/quant.html",
+        **_with_operator(_dash_quant(REPO_ROOT), "quant"),
+    )
 
 
 @app.get("/dashboard/system", response_class=HTMLResponse)
 def page_dash_system(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(request, "dashboard/system.html", **_dash_system(REPO_ROOT))
+    return _render(
+        request, "dashboard/system.html",
+        **_with_operator(_dash_system(REPO_ROOT), "system"),
+    )
 
 
 @app.get("/dashboard/memo", response_class=HTMLResponse)
 def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(request, "dashboard/memo.html", **_dash_memo(REPO_ROOT))
+    return _render(
+        request, "dashboard/memo.html",
+        **_with_operator(_dash_memo(REPO_ROOT), "memo"),
+    )
 
 
 @app.get("/dashboard/portfolio-sync", response_class=HTMLResponse)
@@ -511,6 +542,60 @@ async def page_dash_portfolio_config_save(
     view = _dash_portfolio_config(REPO_ROOT, edit_enabled=enabled)
     view["save_result"] = result
     return _render(request, "dashboard/portfolio_config.html", **view)
+
+
+# ---------------------------------------------------------------------------
+# Operator-control: create a work order (CREATE-ONLY — never executes a worker)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/dashboard/operator/create")
+async def page_create_work_order(
+    request: Request, _a: str | None = Depends(_require_auth)
+):
+    """
+    POST /dashboard/operator/create
+
+    Endpoint path deliberately avoids the token "order" (reserved for trade
+    orders in this system) — it creates an operator-control work order, the
+    only mutating operator action.
+
+    Creates a single allowlisted work order from a (probe_id, skill_id, mode)
+    tuple submitted by a dashboard action button. This is the ONLY mutating
+    operator endpoint and it does exactly one thing: append a work-order record.
+
+    It NEVER executes a worker, runs shell commands, touches broker/trade logic,
+    or stores arbitrary command text — the request carries only registry ids,
+    which are validated against the probe/skill registries + repair policy.
+    """
+    from operator_control import work_orders as _wo
+    from operator_control.repair_policies import WorkOrderValidationError
+    from operator_control.probe_registry import get_probe
+
+    form = await request.form()
+    probe_id = str(form.get("probe_id", "")).strip()
+    skill_id = str(form.get("skill_id", "")).strip()
+    mode = str(form.get("mode", "")).strip()
+
+    actor = _a or "dashboard"
+    probe = get_probe(probe_id)
+    source_view = probe.source_view if probe is not None else "system"
+
+    try:
+        _wo.create_work_order(
+            REPO_ROOT,
+            probe_id=probe_id,
+            skill_id=skill_id,
+            mode=mode,
+            created_by=actor,
+        )
+    except WorkOrderValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        )
+
+    # POST→redirect→GET so a refresh does not resubmit.
+    return RedirectResponse(f"/dashboard/{source_view}", status_code=303)
 
 
 # ---------------------------------------------------------------------------

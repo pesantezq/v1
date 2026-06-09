@@ -1,0 +1,121 @@
+{# =====================================================================
+   Operator-control panel — probe-driven work-order creation + queue.
+
+   Import:   {% import "components/operator_panel.html" as op %}
+
+   SAFETY / contract:
+     * The ONLY action is creating a work order (POST to operator_post_url).
+       No trade/buy/sell/order/execute verbs, no arbitrary command input,
+       no broker controls. Each button submits a registry-derived
+       (probe_id, skill_id, mode) tuple — nothing executable.
+     * Worker execution is NOT performed here (Phase 1 = create-only).
+     * proposal_only=True (quant) shows a prominent banner so proposal-only
+       evidence is never dressed as official advice.
+   ===================================================================== #}
+{% import "components/_ui.html" as ui %}
+
+{# status → severity token for the queue badges. #}
+{% macro _wo_sev(status) -%}
+{%- if status in ("approved", "completed") -%}green
+{%- elif status in ("awaiting_approval",) -%}yellow
+{%- elif status in ("failed", "rejected") -%}red
+{%- elif status in ("queued", "claimed", "running") -%}blue
+{%- else -%}gray{%- endif -%}
+{%- endmacro %}
+
+{# One probe row: description + bounded action buttons (each its own POST form). #}
+{% macro _probe_actions(probe, post_url, proposal_only) -%}
+<div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-2">
+  <div class="flex items-start justify-between gap-2">
+    <div class="min-w-0">
+      <div class="text-sm font-medium text-zinc-100">{{ probe.display_name }}</div>
+      <p class="text-xs text-zinc-400 mt-0.5">{{ probe.description }}</p>
+    </div>
+    {{ ui.badge(probe.severity if probe.severity in ("red","warning","info") else "gray", probe.severity | status_label) }}
+  </div>
+  <div class="flex flex-wrap items-center gap-2 pt-1">
+    {% for a in probe.actions %}
+    <form method="post" action="{{ post_url }}" class="inline">
+      <input type="hidden" name="probe_id" value="{{ probe.probe_id }}" />
+      <input type="hidden" name="skill_id" value="{{ a.skill_id }}" />
+      <input type="hidden" name="mode" value="{{ a.mode }}" />
+      <button type="submit"
+              title="Create a {{ a.label }} work order via {{ a.skill_name }}{% if a.approval_required %} (requires approval){% endif %}"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition active:scale-95
+                     {% if a.mode == 'diagnose' %}bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20
+                     {% elif a.mode == 'propose_fix' %}bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20
+                     {% else %}bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700{% endif %}">
+        {{ a.label }}{% if a.approval_required %}<span class="opacity-60">· approval</span>{% endif %}
+      </button>
+    </form>
+    {% endfor %}
+    {% if not probe.actions %}<span class="text-xs text-zinc-600">No actions available</span>{% endif %}
+  </div>
+  <details class="group">
+    <summary class="text-[11px] text-zinc-600 hover:text-zinc-400 cursor-pointer select-none list-none">Source &amp; safety</summary>
+    <div class="mt-1 text-[11px] text-zinc-500 space-y-0.5">
+      <div class="font-mono">{{ probe.source_artifact }}</div>
+      <div>{{ probe.observe_only_notice }}</div>
+    </div>
+  </details>
+</div>
+{%- endmacro %}
+
+{# The work-order queue table (recent orders for this view). #}
+{% macro _queue(work_orders) -%}
+{% if work_orders %}
+<div class="overflow-x-auto rounded-xl border border-zinc-800">
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="bg-zinc-900/80 text-zinc-400 text-xs uppercase tracking-wide text-left">
+        <th class="py-2 px-3">Work order</th>
+        <th class="py-2 px-3">Probe → Skill</th>
+        <th class="py-2 px-3">Mode</th>
+        <th class="py-2 px-3">Status</th>
+        <th class="py-2 px-3">Risk</th>
+        <th class="py-2 px-3">Created</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-zinc-800">
+      {% for o in work_orders %}
+      <tr class="hover:bg-zinc-900/50">
+        <td class="py-2 px-3 font-mono text-[11px] text-zinc-300">{{ o.work_order_id }}</td>
+        <td class="py-2 px-3 text-zinc-300">{{ o.probe_id }} <span class="text-zinc-600">→</span> {{ o.skill_id }}</td>
+        <td class="py-2 px-3 font-mono text-xs text-zinc-400">{{ o.mode }}</td>
+        <td class="py-2 px-3">{{ ui.badge(_wo_sev(o.status), o.status | status_label) }}</td>
+        <td class="py-2 px-3 text-xs text-zinc-400">{{ o.risk_level }}</td>
+        <td class="py-2 px-3 text-xs text-zinc-500" title="{{ o.created_at }}">{{ o.created_at | human_time }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{{ ui.empty_state("No work orders yet", "Use the actions above to create a diagnostic or proposal work order. Orders are observe-only and reviewed before any action.") }}
+{% endif %}
+{%- endmacro %}
+
+{# Public macro: the full operator-control section. #}
+{% macro operator_panel(probes, work_orders, summary, post_url, proposal_only=False, heading="Operator Actions") -%}
+<section aria-label="Operator control work orders" class="space-y-3">
+  {{ ui.section_header(heading, "work orders only — observe-only, no execution", "outputs/operator_control/work_orders.jsonl") }}
+
+  {% if proposal_only %}
+  <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2.5 text-xs text-amber-200 flex items-start gap-2">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <span><strong>Proposal-only.</strong> These actions produce review evidence, not official advice. <code class="font-mono">decision_plan.json</code> remains the sole source of advisory actions. Nothing here is executed.</span>
+  </div>
+  {% endif %}
+
+  {% if probes %}
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    {% for p in probes %}{{ _probe_actions(p, post_url, proposal_only) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="pt-1">
+    {{ ui.section_header("Recent work orders", "", "") }}
+    {{ _queue(work_orders) }}
+  </div>
+</section>
+{%- endmacro %}

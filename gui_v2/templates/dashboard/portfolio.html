@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/_ui.html" as ui %}
+{% import "components/operator_panel.html" as op %}
 {% block title %}Portfolio &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-portfolio-content"
@@ -241,6 +242,16 @@
       {% endfor %}
     </div>
   </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Operator actions — review-only work orders (create-only).         #}
+  {# No Buy/Sell/Trade/Execute controls; advisory decisions stay       #}
+  {# read-only and are sourced from decision_plan.json only.           #}
+  {# --------------------------------------------------------------- #}
+  {% if operator_probes is defined %}
+  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                       operator_post_url, heading="Operator Actions (review-only)") }}
   {% endif %}
 
 </div>
