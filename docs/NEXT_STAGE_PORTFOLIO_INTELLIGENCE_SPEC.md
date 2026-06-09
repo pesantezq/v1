@@ -174,6 +174,14 @@ queue → Claude Code prompt generator (Type C)`.
 events (JSONL) → confidence calibration + pattern efficacy → better probability/risk
 classification (never price prediction)`.
 
+**Strategy lane** (foundations exist; profile abstraction + comparator are new — §24):
+`actual portfolio (broker snapshot or config) + market regime + scanner / universe /
+opportunity radar / sandbox results / historical outcomes → generate N strategy
+profiles → compare in sandbox (backtest/shadow evidence first) → strategy scorecards →
+strategy review cards → (only if a profile is explicitly user-approved) advisory
+configuration referenced by the official engine`. Writes sandbox/policy; the official
+`decision_plan.json` is never auto-modified.
+
 ---
 
 ## 4. Non-negotiable safety model
@@ -364,11 +372,11 @@ Extend `gui_v2` (primary) using the existing `card()` + `operator_panel` pattern
   Quality, Broker Sync, Portfolio Risk (exist); **Universe Scanner, Opportunity Radar,
   Market Opportunity Review, Sandbox Tracking, Candidate Promotion Review, Approval
   Queues, Pattern Memory, Daily System-Improvement Ideas, Claude Code Launch Center,
-  Mobile Review Mode** (new).
+  Strategy Lab / Portfolio Strategy Center (§24), Mobile Review Mode** (new).
 - Card/probe categories (extend the probe `category` field): `health_probe`,
   `quality_probe`, `broker_sync_probe`, `universe_scan_probe`, `sandbox_probe`,
-  `market_opportunity_probe`, `system_improvement_probe`, `approval_queue_item`,
-  `system_prompted_idea`.
+  `market_opportunity_probe`, `system_improvement_probe`, `strategy_profile_card`,
+  `approval_queue_item`, `system_prompted_idea`.
 - Each card carries: `id, title, category, severity_or_priority, status,
   source_artifact, created_at, updated_at, reason, evidence, recommended_next_action,
   allowed_actions, blocked_actions, observe_only`.
@@ -389,14 +397,20 @@ Artifact-based; execute nothing. Reuse the operator-control append-only + audit 
   request_more_detail, mark_duplicate, mark_completed, create_claude_code_prompt`.
 - Health-remediation actions (exist via operator-control): `create_health_remediation_prompt,
   mark_acknowledged, mark_resolved, defer, request_more_diagnostics`.
+- Strategy actions (§24): `approve_strategy_for_review, reject_strategy, defer_strategy,
+  request_deeper_strategy_analysis, run_strategy_in_sandbox, compare_against_current_policy,
+  mark_as_preferred_profile`. Blocked (asserted by test): `place_trade, submit_order,
+  move_money, broker_write_action, auto_rebalance, modify_real_holdings`.
 - Rules (tested): approving an opportunity never trades and at most → watchlist review;
   approving an improvement never edits code and at most → Claude Code prompt; all
   decisions append-only; rejections/deferrals enforce cooldown (Section 15).
 - Artifacts: `outputs/latest/operator_action_queue.json`,
   `outputs/latest/system_improvement_action_queue.json`,
   `outputs/sandbox/opportunity_approval_queue.json`,
+  `outputs/latest/strategy_review_queue.json`,
   `outputs/policy/user_decisions.jsonl`,
-  `outputs/policy/system_improvement_decisions.jsonl`.
+  `outputs/policy/system_improvement_decisions.jsonl`,
+  `outputs/policy/strategy_decisions.jsonl`.
 
 ---
 
@@ -511,6 +525,14 @@ test. Summary (R/L = replace-latest, A = append-only):
 | `operator_action_queue.json` | latest | approval layer | R/L | empty |
 | `system_improvement_action_queue.json` | latest | approval layer | R/L | empty |
 | `user_decisions.jsonl` | policy | approval layer | A | skip |
+| `strategy_profiles.json` | sandbox | strategy/profiles | R/L | seed defaults |
+| `strategy_comparison.json` | sandbox | strategy_comparator (shared w/ §10) | R/L | empty + degraded |
+| `strategy_shadow_results.json` | sandbox | strategy_comparator | R/L | empty |
+| `strategy_risk_scorecard.json` | sandbox | strategy_comparator | R/L | empty |
+| `strategy_tax_scorecard.json` | sandbox | strategy/tax_scorecard | R/L | `degraded:true` + placeholders if no tax-lot data |
+| `strategy_review_queue.json` | latest | approval layer | R/L | empty |
+| `strategy_decisions.jsonl` | policy | approval layer | A | skip |
+| `strategy_outcomes.jsonl` | policy | strategy_comparator | A | skip |
 
 All carry `observe_only: true`. JSONL retention: rotate/compact yearly (Open Q 23.9).
 
@@ -539,6 +561,12 @@ registry contract, GUI loader tolerance). Required tests:
 - Daily pipeline: each new skill enabled / disabled / failing → non-fatal, default-off.
 - Artifact-registry contract test for each new artifact.
 - Event store: append-only, envelope schema, non-fatal on write error.
+- Strategy engine (§24): strategy profile schema valid; objective/scoring deterministic;
+  strategy writes are sandbox-only (never `decision_plan.json`); **no strategy can place
+  trades or mutate real holdings** (blocked-action + no-write asserts on the six blocked
+  actions); tax strategy degrades cleanly with no tax-lot data; aggressive/boom profiles
+  honor hard leverage/concentration/exposure caps; strategy approval is artifact-based +
+  append-only; AI cannot auto-select a strategy.
 
 ---
 
@@ -551,7 +579,11 @@ Update: `README.md` (lanes + new skills), `ARCHITECTURE_MAP.md` (four lanes),
 `CONFIDENCE_CALIBRATION.md` (event spine inputs), dashboard docs, Schwab docs (link
 existing), and new docs: `docs/UNIVERSE_SCANNER.md`, `docs/OPPORTUNITY_RADAR.md`,
 `docs/SYSTEM_IMPROVEMENT_SKILL.md`, `docs/SHADOW_PORTFOLIOS.md`,
-`docs/prompts/*`. Update `.agent/project_state.yaml` roadmap entries per phase.
+`docs/PORTFOLIO_STRATEGIES.md` (the 8 profiles, objectives, comparison metrics, and
+safety boundaries — §24), `docs/prompts/*`. Update `.agent/project_state.yaml` roadmap
+entries per phase. The strategy doc must state that strategy profiles are advisory-only,
+never auto-trade or auto-replace official policy, and that profit is framed
+risk-adjusted + after-tax.
 Every doc must restate: advisory-only, broker read-only, official vs sandbox, no
 auto-trading, no broker writes, how to run/review/approve/reject/defer.
 
@@ -598,6 +630,29 @@ credentials. "Approval?" = needs explicit user go-ahead before merge to main.
 - **Phase 11 — Pattern-recognition event store.** `event_store.py` + 4 JSONL streams +
   wiring into calibration/pattern_learning. Tests: append-only, envelope, non-fatal.
   Creds: no. Approval: no.
+- **Phase 11A — Multi-Strategy Portfolio Objective Engine (§24).** Depends on Phases
+  5–11 (universe/opportunity/shadow/event-store) and §6 holdings_resolver.
+  *Goal:* compare strategy profiles against objectives, sandbox-first, advisory-only.
+  *Files:* new `portfolio_automation/strategy/{profiles,objective_functions,
+  strategy_comparator,tax_scorecard}.py`; gui_v2 Strategy Lab loader/template; reuses
+  `shadow_tracker`, `opportunity_scoring`, `holdings_resolver`, regime classifier,
+  `tax_harvest_advisor`, allocation layer.
+  *Artifacts:* the 8 strategy artifacts (§18). *Tasks:* (1) audit existing allocation/
+  policy/recommendation/construction logic + where target-allocation assumptions live;
+  (2) define `StrategyProfile` schema; (3) define objective functions; (4) sandbox-only
+  comparison artifacts; (5) scoring + scorecards; (6) tax-aware fields + no-tax-lot
+  placeholders; (7) boom-bucket constraints; (8) Strategy Lab dashboard; (9) strategy
+  approval queue.
+  *Tests:* strategies cannot place trades or mutate holdings (blocked-action +
+  no-write asserts); schema; deterministic scoring; sandbox-only writes; tax strategy
+  degrades without tax-lot data; aggressive/boom capped by hard constraints; approval
+  artifact-based + append-only.
+  *Acceptance:* multiple strategies represented without changing official behavior;
+  comparison runs sandbox-first; current portfolio comparable to each; no strategy
+  executes trades or alters broker holdings.
+  *Rollback:* remove `strategy/` package + Strategy Lab loader + flag; no existing
+  behavior touched. *Creds:* no (broker optional; config fallback). *Approval:* **yes**
+  (new objective/comparison layer adjacent to allocation assumptions).
 - **Phase 12 — Dashboard UI / mobile workflow.** Render all new cards + mobile review
   mode. Tests: render + mobile responsive markers. Creds: no. Approval: no.
 - **Phase 13 — Claude Code launch/copy center.** GUI surface for prompts (copy +
@@ -622,7 +677,10 @@ credentials. "Approval?" = needs explicit user go-ahead before merge to main.
 6. **Broker read-only polish then broker-aware manager** (Phases 9–10) — read-only and
    stubbed until credentials exist; official-lane wiring (Phase 10) only **after**
    contracts + tests exist and behind a default-off flag.
-7. **UI/mobile + launch center + docs + final review** (Phases 12–15) last.
+7. **Multi-strategy engine** (Phase 11A) — after sandbox/opportunity/shadow/event-store
+   and `holdings_resolver` exist, since it consumes their evidence; sandbox-only and
+   advisory, so no official-lane risk until a profile is explicitly approved.
+8. **UI/mobile + launch center + docs + final review** (Phases 12–15) last.
 
 Official decision-engine wiring is the **last** functional step and is gated +
 reversible.
@@ -646,10 +704,134 @@ reversible.
 9. Retention/compaction policy + latest-vs-append for the new JSONL event streams?
 10. Should `broker_aware_portfolio` ever feed `decision_plan` inputs, or remain a
     read-only side-panel only (recommended: side-panel until explicitly approved)?
+11. Strategy engine (§24): how is `after_tax_return_estimate` computed when only
+    config holdings (no broker tax-lot/cost-basis) are available — coarse heuristic vs
+    omit-and-degrade (recommended: degrade with explicit `degraded:true`)?
+12. Should a user-`mark_as_preferred_profile` ever feed advisory configuration into the
+    official engine, and if so via what exact field (recommended: defer; advisory
+    side-panel only until a separately-approved, default-off wiring step)?
+13. `strategy_comparison.json` is named by both §10 (shadow portfolios) and §24 — one
+    writer/schema or two distinct files? (recommended: one shared sandbox artifact with
+    a `produced_by` field).
 
 ---
 
-## 24. Final output (summary)
+## 24. Multi-Strategy Portfolio Objective Engine — `PARTIAL` (added workstream)
+
+A multi-strategy planning layer that evaluates and **compares** portfolio strategies
+against different objectives, to help the user maximize **risk-adjusted, after-tax**
+long-run returns. It produces comparisons, scenario/sandbox analysis, scorecards, and
+review items **only**. It never trades, rebalances, moves money, writes to the broker,
+or modifies real holdings, and it never auto-replaces the official policy.
+
+Grade `PARTIAL` — reusable foundations already exist: `config.json growth_mode`
+(aggressive/accumulation knobs, `concentration_cap`, `leverage_cap`), the
+allocation/allocation-preview layer, `tax_harvest_advisor`, the drawdown/volatility
+**regime classifier**, the §10 shadow portfolios + `strategy_comparison.json`, and the
+§7–8 opportunity radar + boom bucket. **Missing:** a first-class *strategy profile*
+abstraction, multi-strategy objective scoring + scorecards, the Strategy Lab dashboard,
+and a strategy review/approval queue.
+
+### 24.1 Why compare multiple strategies
+There is no single "best" portfolio — only the best *fit for an objective and a
+regime*. Maximizing profit naively maximizes ruin risk; this engine forces the
+tradeoff to be explicit by scoring every strategy on the **upside ↔ survivability**
+spectrum, after tax and after drawdown. The user sees, side by side, what each strategy
+would change, what it would keep, and what it would cost in taxes/turnover/risk — then
+chooses. Profit maximization is always framed as **risk-adjusted and after-tax**, never
+raw upside.
+
+### 24.2 The eight strategy profiles
+
+| # | Profile | Objective | Defining characteristics | Hard caps / guardrails |
+|---|---|---|---|---|
+| 1 | **Aggressive Growth** | Max upside / capital appreciation | Higher tech/growth tilt; limited leveraged-ETF use; more momentum/breakout sensitivity; active boom bucket; higher drawdown tolerance | Strict leverage, concentration, drawdown-regime caps |
+| 2 | **Short-Term Tactical** | Capture short-term opportunities | Price/volume + news catalysts + sector rotation + vol regime; 1/3/7/30d windows; small sizing; **exit criteria required before entry** | Sandbox-heavy before any review; small per-idea size |
+| 3 | **Long-Term Compounding** | Max long-term after-tax compounding | Broad-market ETFs + quality growth; new cash before selling; low turnover; rebalancing bands; 5/10/20/30y horizon | Minimize taxable churn; behavioral guardrails |
+| 4 | **Tax-Aware** | Max after-tax return | Avoid unnecessary taxable sales; new-cash rebalancing; track unrealized gain/loss (if broker data); ST vs LT gain flags; TLH candidates; wash-sale **informational**; separate taxable/Roth/traditional/HSA if data | Degrades gracefully if no cost-basis/tax-lot data |
+| 5 | **Defensive / Capital Preservation** | Reduce drawdown, protect capital | Lower equity in stress regimes; higher cash/treasury/defensive; reduce leverage first; tighter concentration; quality/low-vol/gold-treasury hedges | Stricter risk-off triggers |
+| 6 | **Income / Dividend** | Yield with acceptable growth | Dividend ETFs / quality dividend growth / cash yield / bonds; track yield, dividend growth, payout quality, sector concentration | Avoid unsafe-yield chasing; compare vs growth opportunity cost |
+| 7 | **Balanced Core-Satellite** | Stable core + tactical satellite | Long-term diversified core + smaller opportunity/boom satellite | Strict satellite/boom max allocation |
+| 8 | **Boom Bucket** | Asymmetric upside from high-risk ideas | Speculative ideas tracked separately; uses universe scanner + opportunity radar; sandbox tracking required; private/IPO are watch-only unless investability confirmed | Hard cap per idea **and** total speculative exposure; high boom score alone is never sufficient (needs investability + evidence + risk controls) |
+
+### 24.3 Strategy comparison metrics
+For each strategy, compute or propose (each explainable in the GUI):
+`expected_objective_fit, expected_risk_level, expected_volatility, max_drawdown_estimate
+(or historical-replay drawdown), concentration_risk, leverage_exposure, cash_drag,
+turnover, tax_efficiency, after_tax_return_estimate (where data permits),
+opportunity_capture_score, diversification_score, liquidity_score,
+implementation_complexity, behavioral_difficulty, confidence_score, data_quality_score,
+final_strategy_rank`.
+
+### 24.4 Proposed modules (new)
+- `portfolio_automation/strategy/profiles.py` — `StrategyProfile` schema + the 8 seed
+  profiles (objective, tilts, caps, eligible signal/opportunity types, horizon).
+- `portfolio_automation/strategy/objective_functions.py` — deterministic per-strategy
+  objective scoring (pure functions; no I/O).
+- `portfolio_automation/strategy/strategy_comparator.py` — runs profiles against the
+  actual portfolio (via §6 `holdings_resolver`) using sandbox/backtest/shadow + historical
+  outcome evidence → scorecards. **Prefers evidence over AI narrative.**
+- `portfolio_automation/strategy/tax_scorecard.py` — tax-aware fields; emits explicit
+  `degraded: true` + placeholders when cost-basis/tax-lot data is unavailable.
+- Reuses: §10 `shadow_tracker`, §8 `opportunity_scoring`, §6 `holdings_resolver`, the
+  regime classifier, `tax_harvest_advisor`, and the allocation/preview layer.
+
+### 24.5 Artifacts (see §18 for the registry rows)
+`outputs/sandbox/{strategy_profiles,strategy_comparison,strategy_shadow_results,
+strategy_risk_scorecard,strategy_tax_scorecard}.json`,
+`outputs/latest/strategy_review_queue.json`,
+`outputs/policy/{strategy_decisions,strategy_outcomes}.jsonl`. All `observe_only: true`;
+note `strategy_comparison.json` (sandbox) is shared with §10 — reconcile to one writer.
+
+### 24.6 Dashboard — Strategy Lab / Portfolio Strategy Center
+A new section of the operational dashboard (gui_v2). Sections: Strategy Profiles;
+Strategy Comparison; Current Portfolio vs Strategy Targets; Aggressive vs Long-Term vs
+Tax-Aware; Boom Bucket Exposure; Tax Impact Review; Drawdown/Risk Review; Strategy
+Approval Queue; Strategy Outcome History. New card category: `strategy_profile_card`.
+Each strategy card shows: `objective, current_suggested_allocation_direction,
+expected_benefit, key_risk, tax_warning?, what_would_change, what_would_stay_the_same,
+required_user_approval, blocked_actions, observe_only`.
+
+### 24.7 Approval & blocked actions
+- **Approve actions:** `approve_strategy_for_review, reject_strategy, defer_strategy,
+  request_deeper_strategy_analysis, run_strategy_in_sandbox, compare_against_current_policy,
+  mark_as_preferred_profile`.
+- **Blocked actions (asserted by test, never rendered as controls):** `place_trade,
+  submit_order, move_money, broker_write_action, auto_rebalance, modify_real_holdings`.
+
+### 24.8 Rules
+- No strategy can automatically trade or automatically replace the official policy.
+- An approved strategy becomes only a **reviewed advisory profile**.
+- The official decision engine may **reference** an approved profile (e.g., as target-
+  allocation band hints / advisory configuration) **only after explicit user approval**,
+  and that wiring is itself a separately-approved, default-off, reversible step.
+- Comparison prefers sandbox/backtest evidence over AI narrative; AI may summarize
+  tradeoffs but **cannot choose** the strategy.
+- Profit is framed risk-adjusted + after-tax; the upside↔survivability tradeoff is
+  always shown.
+
+### 24.9 How profiles interact with the decision engine
+Profiles never write `decision_plan.json`. The user may `mark_as_preferred_profile`;
+only after explicit approval may the engine read an approved profile as advisory
+configuration. AI summarizes; the human selects.
+
+### 24.10 How profiles interact with the sandbox
+All generation/comparison/scoring runs **sandbox-first** (research lane,
+`run_mode_governance` enforced), reusing shadow portfolios (§10) and opportunity scoring
+(§8). Backtest/shadow/historical-replay evidence outranks narrative.
+
+### 24.11 How the user approves a preferred profile
+Via the Strategy Approval Queue (artifact-based, append-only to
+`strategy_decisions.jsonl`). Approving/preferring a profile executes nothing.
+
+### 24.12 How outcomes are measured over time
+`strategy_outcomes.jsonl` + the §11 event spine track each profile's realized-vs-expected
+metrics over 1/3/7/30d and longer windows, feeding confidence calibration of the
+strategy scorecards themselves (so the engine learns which strategies fit which regimes).
+
+---
+
+## 25. Final output (summary)
 
 - **Summary:** evolve the repo into a read-only, broker-aware, sandbox-driven,
   self-improving portfolio intelligence platform across 4 lanes; ~50% of the
@@ -663,10 +845,15 @@ reversible.
   `theme_discovery/*`, `scraped_intel/*`, `operator_control/*`, `gui_v2/*`,
   `config.json`, `config/signal_registry.yaml`, `artifact_registry.yaml`, `tests/*`
   (~208), `outputs/*` namespaces.
-- **Current-state findings:** Sections 2 + 5–16 (per-workstream EXISTS/PARTIAL/MISSING).
-- **Target architecture:** Section 3 (four lanes).
-- **Proposed artifacts:** Section 18 (25 new artifacts, namespaced + degraded behavior).
-- **Phase roadmap:** Section 21 (Phases 0–15).
+- **Current-state findings:** Sections 2 + 5–16 + 24 (per-workstream EXISTS/PARTIAL/MISSING).
+- **Target architecture:** Section 3 (five lanes: official, research/sandbox,
+  operational improvement, learning loop, strategy).
+- **Proposed artifacts:** Section 18 (33 new artifacts incl. the 8 strategy artifacts,
+  namespaced + degraded behavior).
+- **Phase roadmap:** Section 21 (Phases 0–15, incl. Phase 11A Multi-Strategy Engine).
+- **Multi-Strategy Portfolio Objective Engine:** Section 24 (8 profiles, comparison
+  metrics, Strategy Lab dashboard, approval/blocked actions, decision-engine + sandbox
+  interaction, outcome measurement).
 - **Test plan:** Section 19. **Docs plan:** Section 20. **Safety constraints:** Section 4.
 - **Open questions:** Section 23.
 - **Next recommended prompt to begin implementation (Phase 1):**
