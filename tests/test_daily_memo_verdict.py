@@ -227,10 +227,10 @@ class TestBuildVerdict(unittest.TestCase):
             # Must not be framed as validated off the stale baseline.
             self.assertNotIn("Retune validated", verdict)
             self.assertIn("NOT validated", verdict)
-            # Leads with the prior-gauge delta and names the prior gauge.
+            # Leads with the prior-gauge delta using human label (H3: no raw hash).
             self.assertIn("-15.9pp", verdict)
             self.assertIn("prior gauge", verdict)
-            self.assertIn("f60e0b9d", verdict)
+            self.assertNotIn("f60e0b9d", verdict)  # H3: no raw hash
             # Stale-baseline delta is present but secondary.
             self.assertIn("+12.4pp", verdict)
             self.assertIn("n=132", verdict)
@@ -273,7 +273,7 @@ class TestBuildVerdict(unittest.TestCase):
             )
             self.assertIn("Retune validated", verdict)
             self.assertIn("prior gauge", verdict)
-            self.assertIn("bbbb2222", verdict)
+            self.assertNotIn("bbbb2222", verdict)  # H3: no raw hash
 
     def test_retune_trap_detected_when_stale_delta_below_10pp(self):
         # Production 2026-06-05 scenario and the core regression this fix
@@ -319,7 +319,7 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("NOT validated", verdict)
             self.assertIn("-18.9pp", verdict)
             self.assertIn("prior gauge", verdict)
-            self.assertIn("f60e0b9d", verdict)
+            self.assertNotIn("f60e0b9d", verdict)  # H3: no raw hash
             # Stale-baseline delta is present but secondary (parenthetical).
             self.assertIn("+9.4pp", verdict)
 
@@ -361,9 +361,10 @@ class TestBuildVerdict(unittest.TestCase):
             line = retune[0]
             self.assertIn("NOT validated", line)
             self.assertIn("prior gauge", line)
-            self.assertIn("f60e0b9d", line)
-            self.assertIn("-18.9pp", line)
-            # The pre→current numbers remain available but no longer lead.
+            self.assertNotIn("f60e0b9d", line)  # H3: no raw hash
+            # H2: Advisor Stack shows only the stale-baseline breakdown
+            self.assertNotIn("-18.9pp", line)
+            # The current hit-rate vs stale baseline numbers must appear
             self.assertIn("50.0%", line)
 
     def test_advisor_stack_retune_line_first_gauge_keeps_pre_current(self):
@@ -430,7 +431,7 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("validated", line)
             self.assertNotIn("NOT validated", line)
             self.assertIn("prior gauge", line)
-            self.assertIn("bbbb2222", line)
+            self.assertNotIn("bbbb2222", line)  # H3: no raw hash
 
     def test_risk_delta_breach_promotes_to_structural_risk(self):
         with tempfile.TemporaryDirectory() as td:
@@ -446,6 +447,325 @@ class TestBuildVerdict(unittest.TestCase):
                 root=root,
             )
             self.assertIn("Structural risk", verdict)
+
+    # ── H1: mean-return unit glyph ───────────────────────────────────────────
+
+    def test_h1_verdict_mean_return_has_percent_glyph(self):
+        """mean_return_1d renders as '…mean-return +1.50%' not '…mean-return +1.50'.
+        Uses a validated case (positive prior_delta) where mean-return appears
+        in the verdict's stale-baseline parenthetical."""
+        import json, re
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "aaaa1111",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "aaaa1111": {
+                            "resolved_1d": 60, "hit_rate_1d": 0.72,
+                            "mean_return_1d": 1.50,
+                            "last_signal_time": "2026-06-04T09:00:00",
+                        },
+                        "bbbb2222": {
+                            "resolved_1d": 200, "hit_rate_1d": 0.70,
+                            "last_signal_time": "2026-05-29T09:00:00",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.406,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            # H1: mean-return must appear with '%' glyph
+            self.assertIn("mean-return", verdict)
+            self.assertIn("%", verdict.split("mean-return")[1][:20])
+            # must NOT render as bare number without glyph (e.g. "mean-return +1.50)")
+            bare_pattern = re.compile(r"mean-return [+-]?\d+\.\d+[^%\w]")
+            self.assertIsNone(bare_pattern.search(verdict), f"bare mean-return found: {verdict!r}")
+
+    def test_h1_advisor_stack_mean_return_has_percent_glyph(self):
+        """_advisor_stack_items retune line includes 'mean-return …%' not bare."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "aaaa1111",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "aaaa1111": {
+                            "resolved_1d": 60, "hit_rate_1d": 0.72,
+                            "mean_return_1d": 1.50,
+                            "last_signal_time": "2026-06-04T09:00:00",
+                        },
+                        "bbbb2222": {
+                            "resolved_1d": 200, "hit_rate_1d": 0.70,
+                            "last_signal_time": "2026-05-29T09:00:00",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.406,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            items = _advisor_stack_items(root)
+            retune = [i for i in items if "Retune" in i]
+            self.assertEqual(len(retune), 1)
+            line = retune[0]
+            # H1: In Advisor Stack the mean-return clause (if present) must have '%'
+            if "mean-return" in line:
+                import re
+                bare_pattern = re.compile(r"mean-return [+-]?\d+\.\d+[^%\w]")
+                self.assertIsNone(bare_pattern.search(line), f"bare mean-return in advisor: {line!r}")
+
+    # ── H2: de-duplicate the retune fact ────────────────────────────────────
+
+    def test_h2_advisor_stack_does_not_repeat_prior_delta(self):
+        """Advisor Stack retune line must NOT contain the prior-gauge pp delta;
+        that belongs in the Verdict only. It must show the stale-baseline breakdown."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "d95e3096443925b0",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "d95e3096443925b0": {
+                            "resolved_1d": 154, "hit_rate_1d": 0.50,
+                            "mean_return_1d": -0.4707,
+                            "last_signal_time": "2026-06-05T09:02:36",
+                        },
+                        "f60e0b9d51bec808": {
+                            "resolved_1d": 264, "hit_rate_1d": 0.6894,
+                            "mean_return_1d": 1.879,
+                            "last_signal_time": "2026-05-29T09:01:45",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.4062,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            items = _advisor_stack_items(root)
+            retune = [i for i in items if "Retune" in i]
+            self.assertEqual(len(retune), 1)
+            line = retune[0]
+            # H2: Advisor Stack must NOT repeat the prior_delta (e.g. "-18.9pp")
+            self.assertNotIn("-18.9pp", line)
+            # H2: it MUST show the stale-baseline breakdown
+            self.assertIn("stale baseline", line)
+            # validated/NOT-validated word must still be present
+            self.assertIn("NOT validated", line)
+
+    def test_h2_advisor_stack_does_not_repeat_mean_return_trap(self):
+        """In trap case the mean_return clause must not appear in the Advisor Stack line."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "d95e3096443925b0",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "d95e3096443925b0": {
+                            "resolved_1d": 154, "hit_rate_1d": 0.50,
+                            "mean_return_1d": -0.4707,
+                            "last_signal_time": "2026-06-05T09:02:36",
+                        },
+                        "f60e0b9d51bec808": {
+                            "resolved_1d": 264, "hit_rate_1d": 0.6894,
+                            "mean_return_1d": 1.879,
+                            "last_signal_time": "2026-05-29T09:01:45",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.4062,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            items = _advisor_stack_items(root)
+            retune = [i for i in items if "Retune" in i]
+            line = retune[0]
+            # H2: mean_return should NOT appear in the advisor stack retune line
+            self.assertNotIn("mean-return", line)
+
+    # ── H3: no raw fingerprint hash in prose ─────────────────────────────────
+
+    def test_h3_verdict_no_raw_hash(self):
+        """_build_verdict must not emit a raw hex fingerprint hash."""
+        import json, re
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "d95e3096443925b0",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "d95e3096443925b0": {
+                            "resolved_1d": 154, "hit_rate_1d": 0.50,
+                            "mean_return_1d": -0.4707,
+                            "last_signal_time": "2026-06-05T09:02:36",
+                        },
+                        "f60e0b9d51bec808": {
+                            "resolved_1d": 264, "hit_rate_1d": 0.6894,
+                            "last_signal_time": "2026-05-29T09:01:45",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.4062,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            # H3: no 8-char hex hash in the verdict
+            self.assertNotIn("f60e0b9d", verdict)
+            self.assertNotIn("d95e3096", verdict)
+            # Must still clearly reference the prior gauge
+            self.assertIn("prior gauge", verdict)
+
+    def test_h3_advisor_stack_no_raw_hash(self):
+        """_advisor_stack_items retune line must not emit a raw hex fingerprint hash."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "d95e3096443925b0",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "d95e3096443925b0": {
+                            "resolved_1d": 154, "hit_rate_1d": 0.50,
+                            "mean_return_1d": -0.4707,
+                            "last_signal_time": "2026-06-05T09:02:36",
+                        },
+                        "f60e0b9d51bec808": {
+                            "resolved_1d": 264, "hit_rate_1d": 0.6894,
+                            "last_signal_time": "2026-05-29T09:01:45",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.4062,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            items = _advisor_stack_items(root)
+            retune = [i for i in items if "Retune" in i]
+            self.assertEqual(len(retune), 1)
+            line = retune[0]
+            self.assertNotIn("f60e0b9d", line)
+            self.assertNotIn("d95e3096", line)
+            self.assertIn("prior gauge", line)
+
+    # ── M1: directional clarity ──────────────────────────────────────────────
+
+    def test_m1_verdict_trap_says_below(self):
+        """When prior_delta < 0 (trap), verdict must say BELOW, not just the raw delta."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "d95e3096443925b0",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "d95e3096443925b0": {
+                            "resolved_1d": 154, "hit_rate_1d": 0.50,
+                            "mean_return_1d": -0.4707,
+                            "last_signal_time": "2026-06-05T09:02:36",
+                        },
+                        "f60e0b9d51bec808": {
+                            "resolved_1d": 264, "hit_rate_1d": 0.6894,
+                            "last_signal_time": "2026-05-29T09:01:45",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.4062,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            # M1: the negative delta must be labelled "BELOW"
+            self.assertIn("BELOW", verdict)
+            self.assertIn("-18.9pp", verdict)
+            self.assertIn("prior gauge", verdict)
+            # Stale-baseline delta is present as secondary context
+            self.assertIn("+9.4pp", verdict)
+
+    def test_m1_verdict_positive_delta_no_below(self):
+        """When prior_delta > 0 (validated), verdict does NOT say BELOW."""
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+                "current_fingerprint": "aaaa1111",
+                "outcome_attribution": {
+                    "available": True,
+                    "pre_tracker_label": "pre_tracker_unknown",
+                    "by_fingerprint": {
+                        "aaaa1111": {
+                            "resolved_1d": 60, "hit_rate_1d": 0.72,
+                            "mean_return_1d": 1.50,
+                            "last_signal_time": "2026-06-04T09:00:00",
+                        },
+                        "bbbb2222": {
+                            "resolved_1d": 200, "hit_rate_1d": 0.70,
+                            "last_signal_time": "2026-05-29T09:00:00",
+                        },
+                        "pre_tracker_unknown": {
+                            "resolved_1d": 352, "hit_rate_1d": 0.406,
+                            "last_signal_time": "2026-05-19T01:22:36",
+                        },
+                    },
+                },
+            }))
+            verdict = _build_verdict(
+                self._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            self.assertNotIn("BELOW", verdict)
+            self.assertIn("Retune validated", verdict)
 
 
 if __name__ == "__main__":

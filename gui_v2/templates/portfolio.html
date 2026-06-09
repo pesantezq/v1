@@ -50,6 +50,13 @@
     {% if holdings %}
     <section>
       <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Holdings</h2>
+      {% if holdings | length == 1 and holdings[0].get("_no_dollar_data") %}
+        {# D-H1: snapshot has per-symbol conviction/allocation data but no live price/value/drift fields #}
+        {% with heading="Snapshot has no per-position dollar/drift data",
+                body="The current portfolio_snapshot.json contains allocation scores but no live price, value, or drift fields. Re-run the daily pipeline with a live broker connection to populate per-position dollar data." %}
+          {% include "components/empty_state.html" %}
+        {% endwith %}
+      {% else %}
       <div class="bg-zinc-900 rounded-lg border border-zinc-800 overflow-x-auto">
         <table class="w-full text-xs font-mono">
           <thead class="text-zinc-500">
@@ -85,10 +92,11 @@
           </tbody>
         </table>
       </div>
+      {% endif %}
     </section>
     {% endif %}
 
-    <!-- Drift warnings -->
+    <!-- Drift warnings (D-H1: suppressed when snapshot has no per-position dollar/drift data) -->
     {% if allocation.drift_warnings %}
     <section>
       <h2 class="text-xs uppercase tracking-wide text-zinc-400 mb-3">Drift warnings (|drift| ≥ 10%)</h2>
@@ -199,14 +207,25 @@
           {% if rows %}
           <details class="bg-zinc-900 rounded-lg border border-zinc-800">
             <summary class="cursor-pointer px-4 py-3 text-sm text-zinc-300">{{ title }} ({{ rows | length }})</summary>
+            {# D-H2/D-M2: render r.name (fallback r.key) as label; curated subset with
+               percent-aware formatting matching the metric cards above. #}
             <ul class="border-t border-zinc-800 px-4 py-2 text-xs font-mono space-y-1">
               {% for r in rows %}
               <li class="flex items-baseline justify-between gap-3">
-                <span class="text-zinc-300">{{ r.key or "" }}</span>
-                <span class="text-zinc-500">
-                  {%- for fk, fv in r.items() if fk != "key" -%}
-                    {{ fk }}={{ fv }}{{ "  " if not loop.last else "" }}
-                  {%- endfor -%}
+                <span class="text-zinc-300">{{ r.name or r.key or "" }}</span>
+                <span class="text-zinc-500 space-x-3">
+                  {%- if r.win_rate is defined and r.win_rate is not none -%}
+                    <span>win {{ "%.1f%%"|format((r.win_rate or 0)*100) }}</span>
+                  {%- endif -%}
+                  {%- if r.avg_gain is defined and r.avg_gain is not none -%}
+                    <span>avg gain {{ "%+.2f%%"|format((r.avg_gain or 0)*100) }}</span>
+                  {%- endif -%}
+                  {%- if r.risk_reward is defined and r.risk_reward is not none -%}
+                    <span>RR {{ "%.2f"|format(r.risk_reward or 0) }}</span>
+                  {%- endif -%}
+                  {%- if r.total_entries is defined and r.total_entries is not none -%}
+                    <span>n={{ r.total_entries }}</span>
+                  {%- endif -%}
                 </span>
               </li>
               {% endfor %}

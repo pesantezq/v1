@@ -335,6 +335,46 @@ GUI/memo/system-summary wording change.
 
 ---
 
+## Operator-facing readability pass — memo + GUI dashboard
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+output_contract
+
+### Files / Functions
+
+- `watchlist_scanner/daily_memo.py` — `_build_verdict`, `_advisor_stack_items`, `_portfolio_pulse_items`, watch-list renderer
+- `gui_v2/data/portfolio.py` — `_holdings_from_snapshot`, `_allocation_summary`
+- `gui_v2/templates/portfolio.html`, `gui_v2/templates/risk_impact.html`, `gui_v2/templates/today.html`
+- `gui_v2/app.py` — new `status_label` Jinja filter
+- `gui_v2/templates/components/empty_state.html`
+
+### Decision
+
+Operator-facing READABILITY pass (no semantic/scoring/contract changes). Memo: mean-return now shows %, retune fact de-duplicated across Verdict/Advisor Stack, raw fingerprint hashes removed from prose, negative prior-gauge delta labeled "BELOW", sector cap framed as "soft target", "winning tag(s)" doubling fixed, md/txt watch-list lengths aligned to 5. GUI: fixed all-blank Holdings table (honest empty-state instead of blank cells/$0 totals), fixed profit-attribution blank-label + raw-fraction dump (curated 4 fields, percent-formatted), humanized raw status enums via `status_label` filter, surfaced FMP pct_used %, disambiguated weight-vs-headroom labels.
+
+### Why
+
+The memo and GUI surfaced ambiguous/duplicated/blank/raw values that were hard to read or easy to misread (audit-driven).
+
+### Invariants Preserved
+
+NO change to scoring/decision/allocation/score semantics, NO change to artifact schemas or producer outputs, NO new features/panels/sections. The retune "NOT validated" trap LOGIC is unchanged (only wording). Holdings fix is the minimal empty-state (no column remap).
+
+### Downstream Impact
+
+daily_memo.md/.txt rendered text; gui_v2 /portfolio, /risk-impact, / (today) display. Tests: test_daily_memo*, test_gui_v2_*. No artifact-health severity change (no missing/defaulting/optional changes).
+
+### Artifact Health Severity
+
+None — GUI/memo WORDING changed; no artifact severity, no missing_artifact_count change. Producer steps unaffected.
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date

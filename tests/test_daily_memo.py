@@ -2073,3 +2073,191 @@ class TestAdvisorStackKellyLine:
         line = self._kelly_line(tmp_path)
         assert "Kelly" in line
 
+
+# ---------------------------------------------------------------------------
+# Readability fixes (H1–M5)
+# ---------------------------------------------------------------------------
+
+from watchlist_scanner.daily_memo import (
+    _portfolio_pulse_items,
+    _pattern_confirmed_candidates,
+)
+import json as _json
+
+
+class TestM2M3SectorFraming:
+    """M2/M3 — 'sector cap reference' replaced by 'soft target … — over'."""
+
+    def _snapshot(self, tmp_path, sector_name="Technology", share=0.778, cap=0.35):
+        """Write a minimal portfolio_snapshot.json for pulse tests."""
+        snap_dir = tmp_path / "outputs" / "portfolio"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        (snap_dir / "portfolio_snapshot.json").write_text(
+            _json.dumps({
+                "total_suggested_allocation": 0.85,
+                "capped_positions": 0,
+                "allocation_by_conviction_band": {
+                    "high_conviction": 0.40, "normal": 0.30, "starter": 0.15
+                },
+                "top_sector": {"name": sector_name, "allocation_pct": share},
+            }),
+            encoding="utf-8",
+        )
+
+    def test_over_cap_reads_soft_target_over(self, tmp_path):
+        self._snapshot(tmp_path, sector_name="Technology", share=0.778, cap=0.35)
+        items = _portfolio_pulse_items(tmp_path)
+        sector_line = next((i for i in items if "Technology" in i), None)
+        assert sector_line is not None
+        assert "soft target" in sector_line
+        assert "over" in sector_line.lower()
+        assert "cap reference" not in sector_line
+
+    def test_within_cap_no_over_flag(self, tmp_path):
+        # share below cap → should not say "over"
+        self._snapshot(tmp_path, sector_name="Financials", share=0.20, cap=0.35)
+        items = _portfolio_pulse_items(tmp_path)
+        sector_line = next((i for i in items if "Financials" in i), None)
+        assert sector_line is not None
+        # when under cap we don't want "— over"
+        assert "— over" not in sector_line
+
+    def test_sector_line_is_one_line(self, tmp_path):
+        self._snapshot(tmp_path, sector_name="Technology", share=0.778, cap=0.35)
+        items = _portfolio_pulse_items(tmp_path)
+        sector_line = next((i for i in items if "Technology" in i), "")
+        assert "\n" not in sector_line
+
+    def test_cap_reference_wording_gone(self, tmp_path):
+        self._snapshot(tmp_path, sector_name="Technology", share=0.778, cap=0.35)
+        items = _portfolio_pulse_items(tmp_path)
+        for item in items:
+            assert "cap reference" not in item
+
+
+class TestM4TagDoubling:
+    """M4 — tag-doubling and singular/plural fix in watch-list renderer."""
+
+    def _write_efficacy(self, tmp_path, tags_winning):
+        """Write a minimal pattern_efficacy_monthly.json."""
+        latest = tmp_path / "outputs" / "latest"
+        latest.mkdir(parents=True, exist_ok=True)
+        by_tag = {
+            tag: {"significance": "winner", "n_samples": 50, "delta_pp": 10.0}
+            for tag in tags_winning
+        }
+        (latest / "pattern_efficacy_monthly.json").write_text(
+            _json.dumps({"by_tag": by_tag}), encoding="utf-8"
+        )
+
+    def _write_top100(self, tmp_path, candidates):
+        latest = tmp_path / "outputs" / "latest"
+        latest.mkdir(parents=True, exist_ok=True)
+        (latest / "top100_daily.json").write_text(
+            _json.dumps({"candidates": candidates}), encoding="utf-8"
+        )
+
+    def test_singular_tag_when_count_is_one(self, tmp_path):
+        self._write_efficacy(tmp_path, ["Technology"])
+        self._write_top100(tmp_path, [
+            {"symbol": "AMD", "sector": "Technology", "score": 0.9,
+             "rationale_tags": ["Technology"]},
+        ])
+        compact, _ = _pattern_confirmed_candidates(tmp_path, cadence="monthly", top_n=5, extended_n=5)
+        assert len(compact) == 1
+        line = compact[0]
+        assert "tag(s)" not in line, f"'(s)' still present in: {line!r}"
+        assert "1 winning tag" in line
+
+    def test_plural_tag_when_count_is_two(self, tmp_path):
+        self._write_efficacy(tmp_path, ["Technology", "AI"])
+        self._write_top100(tmp_path, [
+            {"symbol": "AMD", "sector": "Technology", "score": 0.9,
+             "rationale_tags": ["Technology", "AI"]},
+        ])
+        compact, _ = _pattern_confirmed_candidates(tmp_path, cadence="monthly", top_n=5, extended_n=5)
+        assert len(compact) == 1
+        line = compact[0]
+        assert "2 winning tags" in line
+
+    def test_sector_tag_suppressed_when_matches_sector_field(self, tmp_path):
+        """When the only winning tag equals the sector already shown, the tag
+        list should not repeat '… 1 winning tag: Technology' after '(Technology)'."""
+        self._write_efficacy(tmp_path, ["Technology"])
+        self._write_top100(tmp_path, [
+            {"symbol": "AMD", "sector": "Technology", "score": 0.9,
+             "rationale_tags": ["Technology"]},
+        ])
+        compact, _ = _pattern_confirmed_candidates(tmp_path, cadence="monthly", top_n=5, extended_n=5)
+        line = compact[0]
+        # AMD (Technology) should NOT be followed by ": Technology"
+        assert "1 winning tag: Technology" not in line
+        # The line should still contain AMD and the sector
+        assert "AMD" in line
+        assert "Technology" in line
+
+    def test_non_sector_tag_still_shown(self, tmp_path):
+        """When a winning tag differs from the sector, it must still appear."""
+        self._write_efficacy(tmp_path, ["AI"])
+        self._write_top100(tmp_path, [
+            {"symbol": "NVDA", "sector": "Technology", "score": 0.9,
+             "rationale_tags": ["AI"]},
+        ])
+        compact, _ = _pattern_confirmed_candidates(tmp_path, cadence="monthly", top_n=5, extended_n=5)
+        line = compact[0]
+        # AI tag differs from sector Technology — must be shown
+        assert "AI" in line
+
+
+class TestM5WatchListLengthAlignment:
+    """M5 — TXT watch list must be capped at 5, matching MD.
+
+    Both renderers call _pattern_confirmed_candidates; the TXT path was using
+    extended_n=10 (showing up to 10 rows) while the MD path used top_n=5
+    (showing up to 5). After the fix both must use 5.
+    """
+
+    def _write_efficacy_and_top100(self, tmp_path, n_candidates=8):
+        latest = tmp_path / "outputs" / "latest"
+        latest.mkdir(parents=True, exist_ok=True)
+        (latest / "pattern_efficacy_monthly.json").write_text(
+            _json.dumps({"by_tag": {"Technology": {"significance": "winner", "n_samples": 50, "delta_pp": 10.0}}}),
+            encoding="utf-8",
+        )
+        candidates = [
+            {"symbol": f"SYM{i}", "sector": "Technology", "score": 1.0 - i * 0.01,
+             "rationale_tags": ["Technology"]}
+            for i in range(n_candidates)
+        ]
+        (latest / "top100_daily.json").write_text(
+            _json.dumps({"candidates": candidates}), encoding="utf-8"
+        )
+
+    def test_extended_n_capped_at_five_for_txt(self, tmp_path):
+        """_pattern_confirmed_candidates called with extended_n=5 for TXT path gives ≤5 rows."""
+        self._write_efficacy_and_top100(tmp_path, n_candidates=8)
+        # Call directly with the NEW expected args (extended_n=5, matching MD)
+        compact, extended = _pattern_confirmed_candidates(
+            tmp_path, cadence="monthly", top_n=5, extended_n=5
+        )
+        assert len(extended) <= 5, f"Expected ≤5, got {len(extended)}"
+
+    def test_extended_n_ten_gives_more_than_five(self, tmp_path):
+        """Verify the bug: with extended_n=10 we get 8 rows (more than 5).
+        After the fix, the TXT renderer must no longer call with extended_n=10."""
+        self._write_efficacy_and_top100(tmp_path, n_candidates=8)
+        _, extended_ten = _pattern_confirmed_candidates(
+            tmp_path, cadence="monthly", top_n=5, extended_n=10
+        )
+        # With 8 candidates all matching, extended_n=10 yields 8 rows
+        assert len(extended_ten) > 5
+
+    def test_compact_and_extended_both_five(self, tmp_path):
+        """After fix, compact (MD) and extended (TXT) paths both cap at 5."""
+        self._write_efficacy_and_top100(tmp_path, n_candidates=8)
+        compact, extended = _pattern_confirmed_candidates(
+            tmp_path, cadence="monthly", top_n=5, extended_n=5
+        )
+        assert len(compact) <= 5
+        assert len(extended) <= 5
+

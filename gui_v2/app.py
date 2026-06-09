@@ -113,6 +113,32 @@ def _risk_severity(status: str | None) -> str:
 templates.env.filters["risk_severity"] = _risk_severity
 
 
+_STATUS_LABELS: dict[str, str] = {
+    "ok":               "OK",
+    "ok_with_warnings": "OK · warnings",
+    "news_empty":       "No news",
+    "near_cap":         "Near cap",
+    "partial":          "Partial",
+    "warn":             "Warning",
+    "breach":           "Breach",
+    "exhausted":        "Exhausted",
+    "failed":           "Failed",
+    "unknown":          "Unknown",
+}
+
+
+def _status_label(status: str | None) -> str:
+    """D-M1: humanize snake_case status enums to operator-readable text."""
+    s = (status or "").strip().lower()
+    if s in _STATUS_LABELS:
+        return _STATUS_LABELS[s]
+    # Safe default: title-case with spaces instead of underscores.
+    return s.replace("_", " ").title()
+
+
+templates.env.filters["status_label"] = _status_label
+
+
 def _overall_severity_for_nav() -> str:
     """Compute overall severity for the nav badge. Best-effort; never raises."""
     try:

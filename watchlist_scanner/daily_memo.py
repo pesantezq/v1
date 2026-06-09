@@ -855,22 +855,34 @@ def _build_verdict(
                                     # is computed once above and shared with the
                                     # Advisor Stack line.
                                     mr_clause = (
-                                        f", mean-return {cur_mr:+.2f}"
+                                        f", mean-return {cur_mr:+.2f}%"
                                         if cur_mr is not None else ""
                                     )
                                     if prior_delta is not None:
                                         word = "NOT validated" if is_trap else "validated"
+                                        # H3: use human label, not raw hex hash.
+                                        # M1: when delta < 0, make the direction unambiguous.
+                                        if prior_delta < 0:
+                                            delta_phrase = (
+                                                f"current-fp {prior_delta:+.1f}pp BELOW "
+                                                f"the prior gauge it replaced "
+                                                f"({delta_pp:+.1f}pp vs the stale pre-tracker baseline)"
+                                            )
+                                        else:
+                                            delta_phrase = (
+                                                f"current-fp {prior_delta:+.1f}pp "
+                                                f"vs the prior gauge it replaced "
+                                                f"({delta_pp:+.1f}pp vs stale baseline{mr_clause})"
+                                            )
                                         milestone = (
-                                            f" Retune {word} — current-fp {prior_delta:+.1f}pp "
-                                            f"vs prior gauge {prior_fp[:8]} at n={cur_n} "
-                                            f"({delta_pp:+.1f}pp vs stale baseline{mr_clause})."
+                                            f" Retune {word} — {delta_phrase} at n={cur_n}."
                                         )
                                     elif is_trap:
                                         # No prior gauge to compare, but mean-return is negative.
                                         milestone = (
                                             f" Retune NOT validated — current-fp {delta_pp:+.1f}pp "
                                             f"vs stale baseline at n={cur_n} but mean-return "
-                                            f"{cur_mr:+.2f} negative."
+                                            f"{cur_mr:+.2f}% negative."
                                         )
                                     else:
                                         # First gauge era: nothing prior to regress against.
@@ -1694,16 +1706,28 @@ def _portfolio_pulse_items(root: Path) -> list[str]:
         # Read sector_cap from allocation_engine.DEFAULT_CONFIG so the memo
         # reflects the current gauge value rather than a stale literal.
         cap_pct_str = "—"
+        cap_val: "float | None" = None
         try:
             from allocation_engine import DEFAULT_CONFIG as _AE_CFG
-            cap_val = _AE_CFG.get("sector_cap")
-            if isinstance(cap_val, (int, float)) and cap_val > 0:
+            _cv = _AE_CFG.get("sector_cap")
+            if isinstance(_cv, (int, float)) and _cv > 0:
+                cap_val = float(_cv)
                 cap_pct_str = f"{cap_val * 100:.0f}%"
         except Exception:
             pass
+        # M2/M3: qualify as "soft target" and flag "over" when breached.
+        share_float: "float | None" = None
+        try:
+            share_float = float(share) if share is not None else None
+        except (TypeError, ValueError):
+            pass
+        if cap_val is not None and share_float is not None and share_float > cap_val:
+            over_flag = " — over"
+        else:
+            over_flag = ""
         items.append(
-            f"Top sector — {name} at {_pct(share)} of portfolio "
-            f"(sector cap reference: {cap_pct_str})"
+            f"Top sector — {name} {_pct(share)} "
+            f"(soft target {cap_pct_str}{over_flag})"
         )
 
     total_pct = snapshot.get("total_suggested_allocation")
@@ -1828,17 +1852,17 @@ def _advisor_stack_items(root: Path) -> list[str]:
             )
             if prior_fp is not None and prior_delta is not None and cur_n >= 10:
                 word = "NOT validated" if is_trap else "validated"
-                mr_clause = (
-                    f", mean-return {cur_mr:+.2f}" if cur_mr is not None else ""
-                )
+                # H2: Advisor Stack shows ONLY the incremental stale-baseline
+                # breakdown — the prior-gauge delta and mean-return live in the
+                # Verdict (Today's Verdict) so they are not duplicated here.
+                # H3: use human label, not raw hex hash.
                 stale_clause = (
-                    f"; {cur_str} vs stale baseline {pre_str} ({delta_pp:+.1f}pp)"
-                    if delta_pp is not None else f"; current {cur_str}"
+                    f"{cur_str} vs stale baseline {pre_str} ({delta_pp:+.1f}pp)"
+                    if delta_pp is not None else f"current {cur_str}"
                 )
                 items.append(
-                    f"Retune impact: {word} — current-fp {prior_delta:+.1f}pp "
-                    f"vs prior gauge {prior_fp[:8]} (n={cur_n}{mr_clause})"
-                    f"{stale_clause}"
+                    f"Retune impact: {word} vs the prior gauge it replaced "
+                    f"(n={cur_n}); {stale_clause}"
                 )
             else:
                 # First gauge era (no prior to regress against) or n<10: keep
@@ -1928,11 +1952,21 @@ def _pattern_confirmed_candidates(
             sym = c.get("symbol", "?")
             sector = c.get("sector", "?")
             winning_overlap = sorted(set(c.get("rationale_tags") or []) & winning_tags)
-            tag_strs = ", ".join(t.replace("source:", "").replace("sector:", "") for t in winning_overlap[:3])
-            line = (
-                f"`{sym}` ({sector}) — {win_count} winning tag(s): "
-                f"{tag_strs}"
-            )
+            tag_label = "tag" if win_count == 1 else "tags"
+            # M4: suppress the tag list when it would just repeat the sector name.
+            cleaned_tags = [
+                t.replace("source:", "").replace("sector:", "")
+                for t in winning_overlap[:3]
+            ]
+            # If the only tag equals the sector already shown, omit the ": <tag>" clause.
+            if win_count == 1 and cleaned_tags and cleaned_tags[0] == sector:
+                line = f"`{sym}` ({sector}) — {win_count} winning {tag_label}"
+            else:
+                tag_strs = ", ".join(cleaned_tags)
+                line = (
+                    f"`{sym}` ({sector}) — {win_count} winning {tag_label}: "
+                    f"{tag_strs}"
+                )
             if i <= top_n:
                 compact.append(line)
             extended.append(line)
@@ -2086,9 +2120,9 @@ def build_daily_memo(
                 a(f"  - {item}")
             a("")
 
-        # Pattern-confirmed watch candidates (long-form: up to 10)
+        # Pattern-confirmed watch candidates — capped at 5 to match the MD brief.
         _, extended = _pattern_confirmed_candidates(
-            pulse_root, cadence="monthly", top_n=5, extended_n=10
+            pulse_root, cadence="monthly", top_n=5, extended_n=5
         )
         if extended:
             a(_LINE)

@@ -56,7 +56,7 @@
         <div class="flex items-center gap-3">
           <span class="text-xs uppercase tracking-wide text-zinc-400">Risk &amp; Impact</span>
           {% if risk_summary.overall_status %}
-            {% with severity=risk_summary.overall_status|risk_severity, label=risk_summary.overall_status %}
+            {% with severity=risk_summary.overall_status|risk_severity, label=risk_summary.overall_status|status_label %}
               {% include "components/severity_badge.html" %}
             {% endwith %}
           {% endif %}
@@ -76,7 +76,7 @@
           {% endif %}
           {% if risk_summary.run_status %}
             <span class="text-zinc-400">
-              Run: <span class="font-mono text-zinc-200">{{ risk_summary.run_status }}</span>
+              Run: <span class="font-mono text-zinc-200">{{ risk_summary.run_status|status_label }}</span>
             </span>
           {% endif %}
           <span class="text-emerald-300/80 text-xs">View dashboard →</span>
