@@ -214,6 +214,32 @@ def test_complete_from_claimed(repo):
     assert wo_mod.get_work_order(repo, order["work_order_id"])["status"] == "completed"
 
 
+def test_complete_attaches_existing_report_path(repo):
+    from operator_control import worker_runner, report_path
+
+    order = _order(repo)
+    worker_runner.scaffold(repo, order["work_order_id"], actor="t")
+    rp = report_path(repo, order["work_order_id"])
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text("# report\n")
+    worker_runner.complete(repo, order["work_order_id"], actor="t")
+    folded = wo_mod.get_work_order(repo, order["work_order_id"])
+    assert folded["status"] == "completed"
+    assert folded["result_report_path"] is not None
+    assert folded["result_report_path"].endswith(f"{order['work_order_id']}.md")
+
+
+def test_complete_without_report_leaves_path_null(repo):
+    from operator_control import worker_runner
+
+    order = _order(repo)
+    worker_runner.scaffold(repo, order["work_order_id"], actor="t")
+    worker_runner.complete(repo, order["work_order_id"], actor="t")
+    folded = wo_mod.get_work_order(repo, order["work_order_id"])
+    assert folded["status"] == "completed"
+    assert folded["result_report_path"] is None
+
+
 def test_fail_from_claimed(repo):
     from operator_control import worker_runner
 

@@ -249,6 +249,15 @@ def complete(root, work_order_id, actor="cli", note="manual worker completed") -
             root, work_order_id, new_status="running", actor=actor,
             note="manual worker started",
         )
+    # Attach the report if the worker wrote one at the conventional path
+    # (the autonomous path attaches it itself; this covers the manual path).
+    rp = report_path(root, work_order_id)
+    if rp.exists():
+        try:
+            rel = str(rp.relative_to(Path(root)))
+        except (ValueError, TypeError):
+            rel = str(rp)
+        wo.attach_report_path(root, work_order_id, rel, actor=actor)
     return wo.transition_work_order(
         root, work_order_id, new_status="completed", actor=actor, note=note,
     )
