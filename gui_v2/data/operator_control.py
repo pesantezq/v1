@@ -50,11 +50,14 @@ def _action_descriptors(probe) -> list[dict[str, Any]]:
         )
         actions.append(
             {
-                "label": _ACTION_LABELS.get(mode, mode),
+                "label": "Repair" if mode == "safe_repair" else _ACTION_LABELS.get(mode, mode),
                 "mode": mode,
                 "skill_id": skill.skill_id,
                 "skill_name": skill.name,
                 "approval_required": approval,
+                # safe_repair actions DISPATCH an autonomous worker (the click is
+                # the approval); diagnose/propose_fix only create a queued order.
+                "dispatch": mode == "safe_repair",
             }
         )
     return actions
@@ -111,6 +114,7 @@ def operator_control_context(root: Path | str, view: str) -> dict[str, Any]:
         "operator_summary": _summarize(all_orders),
         "operator_proposal_only": view in _PROPOSAL_ONLY_VIEWS,
         "operator_post_url": "/dashboard/operator/create",
+        "operator_dispatch_url": "/dashboard/operator/dispatch",
         "operator_observe_only": True,
     }
     # The Phase 2 worker-runner status is a System-tab (developer) concern only.
@@ -145,6 +149,8 @@ def worker_runner_status(root: Path | str) -> dict[str, Any]:
     else:
         status = "ok"
     label = "autonomous ON" if st.get("autonomous_enabled") else "scaffold-only"
+    cost = st.get("operational_cost_usd_total", 0.0)
+    runs = st.get("operational_runs", 0)
 
     return card(
         "Worker Runner",
@@ -152,9 +158,14 @@ def worker_runner_status(root: Path | str) -> dict[str, Any]:
         label=label,
         summary=(
             f"{completed} completed; {failed} failed; {running} running; "
-            f"{claimed} claimed; {len(worktrees)} worktrees"
+            f"{claimed} claimed; {len(worktrees)} worktrees · "
+            f"operational cost ${cost} over {runs} run(s) "
+            f"(separate from FMP/AI budget)"
         ),
-        source_artifacts=["outputs/operator_control/work_orders.jsonl"],
+        source_artifacts=[
+            "outputs/operator_control/work_orders.jsonl",
+            "outputs/operator_control/worker_cost_log.jsonl",
+        ],
     )
 
 

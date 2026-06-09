@@ -127,7 +127,8 @@
   {# --------------------------------------------------------------- #}
   {% if operator_probes is defined %}
   {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
-                       operator_post_url, heading="Operator Actions") }}
+                       operator_post_url, heading="Operator Actions",
+                       dispatch_url=operator_dispatch_url) }}
   {% endif %}
 
 </div>

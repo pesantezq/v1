@@ -407,5 +407,11 @@
       "max_monthly_drift": 0.10,
       "max_abs_delta": 0.05
     }
+  },
+  "operator_control": {
+    "autonomous_worker": {
+      "enabled": true,
+      "note": "GUI Repair button dispatches an unattended worker. Containment: isolated worktree, never merges/pushes, protected-path guard, production-impact gate. Emergency stop: create config/operator_worker.DISABLED."
+    }
   }
 }

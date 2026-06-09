@@ -16,11 +16,13 @@ SAFETY:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from operator_control import (
@@ -28,6 +30,7 @@ from operator_control import (
     worktree,
     audit_log,
     report_path,
+    worker_cost_log_path,
 )
 from operator_control.worker_prompts import render_prompt
 from operator_control.skill_registry import get_skill
@@ -130,15 +133,57 @@ def scaffold(root, work_order_id, actor="cli") -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _invoke_claude(worktree_path, prompt_md: str) -> dict:
-    """Run headless Claude Code in the worktree. Real subprocess; mocked in tests."""
+def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dict:
+    """Run headless Claude Code in the worktree. Real subprocess; mocked in tests.
+
+    Strips ANTHROPIC_API_KEY from the child env so the worker authenticates via
+    the box's Claude Code login (subscription) instead of an external API key.
+    On this VPS a stray/invalid ANTHROPIC_API_KEY forced API-key auth and 401'd;
+    the login credentials in ~/.claude work headlessly once the key is removed.
+
+    For ``safe_repair`` the worker is run with ``--permission-mode acceptEdits``
+    so it can actually edit files in the (isolated) worktree; the deny rules in
+    worker_settings.json still apply, and edits land only in the worktree.
+    ``diagnose`` runs with default permissions (read-only capable).
+
+    Returns ``ok`` plus the operational-cost fields claude reports
+    (``cost_usd``, ``num_turns``, ``duration_ms``) so the runner can log spend.
+    """
     settings = Path(__file__).parent / "worker_settings.json"
+    child_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    argv = ["claude", "-p", prompt_md, "--output-format", "json",
+            "--settings", str(settings)]
+    if mode == "safe_repair":
+        argv += ["--permission-mode", "acceptEdits"]
     proc = subprocess.run(
-        ["claude", "-p", prompt_md, "--output-format", "json",
-         "--settings", str(settings)],
-        cwd=str(worktree_path), capture_output=True, text=True,
+        argv, cwd=str(worktree_path), capture_output=True, text=True, env=child_env,
     )
-    return {"ok": proc.returncode == 0, "stdout": proc.stdout, "stderr": proc.stderr}
+    ok = proc.returncode == 0
+    error = None
+    cost_usd = 0.0
+    num_turns = None
+    duration_ms = None
+    result_text = None
+    try:
+        lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
+        parsed = json.loads(lines[-1]) if lines else {}
+        if isinstance(parsed, dict):
+            cost_usd = float(parsed.get("total_cost_usd") or 0.0)
+            num_turns = parsed.get("num_turns")
+            duration_ms = parsed.get("duration_ms")
+            result_text = parsed.get("result")
+            # is_error can be set even with a 0 exit code (e.g. an auth 401):
+            # treat that as a failed worker run, not a silent success.
+            if parsed.get("is_error"):
+                ok = False
+                error = parsed.get("result") or f"api_error_status={parsed.get('api_error_status')}"
+    except (json.JSONDecodeError, IndexError, ValueError, TypeError):
+        pass
+    if not ok and error is None:
+        error = (proc.stderr or "non-zero exit").strip()[:300]
+    return {"ok": ok, "stdout": proc.stdout, "stderr": proc.stderr, "error": error,
+            "cost_usd": cost_usd, "num_turns": num_turns, "duration_ms": duration_ms,
+            "result_text": result_text}
 
 
 def _run_tests(worktree_path, tests) -> dict:
@@ -147,12 +192,19 @@ def _run_tests(worktree_path, tests) -> dict:
     Commands come from the skill registry (trusted, hardcoded). We still split
     with shlex and run WITHOUT a shell so no string is ever interpreted by a
     shell (no command injection, no metacharacter surprises).
+
+    A leading bare ``python`` is rewritten to the runner's own interpreter
+    (``sys.executable``) so the skill's tests run under the project venv (which
+    has pytest) rather than a bare system ``python`` in the worktree subprocess.
     """
     outputs = []
     passed = True
     for t in tests:
+        argv = shlex.split(t)
+        if argv and argv[0] == "python":
+            argv[0] = sys.executable
         proc = subprocess.run(
-            shlex.split(t), cwd=str(worktree_path),
+            argv, cwd=str(worktree_path),
             capture_output=True, text=True,
         )
         outputs.append(f"$ {t}\n{proc.stdout}\n{proc.stderr}")
@@ -184,6 +236,85 @@ def _write_report(root, work_order_id, *, status, diff, tests, worker, violation
     return rep
 
 
+# Live production state a contained worker must NEVER change. The worker works
+# in an isolated worktree and we never merge/push — this is a deterministic
+# tripwire that a run did not somehow bleed into the live tree or move main.
+_PRODUCTION_MARKERS = (
+    "config.json",
+    "config/signal_registry.yaml",
+    "outputs/latest/decision_plan.json",
+)
+
+
+def _file_hash(p: Path) -> str | None:
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _production_snapshot(root) -> dict:
+    root = Path(root)
+    r = subprocess.run(["git", "-C", str(root), "rev-parse", "main"],
+                       capture_output=True, text=True)
+    return {
+        "main_sha": r.stdout.strip(),
+        "files": {m: _file_hash(root / m) for m in _PRODUCTION_MARKERS},
+    }
+
+
+def _production_impact(root, snap: dict) -> list[str]:
+    """Return production markers the run changed (empty = none). The 'failed
+    gate': any non-empty result means the worker bled into production."""
+    after = _production_snapshot(root)
+    changed = []
+    if snap.get("main_sha") and after["main_sha"] != snap["main_sha"]:
+        changed.append("main HEAD moved")
+    for m, h in (snap.get("files") or {}).items():
+        if after["files"].get(m) != h:
+            changed.append(m)
+    return changed
+
+
+def _record_cost(root, order, worker, *, status: str) -> dict:
+    """Append one operational-cost record. SEPARATE from the FMP/AI decision
+    budget — this is the cost of running the worker itself, with the 'why'."""
+    rec = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "work_order_id": order.get("work_order_id"),
+        "probe_id": order.get("probe_id"),
+        "skill_id": order.get("skill_id"),
+        "mode": order.get("mode"),
+        "why": order.get("requested_action"),
+        "status": status,
+        "cost_usd": round(float(worker.get("cost_usd") or 0.0), 6),
+        "num_turns": worker.get("num_turns"),
+        "duration_ms": worker.get("duration_ms"),
+        "budget_scope": "operator_worker_operational",
+    }
+    path = worker_cost_log_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, default=str) + "\n")
+    return rec
+
+
+def read_cost_log(root, limit: int | None = None) -> list[dict]:
+    path = worker_cost_log_path(root)
+    if not path.exists():
+        return []
+    out = []
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return out[-limit:] if limit else out
+
+
 def run(root, work_order_id, actor="cli") -> dict:
     """Autonomous path when gated on; otherwise falls back to scaffold."""
     root = Path(root)
@@ -201,7 +332,37 @@ def run(root, work_order_id, actor="cli") -> dict:
             note="autonomous worker started",
         )
         skill = get_skill(order["skill_id"])
-        worker = _invoke_claude(wt, (wt / "WORKER_PROMPT.md").read_text(encoding="utf-8"))
+        prod = _production_snapshot(root)
+        worker = _invoke_claude(
+            wt, (wt / "WORKER_PROMPT.md").read_text(encoding="utf-8"),
+            mode=order.get("mode", "diagnose"),
+        )
+        # Cost is incurred regardless of outcome — log it once, immediately,
+        # in the operational ledger (NOT the FMP/AI decision budget).
+        _record_cost(root, order, worker,
+                     status=("ok" if worker.get("ok") else "worker_error"))
+
+        # FAILED GATE — no production impact. A contained worker must never
+        # change main or a live production file. If it did (escaped the
+        # worktree), fail loudly; the order is never merged regardless.
+        impacted = _production_impact(root, prod)
+        if impacted:
+            audit_log.record_event(
+                root, event_type="worker_production_impact", actor=actor,
+                work_order_id=work_order_id, probe_id=order["probe_id"],
+                skill_id=order["skill_id"], mode=order["mode"],
+                details={"impacted": impacted}, safety_result="blocked: production changed",
+            )
+            _write_report(root, work_order_id, status="failed", diff=[],
+                          tests=None, worker=worker, violations=impacted, actor=actor)
+            wo.transition_work_order(
+                root, work_order_id, new_status="failed", actor=actor,
+                note=f"production-impact gate: {', '.join(impacted)}",
+            )
+            return {"work_order_id": work_order_id, "mode_of_runner": "autonomous",
+                    "result": "production_impact_blocked", "worktree": str(wt),
+                    "impacted": impacted}
+
         diff = worktree.changed_files(wt, base="main")
         violations = violating_paths(diff)
 
@@ -220,6 +381,21 @@ def run(root, work_order_id, actor="cli") -> dict:
             )
             return {"work_order_id": work_order_id, "mode_of_runner": "autonomous",
                     "result": "quarantined", "worktree": str(wt), "violations": violations}
+
+        # The worker process itself must have succeeded. A claude error (e.g. an
+        # auth 401, or a non-zero exit) means the worker did NOT do the work —
+        # do not pass it off as "completed" just because the diff is clean and
+        # pre-existing tests pass.
+        if not worker.get("ok"):
+            _write_report(root, work_order_id, status="failed", diff=diff,
+                          tests=None, worker=worker, violations=[], actor=actor)
+            wo.transition_work_order(
+                root, work_order_id, new_status="failed", actor=actor,
+                note=f"worker process errored: {worker.get('error') or 'non-zero exit'}",
+            )
+            return {"work_order_id": work_order_id, "mode_of_runner": "autonomous",
+                    "result": "failed", "reason": "worker_error",
+                    "worktree": str(wt), "error": worker.get("error")}
 
         tests = _run_tests(wt, skill.required_tests if skill else [])
         status = "completed" if tests["passed"] else "failed"
@@ -301,10 +477,14 @@ def status(root) -> dict:
     counts: dict[str, int] = {}
     for o in orders:
         counts[o["status"]] = counts.get(o["status"], 0) + 1
+    cost_log = read_cost_log(root)
+    total_cost = round(sum(float(c.get("cost_usd") or 0.0) for c in cost_log), 4)
     return {
         "by_status": counts,
         "worktrees": worktree.list_worktrees(root),
         "autonomous_enabled": autonomous_enabled(root),
+        "operational_cost_usd_total": total_cost,
+        "operational_runs": len(cost_log),
     }
 
 
@@ -334,6 +514,7 @@ def _build_parser():
     spd.add_argument("--max", type=int, default=10)
     spd.add_argument("--actor", default="cron")
     sub.add_parser("status")
+    sub.add_parser("cost")  # operational cost ledger (separate from FMP/AI budget)
     return p
 
 
@@ -366,6 +547,16 @@ def main(argv=None) -> int:
         if args.command == "status":
             print(json.dumps(status(root), indent=2))
             return 0
+        if args.command == "cost":
+            log = read_cost_log(root)
+            total = round(sum(float(c.get("cost_usd") or 0.0) for c in log), 4)
+            print(f"Operator-worker operational cost (separate from FMP/AI decision budget)")
+            print(f"  runs: {len(log)} · total: ${total}")
+            for c in log:
+                print(f"  {c.get('timestamp','')[:19]}  ${c.get('cost_usd')}  "
+                      f"{c.get('mode')}  {c.get('probe_id')} → {c.get('skill_id')}  "
+                      f"[{c.get('status')}]  ({c.get('num_turns')} turns)")
+            return 0
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -384,6 +575,7 @@ __all__ = [
     "fail",
     "drain",
     "status",
+    "read_cost_log",
     "main",
     "WorkerRunnerError",
 ]

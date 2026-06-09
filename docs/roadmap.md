@@ -31,10 +31,21 @@
   `docs/operator_control_worker_runner.md`. The operator-control system
   (create → run → schedule+review) is now feature-complete; further work is
   optional polish.
-- **Follow-up (operator sign-off).** Add a `work_orders.jsonl` / `audit_log.jsonl`
-  liveness line to `.claude/commands/daily-tool-analysis.md` (flag a growing
-  `failed` / long-`awaiting_approval` queue). Left for explicit sign-off because
-  it edits a `.claude/commands/*` oversight file.
+- **Phase 4 — shipped (operator-directed).** GUI **"Repair" button** →
+  `POST /dashboard/operator/dispatch` → creates + approves (the click is the
+  only gate) + spawns a DETACHED unattended worker that auto-diagnoses then
+  fixes. Auth via the box's Claude Code login (worker strips `ANTHROPIC_API_KEY`,
+  which otherwise 401s); `config.json` ships `autonomous_worker.enabled=true`
+  and the dispatch sets the per-run env. New deterministic **production-impact
+  gate** (snapshots `main` + `config.json` + `signal_registry.yaml` +
+  `decision_plan.json`; any change → fail + `worker_production_impact`) so a
+  worker can never reach production. Separate **operational cost ledger**
+  (`worker_cost_log.jsonl`, `worker_runner cost`) — tracked per run + why, NO
+  cap, explicitly NOT the FMP/AI decision budget. Residual risk: worker runs as
+  root with git-isolation only — recommend an unprivileged user/container before
+  heavy `safe_repair` reliance. See `docs/operator_control_worker_runner.md`.
+- **Analysis+health pairing — done.** operator-control liveness wired into the
+  daily / monthly / yearly tiers (process-analyst lens).
 
 ## Phase 0 — Infrastructure & Data Governance (In Progress)
 

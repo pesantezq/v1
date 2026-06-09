@@ -27,6 +27,7 @@ EVENT_TYPES = (
     "validation_rejected",
     "report_attached",
     "worker_protected_path_violation",
+    "worker_production_impact",
 )
 
 

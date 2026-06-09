@@ -24,7 +24,7 @@
 {%- endmacro %}
 
 {# One probe row: description + bounded action buttons (each its own POST form). #}
-{% macro _probe_actions(probe, post_url, proposal_only) -%}
+{% macro _probe_actions(probe, post_url, proposal_only, dispatch_url="") -%}
 <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-2">
   <div class="flex items-start justify-between gap-2">
     <div class="min-w-0">
@@ -35,17 +35,20 @@
   </div>
   <div class="flex flex-wrap items-center gap-2 pt-1">
     {% for a in probe.actions %}
-    <form method="post" action="{{ post_url }}" class="inline">
+    {# safe_repair DISPATCHES an autonomous worker (the click is the approval);
+       diagnose/propose_fix only CREATE a queued work order. #}
+    <form method="post" action="{{ dispatch_url if (a.dispatch and dispatch_url) else post_url }}" class="inline"
+          {% if a.dispatch %}onsubmit="return confirm('Launch an unattended auto-repair worker for this probe? It runs in an isolated worktree, never merges to production, and you review the result.');"{% endif %}>
       <input type="hidden" name="probe_id" value="{{ probe.probe_id }}" />
       <input type="hidden" name="skill_id" value="{{ a.skill_id }}" />
       <input type="hidden" name="mode" value="{{ a.mode }}" />
       <button type="submit"
-              title="Create a {{ a.label }} work order via {{ a.skill_name }}{% if a.approval_required %} (requires approval){% endif %}"
+              title="{% if a.dispatch %}Launch an unattended auto-repair worker (auto-diagnoses then fixes in an isolated worktree; never reaches production without review){% else %}Create a {{ a.label }} work order via {{ a.skill_name }}{% endif %}"
               class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition active:scale-95
                      {% if a.mode == 'diagnose' %}bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20
                      {% elif a.mode == 'propose_fix' %}bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20
-                     {% else %}bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700{% endif %}">
-        {{ a.label }}{% if a.approval_required %}<span class="opacity-60">· approval</span>{% endif %}
+                     {% else %}bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20{% endif %}">
+        {{ a.label }}{% if a.dispatch %}<span class="opacity-60">· auto</span>{% elif a.approval_required %}<span class="opacity-60">· approval</span>{% endif %}
       </button>
     </form>
     {% endfor %}
@@ -96,7 +99,7 @@
 {%- endmacro %}
 
 {# Public macro: the full operator-control section. #}
-{% macro operator_panel(probes, work_orders, summary, post_url, proposal_only=False, heading="Operator Actions") -%}
+{% macro operator_panel(probes, work_orders, summary, post_url, proposal_only=False, heading="Operator Actions", dispatch_url="") -%}
 <section aria-label="Operator control work orders" class="space-y-3">
   {{ ui.section_header(heading, "work orders only — observe-only, no execution", "outputs/operator_control/work_orders.jsonl") }}
 
@@ -109,7 +112,7 @@
 
   {% if probes %}
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-    {% for p in probes %}{{ _probe_actions(p, post_url, proposal_only) }}{% endfor %}
+    {% for p in probes %}{{ _probe_actions(p, post_url, proposal_only, dispatch_url) }}{% endfor %}
   </div>
   {% endif %}
 

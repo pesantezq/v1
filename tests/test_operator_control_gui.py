@@ -154,9 +154,12 @@ def test_no_arbitrary_command_input(client_root, route):
 def test_operator_forms_only_post_to_safe_endpoint(client_root, route):
     client, _ = client_root
     body = client.get(route).text
+    # The only operator endpoints are create (queue a work order) and dispatch
+    # (launch the gated autonomous worker). Both are known-safe; no other.
+    _safe = {"/dashboard/operator/create", "/dashboard/operator/dispatch"}
     for action in re.findall(r'<form[^>]*action="([^"]*)"', body, re.IGNORECASE):
         if "operator" in action:
-            assert action == "/dashboard/operator/create"
+            assert action in _safe
 
 
 @pytest.mark.parametrize("route", _DASH_ROUTES)
@@ -183,6 +186,63 @@ def test_system_tab_shows_runner_card(client_root):
     client, _ = client_root
     body = client.get("/dashboard/system").text
     assert "Worker Runner" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Repair dispatch (GUI-triggered autonomous worker)
+# ---------------------------------------------------------------------------
+
+
+def test_system_tab_shows_repair_dispatch_button(client_root):
+    client, _ = client_root
+    body = client.get("/dashboard/system").text
+    # The Repair button posts to the dispatch endpoint (not /create).
+    assert 'action="/dashboard/operator/dispatch"' in body
+
+
+def test_dispatch_creates_approves_and_spawns_detached(client_root, monkeypatch):
+    client, root = client_root
+    from gui_v2 import app as app_module
+
+    calls = {}
+
+    def fake_popen(argv, **kw):
+        calls["argv"] = argv
+        calls["env"] = kw.get("env", {})
+
+        class _P:  # minimal Popen stand-in
+            pass
+        return _P()
+
+    monkeypatch.setattr(app_module.subprocess, "Popen", fake_popen)
+
+    resp = client.post(
+        "/dashboard/operator/dispatch",
+        data={"probe_id": "data_quality.warnings",
+              "skill_id": "propose_data_quality_fix", "mode": "safe_repair"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    # detached worker launched with the autonomous env set (the click authorizes)
+    assert calls["env"].get("STOCKBOT_OPERATOR_WORKER_AUTONOMOUS") == "1"
+    assert "worker_runner" in " ".join(calls["argv"])
+
+    from operator_control import work_orders as wo
+    orders = wo.list_work_orders(root)
+    assert len(orders) == 1
+    # the GUI click is the approval → order is approved (not stuck awaiting)
+    assert orders[0]["status"] == "approved"
+
+
+def test_dispatch_rejects_unknown_probe(client_root, monkeypatch):
+    client, _ = client_root
+    from gui_v2 import app as app_module
+    monkeypatch.setattr(app_module.subprocess, "Popen", lambda *a, **k: None)
+    resp = client.post(
+        "/dashboard/operator/dispatch",
+        data={"probe_id": "bogus", "skill_id": "x", "mode": "safe_repair"},
+    )
+    assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

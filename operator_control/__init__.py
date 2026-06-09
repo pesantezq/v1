@@ -44,6 +44,16 @@ def audit_log_path(root: Path | str) -> Path:
     return operator_control_dir(root) / "audit_log.jsonl"
 
 
+def worker_cost_log_path(root: Path | str) -> Path:
+    """Operational cost ledger for autonomous worker runs.
+
+    Deliberately SEPARATE from the FMP/AI decision budget
+    (``ai_budget_summary.json``) — this tracks the cost of running the
+    repair/diagnose worker itself, not the cost of the investment pipeline.
+    """
+    return operator_control_dir(root) / "worker_cost_log.jsonl"
+
+
 def prompts_dir(root: Path | str) -> Path:
     return operator_control_dir(root) / "prompts"
 
@@ -65,6 +75,7 @@ __all__ = [
     "operator_control_dir",
     "work_orders_path",
     "audit_log_path",
+    "worker_cost_log_path",
     "prompts_dir",
     "reports_dir",
     "prompt_path",

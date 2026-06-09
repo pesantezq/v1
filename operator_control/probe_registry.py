@@ -94,7 +94,7 @@ _PROBES: tuple[Probe, ...] = (
         severity="warning",
         description="Symbol-level data-quality warnings or critical symbols present.",
         recommended_skill_id="diagnose_data_quality_warnings",
-        allowed_actions=("diagnose", "propose_fix"),
+        allowed_actions=("diagnose", "propose_fix", "safe_repair"),
         risk_level="low",
         approval_required=False,
     ),

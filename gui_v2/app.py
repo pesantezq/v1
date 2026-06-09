@@ -5,6 +5,8 @@ import json
 import os
 import re
 import secrets
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -596,6 +598,77 @@ async def page_create_work_order(
         )
 
     # POST→redirect→GET so a refresh does not resubmit.
+    return RedirectResponse(f"/dashboard/{source_view}", status_code=303)
+
+
+@app.post("/dashboard/operator/dispatch")
+async def page_dispatch_worker(
+    request: Request, _a: str | None = Depends(_require_auth)
+):
+    """
+    POST /dashboard/operator/dispatch — the "Repair" button.
+
+    Creates a work order, APPROVES it (the deliberate GUI click is the
+    approval — the only gate), and launches a DETACHED autonomous worker that
+    auto-diagnoses then fixes in an isolated worktree. The web process never
+    blocks: it spawns a background runner and returns immediately.
+
+    The worker can NEVER reach production: it works in a throwaway worktree, the
+    runner never merges/pushes, the protected-path guard quarantines protected
+    changes, and the production-impact gate fails any run that touches main or a
+    live production file. The kill-switch (config/operator_worker.DISABLED)
+    still forces a safe fallback to scaffolding.
+    """
+    from operator_control import work_orders as _wo
+    from operator_control.repair_policies import WorkOrderValidationError
+    from operator_control.probe_registry import get_probe
+
+    form = await request.form()
+    probe_id = str(form.get("probe_id", "")).strip()
+    skill_id = str(form.get("skill_id", "")).strip()
+    mode = str(form.get("mode", "")).strip()
+
+    actor = _a or "dashboard"
+    probe = get_probe(probe_id)
+    source_view = probe.source_view if probe is not None else "system"
+
+    try:
+        order = _wo.create_work_order(
+            REPO_ROOT, probe_id=probe_id, skill_id=skill_id, mode=mode,
+            created_by=actor,
+        )
+        wid = order["work_order_id"]
+        # The GUI click IS the approval — clear awaiting_approval so the runner
+        # (which only accepts queued/approved) can pick it up.
+        if order["status"] == "awaiting_approval":
+            _wo.transition_work_order(
+                REPO_ROOT, wid, new_status="approved", actor=actor,
+                note="approved via GUI dispatch (operator click)",
+            )
+    except WorkOrderValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    # Launch the worker detached so the web request returns immediately and the
+    # worker runs unattended. STOCKBOT_OPERATOR_WORKER_AUTONOMOUS=1 is set HERE
+    # (the click authorizes this run) so the operator need not set it globally.
+    child_env = dict(os.environ)
+    child_env["STOCKBOT_OPERATOR_WORKER_AUTONOMOUS"] = "1"
+    log_dir = REPO_ROOT / "outputs" / "operator_control"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(log_dir / f"dispatch_{wid}.log", "ab") as logf:
+            subprocess.Popen(
+                [sys.executable, "-m", "operator_control.worker_runner",
+                 "run", "--id", wid, "--actor", actor],
+                cwd=str(REPO_ROOT), env=child_env,
+                stdout=logf, stderr=logf, start_new_session=True,
+            )
+    except Exception as exc:  # spawning failed — surface, don't crash the page
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to launch worker: {exc}",
+        )
+
     return RedirectResponse(f"/dashboard/{source_view}", status_code=303)
 
 

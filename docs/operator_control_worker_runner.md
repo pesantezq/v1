@@ -99,7 +99,53 @@ remove with `git worktree remove --force .worktrees/<id>`.
   regex-validated (`^wo_[0-9A-Za-z_]+$`) so it can never traverse out of
   `outputs/operator_control/reports/`.
 
-## What Phase 2/3 does NOT do
+## Phase 4 — GUI "Repair" button (unattended auto-repair)
+
+A **Repair** button on the System (data-quality) and Memo probes launches an
+*unattended* worker that **auto-diagnoses then fixes**:
+
+```
+[Repair · auto] (System tab)
+  → POST /dashboard/operator/dispatch
+  → create work order, APPROVE it (the click IS the approval — the only gate)
+  → spawn a DETACHED runner (web returns instantly; never blocks)
+  → headless `claude` (login auth) edits in an isolated worktree (acceptEdits)
+  → protected-path guard + test gate + production-impact gate
+  → report (+ cost) → completed | failed ; queue links the report
+```
+
+Key facts:
+- **Auth on the box, not an API key.** The worker subprocess runs with
+  `ANTHROPIC_API_KEY` stripped so it authenticates via the Claude Code **login**
+  in `~/.claude` (a stray external API key otherwise 401s). No external API key
+  is used or required.
+- **The only gate is the click.** `config.json` ships
+  `operator_control.autonomous_worker.enabled=true`; the dispatch endpoint sets
+  `STOCKBOT_OPERATOR_WORKER_AUTONOMOUS=1` for that run, so the operator need not
+  set anything globally. The kill-switch (`config/operator_worker.DISABLED`)
+  still forces a safe fallback to scaffolding.
+- **Failed gate → no production impact (deterministic).** Before/after each run
+  the runner snapshots `main` HEAD + `config.json` + `config/signal_registry.yaml`
+  + `outputs/latest/decision_plan.json`. If any changed, the run is **failed**
+  (`worker_production_impact` audit) — a worker can never bleed into production.
+  This sits on top of worktree-isolation, never-merge/never-push, and the
+  protected-path diff guard.
+- **Operational cost tracking (separate ledger).** Every run appends to
+  `outputs/operator_control/worker_cost_log.jsonl`
+  (`{cost_usd, num_turns, probe_id, skill_id, why, status, budget_scope}`),
+  surfaced on the System-tab Worker Runner card and via
+  `python -m operator_control.worker_runner cost`. This is the worker's own
+  operational spend — **deliberately NOT part of** the FMP/AI decision budget
+  (`ai_budget_summary.json`). **No cost cap** — tracked, not throttled.
+
+### Residual risk (read before relying on repair)
+The worker runs as the dashboard service's user (root) with only
+**git-isolation** (the worktree), not process-isolation. The production-impact
+gate + protected-path guard catch escapes deterministically and nothing merges
+without review, but for heavy reliance on `safe_repair` run the worker as an
+unprivileged user or in a container. Diagnose is read-only and lowest-risk.
+
+## What Phase 2/3/4 does NOT do
 
 - Never merges to `main`, never pushes to any remote.
 - No cron/schedule — manual CLI trigger only.
