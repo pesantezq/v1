@@ -31,6 +31,7 @@ Working dir: `/opt/stockbot`.
 10. `data/themes_catalog.json` + `outputs/history/*/theme_signals.json` → which themes actually drove discoveries vs noise
 11. `outputs/backtest/poc_simulation_results.json` → Pattern-Loop backtest (Steps 0–3): evaluated count, per-regime efficacy, calibration slope, generated_at freshness
 12. `outputs/policy/signal_weight_proposals.json` → Pattern-Loop tuning proposals (Step 4): how many bounded weight deltas were proposed vs gated as insufficient/no-edge
+13. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (lifetime) → operator-control retrospective: total work orders, completed vs failed, lifetime `worker_protected_path_violation` count, and autonomous-vs-scaffold usage split (added 2026-06-09; observe-only operator-control plane)
 
 ---
 
@@ -54,6 +55,7 @@ Working dir: `/opt/stockbot`.
 - **`rollback_clusters`** — group rollbacks by week; flag weeks with ≥3 rollbacks as "loop instability events"
 - **`operator_interventions`** — count of times apply_enabled was set to false; total downtime
 - **`cost_per_resolved_signal`** — actual_spend_year_usd / total_resolved_signals_year (efficiency metric)
+- **`operator_control_lifetime`** — total work orders created, % completed vs failed, lifetime quarantine (`worker_protected_path_violation`) count, and how often the autonomous path ran vs scaffolding. A guard-effectiveness + adoption signal: a non-zero quarantine count with zero protected-path changes ever reaching `main` confirms the deterministic guard works as designed.
 
 ### Market expert lens
 - **`memo_top_decision_lifetime_hit_rate`** — fraction of all memo-surfaced top-5 decisions that resolved positive
@@ -142,7 +144,7 @@ Sections (each 50-150 words):
 1. **Year in numbers** — cron uptime, total runs, total cost, portfolio value change, feature velocity
 2. **Developer lens** — silent failures caught + recovered, dependency drift events, test coverage trajectory
 3. **Quant lens** — top 5 winning tags lifetime, top 3 winning (tag × regime) cells, best gauge era, current gauge percentile
-4. **Process analyst lens** — audit log consistency, rollback clusters with root cause, operator interventions
+4. **Process analyst lens** — audit log consistency, rollback clusters with root cause, operator interventions, operator-control plane usage (worker runs completed/failed, lifetime quarantines, autonomous-vs-scaffold split)
 5. **Market expert lens** — memo accuracy, discovery yield funnel, sector performance table, regime call accuracy
 6. **Tag taxonomy proposals** — which tags to add (high evidence of unmodelled signals), which to retire (insufficient_sample for >12 months), which to merge
 7. **Roadmap deltas** — which planned features shipped, which dropped, top 3 priorities for next year

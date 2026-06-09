@@ -34,6 +34,7 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 15. `outputs/policy/signal_tagging_proposal.json` → D2 tagging proposer: read `untagged_pct`, `families_missing_registry_id`, `proposals`
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply audit: read the last entry's `status` (disabled/oos_immature/gpt_vetoed/applied/rolled_back) + provenance
 17. `outputs/latest/pattern_efficacy_weekly.json` → per-tag weekly efficacy for the 4-week drift trend; compare each tag's `vs_baseline_pp` week-over-week to surface accelerating winners or deteriorating signals (added 2026-06-08; quant-trend consumer)
+18. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (both append-only; fold work_orders by `work_order_id`, last line wins) → 30-day operator-control activity: counts by status, worker runs that reached `completed`/`failed`, and count of `worker_protected_path_violation` events in the audit log (added 2026-06-09; operator-control plane Phases 1–3 — **observe-only, operator-driven**; absence / all-zero is the inert steady state, NOT a finding)
 
 ---
 
@@ -56,6 +57,9 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 - **`drift_cap_utilization`** = for each parameter in monthly_drift, current_drift / 0.25 expressed as %
 - **`pending_confirmation_age_max`** = oldest pending confirmation in days
 - **`pulse_cost_pace`** = monthly_cost_usd / (days_into_month / 30) — projected monthly burn
+- **`operator_worker_throughput_30d`** = count of work orders that reached `completed`/`failed` in the last 30d (from `work_orders.jsonl` status_history)
+- **`operator_quarantine_count_30d`** = count of `worker_protected_path_violation` events in `audit_log.jsonl` over the last 30d (the autonomous worker tried to touch a protected path; contained — the run was quarantined and never merged)
+- **`operator_decision_queue_age_max`** = oldest `awaiting_approval` work-order age in days (operator decision-queue staleness)
 
 ### Market expert lens
 - **`memo_top_decision_hit_rate`** = fraction of memo's top-5 decisions over last 30d that had positive 1d outcome
@@ -83,6 +87,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - `pending_confirmation_age_max > 14d` (suggestions stuck)
 - `drift_cap_utilization ∈ [60%, 80%]` on any parameter
 - `memo_top_decision_hit_rate ∈ [0.45, 0.55]` (coin-flip range)
+- `operator_quarantine_count_30d ≥ 1` (the autonomous worker hit a protected path this month — contained/quarantined, never merged, but review the report at `/dashboard/operator/report/<id>` to confirm the guard fired correctly) OR `operator_decision_queue_age_max > 30d` (an operator approval has been pending a month — clear or cancel it). Operator-control is observe-only and **never** escalates monthly to RED on its own.
 - `apply_rate_per_week == 0` (loop dormant — may be expected on quiet months)
 
 **RED** (operator must act):
@@ -152,6 +157,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
    `"Feedback proposers — calibration: inverted={bool} (apply_gate={apply_gate}); tagging: {untagged_pct} untagged, families missing registry id: {families_missing_registry_id}."`
 3. **Process analyst lens** (always):
    `"Drift cap max {Z}% on {param}. Pending confirmations: {count} oldest {age}d. Burn pace ${P}/mo vs $20 cap."`
+   `"Operator-control: {operator_worker_throughput_30d} worker runs/30d, {operator_quarantine_count_30d} quarantined, decision queue oldest {operator_decision_queue_age_max}d (observe-only; inert if all-zero)."`
 4. **Market expert lens** (always):
    `"Memo hit-rate {X}%. Net-new discoveries: {N} surfaced, {M} resolved positive. Sector rotation {S}. Dominant regime: {R} ({pct}%)."`
 5. **Notable trend(s)** (1-3 bullets — what changed vs last month)
