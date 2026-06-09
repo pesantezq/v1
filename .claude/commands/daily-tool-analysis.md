@@ -62,6 +62,8 @@ the fix.
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply: last entry `status` (added 2026-06-05; default-inert mutator — absent or `disabled`/`oos_immature` is the expected steady state, NOT a finding)
 17. `outputs/latest/correlation_risk_advisor.json` → risk lens: read `high_correlation_pairs`, `concentration_risk_score`, `recommendations` — flags when portfolio positions are highly correlated and concentration risk is elevated (added 2026-06-08; risk-lens consumer)
 18. `outputs/latest/quant_watch_status.json` → overall_status, active_count, active[] (concern + age_days), registered_today, resolved_today, escalated_today, ledger_liveness (added 2026-06-08; quant-watch probe ledger — sub-RED quant concern tracker)
+19. `outputs/latest/broker_sync_status.json` → overall_status (`disabled`|`unconfigured`|`error`|`ok`|`degraded`), configured, authenticated, account_count, position_count, last_error (added 2026-06-09; Schwab read-only broker sync — **on_demand / operator-run, NOT a daily-cron producer**; `unconfigured`/`disabled` is the expected inert steady state, NOT a finding. Always-producible even when uncredentialed.)
+20. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (both append-only; fold work_orders by `work_order_id`, last line wins) → operator-control plane (Phases 1–3): counts by status + count of `worker_protected_path_violation` events in the audit log (added 2026-06-09; **observe-only, operator-driven** — absence / all-zero is the inert steady state, NOT a finding; never blocks the decision core)
 
 **Compute**:
 
@@ -86,6 +88,13 @@ the fix.
   ```
   Each verdict is `{id, status, detail}` where status ∈ `{confirmed, regressed, pending, manual}`. The module applies an `applied_at` staleness guard, so a fix reads `pending` (not `regressed`) until the pipeline has regenerated artifacts *after* the fix went live.
 - `applied_fix_regressions` = verdicts with `status == "regressed"` (a shipped fix's original symptom is back)
+- `broker_status` = `broker_sync_status.overall_status` (default `unconfigured` if the artifact is missing — the layer ships always-producible, so a true absence means the broker module is not deployed)
+- `broker_configured` = `broker_sync_status.configured` (default `false`); `broker_authenticated` = `broker_sync_status.authenticated` (default `false`)
+- operator-control: from `.venv/bin/python -m operator_control.worker_runner status` (by_status counts + autonomous_enabled) and `outputs/operator_control/audit_log.jsonl`:
+  - `operator_open_count` = orders in {queued, awaiting_approval, claimed, running, approved}; `operator_failed_count` = orders in `failed`
+  - `operator_quarantined_today` = count of `worker_protected_path_violation` audit events dated today (absent files → 0)
+  - `operator_stuck_running` = any order in `running`/`claimed` whose last `status_history.at` is > 24h ago (worker crashed mid-run, or a scaffolded order was never completed)
+  - `operator_worker_mode` = `"autonomous ON"` if `autonomous_enabled` else `"scaffold-only"`
 
 ---
 
@@ -110,6 +119,8 @@ the fix.
 - `retune_drift_max_pct < 60` (no auto-apply param burning through monthly drift)
 - `retune_apply_enabled == true` (learning loop not operator-paused)
 - `applied_fix_regressions` is empty (no shipped fix has regressed)
+- `broker_status ∈ {unconfigured, disabled, ok}` (Schwab layer inert or healthy — `degraded`/`error` is the only non-GREEN broker state)
+- `operator_quarantined_today == 0` AND `operator_stuck_running` is false (operator-control plane inert or healthy — no work orders at all is GREEN)
 - no unexpected fingerprint change
 - attribution presence consistent with fingerprint age (n=0 only acceptable when age <2 days)
 
@@ -125,6 +136,8 @@ the fix.
 - `retune_auto_applicable_count ≥ 3` (unusually many proposals queued — worth a look)
 - `applied_fix_regressions` is non-empty (a shipped fix regressed — its original symptom is back; advisory, investigate via discovery-health)
 - `doc_audit_status.overall_status == "coverage_gap"` OR any unfixed `drift`/`consistency` finding present (docs lag code — advisory; resolved by the next `/doc-audit` run)
+- `broker_status ∈ {degraded, error}` (Schwab configured but the OAuth token is unauthenticated, or the last broker API call failed — advisory only: the broker layer is observe-only evidence and **never** blocks the decision core; point the operator to `docs/schwab_integration.md` Troubleshooting. Never RED.)
+- `operator_quarantined_today ≥ 1` (the autonomous worker hit a protected path today — contained/quarantined, never merged; review `/dashboard/operator/report/<id>` to confirm the guard fired correctly) OR `operator_stuck_running` (an order has sat in `running`/`claimed` > 24h — worker crashed or a scaffolded order was abandoned; inspect the worktree). Operator-control is observe-only and **never** RED (it never blocks the decision core).
 - attribution lag (age ≥2d AND n=0) — known cron-timing issue
 
 **RED** when any of:
@@ -242,6 +255,8 @@ Headline grammar:
 6c. Docs (only when `doc_audit_status.json` exists): `"Docs: {overall_status} · {N} findings, {K} coverage gaps (last audit {last_audited_sha[:8]})"`
 6d. Pattern-loop (always, from the sub-check above): `"Pattern-loop: {mode}, OOS {observed}/315 (~{eta}), proposals {N}, auto-apply {state}"` — folds in the `/pattern-loop-analysis` heartbeat.
 6e. Quant-watch (always, from the sub-check above): `"Quant-watch: {overall_status} · {active_count} active ({top active probe concern}); {len(registered_today)}↑/{len(resolved_today)}↓/{len(escalated_today)} esc today"` — folds in the `/quant-watch-analysis` heartbeat. RED only when `escalated_today` is non-empty (which is already a daily RED key).
+6f. Broker-sync (always): `"Broker-sync: {broker_status} (configured={broker_configured}, authenticated={broker_authenticated}) · {account_count} accts / {position_count} positions"` — Schwab read-only layer. `unconfigured`/`disabled` is the inert steady state (report, don't alert). `degraded`/`error` → AMBER; append `"— see docs/schwab_integration.md Troubleshooting"`. Never RED (observe-only evidence; never blocks decisions).
+6g. Operator-control (always): `"Operator-control: {operator_open_count} open · {operator_failed_count} failed · {operator_quarantined_today} quarantined today · worker {operator_worker_mode}"` — observe-only work-order plane (Phases 1–3). No work orders / all-zero is the inert steady state (report, don't alert). `operator_quarantined_today ≥ 1` or a >24h stuck run → AMBER; append `"— review /dashboard/operator/report/<id>"`. Never RED (never blocks the decision core).
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
