@@ -518,3 +518,21 @@ sudo systemctl disable --now stockbot-dashboard.service
 ```
 
 The daily timer and the Streamlit unit are unaffected by any of this.
+
+## Operator control / work orders (Phase 1)
+
+The dashboard can turn health/quality probes into **allowlisted work orders**
+(observe-only; the web app only *creates* records, it never executes a worker).
+State lives in `outputs/operator_control/` (append-only `work_orders.jsonl` +
+`audit_log.jsonl`; generated `prompts/`). CLI:
+
+```bash
+python -m operator_control.work_orders list
+python -m operator_control.work_orders create --probe-id data_quality.warnings \
+    --skill-id diagnose_data_quality_warnings --mode diagnose --created-by enrique_cli
+python -m operator_control.work_orders show --id <id>
+python -m operator_control.work_orders generate-prompt --id <id>
+```
+
+Full architecture, safety model, lifecycle, and the recommended Phase 2 worker
+runner: see `docs/operator_control.md`.

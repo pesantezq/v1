@@ -1604,3 +1604,17 @@ protected, owner-gated apply path). Written by `tuning_proposals.write_proposals
 | `summary` | object | `{evaluated, proposed_count, insufficient_evidence, no_significant_edge, unknown_signal}` |
 | `source` | string | `artifact:<path>` or `history:<dir>` (added by `run_loop`) |
 | `step_5_status` | string | `inert_owner_gated` (apply path not invoked) |
+
+### `outputs/operator_control/` — operator-control plane (control-plane state)
+
+Written directly by the `operator_control` package, **not** via
+`OutputNamespace` (control-plane state, like `data/*_check_state.json`). All
+append-only. Observe-only; never trade/broker/execution related. See
+`docs/operator_control.md`.
+
+| Path | Type | Meaning |
+|---|---|---|
+| `work_orders.jsonl` | JSONL | Append-only, event-sourced work orders. Each create/transition appends a full snapshot; fold by `work_order_id` (last line wins). Fields: `work_order_id, created_at, created_by, source_view, probe_id, skill_id, mode, risk_level, approval_required, status, status_history[], source_artifacts[], requested_action, safety_constraints[], generated_prompt_path, result_report_path, observe_only`. `status` ∈ `queued/claimed/running/completed/failed/awaiting_approval/approved/rejected/cancelled`. |
+| `audit_log.jsonl` | JSONL | Append-only audit events: `{timestamp, event_type, work_order_id, probe_id, skill_id, mode, actor, details, safety_result}`. |
+| `prompts/{id}.md` | Markdown | Generated Claude Code worker prompt (preparation only; not execution). |
+| `reports/{id}.md` | Markdown | Expected worker result-report path (written by the Phase 2 worker, not Phase 1). |

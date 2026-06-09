@@ -1,5 +1,25 @@
 # Roadmap
 
+## Operator control / Claude Code worker (2026-06-09)
+
+- **Phase 1 — shipped (branch `operator-control-work-orders`).** Probe-driven,
+  allowlisted, observe-only work-order plane. The dashboard turns existing
+  health/quality probes into work orders (create-only — the web app never
+  executes a worker, runs shell, or touches trade/broker/scoring logic). New
+  `operator_control/` package (probe + skill registries, repair policy,
+  append-only work orders + audit, worker-prompt generation, CLI); GUI adapter
+  + `operator_panel.html` wired into all five persona tabs; 50 new tests. See
+  `docs/operator_control.md`.
+- **Phase 2 — recommended next.** A separate, default-off **Claude Code worker
+  runner** that claims a queued/approved order → renders the prompt → runs a
+  worker in an isolated sandbox/worktree → runs the skill's required tests →
+  writes a result report → transitions the order for human review. Must preserve
+  every Phase-1 boundary and run outside the web process.
+- **Follow-up (operator sign-off).** Add a `work_orders.jsonl` / `audit_log.jsonl`
+  liveness line to `.claude/commands/daily-tool-analysis.md` (flag a growing
+  `failed` / long-`awaiting_approval` queue). Left for explicit sign-off because
+  it edits a `.claude/commands/*` oversight file.
+
 ## Phase 0 — Infrastructure & Data Governance (In Progress)
 
 ### Step 1 — user_id Schema Migration (Complete)
