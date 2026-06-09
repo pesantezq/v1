@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -151,7 +152,21 @@ def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dic
     """
     settings = Path(__file__).parent / "worker_settings.json"
     child_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
-    argv = ["claude", "-p", prompt_md, "--output-format", "json",
+    # Resolve the claude binary to an absolute path. A worker spawned from the
+    # systemd dashboard service inherits a minimal PATH that lacks
+    # ~/.local/bin, so a bare "claude" raises FileNotFoundError.
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        for cand in (os.path.expanduser("~/.local/bin/claude"),
+                     "/root/.local/bin/claude", "/usr/local/bin/claude"):
+            if os.path.exists(cand):
+                claude_bin = cand
+                break
+    if not claude_bin:
+        return {"ok": False, "stdout": "", "stderr": "", "cost_usd": 0.0,
+                "num_turns": None, "duration_ms": None, "result_text": None,
+                "error": "claude binary not found on PATH or ~/.local/bin"}
+    argv = [claude_bin, "-p", prompt_md, "--output-format", "json",
             "--settings", str(settings)]
     if mode == "safe_repair":
         argv += ["--permission-mode", "acceptEdits"]
@@ -407,6 +422,21 @@ def run(root, work_order_id, actor="cli") -> dict:
         )
         return {"work_order_id": work_order_id, "mode_of_runner": "autonomous",
                 "result": status, "worktree": str(wt), "branch": branch}
+    except WorkerRunnerError:
+        raise  # eligibility/precondition errors — order not yet running
+    except Exception as exc:
+        # Never leave an order stuck mid-run: if it reached claimed/running,
+        # mark it failed before propagating so production/state stays clean.
+        try:
+            cur = wo.get_work_order(root, work_order_id)
+            if cur and cur.get("status") in ("claimed", "running"):
+                wo.transition_work_order(
+                    root, work_order_id, new_status="failed", actor=actor,
+                    note=f"runner crashed: {type(exc).__name__}: {exc}"[:200],
+                )
+        except Exception:
+            pass
+        raise
     finally:
         run_lock.release_run_lock(lock)
 

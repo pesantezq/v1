@@ -182,6 +182,32 @@ def test_run_falls_back_to_scaffold_when_disabled(repo, monkeypatch):
     assert res["mode_of_runner"] == "scaffold"  # no claude invoked
 
 
+def test_invoke_claude_missing_binary_returns_error(repo, monkeypatch):
+    from operator_control import worker_runner
+
+    monkeypatch.setattr(worker_runner.shutil, "which", lambda _: None)
+    monkeypatch.setattr(worker_runner.os.path, "exists", lambda _p: False)
+    res = worker_runner._invoke_claude(repo, "prompt", mode="diagnose")
+    assert res["ok"] is False
+    assert "not found" in res["error"]
+
+
+def test_crash_never_leaves_order_running(repo, monkeypatch):
+    """Any exception mid-run marks the order failed (never stuck in running)."""
+    from operator_control import worker_runner
+
+    _enable_autonomous(repo, monkeypatch)
+    order = _order(repo)
+
+    def boom(wt, p, mode="diagnose"):
+        raise RuntimeError("simulated worker crash")
+
+    monkeypatch.setattr(worker_runner, "_invoke_claude", boom)
+    with pytest.raises(RuntimeError):
+        worker_runner.run(repo, order["work_order_id"], actor="auto")
+    assert wo_mod.get_work_order(repo, order["work_order_id"])["status"] == "failed"
+
+
 def test_cost_logged_to_separate_ledger(repo, monkeypatch):
     from operator_control import worker_runner
 
