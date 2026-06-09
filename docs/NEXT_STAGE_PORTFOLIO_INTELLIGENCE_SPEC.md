@@ -687,32 +687,44 @@ reversible.
 
 ---
 
-## 23. Open questions / decisions needed
+## 23. Decisions — RESOLVED 2026-06-09
 
-1. Schwab API access readiness (live app approval, redirect URI on VPS)?
-2. Where do broker OAuth tokens live in production — local `data/` (current), VPS-only,
-   or an encrypted store?
-3. Primary dashboard target for new cards: `gui_v2` (FastAPI, recommended) — confirm
-   Streamlit stays legacy-only?
-4. Default universe lists (which ETFs/sectors/commodities/themes ship as defaults)?
-5. Boom-bucket size / cap (how many boom candidates tracked at once)?
-6. Approval actions: file-based artifacts only, or dashboard-interactive POST (the
-   operator-control plane supports interactive — confirm scope)?
-7. Claude Code launch from phone/VPS: copy-only on mobile, dispatch desktop-only?
-8. System-improvement skill: deterministic-first (recommended) vs OpenAI-assisted from
-   day one?
-9. Retention/compaction policy + latest-vs-append for the new JSONL event streams?
-10. Should `broker_aware_portfolio` ever feed `decision_plan` inputs, or remain a
-    read-only side-panel only (recommended: side-panel until explicitly approved)?
-11. Strategy engine (§24): how is `after_tax_return_estimate` computed when only
-    config holdings (no broker tax-lot/cost-basis) are available — coarse heuristic vs
-    omit-and-degrade (recommended: degrade with explicit `degraded:true`)?
-12. Should a user-`mark_as_preferred_profile` ever feed advisory configuration into the
-    official engine, and if so via what exact field (recommended: defer; advisory
-    side-panel only until a separately-approved, default-off wiring step)?
-13. `strategy_comparison.json` is named by both §10 (shadow portfolios) and §24 — one
-    writer/schema or two distinct files? (recommended: one shared sandbox artifact with
-    a `produced_by` field).
+All planning questions are resolved. These are the binding decisions for
+implementation; revisit only by explicit owner change.
+
+1. **Schwab API readiness → keep stubbed until ready.** Build Phases 9–10 against the
+   existing read-only layer + fixtures; **no live OAuth wiring yet**. Nothing blocks on
+   credentials; live pulls are a later, additive flip when the app is approved.
+2. **Broker token storage → local `data/schwab_token.json`, `0600`, gitignored**
+   (current approach; adequate for read-only scope). Encrypted-at-rest / keyring is a
+   future hardening option, not required now.
+3. **Primary dashboard → `gui_v2` (FastAPI)** for all new cards; Streamlit stays
+   legacy/reversible-only.
+4. **Default universe lists →** seed `config/universe_lists.yaml` with: broad-market
+   ETFs (SPY, QQQ, VTI, VXUS); sector SPDRs (XLK, XLE, XLF, XLV, XLI, XLU, XLP, XLY,
+   XLB, XLRE, XLC); commodity proxies (GLD, SLV, USO, URA, DBC); and the 10 example
+   themes in §7 as `theme_baskets`. All sandbox-scored only.
+5. **Boom-bucket / speculative cap → Higher tier: ≤15% total speculative exposure,
+   ≤5% per idea** (hard caps). Core stays ≥85%. Applies to Aggressive Growth + Boom
+   Bucket profiles (§24).
+6. **Approval actions → dashboard-interactive POST + append-only artifact.** Reuse the
+   operator-control plane; the append-only artifact is the source of truth, the UI is a
+   writer.
+7. **Claude Code launch → copy-only on mobile**; gated autonomous dispatch
+   desktop/VPS-only.
+8. **System-improvement skill → deterministic producer + optional OpenAI summary.**
+   Deterministic ideas always (offline, no cost, testable); OpenAI only rewrites the
+   brief when `ai_budget` allows.
+9. **Event streams → append-only JSONL, yearly compaction** to
+   `outputs/policy/archive/`; live streams are never rewritten.
+10. **`broker_aware_portfolio` → read-only side-panel only**; never feeds
+    `decision_plan` inputs unless a separate, default-off, owner-approved wiring step.
+11. **`after_tax_return_estimate` with no tax-lot data → degrade** with explicit
+    `degraded: true` + placeholders; no coarse guess.
+12. **`mark_as_preferred_profile` → advisory side-panel only**; engine wiring deferred
+    to a later, separately-approved, default-off step.
+13. **`strategy_comparison.json` collision → one shared sandbox file** with a
+    `produced_by` field (`shadow_tracker` | `strategy_comparator`).
 
 ---
 
@@ -745,14 +757,14 @@ raw upside.
 
 | # | Profile | Objective | Defining characteristics | Hard caps / guardrails |
 |---|---|---|---|---|
-| 1 | **Aggressive Growth** | Max upside / capital appreciation | Higher tech/growth tilt; limited leveraged-ETF use; more momentum/breakout sensitivity; active boom bucket; higher drawdown tolerance | Strict leverage, concentration, drawdown-regime caps |
+| 1 | **Aggressive Growth** | Max upside / capital appreciation | Higher tech/growth tilt; limited leveraged-ETF use; more momentum/breakout sensitivity; active boom bucket; higher drawdown tolerance | Strict leverage, concentration, drawdown-regime caps; speculative sleeve bounded by the §23.5 caps (≤15% total, ≤5%/idea) |
 | 2 | **Short-Term Tactical** | Capture short-term opportunities | Price/volume + news catalysts + sector rotation + vol regime; 1/3/7/30d windows; small sizing; **exit criteria required before entry** | Sandbox-heavy before any review; small per-idea size |
 | 3 | **Long-Term Compounding** | Max long-term after-tax compounding | Broad-market ETFs + quality growth; new cash before selling; low turnover; rebalancing bands; 5/10/20/30y horizon | Minimize taxable churn; behavioral guardrails |
 | 4 | **Tax-Aware** | Max after-tax return | Avoid unnecessary taxable sales; new-cash rebalancing; track unrealized gain/loss (if broker data); ST vs LT gain flags; TLH candidates; wash-sale **informational**; separate taxable/Roth/traditional/HSA if data | Degrades gracefully if no cost-basis/tax-lot data |
 | 5 | **Defensive / Capital Preservation** | Reduce drawdown, protect capital | Lower equity in stress regimes; higher cash/treasury/defensive; reduce leverage first; tighter concentration; quality/low-vol/gold-treasury hedges | Stricter risk-off triggers |
 | 6 | **Income / Dividend** | Yield with acceptable growth | Dividend ETFs / quality dividend growth / cash yield / bonds; track yield, dividend growth, payout quality, sector concentration | Avoid unsafe-yield chasing; compare vs growth opportunity cost |
 | 7 | **Balanced Core-Satellite** | Stable core + tactical satellite | Long-term diversified core + smaller opportunity/boom satellite | Strict satellite/boom max allocation |
-| 8 | **Boom Bucket** | Asymmetric upside from high-risk ideas | Speculative ideas tracked separately; uses universe scanner + opportunity radar; sandbox tracking required; private/IPO are watch-only unless investability confirmed | Hard cap per idea **and** total speculative exposure; high boom score alone is never sufficient (needs investability + evidence + risk controls) |
+| 8 | **Boom Bucket** | Asymmetric upside from high-risk ideas | Speculative ideas tracked separately; uses universe scanner + opportunity radar; sandbox tracking required; private/IPO are watch-only unless investability confirmed | **≤5% per idea, ≤15% total speculative exposure** (§23.5); high boom score alone is never sufficient (needs investability + evidence + risk controls) |
 
 ### 24.3 Strategy comparison metrics
 For each strategy, compute or propose (each explainable in the GUI):
@@ -855,7 +867,7 @@ strategy scorecards themselves (so the engine learns which strategies fit which 
   metrics, Strategy Lab dashboard, approval/blocked actions, decision-engine + sandbox
   interaction, outcome measurement).
 - **Test plan:** Section 19. **Docs plan:** Section 20. **Safety constraints:** Section 4.
-- **Open questions:** Section 23.
+- **Decisions (all resolved 2026-06-09):** Section 23.
 - **Next recommended prompt to begin implementation (Phase 1):**
 
   > "Implement Phase 1 of `docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md`: add the
