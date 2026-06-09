@@ -559,7 +559,15 @@ def _normalize_overview(
             for status in artifact_statuses.values()
             if status.get("exists")
         ]
-        last_updated_dt = max([dt for dt in existing_updates if dt is not None], default=None)
+        # Artifact timestamps may be a mix of tz-aware ("…+00:00"/"Z") and naive
+        # strings; normalize to naive UTC (the module convention, cf. line ~227)
+        # before max() so the comparison never raises offset-naive vs -aware.
+        _norm = [
+            (dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo is not None else dt)
+            for dt in existing_updates
+            if dt is not None
+        ]
+        last_updated_dt = max(_norm, default=None)
 
     warning_pool = []
     warning_pool.extend(health_warnings)
