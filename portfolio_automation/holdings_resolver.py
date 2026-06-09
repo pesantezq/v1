@@ -1,0 +1,171 @@
+"""Broker-aware holdings resolver + portfolio side-panel (Phase 10, spec §6).
+
+Provides the user's *actual* holdings as an OPTIONAL input: a fresh Schwab
+read-only snapshot is preferred when available + configured + the feature flag is
+on; otherwise it falls back to ``config.json`` holdings. Stale/missing broker data
+lowers a confidence modifier.
+
+Decision §23.10: ``broker_aware_portfolio.json`` is a **read-only side-panel** —
+it NEVER feeds ``decision_plan`` inputs (that would be a separate, default-off,
+owner-approved wiring step). This module trades nothing, writes no broker, and
+mutates no holdings.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+from portfolio_automation.next_stage.contracts import observe_only_envelope
+
+# Broker snapshot is considered stale beyond this age (seconds).
+_STALE_AFTER_S = 24 * 3600
+
+
+def _load_json_safe(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except Exception:
+        return None
+
+
+def _config(root: Path) -> dict[str, Any]:
+    return _load_json_safe(root / "config.json") or {}
+
+
+def _broker_aware_enabled(root: Path) -> bool:
+    cfg = _config(root)
+    try:
+        return bool(cfg.get("portfolio", {}).get("broker_aware", {}).get("enabled", False))
+    except Exception:
+        return False
+
+
+def _parse_age_s(ts: str | None, now: datetime) -> float | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (now - dt).total_seconds())
+    except Exception:
+        return None
+
+
+def resolve_holdings(root: Path, prefer_broker: bool | None = None,
+                     now: datetime | None = None) -> dict[str, Any]:
+    """Resolve holdings + cash, preferring a fresh broker snapshot when allowed.
+
+    Returns ``{holdings, cash, holdings_source, broker_freshness_age_s,
+    confidence_modifier, reason}``. Never raises.
+    """
+    now = now or datetime.now(timezone.utc)
+    if prefer_broker is None:
+        prefer_broker = _broker_aware_enabled(root)
+    L = root / "outputs" / "latest"
+    cfg = _config(root)
+    cfg_holdings = (cfg.get("portfolio", {}) or {}).get("holdings", []) or []
+    cfg_cash = (cfg.get("portfolio", {}) or {}).get("cash_available", 0.0)
+
+    def _config_result(reason: str, conf: float) -> dict[str, Any]:
+        return {"holdings": cfg_holdings, "cash": cfg_cash, "holdings_source": "config",
+                "broker_freshness_age_s": None, "confidence_modifier": conf, "reason": reason}
+
+    if not prefer_broker:
+        return _config_result("broker_aware_disabled", 1.0)
+
+    positions = _load_json_safe(L / "schwab_positions.json")
+    snapshot = _load_json_safe(L / "schwab_portfolio_snapshot.json")
+    if not isinstance(positions, dict) or not isinstance(snapshot, dict):
+        return _config_result("broker_data_missing", 0.85)
+
+    age = _parse_age_s(snapshot.get("snapshot_timestamp") or snapshot.get("generated_at"), now)
+    if age is not None and age > _STALE_AFTER_S:
+        return _config_result("broker_data_stale", 0.8)
+
+    pos = positions.get("positions", []) or []
+    if not pos:
+        return _config_result("broker_no_positions", 0.85)
+
+    holdings = [{"symbol": str(p.get("symbol", "")).upper(),
+                 "quantity": p.get("quantity"),
+                 "market_value": p.get("market_value")} for p in pos if p.get("symbol")]
+    cash = (snapshot.get("totals", {}) or {}).get("cash", cfg_cash)
+    return {"holdings": holdings, "cash": cash, "holdings_source": "broker",
+            "broker_freshness_age_s": age, "confidence_modifier": 1.0,
+            "reason": "fresh_broker_snapshot"}
+
+
+def _config_leveraged(root: Path) -> set[str]:
+    cfg = _config(root)
+    out = set()
+    for h in (cfg.get("portfolio", {}) or {}).get("holdings", []) or []:
+        if h.get("is_leveraged"):
+            out.add(str(h.get("symbol", "")).upper())
+    return out
+
+
+def build_broker_aware_portfolio(root: Path, now: datetime | None = None) -> dict[str, Any]:
+    """Build the read-only broker-aware portfolio side-panel. Never feeds decision_plan."""
+    now = now or datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    res = resolve_holdings(root, now=now)
+    payload = observe_only_envelope(now_iso, source="holdings_resolver",
+                                    side_panel_only=True,
+                                    feeds_decision_plan=False)
+    payload["holdings_source"] = res["holdings_source"]
+    payload["freshness"] = {"broker_freshness_age_s": res["broker_freshness_age_s"],
+                            "reason": res["reason"]}
+    payload["confidence_modifier"] = res["confidence_modifier"]
+
+    holdings = res["holdings"]
+    leveraged = _config_leveraged(root)
+
+    if res["holdings_source"] == "broker":
+        mvs = {h["symbol"]: float(h.get("market_value") or 0) for h in holdings}
+        total = sum(mvs.values()) + float(res["cash"] or 0)
+        weights = {s: round(mv / total, 4) for s, mv in mvs.items()} if total > 0 else {}
+        payload["allocation"] = weights
+        payload["concentration"] = {"max_weight": round(max(weights.values()), 4) if weights else 0.0,
+                                     "flag": (max(weights.values()) > 0.40) if weights else False}
+        lev_mv = sum(mv for s, mv in mvs.items() if s in leveraged)
+        payload["leverage"] = {"leveraged_exposure": round(lev_mv / total, 4) if total > 0 else 0.0}
+        payload["cash_drag"] = round(float(res["cash"] or 0) / total, 4) if total > 0 else 0.0
+        # config-vs-broker drift (symbol set + cash)
+        cfg_syms = {str(h.get("symbol", "")).upper()
+                    for h in (_config(root).get("portfolio", {}) or {}).get("holdings", []) or []}
+        broker_syms = set(mvs)
+        payload["config_vs_broker_drift"] = {
+            "only_in_broker": sorted(broker_syms - cfg_syms),
+            "only_in_config": sorted(cfg_syms - broker_syms),
+        }
+        payload["degraded_mode"] = False
+    else:
+        # config fallback: no live prices → market-value metrics unavailable (degrade honestly)
+        payload["allocation"] = {}
+        payload["concentration"] = {"available": False, "reason": "no_market_value_without_broker"}
+        payload["leverage"] = {"available": False}
+        payload["cash_drag"] = None
+        payload["config_vs_broker_drift"] = {"available": False}
+        payload["degraded_mode"] = True
+    return payload
+
+
+def write_broker_aware_portfolio(root: Path, now: datetime | None = None) -> dict[str, Any]:
+    """Write the side-panel artifact (PORTFOLIO namespace). Non-fatal."""
+    now = now or datetime.now(timezone.utc)
+    base = root / "outputs"
+    try:
+        payload = build_broker_aware_portfolio(root, now)
+    except Exception as exc:
+        payload = observe_only_envelope(now.isoformat(), source="holdings_resolver",
+                                        degraded_mode=True, degraded_reason=str(exc),
+                                        side_panel_only=True, feeds_decision_plan=False)
+        payload["holdings_source"] = "config"
+        payload["freshness"] = {"reason": "error"}
+    safe_write_json(OutputNamespace.PORTFOLIO, "broker_aware_portfolio.json", payload, base_dir=base)
+    return {"holdings_source": payload.get("holdings_source"),
+            "degraded": bool(payload.get("degraded_mode"))}
