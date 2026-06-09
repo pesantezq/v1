@@ -1,0 +1,57 @@
+[
+  {
+    "path": "outputs/latest/decision_plan.json",
+    "label": "decision plan",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/decision_plan.md",
+    "label": "decision plan (md)",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/system_decision_summary.json",
+    "label": "system decision summary",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/daily_memo.md",
+    "label": "daily memo (md)",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/daily_memo.txt",
+    "label": "daily memo (txt)",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/news_intelligence.json",
+    "label": "news intelligence",
+    "required": true
+  },
+  {
+    "path": "outputs/latest/risk_delta.json",
+    "label": "risk delta panel",
+    "required": true
+  },
+  {
+    "path": "outputs/portfolio/portfolio_snapshot.json",
+    "label": "portfolio snapshot",
+    "required": true
+  },
+  {
+    "path": "outputs/performance/approved_ranking_config.json",
+    "label": "approved ranking config",
+    "required": false
+  },
+  {
+    "path": "outputs/performance/approved_allocation_policy.json",
+    "label": "approved allocation policy",
+    "required": false
+  },
+  {
+    "path": "outputs/latest/theme_opportunities.json",
+    "label": "theme opportunities",
+    "required": false
+  }
+]

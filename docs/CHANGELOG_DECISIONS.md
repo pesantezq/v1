@@ -166,6 +166,91 @@ operator can generate and review a safe-writer proposal.
 
 ---
 
+## Registry Consumer-Debt Burn-Down
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `portfolio_automation/artifact_registry.yaml` — `consumer_status` field added to all 54 rows; `UNATTRIBUTED` sentinel removed; `consumers` relaxed to allow empty list for non-consumed rows.
+- `portfolio_automation/artifact_registry.py` — `CONSUMER_STATUSES` enum; `schema_errors` validates `consumer_status` + consumed-requires-non-empty-consumers invariant; `validate_registry` reports `classified`, `unjustified_debt`, `justified_no_consumer`, `by_consumer_status`, `debt_target_met`; degraded dict carries new fields; `unattributed` key removed.
+- `tests/test_artifact_registry.py` — 12 new tests: consumer_status schema (4), classification coverage (3), debt fields (3), validator immutability (1), proof-wire reference (1).
+- `tests/conftest.py` (new) — session-scoped autouse guard: snapshots `config/signal_registry.yaml`, `config/approved_weight_changes.json`, and `config/history/` before the test session; fails loudly and restores if any test mutates them.
+- `tests/test_registry_apply.py` — `test_no_approval_file_is_inert` made hermetic (uses `tmp_path` registry copy instead of live paths); fixes the live signal_registry.yaml mutation leak.
+- `.claude/commands/daily-tool-analysis.md` — Step 1 field list, Step 2 governance gate, Step 4 Coverage heartbeat updated: `unjustified_debt` / `classified` / `by_consumer_status` / `debt_target_met` replace `unattributed`.
+- `.claude/commands/monthly-tool-analysis.md` — `pattern_efficacy_weekly.json` trend read added.
+
+### Decision
+
+Shipped the registry consumer-debt burn-down: `consumer_status` (consumed / diagnostic_only / archive_only / deprecated_candidate) replaces the opaque `UNATTRIBUTED` sentinel; all 54 rows classified; target 100%/0-unjustified met (`debt_target_met: true`). The validator now reports structured debt fields (observe-only — never moves `overall_status`). Validator-immutability and a conftest protected-file guard fix the `test_no_approval_file_is_inert` live-registry leak. Proof-wired `correlation_risk_advisor.json` (daily-tool-analysis) and `pattern_efficacy_weekly.json` (monthly-tool-analysis) from `diagnostic_only` to `consumed` (`confidence_calibration.json` turned out already-consumed by `watchlist_scanner.memo_enrichment`, so it was not a proof-wire target). Consumer distribution: 45 consumed / 8 diagnostic_only / 1 archive_only / 0 deprecated_candidate.
+
+### Why
+
+The `UNATTRIBUTED` sentinel made it impossible to distinguish intentional diagnostic artifacts (no analysis consumer by design) from genuine debt (no consumer, no justification). Without a structured debt metric, producer-without-consumer rot was invisible. The conftest gap allowed `test_no_approval_file_is_inert` to silently mutate `config/signal_registry.yaml` whenever a residual approval file existed on disk.
+
+### Invariants Preserved
+
+No scoring/decision/allocation/recommendation logic changed. `overall_status` is unaffected by debt fields. `observe_only: true` preserved. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+`artifact_registry_status.json` gains `classified`, `unjustified_debt`, `justified_no_consumer`, `by_consumer_status`, `debt_target_met` fields; `unattributed` key removed. Daily heartbeat Coverage line updated. Tests: 12 new in `tests/test_artifact_registry.py`. `tests/conftest.py` now guards the live registry from all test-suite mutations.
+
+**Spec:** `docs/superpowers/specs/2026-06-08-registry-consumer-debt-burndown-design.md`
+**Plan:** `docs/superpowers/plans/2026-06-08-registry-consumer-debt-burndown.md`
+
+---
+
+## Artifact Registry & Probe Governance Layer
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `portfolio_automation/artifact_registry.yaml` (new) — declarative YAML contract for ~52 artifacts; one row per artifact with `lens`, `role`, `required`, `cadence`, `producer`, `consumers`, `severity_if_missing`.
+- `portfolio_automation/artifact_registry.py` (new) — `load_registry()`, `schema_errors()`, `required_artifacts()`, `max_age_hours()`, `is_stale()`, `validate_registry()`, `run_artifact_registry()` (never raises; writes `outputs/latest/artifact_registry_status.json`).
+- `portfolio_automation/daily_run_status.py` — `_EXPECTED_ARTIFACTS` replaced by `_expected_artifacts()` registry feed + `_FALLBACK_EXPECTED_ARTIFACTS` built-in copy; no schema break (golden-output guard in tests).
+- `.claude/commands/daily-tool-analysis.md` — `artifact_registry_status.json` read first in Step 1; governance confidence-gate in Step 2 (source_of_truth missing/stale → cap at AMBER); coverage heartbeat in Step 4 (always first item).
+- `tests/test_artifact_registry.py` (new) — 15 tests covering loader, schema, required-equivalence, cadence-staleness, validator (red/amber/green/invalid/schema_invalid), orchestrator, degraded, golden.
+- `tests/fixtures/daily_run_status_golden.json` (new) — 11-row captured pre-invert payload for equivalence guard.
+
+### Decision
+
+Shipped the artifact registry & probe governance layer: a declarative YAML contract describes every tracked artifact; a cadence-aware validator (`run_artifact_registry`) classifies the live corpus and writes `outputs/latest/artifact_registry_status.json`; `daily_run_status` is inverted to read `required_artifacts()` from the registry instead of a hardcoded list; the observe-only invariant is codified via the `role` field (`source_of_truth` = official action, `advisor`/`probe`/`telemetry`/`narrative` = confidence/explanation only); `daily-tool-analysis` gates confidence by governance (source_of_truth missing/stale → AMBER cap).
+
+### Why
+
+~52 `outputs/latest` artifacts had no single governed description: no machine-readable ownership, no cadence-aware staleness, no consumer attribution, no schema enforcement. The hardcoded `_EXPECTED_ARTIFACTS` list in `daily_run_status.py` was a standalone manual copy with no link to the rest of the corpus. The registry unifies all of this into one contract and one validator, making producer-without-consumer gaps visible and staleness classification correct for weekly/monthly artifacts.
+
+### Invariants Preserved
+
+No scoring/decision/allocation/recommendation logic changed. No `decision_engine.py` change. `daily_run_status` output schema is byte-identical (golden-output test enforces this). `observe_only: true` hardcoded in the status artifact. `next_official_step` unchanged (`observe_and_iterate`).
+
+### Downstream Impact
+
+New artifact `outputs/latest/artifact_registry_status.json` (observe-only; `meta_governance` lens). `daily-tool-analysis` reads it first and gates confidence. No GUI/memo wording change. Tests: `tests/test_artifact_registry.py` (15).
+
+### Artifact Health Severity
+
+New artifact `artifact_registry_status.json` is `required: true`, `cadence: daily`, `severity_if_missing: warning`. Self-describing: its own `overall_status` rolls up critical/warning/info across the whole corpus. Producer: `artifact_registry`. Consumer: `daily-tool-analysis`.
+
+**Spec:** `docs/superpowers/specs/2026-06-08-artifact-registry-governance-design.md`
+**Plan:** `docs/superpowers/plans/2026-06-08-artifact-registry-governance.md`
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date

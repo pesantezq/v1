@@ -43,6 +43,7 @@ the fix.
 
 **Read artifacts** (degrade gracefully on any miss):
 
+0. `outputs/latest/artifact_registry_status.json` → overall_status, counts, missing[], stale[], invalid_json[], unjustified_debt[], justified_no_consumer, by_consumer_status, classified, debt_target_met, severity, operator_message (added 2026-06-08; artifact-governance validator — READ FIRST, it gates confidence in everything below). If absent, fall back to daily_run_status as before and note the registry validator did not run.
 1. `outputs/latest/daily_run_status.json` → overall_status, stage_summary, required_missing_count, **content_liveness, content_warn_count** (added 2026-05-28)
 2. `outputs/latest/daily_memo.md` (first 50 lines)
 3. `outputs/latest/retune_impact.json` → outcome_attribution.by_fingerprint, **sector_composition per fingerprint** (added 2026-05-28)
@@ -59,6 +60,7 @@ the fix.
 14. `outputs/latest/historical_backfill_status.json` → universe_size, fetched, errored, skipped_budget (added 2026-05-28; weekend-cadence producer)
 15. `outputs/latest/doc_audit_status.json` → overall_status, len(coverage_gaps), count of unfixed `drift`/`consistency` findings (added 2026-06-01; weekly-cadence producer — may be absent until first /doc-audit run)
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply: last entry `status` (added 2026-06-05; default-inert mutator — absent or `disabled`/`oos_immature` is the expected steady state, NOT a finding)
+17. `outputs/latest/correlation_risk_advisor.json` → risk lens: read `high_correlation_pairs`, `concentration_risk_score`, `recommendations` — flags when portfolio positions are highly correlated and concentration risk is elevated (added 2026-06-08; risk-lens consumer)
 
 **Compute**:
 
@@ -87,6 +89,12 @@ the fix.
 ---
 
 ## Step 2 — Triage
+
+**Artifact-governance gate (run before GREEN/AMBER/RED):**
+- Read `artifact_registry_status.json` first. If a `role: source_of_truth` artifact is in `missing` or `stale` → **downgrade confidence and cap the run at AMBER at best** (the decision core is not trustworthy); never infer portfolio actions from a degraded decision core.
+- If a `required` `role: probe` artifact is missing/stale → mark the analysis **partial** for that lens.
+- `unjustified_debt` entries route to `portfolio-discovery-health` (advisory, not RED); `justified_no_consumer` is acknowledged, not debt.
+- Only `source_of_truth` artifacts represent official actions; probe/advisor/telemetry/narrative artifacts inform confidence and explanation only.
 
 **GREEN** when all of:
 - `overall_status == "ok"` (NOT `ok_with_warnings`)
@@ -207,6 +215,7 @@ Headline grammar:
 
 **Body, under 250 words**:
 
+0. Artifact governance (always, first): `"Coverage: {present}/{total} present · {missing} missing ({missing_required} required) · {stale} stale · debt {unjustified_debt} (target 0) · classified {classified}/{total} · {overall_status}"` — from artifact_registry_status.json. RED here (critical/source-of-truth missing) forces the daily lead line to RED.
 1. Attribution snapshot (always): `"Attribution: current-fp n={N} at {H}% / pre-tracker n={N} at {H}% · Δ {sign}{pp}pp · top sector {gauge_top_sector}"`
 2. Risk-delta state (always): `"Risk: {top_symbol} {weight}% (cap {cap}%, +{headroom}pp); leverage {L}%"`
 3. Discovery pulse + AI spend (always, since they're project-wide health signals): `"Pulse: last={pulse_age_hours}h ago, {total_runs_month} runs MTD ({skipped_runs_month} skipped) · AI: ${monthly_cost_total_usd:.2f}/${monthly_cost_limit_usd:.0f} cap ({ai_budget_pct_of_cap}%)"`

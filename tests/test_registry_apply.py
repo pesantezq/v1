@@ -65,12 +65,18 @@ def _weights(reg: Path) -> dict[str, float]:
 # Default-inert live-safety gate
 # --------------------------------------------------------------------------
 
-def test_no_approval_file_is_inert():
-    before = Path(_LIVE_REGISTRY).read_bytes()
-    rep = apply_approved_changes()  # all defaults; no config/approved_weight_changes.json exists
-    after = Path(_LIVE_REGISTRY).read_bytes()
+def test_no_approval_file_is_inert(tmp_path):
+    # Inert when the approval file is absent — proven against a temp registry so the
+    # live config/signal_registry.yaml can never be touched (it is the apply DEFAULT).
+    reg = _temp_registry(tmp_path)
+    before = reg.read_bytes()
+    missing_approval = tmp_path / "approved_weight_changes.json"  # does not exist
+    rep = apply_approved_changes(
+        registry_path=str(reg), approval_path=str(missing_approval),
+        history_dir=str(tmp_path / "history"), base_dir=str(tmp_path / "out"),
+        now_iso=_NOW)
     assert rep["status"] == "no_approval_file"
-    assert before == after, "with no approval file, the live registry must be untouched"
+    assert reg.read_bytes() == before, "with no approval file, the registry must be untouched"
 
 
 # --------------------------------------------------------------------------
@@ -82,9 +88,9 @@ def test_apply_within_caps_changes_only_approved(tmp_path):
     approval = _write_approval(tmp_path, [{"signal_id": "STRONG_MOVE_UP", "delta": 0.05}])
     rep = _apply(reg, approval, tmp_path, max_abs_delta=0.05)
     assert rep["status"] == "applied"
-    after = _weights(reg)
-    assert after["STRONG_MOVE_UP"] == 0.50  # 0.45 + 0.05
     baseline = _baseline_weights()
+    after = _weights(reg)
+    assert abs(after["STRONG_MOVE_UP"] - (baseline["STRONG_MOVE_UP"] + 0.05)) < 1e-9  # baseline + delta (baseline-relative; owner-applied weight drifts)
     for sid, w in after.items():
         if sid != "STRONG_MOVE_UP":
             assert w == baseline[sid], f"{sid} weight changed but was not approved"
