@@ -1,7 +1,11 @@
 [Unit]
-Description=StockBot Dashboard v2 (FastAPI + HTMX)
+Description=StockBot Dashboard v2 (FastAPI + HTMX) — persona cockpit /dashboard/*
 After=network.target
-Documentation=docs/superpowers/specs/2026-05-15-gui-v2-design.md
+Documentation=docs/superpowers/specs/2026-05-15-gui-v2-design.md docs/gui_usage.md
+# Routes: /dashboard/today|portfolio|quant|system|memo|portfolio-sync|portfolio-config
+# Optional env vars (add to EnvironmentFile=/opt/stockbot/.env):
+#   GUI_V2_AUTH_USER=<user>   GUI_V2_AUTH_PASS=<pass>  — enable HTTP Basic Auth (open by default)
+#   GUI_V2_PORTFOLIO_EDIT=1   — enable gated portfolio holdings/cash edit (requires auth; off by default)
 
 [Service]
 Type=simple

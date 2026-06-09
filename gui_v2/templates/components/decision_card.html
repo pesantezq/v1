@@ -1,0 +1,34 @@
+{# Decision card component — renders a single advisory decision row.
+   Source: decision_plan.json (decision-core only).
+   Pass `d` = a decision dict with keys: ticker, action, priority, urgency, rationale, confidence.
+   NO trade-execution language. Advisory only. #}
+{% if d %}
+<div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+  <div class="flex items-center justify-between gap-2">
+    <span class="font-mono font-semibold text-sm text-zinc-100">{{ d.ticker }}</span>
+    {# Action badge — color-coded by direction #}
+    {% set act = d.action | upper %}
+    {% if act == "BUY" %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ act }}</span>
+    {% elif act == "SELL" %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ act }}</span>
+    {% elif act == "HOLD" %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ act }}</span>
+    {% elif act == "SCALE" %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ act }}</span>
+    {% else %}
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ act or "—" }}</span>
+    {% endif %}
+    {% if d.urgency %}
+      <span class="text-xs text-zinc-500">{{ d.urgency }}</span>
+    {% endif %}
+    {% if d.priority %}
+      <span class="text-xs text-zinc-500 font-mono">p={{ "%.2f" | format(d.priority | float) }}</span>
+    {% endif %}
+  </div>
+  {% if d.rationale %}
+  <p class="text-xs text-zinc-400 leading-snug">{{ d.rationale }}</p>
+  {% endif %}
+  <p class="text-xs text-zinc-600 italic">Advisory only &mdash; from decision_plan.json</p>
+</div>
+{% endif %}

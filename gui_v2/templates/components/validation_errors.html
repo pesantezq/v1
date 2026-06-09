@@ -1,0 +1,92 @@
+{#
+  validation_errors.html — inline validation result for the portfolio config form.
+
+  Context variables expected:
+    validation      — {"ok": bool, "errors": [str]}
+    diff            — {"holdings": [...], "cash": {"before": float, "after": float}}
+                      (only present when validation.ok is True)
+
+  Rendered as an HTMX fragment response (no base layout).
+#}
+{% if validation %}
+  {% if not validation.ok %}
+  <div class="rounded-md bg-rose-500/10 border border-rose-500/30 px-4 py-3 space-y-2">
+    <p class="text-sm font-semibold text-rose-300">Validation errors — config not saved</p>
+    <ul class="text-xs text-rose-400 list-disc list-inside space-y-0.5">
+      {% for err in validation.errors %}
+      <li>{{ err }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <div class="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 space-y-3">
+    <p class="text-sm font-semibold text-emerald-300">Preview — no changes written yet</p>
+
+    {# Cash diff #}
+    {% if diff and diff.cash %}
+    <div class="text-xs text-zinc-400">
+      Cash: <span class="font-mono text-zinc-200">${{ "%.2f" | format(diff.cash.before | float) }}</span>
+      &rarr; <span class="font-mono text-zinc-200">${{ "%.2f" | format(diff.cash.after | float) }}</span>
+      {% set cash_delta = (diff.cash.after | float) - (diff.cash.before | float) %}
+      {% if cash_delta > 0.005 %}
+        <span class="text-emerald-400 font-mono">(+${{ "%.2f" | format(cash_delta) }})</span>
+      {% elif cash_delta < -0.005 %}
+        <span class="text-rose-400 font-mono">(${{ "%.2f" | format(cash_delta) }})</span>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# Holdings diff table #}
+    {% if diff and diff.holdings %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="border-b border-zinc-700 text-zinc-500 uppercase tracking-wide text-left">
+            <th class="py-1 pr-3">Symbol</th>
+            <th class="py-1 pr-3">Change</th>
+            <th class="py-1 pr-3 text-right">Shares Before</th>
+            <th class="py-1 text-right">Shares After</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for row in diff.holdings %}
+          <tr>
+            <td class="py-1 pr-3 font-mono font-semibold text-zinc-100">{{ row.symbol }}</td>
+            <td class="py-1 pr-3">
+              {% if row.before is none %}
+                <span class="text-emerald-400">+ added</span>
+              {% elif row.after is none %}
+                <span class="text-rose-400">- removed</span>
+              {% else %}
+                {% set before_shares = (row.before.shares | float) if row.before and row.before.shares is not none else 0 %}
+                {% set after_shares = (row.after.shares | float) if row.after and row.after.shares is not none else 0 %}
+                {% if (before_shares - after_shares) | abs > 0.0001 %}
+                  <span class="text-amber-400">~ changed</span>
+                {% else %}
+                  <span class="text-zinc-500">unchanged</span>
+                {% endif %}
+              {% endif %}
+            </td>
+            <td class="py-1 pr-3 text-right font-mono text-zinc-400">
+              {% if row.before is not none and row.before.shares is not none %}
+                {{ row.before.shares }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="py-1 text-right font-mono text-zinc-300">
+              {% if row.after is not none and row.after.shares is not none %}
+                {{ row.after.shares }}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <p class="text-xs text-zinc-500">
+      Click <strong class="text-zinc-300">Confirm &amp; save config</strong> to apply these changes.
+    </p>
+  </div>
+  {% endif %}
+{% endif %}

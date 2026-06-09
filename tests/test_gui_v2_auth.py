@@ -24,10 +24,18 @@ class TestAuthDisabled:
     ):
         monkeypatch.delenv("GUI_V2_AUTH_USER", raising=False)
         monkeypatch.delenv("GUI_V2_AUTH_PASS", raising=False)
-        # No Authorization header sent
+        # No Authorization header sent.
+        # Old routes (/portfolio etc.) now redirect; the canonical dashboard path is used.
+        # We verify with follow_redirects=False that the route itself is accessible
+        # (not 401) and redirects as expected.
+        from gui_v2.app import app
+        c = TestClient(app, follow_redirects=False)
         for path in ("/", "/portfolio", "/research", "/health", "/operations"):
-            r = client.get(path)
-            assert r.status_code == 200, f"{path}: open-mode should allow access"
+            r = c.get(path)
+            assert r.status_code in (200, 302), f"{path}: open-mode should allow access (got {r.status_code})"
+        # The new canonical route must return 200
+        r = client.get("/dashboard/today")
+        assert r.status_code == 200, "/dashboard/today: open-mode should allow access"
 
     def test_open_access_when_only_user_set(
         self, client, monkeypatch: pytest.MonkeyPatch,
@@ -78,11 +86,20 @@ class TestAuthEnabled:
         assert "<html" in r.text.lower()
 
     def test_every_page_requires_auth(self, client):
+        # Old routes (/portfolio etc.) now redirect (302) when authenticated.
+        # Unauthenticated → 401; authenticated → 302 (redirect) or 200 for canonical routes.
+        from gui_v2.app import app
+        c = TestClient(app, follow_redirects=False)
         for path in ("/", "/portfolio", "/research", "/health", "/operations"):
-            r = client.get(path)
-            assert r.status_code == 401, f"{path}: should be gated"
-            r2 = client.get(path, headers=_auth_header("ops", "hunter2"))
-            assert r2.status_code == 200, f"{path}: should pass with correct creds"
+            r = c.get(path)
+            assert r.status_code == 401, f"{path}: should be gated when no creds"
+            r2 = c.get(path, headers=_auth_header("ops", "hunter2"))
+            assert r2.status_code in (200, 302), f"{path}: should pass with correct creds (got {r2.status_code})"
+        # The canonical dashboard route requires auth and serves 200 with correct creds
+        r3 = c.get("/dashboard/today")
+        assert r3.status_code == 401, "/dashboard/today: should be gated when no creds"
+        r4 = c.get("/dashboard/today", headers=_auth_header("ops", "hunter2"))
+        assert r4.status_code == 200, "/dashboard/today: should pass with correct creds"
 
     def test_constant_time_comparison_does_not_short_circuit_username(
         self, client,

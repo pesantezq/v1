@@ -78,18 +78,22 @@ class TestCollectView(unittest.TestCase):
 
 
 class TestRouteRenders(unittest.TestCase):
-    """Smoke-test the actual /risk-impact route against the live outputs/latest/."""
+    """Smoke-test the /risk-impact route.
 
-    def test_route_returns_200_and_key_strings(self):
+    /risk-impact now redirects to /dashboard/portfolio (Task 1 persona-cockpit).
+    The risk-impact content (Risk Delta, Retune Impact, FMP Budget) will be
+    surfaced under /dashboard/portfolio in Task 2. Here we assert the redirect
+    is in place so the route does not 404 and the underlying data collector
+    (collect_risk_impact_view, tested above) remains functional.
+    """
+
+    def test_risk_impact_route_redirects_to_portfolio(self):
         from gui_v2.app import app
         from fastapi.testclient import TestClient
-        client = TestClient(app)
+        client = TestClient(app, follow_redirects=False)
         r = client.get("/risk-impact")
-        self.assertEqual(r.status_code, 200)
-        # Key labels that must appear in the rendered HTML.
-        for needle in ("Risk &amp; Impact", "Risk Delta", "Retune Impact",
-                       "FMP Budget", "Today's Run"):
-            self.assertIn(needle, r.text)
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.headers["location"], "/dashboard/portfolio")
 
 
 if __name__ == "__main__":

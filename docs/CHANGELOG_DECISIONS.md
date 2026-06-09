@@ -375,6 +375,74 @@ None — GUI/memo WORDING changed; no artifact severity, no missing_artifact_cou
 
 ---
 
+## GUI Persona Cockpit
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `gui_v2/app.py` — seven `/dashboard/*` routes (today/portfolio/quant/system/memo/portfolio-sync/portfolio-config); old-route redirects via `REDIRECT_MAP`; `_edit_enabled()` gate; portfolio-config validate/save POST handlers; `_parse_holdings_from_form()`.
+- `gui_v2/data/shared.py` — `card()` normalized shape helper + `REDIRECT_MAP`.
+- `gui_v2/data/dash_today.py`, `dash_portfolio.py`, `dash_quant.py`, `dash_system.py`, `dash_memo.py`, `dash_portfolio_sync.py`, `dash_portfolio_config.py` — persona data collectors.
+- `gui_v2/portfolio_config_writer.py` — gated safe-write surface (reuses `tools.manual_portfolio_update` primitives).
+- `gui_v2/templates/base.html` — observe-only banner, persona top-nav, mobile bottom-nav, mobile status bar.
+- `gui_v2/templates/dashboard/*.html` — seven persona templates.
+- `gui_v2/templates/components/bottom_nav.html`, `mobile_status_bar.html`, `evidence_drawer.html`, `source_artifact_label.html`, `portfolio_edit_form.html`, `validation_errors.html`.
+- `tests/test_gui_dashboard_shell.py`, `test_gui_dashboard_portfolio.py`, `test_gui_dashboard_quant.py`, `test_gui_dashboard_system.py`, `test_gui_dashboard_memo.py`, `test_gui_dashboard_portfolio_sync.py`, `test_gui_dashboard_portfolio_config.py`.
+- `docs/gui_usage.md`, `docs/gui_mobile.md`, `docs/gui_remote_access.md`, `docs/gui_observe_only_safety.md`, `docs/gui_portfolio_config.md` (this Task 8).
+- Spec: `docs/superpowers/specs/2026-06-08-gui-persona-cockpit-design.md`. Plan: `docs/superpowers/plans/2026-06-08-gui-persona-cockpit.md`.
+
+### Decision
+
+Shipped a three-persona + memo + portfolio-utility cockpit on the existing FastAPI/HTMX/Jinja2/Tailwind gui_v2 stack:
+
+- **Three persona views** at `/dashboard/today` (Operator), `/dashboard/portfolio` (Portfolio Manager), `/dashboard/quant` (Quant), `/dashboard/system` (Developer/System).
+- **Memo view** at `/dashboard/memo`.
+- **Schwab portfolio-sync view** at `/dashboard/portfolio-sync` — read-only reconcile proposal, never mutates config.
+- **Gated portfolio-config edit** at `/dashboard/portfolio-config` — requires auth + `GUI_V2_PORTFOLIO_EDIT=1`; validate → dry-run diff → confirm → save flow; backup + audit + reversible.
+- **Old-route redirects**: `/portfolio` → `/dashboard/portfolio`, `/risk-impact` → `/dashboard/portfolio`, `/research` → `/dashboard/quant`, `/health` and `/operations` → `/dashboard/system`.
+- **Mobile bottom-nav** (five tabs: Today/Portfolio/Quant/System/Memo) hidden on desktop via `md:hidden`.
+- **Observe-only banner** hardcoded on every page (`base.html`).
+- **No forbidden labels** — `Execute`, `Trade`, `Buy Now`, `Sell Now`, `Place Order`, `Auto-Trade`, `Auto-Approve` are absent from all templates (enforced by test).
+- Safe-write path reuses `tools.manual_portfolio_update` primitives (`_atomic_write_json`, `_write_backup`, `_append_audit_record`).
+
+### Why
+
+The legacy Streamlit cockpit was retired in favor of the FastAPI/HTMX gui_v2 stack.
+The persona cockpit consolidates the operator's daily review, quant analysis, and
+system health monitoring into a single mobile-friendly, observe-only web UI with
+a clear source-of-truth chain.
+
+### Invariants Preserved
+
+- No scoring, decision, or recommendation logic changed.
+- `decision_plan.json` remains the sole decision source of truth.
+- All new views are read-only artifact consumers (except the gated config edit, which
+  is write-gated and audit-logged).
+- `observe_only: true` carried in all config-edit audit records.
+- `next_official_step` unchanged (= `observe_and_iterate`).
+
+### Downstream Impact
+
+New deployment env var: `GUI_V2_PORTFOLIO_EDIT` (default off). New `/dashboard/*`
+routes are canonical; old routes redirect. Write artifacts:
+`outputs/policy/portfolio_backups/` and `outputs/policy/manual_portfolio_updates.jsonl`
+(both pre-existing paths from the `manual_portfolio_update` tool).
+
+### Artifact Health Severity
+
+No new health-flagged artifacts. Portfolio config backup and audit artifacts are
+`optional_missing` (absent until a save is performed). No `missing_artifact_count`
+change. No GUI/memo/system-summary wording change.
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date
