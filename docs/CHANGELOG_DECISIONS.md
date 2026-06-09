@@ -251,6 +251,90 @@ New artifact `artifact_registry_status.json` is `required: true`, `cadence: dail
 
 ---
 
+## Quant-Watch Probe Ledger — Sub-RED Quant Concern Tracker
+
+### Date
+
+`2026-06-08`
+
+### Area
+
+evaluation, architecture
+
+### Files / Functions
+
+- `portfolio_automation/quant_watch_probes.py` (new) — `run_quant_watch` (orchestrator), `detect`/`evaluate`/`update_ledger`/`render_status`/`overall_status`/`load_ledger`, 3 detectors (`detect_prior_gauge_underperformance`, `detect_negative_mean_return_persistence`, `detect_sector_drag`) + paired evaluators (`_eval_prior_gauge`, `_eval_neg_return`, `_eval_sector_drag`), `write_ledger`, helpers (`_select_prior_gauge`, `_active`/`_resolved`/`_escalated`/`_age_days`).
+- `.claude/commands/quant-watch-analysis.md` (new) — skill: Steps 1–5 (run loop, manual judgment path, triage, heartbeat, notes).
+- `.claude/commands/daily-tool-analysis.md` (modify) — artifact read entry (item 17), quant-watch sub-check delegation block, Step 4 body line 6e.
+- `docs/quant_watch_probes.md` (new) — module documentation.
+- `tests/test_quant_watch_probes.py` (new) — 46 unit + integration tests.
+
+Spec: `docs/superpowers/specs/2026-06-08-quant-watch-probes-design.md`.
+Plan: `docs/superpowers/plans/2026-06-08-quant-watch-probes.md`.
+
+### Decision
+
+Shipped the quant-watch probe ledger: a self-managing ledger of sub-RED quant
+concerns. Three deterministic detectors fire below the `daily-tool-analysis` RED
+trip-wires and register a probe; each run paired evaluators re-check open probes
+(escalate-before-resolve); resolved/escalated probes are archived with
+`resolved_at`, `resolution`, and `lifetime_days`. AMBER/RED-hybrid escalation:
+an escalated probe has by construction crossed a daily RED gate, so the RED
+*response* is deferred to `daily-tool-analysis` + `portfolio-attribution-analyst`
+dispatch — quant-watch adds continuity and same-run visibility, not a second RED
+authority.
+
+Detector table (v1):
+- D1 `prior_gauge_underperformance` (flagship) — fires when current-fp is ≥10pp
+  below the prior gauge era and `|Δ vs pre_tracker|` < 10pp (sub-RED band).
+  Escalates when the daily RED gate (`|Δ vs pre_tracker|` ≥10pp at n≥30) is
+  later crossed.
+- D2 `negative_mean_return_persistence` — fires when current-fp `mean_return_1d`
+  < 0 at n≥30.
+- D3 `sector_drag` — fires when a `sector:*` tag in `pattern_efficacy_monthly.json`
+  is `loser` at n≥30.
+- Manual judgment path (`detector: "manual"`) — never auto-resolved; operator
+  retires by editing the ledger.
+
+New skill `/quant-watch-analysis` drives the loop daily (on-demand, delegated from
+`daily-tool-analysis` via the new sub-check block).
+
+### Why
+
+Quant concerns that fire below the daily RED threshold currently go untracked
+between runs. Without a ledger they may persist silently for weeks (as the
+prior-gauge trap did on the d95e gauge fingerprint). The watch-probe model
+provides continuity + retrospective trail without touching pipeline state.
+
+### Invariants Preserved
+
+No change to `decision_engine.py`, `signal_score`, `confidence_score`,
+`effective_score`, `conviction_score`, `final_rank_score`, or
+`recommendation_score` semantics. No change to allocation or portfolio state.
+Module mutates only its own ledger (`data/quant_watch_ledger.json`) and its
+status artifact (`outputs/latest/quant_watch_status.json`); both are
+runtime-generated and not committed. All new code is observe-only (`observe_only:
+true` in every output). `next_official_step` unchanged.
+
+### Downstream Impact
+
+New artifacts: `data/quant_watch_ledger.json` (runtime, git-ignored),
+`outputs/latest/quant_watch_status.json` (observe-only heartbeat). New skill
+`.claude/commands/quant-watch-analysis.md`. Additive edits to
+`.claude/commands/daily-tool-analysis.md` (artifact read + sub-check + body line).
+Tests: `tests/test_quant_watch_probes.py` (46). No GUI/memo wording change; no
+scoring/decision artifact change.
+
+### Artifact Health Severity
+
+`quant_watch_status.json` is `optional_missing` (absent until the runner fires the
+first time → no flag, graceful green). New `overall_status` field: green/amber/red.
+`missing_artifact_count` unchanged. Producer: `portfolio_automation.quant_watch_probes`
+(via `/quant-watch-analysis` skill, delegated from `/daily-tool-analysis`). No
+GUI/memo/system-summary wording change.
+
+---
+
 ## Pattern-Loop sub-project F — Historical Signal Reconstruction (look-ahead-safe)
 
 ### Date

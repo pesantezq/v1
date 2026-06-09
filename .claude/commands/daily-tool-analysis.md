@@ -61,6 +61,7 @@ the fix.
 15. `outputs/latest/doc_audit_status.json` → overall_status, len(coverage_gaps), count of unfixed `drift`/`consistency` findings (added 2026-06-01; weekly-cadence producer — may be absent until first /doc-audit run)
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply: last entry `status` (added 2026-06-05; default-inert mutator — absent or `disabled`/`oos_immature` is the expected steady state, NOT a finding)
 17. `outputs/latest/correlation_risk_advisor.json` → risk lens: read `high_correlation_pairs`, `concentration_risk_score`, `recommendations` — flags when portfolio positions are highly correlated and concentration risk is elevated (added 2026-06-08; risk-lens consumer)
+18. `outputs/latest/quant_watch_status.json` → overall_status, active_count, active[] (concern + age_days), registered_today, resolved_today, escalated_today, ledger_liveness (added 2026-06-08; quant-watch probe ledger — sub-RED quant concern tracker)
 
 **Compute**:
 
@@ -200,6 +201,22 @@ alert on it. The recompute itself is monthly, so day-to-day the evidence is unch
 daily value is catching auto-apply events same-day, a stalled recompute, or an offline
 fallback.
 
+### Quant-watch operational sub-check (delegate to `/quant-watch-analysis`)
+
+Run the `/quant-watch-analysis` skill's Step 1 backbone as the daily driver of
+the quant-watch probe ledger (auto-register sub-RED quant concerns, re-check
+open probes, auto-archive resolved ones). Do NOT re-derive detector logic here
+— that skill + `portfolio_automation/quant_watch_probes.py` own it. Fold its
+one-line heartbeat into the daily body (Step 4, item: "quant-watch: …").
+
+Escalate the DAILY check to RED only on the quant-watch RED condition
+(`escalated_today` non-empty). By construction an escalated probe has crossed a
+daily RED gate (e.g. `|delta_hit_rate_pp| >= 10 at n>=30`), so the existing
+daily RED logic + `portfolio-attribution-analyst` dispatch already own the
+response — quant-watch adds continuity + same-run visibility, not a second RED
+authority. The steady state (≥1 active AMBER probe, e.g. the prior-gauge
+underperformance trap) is AMBER — report it, don't alert on it.
+
 ---
 
 ## Step 4 — Output (daily heartbeat — emit every run)
@@ -224,6 +241,7 @@ Headline grammar:
 5b. Applied-fix verification (only when `applied_fixes` is non-empty): `"Fixes: {confirmed} confirmed · {pending} pending · {manual} manual{, REGRESSED: <id(s)> if any}"`. List each regressed id explicitly with its `detail`. When a fix is `confirmed`, it is dropped from state in Step 5 (it held — stop re-checking).
 6c. Docs (only when `doc_audit_status.json` exists): `"Docs: {overall_status} · {N} findings, {K} coverage gaps (last audit {last_audited_sha[:8]})"`
 6d. Pattern-loop (always, from the sub-check above): `"Pattern-loop: {mode}, OOS {observed}/315 (~{eta}), proposals {N}, auto-apply {state}"` — folds in the `/pattern-loop-analysis` heartbeat.
+6e. Quant-watch (always, from the sub-check above): `"Quant-watch: {overall_status} · {active_count} active ({top active probe concern}); {len(registered_today)}↑/{len(resolved_today)}↓/{len(escalated_today)} esc today"` — folds in the `/quant-watch-analysis` heartbeat. RED only when `escalated_today` is non-empty (which is already a daily RED key).
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
