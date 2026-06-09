@@ -490,15 +490,16 @@ def test_mismatch_rows_extracted_correctly(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_schwab_available_is_false_on_this_branch(tmp_path):
+def test_schwab_available_true_when_brokers_present(tmp_path):
     """
-    On this branch portfolio_automation.brokers does NOT exist, so
-    schwab_available must be False.
+    The Schwab brokers package is now merged into main, so
+    portfolio_automation.brokers.schwab_sync IS importable and schwab_available
+    must be True. (It was False on the pre-merge cockpit branch.)
     """
     from gui_v2.data.dash_portfolio_sync import schwab_available
 
-    assert schwab_available is False, (
-        "Expected schwab_available=False since brokers package is not on this branch"
+    assert schwab_available is True, (
+        "Expected schwab_available=True now that the brokers package is present"
     )
 
 
@@ -583,12 +584,17 @@ def test_portfolio_sync_safety_banner_text():
     )
 
 
-def test_portfolio_sync_generate_button_disabled_when_schwab_unavailable():
+def test_portfolio_sync_generate_button_disabled_when_schwab_unavailable(monkeypatch):
     """
-    When schwab_available=False (this branch), the Generate Config Update Proposal
-    button must be rendered with the 'disabled' attribute and the not-installed note.
+    When schwab_available is False (brokers unavailable / degraded path), the
+    Generate Config Update Proposal button must render with the 'disabled'
+    attribute and the not-installed note. Brokers are normally present now, so
+    unavailability is forced via the module flag to keep covering this path.
     """
     from gui_v2.app import app
+    from gui_v2.data import dash_portfolio_sync as dps_module
+
+    monkeypatch.setattr(dps_module, "schwab_available", False)
 
     client = TestClient(app)
     r = client.get("/dashboard/portfolio-sync")
@@ -759,11 +765,17 @@ def test_reconcile_post_with_stubbed_run_reconcile_does_not_mutate_config(
         sys.modules.pop("portfolio_automation.brokers.schwab_sync", None)
 
 
-def test_reconcile_post_returns_not_installed_message_when_brokers_absent():
+def test_reconcile_post_returns_not_installed_message_when_brokers_absent(monkeypatch):
     """
-    POST /reconcile when brokers module absent → response contains the not-installed note.
+    POST /reconcile when the brokers module is unavailable → response contains the
+    not-installed note. Brokers are normally present now, so absence is forced by
+    sabotaging the import (sys.modules entry → None raises ImportError) to keep
+    covering the degraded path.
     """
+    import sys
     from gui_v2.app import app
+
+    monkeypatch.setitem(sys.modules, "portfolio_automation.brokers.schwab_sync", None)
 
     client = TestClient(app)
     r = client.post("/dashboard/portfolio-sync/reconcile")
