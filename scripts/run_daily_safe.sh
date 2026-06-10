@@ -218,6 +218,16 @@ run_aux_stage "Sandbox lane status" \
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
 
+# Stage 10b — Next-stage research/strategy lane (Phases 1-15). Standalone
+# observe-only orchestrator: system-improvement → universe scan + radar →
+# shadow tracking → market-opportunity prompts → strategy comparison →
+# approval queues → broker-aware side-panel. Pure (no LLM/FMP/network; reads
+# local artifacts only), every producer non-fatal, never writes decision_plan.
+# Runs before Stages 11-12 so daily_run_status + the registry validator count
+# its artifacts as freshly present rather than missing.
+run_aux_stage "Next-stage research/strategy lane" \
+    python -m portfolio_automation.next_stage.run_next_stage --root "${REPO_ROOT}"
+
 # Stage 11 — Daily run status (reads its own log; runs last so it captures
 # all preceding stages). Provides operator-glanceable ok/partial/failed.
 run_aux_stage "Daily run status" \
