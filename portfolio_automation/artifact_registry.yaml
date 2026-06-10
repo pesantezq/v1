@@ -773,10 +773,10 @@ artifacts:
     required: false
     cadence: daily
     producer: universe_scanner
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 6 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phases 5-6 — consumed by /daily-tool-analysis Step 4 line 6h (radar candidate-count liveness + silent-zero discovery-health dispatch); activated 2026-06-10
 
   private_ipo_watchlist.json:
     path: outputs/sandbox/private_ipo_watchlist.json
@@ -838,10 +838,10 @@ artifacts:
     required: false
     cadence: on_demand
     producer: approval_layer
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 8 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phases 4+8 — consumed by /daily-tool-analysis Step 4 line 6h (open opportunity-queue depth); activated 2026-06-10
 
   shadow_opportunity_tracking.json:
     path: outputs/sandbox/shadow_opportunity_tracking.json
@@ -851,10 +851,10 @@ artifacts:
     required: false
     cadence: daily
     producer: shadow_tracker
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 7 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phase 7 — consumed by /daily-tool-analysis Step 4 line 6h (shadow record-count); activated 2026-06-10
 
   shadow_portfolios.json:
     path: outputs/sandbox/shadow_portfolios.json
@@ -877,10 +877,10 @@ artifacts:
     required: false
     cadence: on_demand
     producer: strategy_comparator
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 7 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phases 11A+12-13 — consumed by /daily-tool-analysis Step 4 line 6h (top strategy profile + profile count + context_source); activated 2026-06-10
 
   candidate_promotion_review.json:
     path: outputs/sandbox/candidate_promotion_review.json
@@ -955,10 +955,10 @@ artifacts:
     required: false
     cadence: daily
     producer: holdings_resolver
-    consumers: []
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 10 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phase 10 — consumed by /daily-tool-analysis Step 4 line 6h (holdings_source + degraded_mode); config source while Schwab unconfigured is expected; activated 2026-06-10
 
   system_improvement_ideas.json:
     path: outputs/latest/system_improvement_ideas.json
@@ -968,10 +968,10 @@ artifacts:
     required: false
     cadence: daily
     producer: system_improvement
-    consumers: []
+    consumers: [daily-tool-analysis, daily-system-improvement]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 3 — producer not yet shipped
+    consumer_status: consumed
+    notes: next-stage Phase 3 — liveness (idea_count) surfaced by /daily-tool-analysis Step 4 line 6h; deep triage owned by /daily-system-improvement; activated 2026-06-10
 
   system_improvement_brief.md:
     path: outputs/latest/system_improvement_brief.md

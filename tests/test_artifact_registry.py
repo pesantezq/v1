@@ -489,3 +489,48 @@ def test_broker_post_sync_absence_is_info_not_escalating(tmp_path):
     assert st["overall_status"] == ar.GREEN          # info-missing never escalates
     assert st["counts"]["missing"] == 4              # the 4 post-sync artifacts
     assert st["counts"]["missing_required"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Next-stage lane (Phases 1-15) — daily-tool-analysis per-phase dispatch wiring
+# (added 2026-06-10: the activated next-stage producers are now consumed by the
+#  daily check's Step 4 line 6h; guard the consumer wiring + skill reference so
+#  it can't silently revert to producer-without-consumer debt.)
+# ---------------------------------------------------------------------------
+
+# artifact -> the daily skill must consume it and reference its filename.
+_NEXT_STAGE_DAILY_CONSUMED = (
+    "opportunity_radar.json",
+    "opportunity_approval_queue.json",
+    "strategy_comparison.json",
+    "shadow_opportunity_tracking.json",
+    "broker_aware_portfolio.json",
+    "system_improvement_ideas.json",
+)
+
+
+def test_next_stage_artifacts_consumed_by_daily_tool_analysis():
+    reg = ar.load_registry()
+    for art in _NEXT_STAGE_DAILY_CONSUMED:
+        row = reg["artifacts"][art]
+        assert row["consumer_status"] == "consumed", \
+            f"{art} should be consumed by the daily check but is {row['consumer_status']!r}"
+        assert "daily-tool-analysis" in row["consumers"], \
+            f"{art} must list daily-tool-analysis as a consumer"
+        # absence of a next-stage advisory must never escalate governance
+        assert row["severity_if_missing"] == "info", \
+            f"{art} severity_if_missing must be info (observe-only side-panel)"
+
+
+def test_next_stage_dispatch_lines_present_in_daily_skill():
+    skill = _Path(".claude/commands/daily-tool-analysis.md")
+    assert skill.exists(), "daily-tool-analysis skill file missing"
+    text = skill.read_text(encoding="utf-8")
+    # the per-phase heartbeat line (Step 4 item 6h) and its silent-zero dispatch
+    assert "6h." in text and "Next-stage lane" in text, \
+        "Step 4 line 6h (Next-stage lane heartbeat) missing from daily skill"
+    assert "next_stage_radar_candidates" in text, \
+        "next-stage radar silent-zero signal missing from daily skill"
+    # every artifact the registry says daily-tool-analysis consumes must be named
+    for art in _NEXT_STAGE_DAILY_CONSUMED:
+        assert art in text, f"daily skill does not reference consumed artifact {art}"

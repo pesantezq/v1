@@ -64,6 +64,13 @@ the fix.
 18. `outputs/latest/quant_watch_status.json` → overall_status, active_count, active[] (concern + age_days), registered_today, resolved_today, escalated_today, ledger_liveness (added 2026-06-08; quant-watch probe ledger — sub-RED quant concern tracker)
 19. `outputs/latest/broker_sync_status.json` → overall_status (`disabled`|`unconfigured`|`error`|`ok`|`degraded`), configured, authenticated, account_count, position_count, last_error (added 2026-06-09; Schwab read-only broker sync — **on_demand / operator-run, NOT a daily-cron producer**; `unconfigured`/`disabled` is the expected inert steady state, NOT a finding. Always-producible even when uncredentialed.)
 20. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (both append-only; fold work_orders by `work_order_id`, last line wins) → operator-control plane (Phases 1–3): counts by status + count of `worker_protected_path_violation` events in the audit log (added 2026-06-09; **observe-only, operator-driven** — absence / all-zero is the inert steady state, NOT a finding; never blocks the decision core)
+21. Next-stage research/strategy lane (Phases 1–15, activated 2026-06-10 as `run_daily_safe.sh` Stage 10b; **observe-only, advisory side-panels — never feeds `decision_plan.json`**). Read the producers' artifacts (degrade gracefully on any miss — the lane is non-fatal per-step):
+    - `outputs/sandbox/opportunity_radar.json` → `opportunity_count` (universe scanner / Phases 5–6)
+    - `outputs/sandbox/opportunity_approval_queue.json` → `queue_count` (market-opportunity prompts / Phases 4+8)
+    - `outputs/sandbox/strategy_comparison.json` → `comparison` (len = profile count), `context_source` (Phases 11A+12–13 Multi-Strategy / Strategy Lab)
+    - `outputs/sandbox/shadow_opportunity_tracking.json` → `record_count` (Phase 7 shadow tracking)
+    - `outputs/portfolio/broker_aware_portfolio.json` → `holdings_source`, `degraded_mode` (Phase 10 broker-aware side-panel — `degraded_mode:true` + `holdings_source:config` is the expected inert state while Schwab is `unconfigured`, NOT a finding)
+    - `outputs/latest/system_improvement_ideas.json` → `idea_count` (Phase 3; deeper triage owned by the dedicated `/daily-system-improvement` skill — daily check only surfaces liveness here)
 
 **Compute**:
 
@@ -95,6 +102,13 @@ the fix.
   - `operator_quarantined_today` = count of `worker_protected_path_violation` audit events dated today (absent files → 0)
   - `operator_stuck_running` = any order in `running`/`claimed` whose last `status_history.at` is > 24h ago (worker crashed mid-run, or a scaffolded order was never completed)
   - `operator_worker_mode` = `"autonomous ON"` if `autonomous_enabled` else `"scaffold-only"`
+- next-stage lane (Phases 1–15; all default to `null`/`absent` if the artifact is missing — the lane ships non-fatal and is observe-only):
+  - `next_stage_lane_ran` = any next-stage artifact's `generated_at` is within the last 26h (lane fired in today's cron)
+  - `next_stage_radar_candidates` = `opportunity_radar.opportunity_count`
+  - `next_stage_opp_queue_open` = `opportunity_approval_queue.queue_count`; `next_stage_improvement_open` = `system_improvement_ideas.idea_count`
+  - `next_stage_strategy_profiles` = `len(strategy_comparison.comparison)`; `next_stage_strategy_top` = `strategy_id` of the entry with `final_strategy_rank == 1`; `next_stage_strategy_context` = `strategy_comparison.context_source`
+  - `next_stage_shadow_tracked` = `shadow_opportunity_tracking.record_count`
+  - `next_stage_broker_aware_source` = `broker_aware_portfolio.holdings_source`; `next_stage_lane_degraded_steps` = count of next-stage producers reporting a degraded/error state (e.g. `broker_aware_portfolio.degraded_mode == true`)
 
 ---
 
@@ -121,6 +135,7 @@ the fix.
 - `applied_fix_regressions` is empty (no shipped fix has regressed)
 - `broker_status ∈ {unconfigured, disabled, ok}` (Schwab layer inert or healthy — `degraded`/`error` is the only non-GREEN broker state)
 - `operator_quarantined_today == 0` AND `operator_stuck_running` is false (operator-control plane inert or healthy — no work orders at all is GREEN)
+- next-stage lane healthy: `next_stage_lane_ran` is false (not yet run — neutral) OR (`next_stage_radar_candidates > 0` AND `next_stage_lane_degraded_steps ≤ 1`) — the lane is observe-only/advisory; `broker_aware` degraded-to-config while Schwab is unconfigured is the expected single degraded step and does NOT break GREEN
 - no unexpected fingerprint change
 - attribution presence consistent with fingerprint age (n=0 only acceptable when age <2 days)
 
@@ -138,6 +153,7 @@ the fix.
 - `doc_audit_status.overall_status == "coverage_gap"` OR any unfixed `drift`/`consistency` finding present (docs lag code — advisory; resolved by the next `/doc-audit` run)
 - `broker_status ∈ {degraded, error}` (Schwab configured but the OAuth token is unauthenticated, or the last broker API call failed — advisory only: the broker layer is observe-only evidence and **never** blocks the decision core; point the operator to `docs/schwab_integration.md` Troubleshooting. Never RED.)
 - `operator_quarantined_today ≥ 1` (the autonomous worker hit a protected path today — contained/quarantined, never merged; review `/dashboard/operator/report/<id>` to confirm the guard fired correctly) OR `operator_stuck_running` (an order has sat in `running`/`claimed` > 24h — worker crashed or a scaffolded order was abandoned; inspect the worktree). Operator-control is observe-only and **never** RED (it never blocks the decision core).
+- next-stage lane silent-zero: `next_stage_lane_ran` is true AND `next_stage_radar_candidates == 0` (the universe scanner ran but emitted no opportunities — discovery upstream likely broke; dispatch `portfolio-discovery-health`) OR `next_stage_lane_degraded_steps ≥ 2` (more than the expected broker-aware-only degradation — a second next-stage producer degraded). The next-stage lane is observe-only/advisory and **never** RED (it never feeds `decision_plan.json`).
 - attribution lag (age ≥2d AND n=0) — known cron-timing issue
 
 **RED** when any of:
@@ -182,8 +198,9 @@ the fix.
 - `pulse_cap_pct ≥ 80` (pulse approaching or past trip-wire — investigate which cap)
 - `ai_budget_pct_of_cap ≥ 80` (project-wide AI spend approaching $20/mo)
 - `applied_fix_regressions` contains any discovery-layer fix id (e.g. `persistence_7d_daily_mode`, `pulse_last_run_age_sla`, `extended_watchlist_cross_day_gate`) — a previously-shipped discovery fix has regressed; pass the verdict `detail` so the agent can pinpoint which signal reverted
+- `next_stage_lane_ran` is true AND `next_stage_radar_candidates == 0` (the next-stage universe scanner / opportunity-radar ran but emitted zero candidates — a silent-zero in the broad-market discovery layer; pass that the radar is empty so the agent can trace whether the scanner's price/universe inputs went stale)
 
-This agent audits the discovery layer: RSS feedparser availability, Ollama / LLM reachability, theme_signals emit-rate, extended_watchlist promotions, FMP profile-cache freshness, parallel FMP candidate-scanner wiring, **discovery_pulse cron health, AI budget cap utilization, and FMP monthly headroom**. Surfaces stacked silent-zero failures.
+This agent audits the discovery layer: RSS feedparser availability, Ollama / LLM reachability, theme_signals emit-rate, extended_watchlist promotions, FMP profile-cache freshness, parallel FMP candidate-scanner wiring, the **next-stage opportunity-radar / universe-scanner emit-rate**, **discovery_pulse cron health, AI budget cap utilization, and FMP monthly headroom**. Surfaces stacked silent-zero failures.
 
 `portfolio-learning-loop-health` IF any of:
 - `pattern_match_rate < 30` AND lookback has had ≥7 daily snapshots (join logic likely broken)
@@ -257,6 +274,7 @@ Headline grammar:
 6e. Quant-watch (always, from the sub-check above): `"Quant-watch: {overall_status} · {active_count} active ({top active probe concern}); {len(registered_today)}↑/{len(resolved_today)}↓/{len(escalated_today)} esc today"` — folds in the `/quant-watch-analysis` heartbeat. RED only when `escalated_today` is non-empty (which is already a daily RED key).
 6f. Broker-sync (always): `"Broker-sync: {broker_status} (configured={broker_configured}, authenticated={broker_authenticated}) · {account_count} accts / {position_count} positions"` — Schwab read-only layer. `unconfigured`/`disabled` is the inert steady state (report, don't alert). `degraded`/`error` → AMBER; append `"— see docs/schwab_integration.md Troubleshooting"`. Never RED (observe-only evidence; never blocks decisions).
 6g. Operator-control (always): `"Operator-control: {operator_open_count} open · {operator_failed_count} failed · {operator_quarantined_today} quarantined today · worker {operator_worker_mode}"` — observe-only work-order plane (Phases 1–3). No work orders / all-zero is the inert steady state (report, don't alert). `operator_quarantined_today ≥ 1` or a >24h stuck run → AMBER; append `"— review /dashboard/operator/report/<id>"`. Never RED (never blocks the decision core).
+6h. Next-stage lane (always when `next_stage_lane_ran`; else `"Next-stage lane: not run today"`): `"Next-stage lane: radar {next_stage_radar_candidates} candidates · queues {next_stage_opp_queue_open} opp / {next_stage_improvement_open} improvement · strategy top {next_stage_strategy_top} of {next_stage_strategy_profiles} ({next_stage_strategy_context}) · shadow {next_stage_shadow_tracked} tracked · broker-aware {next_stage_broker_aware_source}{, +N degraded if next_stage_lane_degraded_steps>1}"` — the activated Phases 1–15 research/strategy lane (observe-only, advisory side-panels, never feeds `decision_plan.json`). This one line is the per-phase heartbeat: radar = universe scan (5–6), queues = opportunity prompts + system-improvement (3/4/8), strategy = Multi-Strategy / Strategy Lab (11A/12–13), shadow = sandbox tracking (7), broker-aware = holdings resolver (10). A `config` broker-aware source while Schwab is unconfigured is expected (report, don't alert). AMBER only on the silent-zero / ≥2-degraded conditions in Step 2; **never RED** (the lane never blocks the decision core).
 6. Agent dispatch results — one line per agent. memo-reviewer always fires, so its line always appears: `"memo-reviewer: clean"` or `"memo-reviewer: N issue(s) — <highest-severity summary>"`. Other agents appear only if they fired. The discovery-health and learning-loop-health agents report `"<name>: {verdict} — {root cause sentence}"`.
 7. For RED only: named action from the template library below
 8. For GREEN: `"No action required."`
