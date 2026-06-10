@@ -411,3 +411,81 @@ def test_proof_wired_artifacts_are_referenced_by_their_consumer():
             assert hits, f"consumer file {c}.md not found for {art}"
             assert any(art in h.read_text(encoding="utf-8") for h in hits), \
                 f"{c}.md does not reference {art}"
+
+
+# ---------------------------------------------------------------------------
+# Broker-sync (Schwab read-only) registry coverage + daily-health pairing
+# (added 2026-06-09 — Track B: register the 5 broker artifacts and wire the
+#  broker_sync_status health check into daily-tool-analysis.)
+# ---------------------------------------------------------------------------
+
+_BROKER_ARTIFACTS = {
+    "broker_sync_status.json": ("developer", "telemetry"),
+    "schwab_portfolio_snapshot.json": ("risk_action", "advisor"),
+    "schwab_positions.json": ("risk_action", "advisor"),
+    "portfolio_reconciliation.json": ("risk_action", "advisor"),
+    "portfolio_config_update_proposal.json": ("risk_action", "advisor"),
+}
+
+
+def test_broker_artifacts_registered_and_schema_valid():
+    reg = ar.load_registry()
+    arts = reg["artifacts"]
+    for key, (lens, role) in _BROKER_ARTIFACTS.items():
+        assert key in arts, f"broker artifact not registered: {key}"
+        row = arts[key]
+        assert row["lens"] == lens
+        assert row["role"] == role
+        assert row["cadence"] == "on_demand"      # operator-run; never auto-stale
+        assert row["required"] is False
+        assert row["severity_if_missing"] == "info"  # absence must never escalate
+        assert ar._row_schema_ok(row), f"schema invalid row: {key}"
+    # the whole shipped registry still has zero schema errors after the additions
+    assert ar.schema_errors(reg) == []
+
+
+def test_broker_sync_status_paired_with_daily_health_check():
+    # CLAUDE.md Analysis+Health Coverage Requirement: a shipped producer must have
+    # at least one consumer at the appropriate cadence — here the daily skill.
+    reg = ar.load_registry()
+    row = reg["artifacts"]["broker_sync_status.json"]
+    assert row["consumer_status"] == "consumed"
+    assert "daily-tool-analysis" in row["consumers"], \
+        "broker_sync_status must be consumed by the daily-tool-analysis health check"
+
+
+def test_broker_artifacts_never_unjustified_debt(tmp_path):
+    # Healthy state: broker_sync_status present → all 5 rows classified 'consumed',
+    # zero unjustified debt, zero schema-invalid.
+    import datetime
+    reg = ar.load_registry()
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "broker_sync_status.json").write_text(
+        _json.dumps({"overall_status": "unconfigured", "observe_only": True}))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    st = ar.validate_registry(reg, tmp_path, now)
+    for key in _BROKER_ARTIFACTS:
+        assert key not in st["unjustified_debt"], f"{key} flagged as unjustified debt"
+        assert key not in st["schema_invalid"], f"{key} flagged schema-invalid"
+
+
+def test_broker_post_sync_absence_is_info_not_escalating(tmp_path):
+    # Degraded/uncredentialed state: the 4 post-sync artifacts are absent until a
+    # live --sync/--reconcile runs. Their absence must read info-missing only and
+    # NOT push governance to AMBER/RED. Isolate the broker rows so the assertion is
+    # purely about them.
+    import datetime
+    reg_full = ar.load_registry()
+    broker_only = {
+        "artifacts": {k: reg_full["artifacts"][k] for k in _BROKER_ARTIFACTS},
+        "daily_run_status_tracked": [],
+    }
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    # only the always-producible status artifact exists
+    (tmp_path / "outputs" / "latest" / "broker_sync_status.json").write_text(
+        _json.dumps({"overall_status": "unconfigured"}))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    st = ar.validate_registry(broker_only, tmp_path, now)
+    assert st["overall_status"] == ar.GREEN          # info-missing never escalates
+    assert st["counts"]["missing"] == 4              # the 4 post-sync artifacts
+    assert st["counts"]["missing_required"] == 0

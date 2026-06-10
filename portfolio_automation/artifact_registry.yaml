@@ -604,6 +604,77 @@ artifacts:
     severity_if_missing: warning
     consumer_status: consumed
 
+  # ── Broker sync (Schwab, read-only) ───────────────────────────────────────
+  # Observe-only broker layer. broker_sync_status is always-producible (emits
+  # status=unconfigured until credentials are set, so it is never legitimately
+  # absent once the layer ships). The other four exist only after a live
+  # `schwab_sync --sync/--reconcile` run, so they read info-missing (not a fault)
+  # until Schwab is authenticated. All are cadence:on_demand → never auto-stale.
+  broker_sync_status.json:
+    path: outputs/latest/broker_sync_status.json
+    label: broker sync status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: [daily-tool-analysis, gui_v2.data.dash_portfolio_sync]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Schwab read-only broker sync health. Always-producible; status=unconfigured until SCHWAB_* env + OAuth token set. Not in daily cron (operator-run)."
+
+  schwab_portfolio_snapshot.json:
+    path: outputs/latest/schwab_portfolio_snapshot.json
+    label: schwab portfolio snapshot
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: [gui_v2.data.dash_portfolio_sync]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Broker-snapshot evidence. Present only after a live --sync run."
+
+  schwab_positions.json:
+    path: outputs/latest/schwab_positions.json
+    label: schwab positions
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: [gui_v2.data.dash_portfolio_sync]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Broker positions evidence. Present only after a live --sync run."
+
+  portfolio_reconciliation.json:
+    path: outputs/latest/portfolio_reconciliation.json
+    label: portfolio reconciliation
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: [gui_v2.data.dash_portfolio_sync]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Schwab-vs-config mismatch report. Present only after a --reconcile run."
+
+  portfolio_config_update_proposal.json:
+    path: outputs/latest/portfolio_config_update_proposal.json
+    label: portfolio config update proposal
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: [gui_v2.data.dash_portfolio_sync, tools.manual_portfolio_update]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Operator-approval artifact (operator_approval_required + auto_applied:false hardcoded). Proposal-only; applied via the reviewed safe-writer tools/manual_portfolio_update.py. Present only after a --reconcile run."
+
   # ── Extra tracked (non-outputs/latest) ────────────────────────────────────
   daily_memo.md:
     path: outputs/latest/daily_memo.md
