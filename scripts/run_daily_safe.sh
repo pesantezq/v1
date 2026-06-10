@@ -222,3 +222,12 @@ run_aux_stage "Daily memo + email" \
 # all preceding stages). Provides operator-glanceable ok/partial/failed.
 run_aux_stage "Daily run status" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.daily_run_status import run_daily_run_status; r = run_daily_run_status(root='.'); print('overall:', r.get('overall_status'), 'missing_required:', r.get('required_missing_count'))"
+
+# Stage 12 — Artifact registry governance (corpus-integrity gate). Runs LAST,
+# after every other stage has written its artifact, so its presence/staleness
+# scan sees the fresh corpus (including daily_run_status above). Observe-only:
+# reads the registry + artifact mtimes, writes only its own status artifact.
+# This is the governance gate /daily-tool-analysis reads first to gate
+# confidence in everything below it.
+run_aux_stage "Artifact registry governance" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.artifact_registry import run_artifact_registry; r = run_artifact_registry(root='.'); c = r.get('counts') or {}; print('overall:', r.get('overall_status'), 'present:', c.get('present'), '/', c.get('total'), 'missing:', c.get('missing'), '(required', str(c.get('missing_required')) + ')', 'stale:', c.get('stale'), 'debt:', c.get('unjustified_debt'))"
