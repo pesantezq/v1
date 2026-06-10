@@ -607,3 +607,39 @@ permanently_deferred:
   external_customer_productization:
     status: out_of_scope
     reason: Personal system; no external product plans
+
+# ---------------------------------------------------------------------------
+# Next-Stage Portfolio Intelligence (2026-06-10) — built + activated
+# Spec: docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md
+# All phases additive / observe-only; never write decision_plan.json.
+# Built by a concurrent session (13 commits af6f63be..a981da01); activated into
+# the daily cron this session (Stage 10b of run_daily_safe.sh). 140 tests pass.
+# next_official_step remains observe_and_iterate (roadmap-control = GPT).
+# ---------------------------------------------------------------------------
+
+next_stage_intelligence:
+  status: built_and_activated
+  observe_only: true
+  cost_profile: pure  # no LLM/FMP/network
+  orchestrator: portfolio_automation/next_stage/run_next_stage.py
+  pipeline_stage: run_daily_safe.sh Stage 10b "Next-stage research/strategy lane"
+  steps:
+    phase_1_artifact_contracts: complete
+    phase_2_strategy_lab_view: complete
+    phase_3_daily_system_improvement_skill: complete
+    phase_4_approval_queues: complete
+    phase_5_universe_scanner: complete
+    phase_6_opportunity_scoring: complete
+    phase_7_sandbox_shadow_tracking: complete
+    phase_8_market_opportunity_prompts: complete
+    phase_9_broker_protocol_readonly: complete
+    phase_10_broker_aware_holdings_resolver: complete
+    phase_11_learning_loop_event_store: complete
+    phase_11a_multi_strategy_objective_engine: complete  # 8 profiles
+    phase_12_13_strategy_lab: complete
+    phase_14_15_orchestrator_and_docs: complete
+  activation_commits: [16c374bd, 256058e3, d69b97d4]
+  tests: 140
+  pending_operator:
+    dashboard_restart: done  # 2026-06-10 13:34 UTC — new GUI views (Strategy Lab / broker side-panel / approval queues) now serve
+    full_pytest_vps: done    # 7041 passed / 3 known-pre-existing failures (tuning_proposals weight, run_loop oos) — not regressions

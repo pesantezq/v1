@@ -86,6 +86,10 @@ completed_steps:
   - artifact_registry_and_probe_governance_layer  # 2026-06-08 — declarative artifact_registry.yaml contract for ~52 artifacts + cadence-aware validator (artifact_registry_status.json) + daily_run_status inverted to read the registry (golden-output guard, no schema break) + observe-only invariant codified via role field + daily-tool-analysis confidence gate. GPT-proposed, operator-approved; supersedes the standing observe_and_iterate hold for this governance step. Observe-only; next_official_step unchanged (observe_and_iterate).
   - registry_consumer_debt_burn_down  # 2026-06-08 — consumer_status field (consumed/diagnostic_only/archive_only/deprecated_candidate) replaces UNATTRIBUTED; all 54 rows classified (100%/0-unjustified target met; consumed 45 / diagnostic_only 8 / archive_only 1 / deprecated_candidate 0); validate_registry reports classified/unjustified_debt/by_consumer_status/debt_target_met (observe-only, never moves overall_status); validator-immutability test + tests/conftest.py protected-file guard that fixed the test_no_approval_file_is_inert live signal_registry.yaml leak; proof-wired correlation_risk_advisor (daily-tool-analysis) + pattern_efficacy_weekly (monthly-tool-analysis) from diagnostic_only to consumed (confidence_calibration was already genuinely consumed by watchlist_scanner.memo_enrichment, so it was not a proof-wire target). GPT-proposed, operator-approved. next_official_step unchanged (observe_and_iterate).
   - gui_persona_cockpit_shipped  # 2026-06-08 — persona cockpit (Milestones 1-8) shipped: 3 persona views (today/portfolio/quant/system) + memo + Schwab portfolio-sync view (read-only proposal) + gated portfolio-config edit (auth+GUI_V2_PORTFOLIO_EDIT=1; validate->dry-run-diff->confirm->save; backup+audit+reversible); replace old routes with 302 redirects; mobile bottom-nav (5 tabs); observe-only banner hardcoded; no forbidden labels enforced by test; safe-write reuses manual_portfolio_update primitives; 5 docs written; CHANGELOG updated. next_official_step unchanged = observe_and_iterate
+  - next_stage_intelligence_phases_1_15_shipped  # 2026-06-10 — full Next-Stage Portfolio Intelligence spec (docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md) built by a concurrent session in 13 commits (af6f63be..a981da01): Phase 1 artifact contracts (+418 registry rows) + Phases 2-15 incl. 11A Multi-Strategy Portfolio Objective Engine (8 profiles), broad-market universe scanner, opportunity scoring + radar, sandbox shadow tracking, read-only broker Protocol, broker-aware holdings resolver, learning-loop event store, daily system-improvement skill, market-opportunity prompts + approval queues, Strategy Lab dashboard view, orchestrator + docs/NEXT_STAGE_IMPLEMENTATION.md. 140 tests (test_next_stage_e2e + 11 phase suites + test_artifact_registry). All additive/observe-only; never writes decision_plan.json. next_official_step unchanged (observe_and_iterate) — see next_stage_intelligence block; roadmap-control (GPT) to decide whether to advance.
+  - artifact_registry_validator_wired_into_daily_cron  # 2026-06-10 — commit 16c374bd: run_artifact_registry wired as Stage 12 (last) of scripts/run_daily_safe.sh. The validator was previously invoked ONLY by tests + on-demand GUI, so artifact_registry_status.json was never produced by the cron and the /daily-tool-analysis step-0 governance gate had no artifact. Non-blocking; producer never raises. next_official_step unchanged.
+  - schwab_broker_artifacts_registered  # 2026-06-10 — commit 256058e3: 5 Schwab read-only broker artifacts registered in artifact_registry.yaml (broker_sync_status telemetry + 4 on_demand advisors), all required:false/severity:info so absence never escalates governance; broker_sync_status paired with daily-tool-analysis health check. Closes the deferred registry-registration + daily-health-pairing items from the Schwab read-only sync feature. 4 tests. next_official_step unchanged.
+  - next_stage_lane_activated_in_daily_cron  # 2026-06-10 — commit d69b97d4: next-stage orchestrator (portfolio_automation/next_stage/run_next_stage.py:run_all) activated as Stage 10b of scripts/run_daily_safe.sh (before Stages 11-12 so daily_run_status + registry count its artifacts fresh). The whole Phases 1-15 workstream was built+tested but DORMANT (run_all called only by its test); now runs daily in production. Pure (no LLM/FMP/network), non-fatal per-step, observe_only=True. Live run: 7 steps (6 ok; broker_aware degrades-to-config since Schwab unconfigured); registry coverage 46->70/91 present, 0 required-missing, 0 critical. next_official_step unchanged (observe_and_iterate).
 
 next_official_step:
   primary: observe_and_iterate  # All shipped code paths now need real-world outcome history to tune against; no new modules planned
@@ -472,3 +476,41 @@ pattern_loop_progress:
     step_5_precondition_2_value_gate: done  # 2026-06-05 backtesting/score_invariance_gate.py — the documented decision_engine value-regression gate. Proves a registry default_weight delta is bit-identical-safe for the six protected scores by recomputing them (real scanner/confidence/alert_ranking fns) over a fixture before/after an apply on a TEMP registry copy. GREEN live (weight 0.45->0.50, scores unchanged); live registry byte-identical. Wired opt-in into backtest_health(run_score_gate=True) -> RED flag score_coupling_regression. 6 + 2 tests. KEY FINDING: registry default_weight is currently DECOUPLED from all six protected scores (scoring never reads it) -> a Step 5 apply changes the YAML but no decision; wiring weights into scoring is protected scope needing explicit owner approval, NOT done. Remaining precondition #1 (owner-signed approved_weight_changes.json w/ evidence-backed deltas from a --live loop run) still unmet; Step 5 stays owner-gated + inert."
     step_6_analysis_health_pairing: done   # backtesting/backtest_health.py (assess_backtest_health GREEN/AMBER/RED + content_liveness) + yearly-tool-analysis.md wiring (artifacts 11-12, computed signal, triage, dispatch) + portfolio-backtest-health agent (committed, needs session restart to dispatch); 7 tests; satisfies CLAUDE.md analysis+health coverage rule for the whole loop
     end_to_end_driver: done            # 2026-06-05 backtesting/run_loop.py — thin observe-only CLI chaining Steps 1->4 in one command (load real signals -> run_poc -> per-signal OOS walk_forward grouped by registry signal_id -> propose_weight_changes -> write_proposals). registry_signal_id direction-resolves STRONG_MOVE; run_poc gained additive signals= param. Ran live over 858 aggregated real-history signals (offline prices): backtest_health flipped proposals_missing -> no_proposals. Step 5 NOT invoked (inert). 11 tests; registry byte-identical; docs/PATTERN_LOOP_RUN_LOOP.md + contracts + CHANGELOG. Real-edge evidence still needs --live on operator env (FMP key + network).
+
+next_stage_intelligence:
+  authorized_by: owner  # "continue working on all phases" 2026-06-10
+  spec: docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md
+  impl_doc: docs/NEXT_STAGE_IMPLEMENTATION.md
+  built_by: concurrent_session  # 13 commits af6f63be..a981da01
+  activated_by: this_session    # 3 follow-on commits, see below
+  status: built_and_activated
+  observe_only: true            # never writes decision_plan.json; advisory side-panels only
+  cost_profile: pure            # no LLM / FMP / network — all local-artifact reads
+  orchestrator: portfolio_automation/next_stage/run_next_stage.py  # run_all()
+  pipeline_stage: scripts/run_daily_safe.sh "Next-stage research/strategy lane" (Stage 10b)
+  tests: 140  # test_next_stage_e2e + 11 phase suites + test_artifact_registry
+  phases:
+    phase_1_artifact_contracts: done       # +418 registry rows; record schemas
+    phase_2_strategy_lab_view: done         # Strategy Lab dashboard view (with 12-13)
+    phase_3_daily_system_improvement: done  # /daily-system-improvement skill
+    phase_4_approval_queues: done
+    phase_5_universe_scanner: done          # broad-market scan
+    phase_6_opportunity_scoring: done       # distinct model
+    phase_7_sandbox_shadow_tracking: done   # shadow portfolios
+    phase_8_market_opportunity_prompts: done
+    phase_9_broker_protocol: done           # read-only Protocol (additive)
+    phase_10_broker_aware_holdings_resolver: done  # side-panel; degrades to config without broker
+    phase_11_learning_loop_event_store: done
+    phase_11a_multi_strategy_engine: done   # Multi-Strategy Portfolio Objective Engine, 8 profiles
+    phase_12_13_strategy_lab: done
+    phase_14_15_orchestrator_and_docs: done
+  activation_commits:
+    - 16c374bd  # artifact_registry validator wired as Stage 12 of run_daily_safe.sh
+    - 256058e3  # 5 Schwab broker artifacts registered + daily-health pairing
+    - d69b97d4  # next-stage orchestrator activated as Stage 10b (was dormant/test-only)
+  first_live_run_2026_06_10:
+    steps_ok: 6  # of 7; broker_aware degraded-to-config (Schwab unconfigured)
+    registry_present: "70/91"
+    registry_required_missing: 0
+    registry_critical: 0
+  roadmap_control_note: "next_official_step left at observe_and_iterate per the GPT/owner role split (roadmap-control is not Claude's to advance). These phases are recorded as built+activated for factual state; GPT to decide whether to advance the official step. Pending operator: dashboard restart done 2026-06-10 13:34 UTC (new GUI views live); full pytest 7041 passed / 3 known-pre-existing failures."

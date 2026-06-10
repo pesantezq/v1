@@ -1,5 +1,30 @@
 # Roadmap
 
+## Next-Stage Portfolio Intelligence — built + activated (2026-06-10)
+
+- **Phases 1–15 shipped (concurrent session, 13 commits `af6f63be..a981da01`).**
+  The full `docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md`: Phase 1 artifact
+  contracts (+418 registry rows), broad-market universe scanner + opportunity
+  scoring/radar, sandbox shadow tracking, read-only broker Protocol +
+  broker-aware holdings resolver (advisory side-panel), learning-loop event
+  store, daily system-improvement skill, market-opportunity prompts + approval
+  queues, **Phase 11A Multi-Strategy Portfolio Objective Engine (8 profiles)**,
+  Strategy Lab dashboard view, orchestrator + `docs/NEXT_STAGE_IMPLEMENTATION.md`.
+  140 tests. All additive / observe-only; never writes `decision_plan.json`.
+- **Activated into production (this session, 3 commits).** The workstream was
+  built but **dormant** (orchestrator invoked only by its test). Wired the
+  next-stage orchestrator as **Stage 10b** of `scripts/run_daily_safe.sh` and the
+  artifact-registry validator as **Stage 12**; registered the 5 Schwab broker
+  artifacts. Lane is pure (no LLM/FMP/network), non-fatal per producer,
+  `observe_only`. First live run: 6/7 steps ok (broker_aware degrades-to-config,
+  Schwab unconfigured); registry coverage 46→70/91, 0 required-missing, 0
+  critical. Commits `16c374bd`, `256058e3`, `d69b97d4`. Dashboard restarted;
+  full VPS suite 7041 passed (3 known-pre-existing failures, not regressions).
+- **Roadmap status.** `next_official_step` stays `observe_and_iterate`
+  (roadmap-control is GPT's role); recorded as built+activated in
+  `.agent/project_state.yaml:next_stage_intelligence` and
+  `.agent/phase_status.yaml`.
+
 ## Operator control / Claude Code worker (2026-06-09)
 
 - **Phase 1 — shipped (branch `operator-control-work-orders`).** Probe-driven,

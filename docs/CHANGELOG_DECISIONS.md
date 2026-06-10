@@ -1617,3 +1617,47 @@ approval — intentionally **not** done.
 
 `tests/test_score_invariance_gate.py` (6) + 2 in `tests/test_backtest_health.py`.
 Full backtesting suite: 252 passed.
+
+## 2026-06-10 — Next-Stage Portfolio Intelligence: built + activated into the daily cron
+
+### Area
+
+architecture, output_contract
+
+### Files / Functions
+
+- `scripts/run_daily_safe.sh` — new **Stage 10b** "Next-stage research/strategy lane"
+  (`python -m portfolio_automation.next_stage.run_next_stage --root …`) and new **Stage 12**
+  "Artifact registry governance" (`portfolio_automation.artifact_registry.run_artifact_registry`).
+- `portfolio_automation/artifact_registry.yaml` — 5 Schwab broker rows registered.
+- `portfolio_automation/next_stage/run_next_stage.py:run_all` — orchestrator (unchanged; now invoked).
+
+### Decision
+
+The full Next-Stage Portfolio Intelligence spec (`docs/NEXT_STAGE_PORTFOLIO_INTELLIGENCE_SPEC.md`,
+Phases 1–15 incl. 11A Multi-Strategy, 8 profiles) was built by a concurrent session in 13 commits
+(`af6f63be..a981da01`, 140 tests) but shipped **dormant** — its orchestrator was invoked only by
+tests, so its ~24 producers never ran in production. Likewise the artifact-registry validator was
+never wired into the cron. This session **activated** both: the next-stage lane as Stage 10b (before
+Stages 11–12 so `daily_run_status` + the registry validator count its artifacts as fresh) and the
+registry validator as Stage 12. Commits `16c374bd` (Stage 12), `256058e3` (Schwab registration),
+`d69b97d4` (Stage 10b activation).
+
+### Rationale / Invariants
+
+The next-stage lane is **pure** (no LLM/FMP/network — local-artifact reads only), **non-fatal**
+per producer (`_step` try/except), hardcoded `observe_only: true`, and **never writes
+`decision_plan.json`** — broker-aware holdings + preferred strategy stay advisory side-panels per
+§23 of the spec. No scoring / allocation / recommendation semantics changed; no output schema broken.
+`next_official_step` stays `observe_and_iterate` (roadmap-control is GPT's role).
+
+### Outcome
+
+First live run 2026-06-10: 7 steps, 6 ok (`broker_aware` degrades-to-config since Schwab is
+unconfigured). Registry coverage 46→70/91 present, **0 required-missing, 0 critical**. Dashboard
+restarted (new GUI views live). Full VPS suite: **7041 passed**, 3 known-pre-existing failures
+(`test_tuning_proposals` ×2 weight 0.45-vs-0.4947, `test_run_loop` oos) — not regressions.
+
+### Tests
+
+Targeted: 140 (`test_next_stage_e2e` + 11 phase suites + `test_artifact_registry`, 33).
