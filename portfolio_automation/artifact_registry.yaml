@@ -221,7 +221,12 @@ artifacts:
     lens: quant_learning
     role: advisor
     required: false
-    cadence: daily
+    # Produced weekly by `python -m portfolio_automation.retune_suggestions`
+    # in run_weekly_safe.sh (Monday 08:00). The learning loop intentionally
+    # recomputes on a weekly cadence (retune proposals need a week of fresh
+    # outcomes), so daily was a misclassification that produced false-stale
+    # signals every mid-week daily check.
+    cadence: weekly
     producer: retune_suggestions
     consumers: [monthly-tool-analysis, portfolio-learning-loop-health, daily-tool-analysis]
     severity_if_missing: info
@@ -516,6 +521,18 @@ artifacts:
     cadence: daily
     producer: resolution_due_probe
     consumers: [portfolio-resolver-investigator, daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+
+  pipeline_wiring_status.json:
+    path: outputs/latest/pipeline_wiring_status.json
+    label: pipeline wiring status
+    lens: developer
+    role: probe
+    required: false
+    cadence: daily
+    producer: pipeline_wiring_probe
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
     severity_if_missing: info
     consumer_status: consumed
 

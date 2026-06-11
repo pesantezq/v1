@@ -91,6 +91,17 @@ if src == 'fallback' or len(non_fb) == 0:
     printf '\n-- Pattern learning (monthly rolling 30d) --\n'
     python -m portfolio_automation.pattern_learning monthly
 
+    # Market narratives weekly + monthly-rolling synthesis. The daily cron
+    # (run_daily_safe.sh Stage 8a) refreshes only the "daily" period; the
+    # weekly/monthly narrative artifacts are produced here, alongside the other
+    # weekly+monthly recompute producers. Pure read of local decision + news
+    # artifacts (no LLM/FMP); run_market_narratives never aborts the run.
+    printf '\n-- Market narratives (weekly) --\n'
+    python -c "from portfolio_automation.market_narratives import run_market_narratives; r = run_market_narratives(periods=['weekly']); w = r.get('weekly') or {}; print('themes:', w.get('themes_found', 0), 'risks:', w.get('risks_found', 0), 'catalysts:', w.get('catalysts_found', 0))"
+
+    printf '\n-- Market narratives (monthly rolling 30d) --\n'
+    python -c "from portfolio_automation.market_narratives import run_market_narratives; r = run_market_narratives(periods=['monthly']); m = r.get('monthly') or {}; print('themes:', m.get('themes_found', 0), 'risks:', m.get('risks_found', 0), 'catalysts:', m.get('catalysts_found', 0))"
+
     printf '\n-- Pattern learning (yearly, partitioned by gauge x regime) --\n'
     python -m portfolio_automation.pattern_learning yearly
 

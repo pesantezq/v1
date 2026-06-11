@@ -192,11 +192,37 @@ run_aux_stage "FMP budget telemetry" \
 run_aux_stage "Resolution-due probe" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.resolution_due_probe import run_resolution_due_probe; r = run_resolution_due_probe(root='.'); print('status:', r.get('status'), 'stuck:', r.get('stuck_count'), '/', r.get('total_signals'))"
 
+# Stage 7f — Quant-watch probe ledger: auto-register sub-RED quant concerns,
+# re-check open probes, auto-archive resolved ones. Consumes retune_impact.json
+# (Stage 7c above) + pattern_efficacy_monthly.json, so it runs after the impact
+# tracker. Wired here deterministically so the ledger refreshes every cron run
+# rather than depending on the /quant-watch-analysis LLM skill being invoked.
+# run_quant_watch never raises (degrades to an empty-but-valid status); the
+# created_run tag marks cron-sourced registrations distinctly from skill runs.
+run_aux_stage "Quant-watch probe ledger" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.quant_watch_probes import run_quant_watch; r = run_quant_watch(root='.', created_run='run_daily_safe'); print('overall:', r.get('overall_status'), 'active:', r.get('active_count'), 'registered:', len(r.get('registered_today') or []), 'escalated:', len(r.get('escalated_today') or []))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
 run_aux_stage "News intelligence (post-pipeline refresh)" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.news.run_news_intelligence import run; s = run(root='.'); print('articles:', s.get('articles_fetched', 0), 'packets:', s.get('evidence_packet_count', 0))"
+
+# Stage 8a — Market narratives (observe-only synthesis of news intelligence +
+# decision artifacts into daily/weekly/monthly narrative summaries). Runs after
+# Stage 8 (consumes news_intelligence.json) and BEFORE the news-evidence layer,
+# promotion governance (Stage 9), and the memo (Stage 10), all of which consume
+# its market_narrative_*.json output. Pure read of local artifacts; non-blocking.
+run_aux_stage "Market narratives" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.market_narratives import run_market_narratives; r = run_market_narratives(base_dir='outputs'); d = r.get('daily') or {}; print('themes:', d.get('themes_found', 0), 'risks:', d.get('risks_found', 0), 'catalysts:', d.get('catalysts_found', 0))"
+
+# Stage 8a2 — News evidence layer (observe-only evidence bundle keyed to the
+# decision plan; consumes news_intelligence.json + market_narrative_*.json, so
+# it runs right after Stage 8a). Consumed downstream by promotion governance
+# (Stage 9) and the daily memo's memo_enrichment (Stage 10). Non-blocking;
+# writes only its own observe-only artifacts.
+run_aux_stage "News evidence layer" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.news_evidence_layer import run_news_evidence_layer; r = run_news_evidence_layer(base_dir='outputs'); print('data_available:', r.get('data_available'), 'ticker_ctx:', r.get('ticker_context_count', 0), 'decision_ctx:', r.get('decision_context_count', 0))"
 
 # Stage 8b — Discovery news integration (sandbox research lane).
 run_aux_stage "Discovery news integration" \
@@ -241,3 +267,11 @@ run_aux_stage "Daily run status" \
 # confidence in everything below it.
 run_aux_stage "Artifact registry governance" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.artifact_registry import run_artifact_registry; r = run_artifact_registry(root='.'); c = r.get('counts') or {}; print('overall:', r.get('overall_status'), 'present:', c.get('present'), '/', c.get('total'), 'missing:', c.get('missing'), '(required', str(c.get('missing_required')) + ')', 'stale:', c.get('stale'), 'debt:', c.get('unjustified_debt'))"
+
+# Stage 13 — Pipeline wiring probe (root-cause layer over the registry). Runs
+# AFTER registry governance so it sees the full fresh corpus. Crosses artifact
+# freshness with static caller-grep to explain WHY any producer is stale
+# (unwired / cadence_mismatch / silently_skipped) rather than just flagging the
+# symptom. Observe-only, AMBER-max, never blocks the decision core.
+run_aux_stage "Pipeline wiring probe" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.pipeline_wiring_probe import run_pipeline_wiring_probe; r = run_pipeline_wiring_probe(root='.'); s = r.get('summary') or {}; print('overall:', r.get('overall_status'), 'audited:', s.get('total_audited'), 'unwired:', s.get('unwired'), 'mismatch:', s.get('cadence_mismatch'), 'skipped:', s.get('silently_skipped'), 'empty:', s.get('fresh_but_empty'))"

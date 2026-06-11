@@ -208,6 +208,7 @@ class Config:
     universal_scanner_cfg: Dict[str, Any] = field(default_factory=dict)
     opportunity_ranker_cfg: Dict[str, Any] = field(default_factory=dict)
     promotion_engine_cfg: Dict[str, Any] = field(default_factory=dict)
+    scraped_intel: Dict[str, Any] = field(default_factory=lambda: {"enabled": False})
 
     # ── Convenience properties for growth_mode sub-keys ──────────────────────
     @property
@@ -326,6 +327,7 @@ class Config:
             universal_scanner_cfg=data.get('universal_scanner', {}),
             opportunity_ranker_cfg=data.get('opportunity_ranker', {}),
             promotion_engine_cfg=data.get('promotion_engine', {}),
+            scraped_intel=data.get('scraped_intel', {"enabled": False}),
         )
 
 

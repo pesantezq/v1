@@ -1571,6 +1571,14 @@ def run_portfolio_update(
                         'cash_available': config.cash_available,
                         'target_cash_weight': config.target_cash_weight,
                     },
+                    # Pass the scraped_intel sub-config so the scanner's additive
+                    # scraped-intel layer (SEC/RSS bundles + the shadow-mode
+                    # comparison report) runs in the daily pipeline. Omitting it
+                    # left scraped_intel_config=None, silently skipping the whole
+                    # layer — scraped_intel_comparison.json went stale because the
+                    # comparison block (gated on comparison_mode) never executed
+                    # here, only under the standalone `python -m watchlist_scanner`.
+                    scraped_intel_config=getattr(config, 'scraped_intel', None),
                 )
                 logger.info(
                     "WATCHLIST SCANNER: %d signals, %d alerts (%d API calls used today)",
