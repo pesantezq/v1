@@ -47,3 +47,63 @@ def check_readiness(env: dict[str, str] | None = None) -> dict[str, Any]:
         return {"ready": False, "reason": "schwab_unconfigured",
                 "hint": "set SCHWAB_CLIENT_ID/SECRET/REDIRECT_URI"}
     return {"ready": True, "reason": None, "tunnel_name": name}
+
+
+class _CallbackListener:
+    """Ephemeral one-shot HTTP listener bound to 127.0.0.1:<random port>.
+    Validates the state nonce, captures the code, and reports via result_q."""
+
+    def __init__(self) -> None:
+        self.result_q: "queue.Queue[dict]" = queue.Queue()
+        self._httpd: http.server.HTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.port: int | None = None
+
+    def start(self) -> int:
+        result_q = self.result_q
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_a):  # no access log — avoid logging the code/query
+                return
+
+            def _html(self, msg: str) -> None:
+                body = f"<html><body><p>{msg}</p></body></html>".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):  # noqa: N802
+                parsed = urlparse(self.path)
+                if parsed.path != CALLBACK_PATH:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                qs = parse_qs(parsed.query)
+                err = (qs.get("error") or [None])[0]
+                state = (qs.get("state") or [None])[0]
+                code = (qs.get("code") or [None])[0]
+                if err:
+                    self._html("Authorization failed. You can close this tab.")
+                    result_q.put({"error": bm.redact(err)})
+                    return
+                if not code or not oauth.verify_state(state or ""):
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"invalid request")
+                    return
+                self._html("Schwab re-auth received. You can close this tab.")
+                result_q.put({"code": code})
+
+        self._httpd = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        self.port = self._httpd.server_address[1]
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+        return self.port
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._httpd = None
