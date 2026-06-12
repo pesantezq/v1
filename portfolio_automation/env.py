@@ -52,9 +52,10 @@ GROUP_LLM     = "llm"       # LLM provider selection + credentials
 GROUP_EMAIL   = "email"     # SMTP / memo delivery
 GROUP_RUNTIME = "runtime"   # feature flags, runtime toggles
 GROUP_CONFIG  = "config"    # config file selection
+GROUP_BROKER  = "broker"    # read-only broker sync (Schwab) credentials
 
 ALLOWED_GROUPS: frozenset[str] = frozenset({
-    GROUP_DATA, GROUP_LLM, GROUP_EMAIL, GROUP_RUNTIME, GROUP_CONFIG,
+    GROUP_DATA, GROUP_LLM, GROUP_EMAIL, GROUP_RUNTIME, GROUP_CONFIG, GROUP_BROKER,
 })
 
 
@@ -307,6 +308,51 @@ REGISTRY: tuple[EnvVar, ...] = (
         description="Recipient address(es) for memo_email_sender. Required when MEMO_EMAIL_ENABLED=1.",
         group=GROUP_EMAIL,
         aliases=("EMAIL_TO", "EMAIL_RECIPIENT"),
+    ),
+
+    # ---- Schwab read-only broker sync (observe-only; NEVER required) ----
+    # The layer self-reports `unconfigured` when these are absent, so none may be
+    # required — preflight must stay green before provisioning. Trading is not
+    # implemented regardless of any value here (AST-enforced in brokers/).
+    EnvVar(
+        name="SCHWAB_CLIENT_ID",
+        required=False,
+        default=None,
+        secret=True,
+        description="Schwab OAuth Client ID (developer portal). Enables read-only broker sync.",
+        group=GROUP_BROKER,
+    ),
+    EnvVar(
+        name="SCHWAB_CLIENT_SECRET",
+        required=False,
+        default=None,
+        secret=True,
+        description="Schwab OAuth Client Secret (developer portal). Required for read-only sync.",
+        group=GROUP_BROKER,
+    ),
+    EnvVar(
+        name="SCHWAB_REDIRECT_URI",
+        required=False,
+        default=None,
+        secret=False,
+        description="Exact redirect URI registered with the Schwab app, e.g. https://127.0.0.1/callback.",
+        group=GROUP_BROKER,
+    ),
+    EnvVar(
+        name="SCHWAB_READ_ONLY_MODE",
+        required=False,
+        default="true",
+        secret=False,
+        description="Activates the read-only broker layer. Trading is NOT implemented regardless.",
+        group=GROUP_BROKER,
+    ),
+    EnvVar(
+        name="TRADING_ENABLED",
+        required=False,
+        default="false",
+        secret=False,
+        description="Must remain false. Documentation signal only; no trading path exists in the codebase.",
+        group=GROUP_BROKER,
     ),
 )
 

@@ -41,6 +41,30 @@ class TestRegistry:
         assert "FMP_API_KEY" in required
 
 
+class TestSchwabEnvRegistry:
+    """Schwab read-only sync activation (2026-06-12): the OAuth env vars must be
+    registered so preflight's env-check recognizes them, but never required —
+    the layer self-reports `unconfigured` and must not block a pre-provisioning
+    preflight."""
+
+    _SCHWAB = ("SCHWAB_CLIENT_ID", "SCHWAB_CLIENT_SECRET", "SCHWAB_REDIRECT_URI",
+               "SCHWAB_READ_ONLY_MODE", "TRADING_ENABLED")
+
+    def test_schwab_vars_registered(self):
+        names = {v.name for v in envmod.REGISTRY}
+        for n in self._SCHWAB:
+            assert n in names, f"{n} missing from env REGISTRY"
+
+    def test_schwab_vars_not_required(self):
+        for v in envmod.REGISTRY:
+            if v.name in self._SCHWAB:
+                assert v.required is False, f"{v.name} must be optional (layer self-reports unconfigured)"
+
+    def test_schwab_client_secret_is_secret(self):
+        by = {v.name: v for v in envmod.REGISTRY}
+        assert by["SCHWAB_CLIENT_SECRET"].secret is True
+
+
 # ---------------------------------------------------------------------------
 # Lookups
 # ---------------------------------------------------------------------------

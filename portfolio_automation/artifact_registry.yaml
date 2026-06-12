@@ -624,21 +624,24 @@ artifacts:
   # ── Broker sync (Schwab, read-only) ───────────────────────────────────────
   # Observe-only broker layer. broker_sync_status is always-producible (emits
   # status=unconfigured until credentials are set, so it is never legitimately
-  # absent once the layer ships). The other four exist only after a live
-  # `schwab_sync --sync/--reconcile` run, so they read info-missing (not a fault)
-  # until Schwab is authenticated. All are cadence:on_demand → never auto-stale.
+  # absent once the layer ships) and is refreshed by the daily cron stage
+  # (run_daily_safe.sh "Schwab broker sync") → cadence:daily. The other four
+  # exist only after a live authenticated `schwab_sync --sync/--reconcile` run,
+  # so they read info-missing (not a fault) until Schwab is authenticated and
+  # STAY cadence:on_demand → daily cadence would manufacture false-stale flags
+  # while unconfigured or on a failed sync.
   broker_sync_status.json:
     path: outputs/latest/broker_sync_status.json
     label: broker sync status
     lens: developer
     role: telemetry
     required: false
-    cadence: on_demand
+    cadence: daily
     producer: schwab_sync
     consumers: [daily-tool-analysis, gui_v2.data.dash_portfolio_sync]
     severity_if_missing: info
     consumer_status: consumed
-    notes: "Schwab read-only broker sync health. Always-producible; status=unconfigured until SCHWAB_* env + OAuth token set. Not in daily cron (operator-run)."
+    notes: "Schwab read-only broker sync health. Always-producible; status=unconfigured until SCHWAB_* env + OAuth token set. Refreshed daily by run_daily_safe.sh (non-blocking) + re-triggerable on-demand (CLI/GUI)."
 
   schwab_portfolio_snapshot.json:
     path: outputs/latest/schwab_portfolio_snapshot.json

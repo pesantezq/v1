@@ -254,6 +254,17 @@ run_aux_stage "Daily memo + email" \
 run_aux_stage "Next-stage research/strategy lane" \
     python -m portfolio_automation.next_stage.run_next_stage --root "${REPO_ROOT}"
 
+# Stage 10c — Schwab read-only broker sync (observe-only). Refreshes
+# broker_sync_status.json + (when authenticated) the read-only portfolio
+# snapshot / positions / reconciliation proposal. READ-ONLY: no trade path
+# exists (AST-enforced in brokers/). Fail-closed: when SCHWAB_* creds / OAuth
+# token are absent it writes status=unconfigured and no-ops the rest. Wrapped
+# non-blocking so a Schwab API / token failure degrades to error/AMBER and never
+# aborts the pipeline. Runs before Stage 11 so daily_run_status + the registry +
+# the wiring probe count broker_sync_status fresh. Proposal stays operator-applied.
+run_aux_stage "Schwab broker sync" \
+    python -m portfolio_automation.brokers.schwab_sync --sync --reconcile
+
 # Stage 11 — Daily run status (reads its own log; runs last so it captures
 # all preceding stages). Provides operator-glanceable ok/partial/failed.
 run_aux_stage "Daily run status" \

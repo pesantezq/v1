@@ -436,7 +436,11 @@ def test_broker_artifacts_registered_and_schema_valid():
         row = arts[key]
         assert row["lens"] == lens
         assert row["role"] == role
-        assert row["cadence"] == "on_demand"      # operator-run; never auto-stale
+        # broker_sync_status is refreshed by the daily cron stage (always-producible);
+        # the 4 advisor artifacts only populate post-auth and stay on_demand so they
+        # never manufacture false-stale flags while unconfigured (2026-06-12 activation).
+        expected_cadence = "daily" if key == "broker_sync_status.json" else "on_demand"
+        assert row["cadence"] == expected_cadence
         assert row["required"] is False
         assert row["severity_if_missing"] == "info"  # absence must never escalate
         assert ar._row_schema_ok(row), f"schema invalid row: {key}"

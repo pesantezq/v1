@@ -154,3 +154,55 @@ def test_gate_retune_cadence_is_weekly() -> None:
         "gate_retune_suggestions cadence must be weekly (produced by "
         "run_weekly_safe.sh Monday cron); daily produced false-stale signals."
     )
+
+
+# ── Schwab read-only sync activation (2026-06-12) ────────────────────────────
+
+def _registry_entry(name: str):
+    import yaml
+    reg = yaml.safe_load(_REGISTRY.read_text(encoding="utf-8"))
+    for container in (reg, *(v for v in reg.values() if isinstance(v, dict))):
+        if isinstance(container, dict) and name in container:
+            return container[name]
+    return None
+
+
+def test_schwab_sync_is_wired_daily(daily: str) -> None:
+    assert "schwab_sync" in daily, (
+        "run_daily_safe.sh must invoke schwab_sync so broker_sync_status.json "
+        "refreshes every cron run (daily read-only reconciliation)."
+    )
+    assert 'run_aux_stage "Schwab broker sync"' in daily, (
+        "Schwab sync must run through the non-blocking run_aux_stage wrapper so a "
+        "Schwab API / token failure degrades broker_sync_status and never aborts "
+        "the pipeline."
+    )
+
+
+def test_schwab_sync_runs_before_daily_run_status(daily: str) -> None:
+    """broker_sync_status must be fresh before Stages 11/12/13 count it."""
+    assert daily.index("schwab_sync") < daily.index("run_daily_run_status"), (
+        "schwab_sync must run before run_daily_run_status so daily_run_status, "
+        "the registry validator, and the wiring probe see fresh broker data."
+    )
+
+
+def test_broker_sync_status_cadence_is_daily() -> None:
+    entry = _registry_entry("broker_sync_status.json")
+    assert entry is not None, "broker_sync_status.json missing from registry"
+    assert entry.get("cadence") == "daily", (
+        "broker_sync_status is always-producible and now refreshed by the daily "
+        "cron stage, so its cadence must be daily."
+    )
+
+
+def test_schwab_advisor_artifacts_stay_on_demand() -> None:
+    """The 4 advisor artifacts only populate post-auth; daily cadence would
+    manufacture false-stale flags while unconfigured or on a failed sync."""
+    for name in ("schwab_portfolio_snapshot.json", "schwab_positions.json",
+                 "portfolio_reconciliation.json", "portfolio_config_update_proposal.json"):
+        entry = _registry_entry(name)
+        assert entry is not None, f"{name} missing from registry"
+        assert entry.get("cadence") == "on_demand", (
+            f"{name} must stay on_demand (only exists after a live authenticated sync)."
+        )
