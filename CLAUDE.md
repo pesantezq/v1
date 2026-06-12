@@ -202,6 +202,26 @@ be consumed by AT LEAST ONE check at the appropriate cadence. If no
 check reads it, either add one or delete the artifact. Producers
 without consumers are debt.
 
+## Strategy Documentation Requirement
+
+Any tactic/strategy added to `portfolio_automation/portfolio_sim/` (backtest,
+crowd-signal, or projection tactics) MUST ship with a **strategy-catalog entry**
+and every tunable parameter MUST record its rationale. The catalog entry covers:
+objective, resolved universe, materialization logic (how target weights are
+derived), rebalance assumptions, caps applied, latest backtest/projection metrics,
+the decision rationale for each parameter (tilt multipliers, caps, rebalance
+default, universe membership), and a plain-language explanation.
+
+- The mechanism is `portfolio_sim/strategy_docs.py` (producer) + the
+  `/strategy-catalog` skill (regenerates `docs/STRATEGY_CATALOG.md` +
+  `outputs/sandbox/strategy_catalog.json` and routes prose findings to
+  `portfolio-doc-writer`).
+- A tactic whose `rationale` is empty flips the catalog's `coverage_complete` to
+  False — it is **incomplete and must not be surfaced in the Strategy Lab**.
+- The doc-audit tier verifies catalog coverage. This mirrors the
+  Analysis+Health corollary: every artifact needs a consumer; **every strategy
+  needs an explanation.**
+
 ## Agent + Skill Loading Behavior
 
 Repo-local agents live in `.claude/agents/*.md` and skills in
