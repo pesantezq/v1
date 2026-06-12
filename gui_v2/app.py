@@ -424,6 +424,22 @@ def page_dash_strategy_lab(
     return _render(request, "dashboard/strategy_lab.html", **ctx)
 
 
+@app.get("/dashboard/crowd-radar", response_class=HTMLResponse)
+def page_dash_crowd_radar(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    # Public Knowledge Velocity Layer (Crowd Radar): sandbox-only, observe-only
+    # crowd-knowledge state classifier. Tolerant of absent / disabled / degraded
+    # artifacts — never feeds the decision plan.
+    try:
+        from gui_v2.data.dash_crowd_radar import collect_crowd_radar_view
+        ctx = collect_crowd_radar_view(REPO_ROOT)
+    except Exception:
+        ctx = {"persona": "crowd_radar", "observe_only": True, "cards": [],
+               "sections": [], "warnings": [], "has_data": False}
+    return _render(request, "dashboard/crowd_radar.html", **ctx)
+
+
 @app.get("/dashboard/memo", response_class=HTMLResponse)
 def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)

@@ -1511,6 +1511,56 @@ def _enrichment_payload() -> dict[str, Any]:
         return {}
 
 
+_CROWD_STATE_REL = ("outputs", "sandbox", "discovery", "crowd_knowledge_state.json")
+
+
+def _crowd_radar_section_lines(root_path: Path) -> list[str]:
+    """
+    Compact Crowd Radar (Public Knowledge Velocity Layer) memo lines.
+
+    Read-only consumer of the sandbox artifact. Returns research-framed lines
+    only — never a buy/sell/hold recommendation. Empty list when the layer is
+    disabled / produced nothing, so the caller renders a clean placeholder.
+    """
+    doc = _safe_load(root_path.joinpath(*_CROWD_STATE_REL))
+    if not doc:
+        return []
+    status = doc.get("source_status", "unknown")
+    quality = doc.get("data_quality_status", "unknown")
+    records = doc.get("records") or []
+    if not records:
+        return [
+            f"Data quality: {quality} · Source: {status}",
+            "No crowd-knowledge states classified this run.",
+        ]
+
+    buckets: dict[str, list[str]] = {}
+    for rec in records:
+        buckets.setdefault(rec.get("crowd_state", "dormant_noise"), []).append(
+            str(rec.get("ticker", "?"))
+        )
+
+    def _line(label: str, key: str) -> str | None:
+        tickers = buckets.get(key) or []
+        return f"{label}: {', '.join(tickers[:5])}" if tickers else None
+
+    lines: list[str] = []
+    for label, key in (
+        ("Emerging DD", "emerging_dd"),
+        ("Crowd Validation", "crowd_validation"),
+        ("Hype Acceleration Warning", "hype_acceleration"),
+        ("Reflexive Squeeze Risk", "reflexive_squeeze_risk"),
+        ("Known News Echo", "known_news_echo"),
+        ("Contrarian Neglect", "contrarian_neglect"),
+    ):
+        ln = _line(label, key)
+        if ln:
+            lines.append(ln)
+    lines.append(f"Data quality: {quality} · Source: {status}")
+    lines.append("Research priority only — not a trade recommendation.")
+    return lines
+
+
 def _append_enrichment_text(append) -> None:
     """Append the four enrichment sections to the plain-text memo."""
     try:
@@ -1561,6 +1611,13 @@ def _append_enrichment_text(append) -> None:
         )
     except Exception as exc:
         logger.warning("daily_memo: what-to-watch section failed — %s", exc)
+    try:
+        _section(
+            "CROWD RADAR  [Sandbox Research]",
+            _crowd_radar_section_lines(_enrichment_repo_root()),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: crowd radar section failed — %s", exc)
 
 
 def _append_enrichment_md(append) -> None:
@@ -1611,6 +1668,13 @@ def _append_enrichment_md(append) -> None:
         )
     except Exception as exc:
         logger.warning("daily_memo: what-to-watch section (md) failed — %s", exc)
+    try:
+        _section(
+            "Crowd Radar — Sandbox Research",
+            _crowd_radar_section_lines(_enrichment_repo_root()),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: crowd radar section (md) failed — %s", exc)
 
 
 # ---------------------------------------------------------------------------

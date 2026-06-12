@@ -354,7 +354,7 @@ post_phase_0:
       - docs/PIPELINE_RUNBOOK.md
       - .agent/project_state.yaml
       - .agent/phase_status.yaml
-    tests: 50 passed
+    tests: 59 passed
 
   gui_operator_cockpit_redesign:
     status: in_progress
@@ -643,3 +643,32 @@ next_stage_intelligence:
   pending_operator:
     dashboard_restart: done  # 2026-06-10 13:34 UTC — new GUI views (Strategy Lab / broker side-panel / approval queues) now serve
     full_pytest_vps: done    # 7041 passed / 3 known-pre-existing failures (tuning_proposals weight, run_loop oos) — not regressions
+
+public_knowledge_velocity_layer:
+  status: built
+  observe_only: true
+  sandbox_only: true
+  default_disabled: true  # config.json crowd_radar.enabled=false
+  cost_profile: gated  # no network unless enabled + REDDIT_* creds present
+  package: portfolio_automation/social_intelligence/
+  orchestrator: portfolio_automation/social_intelligence/public_knowledge_velocity.py
+  pipeline_stage: run_daily_safe.sh Stage 9c "Crowd Radar (public knowledge velocity)"
+  gui_tab: /dashboard/crowd-radar  # Crowd Radar
+  crowd_states: [dormant_noise, emerging_dd, crowd_validation, hype_acceleration, reflexive_squeeze_risk, known_news_echo, crowd_exhaustion, contrarian_neglect]
+  governance:
+    writes_decision_plan: false
+    writes_signal_registry: false
+    recommended_next_step_vocabulary: research_only  # runtime-asserted no trade verbs
+    research_priority_score: capped
+    kill_switch: [config/crowd_radar.DISABLED, STOCKBOT_CROWD_RADAR_DISABLED]
+  artifacts:
+    - outputs/sandbox/discovery/crowd_knowledge_state.json
+    - outputs/sandbox/discovery/public_knowledge_velocity.json
+    - outputs/sandbox/discovery/social_signal_backtest.json
+    - outputs/sandbox/discovery/social_source_compliance.json
+    - outputs/sandbox/discovery/crowd_radar_summary.md
+  tests: 59
+  health_coverage: /daily-tool-analysis content-liveness + portfolio-discovery-health dispatch
+  pending_operator:
+    dashboard_restart: pending  # new Crowd Radar GUI tab needs systemctl restart stockbot-dashboard.service
+    enable_and_provision: pending  # set crowd_radar.enabled=true + REDDIT_* OAuth creds after source-terms review

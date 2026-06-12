@@ -190,7 +190,11 @@ python -m py_compile \
     portfolio_automation/fmp_budget_telemetry.py \
     portfolio_automation/daily_run_status.py \
     portfolio_automation/resolution_due_probe.py \
-    portfolio_automation/news/run_news_intelligence.py
+    portfolio_automation/news/run_news_intelligence.py \
+    portfolio_automation/social_intelligence/public_knowledge_velocity.py \
+    portfolio_automation/social_intelligence/crowd_state_classifier.py \
+    portfolio_automation/social_intelligence/ticker_extractor.py \
+    portfolio_automation/social_intelligence/context_join.py
 pass "Targeted py_compile check passed"
 
 section "Wrapper Syntax Check"
@@ -209,6 +213,7 @@ modules = [
     'portfolio_automation.daily_run_status',
     'portfolio_automation.resolution_due_probe',
     'portfolio_automation.news.run_news_intelligence',
+    'portfolio_automation.social_intelligence.public_knowledge_velocity',
 ]
 for m in modules:
     importlib.import_module(m)

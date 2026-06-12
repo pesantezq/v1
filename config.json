@@ -369,6 +369,21 @@
     "promotion_max_feature_concentration": 0.6,
     "promotion_require_dual_window_outperformance": true
   },
+  "crowd_radar": {
+    "enabled": false,
+    "sources": [
+      "reddit"
+    ],
+    "subreddits": [
+      "wallstreetbets",
+      "stocks",
+      "investing"
+    ],
+    "max_posts_per_source": 200,
+    "min_mentions_for_state": 3,
+    "min_backtest_sample": 20,
+    "research_priority_cap": 10.0
+  },
   "market_universe": {
     "enabled": true,
     "groups": [

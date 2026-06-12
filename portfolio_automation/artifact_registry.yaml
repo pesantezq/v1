@@ -1188,3 +1188,82 @@ artifacts:
     consumer_status: diagnostic_only
     notes: next-stage Phase 11A — producer not yet shipped
 
+  # ── Crowd Radar / Public Knowledge Velocity Layer (sandbox-only) ────────────
+  crowd_knowledge_state.json:
+    path: outputs/sandbox/discovery/crowd_knowledge_state.json
+    label: crowd knowledge state
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Crowd Radar per-ticker crowd-knowledge state; observe-only, sandbox-only, default-disabled. Consumed by /daily-tool-analysis content-liveness check (Step 4 line 6k). Shipped 2026-06-12.
+
+  public_knowledge_velocity.json:
+    path: outputs/sandbox/discovery/public_knowledge_velocity.json
+    label: public knowledge velocity features
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-ticker mention-velocity / dd-density / sentiment features behind the Crowd Radar classifier.
+
+  social_signal_backtest.json:
+    path: outputs/sandbox/discovery/social_signal_backtest.json
+    label: social signal backtest
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Forward-return efficacy of crowd states vs SPY/QQQ/sector; sample-gated (insufficient_data until matured). Research-priority impact only.
+
+  social_source_compliance.json:
+    path: outputs/sandbox/discovery/social_source_compliance.json
+    label: social source compliance
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Source-governance registry (collection method, allowed fields, ToS review date, compliance status) for public-discussion sources.
+
+  crowd_radar_summary.md:
+    path: outputs/sandbox/discovery/crowd_radar_summary.md
+    label: crowd radar summary
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Operator-readable Crowd Radar summary companion to crowd_knowledge_state.json.
+
+  crowd_mention_history.json:
+    path: outputs/sandbox/discovery/crowd_mention_history.json
+    label: crowd mention history ledger
+    lens: market_discovery
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: public_knowledge_velocity_layer
+    consumers: [public_knowledge_velocity_layer]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Rolling per-ticker daily mention-count ledger (window 20). Self-consumed — the velocity z-score baseline. Only written on runs that actually ingest posts (a disabled/no-credentials run does not append). Absent until the layer is enabled.
+

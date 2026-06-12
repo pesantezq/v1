@@ -1,5 +1,32 @@
 # Roadmap
 
+## Public Knowledge Velocity Layer / Crowd Radar — built (2026-06-12)
+
+- **New sandbox-only, observe-only module** `portfolio_automation/social_intelligence/`
+  (Public Knowledge Velocity Layer; GUI label **Crowd Radar**). Classifies the
+  *state of public knowledge* around tickers from API-compliant public discussion
+  (Reddit-first): `dormant_noise / emerging_dd / crowd_validation / hype_acceleration
+  / reflexive_squeeze_risk / known_news_echo / crowd_exhaustion / contrarian_neglect`.
+  8 modules: source-governance registry, feature-gated Reddit connector, robust
+  ticker extractor, feature aggregation, crowd-state classifier, sample-gated
+  social-signal backtest, orchestrator.
+- **Hard governance.** Sandbox-only writes (run-mode-gated), `observe_only=true`,
+  research-only `recommended_next_step` vocabulary (runtime-asserted to exclude
+  trade verbs), capped `crowd_research_priority_score`. Never writes
+  `decision_plan.json` / `signal_registry.yaml`. **Default-disabled**
+  (`config.json crowd_radar.enabled=false`); kill-switch
+  `config/crowd_radar.DISABLED` / `STOCKBOT_CROWD_RADAR_DISABLED=1`. Missing
+  REDDIT_* creds degrade to `no_credentials` — never crash the daily run.
+- **Wired**: `run_daily_safe.sh` Stage 9c (discovery mode, non-blocking), GUI
+  "Crowd Radar" tab, daily-memo "Crowd Radar — Sandbox Research" section, 5
+  artifact-registry rows, `/daily-tool-analysis` content-liveness check +
+  `portfolio-discovery-health` dispatch. 59 tests (incl. full-pipeline e2e + context-join). See
+  `docs/PUBLIC_KNOWLEDGE_VELOCITY_LAYER.md`.
+- **Roadmap status.** `next_official_step` stays `observe_and_iterate`. The layer
+  ships inert; activation = set `enabled=true` + provision Reddit OAuth creds
+  after the source-terms review. Backtest stays `insufficient_data` until enough
+  resolved forward-return observations accumulate.
+
 ## Next-Stage Portfolio Intelligence — built + activated (2026-06-10)
 
 - **Phases 1–15 shipped (concurrent session, 13 commits `af6f63be..a981da01`).**

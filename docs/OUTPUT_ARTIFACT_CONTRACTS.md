@@ -1618,3 +1618,74 @@ append-only. Observe-only; never trade/broker/execution related. See
 | `audit_log.jsonl` | JSONL | Append-only audit events: `{timestamp, event_type, work_order_id, probe_id, skill_id, mode, actor, details, safety_result}`. |
 | `prompts/{id}.md` | Markdown | Generated Claude Code worker prompt (preparation only; not execution). |
 | `reports/{id}.md` | Markdown | Expected worker result-report path (written by the Phase 2 worker, not Phase 1). |
+
+### `outputs/sandbox/discovery/` — Crowd Radar / Public Knowledge Velocity Layer
+
+Written by `portfolio_automation/social_intelligence/public_knowledge_velocity.py`
+via `OutputNamespace.SANDBOX` (run-mode-gated: only `discovery`/`backtest` modes
+may write). **Observe-only, sandbox-only, default-disabled.** Every JSON carries
+the shared envelope: `schema_version, source, run_id, run_mode, created_at,
+source_status, data_quality_status, observe_only, no_trade, not_recommendation,
+sandbox_only, discovery_only, disclaimer, warnings`. See
+`docs/PUBLIC_KNOWLEDGE_VELOCITY_LAYER.md`.
+
+`source_status` / `data_quality_status` ∈ `ok | disabled | degraded |
+no_credentials | rate_limited | source_terms_blocked | insufficient_data | error`.
+
+#### `crowd_knowledge_state.json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state_count` | int | number of classified tickers |
+| `research_priority_cap` | float | hard ceiling on `crowd_research_priority_score` |
+| `records[]` | list | per-ticker: `ticker, crowd_state, confidence, score_components, evidence_summary, risk_flags[], recommended_next_step, crowd_research_priority_score, created_at` |
+
+`crowd_state` ∈ `dormant_noise, emerging_dd, crowd_validation, hype_acceleration,
+reflexive_squeeze_risk, known_news_echo, crowd_exhaustion, contrarian_neglect`.
+`recommended_next_step` ∈ `ignore, monitor, send_to_discovery_review,
+requires_news_validation, requires_backtest, flag_as_hype_risk` (research verbs
+only — never a trade verb).
+
+#### `public_knowledge_velocity.json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ticker_count` / `post_count` | int | tickers with features / posts processed |
+| `subreddits` | list | sources sampled this run |
+| `records[]` | list | per-ticker feature vector: `mention_count, mention_velocity_zscore, unique_author_count, author_concentration, flair_counts, dd_density, evidence_score, sentiment_score, sentiment_dispersion, meme_language_score, external_news_match, …` |
+
+#### `social_signal_backtest.json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `min_sample` | int | minimum resolved observations for a state to be `reliable` |
+| `total_observations` | int | resolved historical signals evaluated |
+| `states_matured` | list | states that cleared the sample gate |
+| `benchmarks` | list | `[SPY, QQQ, sector_etf, same_ticker_baseline]` |
+| `records{state}` | dict | `sample_size, confidence_bucket, reliable, by_horizon{1D/5D/20D/60D: mean_return, mean_excess_vs_*, hit_rate, volatility, sample_size}, max_drawdown, false_positive_rate, risk_adjusted_score, impact` |
+
+`impact` is hardcoded `research_priority_only` — never feeds confidence in any
+official score.
+
+#### `social_source_compliance.json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `total_sources` / `active_sources` | int | governed / active-this-run |
+| `review_needed_count` | int | sources whose `compliance_status != approved` |
+| `records[]` | list | per-source: `source_name, source_type, collection_method, allowed_fields[], rate_limit, raw_text_storage_allowed, ai_processing_allowed, terms_review_date, compliance_status, notes, active` |
+
+#### `crowd_radar_summary.md`
+
+Operator-readable Markdown companion (state buckets + status + disclaimer).
+
+#### `crowd_mention_history.json`
+
+Rolling per-ticker daily mention-count ledger — the velocity z-score baseline.
+Self-consumed by the layer. Only written on runs that actually ingest posts.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `window` | int | rolling trading-day window (default 20) |
+| `ticker_count` | int | tickers tracked |
+| `history` | dict | `{ticker: [daily counts, oldest→newest]}` |

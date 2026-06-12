@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block title %}Crowd Radar &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="dashboard-crowd-radar-content"
+     hx-get="/dashboard/crowd-radar"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-crowd-radar-content"
+     hx-select="#dashboard-crowd-radar-content"
+     hx-swap="outerHTML"
+     class="space-y-7">
+
+  {{ ui.page_header("Crowd Radar", "Public-knowledge velocity · crowd-state classifier — sandbox, observe-only",
+                    "/dashboard/crowd-radar", "dashboard-crowd-radar-content") }}
+
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+    <span class="font-semibold">Sandbox research intelligence only. Not a trade recommendation.</span>
+    Crowd-knowledge state may adjust research priority only; it never triggers
+    BUY / SELL / HOLD / REBALANCE / TRIM / SCALE / PROMOTE or any allocation change.
+  </div>
+
+  {% if warnings %}
+  <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2 text-xs text-amber-200">
+    Data-quality notes: {{ warnings[:4]|join(" · ") }}
+  </div>
+  {% endif %}
+
+  {% if cards %}
+  <section aria-label="Crowd radar summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
+  </section>
+  {% endif %}
+
+  {% for sec in sections %}
+  <section aria-label="{{ sec.label }}">
+    {{ ui.section_header(sec.label, "research priority only", "crowd_knowledge_state.json") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for r in sec.rows %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ r.ticker }}</span>
+          {{ ui.badge(sec.status if sec.status != "ok" else "green", r.crowd_state|status_label) }}
+        </div>
+        <div class="text-xs text-zinc-400 font-mono">
+          conf {{ "%.2f"|format(r.confidence or 0) }} ·
+          vel {{ "%.2f"|format(r.score_components.velocity_z or 0) }} ·
+          dd {{ "%.2f"|format(r.score_components.dd_density or 0) }} ·
+          ev {{ "%.2f"|format(r.score_components.evidence_score or 0) }}
+        </div>
+        <div class="text-xs text-zinc-500">
+          priority {{ "%.1f"|format(r.crowd_research_priority_score or 0) }} ·
+          next: <span class="text-sky-300">{{ r.recommended_next_step|status_label }}</span>
+        </div>
+        {% if r.risk_flags %}
+        <div class="text-[11px] text-rose-300/70">{{ r.risk_flags[:3]|join(" · ") }}</div>
+        {% endif %}
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if not has_data %}
+  {{ ui.empty_state("Crowd Radar not yet produced",
+                    "Enable crowd_radar in config + set REDDIT_* credentials, then run the
+                     discovery lane. The layer ships disabled and degrades safely when off.") }}
+  {% endif %}
+
+</div>
+{% endblock %}

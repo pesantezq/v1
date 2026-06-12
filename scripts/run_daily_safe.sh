@@ -240,6 +240,17 @@ run_aux_stage "Automatic promotion governance" \
 run_aux_stage "Sandbox lane status" \
     python -m tools.daily_sandbox_run
 
+# Stage 9c — Crowd Radar / Public Knowledge Velocity Layer (sandbox research lane).
+# Observe-only, sandbox-only, DEFAULT-DISABLED (config.json crowd_radar.enabled=false).
+# Classifies the state of public knowledge around tickers from API-compliant public
+# discussion (Reddit-first). Runs in discovery run-mode so it MAY write
+# outputs/sandbox/discovery/, but it can NEVER write the official decision plan.
+# Fail-safe: missing REDDIT_* creds / disabled flag / kill-switch write a degraded
+# artifact and no-op the network. Runs before the memo (Stage 10) so the memo's
+# Crowd Radar section reads the fresh artifact. Non-blocking; never aborts the run.
+run_aux_stage "Crowd Radar (public knowledge velocity)" \
+    python -m portfolio_automation.social_intelligence.public_knowledge_velocity --root "${REPO_ROOT}" --run-mode discovery
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"

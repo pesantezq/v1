@@ -42,6 +42,7 @@ abort the run after the official plan has landed.
 | 8 | News intelligence (post-pipeline refresh) | `portfolio_automation.news.run_news_intelligence` | rewrites `outputs/latest/news_intelligence.json` (cache hits, 0 budget) |
 | 8b | Discovery news integration | `portfolio_automation.discovery.news_integration` | `outputs/sandbox/discovery/news_enriched_candidates.json` |
 | 9 | Automatic promotion governance | `portfolio_automation.discovery.automatic_promotion_governance` | `outputs/sandbox/discovery/automatic_promotion_*.json` |
+| 9c | Crowd Radar (public knowledge velocity) | `portfolio_automation.social_intelligence.public_knowledge_velocity` | `outputs/sandbox/discovery/crowd_knowledge_state.json` + 4 more (observe-only, sandbox-only, **default-disabled**) |
 | 10 | Daily memo + email | `watchlist_scanner.daily_memo` | `outputs/latest/daily_memo.{txt,md}` |
 | 11 | Daily run status | `portfolio_automation.daily_run_status` | `outputs/latest/daily_run_status.json` + `.md` |
 
@@ -179,6 +180,41 @@ Optional environment:
   module steps but skips writing the sandbox_run_status artifacts
 
 See [DAILY_SANDBOX_RUN.md](DAILY_SANDBOX_RUN.md) for the full spec.
+
+### Crowd Radar / Public Knowledge Velocity Layer (Stage 9c)
+
+`python -m portfolio_automation.social_intelligence.public_knowledge_velocity --root . --run-mode discovery`
+
+Purpose: classify the state of public knowledge around tickers from
+API-compliant public discussion (Reddit-first). **Observe-only, sandbox-only,
+default-disabled.** Writes 5 artifacts under `outputs/sandbox/discovery/`
+(`crowd_knowledge_state`, `public_knowledge_velocity`, `social_signal_backtest`,
+`social_source_compliance`, `crowd_radar_summary.md`).
+
+Enable / disable:
+
+- Master switch: `config.json` → `crowd_radar.enabled` (default `false`).
+- Credentials: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT`
+  (absent → `source_status=no_credentials`, no network call).
+- Kill-switch: `config/crowd_radar.DISABLED` file **or**
+  `STOCKBOT_CROWD_RADAR_DISABLED=1`.
+
+Failure modes (all write a degraded artifact; the daily run is never aborted):
+
+| Condition | `source_status` |
+|---|---|
+| `enabled=false` / kill-switch | `disabled` |
+| no REDDIT_* creds | `no_credentials` |
+| API 429 | `rate_limited` |
+| ToS review lapsed | `source_terms_blocked` |
+| fetched but nothing classifiable | `insufficient_data` |
+| unexpected error | `error` |
+
+Safety: runs in `discovery` run-mode so it MAY write the sandbox namespace, but
+the run-mode governance layer forbids it from writing `outputs/latest/` /
+`decision_plan.json`. Crowd signals adjust a capped `crowd_research_priority_score`
+only — never BUY/SELL/HOLD/REBALANCE/TRIM/SCALE/PROMOTE. See
+[PUBLIC_KNOWLEDGE_VELOCITY_LAYER.md](PUBLIC_KNOWLEDGE_VELOCITY_LAYER.md).
 
 ## Weekly
 
