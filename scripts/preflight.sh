@@ -218,6 +218,7 @@ modules = [
     'portfolio_automation.news.run_news_intelligence',
     'portfolio_automation.social_intelligence.public_knowledge_velocity',
     'portfolio_automation.portfolio_sim.run_portfolio_backtest',
+    'portfolio_automation.portfolio_sim.run_portfolio_projection',
 ]
 for m in modules:
     importlib.import_module(m)

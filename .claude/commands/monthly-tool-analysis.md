@@ -35,6 +35,11 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 16. `outputs/policy/auto_apply_audit.json` → E auto-apply audit: read the last entry's `status` (disabled/oos_immature/gpt_vetoed/applied/rolled_back) + provenance
 17. `outputs/latest/pattern_efficacy_weekly.json` → per-tag weekly efficacy for the 4-week drift trend; compare each tag's `vs_baseline_pp` week-over-week to surface accelerating winners or deteriorating signals (added 2026-06-08; quant-trend consumer)
 18. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (both append-only; fold work_orders by `work_order_id`, last line wins) → 30-day operator-control activity: counts by status, worker runs that reached `completed`/`failed`, and count of `worker_protected_path_violation` events in the audit log (added 2026-06-09; operator-control plane Phases 1–3 — **observe-only, operator-driven**; absence / all-zero is the inert steady state, NOT a finding)
+19. Portfolio simulation suite (added 2026-06-12 as `run_weekly_safe.sh` stages; **observe-only, sandbox-only, default-disabled — never feeds `decision_plan.json`**; quant lens). Read (degrade gracefully on any miss):
+    - `outputs/sandbox/portfolio_backtest.json` → `status`, `objective`, per-window `leaderboard` (top tactic by excess-vs-SPY), `contribution_sensitivity`. Headline: which tactic beats the S&P 500 most across windows, and how outcomes scale with contribution size.
+    - `outputs/sandbox/portfolio_projection.json` → per-tactic `rows` (p50 balance, `prob_reach_target`, `max_drawdown_p95`) — sanity-check p50 CAGR is in a plausible band (e.g. −10%..+30%) and percentiles are monotone.
+    - `outputs/sandbox/strategy_catalog.json` → `coverage_complete` must be true (Strategy Documentation Requirement); if false, that's a RED doc-coverage gap — list `undocumented[]`.
+    - **content_liveness**: `status == "ok"` but `result_count == 0` (engine ran but every tactic degraded → empty) is a looks-fresh-but-empty failure; check the price archive (`outputs/backtest/historical/*_5y.json`) coverage. `disabled` is the expected inert state before the operator enables `config portfolio_sim.enabled`.
 
 ---
 
