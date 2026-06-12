@@ -76,6 +76,14 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
         sd, pr = bm.snapshot_dict(snap), bm.positions_dict(snap)
         _write(root, "schwab_portfolio_snapshot.json", sd)
         _write(root, "schwab_positions.json", pr)
+        # per-lot tax data (best-effort; degrades to has_lots:false when absent)
+        try:
+            from portfolio_automation.brokers.schwab_tax_lots import normalize_tax_lots
+            flat = {"positions": [p for acct in (raw if isinstance(raw, list) else [])
+                                  for p in ((acct.get("securitiesAccount") or {}).get("positions") or [])]}
+            _write(root, "schwab_tax_lots.json", normalize_tax_lots(flat, now_iso=ts))
+        except Exception:
+            pass
         _archive(root, ts, sd, pr)
         return run_status(root=root, now=ts, authenticated=True,
                           account_count=len(sd["accounts"]), position_count=len(pr["positions"]))
