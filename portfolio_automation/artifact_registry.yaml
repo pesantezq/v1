@@ -669,6 +669,19 @@ artifacts:
     consumer_status: consumed
     notes: "Broker positions evidence. Present only after a live --sync run."
 
+  schwab_tax_lots.json:
+    path: outputs/latest/schwab_tax_lots.json
+    label: schwab tax lots
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_tax_lots
+    consumers: [tax_scorecard, strategy_tax_gui, daily_tool_analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Per-lot tax data (acquisition dates / lot cost basis) when Schwab returns it; observe-only, degrades to has_lots:false."
+
   portfolio_reconciliation.json:
     path: outputs/latest/portfolio_reconciliation.json
     label: portfolio reconciliation

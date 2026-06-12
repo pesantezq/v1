@@ -64,7 +64,10 @@
     "target_cash_weight": 0.05,
     "monthly_contribution": 1000,
     "has_regular_contributions": true,
-    "is_taxable_account": true
+    "is_taxable_account": true,
+    "broker_aware": {
+      "enabled": true
+    }
   },
   "rebalance_rules": {
     "band_threshold": 0.12,
