@@ -39,6 +39,8 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
     opp_q = _load(latest / "operator_action_queue.json") or {}
     broker = _load(portfolio / "broker_aware_portfolio.json") or {}
     cards_review = _load(sb / "market_opportunity_review_cards.json") or {}
+    backtest = _load(sb / "portfolio_backtest.json") or {}
+    projection = _load(sb / "portfolio_projection.json") or {}
 
     def _n(d, key):  # safe count
         v = d.get(key)
@@ -109,4 +111,39 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
         "opportunity_queue": opp_q.get("queue", []) if isinstance(opp_q, dict) else [],
         "market_review_cards": (cards_review.get("cards", []) or [])[:12],
         "broker_aware": broker,
+        "backtest": _backtest_view(backtest),
+        "projection": _projection_view(projection),
+    }
+
+
+def _backtest_view(doc: dict) -> dict[str, Any]:
+    """Compact Strategy Lab view of the portfolio backtest (observe-only)."""
+    if not isinstance(doc, dict) or doc.get("status") not in ("ok",):
+        return {"available": False, "status": (doc or {}).get("status", "absent")}
+    lb = doc.get("leaderboard") or {}
+    # Prefer a multi-year window for the headline leaderboard.
+    headline_key = next((k for k in ("trailing_3y", "trailing_5y", "trailing_1y", "ytd")
+                         if k in lb and lb[k]), next(iter(lb), None))
+    return {
+        "available": True,
+        "objective": doc.get("objective"),
+        "primary_benchmark": doc.get("primary_benchmark"),
+        "headline_window": headline_key,
+        "leaderboard": (lb.get(headline_key) or [])[:8] if headline_key else [],
+        "windows": doc.get("windows", []),
+        "contribution_sensitivity": doc.get("contribution_sensitivity", {}),
+        "created_at": doc.get("created_at"),
+    }
+
+
+def _projection_view(doc: dict) -> dict[str, Any]:
+    """Compact Strategy Lab view of the Monte-Carlo projection (observe-only)."""
+    if not isinstance(doc, dict) or doc.get("status") not in ("ok",):
+        return {"available": False, "status": (doc or {}).get("status", "absent")}
+    return {
+        "available": True,
+        "rows": (doc.get("rows") or [])[:12],
+        "horizons": doc.get("horizons", []),
+        "seed": doc.get("seed"),
+        "created_at": doc.get("created_at"),
     }
