@@ -108,3 +108,35 @@ def test_refresh_token_status_ok_due_soon_expired_unknown(tmp_path, monkeypatch)
     # untracked (legacy token with no anchor) -> unknown, never a false alarm
     s = oa.refresh_token_status({"access_token": "x"}, now=now)
     assert s["reauth_status"] == "unknown" and s["tracked"] is False
+
+
+def test_generate_and_verify_state_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "STATE_PATH", tmp_path / "state.json")
+    nonce = oa.generate_state()
+    assert nonce and isinstance(nonce, str)
+    assert oa.verify_state(nonce, consume=False) is True
+
+
+def test_verify_state_rejects_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "STATE_PATH", tmp_path / "state.json")
+    oa.generate_state()
+    assert oa.verify_state("not-the-nonce") is False
+
+
+def test_verify_state_rejects_expired(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "STATE_PATH", tmp_path / "state.json")
+    nonce = oa.generate_state(now=int(time.time()) - oa.STATE_TTL_SEC - 5)
+    assert oa.verify_state(nonce) is False
+
+
+def test_verify_state_single_use_consumes(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "STATE_PATH", tmp_path / "state.json")
+    nonce = oa.generate_state()
+    assert oa.verify_state(nonce) is True
+    assert oa.verify_state(nonce) is False
+
+
+def test_verify_state_missing_file_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "STATE_PATH", tmp_path / "nope.json")
+    assert oa.verify_state("anything") is False

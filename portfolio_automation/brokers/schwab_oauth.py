@@ -3,8 +3,10 @@
 Secrets via env only; tokens never logged. READ-ONLY scopes; no trade auth."""
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
 import time
 from pathlib import Path
 from urllib.parse import urlencode
@@ -23,6 +25,45 @@ TOKEN_PATH = Path(__file__).resolve().parents[2] / "data" / "schwab_token.json"
 REFRESH_TOKEN_TTL_SEC = 7 * 24 * 3600
 # Warn this far ahead of refresh-token expiry so re-auth stays a planned ~30s task.
 REAUTH_WARN_SEC = 2 * 24 * 3600
+
+# Single-use CSRF state nonce for the auth-code flow (used by schwab_reauth
+# auto-capture). Persisted 0600 with a short TTL; consumed on first match.
+STATE_PATH = Path(__file__).resolve().parents[2] / "data" / "schwab_reauth_state.json"
+STATE_TTL_SEC = 600  # 10 minutes
+
+
+def generate_state(now: int | None = None) -> str:
+    """Create + persist (0600) a single-use state nonce with a TTL; return it."""
+    nonce = secrets.token_urlsafe(32)
+    n = int(now if now is not None else time.time())
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps({"state": nonce, "created_at": n,
+                                      "expires_at": n + STATE_TTL_SEC}), encoding="utf-8")
+    try:
+        os.chmod(STATE_PATH, 0o600)
+    except OSError:
+        pass
+    return nonce
+
+
+def verify_state(candidate: str, *, now: int | None = None, consume: bool = True) -> bool:
+    """Constant-time match against the persisted nonce. False if missing/expired/
+    mismatched. Single-use: deletes the state file on a successful match."""
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+    stored = str(data.get("state", ""))
+    n = int(now if now is not None else time.time())
+    if not candidate or not stored or int(data.get("expires_at", 0)) < n:
+        return False
+    ok = hmac.compare_digest(str(candidate), stored)
+    if ok and consume:
+        try:
+            STATE_PATH.unlink()
+        except OSError:
+            pass
+    return ok
 
 
 def _env(key: str) -> str:
