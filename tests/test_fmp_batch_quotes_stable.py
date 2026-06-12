@@ -278,7 +278,8 @@ class TestStaleCacheFallback:
 
     def test_budget_exceeded_stale_served_no_api_call(self):
         """budget=0 forces stale-only path; _raw_get must not be called."""
-        client = _make_client(budget=0)
+        client = _make_client(budget=1)
+        client._counter.increment(5)  # exhaust the daily budget (0 now = no cap)
         client._cache.set("quote_stable_AAPL", _stable_response("AAPL"))
 
         with patch.object(client, '_raw_get') as mock_get:
@@ -289,7 +290,8 @@ class TestStaleCacheFallback:
         assert result["AAPL"]["price"] == pytest.approx(150.0)
 
     def test_budget_exceeded_no_stale_symbol_skipped_no_crash(self):
-        client = _make_client(budget=0)
+        client = _make_client(budget=1)
+        client._counter.increment(5)  # exhaust the daily budget (0 now = no cap)
         with patch.object(client, '_raw_get') as mock_get:
             result = client.get_batch_quotes(["AAPL"])
         mock_get.assert_not_called()

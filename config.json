@@ -200,7 +200,7 @@
     "fallback_watchlist_theme_candidate_limit": 10
   },
   "api_limits": {
-    "fmp_daily_calls_budget": 500
+    "fmp_daily_calls_budget": 0
   },
   "data_sources": {
     "alpha_vantage_enabled": true,

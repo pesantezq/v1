@@ -172,7 +172,8 @@ class TestGetProfile:
         assert result is None
 
     def test_budget_exceeded_serves_stale_no_api_call(self):
-        client = _make_client(budget=0)
+        client = _make_client(budget=1)
+        client._counter.increment(5)  # exhaust the daily budget (0 now = no cap)
         stale = _stable_profile("AAPL")
         client._cache.set("profile_stable_AAPL", stale)
 
@@ -183,7 +184,8 @@ class TestGetProfile:
         assert result is not None
 
     def test_budget_exceeded_no_stale_returns_none(self):
-        client = _make_client(budget=0)
+        client = _make_client(budget=1)
+        client._counter.increment(5)  # exhaust the daily budget (0 now = no cap)
         with patch.object(client, '_raw_get') as mock_get:
             result = client.get_profile("AAPL")
 
@@ -374,7 +376,8 @@ class TestGetRatios:
         assert result["netProfitMargin"] == pytest.approx(0.2531)
 
     def test_budget_exceeded_no_stale_returns_none(self):
-        client = _make_client(budget=0)
+        client = _make_client(budget=1)
+        client._counter.increment(5)  # exhaust the daily budget (0 now = no cap)
         with patch.object(client, '_raw_get') as mock_get:
             result = client.get_ratios("AAPL")
         mock_get.assert_not_called()

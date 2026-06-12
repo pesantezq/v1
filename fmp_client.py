@@ -143,6 +143,10 @@ class _CallCounter:
         return d['count']
 
     def would_exceed(self, budget: int, additional: int = 1) -> bool:
+        # budget <= 0 means NO daily cap — the per-request rate limiter (500ms
+        # min interval, ~120 calls/min, under FMP's 250/min) is the real control.
+        if budget <= 0:
+            return False
         return self.today_count + additional > budget
 
 
