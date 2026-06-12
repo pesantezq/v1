@@ -649,7 +649,17 @@ def run_portfolio_update(
             for issue in config_issues:
                 logger.warning(f"Config issue: {issue}")
                 result['warnings'].append(issue)
-        
+
+        # =====================
+        # 1a. BROKER OVERLAY
+        # =====================
+        try:
+            from portfolio_automation.holdings_resolver import apply_broker_overlay_to_config
+            config = apply_broker_overlay_to_config(config, ".")
+            logger.info("Broker overlay applied (holdings_source from broker or config fallback)")
+        except Exception as _overlay_err:
+            logger.warning("Broker overlay skipped (non-fatal): %s", _overlay_err)
+
         # =====================
         # 1b. CASH LEDGER SYNC
         # =====================

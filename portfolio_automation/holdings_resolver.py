@@ -221,3 +221,45 @@ def broker_overlaid_portfolio(portfolio_block: dict, root: "Path | str",
     block["holdings_source"] = "broker"
     block["confidence_modifier"] = res.get("confidence_modifier", 1.0)
     return block
+
+
+def apply_broker_overlay_to_config(config, root: "Path | str", now=None):
+    """Overlay broker holdings/cash onto a utils.Config object (runtime, in place).
+    Rebuilds config.holdings as the same Holding dataclass, preserving config metadata.
+    Schwab-preferred; config fallback on stale/missing/disabled. Never raises; returns config."""
+    try:
+        block = {"holdings": [{"symbol": getattr(h, "symbol", None), "shares": getattr(h, "shares", None),
+                               "target_weight": getattr(h, "target_weight", 0.0),
+                               "asset_class": getattr(h, "asset_class", "us_equity"),
+                               "is_leveraged": getattr(h, "is_leveraged", False),
+                               "leverage_factor": getattr(h, "leverage_factor", 1.0)}
+                              for h in getattr(config, "holdings", []) or []],
+                 "cash_available": getattr(config, "cash_available", 0.0)}
+        overlaid = broker_overlaid_portfolio(block, root, now=now)
+        if overlaid.get("holdings_source") != "broker":
+            return config
+        if not getattr(config, "holdings", None):
+            return config
+        HoldingCls = type(config.holdings[0])
+        new_holdings = []
+        for h in overlaid["holdings"]:
+            new_holdings.append(HoldingCls(
+                symbol=h["symbol"], shares=float(h.get("shares") or 0),
+                target_weight=float(h.get("target_weight", 0.0) or 0.0),
+                asset_class=h.get("asset_class", "us_equity"),
+                is_leveraged=bool(h.get("is_leveraged", False)),
+                leverage_factor=float(h.get("leverage_factor", 1.0) or 1.0)))
+        config.holdings = new_holdings
+        config.cash_available = overlaid.get("cash_available", config.cash_available)
+        # observe-only telemetry: which source drove this run (non-fatal)
+        try:
+            from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+            safe_write_json(OutputNamespace.LATEST, "decision_holdings_source.json",
+                            {"observe_only": True, "holdings_source": overlaid.get("holdings_source"),
+                             "confidence_modifier": overlaid.get("confidence_modifier")},
+                            base_dir=str(Path(root) / "outputs"))
+        except Exception:
+            pass
+    except Exception:
+        return config
+    return config

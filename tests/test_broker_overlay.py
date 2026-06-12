@@ -68,3 +68,39 @@ def test_overlay_never_raises_on_garbage(tmp_path):
 def test_main_module_imports_overlay():
     src = Path("watchlist_scanner/__main__.py").read_text(encoding="utf-8")
     assert "broker_overlaid_portfolio" in src
+
+
+def test_apply_overlay_to_config_object(tmp_path, monkeypatch):
+    import portfolio_automation.holdings_resolver as hrmod
+    from utils import load_config
+    monkeypatch.setattr(hrmod, "resolve_holdings", lambda root, now=None: {
+        "holdings_source": "broker", "confidence_modifier": 1.0, "cash": 150.6,
+        "holdings": [{"symbol": "NASA", "quantity": 15}, {"symbol": "QQQ", "quantity": 6}]})
+    cfg = load_config("/opt/stockbot/config.json")
+    cfg2 = hrmod.apply_broker_overlay_to_config(cfg, str(tmp_path))
+    by = {h.symbol: h for h in cfg2.holdings}
+    assert by["NASA"].shares == 15
+    assert by["QQQ"].target_weight == 0.35   # config metadata preserved
+
+
+def test_apply_overlay_writes_source_artifact(tmp_path, monkeypatch):
+    import json as _json
+    import portfolio_automation.holdings_resolver as hrmod
+    from utils import load_config
+    monkeypatch.setattr(hrmod, "resolve_holdings", lambda root, now=None: {
+        "holdings_source": "broker", "confidence_modifier": 1.0, "cash": 150.6,
+        "holdings": [{"symbol": "QQQ", "quantity": 6}]})
+    cfg = load_config("/opt/stockbot/config.json")
+    hrmod.apply_broker_overlay_to_config(cfg, str(tmp_path))
+    p = tmp_path / "outputs" / "latest" / "decision_holdings_source.json"
+    assert p.exists() and _json.loads(p.read_text())["holdings_source"] == "broker"
+
+
+def test_apply_overlay_config_fallback_returns_unchanged(tmp_path, monkeypatch):
+    import portfolio_automation.holdings_resolver as hrmod
+    from utils import load_config
+    monkeypatch.setattr(hrmod, "resolve_holdings", lambda root, now=None: {"holdings_source": "config", "confidence_modifier": 0.8})
+    cfg = load_config("/opt/stockbot/config.json")
+    before = [(h.symbol, h.shares) for h in cfg.holdings]
+    cfg2 = hrmod.apply_broker_overlay_to_config(cfg, str(tmp_path))
+    assert [(h.symbol, h.shares) for h in cfg2.holdings] == before
