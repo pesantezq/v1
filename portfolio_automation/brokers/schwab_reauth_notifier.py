@@ -99,14 +99,39 @@ def build_reauth_message(cfg: mes.MemoEmailConfig, *, reauth_status: str,
     return msg
 
 
+def _split_addrs(raw: str) -> list[str]:
+    return [a.strip() for a in raw.replace(";", ",").split(",") if a.strip()]
+
+
 def _load_transport(env: dict[str, str]) -> mes.MemoEmailConfig:
     """Reuse the memo sender's SMTP transport; override gate/dry-run/recipients
-    with the re-auth-specific envs so the alert is enabled independently."""
+    with the re-auth-specific envs so the alert is enabled independently.
+
+    When the dedicated ``MEMO_EMAIL_*`` transport is not separately configured,
+    fall back to the repo's existing Gmail env vars (``SMTP_SERVER`` / ``SMTP_PORT``
+    / ``EMAIL_USER`` / ``EMAIL_PASS`` / ``EMAIL_TO``) so the alert reuses the
+    already-configured mailbox + saved app password — no duplicated secret."""
     cfg = mes.load_memo_email_config(env=env)
-    cfg.dry_run = _env_bool("SCHWAB_REAUTH_EMAIL_DRY_RUN", False, env)
+    if not cfg.smtp_host:
+        cfg.smtp_host = env.get("SMTP_SERVER", "").strip()
+    if not env.get("MEMO_EMAIL_SMTP_PORT") and env.get("SMTP_PORT"):
+        try:
+            cfg.smtp_port = int(env["SMTP_PORT"])
+        except ValueError:
+            pass
+    if not cfg.username:
+        cfg.username = env.get("EMAIL_USER", "").strip()
+    if not cfg.from_addr:
+        cfg.from_addr = env.get("EMAIL_USER", "").strip()  # Gmail: From must equal the auth user
+    if not cfg.password:
+        cfg.password = env.get("EMAIL_PASS", "").strip()
+    if not cfg.to_addrs:
+        cfg.to_addrs = _split_addrs(env.get("EMAIL_TO", ""))
+    # An explicit re-auth recipient always wins over the fallback.
     to_raw = env.get("SCHWAB_REAUTH_EMAIL_TO", "").strip()
     if to_raw:
-        cfg.to_addrs = [a.strip() for a in to_raw.replace(";", ",").split(",") if a.strip()]
+        cfg.to_addrs = _split_addrs(to_raw)
+    cfg.dry_run = _env_bool("SCHWAB_REAUTH_EMAIL_DRY_RUN", False, env)
     return cfg
 
 

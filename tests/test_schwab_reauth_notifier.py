@@ -93,6 +93,24 @@ def test_no_secret_in_artifacts(tmp_path):
     assert "secret-pw" not in blob and "password" not in blob.lower()
 
 
+def test_falls_back_to_legacy_email_env(tmp_path):
+    # No MEMO_EMAIL_* set; only the repo's existing Gmail vars + saved app password.
+    _write_bss(tmp_path, reauth_status="due_soon", reauth_expires_at="2026-06-19T00:00:00+00:00",
+               reauth_days_remaining=1.0)
+    env = {
+        "SCHWAB_REAUTH_EMAIL_ENABLED": "1", "SCHWAB_REAUTH_EMAIL_DRY_RUN": "0",
+        "SMTP_SERVER": "smtp.gmail.com", "SMTP_PORT": "587",
+        "EMAIL_USER": "me@gmail.com", "EMAIL_PASS": "app-pw", "EMAIL_TO": "me@gmail.com",
+    }
+    cfg = rn._load_transport(env)
+    assert cfg.smtp_host == "smtp.gmail.com" and cfg.smtp_port == 587
+    assert cfg.username == "me@gmail.com" and cfg.from_addr == "me@gmail.com"
+    assert cfg.to_addrs == ["me@gmail.com"] and cfg.has_smtp_config()
+    sender = _FakeSender()
+    st = rn.run_reauth_notification(base_dir=tmp_path, env=env, sender=sender)
+    assert st["sent"] is True and len(sender.calls) == 1  # reused legacy creds, sent
+
+
 def test_missing_smtp_config_skips(tmp_path):
     _write_bss(tmp_path, reauth_status="expired", reauth_expires_at="2026-06-19T00:00:00+00:00",
                reauth_days_remaining=-1.0)
