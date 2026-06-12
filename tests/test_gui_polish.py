@@ -22,3 +22,8 @@ def test_ui_badges_have_a11y():
     src = _UI.read_text(encoding="utf-8")
     assert src.count('role="status"') >= 1
     assert "aria-label" in src
+
+
+def test_portfolio_sync_imports_ui():
+    src = Path("gui_v2/templates/dashboard/portfolio_sync.html").read_text(encoding="utf-8")
+    assert 'import "components/_ui.html"' in src

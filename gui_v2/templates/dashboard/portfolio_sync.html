@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
 {% block title %}Portfolio Sync &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-portfolio-sync-content"
@@ -9,19 +10,8 @@
      hx-swap="outerHTML"
      class="space-y-6">
 
-  <header class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold">Portfolio Sync</h1>
-      <p class="text-sm text-zinc-400">Schwab read view &mdash; local StockBot vs Schwab account comparison</p>
-    </div>
-    <button hx-get="/dashboard/portfolio-sync"
-            hx-target="#dashboard-portfolio-sync-content"
-            hx-select="#dashboard-portfolio-sync-content"
-            hx-swap="outerHTML"
-            class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
-      Refresh
-    </button>
-  </header>
+  {{ ui.page_header("Portfolio Sync", "Schwab read view — local StockBot vs Schwab account comparison",
+                    "/dashboard/portfolio-sync", "dashboard-portfolio-sync-content") }}
 
   {# ------------------------------------------------------------------ #}
   {# Safety banner                                                        #}
@@ -47,18 +37,7 @@
     <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
-        {# Severity badge #}
-        {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
-        {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
-        {% endif %}
+        {{ ui.badge(c.severity, c.label or c.status) }}
       </div>
       {% if c.summary %}
       <p class="text-sm text-zinc-300">{{ c.summary }}</p>
@@ -86,16 +65,13 @@
   {# Holdings Mismatch — desktop table + mobile stacked cards            #}
   {# ------------------------------------------------------------------ #}
   <section aria-label="Holdings mismatches">
-    <div class="flex items-center gap-3 mb-3">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Holdings Mismatches</h2>
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">portfolio_reconciliation.json</span>
-    </div>
+    {{ ui.section_header("Holdings Mismatches", "", "portfolio_reconciliation.json") }}
 
     {% if mismatch_rows %}
 
     {# Desktop table — hidden on small screens #}
     <div class="hidden md:block overflow-x-auto">
-      <div class="overflow-x-auto -mx-2 sm:mx-0">
+      {% call ui.responsive_table() %}
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
@@ -112,13 +88,13 @@
             <td class="py-2 pr-4 font-mono text-zinc-100">{{ row.symbol }}</td>
             <td class="py-2 pr-4">
               {% if row.mismatch_type == "quantity" %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">quantity</span>
+                {{ ui.badge("yellow", "quantity") }}
               {% elif "missing in local" in row.mismatch_type %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">missing in local</span>
+                {{ ui.badge("blue", "missing in local") }}
               {% elif "missing in Schwab" in row.mismatch_type %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">missing in Schwab</span>
+                {{ ui.badge("red", "missing in Schwab") }}
               {% else %}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ row.mismatch_type }}</span>
+                {{ ui.badge("gray", row.mismatch_type) }}
               {% endif %}
             </td>
             <td class="py-2 pr-4 text-right font-mono text-zinc-300">{{ row.local_value if row.local_value is not none else '—' }}</td>
@@ -128,7 +104,7 @@
           {% endfor %}
         </tbody>
       </table>
-      </div>
+      {% endcall %}
     </div>
 
     {# Mobile stacked cards — shown only on small screens #}
@@ -138,13 +114,13 @@
         <div class="flex items-center justify-between">
           <span class="font-mono text-zinc-100">{{ row.symbol }}</span>
           {% if row.mismatch_type == "quantity" %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">quantity</span>
+            {{ ui.badge("yellow", "quantity") }}
           {% elif "missing in local" in row.mismatch_type %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">missing in local</span>
+            {{ ui.badge("blue", "missing in local") }}
           {% elif "missing in Schwab" in row.mismatch_type %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">missing in Schwab</span>
+            {{ ui.badge("red", "missing in Schwab") }}
           {% else %}
-            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ row.mismatch_type }}</span>
+            {{ ui.badge("gray", row.mismatch_type) }}
           {% endif %}
         </div>
         <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
@@ -173,9 +149,7 @@
   {# Generate Config Update Proposal control                              #}
   {# ------------------------------------------------------------------ #}
   <section aria-label="Generate config update proposal">
-    <div class="flex items-center gap-3 mb-3">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-400">Config Update Proposal</h2>
-    </div>
+    {{ ui.section_header("Config Update Proposal", "", "") }}
     <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-3">
       <p class="text-sm text-zinc-300">
         Compares Schwab account data to local StockBot configuration and generates
