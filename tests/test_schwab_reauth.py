@@ -227,6 +227,25 @@ def test_cli_check_reports_readiness(monkeypatch, capsys):
 
 def test_cli_begin_invokes_run_begin(monkeypatch):
     called = {}
-    monkeypatch.setattr(sr, "run_begin", lambda **k: called.setdefault("k", k) or {"outcome": "timeout"})
+    def fake(**k):
+        called["k"] = k
+        return {"outcome": "success"}
+    monkeypatch.setattr(sr, "run_begin", fake)
     rc = sr._cli_main(["--begin", "--timeout", "1"])
     assert rc == 0 and called["k"]["timeout"] == 1.0
+
+
+def test_cli_begin_nonsuccess_returns_1(monkeypatch):
+    monkeypatch.setattr(sr, "run_begin", lambda **k: {"outcome": "timeout"})
+    assert sr._cli_main(["--begin"]) == 1
+
+
+def test_run_begin_listener_start_fails(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    class _BoomListener:
+        result_q = __import__("queue").Queue()
+        def start(self): raise OSError("port busy")
+        def stop(self): pass
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                      tunnel_cls=_NoopTunnel, listener_cls=lambda: _BoomListener())
+    assert st["outcome"] == "error"  # never raises; writes an error status instead

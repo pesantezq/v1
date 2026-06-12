@@ -189,8 +189,8 @@ def run_begin(*, base_dir: str | Path = "outputs", env: dict[str, str] | None = 
         return _finish(base_dir, started, outcome="cloudflared_missing", detail=ready["reason"])
 
     listener = listener_cls()
-    port = listener.start()
     try:
+        port = listener.start()
         nonce = oauth.generate_state()
         url = oauth.build_authorize_url(state=nonce)
         _surface_authorize_url(url, env=env, notify=notify)
@@ -201,14 +201,17 @@ def run_begin(*, base_dir: str | Path = "outputs", env: dict[str, str] | None = 
                 return _finish(base_dir, started, outcome="timeout")
             if "error" in res:
                 return _finish(base_dir, started, outcome="error", detail=res["error"])
-            try:
-                tok = oauth.exchange_code(res["code"])
-            except Exception as exc:
-                return _finish(base_dir, started, outcome="error", detail=bm.redact(str(exc)))
+            tok = oauth.exchange_code(res["code"])
             new_exp = oauth.refresh_token_status(tok).get("expires_at")
             return _finish(base_dir, started, outcome="success", new_expires_at=new_exp)
+    except Exception as exc:
+        return _finish(base_dir, started, outcome="error",
+                       detail=bm.redact(f"{type(exc).__name__}: {exc}"))
     finally:
-        listener.stop()
+        try:
+            listener.stop()
+        except Exception:
+            pass
 
 
 def _cli_main(argv: list[str] | None = None) -> int:
@@ -228,7 +231,7 @@ def _cli_main(argv: list[str] | None = None) -> int:
         return 0 if r["ready"] else 1
     st = run_begin(timeout=args.timeout, notify=not args.no_email)
     print(f"outcome={st.get('outcome')} detail={st.get('detail')} new_expires_at={st.get('new_expires_at')}")
-    return 0
+    return 0 if st.get("outcome") == "success" else 1
 
 
 if __name__ == "__main__":
