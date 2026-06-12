@@ -122,3 +122,84 @@ def test_surface_url_prints_and_emails(capsys):
 def test_surface_url_email_optional(capsys):
     sr._surface_authorize_url("https://auth.example/x", env={}, notify=False, sender=None)
     assert "https://auth.example/x" in capsys.readouterr().out
+
+
+class _FakeListener:
+    """Listener double that immediately yields a preset result."""
+    def __init__(self, result):
+        self._result = result
+        self.result_q = __import__("queue").Queue()
+        self.stopped = False
+        self.port = 9999
+    def start(self):
+        if self._result is not None:
+            self.result_q.put(self._result)
+        return self.port
+    def stop(self):
+        self.stopped = True
+
+
+class _NoopTunnel:
+    def __init__(self, *a, **k): self.entered = False; self.exited = False
+    def __enter__(self): self.entered = True; return self
+    def __exit__(self, *a): self.exited = True
+
+
+def _ready(monkeypatch):
+    monkeypatch.setattr(sr.shutil, "which", lambda _n: "/usr/bin/cloudflared")
+    monkeypatch.setattr(sr.oauth, "is_configured", lambda: True)
+    monkeypatch.setattr(sr.oauth, "generate_state", lambda: "nonce")
+    monkeypatch.setattr(sr.oauth, "build_authorize_url", lambda state="x": f"https://auth/x?state={state}")
+    monkeypatch.setattr(sr, "_surface_authorize_url", lambda *a, **k: None)
+
+
+def test_run_begin_success(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(sr.oauth, "exchange_code", lambda code: {"refresh_token_expires_at": 9999999999})
+    monkeypatch.setattr(sr.oauth, "refresh_token_status",
+                        lambda tok: {"expires_at": "2026-06-26T00:00:00+00:00"})
+    tunnel = _NoopTunnel
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                      tunnel_cls=tunnel, listener_cls=lambda: _FakeListener({"code": "ABC"}))
+    assert st["outcome"] == "success" and st["new_expires_at"] == "2026-06-26T00:00:00+00:00"
+    p = get_output_path(OutputNamespace.LATEST, "schwab_reauth_session_status.json", base_dir=tmp_path)
+    assert json.loads(p.read_text())["observe_only"] is True
+
+
+def test_run_begin_cloudflared_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(sr.shutil, "which", lambda _n: None)
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"})
+    assert st["outcome"] == "cloudflared_missing"
+
+
+def test_run_begin_timeout(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"}, timeout=0.2,
+                      tunnel_cls=_NoopTunnel, listener_cls=lambda: _FakeListener(None))
+    assert st["outcome"] == "timeout"
+
+
+def test_run_begin_oauth_error(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                      tunnel_cls=_NoopTunnel, listener_cls=lambda: _FakeListener({"error": "access_denied"}))
+    assert st["outcome"] == "error" and "access_denied" in (st["detail"] or "")
+
+
+def test_run_begin_exchange_failure(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    def boom(code): raise RuntimeError("bad code")
+    monkeypatch.setattr(sr.oauth, "exchange_code", boom)
+    st = sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                      tunnel_cls=_NoopTunnel, listener_cls=lambda: _FakeListener({"code": "ABC"}))
+    assert st["outcome"] == "error"
+
+
+def test_run_begin_teardown_always_runs(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(sr.oauth, "exchange_code", lambda code: {})
+    monkeypatch.setattr(sr.oauth, "refresh_token_status", lambda tok: {"expires_at": None})
+    listener = _FakeListener({"code": "ABC"})
+    sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                 tunnel_cls=_NoopTunnel, listener_cls=lambda: listener)
+    assert listener.stopped is True

@@ -159,3 +159,53 @@ def _surface_authorize_url(url: str, *, env: dict[str, str], notify: bool,
         (sender or mes.send_daily_memo_email)(cfg, msg)
     except Exception as exc:  # email is best-effort; the printed URL always works
         print(f"(email failed — {type(exc).__name__}; use the printed URL)")
+
+
+def _finish(base_dir, started: str, *, outcome: str, detail: str | None = None,
+            new_expires_at: str | None = None) -> dict[str, Any]:
+    status = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "observe_only": True, "no_trade": True,
+        "started_at": started, "outcome": outcome, "detail": detail,
+        "new_expires_at": new_expires_at,
+    }
+    try:
+        safe_write_json(OutputNamespace.LATEST, _STATUS_FILENAME, status, base_dir=base_dir)
+    except Exception:
+        pass
+    return status
+
+
+def run_begin(*, base_dir: str | Path = "outputs", env: dict[str, str] | None = None,
+              timeout: float = DEFAULT_TIMEOUT_SEC, notify: bool = True,
+              tunnel_cls: Callable[..., Any] = TunnelManager,
+              listener_cls: Callable[[], Any] = _CallbackListener) -> dict[str, Any]:
+    """Run one auto-capture re-auth session. Never raises; always writes a status
+    artifact and guarantees listener + tunnel teardown."""
+    env = dict(env if env is not None else os.environ)
+    started = datetime.now(timezone.utc).isoformat()
+    ready = check_readiness(env)
+    if not ready["ready"]:
+        return _finish(base_dir, started, outcome="cloudflared_missing", detail=ready["reason"])
+
+    listener = listener_cls()
+    port = listener.start()
+    try:
+        nonce = oauth.generate_state()
+        url = oauth.build_authorize_url(state=nonce)
+        _surface_authorize_url(url, env=env, notify=notify)
+        with tunnel_cls(ready["tunnel_name"], port):
+            try:
+                res = listener.result_q.get(timeout=timeout)
+            except queue.Empty:
+                return _finish(base_dir, started, outcome="timeout")
+            if "error" in res:
+                return _finish(base_dir, started, outcome="error", detail=res["error"])
+            try:
+                tok = oauth.exchange_code(res["code"])
+            except Exception as exc:
+                return _finish(base_dir, started, outcome="error", detail=bm.redact(str(exc)))
+            new_exp = oauth.refresh_token_status(tok).get("expires_at")
+            return _finish(base_dir, started, outcome="success", new_expires_at=new_exp)
+    finally:
+        listener.stop()
