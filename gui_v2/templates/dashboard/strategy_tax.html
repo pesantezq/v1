@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block title %}Strategy &amp; Tax &mdash; StockBot{% endblock %}
+{% block content %}
+<div id="dashboard-strategy-tax-content"
+     hx-get="/dashboard/strategy-tax"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-strategy-tax-content"
+     hx-select="#dashboard-strategy-tax-content"
+     hx-swap="outerHTML"
+     class="space-y-7">
+
+  {{ ui.page_header("Strategy &amp; Tax", "Tax scorecard · harvest advisor · strategy comparison — observe-only",
+                    "/dashboard/strategy-tax", "dashboard-strategy-tax-content") }}
+
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+    <span class="font-semibold">Observe-only tax and strategy intelligence.</span>
+    These artifacts never trigger BUY / SELL / HOLD / REBALANCE / TRIM / SCALE or any allocation change.
+    No tax or strategy action is taken automatically.
+  </div>
+
+  {# ── Tax Scorecard ─────────────────────────────────────────────────── #}
+  {% if scorecard %}
+  <section aria-label="Tax scorecard">
+    {{ ui.section_header("Tax Scorecard", "unrealized G/L · TLH candidates · wash-sale notes", "strategy_tax_scorecard.json") }}
+
+    {% if scorecard.degraded_mode %}
+    <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2 text-xs text-amber-200 mb-3">
+      <span class="font-semibold">Degraded mode</span> — {{ scorecard.degraded_reason or "no live lot data available" }}.
+      {% set ph = scorecard.placeholders or {} %}
+      {% if ph %}
+      Placeholders: unrealized G/L={{ ph.unrealized_gain_loss }}, short/long={{ ph.short_term_vs_long_term }}.
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% set cards = scorecard.scorecards or [] %}
+    {% if cards %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for pos in cards %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ pos.symbol or pos.ticker or "—" }}</span>
+          {% if pos.tlh_candidate %}
+          {{ ui.badge("yellow", "TLH candidate") }}
+          {% elif pos.unrealized_gain is not none %}
+          {{ ui.badge("green" if (pos.unrealized_gain or 0) >= 0 else "red",
+                      "gain" if (pos.unrealized_gain or 0) >= 0 else "loss") }}
+          {% endif %}
+        </div>
+        {% if pos.unrealized_gain is not none %}
+        <div class="text-xs text-zinc-400 font-mono">
+          unrealized {{ "%+.2f"|format(pos.unrealized_gain or 0) }}
+          {% if pos.unrealized_gain_pct is not none %} ({{ "%+.1f%%"|format((pos.unrealized_gain_pct or 0) * 100) }}){% endif %}
+        </div>
+        {% endif %}
+        {% if pos.holding_period %}
+        <div class="text-xs text-zinc-500">holding: {{ pos.holding_period }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-xs text-zinc-500 mt-2">No per-symbol scorecard data — lot data not yet available.</p>
+    {% endif %}
+
+    {% if scorecard.wash_sale_note %}
+    <p class="text-xs text-amber-300/70 mt-2">{{ scorecard.wash_sale_note }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ── Tax Harvest Advisor ───────────────────────────────────────────── #}
+  {% if harvest %}
+  <section aria-label="Tax harvest advisor">
+    {{ ui.section_header("Tax Harvest Advisor", "harvestable positions · loss estimates", "tax_harvest_advisor.json") }}
+
+    <div class="flex flex-wrap gap-4 text-sm mb-3">
+      <span class="text-zinc-400">Harvestable positions:
+        <span class="font-semibold text-zinc-100">{{ harvest.harvestable_count or 0 }}</span>
+      </span>
+      {% if harvest.total_harvestable_loss_dollars is not none %}
+      <span class="text-zinc-400">Est. harvestable loss:
+        <span class="font-semibold {{ 'text-rose-300' if (harvest.total_harvestable_loss_dollars or 0) < 0 else 'text-zinc-100' }}">
+          ${{ "%.2f"|format(harvest.total_harvestable_loss_dollars or 0) }}
+        </span>
+      </span>
+      {% endif %}
+      {% if harvest.is_taxable_account is not none %}
+      <span class="text-zinc-400">Taxable account:
+        <span class="font-semibold text-zinc-100">{{ "yes" if harvest.is_taxable_account else "no" }}</span>
+      </span>
+      {% endif %}
+    </div>
+
+    {% if harvest.summary_line %}
+    <p class="text-xs text-zinc-400 mb-3">{{ harvest.summary_line }}</p>
+    {% endif %}
+
+    {% set positions = harvest.positions or [] %}
+    {% if positions %}
+    <div class="overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-xs text-zinc-300">
+        <thead class="bg-zinc-900 text-zinc-500 uppercase tracking-wide">
+          <tr>
+            <th class="px-3 py-2 text-left">Symbol</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-right">Loss $</th>
+            <th class="px-3 py-2 text-right">Loss %</th>
+            <th class="px-3 py-2 text-left">Notes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for p in positions %}
+          <tr class="hover:bg-zinc-900/60">
+            <td class="px-3 py-2 font-mono font-semibold text-zinc-100">{{ p.symbol }}</td>
+            <td class="px-3 py-2">
+              {{ ui.badge("yellow" if p.harvest_recommended else "blue", p.status|status_label) }}
+            </td>
+            <td class="px-3 py-2 text-right font-mono {{ 'text-rose-300' if (p.loss_dollars or 0) < 0 else 'text-zinc-400' }}">
+              {{ "%+.2f"|format(p.loss_dollars or 0) }}
+            </td>
+            <td class="px-3 py-2 text-right font-mono {{ 'text-rose-300' if (p.loss_pct or 0) < 0 else 'text-zinc-400' }}">
+              {{ "%+.1f%%"|format((p.loss_pct or 0) * 100) }}
+            </td>
+            <td class="px-3 py-2 text-zinc-500">{{ (p.notes or [])|join("; ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-xs text-zinc-500">No harvestable positions at this time.</p>
+    {% endif %}
+
+    {% if harvest.advisory_disclaimer %}
+    <p class="text-[11px] text-zinc-600 mt-2">{{ harvest.advisory_disclaimer }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ── Strategy Comparison ───────────────────────────────────────────── #}
+  {% if strategy %}
+  <section aria-label="Strategy comparison">
+    {{ ui.section_header("Strategy Comparison", "8-profile objective fit · risk levels", "strategy_comparison.json") }}
+
+    {% if strategy.context_source %}
+    <p class="text-xs text-zinc-500 mb-3">Context: {{ strategy.context_source }}</p>
+    {% endif %}
+
+    {% set profiles = strategy.comparison or [] %}
+    {% if profiles %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {% for p in profiles %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-3 py-3 space-y-1.5">
+        <div class="font-semibold text-zinc-100 text-sm">{{ p.name or p.strategy_id }}</div>
+        {% if p.expected_objective_fit %}
+        <div class="text-xs text-zinc-400">
+          Fit: <span class="text-zinc-200">{{ p.expected_objective_fit }}</span>
+        </div>
+        {% endif %}
+        <div class="text-xs text-zinc-500 space-y-0.5">
+          {% if p.expected_risk_level %}
+          <div>Risk: {{ p.expected_risk_level }}</div>
+          {% endif %}
+          {% if p.expected_volatility %}
+          <div>Volatility: {{ p.expected_volatility }}</div>
+          {% endif %}
+          {% if p.max_drawdown_estimate %}
+          <div>Max DD: {{ p.max_drawdown_estimate }}</div>
+          {% endif %}
+          {% if p.turnover %}
+          <div>Turnover: {{ p.turnover }}</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-xs text-zinc-500">No strategy profiles available.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ── Tax Lots Presence ─────────────────────────────────────────────── #}
+  {% if lots %}
+  <section aria-label="Tax lots">
+    {{ ui.section_header("Tax Lots", "Schwab lot data presence", "schwab_tax_lots.json") }}
+    <p class="text-xs text-zinc-400">
+      Lot data present: <span class="font-semibold {{ 'text-emerald-300' if lots.has_lots else 'text-zinc-500' }}">
+        {{ "yes" if lots.has_lots else "no" }}</span>.
+      {% if lots.lot_count is not none %} {{ lots.lot_count }} lots loaded.{% endif %}
+    </p>
+  </section>
+  {% endif %}
+
+  {# ── Empty state ───────────────────────────────────────────────────── #}
+  {% if not available %}
+  {{ ui.empty_state("Strategy &amp; Tax not yet produced",
+                    "Run the strategy/tax hardening pipeline stages to generate
+                     tax_harvest_advisor.json, strategy_tax_scorecard.json, and
+                     strategy_comparison.json. The panel degrades safely when artifacts are absent.") }}
+  {% endif %}
+
+</div>
+{% endblock %}

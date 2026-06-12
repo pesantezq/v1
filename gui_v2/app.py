@@ -440,6 +440,22 @@ def page_dash_crowd_radar(
     return _render(request, "dashboard/crowd_radar.html", **ctx)
 
 
+@app.get("/dashboard/strategy-tax", response_class=HTMLResponse)
+def page_dash_strategy_tax(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    # Tax/strategy hardening artifacts: scorecard, harvest advisor, strategy
+    # comparison. Sandbox + latest namespaces only; observe-only; never feeds
+    # the decision plan.
+    try:
+        from gui_v2.data.dash_strategy_tax import load_strategy_tax_context
+        ctx = load_strategy_tax_context(REPO_ROOT / "outputs")
+    except Exception:
+        ctx = {"available": False, "observe_only": True,
+               "scorecard": {}, "harvest": {}, "strategy": {}, "lots": {}}
+    return _render(request, "dashboard/strategy_tax.html", **ctx)
+
+
 @app.get("/dashboard/memo", response_class=HTMLResponse)
 def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
