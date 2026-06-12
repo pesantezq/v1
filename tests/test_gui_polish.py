@@ -27,3 +27,9 @@ def test_ui_badges_have_a11y():
 def test_portfolio_sync_imports_ui():
     src = Path("gui_v2/templates/dashboard/portfolio_sync.html").read_text(encoding="utf-8")
     assert 'import "components/_ui.html"' in src
+
+
+def test_portfolio_config_imports_ui_and_keeps_edit_form():
+    src = Path("gui_v2/templates/dashboard/portfolio_config.html").read_text(encoding="utf-8")
+    assert 'import "components/_ui.html"' in src
+    assert 'include "components/portfolio_edit_form.html"' in src

@@ -1,19 +1,11 @@
 {% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
 {% block title %}Portfolio Config &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="portfolio-config-content"
      class="space-y-6">
 
-  <header class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold">Portfolio Config</h1>
-      <p class="text-sm text-zinc-400">Local holdings &amp; cash configuration &mdash; advisory system only</p>
-    </div>
-    <a href="/dashboard/portfolio-config"
-       class="px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
-      Refresh
-    </a>
-  </header>
+  {{ ui.page_header("Portfolio Config", "Local holdings &amp; cash configuration &mdash; advisory system only", "/dashboard/portfolio-config", "portfolio-config-content") }}
 
   {# ------------------------------------------------------------------ #}
   {# Safety banner — required on every config screen                     #}
@@ -51,17 +43,7 @@
     <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-4 space-y-2">
       <div class="flex items-center justify-between gap-2 flex-wrap">
         <span class="text-xs uppercase tracking-wide text-zinc-400">{{ c.title }}</span>
-        {% if c.severity == "green" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "yellow" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "red" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">{{ c.label or c.status }}</span>
-        {% elif c.severity == "blue" %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ c.label or c.status }}</span>
-        {% else %}
-          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">{{ c.label or c.status }}</span>
-        {% endif %}
+        {{ ui.badge(c.severity, c.label or c.status) }}
       </div>
       {% if c.summary %}
       <p class="text-sm text-zinc-300">{{ c.summary }}</p>
@@ -84,9 +66,9 @@
         Holdings &amp; Cash
       </h2>
       {% if edit_enabled %}
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">write enabled</span>
+      {{ ui.badge("yellow", "write enabled") }}
       {% else %}
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">read-only</span>
+      {{ ui.badge("neutral", "read-only") }}
       {% endif %}
     </div>
 
