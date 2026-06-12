@@ -47,11 +47,13 @@ def _build_context(root: Path, now: datetime) -> dict[str, Any]:
 
     # weights: broker market_value if available, else config target_weight, else shares
     weights: dict[str, float] = {}
+    broker_cash_drag = None
     if res["holdings_source"] == "broker":
         mvs = {str(h["symbol"]).upper(): float(h.get("market_value") or 0) for h in res["holdings"]}
         total = sum(mvs.values()) + float(res.get("cash") or 0)
         if total > 0:
             weights = {s: round(mv / total, 4) for s, mv in mvs.items() if mv > 0}
+            broker_cash_drag = round(float(res.get("cash") or 0) / total, 4)
     if not weights:
         tw = {str(h.get("symbol", "")).upper(): float(h.get("target_weight") or 0)
               for h in cfg_holdings if h.get("target_weight")}
@@ -65,7 +67,8 @@ def _build_context(root: Path, now: datetime) -> dict[str, Any]:
 
     leveraged_exposure = sum(w for s, w in weights.items() if s in leveraged)
     radar = _load_json_safe(root / "outputs" / "sandbox" / "opportunity_radar.json") or {}
-    positions = _load_json_safe(root / "outputs" / "latest" / "schwab_positions.json")
+    positions = (_load_json_safe(root / "outputs" / "latest" / "schwab_positions.json")
+                 if res["holdings_source"] == "broker" else None)
     dq = _load_json_safe(root / "outputs" / "latest" / "data_quality_report.json") or {}
     data_quality = 0.6
     if isinstance(dq, dict) and dq.get("available") is not False:
@@ -76,8 +79,7 @@ def _build_context(root: Path, now: datetime) -> dict[str, Any]:
 
     return {
         "weights": weights,
-        "cash_drag": round(float(res.get("cash") or 0) / max(1.0, float(res.get("cash") or 0)
-                     + sum(weights.values())), 4) if weights else None,
+        "cash_drag": broker_cash_drag,
         "leveraged_exposure": round(leveraged_exposure, 4),
         "radar_opportunities": radar.get("opportunities", []) or [],
         "has_tax_lot_data": has_tax_lot_data(positions),
@@ -101,7 +103,8 @@ def write_strategy_artifacts(root: Path, now: datetime | None = None) -> dict[st
     try:
         cmp = build_comparison(root, now)
         metrics = cmp["metrics"]
-        ctx_positions = _load_json_safe(root / "outputs" / "latest" / "schwab_positions.json")
+        ctx_positions = (_load_json_safe(root / "outputs" / "latest" / "schwab_positions.json")
+                         if cmp["context_source"] == "broker" else None)
 
         # strategy_profiles.json
         safe_write_json(OutputNamespace.SANDBOX, "strategy_profiles.json",
