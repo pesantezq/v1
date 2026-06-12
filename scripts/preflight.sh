@@ -194,7 +194,10 @@ python -m py_compile \
     portfolio_automation/social_intelligence/public_knowledge_velocity.py \
     portfolio_automation/social_intelligence/crowd_state_classifier.py \
     portfolio_automation/social_intelligence/ticker_extractor.py \
-    portfolio_automation/social_intelligence/context_join.py
+    portfolio_automation/social_intelligence/context_join.py \
+    portfolio_automation/portfolio_sim/run_portfolio_backtest.py \
+    portfolio_automation/portfolio_sim/backtest_engine.py \
+    portfolio_automation/portfolio_sim/tactics.py
 pass "Targeted py_compile check passed"
 
 section "Wrapper Syntax Check"
@@ -214,6 +217,7 @@ modules = [
     'portfolio_automation.resolution_due_probe',
     'portfolio_automation.news.run_news_intelligence',
     'portfolio_automation.social_intelligence.public_knowledge_velocity',
+    'portfolio_automation.portfolio_sim.run_portfolio_backtest',
 ]
 for m in modules:
     importlib.import_module(m)

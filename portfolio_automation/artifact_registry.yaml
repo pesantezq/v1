@@ -1280,3 +1280,69 @@ artifacts:
     consumer_status: consumed
     notes: Rolling per-ticker daily mention-count ledger (window 20). Self-consumed — the velocity z-score baseline. Only written on runs that actually ingest posts (a disabled/no-credentials run does not append). Absent until the layer is enabled.
 
+  # ── Portfolio simulation suite (sandbox-only) ───────────────────────────────
+  portfolio_backtest.json:
+    path: outputs/sandbox/portfolio_backtest.json
+    label: portfolio backtest
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab, monthly-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Historical backtest of the operator's portfolio + tactics (6 shadow + 8 profiles + benchmarks) vs SPY/QQQ across windows; objective maximize excess vs S&P 500. Observe-only, sandbox-only, default-disabled (config portfolio_sim.enabled).
+
+  portfolio_backtest_summary.md:
+    path: outputs/sandbox/portfolio_backtest_summary.md
+    label: portfolio backtest summary
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Operator-readable backtest leaderboard companion to portfolio_backtest.json.
+
+  strategy_catalog.json:
+    path: outputs/sandbox/strategy_catalog.json
+    label: strategy catalog
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-catalog]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-tactic documentation (objective, materialization, caps, rationale, explanation, metrics). coverage_complete must be true (Strategy Documentation Requirement). Maintained by /strategy-catalog.
+
+  portfolio_projection.json:
+    path: outputs/sandbox/portfolio_projection.json
+    label: portfolio projection
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab, monthly-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Forward Monte-Carlo projection (block-bootstrap) of the portfolio + tactics — terminal-balance percentiles, prob-reach-target, drawdown distribution. Observe-only illustration, not a forecast.
+
+  crowd_tactic_backtest.json:
+    path: outputs/sandbox/crowd_tactic_backtest.json
+    label: crowd tactic proxy backtest
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Labeled volume/momentum PROXY historical backtest of the crowd-signal tactic (proxy=true; not the real crowd signal's record). Real evaluation is the forward shadow-track in social_signal_backtest.json.
+

@@ -111,5 +111,11 @@ if src == 'fallback' or len(non_fb) == 0:
     printf '\n-- Retune auto-apply (gated by guardrails) --\n'
     python -m portfolio_automation.retune_auto_apply --apply
 
+    printf '\n-- Portfolio simulation: backtest (sandbox, observe-only) --\n'
+    python -m portfolio_automation.portfolio_sim.run_portfolio_backtest --root "${REPO_ROOT:-.}" --run-mode discovery || printf 'portfolio_sim backtest non-fatal failure\n'
+
+    printf '\n-- Portfolio simulation: forward projection (sandbox, observe-only) --\n'
+    python -m portfolio_automation.portfolio_sim.run_portfolio_projection --root "${REPO_ROOT:-.}" --run-mode discovery || printf 'portfolio_sim projection non-fatal failure\n'
+
     printf '\nDAILY RUN PASSED\n'
 } >> "$LOG_FILE" 2>&1
