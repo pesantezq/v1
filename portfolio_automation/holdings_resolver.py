@@ -90,9 +90,17 @@ def resolve_holdings(root: Path, prefer_broker: bool | None = None,
     if not pos:
         return _config_result("broker_no_positions", 0.85)
 
+    def _cost_basis(p):
+        q, ac = p.get("quantity"), p.get("average_cost")
+        try:
+            return round(float(q) * float(ac), 2) if q is not None and ac is not None else None
+        except (TypeError, ValueError):
+            return None
     holdings = [{"symbol": str(p.get("symbol", "")).upper(),
                  "quantity": p.get("quantity"),
-                 "market_value": p.get("market_value")} for p in pos if p.get("symbol")]
+                 "market_value": p.get("market_value"),
+                 "average_cost": p.get("average_cost"),
+                 "cost_basis": _cost_basis(p)} for p in pos if p.get("symbol")]
     cash = (snapshot.get("totals", {}) or {}).get("cash", cfg_cash)
     return {"holdings": holdings, "cash": cash, "holdings_source": "broker",
             "broker_freshness_age_s": age, "confidence_modifier": 1.0,
