@@ -40,6 +40,9 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
     - `outputs/sandbox/portfolio_projection.json` → per-tactic `rows` (p50 balance, `prob_reach_target`, `max_drawdown_p95`) — sanity-check p50 CAGR is in a plausible band (e.g. −10%..+30%) and percentiles are monotone.
     - `outputs/sandbox/strategy_catalog.json` → `coverage_complete` must be true (Strategy Documentation Requirement); if false, that's a RED doc-coverage gap — list `undocumented[]`.
     - **content_liveness**: `status == "ok"` but `result_count == 0` (engine ran but every tactic degraded → empty) is a looks-fresh-but-empty failure; check the price archive (`outputs/backtest/historical/*_5y.json`) coverage. `disabled` is the expected inert state before the operator enables `config portfolio_sim.enabled`.
+20. Research-Backed Strategy Lab (added 2026-06-12; weekly; **observe-only, sandbox-only, quant lens**). Run the deterministic assessor and fold its verdict in:
+    `.venv/bin/python -c "import json; from portfolio_automation.portfolio_sim.strategy_lab_health import assess_strategy_lab_health; print(json.dumps(assess_strategy_lab_health(root='.')))"`
+    Reads `outputs/sandbox/{strategy_leaderboard, research_strategy_catalog, walk_forward_results, factor_exposure_report}.json`. RED = `looks_fresh_but_empty` (lab ran but every tactic degraded — check archive coverage). AMBER = disabled/insufficient/stale/undocumented_tactics/`still_works_oos=false` surfaced/factor_data_unavailable. GREEN = ran, populated, documented, no failing-OOS tactic. The dedicated `/strategy-lab-analysis` skill is the on-demand equivalent. Never RED-blocks the decision core (research lane, never feeds `decision_plan`).
 
 ---
 
