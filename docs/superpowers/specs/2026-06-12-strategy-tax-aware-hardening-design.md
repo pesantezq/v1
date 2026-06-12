@@ -143,13 +143,22 @@ These producers run daily → extend `.claude/commands/daily-tool-analysis.md`
 - Targeted first, then full `pytest -q` (preserve `config/signal_registry.yaml`
   `default_weight: 0.4947`).
 
+## GUI panel (IN scope — operator approved 2026-06-12 "everything in scope")
+
+8. **GUI tax/strategy panel** (`gui_v2`). Added defensively to dodge the live
+   concurrent-session collision: a NEW isolated data loader
+   (`gui_v2/data/dash_strategy_tax.py`) + a NEW template
+   (`gui_v2/templates/dashboard/strategy_tax.html`), with only minimal shared-file
+   touches (one route registration in `gui_v2/app.py`, one nav link in
+   `gui_v2/templates/base.html`). Read-only: renders `strategy_tax_scorecard.json`,
+   `tax_harvest_advisor.json`, `strategy_comparison.json`, `schwab_tax_lots.json`
+   (degraded states shown honestly). Implemented as the LAST task; if a concurrent
+   session has touched `app.py`/`base.html` at execution time, rebase the two shared
+   lines (the new files never conflict). Requires a dashboard restart to serve
+   (operator step, per [[project_dashboard_service_no_autoreload]]).
+
 ## Deferred (NOT in this spec)
 
-- **GUI panel for the tax/strategy surfacing → §14 dashboard/mobile polish track.**
-  Deliberately deferred: the operator sequenced strategy/tax FIRST specifically to
-  avoid colliding with live concurrent `gui_v2` sessions. Memo surfacing (this spec)
-  is in `watchlist_scanner/`, not `gui_v2`, so it is collision-safe. If the operator
-  wants the GUI panel folded in, it moves here — but the default is §14.
 - New strategy profiles or objective-function math changes (YAGNI).
 - Strategy efficacy that requires backtest/shadow maturity beyond what exists — those
   fields prefer existing sandbox evidence and mature on their own cadence.
