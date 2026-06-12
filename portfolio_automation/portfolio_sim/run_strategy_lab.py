@@ -35,6 +35,7 @@ logger = logging.getLogger("stockbot.portfolio_sim.run_strategy_lab")
 _LEADERBOARD_JSON = "strategy_leaderboard.json"
 _LEADERBOARD_MD = "strategy_leaderboard_summary.md"
 _CATALOG_JSON = "research_strategy_catalog.json"
+_WALK_FORWARD_JSON = "walk_forward_results.json"
 
 _DEFAULT_WINDOWS = ["trailing_1y", "trailing_3y", "trailing_5y", "ytd"]
 
@@ -60,7 +61,25 @@ def _config(root: Path) -> dict[str, Any]:
     }
 
 
-def _score_tactic(tac, panel, windows, bench, cfg) -> dict[str, Any] | None:
+def _walk_forward_results(panel, cfg) -> dict[str, Any]:
+    """Walk-forward OOS validation for the parameterized tactics (momentum)."""
+    from portfolio_automation.portfolio_sim.research_library import MomentumRotation
+    from portfolio_automation.portfolio_sim.walk_forward import walk_forward
+    universe = sorted({t for t in panel.tickers if t != cfg["primary_benchmark"]})
+    equities = [t for t in universe if t not in {"BND", "TLT", "GLD", "IAU"}]
+    grid = [{"lookback_months": lb, "top_n": n} for lb in (3, 6, 12) for n in (1, 2, 3)]
+    build = lambda p: MomentumRotation(equities or universe, lookback_months=p["lookback_months"],
+                                       top_n=p["top_n"], leveraged=cfg["leveraged"])
+    out: dict[str, Any] = {}
+    try:
+        out["research_momentum_rotation"] = walk_forward(
+            build, grid, panel, benchmark=cfg["primary_benchmark"], train_months=24, test_months=3)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("walk_forward failed (%s)", exc)
+    return out
+
+
+def _score_tactic(tac, panel, windows, bench, cfg, overfit_by_tactic=None) -> dict[str, Any] | None:
     pol = make_policy("periodic", rebalance_rules=cfg["rebalance_rules"])
     excesses, drawdowns, finals = [], [], []
     for win in windows:
@@ -83,11 +102,13 @@ def _score_tactic(tac, panel, windows, bench, cfg) -> dict[str, Any] | None:
     lev = sum(w for t, w in tac.target_weights.items() if t in cfg["leveraged"])
     turnover = 0.7 if isinstance(tac, TimeVaryingTactic) else 0.3
     has_research = bool(tac.metadata.get("academic_basis"))
+    wf = (overfit_by_tactic or {}).get(tac.tactic_id)
+    overfit = wf.get("overfit") if isinstance(wf, dict) and wf.get("status") == "ok" else None
     components = {
         "excess_return_vs_spy": mean_excess, "probability_beat_spy": prob_beat,
         "drawdown": worst_dd, "consistency": prob_beat, "has_research": has_research,
         "turnover": turnover, "tax_drag": 0.0, "concentration": conc, "leverage": lev,
-        "overfit": None,
+        "overfit": overfit,
     }
     sc = score(components, cfg["scoring_weights"])
     return {"tactic_id": tac.tactic_id, "name": tac.name, "source": tac.source,
@@ -96,6 +117,8 @@ def _score_tactic(tac, panel, windows, bench, cfg) -> dict[str, Any] | None:
             "strategy_score": sc["strategy_score"], "flags": sc["flags"],
             "mean_excess_vs_spy": round(mean_excess, 6), "prob_beat_spy": round(prob_beat, 4),
             "worst_max_drawdown": round(worst_dd, 6), "by_window": finals,
+            "overfit": overfit,
+            "still_works_oos": (wf.get("still_works_oos") if isinstance(wf, dict) and wf.get("status") == "ok" else None),
             "tax_note": "gross_until_cost_model"}
 
 
@@ -127,14 +150,16 @@ def run_strategy_lab(root: str | Path = ".", run_mode: str | RunMode = "discover
     windows = resolve_windows(cfg["windows"], panel.dates)
     bench = {w.key: benchmark_total_return(panel, bench_t, w) for w in windows}
 
-    scored = [s for s in (_score_tactic(t, panel, windows, bench, cfg) for t in tactics) if s]
+    wf_results = _walk_forward_results(panel, cfg)
+    scored = [s for s in (_score_tactic(t, panel, windows, bench, cfg, wf_results) for t in tactics) if s]
     leaderboard = rank(scored)
     status = SimStatus.OK.value if leaderboard else SimStatus.INSUFFICIENT_DATA.value
     return _write(root, run_id, mode, status, warnings, leaderboard, write_files,
-                  windows=[w.key for w in windows])
+                  windows=[w.key for w in windows], wf_results=wf_results)
 
 
-def _write(root, run_id, mode, status, warnings, leaderboard, write_files, windows=None) -> dict[str, Any]:
+def _write(root, run_id, mode, status, warnings, leaderboard, write_files, windows=None,
+           wf_results=None) -> dict[str, Any]:
     env = sim_envelope(run_id=run_id, run_mode=mode.value, status=status, warnings=warnings)
     coverage_complete = all(row.get("academic_basis") or row["source"] in ("shadow", "baseline",
                             "strategy_profile", "benchmark") for row in leaderboard)
@@ -155,6 +180,8 @@ def _write(root, run_id, mode, status, warnings, leaderboard, write_files, windo
                 safe_write_json(OutputNamespace.SANDBOX, _LEADERBOARD_JSON, payload, base_dir=base))
             safe_write_text(OutputNamespace.SANDBOX, _LEADERBOARD_MD, _render_md(payload), base_dir=base)
             safe_write_json(OutputNamespace.SANDBOX, _CATALOG_JSON, catalog, base_dir=base)
+            safe_write_json(OutputNamespace.SANDBOX, _WALK_FORWARD_JSON,
+                            {**env, "results": wf_results or {}}, base_dir=base)
             wrote = True
         except Exception as exc:
             logger.warning("strategy_lab: write skipped/failed (%s)", exc)

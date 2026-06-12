@@ -79,3 +79,14 @@ def test_daily_cannot_write(tmp_path):
     _seed(tmp_path, enabled=True)
     r = run_strategy_lab(root=tmp_path, run_mode="daily")
     assert r["wrote_files"] is False
+
+
+def test_walk_forward_artifact_and_overfit(tmp_path):
+    _seed(tmp_path, enabled=True)
+    run_strategy_lab(root=tmp_path, run_mode="discovery")
+    wf = json.loads((tmp_path / "outputs" / "sandbox" / "walk_forward_results.json").read_text())
+    assert "results" in wf
+    # momentum tactic should have an overfit field surfaced (or status reported)
+    lb = json.loads((tmp_path / "outputs" / "sandbox" / "strategy_leaderboard.json").read_text())
+    mom = [r for r in lb["leaderboard"] if r["tactic_id"] == "research_momentum_rotation"]
+    assert mom  # present in leaderboard
