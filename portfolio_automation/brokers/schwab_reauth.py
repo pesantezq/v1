@@ -209,3 +209,27 @@ def run_begin(*, base_dir: str | Path = "outputs", env: dict[str, str] | None = 
             return _finish(base_dir, started, outcome="success", new_expires_at=new_exp)
     finally:
         listener.stop()
+
+
+def _cli_main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m portfolio_automation.brokers.schwab_reauth",
+                                 description="Schwab re-auth auto-capture (observe-only, read-only).")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--begin", action="store_true", help="Run one auto-capture re-auth session")
+    g.add_argument("--check", action="store_true", help="Report cloudflared/tunnel readiness")
+    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SEC)
+    ap.add_argument("--no-email", action="store_true", help="Print URL only, do not email")
+    args = ap.parse_args(argv)
+    print("READ-ONLY MODE — no trading endpoints are called.")
+    if args.check:
+        r = check_readiness()
+        print(f"ready={r['ready']} reason={r.get('reason')} hint={r.get('hint', '')}")
+        return 0 if r["ready"] else 1
+    st = run_begin(timeout=args.timeout, notify=not args.no_email)
+    print(f"outcome={st.get('outcome')} detail={st.get('detail')} new_expires_at={st.get('new_expires_at')}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

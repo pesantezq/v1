@@ -216,3 +216,17 @@ def test_session_status_has_no_secret(tmp_path, monkeypatch):
                            base_dir=tmp_path).read_text()
     for leak in ("SECRET-AT", "SECRET-RT", "SECRET-CODE"):
         assert leak not in blob
+
+
+def test_cli_check_reports_readiness(monkeypatch, capsys):
+    monkeypatch.setattr(sr.shutil, "which", lambda _n: None)
+    rc = sr._cli_main(["--check"])
+    out = capsys.readouterr().out.lower()
+    assert rc == 1 and "cloudflared_not_installed" in out
+
+
+def test_cli_begin_invokes_run_begin(monkeypatch):
+    called = {}
+    monkeypatch.setattr(sr, "run_begin", lambda **k: called.setdefault("k", k) or {"outcome": "timeout"})
+    rc = sr._cli_main(["--begin", "--timeout", "1"])
+    assert rc == 0 and called["k"]["timeout"] == 1.0
