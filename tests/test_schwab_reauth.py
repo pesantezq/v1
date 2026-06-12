@@ -203,3 +203,16 @@ def test_run_begin_teardown_always_runs(tmp_path, monkeypatch):
     sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
                  tunnel_cls=_NoopTunnel, listener_cls=lambda: listener)
     assert listener.stopped is True
+
+
+def test_session_status_has_no_secret(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(sr.oauth, "exchange_code",
+                        lambda code: {"access_token": "SECRET-AT", "refresh_token": "SECRET-RT"})
+    monkeypatch.setattr(sr.oauth, "refresh_token_status", lambda tok: {"expires_at": "2026-06-26T00:00:00+00:00"})
+    sr.run_begin(base_dir=tmp_path, env={"SCHWAB_REAUTH_TUNNEL_NAME": "t"},
+                 tunnel_cls=_NoopTunnel, listener_cls=lambda: _FakeListener({"code": "SECRET-CODE"}))
+    blob = get_output_path(OutputNamespace.LATEST, "schwab_reauth_session_status.json",
+                           base_dir=tmp_path).read_text()
+    for leak in ("SECRET-AT", "SECRET-RT", "SECRET-CODE"):
+        assert leak not in blob
