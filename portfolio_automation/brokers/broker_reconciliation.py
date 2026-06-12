@@ -33,7 +33,12 @@ def reconcile(snapshot: dict, positions: dict, config: dict) -> dict:
         elif sp and not lp:
             missing_local.append({"symbol": sym, "schwab_qty": float(sp.get("quantity") or 0.0)})
         else:
-            missing_schwab.append({"symbol": sym, "local_shares": float(lp.get("shares") or 0.0)})
+            lq = float(lp.get("shares") or 0.0)
+            # A 0-share config entry is an allocation TARGET (intended buy), not a
+            # holdings discrepancy — you own 0, Schwab shows 0. Only flag symbols you
+            # actually HOLD (shares > 0) that are absent from the broker account.
+            if lq > _QTY_EPS:
+                missing_schwab.append({"symbol": sym, "local_shares": lq})
 
     schwab_cash = float((snapshot.get("totals") or {}).get("cash") or 0.0)
     local_cash = float((config.get("portfolio") or {}).get("cash_available") or 0.0)

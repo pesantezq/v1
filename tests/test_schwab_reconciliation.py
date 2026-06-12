@@ -79,3 +79,19 @@ def test_build_proposal_retains_local_only_holdings():
     assert "NASA" in after_syms, "local-only symbol must be retained, not auto-removed"
     assert "NASA" in prop["reason"], "reason must surface retained local-only holdings"
     assert "operator review" in prop["reason"].lower()
+
+
+def test_zero_share_config_target_not_flagged_missing_in_schwab():
+    """A 0-share config entry is an allocation TARGET, not a holdings mismatch.
+    Held symbols (>0 shares) absent from Schwab are still flagged."""
+    snap = {"totals": {"market_value": 4200.0, "cash": 100.0}}
+    pos = {"positions": [{"symbol": "QQQ", "quantity": 6, "market_value": 4200.0}]}
+    cfg = {"portfolio": {"cash_available": 100.0, "holdings": [
+        {"symbol": "QQQ", "shares": 6},
+        {"symbol": "VFH", "shares": 0, "target_weight": 0.15},   # 0-share target — NOT a mismatch
+        {"symbol": "OWNED", "shares": 3},                         # held, absent from Schwab — IS a mismatch
+    ]}}
+    r = rec.reconcile(snap, pos, cfg)
+    miss = {m["symbol"] for m in r["missing_in_schwab"]}
+    assert "VFH" not in miss        # 0-share target ignored
+    assert "OWNED" in miss          # real held-but-absent flagged
