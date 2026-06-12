@@ -132,8 +132,17 @@ def write_strategy_artifacts(root: Path, now: datetime | None = None) -> dict[st
         safe_write_json(OutputNamespace.SANDBOX, "strategy_shadow_results.json", sresults, base_dir=base)
 
         # strategy_tax_scorecard.json — degrades without tax-lot data
+        import json as _json
+        from pathlib import Path as _Path
+        _tax_lots = {}
+        try:
+            _p = _Path(root) / "outputs" / "latest" / "schwab_tax_lots.json"
+            if _p.exists():
+                _tax_lots = (_json.loads(_p.read_text(encoding="utf-8")) or {}).get("by_symbol", {})
+        except Exception:
+            _tax_lots = {}
         safe_write_json(OutputNamespace.SANDBOX, "strategy_tax_scorecard.json",
-                        build_tax_scorecard(now_iso, ctx_positions), base_dir=base)
+                        build_tax_scorecard(now_iso, ctx_positions, tax_lots=_tax_lots), base_dir=base)
 
         # strategy_review_queue.json (LATEST) — operator review; executes nothing
         queue = observe_only_envelope(now_iso, source="strategy_comparator")
