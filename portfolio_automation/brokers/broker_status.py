@@ -8,7 +8,7 @@ from portfolio_automation.brokers.broker_models import redact
 def build_status(*, enabled: bool, configured: bool, authenticated: bool,
                  account_count: int, position_count: int,
                  last_success_at: str | None, last_error: str | None,
-                 now_iso: str) -> dict:
+                 now_iso: str, reauth: dict | None = None) -> dict:
     if not enabled:
         overall = "disabled"
     elif not configured:
@@ -19,6 +19,10 @@ def build_status(*, enabled: bool, configured: bool, authenticated: bool,
         overall = "ok"
     else:
         overall = "degraded"
+    # reauth is the pre-computed schwab_oauth.refresh_token_status() block (kept pure
+    # here — the sync layer owns the oauth dependency). The 7-day refresh-token clock
+    # is surfaced as ADDITIVE signal and never flips overall_status (observe-only).
+    reauth = reauth or {}
     return {
         "generated_at": now_iso, "observe_only": True, "source": "schwab",
         "enabled": bool(enabled), "configured": bool(configured),
@@ -28,4 +32,7 @@ def build_status(*, enabled: bool, configured: bool, authenticated: bool,
         "last_error": redact(last_error) if last_error else None,
         "account_count": int(account_count), "position_count": int(position_count),
         "overall_status": overall,
+        "reauth_status": reauth.get("reauth_status", "unknown"),
+        "reauth_expires_at": reauth.get("expires_at"),
+        "reauth_days_remaining": reauth.get("days_remaining"),
     }

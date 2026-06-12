@@ -87,6 +87,36 @@ Schwab uses an authorization-code flow. After credentials are approved:
 5. The token is saved to `data/schwab_token.json` (mode `0600`, gitignored). Subsequent runs
    refresh it automatically when it expires.
 
+> There is **no `schwab_auto_auth` module and no `--bootstrap` flag**. The bootstrap is exactly the
+> manual `build_authorize_url` → browser → `exchange_code` flow above (it requires Schwab's MFA, so it
+> cannot be scripted with stored credentials).
+
+### Re-authentication: the 7-day refresh-token clock
+
+Schwab issues two tokens with very different lifetimes:
+
+| Token | Lifetime | Renews without a browser? |
+|---|---|---|
+| `access_token` | ~30 min | ✅ auto-refreshed every sync via the stored refresh token |
+| `refresh_token` | **7 days** | ❌ **no** — a browser re-auth (`exchange_code`) is mandatory |
+
+Within any 7-day window the daily cron sync is fully hands-free. But Schwab issues **no rolling
+replacement** for the refresh token, so when the 7-day clock lapses the sync goes `degraded`
+(unauthenticated) until you repeat the OAuth flow above. "Never re-auth" is **not achievable** with
+Schwab — a ~30-second weekly browser re-auth (which clears Schwab's MFA, so you're notified of every
+login) is the floor.
+
+To turn that from a silent outage into a planned task, `exchange_code()` anchors the 7-day clock and
+`broker_sync_status.json` surfaces it:
+
+- `reauth_status` ∈ `{ok, due_soon, expired, unknown}` — `due_soon` fires ≤2 days before expiry.
+- `reauth_expires_at` (ISO) / `reauth_days_remaining` (float).
+- `unknown` is the inert/legacy state (token predates tracking, or uncredentialed) — it populates
+  on the next token refresh or re-auth; it is **not** an alert.
+
+The daily tool-analysis surfaces `due_soon`/`expired` as AMBER (never RED — observe-only). When you
+see it, just re-run the OAuth flow above; the anchor resets to a fresh 7-day window.
+
 ---
 
 ## Environment Variables

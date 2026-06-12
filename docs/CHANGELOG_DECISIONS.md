@@ -69,6 +69,45 @@ Explicitly note:
 
 ---
 
+## Schwab Refresh-Token Re-Auth Heads-Up
+
+### Date
+
+`2026-06-12`
+
+### Area
+
+`output_contract`
+
+### Files / Functions
+
+- `portfolio_automation/brokers/schwab_oauth.py` — added `REFRESH_TOKEN_TTL_SEC`/`REAUTH_WARN_SEC`, `_stamp_refresh_expiry()`, `refresh_token_status()`; `exchange_code()`/`refresh()` now anchor/carry the 7-day clock.
+- `portfolio_automation/brokers/broker_status.py` — `build_status()` gained an optional `reauth` arg and three additive fields.
+- `portfolio_automation/brokers/schwab_sync.py` — `run_status()` computes and passes the reauth block (non-blocking try/except).
+- `.claude/commands/daily-tool-analysis.md` — artifacts-read, AMBER dispatch, body-grammar line 6f.
+
+### Decision
+
+Track Schwab's 7-day refresh-token expiry and surface it in `broker_sync_status.json` as `reauth_status` (`ok|due_soon|expired|unknown`), `reauth_expires_at`, `reauth_days_remaining`. Daily tool-analysis flags `due_soon`/`expired` as AMBER so a browser re-auth is a planned ~30s task rather than a silent outage.
+
+### Why
+
+Schwab issues no rolling refresh-token replacement; the 7-day clock was previously invisible, so an expiry silently flipped the daily sync to `degraded` until someone noticed a stale snapshot.
+
+### Invariants Preserved
+
+Observe-only (`observe_only:true` unchanged); read-only/no-trade unchanged; `overall_status` semantics unchanged (the reauth signal is additive and never flips it); `broker_status.py` stays pure (no oauth import — the sync layer injects the precomputed block). Legacy/uncredentialed tokens read `unknown`, never a false alarm.
+
+### Downstream Impact
+
+Adds 3 fields to `broker_sync_status.json`. New tests: `test_schwab_oauth.py` (+3), `test_schwab_status.py` (+2). Leak-guard kept strict by naming fields `reauth_*` (no `refresh_token` substring). No GUI/memo wording change required (GUI reads `overall_status`).
+
+### Artifact Health Severity
+
+No severity change; `missing_artifact_count` unchanged; producer step owner is `run_daily_safe.sh` Stage 10c.
+
+---
+
 ## Schwab Read-Only Broker Sync
 
 ### Date

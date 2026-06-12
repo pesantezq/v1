@@ -44,10 +44,14 @@ def run_status(*, root: Path = Path("."), now: str | None = None,
     ts = now or _now()
     configured = oauth.is_configured()
     auth = bool(authenticated) if authenticated is not None else (configured and oauth.load_token() is not None)
+    try:
+        reauth = oauth.refresh_token_status() if configured else None
+    except Exception:
+        reauth = None  # observe-only: expiry telemetry never breaks the status write
     st = bstat.build_status(enabled=_enabled(), configured=configured, authenticated=auth,
                             account_count=account_count, position_count=position_count,
                             last_success_at=(ts if (auth and not last_error) else None),
-                            last_error=last_error, now_iso=ts)
+                            last_error=last_error, now_iso=ts, reauth=reauth)
     try:
         _write(root, "broker_sync_status.json", st)
     except Exception:

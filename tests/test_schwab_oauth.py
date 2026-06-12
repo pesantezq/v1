@@ -62,3 +62,49 @@ def test_valid_access_token_none_when_refresh_fails(tmp_path, monkeypatch):
     def boom(data): raise RuntimeError("refresh failed")
     monkeypatch.setattr(oa, "_post_token", boom)
     assert oa.valid_access_token() is None  # expired + refresh fails -> None
+
+
+# --- 7-day refresh-token expiry tracking (re-auth heads-up) ----------------
+
+def test_exchange_code_anchors_seven_day_refresh_clock(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    monkeypatch.setenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1/cb")
+    monkeypatch.setattr(oa, "_post_token", lambda data: {"access_token": "A", "refresh_token": "R",
+                                                         "expires_at": int(time.time()) + 1800})
+    tok = oa.exchange_code("CODE")
+    # browser auth issues a genuinely new refresh token -> fresh 7-day window
+    assert tok["refresh_token_expires_at"] - tok["refresh_token_obtained_at"] == oa.REFRESH_TOKEN_TTL_SEC
+    assert abs(tok["refresh_token_obtained_at"] - int(time.time())) < 5
+
+
+def test_refresh_carries_forward_refresh_clock_not_reset(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    anchor = int(time.time()) - 3 * 86400          # token obtained 3 days ago
+    exp = anchor + oa.REFRESH_TOKEN_TTL_SEC          # ~4 days left
+    prev = {"access_token": "OLD", "refresh_token": "r", "expires_at": int(time.time()) - 5,
+            "refresh_token_obtained_at": anchor, "refresh_token_expires_at": exp}
+    # Schwab refresh reuses the SAME refresh token (no new one in the response)
+    monkeypatch.setattr(oa, "_post_token", lambda data: {"access_token": "NEW",
+                                                         "expires_at": int(time.time()) + 1800})
+    tok = oa.refresh(prev)
+    assert tok["refresh_token_expires_at"] == exp        # clock NOT reset by an access-token refresh
+    assert tok["refresh_token"] == "r"                    # old refresh token carried forward
+
+
+def test_refresh_token_status_ok_due_soon_expired_unknown(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(oa, "TOKEN_PATH", tmp_path / "t.json")
+    now = int(time.time())
+    # ok: 5 days remaining
+    assert oa.refresh_token_status({"refresh_token_expires_at": now + 5 * 86400}, now=now)["reauth_status"] == "ok"
+    # due_soon: within the warning window (< 2 days)
+    s = oa.refresh_token_status({"refresh_token_expires_at": now + 86400}, now=now)
+    assert s["reauth_status"] == "due_soon" and s["expired"] is False and s["days_remaining"] == 1.0
+    # expired
+    s = oa.refresh_token_status({"refresh_token_expires_at": now - 10}, now=now)
+    assert s["reauth_status"] == "expired" and s["expired"] is True
+    # untracked (legacy token with no anchor) -> unknown, never a false alarm
+    s = oa.refresh_token_status({"access_token": "x"}, now=now)
+    assert s["reauth_status"] == "unknown" and s["tracked"] is False
