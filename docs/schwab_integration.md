@@ -117,6 +117,30 @@ To turn that from a silent outage into a planned task, `exchange_code()` anchors
 The daily tool-analysis surfaces `due_soon`/`expired` as AMBER (never RED — observe-only). When you
 see it, just re-run the OAuth flow above; the anchor resets to a fresh 7-day window.
 
+#### Optional: one-tap re-auth (auto-capture)
+
+Instead of copy-pasting the `?code=`, the `schwab_reauth` task captures it
+server-side through an on-demand cloudflared tunnel. One-time setup (your
+Cloudflare account):
+
+```bash
+curl -L --output /tmp/cloudflared.deb \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i /tmp/cloudflared.deb
+cloudflared tunnel login                         # pick the portfolio-ops-center.com zone
+cloudflared tunnel create stockbot-reauth
+cloudflared tunnel route dns stockbot-reauth stockbot.portfolio-ops-center.com
+```
+
+Then add `SCHWAB_REAUTH_TUNNEL_NAME=stockbot-reauth` to `.env`. Leave the tunnel
+**created but not running** — the task starts it on demand and tears it down after.
+Verify readiness: `python3 -m portfolio_automation.brokers.schwab_reauth --check`.
+
+To re-auth: `python3 -m portfolio_automation.brokers.schwab_reauth --begin`. It
+brings up the tunnel, emails + prints the authorize URL, waits up to 5 minutes,
+then on a successful tap captures the code, exchanges it, and tears the tunnel
+down. Outcome is written to `outputs/latest/schwab_reauth_session_status.json`.
+
 #### Optional: email heads-up (out-of-band)
 
 For an unattended operator, the daily pipeline (Stage 10d, `schwab_reauth_notifier`) can also **email**

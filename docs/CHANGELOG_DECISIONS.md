@@ -69,6 +69,44 @@ Explicitly note:
 
 ---
 
+## Schwab Re-Auth Auto-Capture
+
+### Date
+
+`2026-06-12`
+
+### Area
+
+`architecture`
+
+### Files / Functions
+
+- `portfolio_automation/brokers/schwab_oauth.py` — `generate_state()` / `verify_state()` (single-use CSRF nonce).
+- `portfolio_automation/brokers/schwab_reauth.py` (new) — `check_readiness`, `_CallbackListener`, `TunnelManager`, `_surface_authorize_url`, `run_begin`, CLI.
+- `.claude/commands/daily-tool-analysis.md` — `broker_reauth_capture_failed` coverage.
+
+### Decision
+
+Operator-triggered one-tap re-auth: an ephemeral on-demand named cloudflared tunnel routes `stockbot.portfolio-ops-center.com/schwab/callback` to an in-process `127.0.0.1` listener that validates a nonce and exchanges the code. Tunnel is up only during the ~2-min window.
+
+### Why
+
+The Schwab 7-day refresh token requires a weekly browser re-auth; copy-pasting the code is friction. Auto-capture reduces it to one phone tap while keeping the operator-approval (Schwab MFA) property.
+
+### Invariants Preserved
+
+Observe-only session artifact (`observe_only:true`, `no_trade:true`); read-only/no-trade unchanged; no scoring/decision-core change; `gui_v2` untouched; no standing public endpoint (tunnel created-but-stopped between uses); state nonce single-use + TTL; token/code never logged.
+
+### Downstream Impact
+
+New artifact `schwab_reauth_session_status.json`. New tests `test_schwab_reauth.py` + nonce tests in `test_schwab_oauth.py`. Operator one-time cloudflared setup + `SCHWAB_REAUTH_TUNNEL_NAME` env.
+
+### Artifact Health Severity
+
+No severity change; artifact optional; producer is the operator-run `schwab_reauth --begin` (not a cron stage).
+
+---
+
 ## Schwab Re-Auth Email Notifier (Stage 10d)
 
 ### Date
