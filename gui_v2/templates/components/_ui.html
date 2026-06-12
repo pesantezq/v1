@@ -36,12 +36,12 @@
 
 {# Status badge — the canonical pill. `label` is humanized via status_label. #}
 {% macro status_badge(severity, label) -%}
-<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ (label or severity) | status_label }}</span>
+<span role="status" aria-label="{{ (label or severity) | status_label }}" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ (label or severity) | status_label }}</span>
 {%- endmacro %}
 
 {# Plain (already-humanized) badge — skips the status_label filter. #}
 {% macro badge(severity, label) -%}
-<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ label }}</span>
+<span role="status" aria-label="{{ label }}" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border {{ _sev_classes(severity) }}">{{ label }}</span>
 {%- endmacro %}
 
 {# Page header — title, subtitle, and an HTMX refresh button wired to the
@@ -165,4 +165,14 @@
 {% elif act in ("SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT") %}{{ badge("yellow", act.replace("_", " ")) }}
 {% elif act == "WAIT" %}{{ badge("gray", act) }}
 {% else %}{{ badge("gray", act or "—") }}{% endif %}
+{%- endmacro %}
+
+{# Responsive table wrapper — horizontal scroll on narrow screens (mobile).
+   Usage:  {% call ui.responsive_table() %}<table>...</table>{% endcall %} #}
+{% macro responsive_table() -%}
+<div class="overflow-x-auto -mx-2 sm:mx-0">
+  <div class="inline-block min-w-full align-middle px-2 sm:px-0">
+    {{ caller() }}
+  </div>
+</div>
 {%- endmacro %}
