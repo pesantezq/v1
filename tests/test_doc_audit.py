@@ -145,6 +145,40 @@ def test_find_coverage_gaps_ignores_non_source_changes():
     assert doc_audit.find_coverage_gaps(changed, set()) == []
 
 
+def test_find_coverage_gaps_silent_when_module_cited_in_grouped_doc():
+    # No docs/<stem>.md, but the module's full path is documented in a
+    # subsystem/grouped doc (the repo's convention for the next-stage lane).
+    changed = ["portfolio_automation/universe_scanner.py"]
+    existing_docs = {"docs/NEXT_STAGE_IMPLEMENTATION.md"}
+    documented = {"portfolio_automation/universe_scanner.py"}
+    assert doc_audit.find_coverage_gaps(changed, existing_docs, documented) == []
+
+
+def test_find_coverage_gaps_silent_when_module_cited_by_basename():
+    # Subsystem docs frequently cite modules by backticked basename
+    # (e.g. `profiles.py`); that counts as coverage too.
+    changed = ["portfolio_automation/strategy/profiles.py"]
+    documented = {"profiles.py"}
+    assert doc_audit.find_coverage_gaps(changed, set(), documented) == []
+
+
+def test_find_coverage_gaps_flags_module_absent_from_all_docs():
+    # Neither a per-module doc nor any citation anywhere -> still a real gap.
+    changed = ["portfolio_automation/pipeline_wiring_probe.py"]
+    gaps = doc_audit.find_coverage_gaps(changed, set(), documented_modules=set())
+    assert any("pipeline_wiring_probe" in g.detail for g in gaps)
+
+
+def test_collect_documented_modules_extracts_cited_paths(tmp_path):
+    _write(tmp_path, "docs/NEXT_STAGE_IMPLEMENTATION.md",
+           "| 5 | `universe_scanner.py` | radar |\n"
+           "| 9 | `portfolio_automation/brokers/base.py` | client |\n")
+    mods = doc_audit.collect_documented_modules(str(tmp_path))
+    assert "universe_scanner.py" in mods                       # backticked basename
+    assert "portfolio_automation/brokers/base.py" in mods       # full path form
+    assert "base.py" in mods                                    # basename of a full path
+
+
 def test_find_dead_refs_flags_missing_python_file(tmp_path):
     _write(tmp_path, "docs/ARCHITECTURE.md",
            "See `portfolio_automation/ghost_module.py` for details.\n")

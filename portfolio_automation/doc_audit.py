@@ -119,10 +119,36 @@ def _iter_doc_lines(root: str, glob_rel: str):
 _SOURCE_DIRS = ("portfolio_automation/", "watchlist_scanner/", "scanner/")
 
 
-def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str]) -> list[Finding]:
-    """Flag new source modules in changed_files that have no docs/<module>.md.
-    Pure function over the changed-file list + the set of existing doc paths,
-    so it is trivially testable; the git diff is injected by the caller."""
+_DOC_PY_REF_RX = re.compile(r"`([\w/]+\.py)`")
+
+
+def collect_documented_modules(root: str) -> set[str]:
+    """Scan the docs corpus for backticked `*.py` references and return the set
+    of cited module identifiers — each captured token plus its basename. Used to
+    recognize modules documented in grouped/subsystem docs (e.g. a phase table in
+    docs/NEXT_STAGE_IMPLEMENTATION.md) that do not have a per-module docs/<stem>.md.
+    Pure-ish over the filesystem; the matching predicate lives in find_coverage_gaps."""
+    cited: set[str] = set()
+    for doc_path in _glob.glob(str(Path(root) / "docs" / "**" / "*.md"), recursive=True):
+        try:
+            text = Path(doc_path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for token in _DOC_PY_REF_RX.findall(text):
+            cited.add(token)
+            cited.add(Path(token).name)
+    return cited
+
+
+def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str],
+                       documented_modules: set[str] | None = None) -> list[Finding]:
+    """Flag new source modules in changed_files that are undocumented. A module is
+    covered if either a per-module docs/<stem>.md exists OR the module is cited in a
+    grouped/subsystem doc (by full path or basename, via documented_modules).
+    Pure function over the changed-file list + the set of existing doc paths + the
+    set of doc-cited modules, so it is trivially testable; the git diff and the
+    corpus scan are injected by the caller."""
+    documented = documented_modules or set()
     findings: list[Finding] = []
     for f in changed_files:
         if not any(f.startswith(d) for d in _SOURCE_DIRS):
@@ -133,12 +159,15 @@ def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str]) -
         if module.startswith("_"):
             continue
         expected_doc = f"docs/{module}.md"
-        if expected_doc not in existing_doc_paths:
-            findings.append(Finding(
-                dimension="coverage", severity="med", doc=expected_doc,
-                detail=f"module {f} has no documentation at {expected_doc}",
-                auto_fixable=False,
-            ))
+        if expected_doc in existing_doc_paths:
+            continue
+        if f in documented or Path(f).name in documented:
+            continue
+        findings.append(Finding(
+            dimension="coverage", severity="med", doc=expected_doc,
+            detail=f"module {f} has no documentation at {expected_doc}",
+            auto_fixable=False,
+        ))
     return findings
 
 
@@ -240,7 +269,8 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
         findings += find_drift(root)
         findings += find_dead_refs(root)
         findings += find_cross_doc_inconsistency(root)
-        findings += find_coverage_gaps(changed_files, existing_doc_paths)
+        findings += find_coverage_gaps(
+            changed_files, existing_doc_paths, collect_documented_modules(root))
     except Exception as exc:  # never abort the pipeline
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
