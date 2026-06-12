@@ -177,3 +177,47 @@ def write_broker_aware_portfolio(root: Path, now: datetime | None = None) -> dic
     safe_write_json(OutputNamespace.PORTFOLIO, "broker_aware_portfolio.json", payload, base_dir=base)
     return {"holdings_source": payload.get("holdings_source"),
             "degraded": bool(payload.get("degraded_mode"))}
+
+
+_OVERLAY_DEFAULTS = {"target_weight": 0.0, "asset_class": "us_equity",
+                     "is_leveraged": False, "leverage_factor": 1}
+
+
+def broker_overlaid_portfolio(portfolio_block: dict, root: "Path | str",
+                              now: "datetime | None" = None) -> dict:
+    """Return a COPY of the config portfolio block with holdings shares + cash overlaid
+    from the live broker snapshot (Schwab-preferred), preserving config per-symbol
+    strategy metadata. Config fallback on stale/missing/disabled. Runtime-only; never
+    writes config.json; never raises. Adds holdings_source + confidence_modifier."""
+    block = dict(portfolio_block or {})
+    cfg_holdings = block.get("holdings") if isinstance(block.get("holdings"), list) else []
+    try:
+        res = resolve_holdings(Path(root), now=now)
+    except Exception:
+        res = {"holdings_source": "config", "confidence_modifier": 1.0}
+    if res.get("holdings_source") != "broker":
+        block["holdings_source"] = "config"
+        block["confidence_modifier"] = res.get("confidence_modifier", 1.0)
+        return block
+    by_sym = {str(h.get("symbol", "")).upper(): dict(h) for h in cfg_holdings if isinstance(h, dict)}
+    merged: list = []
+    broker_syms: set = set()
+    for bh in res.get("holdings", []) or []:
+        sym = str(bh.get("symbol", "")).upper()
+        if not sym:
+            continue
+        broker_syms.add(sym)
+        base = dict(by_sym.get(sym, {"symbol": sym, **_OVERLAY_DEFAULTS}))
+        base["symbol"] = sym
+        base["shares"] = bh.get("quantity")
+        for k, v in _OVERLAY_DEFAULTS.items():
+            base.setdefault(k, v)
+        merged.append(base)
+    for sym, h in by_sym.items():
+        if sym not in broker_syms:
+            merged.append(h)
+    block["holdings"] = merged
+    block["cash_available"] = res.get("cash", block.get("cash_available"))
+    block["holdings_source"] = "broker"
+    block["confidence_modifier"] = res.get("confidence_modifier", 1.0)
+    return block
