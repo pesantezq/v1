@@ -1,5 +1,29 @@
 # Roadmap
 
+## Research-Backed Strategy Lab — built + ENABLED (2026-06-12)
+
+- **New sandbox sub-suite** on top of the Portfolio Simulation Suite: academic
+  strategy families as tactics (Markowitz mean-variance, Fama-French factor tilt,
+  Jegadeesh-Titman momentum, Antonacci dual-momentum, risk-parity-lite, 60/40,
+  Moreira-Muir vol-managed, Black-Litterman blend) + the suite's 6 shadow + 8
+  profiles + SPY/QQQ = ~24 strategies ranked by a **master strategy score**
+  (after-cost-ish, risk-adjusted excess vs SPY, minus overfit/turnover/tax/
+  concentration/leverage).
+- **Walk-forward OOS validation** (train->test->roll) feeds an overfit penalty;
+  **Fama-French factor attribution** explains alpha vs factor exposure (offline,
+  degrades gracefully). Modules: research_library, strategy_score, walk_forward,
+  factor_data, factor_attribution, run_strategy_lab, strategy_lab_health.
+- **ENABLED for production** (config portfolio_sim.enabled=true + strategy_lab.enabled
+  =true); weekly run_weekly_safe.sh stage; 5 artifact-registry rows; preflight.
+- **Health probe**: strategy_lab_health assessor + new `/strategy-lab-analysis`
+  skill + monthly-tool-analysis wiring (GREEN/AMBER/RED; flags fresh-but-empty,
+  undocumented tactics, failing-OOS, missing factor data).
+- **GUI**: Strategy Lab tab master leaderboard (score/excess/OOS/academic-basis).
+- ~42 tests; full suite 7315 pass / 3 pre-existing fails. Docs:
+  docs/RESEARCH_STRATEGY_LAB.md + specs/plan. Deferred (documented): regime sims,
+  crowd event studies, ensemble, cost/tax model.
+
+
 ## Portfolio Simulation Suite — built (2026-06-12)
 
 - **New sandbox-only, observe-only package** `portfolio_automation/portfolio_sim/`.

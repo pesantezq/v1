@@ -706,3 +706,24 @@ portfolio_simulation_suite:
     enable: pending  # set config portfolio_sim.enabled=true to activate weekly stages
     dashboard_restart: pending  # Strategy Lab Backtest/Projection sections need systemctl restart
     price_archive_backfill: optional  # backfill *_5y.json for holdings/proxies not yet archived
+
+research_backed_strategy_lab:
+  status: built_and_enabled
+  observe_only: true
+  sandbox_only: true
+  enabled: true   # config portfolio_sim.enabled + strategy_lab.enabled = true
+  package: portfolio_automation/portfolio_sim/  # research_library, strategy_score, walk_forward, factor_data, factor_attribution, run_strategy_lab, strategy_lab_health
+  objective: maximize_excess_vs_sp500
+  phases_built: [A_library_score_leaderboard, B_walk_forward, C_factor_attribution, E_vol_managed_black_litterman]
+  phases_deferred: [D_regime_sims, F_crowd_event_studies, ensemble_top3, cost_tax_model]
+  gui_tab: /dashboard/strategy-lab  # master leaderboard section
+  health: /strategy-lab-analysis skill + strategy_lab_health assessor + monthly-tool-analysis
+  artifacts: [strategy_leaderboard.json, strategy_leaderboard_summary.md, research_strategy_catalog.json, walk_forward_results.json, factor_exposure_report.json, factor_attribution_summary.md]
+  specs: [docs/superpowers/specs/2026-06-12-research-backed-strategy-lab-design.md]
+  plan: docs/superpowers/plans/2026-06-12-research-backed-strategy-lab.md
+  doc: docs/RESEARCH_STRATEGY_LAB.md
+  tests: 42
+  pending_operator:
+    dashboard_restart: pending  # Strategy Lab leaderboard section needs systemctl restart
+    factor_data_fetch: optional  # scripts/fetch_factor_data.sh → activates factor attribution
+    price_archive_backfill: recommended  # backfill *_5y.json for holdings/proxies so excess numbers normalize
