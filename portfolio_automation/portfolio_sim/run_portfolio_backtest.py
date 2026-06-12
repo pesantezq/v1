@@ -43,6 +43,7 @@ _BACKTEST_JSON = "portfolio_backtest.json"
 _BACKTEST_MD = "portfolio_backtest_summary.md"
 _CATALOG_JSON = "strategy_catalog.json"
 _CATALOG_DOC = "docs/STRATEGY_CATALOG.md"
+_CROWD_BACKTEST_JSON = "crowd_tactic_backtest.json"
 
 _DEFAULTS = {
     "enabled": False,
@@ -141,6 +142,10 @@ def run_portfolio_backtest(
     # Contribution sensitivity ("based on how much money I put in") — actual baseline.
     contrib_sens = _contribution_sensitivity(tactics, panel, windows, cfg, start_value)
 
+    # Crowd-signal tactic — labeled volume/momentum PROXY backtest (not the real
+    # crowd record; the real evaluation is the forward shadow-track ledger).
+    crowd_proxy = _run_crowd_proxy(tactics, panel, windows, cfg, start_value, monthly, run_id, mode)
+
     catalog = build_strategy_catalog(tactics, results_by_tactic)
 
     env = sim_envelope(run_id=run_id, run_mode=mode.value,
@@ -171,6 +176,8 @@ def run_portfolio_backtest(
             artifacts["strategy_catalog"] = str(
                 safe_write_json(OutputNamespace.SANDBOX, _CATALOG_JSON,
                                 {**env, **catalog}, base_dir=base))
+            artifacts["crowd_tactic_backtest"] = str(
+                safe_write_json(OutputNamespace.SANDBOX, _CROWD_BACKTEST_JSON, crowd_proxy, base_dir=base))
             # Auto-generated doc (repo docs/, not a namespace artifact).
             doc_path = root / _CATALOG_DOC
             doc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +214,33 @@ def _contribution_sensitivity(tactics, panel, windows, cfg, start_value) -> dict
                     "net_gain_dca": r.metrics["net_gain_dca"]}
         out["by_window"][win.key] = per_scenario
     return out
+
+
+def _run_crowd_proxy(tactics, panel, windows, cfg, start_value, monthly, run_id, mode) -> dict[str, Any]:
+    """Run the crowd-signal tactic in labeled PROXY mode over the windows."""
+    from portfolio_automation.portfolio_sim.crowd_tactic import CrowdTactic
+
+    env = sim_envelope(run_id=run_id, run_mode=mode.value, status=SimStatus.OK.value)
+    baseline = next((t for t in tactics if t.tactic_id == "shadow_actual_baseline"), None)
+    if baseline is None or not windows:
+        return {**env, "proxy": True, "available": False,
+                "measures": "volume/momentum attention, NOT real crowd evidence/sentiment",
+                "results": []}
+    pol = make_policy("periodic", rebalance_rules=cfg["_rebalance_rules"])
+    crowd = CrowdTactic(baseline.target_weights, mode="proxy", proxy_universe=panel.tickers)
+    bspy = cfg["primary_benchmark"]
+    rows = []
+    for win in windows:
+        bench = {bspy: benchmark_total_return(panel, bspy, win)}
+        r = run_backtest(crowd, pol, panel, win, start_value=start_value,
+                         monthly_contribution=monthly, benchmark_returns=bench)
+        if r.metrics.get("status") == "ok":
+            rows.append({"window": win.key, "window_label": win.label, **r.metrics,
+                         "degraded": r.degraded})
+    return {**env, "proxy": True, "available": bool(rows),
+            "measures": "volume/momentum attention, NOT real crowd evidence/sentiment",
+            "forward_maturing_note": "Real evaluation is the forward shadow-track in social_signal_backtest.json.",
+            "results": rows}
 
 
 def _render_summary_md(payload: dict[str, Any]) -> str:
