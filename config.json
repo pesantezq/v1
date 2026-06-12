@@ -387,6 +387,53 @@
     "min_backtest_sample": 20,
     "research_priority_cap": 10.0
   },
+  "portfolio_sim": {
+    "enabled": false,
+    "objective": "maximize_excess_vs_sp500",
+    "primary_benchmark": "SPY",
+    "secondary_benchmarks": [
+      "QQQ"
+    ],
+    "anchor": "actual_portfolio",
+    "monthly_contribution": 1000,
+    "contribution_scenarios": [
+      500,
+      1000,
+      2000
+    ],
+    "windows": [
+      "ytd",
+      "trailing_1y",
+      "trailing_3y",
+      "trailing_5y",
+      "calendar_quarter",
+      "calendar_month"
+    ],
+    "rebalance_policies": [
+      "buy_and_hold",
+      "periodic"
+    ],
+    "universe": {
+      "proxy_etfs": [
+        "BND",
+        "TLT",
+        "SCHD",
+        "USMV"
+      ],
+      "include_universe_lists": false
+    },
+    "projection": {
+      "n_paths": 5000,
+      "seed": 12345,
+      "block_months": 1,
+      "horizons_years": [
+        1,
+        5,
+        10,
+        35
+      ]
+    }
+  },
   "market_universe": {
     "enabled": true,
     "groups": [

@@ -19,6 +19,33 @@ Non-goals (deferred to later sub-projects): faithful time-varying / signal-drive
 tactics (sub-project 2 — crowd-signal tactic), forward Monte-Carlo projection
 (sub-project 3), and transaction-cost/tax/slippage modeling in the P&L.
 
+## 1a. Operator objective (config-driven, added 2026-06-12)
+
+Per the operator: the headline objective is **"make the most money possible vs
+the S&P 500"** — i.e. maximize **excess return over SPY** — with strategies
+**anchored on the operator's actual portfolio**, evaluated **across different
+periods of the year**, and **as a function of how much is contributed**. This is
+encoded in `config.json` → `portfolio_sim`:
+
+- `objective: maximize_excess_vs_sp500`, `primary_benchmark: SPY` — the
+  leaderboard ranks tactics by **excess vs SPY** (alpha over the S&P 500), with
+  QQQ as a secondary benchmark.
+- `anchor: actual_portfolio` — the `actual_baseline` tactic (real holdings) is
+  the reference every other tactic is compared against.
+- `windows: [ytd, trailing_1y, trailing_3y, trailing_5y, calendar_quarter,
+  calendar_month]` — **"different periods of the year"**: trailing windows AND
+  intra-year calendar periods (YTD, per-quarter, per-month) so seasonality is
+  visible, not just multi-year trailing returns.
+- `contribution_scenarios: [500, 1000, 2000]` — **"based on how much money I put
+  in"**: each tactic is also evaluated at multiple monthly-DCA levels so the
+  operator can see how outcomes scale with contribution size.
+- `projection`, `universe`, `rebalance_policies` sub-blocks configure sub-projects
+  1 & 3.
+
+The engine therefore resolves named windows into `(start,end)` ranges from the
+price calendar (new `windows.py`), runs each tactic × policy × window ×
+contribution-scenario, and the primary sort key is `excess_vs_spy`.
+
 ## 2. Hard boundaries
 
 - **Sandbox-only / observe-only.** All writes via `OutputNamespace.SANDBOX`.
