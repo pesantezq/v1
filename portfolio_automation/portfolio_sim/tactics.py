@@ -48,6 +48,17 @@ class Tactic:
         return dict(self.target_weights)
 
 
+class TimeVaryingTactic(Tactic):
+    """
+    Base for tactics whose target weights depend on the as-of date (e.g. the
+    crowd-signal tactic). Subclasses override ``target_weights_asof``. The engine
+    calls it at t0 and on every rebalance day, so the vector can evolve over time.
+    """
+
+    def target_weights_asof(self, date: str, ctx: dict | None = None) -> dict[str, float]:  # pragma: no cover - overridden
+        return dict(self.target_weights)
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
