@@ -107,3 +107,29 @@ class _CallbackListener:
             self._httpd.shutdown()
             self._httpd.server_close()
             self._httpd = None
+
+
+class TunnelManager:
+    """Context manager: runs `cloudflared tunnel run --url http://127.0.0.1:<port>
+    <name>` and guarantees teardown on exit (terminate, then kill on timeout)."""
+
+    def __init__(self, tunnel_name: str, local_port: int) -> None:
+        self.tunnel_name = tunnel_name
+        self.local_port = local_port
+        self._proc: subprocess.Popen | None = None
+
+    def __enter__(self) -> "TunnelManager":
+        self._proc = subprocess.Popen(
+            ["cloudflared", "tunnel", "run", "--url",
+             f"http://127.0.0.1:{self.local_port}", self.tunnel_name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()

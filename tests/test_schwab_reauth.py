@@ -72,3 +72,33 @@ def test_listener_handles_oauth_error(monkeypatch):
         assert lis.result_q.get(timeout=2)["error"] == "access_denied"
     finally:
         lis.stop()
+
+
+class _FakeProc:
+    def __init__(self, *a, **k):
+        self.terminated = False
+        self.killed = False
+        self._alive = True
+    def poll(self):
+        return None if self._alive else 0
+    def terminate(self):
+        self.terminated = True
+        self._alive = False
+    def wait(self, timeout=None):
+        return 0
+    def kill(self):
+        self.killed = True
+        self._alive = False
+
+
+def test_tunnel_manager_starts_and_tears_down(monkeypatch):
+    captured = {}
+    def fake_popen(cmd, **k):
+        captured["cmd"] = cmd
+        return _FakeProc()
+    monkeypatch.setattr(sr.subprocess, "Popen", fake_popen)
+    with sr.TunnelManager("stockbot-reauth", 12345) as tm:
+        assert "cloudflared" in captured["cmd"][0]
+        assert "http://127.0.0.1:12345" in captured["cmd"]
+        assert "stockbot-reauth" in captured["cmd"]
+    assert tm._proc.terminated is True
