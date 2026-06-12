@@ -1964,6 +1964,22 @@ def _pulse_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def render_tax_strategy_line(scorecard: dict, harvest: dict, strategy: dict) -> str:
+    """One compact observe-only memo line for tax + strategy (broker-aware)."""
+    if scorecard.get("degraded_mode"):
+        tax = "Tax: degraded (no broker cost basis)"
+    else:
+        ug = scorecard.get("portfolio_unrealized_gain")
+        n = harvest.get("harvestable_count", 0)
+        src = harvest.get("basis_source", "config")
+        deg = scorecard.get("degraded_fields") or []
+        suffix = f" · lot fields degraded ({', '.join(deg)})" if deg else ""
+        ug_str = f"${ug:,.0f}" if isinstance(ug, (int, float)) else "n/a"
+        tax = f"Tax: {ug_str} unrealized G/L · {n} harvest candidate(s) (basis: {src}){suffix}"
+    strat = f"Strategy: context {strategy.get('context_source', 'config')}"
+    return f"{tax} · {strat}"
+
+
 def _pattern_confirmed_candidates(
     root: Path,
     *,
@@ -2217,6 +2233,22 @@ def build_daily_memo(
             a(f"  - {item}")
         a("")
 
+    try:
+        import json as _json
+        from pathlib import Path as _P
+        def _rd(rel: str) -> dict:
+            p = _P(rel)
+            return _json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        _root = _pulse_root()
+        _sc = _rd(str(_root / "outputs" / "sandbox" / "strategy_tax_scorecard.json"))
+        _hv = _rd(str(_root / "outputs" / "latest" / "tax_harvest_advisor.json"))
+        _st = _rd(str(_root / "outputs" / "sandbox" / "strategy_comparison.json"))
+        if _sc or _hv or _st:
+            a(f"  {render_tax_strategy_line(_sc, _hv, _st)}")
+            a("")
+    except Exception:
+        pass
+
     if discovery_data is not None:
         try:
             a(_build_discovery_section(discovery_data))
@@ -2377,6 +2409,22 @@ def build_daily_memo_md(
         for item in health_items[:3]:
             a(f"- {item}")
         a("")
+
+    try:
+        import json as _json
+        from pathlib import Path as _P
+        def _rd(rel: str) -> dict:
+            p = _P(rel)
+            return _json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        _root = _pulse_root()
+        _sc = _rd(str(_root / "outputs" / "sandbox" / "strategy_tax_scorecard.json"))
+        _hv = _rd(str(_root / "outputs" / "latest" / "tax_harvest_advisor.json"))
+        _st = _rd(str(_root / "outputs" / "sandbox" / "strategy_comparison.json"))
+        if _sc or _hv or _st:
+            a(f"_{render_tax_strategy_line(_sc, _hv, _st)}_")
+            a("")
+    except Exception:
+        pass
 
     if discovery_data is not None:
         try:
