@@ -117,5 +117,8 @@ if src == 'fallback' or len(non_fb) == 0:
     printf '\n-- Portfolio simulation: forward projection (sandbox, observe-only) --\n'
     python -m portfolio_automation.portfolio_sim.run_portfolio_projection --root "${REPO_ROOT:-.}" --run-mode discovery || printf 'portfolio_sim projection non-fatal failure\n'
 
+    printf '\n-- Research-backed strategy lab (sandbox, observe-only) --\n'
+    python -m portfolio_automation.portfolio_sim.run_strategy_lab --root "${REPO_ROOT:-.}" --run-mode discovery || printf 'strategy_lab non-fatal failure\n'
+
     printf '\nDAILY RUN PASSED\n'
 } >> "$LOG_FILE" 2>&1

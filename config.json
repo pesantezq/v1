@@ -396,7 +396,7 @@
     "research_priority_cap": 10.0
   },
   "portfolio_sim": {
-    "enabled": false,
+    "enabled": true,
     "objective": "maximize_excess_vs_sp500",
     "primary_benchmark": "SPY",
     "secondary_benchmarks": [
@@ -439,6 +439,15 @@
         5,
         10,
         35
+      ]
+    },
+    "strategy_lab": {
+      "enabled": true,
+      "windows": [
+        "trailing_1y",
+        "trailing_3y",
+        "trailing_5y",
+        "ytd"
       ]
     }
   },

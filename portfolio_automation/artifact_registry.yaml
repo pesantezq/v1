@@ -1346,3 +1346,69 @@ artifacts:
     consumer_status: consumed
     notes: Labeled volume/momentum PROXY historical backtest of the crowd-signal tactic (proxy=true; not the real crowd signal's record). Real evaluation is the forward shadow-track in social_signal_backtest.json.
 
+  # ── Research-Backed Strategy Lab (sandbox-only) ─────────────────────────────
+  strategy_leaderboard.json:
+    path: outputs/sandbox/strategy_leaderboard.json
+    label: strategy leaderboard
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab-analysis, monthly-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Research-backed strategy lab — tactics ranked by master strategy score (after-cost-ish, risk-adjusted excess vs SPY, minus overfit/turnover/tax/concentration/leverage). Observe-only, sandbox-only, ENABLED.
+
+  strategy_leaderboard_summary.md:
+    path: outputs/sandbox/strategy_leaderboard_summary.md
+    label: strategy leaderboard summary
+    lens: market_discovery
+    role: narrative
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Operator-readable leaderboard companion to strategy_leaderboard.json.
+
+  research_strategy_catalog.json:
+    path: outputs/sandbox/research_strategy_catalog.json
+    label: research strategy catalog
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab-analysis, strategy-catalog]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-tactic academic_basis + coverage_complete gate (Strategy Documentation Requirement — every strategy needs a citation).
+
+  walk_forward_results.json:
+    path: outputs/sandbox/walk_forward_results.json
+    label: walk-forward OOS results
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Walk-forward out-of-sample validation (train->test->roll) + overfit (IS-OOS gap) feeding the master score. still_works_oos flag per parameterized tactic.
+
+  factor_exposure_report.json:
+    path: outputs/sandbox/factor_exposure_report.json
+    label: factor exposure report
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: portfolio_sim
+    consumers: [strategy-lab-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Fama-French factor attribution (alpha + betas + R2) per tactic. Offline factor cache; degrades to factor_data_unavailable if data/factors absent.
+

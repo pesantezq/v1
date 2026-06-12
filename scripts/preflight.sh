@@ -197,7 +197,10 @@ python -m py_compile \
     portfolio_automation/social_intelligence/context_join.py \
     portfolio_automation/portfolio_sim/run_portfolio_backtest.py \
     portfolio_automation/portfolio_sim/backtest_engine.py \
-    portfolio_automation/portfolio_sim/tactics.py
+    portfolio_automation/portfolio_sim/tactics.py \
+    portfolio_automation/portfolio_sim/run_strategy_lab.py \
+    portfolio_automation/portfolio_sim/research_library.py \
+    portfolio_automation/portfolio_sim/strategy_lab_health.py
 pass "Targeted py_compile check passed"
 
 section "Wrapper Syntax Check"
@@ -219,6 +222,7 @@ modules = [
     'portfolio_automation.social_intelligence.public_knowledge_velocity',
     'portfolio_automation.portfolio_sim.run_portfolio_backtest',
     'portfolio_automation.portfolio_sim.run_portfolio_projection',
+    'portfolio_automation.portfolio_sim.run_strategy_lab',
 ]
 for m in modules:
     importlib.import_module(m)
