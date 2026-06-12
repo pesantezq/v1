@@ -95,6 +95,7 @@
 
     {# Desktop table — hidden on small screens #}
     <div class="hidden md:block overflow-x-auto">
+      <div class="overflow-x-auto -mx-2 sm:mx-0">
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wide text-left">
@@ -127,6 +128,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
 
     {# Mobile stacked cards — shown only on small screens #}

@@ -143,6 +143,7 @@
 
     {% if holdings %}
     <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
+      {% call ui.responsive_table() %}
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
@@ -167,6 +168,7 @@
           {% endfor %}
         </tbody>
       </table>
+      {% endcall %}
     </div>
 
     <div class="md:hidden space-y-3">
@@ -201,6 +203,7 @@
   <section aria-label="Watchlist signals">
     {{ ui.section_header("Watchlist Signals", "evidence only", "") }}
     <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
+      {% call ui.responsive_table() %}
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
@@ -223,6 +226,7 @@
           {% endfor %}
         </tbody>
       </table>
+      {% endcall %}
     </div>
     <div class="md:hidden space-y-3">
       {% for sig in recent_signals %}

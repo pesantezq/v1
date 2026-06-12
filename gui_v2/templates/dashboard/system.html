@@ -102,6 +102,7 @@
 
     {% if failed_stages %}
     <div class="hidden md:block overflow-x-auto rounded-xl border border-rose-500/30">
+      {% call ui.responsive_table() %}
       <table class="w-full text-sm border-collapse">
         <thead>
           <tr class="bg-rose-500/10 text-rose-300/80 text-xs uppercase tracking-wide text-left">
@@ -120,6 +121,7 @@
           {% endfor %}
         </tbody>
       </table>
+      {% endcall %}
     </div>
     <div class="md:hidden space-y-3">
       {% for s in failed_stages %}
