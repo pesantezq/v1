@@ -165,6 +165,40 @@
   </section>
   {% endif %}
 
+  {# ── Research Strategy Lab — master leaderboard ───────────────────────── #}
+  {% if strategy_lab and strategy_lab.available %}
+  <section aria-label="Research strategy lab">
+    {{ ui.section_header("Research Strategy Lab", "ranked by master score · academic-backed · OOS-validated", "strategy_leaderboard.json") }}
+    <p class="text-[11px] text-zinc-600 mb-2">Objective: beat the S&P 500 (after-cost, risk-adjusted). {{ strategy_lab.tactic_count }} strategies. Observe-only — not a trade recommendation.</p>
+    <div class="overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+          <th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">Strategy</th>
+          <th class="py-2.5 px-4 text-right">Score</th><th class="py-2.5 px-4 text-right">Excess vs SPY</th>
+          <th class="py-2.5 px-4 text-right">Beats SPY</th><th class="py-2.5 px-4 text-right">Worst DD</th>
+          <th class="py-2.5 px-4">OOS</th></tr></thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for r in strategy_lab.rows %}
+          <tr class="hover:bg-zinc-900/50" title="{{ r.academic_basis }}">
+            <td class="py-2.5 px-4 text-zinc-500">{{ loop.index }}</td>
+            <td class="py-2.5 px-4 text-zinc-100">{{ r.name }}{% if r.approximate %} <span class="text-amber-400" title="approximate static stand-in">*</span>{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(r.strategy_score or 0) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (r.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((r.mean_excess_vs_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((r.prob_beat_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((r.worst_max_drawdown or 0)*100) }}%</td>
+            <td class="py-2.5 px-4">
+              {% if r.still_works_oos is sameas true %}<span class="text-emerald-400 text-xs">OOS ✓</span>
+              {% elif r.still_works_oos is sameas false %}<span class="text-rose-400 text-xs" title="failed walk-forward out-of-sample">OOS ✗</span>
+              {% else %}<span class="text-zinc-600 text-xs">—</span>{% endif %}
+            </td>
+          </tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-[11px] text-zinc-600 mt-2">* approximate stand-in · OOS ✗ = overfit in walk-forward (ranked down). Hover a row for its academic basis. Sandbox research only.</p>
+  </section>
+  {% endif %}
+
   {# ── Forward projection (Monte-Carlo) ─────────────────────────────────── #}
   {% if projection and projection.available %}
   <section aria-label="Forward projection">

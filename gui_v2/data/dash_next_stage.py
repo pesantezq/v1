@@ -41,6 +41,7 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
     cards_review = _load(sb / "market_opportunity_review_cards.json") or {}
     backtest = _load(sb / "portfolio_backtest.json") or {}
     projection = _load(sb / "portfolio_projection.json") or {}
+    strategy_lab = _load(sb / "strategy_leaderboard.json") or {}
 
     def _n(d, key):  # safe count
         v = d.get(key)
@@ -113,6 +114,32 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
         "broker_aware": broker,
         "backtest": _backtest_view(backtest),
         "projection": _projection_view(projection),
+        "strategy_lab": _strategy_lab_view(strategy_lab),
+    }
+
+
+def _strategy_lab_view(doc: dict) -> dict[str, Any]:
+    """Compact Research Strategy Lab leaderboard view (observe-only)."""
+    if not isinstance(doc, dict) or doc.get("status") != "ok":
+        return {"available": False, "status": (doc or {}).get("status", "absent")}
+    rows = []
+    for r in (doc.get("leaderboard") or [])[:15]:
+        rows.append({
+            "name": r.get("name"), "tactic_id": r.get("tactic_id"),
+            "strategy_score": r.get("strategy_score"),
+            "mean_excess_vs_spy": r.get("mean_excess_vs_spy"),
+            "prob_beat_spy": r.get("prob_beat_spy"),
+            "worst_max_drawdown": r.get("worst_max_drawdown"),
+            "academic_basis": r.get("academic_basis", ""),
+            "still_works_oos": r.get("still_works_oos"),
+            "approximate": r.get("approximate", False),
+        })
+    return {
+        "available": True,
+        "objective": doc.get("objective"),
+        "tactic_count": doc.get("tactic_count"),
+        "rows": rows,
+        "created_at": doc.get("created_at"),
     }
 
 
