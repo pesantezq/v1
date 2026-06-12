@@ -93,3 +93,30 @@ def test_dual_momentum_defensive_when_riskon_negative(tmp_path):
     dm = DualMomentum(risk_on=["SPY"], defensive=["BND"], lookback_months=6)
     w = dm.target_weights_asof("2025-12-15", {"panel": panel})
     assert "BND" in w
+
+
+def test_vol_managed_and_black_litterman_registered(tmp_path):
+    _config(tmp_path)
+    _panel(tmp_path)
+    ids = {t.tactic_id for t in research_tactics(tmp_path)}
+    assert "research_vol_managed" in ids
+    assert "research_black_litterman" in ids
+
+
+def test_vol_managed_cuts_leverage_when_vol_high(tmp_path):
+    _config(tmp_path)
+    from portfolio_automation.portfolio_sim.research_library import VolManaged
+    panel = _panel(tmp_path)
+    base = {"QQQ": 0.5, "QLD": 0.3, "BND": 0.2}
+    vm = VolManaged(base, {"QLD"}, vol_threshold=0.0, defensive=("BND",))  # threshold 0 → always cut
+    w = vm.target_weights_asof("2025-12-15", {"panel": panel})
+    assert w.get("QLD", 0.0) < 0.3   # leverage trimmed
+    assert w.get("BND", 0.0) > 0.2   # defensive raised
+
+
+def test_black_litterman_bounded(tmp_path):
+    from portfolio_automation.portfolio_sim.research_library import BlackLittermanBlend
+    bl = BlackLittermanBlend({"QQQ": 0.5, "GLD": 0.5}, {"QQQ": 1.0}, confidence=0.2)
+    w = bl.target_weights
+    assert abs(sum(w.values()) - 1.0) < 1e-6
+    assert w["QQQ"] < 0.65   # small tilt, not a full swing to the view

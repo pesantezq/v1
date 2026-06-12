@@ -149,6 +149,71 @@ class RiskParityLite(TimeVaryingTactic):
         return _clamp_caps(invvol, self.leveraged, *self.caps)
 
 
+class VolManaged(TimeVaryingTactic):
+    """Moreira & Muir 2017: cut the leverage sleeve when realized vol is high."""
+
+    def __init__(self, base_weights: dict[str, float], leveraged: set[str], *,
+                 vol_threshold: float = 0.018, vol_days: int = 21,
+                 defensive: tuple[str, ...] = ("BND", "GLD"), caps=(0.60, 0.25)):
+        super().__init__("research_vol_managed", "Volatility-Managed", "strategy_profile",
+                         dict(base_weights),
+                         metadata={"academic_basis": "Moreira & Muir (2017): taking less risk "
+                                   "when volatility is high raised Sharpe / alpha.",
+                                   "params": {"vol_threshold": vol_threshold, "vol_days": vol_days},
+                                   "materialization": {"rules": ["scale leverage sleeve down when "
+                                                                  "realized vol > threshold"]}})
+        self.base = dict(base_weights)
+        self.leveraged = leveraged
+        self.vol_threshold = vol_threshold
+        self.vol_days = vol_days
+        self.defensive = [d for d in defensive]
+        self.caps = caps
+
+    def target_weights_asof(self, date, ctx=None):
+        panel = (ctx or {}).get("panel")
+        if panel is None or not self.leveraged:
+            return _clamp_caps(self.base, self.leveraged, *self.caps)
+        # use the most-volatile leveraged name's trailing vol as the risk gauge
+        vols = [_trailing_vol(panel, t, date, self.vol_days) for t in self.leveraged]
+        vols = [v for v in vols if v is not None]
+        gauge = max(vols) if vols else 0.0
+        w = dict(self.base)
+        if gauge > self.vol_threshold:
+            freed = 0.0
+            for t in self.leveraged:
+                if t in w:
+                    cut = w[t] * 0.5
+                    w[t] -= cut
+                    freed += cut
+            recips = [d for d in self.defensive if d in (panel.tickers if panel else [])] or self.defensive
+            if freed > 0 and recips:
+                for d in recips:
+                    w[d] = w.get(d, 0.0) + freed / len(recips)
+        return _clamp_caps(w, self.leveraged, *self.caps)
+
+
+class BlackLittermanBlend(TimeVaryingTactic):
+    """
+    Idzorek/Black-Litterman: blend a market/target prior with a confidence-scaled
+    view tilt. Here a static confidence blend toward a view vector — bounded so it
+    never produces an extreme/concentrated allocation.
+    """
+
+    def __init__(self, prior: dict[str, float], view: dict[str, float], *, confidence: float = 0.2,
+                 leveraged=None, caps=(0.60, 0.25)):
+        conf = max(0.0, min(1.0, confidence))
+        blended = {t: (1 - conf) * prior.get(t, 0.0) + conf * view.get(t, 0.0)
+                   for t in set(prior) | set(view)}
+        super().__init__("research_black_litterman", "Black-Litterman Blend", "strategy_profile",
+                         _normalize(blended),
+                         metadata={"academic_basis": "Black-Litterman / Idzorek: combine market "
+                                   "prior with confidence-weighted views; confidence caps tilt size.",
+                                   "params": {"confidence": conf},
+                                   "materialization": {"rules": [f"{int(conf*100)}% tilt toward view, "
+                                                                 "rest = prior"]}})
+        self.target_weights = _clamp_caps(_normalize(blended), leveraged or set(), *caps)
+
+
 class MeanVarianceFrontier(TimeVaryingTactic):
     """Markowitz 1952: max-Sharpe weights from trailing mean/cov, clamped to caps."""
 
@@ -232,4 +297,16 @@ def research_tactics(root: str | Path = ".") -> list[Tactic]:  # noqa: F821
         RiskParityLite(universe, leveraged=leveraged, caps=caps),
         MeanVarianceFrontier(universe, leveraged=leveraged, caps=caps),
     ]
+    # Anchor = actual portfolio weights (shares proxy) for prior/base.
+    base = _normalize({str(h.get("symbol", "")).upper(): float(h.get("shares", 0) or 0)
+                       for h in holdings if h.get("symbol")})
+    if base and leveraged:
+        out.append(VolManaged(base, leveraged, caps=caps,
+                              defensive=tuple(t for t in ("BND", "GLD") if t in universe) or ("BND",)))
+    if base:
+        # view: tilt toward the strongest broad-equity holding (a bounded research view)
+        view_ticker = next((t for t in ("QQQ", "SPY") if t in universe), None)
+        if view_ticker:
+            out.append(BlackLittermanBlend(base, {view_ticker: 1.0}, confidence=0.2,
+                                           leveraged=leveraged, caps=caps))
     return out
