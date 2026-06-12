@@ -133,3 +133,29 @@ class TunnelManager:
                 self._proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+
+
+def _surface_authorize_url(url: str, *, env: dict[str, str], notify: bool,
+                           sender: Callable[[Any, EmailMessage], dict] | None = None) -> None:
+    """Print the authorize URL for the terminal/SSH operator and (when notify)
+    email it via the re-auth notifier's transport so it can be tapped on a phone."""
+    print("\nSchwab authorize URL (open on your phone, log in, approve):\n")
+    print(f"  {url}\n")
+    if not notify:
+        return
+    try:
+        cfg = notifier._load_transport(env)
+        if not cfg.has_valid_recipients() or not cfg.has_smtp_config():
+            print("(email skipped — SMTP not fully configured)")
+            return
+        msg = EmailMessage()
+        msg["Subject"] = "Schwab re-auth — tap to authorize"
+        msg["From"] = cfg.from_addr
+        msg["To"] = ", ".join(cfg.to_addrs)
+        msg.set_content(
+            "Tap to re-authorize Schwab (log in + approve in the app):\n\n"
+            f"{url}\n\nThis link is valid for ~10 minutes. Advisory only — no trades.\n"
+        )
+        (sender or mes.send_daily_memo_email)(cfg, msg)
+    except Exception as exc:  # email is best-effort; the printed URL always works
+        print(f"(email failed — {type(exc).__name__}; use the printed URL)")

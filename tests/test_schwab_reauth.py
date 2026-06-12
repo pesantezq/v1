@@ -102,3 +102,23 @@ def test_tunnel_manager_starts_and_tears_down(monkeypatch):
         assert "http://127.0.0.1:12345" in captured["cmd"]
         assert "stockbot-reauth" in captured["cmd"]
     assert tm._proc.terminated is True
+
+
+def test_surface_url_prints_and_emails(capsys):
+    sent = {}
+    def fake_sender(cfg, msg):
+        sent["to"] = msg["To"]; sent["body"] = msg.get_content()
+        return {"attempted": True, "sent": True}
+    env = {"SMTP_SERVER": "smtp.gmail.com", "EMAIL_USER": "me@gmail.com",
+           "EMAIL_PASS": "pw", "EMAIL_TO": "me@gmail.com"}
+    sr._surface_authorize_url("https://auth.example/x?state=n", env=env,
+                              notify=True, sender=fake_sender)
+    out = capsys.readouterr().out
+    assert "https://auth.example/x?state=n" in out
+    assert "https://auth.example/x?state=n" in sent["body"]
+    assert sent["to"] == "me@gmail.com"
+
+
+def test_surface_url_email_optional(capsys):
+    sr._surface_authorize_url("https://auth.example/x", env={}, notify=False, sender=None)
+    assert "https://auth.example/x" in capsys.readouterr().out
