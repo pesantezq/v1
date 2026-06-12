@@ -1689,3 +1689,36 @@ Self-consumed by the layer. Only written on runs that actually ingest posts.
 | `window` | int | rolling trading-day window (default 20) |
 | `ticker_count` | int | tickers tracked |
 | `history` | dict | `{ticker: [daily counts, oldest→newest]}` |
+
+---
+
+## Schwab Broker Artifacts
+
+Produced by `portfolio_automation/brokers/schwab_sync.py` (Stage 10c of
+`run_daily_safe`). All artifacts are observe-only, read-only, and carry no trade
+capability. Consumed by `tax_scorecard`, `tax_harvest_advisor`,
+`strategy_comparator`, and the GUI strategy/tax panel.
+
+### `outputs/latest/schwab_tax_lots.json`
+
+Namespace: LATEST. Written by `schwab_sync.run_sync` → `schwab_tax_lots.py`
+per-lot normalizer on every broker sync run. Best-effort: degrades to
+`has_lots: false` when Schwab returns no per-lot data or the sync is stale.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `observe_only` | bool | Hardcoded `true` |
+| `no_trade` | bool | Hardcoded `true` |
+| `has_lots` | bool | `true` when at least one symbol has per-lot data; `false` on degraded/missing |
+| `by_symbol` | object | Keyed by ticker symbol. Each value is a list of lot objects: `{quantity, cost_basis, acquired_date}`. Empty dict when `has_lots: false`. |
+| `reason` | string | Human-readable status: e.g. `"ok"`, `"no_lot_data"`, `"sync_stale"`, `"schwab_unavailable"` |
+| `source` | string | Always `"schwab"` |
+
+Contract notes:
+
+- `required: false` — absence is non-fatal; downstream consumers must check `has_lots` and degrade gracefully.
+- Artifact health severity: `info` / `optional_missing` — does **not** increment `missing_artifact_count`.
+- `acquired_date` is an ISO 8601 date string when available; `null` when Schwab omits it.
+- The per-lot list is ordered oldest-first when Schwab provides acquisition dates.
+- This artifact is consumed by `tax_scorecard` to compute unrealized G/L and lot-aware holding period (LTCG vs STCG). When `has_lots: false`, the scorecard degrades to `degraded_mode` and reports honest `degraded_fields`.
+- Never written from a replay or backtest path; producer is the live sync stage only.

@@ -69,6 +69,50 @@ Explicitly note:
 
 ---
 
+## Strategy + Tax-Aware Hardening
+
+### Date
+
+`2026-06-12`
+
+### Area
+
+`architecture`
+
+### Files / Functions
+
+- `portfolio_automation/holdings_resolver.py` — broker holdings now carry `average_cost`/`cost_basis`.
+- `portfolio_automation/brokers/schwab_tax_lots.py` (new) — defensive per-lot normalizer; wired into `schwab_sync.run_sync` → `schwab_tax_lots.json`.
+- `portfolio_automation/strategy/tax_scorecard.py` — computes unrealized G/L; lot-aware holding period; `degraded_fields` (backward-compat `placeholders` kept).
+- `portfolio_automation/tax_harvest_advisor.py` — broker cost-basis path + `basis_source`.
+- `portfolio_automation/strategy/strategy_comparator.py` — broker context + tax-lot passthrough.
+- `watchlist_scanner/daily_memo.py` — compact tax/strategy line.
+- `.claude/commands/daily-tool-analysis.md` — `tax_scorecard_unexpectedly_degraded` + `strategy_context_not_broker` coverage.
+- `gui_v2/data/dash_strategy_tax.py` + `gui_v2/templates/dashboard/strategy_tax.html` + route — read-only panel.
+- `config.json` — `portfolio.broker_aware.enabled=true` (prod-ready enable).
+
+### Decision
+
+With Schwab read-only sync live, enable broker-aware holdings so the tax + strategy advisory layer consumes the operator's actual positions + cost basis. Per-lot tax fields (LTCG/STCG, wash-sale) light up when Schwab returns lots, else degrade honestly.
+
+### Why
+
+The tax scorecard was stuck in degraded_mode and the strategy comparison ran on config holdings; the live Schwab feed makes both reflect reality.
+
+### Invariants Preserved
+
+Observe-only throughout; never writes `decision_plan.json`; no scoring/decision-core change; `broker_aware_portfolio` stays side-panel-only (`feeds_decision_plan:false`); resolver staleness→config fallback intact (stale Schwab never drives advice); honest degradation (no guessed lot fields); no trade capability added (AST test passes); `placeholders` kept for backward-compat.
+
+### Downstream Impact
+
+New artifact `schwab_tax_lots.json` (registered, on_demand, info). New tests across resolver/scorecard/harvest/comparator/memo/gui/flip. The `broker_aware.enabled` flip makes `holdings_source` resolve to `broker` when Schwab data is fresh.
+
+### Artifact Health Severity
+
+No severity change; `schwab_tax_lots.json` is `info`/`required:false`. The flip enables the broker source; resolver auto-degrades to config when stale/missing.
+
+---
+
 ## Schwab Re-Auth Auto-Capture
 
 ### Date
