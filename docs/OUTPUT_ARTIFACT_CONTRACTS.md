@@ -1722,3 +1722,43 @@ Contract notes:
 - The per-lot list is ordered oldest-first when Schwab provides acquisition dates.
 - This artifact is consumed by `tax_scorecard` to compute unrealized G/L and lot-aware holding period (LTCG vs STCG). When `has_lots: false`, the scorecard degrades to `degraded_mode` and reports honest `degraded_fields`.
 - Never written from a replay or backtest path; producer is the live sync stage only.
+
+### `outputs/sandbox/` — Portfolio Simulation Suite
+
+Written by `portfolio_automation/portfolio_sim/` (weekly, `run_weekly_safe.sh`).
+**Observe-only, sandbox-only, default-disabled** (`config.json portfolio_sim.enabled`).
+Reads the HISTORICAL price archive (`outputs/backtest/historical/<T>_5y.json`);
+never writes decision_plan/config/registry. Objective: maximize excess return vs
+the S&P 500 (SPY). See `docs/superpowers/specs/2026-06-12-portfolio-tactic-backtest-design.md`.
+
+#### `portfolio_backtest.json`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `objective` | string | `maximize_excess_vs_sp500` |
+| `windows` | list | resolved period keys (ytd/trailing_*/calendar_quarter/month) |
+| `leaderboard{window}` | list | tactics ranked by `excess_vs_spy`: `tactic_id,name,policy,excess_vs_spy,cagr,max_drawdown,sharpe,final_balance_dca` |
+| `contribution_sensitivity` | dict | actual-baseline final balance per (window × contribution scenario) |
+| `results[]` | list | full per tactic×policy×window metrics + downsampled `value_series` + `degraded` |
+
+#### `portfolio_backtest_summary.md`
+
+Operator-readable leaderboard (top tactics by excess-vs-SPY per window).
+
+#### `strategy_catalog.json`
+
+Per-tactic documentation: `coverage_complete` (Strategy Documentation Requirement),
+`undocumented[]`, `cards[]` (objective, universe, materialization, caps, metrics,
+rationale, explanation). Mirror: `docs/STRATEGY_CATALOG.md`.
+
+#### `portfolio_projection.json`
+
+Forward Monte-Carlo (block-bootstrap). `assumptions` (illustration-not-forecast),
+`seed`, `horizons`, `rows[]` (per tactic×horizon: `p5/p25/p50/p75/p95_balance`,
+`prob_reach_target`, `prob_loss`, `cagr_p*`, `max_drawdown_p50/p95`), `anchor_fan`.
+
+#### `crowd_tactic_backtest.json`
+
+Labeled volume/momentum PROXY backtest of the crowd-signal tactic (`proxy: true`,
+`measures` caveat). NOT the real crowd signal's record — the real evaluation is the
+forward shadow-track in `social_signal_backtest.json`.

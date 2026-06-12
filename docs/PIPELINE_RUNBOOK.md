@@ -572,3 +572,19 @@ python -m operator_control.work_orders generate-prompt --id <id>
 
 Full architecture, safety model, lifecycle, and the recommended Phase 2 worker
 runner: see `docs/operator_control.md`.
+
+### Portfolio Simulation Suite (weekly, sandbox)
+
+`python -m portfolio_automation.portfolio_sim.run_portfolio_backtest --root . --run-mode discovery`
+`python -m portfolio_automation.portfolio_sim.run_portfolio_projection --root . --run-mode discovery`
+
+Two weekly stages in `run_weekly_safe.sh` (non-blocking). **Observe-only,
+sandbox-only, default-disabled.** Objective: maximize excess return vs the S&P 500.
+
+Enable: `config.json portfolio_sim.enabled=true` (the suite reads the offline 5y
+price archive — no FMP/network needed when archives are present; missing tickers
+are recorded under `missing_price_history` and backfilled via free FMP if a client
+is wired). Writes 5 artifacts under `outputs/sandbox/` + the auto-generated
+`docs/STRATEGY_CATALOG.md`. Disabled / insufficient-data → degraded artifact, no
+crash. Surfaced in the GUI Strategy Lab tab (Backtest + Projection sections).
+See [superpowers spec](superpowers/specs/2026-06-12-portfolio-tactic-backtest-design.md).

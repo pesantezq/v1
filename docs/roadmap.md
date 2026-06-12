@@ -1,5 +1,32 @@
 # Roadmap
 
+## Portfolio Simulation Suite — built (2026-06-12)
+
+- **New sandbox-only, observe-only package** `portfolio_automation/portfolio_sim/`.
+  Three sub-projects, all spec'd + planned (`docs/superpowers/specs/2026-06-12-*`,
+  `docs/superpowers/plans/2026-06-12-portfolio-sim-suite.md`) then built in one go:
+  1. **Historical backtest engine** — the operator's real portfolio + 6 shadow
+     portfolios + 8 materialized strategy profiles + SPY/QQQ, over period windows
+     (YTD / quarterly / monthly / trailing). **Objective: maximize excess return
+     vs the S&P 500** (config `portfolio_sim`), portfolio-anchored, with
+     time-weighted + DCA dollar paths and a contribution-sensitivity sweep
+     ("based on how much you put in"). Pluggable rebalance policies.
+  2. **Crowd-signal tactic** — capped sleeve toward useful crowd states +
+     avoid-overlay on caution states; forward shadow-track (real) + labeled
+     volume/momentum proxy backtest.
+  3. **Forward Monte-Carlo projection** — block-bootstrap of historical monthly
+     return vectors; terminal-balance percentiles, prob-reach-target, drawdown
+     distribution; seeded/reproducible; "illustration, not forecast".
+- **Strategy Documentation discipline** — `strategy_docs.py` producer +
+  `/strategy-catalog` skill + a CLAUDE.md *Strategy Documentation Requirement*
+  rule: every tactic ships a catalog entry; undocumented tactics don't surface.
+- **Governance**: reads HISTORICAL archive, writes SANDBOX; observe-only,
+  default-disabled (`config portfolio_sim.enabled=false`); never writes
+  decision_plan/config/registry; no trade verbs; run-mode-gated.
+- **Wired**: 2 weekly `run_weekly_safe.sh` stages, GUI Strategy Lab
+  Backtest + Projection sections, 5 artifact-registry rows, monthly-tool-analysis
+  quant-lens health + content-liveness, preflight. ~103 tests. Ships inert.
+
 ## Public Knowledge Velocity Layer / Crowd Radar — built (2026-06-12)
 
 - **New sandbox-only, observe-only module** `portfolio_automation/social_intelligence/`

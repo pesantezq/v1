@@ -672,3 +672,37 @@ public_knowledge_velocity_layer:
   pending_operator:
     dashboard_restart: pending  # new Crowd Radar GUI tab needs systemctl restart stockbot-dashboard.service
     enable_and_provision: pending  # set crowd_radar.enabled=true + REDDIT_* OAuth creds after source-terms review
+
+portfolio_simulation_suite:
+  status: built
+  observe_only: true
+  sandbox_only: true
+  default_disabled: true  # config portfolio_sim.enabled=false
+  package: portfolio_automation/portfolio_sim/
+  objective: maximize_excess_vs_sp500  # operator-directed: beat the S&P 500
+  reads: outputs/backtest/historical/*_5y.json  # HISTORICAL archive
+  writes: outputs/sandbox/  # SANDBOX lane
+  gui_tab: /dashboard/strategy-lab  # Backtest + Projection sections
+  sub_projects:
+    sp1_historical_backtest: built   # tactics, windows, rebalance policies, engine, orchestrator, strategy_docs
+    sp2_crowd_signal_tactic: built   # sleeve+overlay, proxy pseudo-states, forward shadow-track
+    sp3_monte_carlo_projection: built  # block-bootstrap, percentiles, prob-reach-target
+  documentation_rule: CLAUDE.md "Strategy Documentation Requirement" + /strategy-catalog skill
+  artifacts:
+    - outputs/sandbox/portfolio_backtest.json
+    - outputs/sandbox/portfolio_backtest_summary.md
+    - outputs/sandbox/strategy_catalog.json
+    - outputs/sandbox/portfolio_projection.json
+    - outputs/sandbox/crowd_tactic_backtest.json
+    - docs/STRATEGY_CATALOG.md
+  specs:
+    - docs/superpowers/specs/2026-06-12-portfolio-tactic-backtest-design.md
+    - docs/superpowers/specs/2026-06-12-crowd-signal-tactic-design.md
+    - docs/superpowers/specs/2026-06-12-forward-projection-design.md
+  plan: docs/superpowers/plans/2026-06-12-portfolio-sim-suite.md
+  tests: 103
+  health_coverage: monthly-tool-analysis quant lens + content-liveness
+  pending_operator:
+    enable: pending  # set config portfolio_sim.enabled=true to activate weekly stages
+    dashboard_restart: pending  # Strategy Lab Backtest/Projection sections need systemctl restart
+    price_archive_backfill: optional  # backfill *_5y.json for holdings/proxies not yet archived
