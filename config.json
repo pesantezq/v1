@@ -12,40 +12,24 @@
   "portfolio": {
     "holdings": [
       {
+        "symbol": "NASA",
+        "shares": 15.0,
+        "target_weight": 0.1,
+        "asset_class": "us_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
         "symbol": "QQQ",
-        "shares": 6,
+        "shares": 6.0,
         "target_weight": 0.35,
         "asset_class": "us_equity",
         "is_leveraged": false,
         "leverage_factor": 1
       },
       {
-        "symbol": "NASA",
-        "shares": 14,
-        "target_weight": 0.1,
-        "asset_class": "us_equity",
-        "is_leveraged": false,
-        "leverage_factor": 1
-      },
-      {
-        "symbol": "VFH",
-        "shares": 0,
-        "target_weight": 0.15,
-        "asset_class": "us_equity_sector",
-        "is_leveraged": false,
-        "leverage_factor": 1
-      },
-      {
-        "symbol": "VXUS",
-        "shares": 0,
-        "target_weight": 0.1,
-        "asset_class": "international_equity",
-        "is_leveraged": false,
-        "leverage_factor": 1
-      },
-      {
         "symbol": "GLD",
-        "shares": 4,
+        "shares": 4.0,
         "target_weight": 0.2,
         "asset_class": "commodity",
         "is_leveraged": false,
@@ -53,14 +37,38 @@
       },
       {
         "symbol": "QLD",
-        "shares": 8,
+        "shares": 8.0,
         "target_weight": 0.05,
         "asset_class": "us_equity_leveraged",
         "is_leveraged": true,
         "leverage_factor": 2
+      },
+      {
+        "symbol": "VFH",
+        "shares": 0.0,
+        "target_weight": 0.15,
+        "asset_class": "us_equity_sector",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "VXUS",
+        "shares": 0.0,
+        "target_weight": 0.1,
+        "asset_class": "international_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
+      },
+      {
+        "symbol": "CHAT",
+        "shares": 4.0,
+        "target_weight": 0.05,
+        "asset_class": "us_equity",
+        "is_leveraged": false,
+        "leverage_factor": 1
       }
     ],
-    "cash_available": 464.16,
+    "cash_available": 150.6,
     "target_cash_weight": 0.05,
     "monthly_contribution": 1000,
     "has_regular_contributions": true,
@@ -273,12 +281,12 @@
       "model": "gpt-4o-mini"
     },
     "rss_feeds": [
-  	"https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-  	"https://www.cnbc.com/id/100003114/device/rss/rss.html",
-  	"https://feeds.bloomberg.com/markets/news.rss",
-  	"https://www.ft.com/?format=rss",
-  	"https://www.reutersagency.com/feed/?best-topics=business-finance",
-  	"https://seekingalpha.com/market_currents.xml"
+      "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+      "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+      "https://feeds.bloomberg.com/markets/news.rss",
+      "https://www.ft.com/?format=rss",
+      "https://www.reutersagency.com/feed/?best-topics=business-finance",
+      "https://seekingalpha.com/market_currents.xml"
     ],
     "max_items_per_run": 30,
     "ollama_model": "qwen2.5:7b-instruct",
@@ -469,7 +477,7 @@
   "backtesting": {
     "auto_apply": {
       "enabled": true,
-      "max_monthly_drift": 0.10,
+      "max_monthly_drift": 0.1,
       "max_abs_delta": 0.05
     }
   },
