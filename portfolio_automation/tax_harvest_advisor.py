@@ -43,6 +43,7 @@ from portfolio_automation.data_governance import (
     safe_write_json,
     safe_write_text,
 )
+from portfolio_automation.holdings_resolver import resolve_holdings
 
 logger = logging.getLogger("stockbot.portfolio_automation.tax_harvest_advisor")
 
@@ -197,6 +198,7 @@ def build_plan(
     is_taxable: bool,
     rows: list[dict[str, Any]],
     notes: list[str],
+    basis_source: str = "config",
 ) -> dict[str, Any]:
     if not is_taxable:
         summary_line = "Tax harvest advisor: skipped (account is not taxable)"
@@ -205,6 +207,7 @@ def build_plan(
             "observe_only": True,
             "schema_version": "1",
             "is_taxable_account": False,
+            "basis_source": basis_source,
             "summary_line": summary_line,
             "positions": [],
             "harvestable_count": 0,
@@ -222,6 +225,7 @@ def build_plan(
         "observe_only": True,
         "schema_version": "1",
         "is_taxable_account": True,
+        "basis_source": basis_source,
         "summary_line": summary_line,
         "harvestable_count": len(harvestable),
         "total_harvestable_loss_dollars": total_loss,
@@ -316,37 +320,44 @@ def run_tax_harvest_advisor(
     notes: list[str] = []
     if not is_taxable:
         notes.append("account is not flagged as taxable in config.json")
-        plan = build_plan(is_taxable=False, rows=[], notes=notes)
+        plan = build_plan(is_taxable=False, rows=[], notes=notes, basis_source="config")
         _write_artifacts(plan, base_dir)
         return plan
 
     replacement_map = replacement_map if replacement_map is not None else DEFAULT_REPLACEMENT_MAP
     price_overrides = price_overrides or {}
+    res = resolve_holdings(repo_root)
+    basis_source = "broker" if res.get("holdings_source") == "broker" else "config"
     rows: list[dict[str, Any]] = []
-
-    for h in portfolio.get("holdings") or []:
-        if not isinstance(h, dict):
-            continue
-        symbol = _safe_str(h.get("symbol")).upper()
-        shares = _safe_float(h.get("shares"))
-        cost_basis = _safe_float(h.get("cost_basis"))
-        if not symbol or shares is None or shares <= 0:
-            continue
-        if symbol in price_overrides:
-            price = _safe_float(price_overrides[symbol])
-        elif fmp_client is not None:
-            price = _current_price_from_fmp(fmp_client, symbol)
-        else:
-            price = None
-        rows.append(evaluate_position(
-            symbol=symbol,
-            shares=shares,
-            cost_basis=cost_basis,
-            current_price=price,
-            replacement_map=replacement_map,
-        ))
-
-    plan = build_plan(is_taxable=True, rows=rows, notes=notes)
+    if basis_source == "broker":
+        for h in res.get("holdings") or []:
+            symbol = _safe_str(h.get("symbol")).upper()
+            shares = _safe_float(h.get("quantity"))
+            avg = _safe_float(h.get("average_cost"))
+            mv = _safe_float(h.get("market_value"))
+            if not symbol or shares is None or shares <= 0:
+                continue
+            price = (mv / shares) if (mv is not None and shares) else None
+            rows.append(evaluate_position(symbol=symbol, shares=shares, cost_basis=avg,
+                                          current_price=price, replacement_map=replacement_map))
+    else:
+        for h in portfolio.get("holdings") or []:
+            if not isinstance(h, dict):
+                continue
+            symbol = _safe_str(h.get("symbol")).upper()
+            shares = _safe_float(h.get("shares"))
+            cost_basis = _safe_float(h.get("cost_basis"))
+            if not symbol or shares is None or shares <= 0:
+                continue
+            if symbol in price_overrides:
+                price = _safe_float(price_overrides[symbol])
+            elif fmp_client is not None:
+                price = _current_price_from_fmp(fmp_client, symbol)
+            else:
+                price = None
+            rows.append(evaluate_position(symbol=symbol, shares=shares, cost_basis=cost_basis,
+                                          current_price=price, replacement_map=replacement_map))
+    plan = build_plan(is_taxable=True, rows=rows, notes=notes, basis_source=basis_source)
     _write_artifacts(plan, base_dir)
     return plan
 
