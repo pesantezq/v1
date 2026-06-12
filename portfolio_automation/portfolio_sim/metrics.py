@@ -82,6 +82,49 @@ def excess_return(tactic_total_return: float, benchmark_total_return: float) -> 
     return tactic_total_return - benchmark_total_return
 
 
+def time_underwater(values: list[float]) -> float:
+    """Fraction of the series spent below a prior peak (0..1)."""
+    if len(values) < 2:
+        return 0.0
+    peak = values[0]
+    under = 0
+    for v in values:
+        peak = max(peak, v)
+        if v < peak - 1e-12:
+            under += 1
+    return under / len(values)
+
+
+def worst_window_return(values: list[float], window: int) -> float:
+    """Most negative return over any `window`-length sub-series (≤ 0 typical)."""
+    if len(values) <= window:
+        return total_return(values)
+    worst = math.inf
+    for i in range(len(values) - window):
+        if values[i] > 0:
+            worst = min(worst, values[i + window] / values[i] - 1.0)
+    return worst if worst != math.inf else 0.0
+
+
+def expected_shortfall(values: list[float], q: float = 0.05) -> float:
+    """Mean of the worst q-tail of daily returns (≤ 0). Conditional VaR."""
+    r = daily_returns(values)
+    if len(r) < 2:
+        return 0.0
+    arr = np.sort(np.array(r))
+    k = max(1, int(len(arr) * q))
+    return float(arr[:k].mean())
+
+
+def prob_beat(series_a: list[float], series_b: list[float]) -> float:
+    """Fraction of periods where series_a's return exceeds series_b's."""
+    ra, rb = daily_returns(series_a), daily_returns(series_b)
+    n = min(len(ra), len(rb))
+    if n == 0:
+        return 0.0
+    return float(sum(1 for i in range(n) if ra[i] > rb[i]) / n)
+
+
 def dca_terminal(growth_of_unit: list[float], contributions: list[tuple[int, float]]) -> tuple[float, float]:
     """
     Terminal balance of a dollar-cost-averaging schedule.
