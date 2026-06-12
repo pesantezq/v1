@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from config.loader import load_runtime_config_dict
+from portfolio_automation.holdings_resolver import broker_overlaid_portfolio
 from degraded_mode import build_data_health_context
 from market_regime import detect_market_regime, regime_fit_commentary
 from watchlist_scanner.conviction import apply_conviction_layer
@@ -510,7 +511,7 @@ def main() -> None:
             dry_run=args.dry_run,
             output_dir=ws_config.get("output_dir", args.output_dir),
             extended_watchlist_config=full_cfg.get("extended_watchlist"),
-            portfolio_context=full_cfg.get("portfolio"),
+            portfolio_context=broker_overlaid_portfolio(full_cfg.get("portfolio") or {}, Path(".")),
             signals_config=full_cfg.get("signals"),
             ranking_config=full_cfg.get("ranking"),
             scraped_intel_config=full_cfg.get("scraped_intel"),
