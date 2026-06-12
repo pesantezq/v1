@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from gui_v2.data.shared import card, _read_json
+from gui_v2.data.dash_schwab_holdings import schwab_holdings
 
 # ---------------------------------------------------------------------------
 # Defensive broker import — sets module-level flag
@@ -403,4 +404,5 @@ def collect_portfolio_sync_view(root: Path) -> dict[str, Any]:
         "mismatch_rows": mismatch_rows,
         "schwab_available": schwab_available,
         "observe_only": True,
+        "schwab_holdings": schwab_holdings(root),
     }

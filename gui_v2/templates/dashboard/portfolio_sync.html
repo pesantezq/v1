@@ -146,6 +146,108 @@
   </section>
 
   {# ------------------------------------------------------------------ #}
+  {# Schwab Holdings (live) — read-only display table                    #}
+  {# ------------------------------------------------------------------ #}
+  <section aria-label="Schwab live holdings">
+    {{ ui.section_header("Schwab Holdings (live)", "read-only Schwab snapshot — advisory only", "schwab_positions.json") }}
+
+    <div class="rounded-md bg-sky-500/10 border border-sky-500/20 px-4 py-2 text-xs text-sky-300 mb-3">
+      Read-only Schwab snapshot — advisory only. This data is displayed for reference and does not influence advisory decisions.
+    </div>
+
+    {% if schwab_holdings and schwab_holdings.available %}
+
+    {# Desktop table — hidden on small screens #}
+    <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
+      {% call ui.responsive_table() %}
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2.5 px-4">Symbol</th>
+            <th class="py-2.5 px-4 text-right">Qty</th>
+            <th class="py-2.5 px-4 text-right">Market Value</th>
+            <th class="py-2.5 px-4 text-right">Avg Cost</th>
+            <th class="py-2.5 px-4 text-right">Cost Basis</th>
+            <th class="py-2.5 px-4 text-right">Unrealized G/L</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for row in schwab_holdings.rows %}
+          <tr class="hover:bg-zinc-900/50">
+            <td class="py-2.5 px-4 font-mono font-semibold text-zinc-100">{{ row.symbol }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ row.quantity if row.quantity is not none else '—' }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{% if row.market_value is not none %}${{ "%.2f" | format(row.market_value) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{% if row.average_cost is not none %}${{ "%.2f" | format(row.average_cost) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{% if row.cost_basis is not none %}${{ "%.2f" | format(row.cost_basis) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 text-right font-mono
+              {%- if row.unrealized_gain is not none and row.unrealized_gain > 0 %} text-emerald-400
+              {%- elif row.unrealized_gain is not none and row.unrealized_gain < 0 %} text-rose-400
+              {%- else %} text-zinc-300{% endif %}">
+              {% if row.unrealized_gain is not none %}
+                {{ "+" if row.unrealized_gain > 0 else "" }}${{ "%.2f" | format(row.unrealized_gain) }}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot class="border-t border-zinc-700">
+          <tr class="text-zinc-400 text-xs">
+            <td class="py-2.5 px-4 font-semibold uppercase tracking-wide" colspan="2">Totals</td>
+            <td class="py-2.5 px-4 text-right font-mono font-semibold text-zinc-200">${{ "%.2f" | format(schwab_holdings.totals.market_value) }}</td>
+            <td class="py-2.5 px-4" colspan="2"></td>
+            <td class="py-2.5 px-4 text-right font-mono font-semibold
+              {%- if schwab_holdings.totals.unrealized_gain > 0 %} text-emerald-400
+              {%- elif schwab_holdings.totals.unrealized_gain < 0 %} text-rose-400
+              {%- else %} text-zinc-300{% endif %}">
+              {{ "+" if schwab_holdings.totals.unrealized_gain > 0 else "" }}${{ "%.2f" | format(schwab_holdings.totals.unrealized_gain) }}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      {% endcall %}
+    </div>
+
+    {# Mobile stacked cards — shown only on small screens #}
+    <div class="md:hidden space-y-3">
+      {% for row in schwab_holdings.rows %}
+      <div class="bg-zinc-900 rounded-lg border border-zinc-800 px-4 py-3 space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ row.symbol }}</span>
+          <span class="font-mono text-sm
+            {%- if row.unrealized_gain is not none and row.unrealized_gain > 0 %} text-emerald-400
+            {%- elif row.unrealized_gain is not none and row.unrealized_gain < 0 %} text-rose-400
+            {%- else %} text-zinc-300{% endif %}">
+            {% if row.unrealized_gain is not none %}{{ "+" if row.unrealized_gain > 0 else "" }}${{ "%.2f" | format(row.unrealized_gain) }}{% else %}—{% endif %}
+          </span>
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+          <div class="text-zinc-500">Qty</div>
+          <div class="text-zinc-300 font-mono text-right">{{ row.quantity if row.quantity is not none else '—' }}</div>
+          <div class="text-zinc-500">Market Value</div>
+          <div class="text-zinc-300 font-mono text-right">{% if row.market_value is not none %}${{ "%.2f" | format(row.market_value) }}{% else %}—{% endif %}</div>
+          <div class="text-zinc-500">Avg Cost</div>
+          <div class="text-zinc-300 font-mono text-right">{% if row.average_cost is not none %}${{ "%.2f" | format(row.average_cost) }}{% else %}—{% endif %}</div>
+          <div class="text-zinc-500">Cost Basis</div>
+          <div class="text-zinc-300 font-mono text-right">{% if row.cost_basis is not none %}${{ "%.2f" | format(row.cost_basis) }}{% else %}—{% endif %}</div>
+        </div>
+      </div>
+      {% endfor %}
+      {# Totals row #}
+      <div class="bg-zinc-900/50 rounded-lg border border-zinc-700 px-4 py-2 flex justify-between text-xs">
+        <span class="text-zinc-400 font-semibold uppercase tracking-wide">Totals</span>
+        <span class="font-mono text-zinc-200">${{ "%.2f" | format(schwab_holdings.totals.market_value) }}</span>
+      </div>
+    </div>
+
+    {% else %}
+    {% with heading="No Schwab holdings data",
+            body="schwab_positions.json absent or empty — run a Schwab sync to populate." %}
+      {% include "components/empty_state.html" %}
+    {% endwith %}
+    {% endif %}
+  </section>
+
+  {# ------------------------------------------------------------------ #}
   {# Generate Config Update Proposal control                              #}
   {# ------------------------------------------------------------------ #}
   <section aria-label="Generate config update proposal">

@@ -18,6 +18,7 @@ from typing import Any
 from gui_v2.data.shared import card, _read_json
 from gui_v2.data.portfolio import collect_portfolio_view as _portfolio_data
 from gui_v2.data.risk_impact import collect_risk_impact_view as _risk_data
+from gui_v2.data.dash_schwab_holdings import schwab_holdings
 
 
 # ---------------------------------------------------------------------------
@@ -410,4 +411,6 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         "recent_signals": portfolio_data.get("recent_signals") or [],
         # Raw dp for context flags
         "observe_only": (dp.get("observe_only") if isinstance(dp, dict) else True),
+        # Live Schwab holdings (read-only display; never feeds decision_plan)
+        "schwab_holdings": schwab_holdings(root),
     }
