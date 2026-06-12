@@ -69,6 +69,44 @@ Explicitly note:
 
 ---
 
+## Schwab Re-Auth Email Notifier (Stage 10d)
+
+### Date
+
+`2026-06-12`
+
+### Area
+
+`alerts`
+
+### Files / Functions
+
+- `portfolio_automation/brokers/schwab_reauth_notifier.py` (new) — reads `broker_sync_status.reauth_status`; on `due_soon`/`expired` sends ONE email per `(kind, expiry-window)` via `memo_email_sender.send_daily_memo_email`. CLI `--dry-run`/`--send`.
+- `scripts/run_daily_safe.sh` — Stage 10d, non-blocking, after Stage 10c.
+- `.claude/commands/daily-tool-analysis.md` — artifacts-read + `broker_reauth_notify_failed` AMBER + body line 6f.
+
+### Decision
+
+Optional out-of-band email heads-up for the Schwab 7-day re-auth, reusing the existing memo SMTP transport. Default-inert (`SCHWAB_REAUTH_EMAIL_ENABLED=0`). Idempotent per expiry window (one `due_soon` + one `expired` alarm).
+
+### Why
+
+The in-system daily-memo AMBER assumes the operator reads the memo daily; an unattended operator needs a real push before the weekly refresh-token lapse silently degrades the sync.
+
+### Invariants Preserved
+
+Observe-only (`observe_only:true`, `no_trade:true` in both artifacts); read-only/no-trade unchanged; no new credentials (transport shared with memo sender); credential redaction inherited from `memo_email_sender._sanitize_error`; non-blocking (never raises). No decision-core touch.
+
+### Downstream Impact
+
+New artifacts `schwab_reauth_notification_status.json` (LATEST) + `schwab_reauth_notification_log.jsonl` (POLICY). New tests `test_schwab_reauth_notifier.py` (7). Daily skill consumes the status artifact.
+
+### Artifact Health Severity
+
+No severity change; both artifacts optional; producer step owner is `run_daily_safe.sh` Stage 10d.
+
+---
+
 ## Schwab Refresh-Token Re-Auth Heads-Up
 
 ### Date

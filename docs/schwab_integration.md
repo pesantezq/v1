@@ -117,6 +117,25 @@ To turn that from a silent outage into a planned task, `exchange_code()` anchors
 The daily tool-analysis surfaces `due_soon`/`expired` as AMBER (never RED — observe-only). When you
 see it, just re-run the OAuth flow above; the anchor resets to a fresh 7-day window.
 
+#### Optional: email heads-up (out-of-band)
+
+For an unattended operator, the daily pipeline (Stage 10d, `schwab_reauth_notifier`) can also **email**
+you once per expiry window when re-auth is `due_soon`/`expired`. It is **default-inert** and reuses the
+memo sender's SMTP transport (same mailbox), so there are no new credentials beyond an enable flag:
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCHWAB_REAUTH_EMAIL_ENABLED` | `0` | `1` to enable the email heads-up |
+| `SCHWAB_REAUTH_EMAIL_DRY_RUN` | `0` | `1` to build + gate but not send |
+| `SCHWAB_REAUTH_EMAIL_TO` | `MEMO_EMAIL_TO` | recipients (comma-separated); falls back to the memo recipients |
+| `SCHWAB_REAUTH_EMAIL_FORCE` | `0` | `1` to re-send even if this window was already notified |
+
+SMTP transport is shared with the memo sender (`MEMO_EMAIL_SMTP_HOST` / `_PORT` / `_USERNAME` /
+`_PASSWORD` / `_FROM` / `_USE_TLS`). One email is sent per `(reauth_status, expiry-window)` — you get a
+single `due_soon` heads-up and, if it actually lapses, one `expired` alarm; a fresh re-auth re-arms it.
+Status: `outputs/latest/schwab_reauth_notification_status.json`; audit: `outputs/policy/schwab_reauth_notification_log.jsonl`.
+Test it any time with `python3 -m portfolio_automation.brokers.schwab_reauth_notifier --dry-run`.
+
 ---
 
 ## Environment Variables

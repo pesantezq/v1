@@ -265,6 +265,14 @@ run_aux_stage "Next-stage research/strategy lane" \
 run_aux_stage "Schwab broker sync" \
     python -m portfolio_automation.brokers.schwab_sync --sync --reconcile
 
+# Stage 10d — Schwab re-auth email heads-up (observe-only). Reads the
+# broker_sync_status.json just written by Stage 10c; when the 7-day refresh token
+# is due_soon/expired it sends ONE email per expiry window via the shared
+# memo_email_sender SMTP transport. Default-INERT (SCHWAB_REAUTH_EMAIL_ENABLED=0) —
+# no-ops silently until the operator opts in. Non-blocking; never aborts the run.
+run_aux_stage "Schwab re-auth notifier" \
+    python -m portfolio_automation.brokers.schwab_reauth_notifier --send
+
 # Stage 11 — Daily run status (reads its own log; runs last so it captures
 # all preceding stages). Provides operator-glanceable ok/partial/failed.
 run_aux_stage "Daily run status" \
