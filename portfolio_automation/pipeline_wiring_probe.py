@@ -256,6 +256,13 @@ def _content_predicates() -> dict[str, Any]:
 # flag. (path-into-config.json, default_when_absent).
 _CONFIG_GATES = {
     "scraped_intel_comparison.json": (("scraped_intel", "comparison_mode"), False),
+    # Crowd Radar ships default-disabled; its persisted mention-history ledger
+    # only materializes once crowd_radar.enabled=true (and a run yields posts).
+    # Until then the artifact is absent + the static caller-grep can't attribute
+    # a cadence, which would otherwise read as `unwired`. Gating it reclassifies
+    # that to the non-AMBER `disabled` (stale-by-design). See daily-tool-analysis
+    # Crowd Radar dispatch + docs/pipeline_wiring_probe.md.
+    "crowd_mention_history.json": (("crowd_radar", "enabled"), False),
 }
 
 

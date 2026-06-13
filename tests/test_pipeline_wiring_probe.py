@@ -107,6 +107,30 @@ def test_config_gate_off_is_disabled_not_skipped():
     assert out["summary"]["silently_skipped"] == 0
 
 
+def test_crowd_mention_history_registered_in_config_gates():
+    """The crowd-radar ledger must be registered so a disabled Crowd Radar
+    reclassifies its absent ledger unwired->disabled (non-AMBER)."""
+    from portfolio_automation.pipeline_wiring_probe import _CONFIG_GATES
+    assert "crowd_mention_history.json" in _CONFIG_GATES
+    path_keys, default = _CONFIG_GATES["crowd_mention_history.json"]
+    assert path_keys == ("crowd_radar", "enabled")
+    assert default is False
+
+
+def test_crowd_mention_history_gated_off_is_disabled_not_unwired():
+    """A .json (not .jsonl) telemetry ledger that is missing because its layer
+    is gated off must read `disabled`, not `unwired` — the 2026-06-13 false-positive."""
+    reg = {"crowd_mention_history.json": {"producer": "public_knowledge_velocity_layer",
+                                          "cadence": "daily", "role": "telemetry"}}
+    ages = {"crowd_mention_history.json": None}  # absent on disk (gated off)
+    out = classify_producers(reg, _scripts(daily="public_knowledge_velocity"),
+                             ages, config_gates={"crowd_mention_history.json": False})
+    v = {p["artifact"]: p for p in out["producers"]}
+    assert v["crowd_mention_history.json"]["status"] == "disabled"
+    assert out["summary"]["unwired"] == 0
+    assert out["overall_status"] == "green"
+
+
 def test_fresh_but_empty_content_flag():
     reg = _registry()
     ages = {k: 1.0 for k in reg}
