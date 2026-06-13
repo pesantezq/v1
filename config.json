@@ -132,7 +132,7 @@
     "enabled": false
   },
   "market_data": {
-    "provider": "alpha_vantage",
+    "provider": "fmp",
     "cache_ttl_seconds": 86400,
     "max_retries": 3,
     "retry_base_delay_seconds": 5,
@@ -203,7 +203,6 @@
     "fmp_daily_calls_budget": 0
   },
   "data_sources": {
-    "alpha_vantage_enabled": true,
     "fmp_enabled": true,
     "prefer_fmp_on_budget_exhausted": true
   },
@@ -233,7 +232,6 @@
       "NASA",
       "CHAT"
     ],
-    "max_daily_calls": 20,
     "price_change_alert_pct": 3.0,
     "volume_spike_factor": 1.5,
     "theme_score_threshold": 0.4,

@@ -228,7 +228,7 @@
     "v3_max_symbols": 100
   },
   "api_limits": {
-    "fmp_daily_calls_budget": 230
+    "fmp_daily_calls_budget": 0
   },
   "watchlist_scanner": {
     "enabled": true,

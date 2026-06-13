@@ -30,15 +30,10 @@ class _DummyCache:
     calls_today = 0
 
 
-class _DummyAV:
-    _max_calls = 20
-
-
 def _scanner() -> WatchlistScanner:
     return WatchlistScanner(
         watchlist=[],
         cache=_DummyCache(),
-        av_client=_DummyAV(),
     )
 
 
@@ -1036,7 +1031,7 @@ class TestAlertCooldown(unittest.TestCase):
                     "degraded_mode": False,
                     "degraded_reason": "",
                     "degraded_confidence_penalty": 0.0,
-                    "data_sources_used": ["alphavantage"],
+                    "data_sources_used": ["fmp"],
                     "data_mode": "live",
                     "data_fallback_triggered": False,
                 },
@@ -1093,7 +1088,7 @@ class TestSignalMetaLayer(unittest.TestCase):
         return {
             "degraded_mode": degraded,
             "degraded_reason": "fmp_403" if degraded else None,
-            "data_sources_used": ["fallback"] if degraded else ["alphavantage"],
+            "data_sources_used": ["fallback"] if degraded else ["fmp"],
             "data_mode": "fallback" if degraded else "live",
             "degraded_confidence_penalty": penalty,
         }

@@ -305,7 +305,7 @@ def run_pipeline(
     # Evaluate skip conditions
     te_cfg      = raw_cfg.get("theme_engine", {})
     te_runnable = te_cfg.get("enabled", False) or te_cfg.get("testing_mode", False)
-    av_key_set  = bool(os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip())
+    fmp_key_set = bool(os.environ.get("FMP_API_KEY", "").strip())
 
     steps: list[StepResult] = []
 
@@ -327,11 +327,11 @@ def run_pipeline(
         "watchlist_scan",
         lambda: _step_watchlist_scan(raw_cfg, dry_run),
         log=log,
-        skip=skip_scan or not av_key_set,
+        skip=skip_scan or not fmp_key_set,
         skip_reason=(
             "--skip-scan"
             if skip_scan
-            else "ALPHA_VANTAGE_API_KEY not set in .env or environment"
+            else "FMP_API_KEY not set in .env or environment"
         ),
     ))
 

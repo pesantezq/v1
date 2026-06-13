@@ -453,11 +453,16 @@ class TestParseFmpFundamentalsBundle:
         )
         assert result["pe_ratio"] == pytest.approx(29.0)
 
-    def test_schema_compatible_with_parse_overview(self):
-        from watchlist_scanner.fundamentals_engine import parse_overview
-        overview_keys = set(parse_overview({"Symbol": "X", "Sector": "Tech"}).keys())
-        bundle_keys   = set(self._bundle().keys())
-        assert overview_keys == bundle_keys
+    def test_schema_has_canonical_fundamentals_keys(self):
+        expected_keys = {
+            "symbol", "name", "sector", "industry", "description", "market_cap",
+            "pe_ratio", "forward_pe", "profit_margin", "revenue_ttm",
+            "gross_profit_ttm", "beta", "analyst_target_price", "dividend_yield",
+            "eps", "book_value", "52w_high", "52w_low", "50dma", "200dma",
+            "revenue_growth", "earnings_growth", "debt_ratio",
+        }
+        bundle_keys = set(self._bundle().keys())
+        assert bundle_keys == expected_keys
 
     def test_all_ratios_fields(self):
         result = self._bundle(ratios=_stable_ratios("AAPL")[0])
@@ -474,7 +479,6 @@ class TestParseFmpFundamentalsBundle:
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from watchlist_scanner.alpha_vantage_client import BudgetExceeded
 from watchlist_scanner.scanner import WatchlistScanner
 
 
@@ -485,18 +489,6 @@ def _make_cache_mock(*, calls_today: int = 0) -> MagicMock:
     mock.get.return_value = None
     mock.get_stale.return_value = None
     mock.get_age_seconds.return_value = None
-    return mock
-
-
-def _make_av_mock(*, budget_exceed_overview: bool = False) -> MagicMock:
-    mock = MagicMock()
-    mock._max_calls = 20
-    mock.get_daily_ohlcv.return_value = None
-    mock.get_news_sentiment.return_value = []
-    if budget_exceed_overview:
-        mock.get_overview.side_effect = BudgetExceeded("budget")
-    else:
-        mock.get_overview.return_value = {}
     return mock
 
 
@@ -511,56 +503,52 @@ def _make_fmp_mock(*, profiles=None, quotes=None) -> MagicMock:
 
 
 class TestScannerFmpPrimaryFundamentals:
-    def _make_scanner(self, fmp, av, watchlist=None):
+    def _make_scanner(self, fmp, watchlist=None):
         return WatchlistScanner(
             watchlist=watchlist or ["AAPL"],
             cache=_make_cache_mock(),
-            av_client=av,
             fmp_client=fmp,
-            data_sources={"fmp_enabled": True, "prefer_fmp_on_budget_exhausted": True},
+            data_sources={"fmp_enabled": True},
         )
 
     def test_get_batch_profiles_called_not_v3(self):
         """Scanner must call get_batch_profiles(), not get_batch_profiles_v3()."""
         fmp = _make_fmp_mock()
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
+        scanner = self._make_scanner(fmp)
         scanner.run(dry_run=False)
         fmp.get_batch_profiles.assert_called()
 
     def test_v3_endpoint_not_called(self):
         """Legacy get_batch_profiles_v3 must NOT be called in the new architecture."""
         fmp = _make_fmp_mock()
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
+        scanner = self._make_scanner(fmp)
         scanner.run(dry_run=False)
         fmp.get_batch_profiles_v3.assert_not_called()
 
-    def test_av_overview_not_called_when_fmp_profile_available(self):
-        """When every symbol has an FMP profile, AV OVERVIEW must not be fetched."""
+    def test_fundamentals_source_fmp_when_profile_available(self):
+        """When every symbol has an FMP profile, fundamentals_source must be 'fmp'."""
         profiles = [{"symbol": "AAPL", "companyName": "Apple", "sector": "Technology",
                      "mktCap": 2.8e12, "beta": 1.2}]
         fmp = _make_fmp_mock(profiles=profiles)
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
-        scanner.run(dry_run=False)
-        av.get_overview.assert_not_called()
+        scanner = self._make_scanner(fmp)
+        result = scanner.run(dry_run=False)
+        sources = {r["fundamentals_source"] for r in result["results"]}
+        assert sources == {"fmp"}
 
-    def test_av_overview_called_for_symbol_without_fmp_profile(self):
-        """When FMP has no profile for a symbol, AV OVERVIEW is attempted."""
+    def test_fundamentals_source_missing_without_fmp_profile(self):
+        """When FMP has no profile for a symbol, fundamentals_source is 'missing'."""
         fmp = _make_fmp_mock(profiles=[])  # no profiles
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
-        scanner.run(dry_run=False)
-        av.get_overview.assert_called()
+        scanner = self._make_scanner(fmp)
+        result = scanner.run(dry_run=False)
+        sources = {r["fundamentals_source"] for r in result["results"]}
+        assert sources == {"missing"}
 
     def test_fundamentals_source_fmp_when_profile_loaded(self):
         """Results must report fundamentals_source='fmp' when FMP profile was used."""
         profiles = [{"symbol": "AAPL", "companyName": "Apple", "sector": "Technology",
                      "mktCap": 2.8e12, "beta": 1.2}]
         fmp = _make_fmp_mock(profiles=profiles)
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
+        scanner = self._make_scanner(fmp)
         result = scanner.run(dry_run=False)
         sources = {r["fundamentals_source"] for r in result["results"]}
         assert "fmp" in sources
@@ -569,8 +557,7 @@ class TestScannerFmpPrimaryFundamentals:
         """get_ratios() must be called once per watchlist symbol during pre-fetch."""
         watchlist = ["AAPL", "MSFT"]
         fmp = _make_fmp_mock()
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av, watchlist=watchlist)
+        scanner = self._make_scanner(fmp, watchlist=watchlist)
         scanner.run(dry_run=False)
         assert fmp.get_ratios.call_count == len(watchlist)
 
@@ -578,8 +565,7 @@ class TestScannerFmpPrimaryFundamentals:
         """get_historical_prices() must be called once per watchlist symbol."""
         watchlist = ["AAPL", "MSFT"]
         fmp = _make_fmp_mock()
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av, watchlist=watchlist)
+        scanner = self._make_scanner(fmp, watchlist=watchlist)
         scanner.run(dry_run=False)
         assert fmp.get_historical_prices.call_count == len(watchlist)
 
@@ -592,8 +578,7 @@ class TestScannerFmpPrimaryFundamentals:
                             "priceAvg50": 182.0, "priceAvg200": 170.0,
                             "yearHigh": 198.0, "yearLow": 124.0, "marketCap": 2.8e12}}
         fmp = _make_fmp_mock(profiles=profiles, quotes=quotes)
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
+        scanner = self._make_scanner(fmp)
         result = scanner.run(dry_run=False)
         scores = [r["fundamentals_score"] for r in result["results"]]
         assert all(s > 0 for s in scores)
@@ -605,7 +590,6 @@ class TestScannerFmpPrimaryFundamentals:
         quotes = {"AAPL": {"price": 185.0, "changesPercentage": 1.5, "pe": 28.0,
                             "volume": 50_000_000, "avgVolume": 45_000_000}}
         fmp = _make_fmp_mock(profiles=profiles, quotes=quotes)
-        av  = _make_av_mock()
-        scanner = self._make_scanner(fmp, av)
+        scanner = self._make_scanner(fmp)
         result = scanner.run(dry_run=False)
         assert result["scan_summary"]["scan_status"] != "cache_only"

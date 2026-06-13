@@ -164,15 +164,6 @@ REGISTRY: tuple[EnvVar, ...] = (
         description="Financial Modeling Prep API key. Required when scanner is enabled.",
         group=GROUP_DATA,
     ),
-    EnvVar(
-        name="ALPHA_VANTAGE_API_KEY",
-        required=False,
-        default=None,
-        secret=True,
-        description="Alpha Vantage API key. Optional; some scanners degrade without it.",
-        group=GROUP_DATA,
-    ),
-
     # ---- LLM provider selection ----
     EnvVar(
         name="STOCKBOT_LLM_PROVIDER",

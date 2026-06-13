@@ -1,11 +1,11 @@
 """
-Fundamentals engine — parses Alpha Vantage OVERVIEW responses.
+Fundamentals engine — parses FMP profile / ratios payloads.
 
 Extracts key company data and computes a fundamental_context_score in [0, 1]
 that captures sector relevance, size/liquidity, and quality signals.
 
 No API calls are made here — this module only parses and scores
-pre-fetched OVERVIEW payloads.
+pre-fetched FMP payloads.
 """
 
 from __future__ import annotations
@@ -48,56 +48,6 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
 def _safe_str(value: Any) -> str | None:
     s = str(value).strip() if value is not None else ""
     return s if s and s.lower() != "none" else None
-
-
-# ── Parser ───────────────────────────────────────────────────────────────────
-
-def parse_overview(raw: dict[str, Any]) -> dict[str, Any]:
-    """
-    Extract key fields from an Alpha Vantage OVERVIEW response.
-
-    Returns a clean fundamentals dict.  Missing / invalid fields are None.
-    Returns an empty dict when `raw` is falsy.
-    """
-    if not raw:
-        return {}
-
-    def _f(key: str) -> float | None:
-        val = raw.get(key)
-        if val in (None, "None", "", "-", "N/A"):
-            return None
-        return _safe_float(val)
-
-    def _s(key: str) -> str | None:
-        return _safe_str(raw.get(key, ""))
-
-    return {
-        "symbol":               _s("Symbol"),
-        "name":                 _s("Name"),
-        "sector":               _s("Sector"),
-        "industry":             _s("Industry"),
-        "description":          (_s("Description") or "")[:200],
-        "market_cap":           _f("MarketCapitalization"),
-        "pe_ratio":             _f("PERatio"),
-        "forward_pe":           _f("ForwardPE"),
-        "profit_margin":        _f("ProfitMargin"),
-        "revenue_ttm":          _f("RevenueTTM"),
-        "gross_profit_ttm":     _f("GrossProfitTTM"),
-        "beta":                 _f("Beta"),
-        "analyst_target_price": _f("AnalystTargetPrice"),
-        "dividend_yield":       _f("DividendYield"),
-        "eps":                  _f("EPS"),
-        "book_value":           _f("BookValue"),
-        "52w_high":             _f("52WeekHigh"),
-        "52w_low":              _f("52WeekLow"),
-        "50dma":                _f("50DayMovingAverage"),
-        "200dma":               _f("200DayMovingAverage"),
-        # Growth metrics available in AV OVERVIEW
-        "revenue_growth":       _f("QuarterlyRevenueGrowthYOY"),
-        "earnings_growth":      _f("QuarterlyEarningsGrowthYOY"),
-        # Not available in AV free-tier OVERVIEW
-        "debt_ratio":           None,
-    }
 
 
 # ── Scorer ───────────────────────────────────────────────────────────────────
@@ -168,8 +118,8 @@ def parse_fmp_profile(
     quote: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Map an FMP stable/profile response (+ optional batch-quote row) to the same
-    schema as parse_overview() so the rest of the pipeline needs no changes.
+    Map an FMP stable/profile response (+ optional batch-quote row) to the
+    canonical fundamentals schema used by the rest of the pipeline.
 
     Fields that are not available on the FMP free-tier profile endpoint are
     returned as None:

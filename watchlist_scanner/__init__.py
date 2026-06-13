@@ -1,9 +1,10 @@
 """
-Watchlist Scanner — Alpha Vantage powered signal detection.
+Watchlist Scanner — FMP-primary signal detection.
 
-Scans a fixed ~20-stock watchlist for price momentum, volume spikes,
-and news-driven themes. Designed for the Alpha Vantage free tier
-(≤25 requests/day) with aggressive local caching.
+Scans a static + extended watchlist for price momentum, volume spikes,
+and news-driven themes. Data is sourced from Financial Modeling Prep
+(FMP) — quotes, historical prices, profiles, ratios, and news — with
+local caching keyed to the FMP TTLs in config.py.
 
 Usage:
     py -m watchlist_scanner [--dry-run] [--debug]

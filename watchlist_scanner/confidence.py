@@ -174,7 +174,7 @@ def compute_confidence(
         data_quality:      Result's data_quality label (fresh/partial/budget_skipped/cached).
         ov_source:         OVERVIEW fetch provenance (fresh/cached/budget_skipped).
         tech:              Technicals dict from _compute_technicals().
-        fundamentals:      Fundamentals dict from parse_overview().
+        fundamentals:      Fundamentals dict from parse_fmp_fundamentals_bundle().
         articles:          News articles for this symbol.
         cache_age_seconds: Age of the OVERVIEW cache file in seconds; None if unavailable.
 

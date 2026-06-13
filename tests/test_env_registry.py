@@ -89,7 +89,9 @@ class TestLookups:
         data = envmod.vars_for_group(envmod.GROUP_DATA)
         names = {v.name for v in data}
         assert "FMP_API_KEY" in names
-        assert "ALPHA_VANTAGE_API_KEY" in names
+        # AlphaVantage has been excised from the system; FMP is the sole
+        # market-data provider, so ALPHA_VANTAGE_API_KEY is no longer registered.
+        assert "ALPHA_VANTAGE_API_KEY" not in names
 
 
 # ---------------------------------------------------------------------------

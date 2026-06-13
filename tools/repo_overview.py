@@ -99,7 +99,6 @@ FILE_TAG_MAP: dict[str, list[str]] = {
     "theme_engine/__main__.py":        ["entry_point"],
     "watchlist_scanner/__main__.py":   ["entry_point"],
     "watchlist_scanner/scanner.py":    ["scanner", "core_logic"],
-    "watchlist_scanner/alpha_vantage_client.py": ["integration"],
     "watchlist_scanner/fundamentals_engine.py":  ["core_logic"],
     "watchlist_scanner/cache_manager.py":        ["state"],
     "stockbot_mcp_server.py":      ["integration", "orchestration"],
@@ -565,7 +564,7 @@ def build_integrations(root: Path, py_files: list[Path]) -> list[dict]:
         {
             "name": "Alpha Vantage API",
             "keywords": ["alphavantage", "alpha_vantage", "ALPHA_VANTAGE_API_KEY", "TIME_SERIES"],
-            "files": ["market_data.py", "watchlist_scanner/alpha_vantage_client.py"],
+            "files": ["market_data.py"],
             "purpose": "Market data (prices, news sentiment, company overview)",
             "auth": "ALPHA_VANTAGE_API_KEY env var",
             "optional": False,
@@ -798,7 +797,6 @@ def build_prompt_helpers(
         {
             "scenario": "Changing scanner / API budgeting",
             "inspect_first": ["fmp_client.py", "scanner/candidate_scanner.py",
-                               "watchlist_scanner/alpha_vantage_client.py",
                                "api_budget.py", "watchlist_scanner/cache_manager.py"],
             "notes": "FMP budget guard: 230 calls/day. AV budget: 20 calls/day. "
                      "Cache TTLs in watchlist_scanner/config.py. "

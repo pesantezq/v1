@@ -339,7 +339,7 @@ async def _tool_agent_health_check() -> list[types.TextContent]:
             _chk(rel, "warning", "not yet created")
 
     # 5. Environment variables — presence only, never values
-    env_required = ("FMP_API_KEY", "ALPHA_VANTAGE_API_KEY", "ANTHROPIC_API_KEY")
+    env_required = ("FMP_API_KEY", "ANTHROPIC_API_KEY")
     env_optional = ("OLLAMA_MODEL", "ANTHROPIC_MODEL", "EMAIL_PASSWORD")
     for var in env_required:
         if os.environ.get(var):

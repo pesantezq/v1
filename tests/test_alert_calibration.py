@@ -52,7 +52,7 @@ def _make_signal(
 
 
 def _make_scanner(watchlist: list[str], signals_config: dict | None = None):
-    """Build a WatchlistScanner with mocked AV + cache clients."""
+    """Build a WatchlistScanner with a mocked cache (FMP-primary, no FMP client)."""
     from watchlist_scanner.scanner import WatchlistScanner
     from watchlist_scanner.cache_manager import CacheManager
 
@@ -63,19 +63,14 @@ def _make_scanner(watchlist: list[str], signals_config: dict | None = None):
     cache.get_age_seconds.return_value = None
     cache.delete.return_value = None
 
-    av = MagicMock()
-    av._max_calls = 20
-    av.get_news_sentiment.return_value = []
-    av.get_overview.return_value = {}
-    av.get_daily_ohlcv.return_value = None
-
+    # Third tuple element retained for backward-compat with existing unpacking;
+    # the scanner is FMP-primary with no FMP client wired in these tests.
     return WatchlistScanner(
         watchlist=watchlist,
         cache=cache,
-        av_client=av,
         signals_config=signals_config or {},
         fmp_client=None,
-    ), cache, av
+    ), cache, None
 
 
 # ---------------------------------------------------------------------------

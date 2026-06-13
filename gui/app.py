@@ -70,7 +70,6 @@ PYTHON           = sys.executable   # same venv that runs the GUI
 PROMPTS_PATH     = DATA_DIR / "prompts.json"
 WL_TAGS_PATH     = DATA_DIR / "watchlist_tags.json"
 WL_CALL_COUNTER  = DATA_DIR / "watchlist_cache" / "call_counter.json"
-AV_CALL_BUDGET   = 20   # Alpha Vantage free-tier budget (watchlist scanner)
 
 # -- Page config -------------------------------------------------------------
 st.set_page_config(
@@ -190,7 +189,6 @@ def _run_command(cmd: list, timeout: int = 360):
 def _env_status() -> dict:
     """Return {key: {desc, set}} without exposing values."""
     keys = {
-        "ALPHA_VANTAGE_API_KEY": "Market data -- required for price fetch",
         "EMAIL_PASSWORD":        "Gmail SMTP app-password -- email digest",
         "FMP_API_KEY":           "S&P 500 scanner via Financial Modeling Prep",
         "ANTHROPIC_API_KEY":     "Claude AI agent -- monthly memo",
@@ -4816,62 +4814,6 @@ def _render_rotation_tab(rot_events: list) -> None:
 
 # -- v2 helpers --------------------------------------------------------------
 
-def _av_budget() -> dict:
-    """Read AV call counter. Returns date, count, budget, remaining, cache_stats."""
-    counter = _load_json(WL_CALL_COUNTER)
-    today = date.today().isoformat()
-    count = counter.get("count", 0) if counter.get("date") == today else 0
-
-    wlc = DATA_DIR / "watchlist_cache"
-    cache_stats = {"daily": 0, "news": 0, "overview": 0, "quote": 0}
-    if wlc.exists():
-        for f in wlc.glob("*.json"):
-            n = f.name
-            if n.startswith("daily_"):
-                cache_stats["daily"] += 1
-            elif n.startswith("news_"):
-                cache_stats["news"] += 1
-            elif n.startswith("overview_"):
-                cache_stats["overview"] += 1
-            elif n.startswith("quote_"):
-                cache_stats["quote"] += 1
-
-    return {
-        "date":        today,
-        "count":       count,
-        "budget":      AV_CALL_BUDGET,
-        "remaining":   max(0, AV_CALL_BUDGET - count),
-        "cache_stats": cache_stats,
-    }
-
-
-def _test_av_connection():
-    """
-    Live connectivity test via GLOBAL_QUOTE (costs 1 API call).
-    Returns (status, message) where status is 'ok' | 'warning' | 'error'.
-    """
-    key = _get_api_key("ALPHA_VANTAGE_API_KEY")
-    if not key or key.startswith("your_"):
-        return "error", "ALPHA_VANTAGE_API_KEY not set -- add it to .env"
-    url = (
-        "https://www.alphavantage.co/query"
-        f"?function=GLOBAL_QUOTE&symbol=SPY&apikey={key}"
-    )
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "stockbot/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode())
-        if "Note" in data:
-            return "warning", f"Rate-limited: {data['Note']}"
-        if "Information" in data:
-            return "warning", f"API info: {data['Information']}"
-        if "Global Quote" in data and data["Global Quote"]:
-            price = data["Global Quote"].get("05. price", "?")
-            return "ok", f"Connected -- SPY = ${price}"
-        return "warning", f"Unexpected response keys: {list(data.keys())}"
-    except Exception as exc:
-        return "error", f"Connection failed: {exc}"
-
 
 def _get_ollama_status(cfg: dict) -> dict:
     """
@@ -5262,7 +5204,7 @@ def page_run_controls() -> None:
     with s2:
         st.markdown("**Watchlist Scanner** (`python -m watchlist_scanner`)")
         wl_dry = st.checkbox("Dry run", value=True, key="wl_dry",
-                             help="Uses cached data only -- no Alpha Vantage calls.")
+                             help="Uses cached data only -- no live API calls.")
         if st.button("Run Watchlist Scanner", width="stretch", key="btn_wl"):
             cmd = [PYTHON, "-m", "watchlist_scanner"]
             if wl_dry:
@@ -5657,86 +5599,6 @@ def page_api_health() -> None:
     st.title("API & Model Health")
     cfg_raw = _load_config()
 
-    # -- Alpha Vantage --------------------------------------------------------
-    st.subheader("Alpha Vantage")
-    av_key_set = _env_status().get("ALPHA_VANTAGE_API_KEY", {}).get("set", False)
-
-    if av_key_set:
-        st.success("API key: **set**")
-    else:
-        st.error("API key: **missing** -- add `ALPHA_VANTAGE_API_KEY` to `.env`")
-
-    if av_key_set:
-        if st.button("Test connectivity (costs 1 API call)", key="btn_av_test"):
-            with st.spinner("Testing..."):
-                status, msg = _test_av_connection()
-            if status == "ok":
-                st.success(f"Healthy: {msg}")
-            elif status == "warning":
-                st.warning(f"Warning: {msg}")
-            else:
-                st.error(f"Error: {msg}")
-                st.info(
-                    "Check that your API key is valid at alphavantage.co. "
-                    "Free-tier keys can take a few minutes to activate after registration."
-                )
-    else:
-        st.caption("Connectivity test disabled until key is configured.")
-
-    # -- Usage Budget ---------------------------------------------------------
-    st.subheader("Daily API Budget (Alpha Vantage)")
-    budget = _av_budget()
-    used   = budget["count"]
-    limit  = budget["budget"]
-    remain = budget["remaining"]
-
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Used today", used)
-    b2.metric("Budget",     limit)
-    b3.metric("Remaining",  remain,
-              delta=str(remain),
-              delta_color="normal" if remain > 5 else "inverse")
-
-    pct = used / limit if limit > 0 else 0
-    st.progress(min(pct, 1.0), text=f"{used}/{limit} calls ({pct:.0%})")
-
-    if used >= limit:
-        st.error(
-            "Daily budget exhausted -- watchlist scanner is blocked until midnight. "
-            "Consider running with --dry-run or clearing the call counter."
-        )
-    elif remain <= 3:
-        st.warning(
-            f"Only {remain} calls remaining today. "
-            "Dry-run mode recommended to avoid exceeding the limit."
-        )
-
-    st.caption(
-        f"Budget date: {budget['date']}  |  "
-        f"Counter file: `data/watchlist_cache/call_counter.json`  |  "
-        f"Budget source: `watchlist_scanner/config.py:MAX_DAILY_CALLS`"
-    )
-
-    # Endpoint breakdown
-    cs = budget["cache_stats"]
-    if any(cs.values()):
-        st.subheader("Cache File Breakdown")
-        cache_df = pd.DataFrame([
-            {"Endpoint": "Daily OHLCV",         "TTL": "24h",  "Cached files": cs["daily"]},
-            {"Endpoint": "News / Sentiment",     "TTL": "4h",   "Cached files": cs["news"]},
-            {"Endpoint": "Company Overview",     "TTL": "7d",   "Cached files": cs["overview"]},
-            {"Endpoint": "Real-time Quote",      "TTL": "30m",  "Cached files": cs["quote"]},
-        ])
-        st.dataframe(cache_df, width="stretch", hide_index=True)
-        st.caption(
-            "Cached responses serve future requests without consuming budget. "
-            "Clear caches in Diagnostics > Maintenance to force fresh API fetches."
-        )
-    else:
-        st.info("No cache files found yet. Run Watchlist Scanner to populate cache.")
-
-    st.divider()
-
     # -- Ollama ---------------------------------------------------------------
     st.subheader("Ollama (local LLM)")
     ollama = _get_ollama_status(cfg_raw)
@@ -5783,8 +5645,6 @@ def page_api_health() -> None:
     # -- Other API keys -------------------------------------------------------
     st.subheader("Other API Keys")
     for key, info in _env_status().items():
-        if key == "ALPHA_VANTAGE_API_KEY":
-            continue
         row1, row2 = st.columns([4, 1])
         row1.markdown(f"**`{key}`** -- {info['desc']}")
         if info["set"]:
@@ -5798,14 +5658,7 @@ def page_api_health() -> None:
     st.subheader("Network Connectivity")
     nc1, nc2 = st.columns(2)
 
-    if nc1.button("Ping alphavantage.co", key="btn_av_dns"):
-        try:
-            with urllib.request.urlopen("https://www.alphavantage.co", timeout=5) as r:
-                st.success(f"alphavantage.co reachable (HTTP {r.status})")
-        except Exception as exc:
-            st.error(f"alphavantage.co unreachable: {exc}")
-
-    if nc2.button("Ping api.anthropic.com", key="btn_claude_dns"):
+    if nc1.button("Ping api.anthropic.com", key="btn_claude_dns"):
         try:
             with urllib.request.urlopen("https://api.anthropic.com", timeout=5) as r:
                 st.success(f"api.anthropic.com reachable (HTTP {r.status})")
@@ -5928,7 +5781,7 @@ def page_config_editor() -> None:
             scan_on   = t1.checkbox("S&P 500 Scanner (FMP)",            value=bool(scanner.get("enabled", False)), help="Requires FMP_API_KEY")
             sleeve_on = t2.checkbox("Speculative Sleeve",                value=bool(sleeve.get("enabled",  False)))
             theme_on  = t1.checkbox("Theme Engine (RSS + Ollama)",       value=bool(theme.get("enabled",   False)), help="Requires local Ollama")
-            wl_on     = t2.checkbox("Watchlist Scanner (Alpha Vantage)", value=bool(wl.get("enabled",      False)))
+            wl_on     = t2.checkbox("Watchlist Scanner",                 value=bool(wl.get("enabled",      False)))
             ml_on     = t1.checkbox("ML Advisor",                        value=bool(ml.get("enabled",      True)))
 
             st.markdown("---")
@@ -6418,7 +6271,7 @@ def page_diagnostics() -> None:
     # -- Maintenance ----------------------------------------------------------
     with tab_maint:
         st.subheader("Quick Checks")
-        m1, m2, m3 = st.columns(3)
+        m1, m3 = st.columns(2)
 
         with m1:
             st.markdown("**Config**")
@@ -6434,13 +6287,6 @@ def page_diagnostics() -> None:
                     st.success(out.strip() or "(no output)")
                 else:
                     st.warning(out.strip() or "(no output)")
-
-        with m2:
-            st.markdown("**Alpha Vantage**")
-            if st.button("Test AV connection", key="btn_maint_av"):
-                with st.spinner("Testing..."):
-                    status, msg = _test_av_connection()
-                {"ok": st.success, "warning": st.warning, "error": st.error}[status](msg)
 
         with m3:
             st.markdown("**Ollama**")
@@ -6563,7 +6409,7 @@ def page_diagnostics() -> None:
 
         st.subheader("Sub-system Commands")
         st.code(
-            "# Watchlist Scanner (uses Alpha Vantage budget)\n"
+            "# Watchlist Scanner\n"
             f"{PYTHON} -m watchlist_scanner\n\n"
             "# Theme Engine (requires Ollama)\n"
             f"{PYTHON} -m theme_engine --mode daily\n\n"

@@ -93,8 +93,6 @@ class DigestContext:
     guardrail_violations: List[Dict[str, Any]] = field(default_factory=list)
 
     # ── System status ─────────────────────────────────────────────────────
-    av_budget_remaining: Optional[int] = None
-    av_budget_total: int = 25
     fmp_circuit_breaker_open: bool = False
     fmp_disabled_until: Optional[str] = None
     scanner_enabled: bool = False
@@ -467,13 +465,6 @@ def build_system_status(ctx: DigestContext) -> List[str]:
     Returns an empty list when all subsystems are healthy.
     """
     issues: List[str] = []
-
-    # AV budget
-    if ctx.av_budget_remaining is not None and ctx.av_budget_remaining < 5:
-        issues.append(
-            f"⚠ Alpha Vantage budget low: {ctx.av_budget_remaining}/{ctx.av_budget_total} "
-            "calls remaining — some market data may be stale"
-        )
 
     # FMP circuit breaker
     if ctx.fmp_circuit_breaker_open:

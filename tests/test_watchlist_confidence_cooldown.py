@@ -57,7 +57,7 @@ def _data_health(
         "degraded_mode": degraded,
         "degraded_reason": reason or ("degraded" if degraded else None),
         "degraded_confidence_penalty": penalty,
-        "data_sources_used": ["cache"] if degraded else ["alphavantage"],
+        "data_sources_used": ["cache"] if degraded else ["fmp"],
         "data_mode": "fallback" if degraded else "live",
     }
 

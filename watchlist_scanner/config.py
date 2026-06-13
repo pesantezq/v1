@@ -13,16 +13,6 @@ DEFAULT_WATCHLIST: list[str] = [
     "SPY", "QQQ", "XLE", "XLF", "XLK", "IWM",
 ]
 
-# Alpha Vantage free tier: 25 calls/day hard cap;
-# use 20 as our limit to leave headroom for the portfolio engine.
-MAX_DAILY_CALLS: int = 20
-
-# Cache TTLs (seconds)
-CACHE_TTL_DAILY_SECONDS: int = 86_400    # 24 h  — daily OHLCV
-CACHE_TTL_NEWS_SECONDS: int = 14_400     # 4 h   — news/sentiment
-CACHE_TTL_QUOTE_SECONDS: int = 1_800     # 30 min — real-time quote
-CACHE_TTL_OVERVIEW_SECONDS: int = 604_800  # 7 days — company fundamentals
-
 # Alert thresholds
 PRICE_CHANGE_ALERT_PCT: float = 3.0     # % single-day move to flag
 VOLUME_SPIKE_FACTOR: float = 1.5        # today_vol > avg_vol * factor

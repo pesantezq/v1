@@ -151,13 +151,11 @@ def run(
         ``extended_watchlist_meta`` key containing outcome metadata.
     """
     from watchlist_scanner.cache_manager import CacheManager
-    from watchlist_scanner.alpha_vantage_client import WatchlistAVClient
     from watchlist_scanner.scanner import WatchlistScanner
-    from watchlist_scanner.config import DEFAULT_WATCHLIST, MAX_DAILY_CALLS
+    from watchlist_scanner.config import DEFAULT_WATCHLIST
 
     cache_dir = config.get("cache_dir", "data/watchlist_cache")
     static_watchlist = config.get("watchlist", DEFAULT_WATCHLIST)
-    max_calls  = int(config.get("max_daily_calls", MAX_DAILY_CALLS))
     manual_dry_run = bool(dry_run)
     cache_only_mode = manual_dry_run
     if signals_config is None:
@@ -165,33 +163,15 @@ def run(
 
     cache = CacheManager(cache_dir=cache_dir)
 
-    # Shared AV budget (may not be available if api_budget module is absent)
-    _shared_budget = None
-    try:
-        from api_budget import AVDailyBudget
-        _shared_budget = AVDailyBudget()
-        if _shared_budget.scanner_remaining() == 0:
-            logger.warning(
-                "WatchlistScanner: shared AV scanner budget exhausted (%s). "
-                "Falling back to dry-run / cache only.",
-                _shared_budget.status_line(),
-            )
-            cache_only_mode = True
-    except Exception:
-        pass
-
-    if cache.calls_today >= max_calls:
-        logger.warning(
-            "WatchlistScanner: daily budget already exhausted (%d/%d calls). "
-            "Returning cached results only.",
-            cache.calls_today, max_calls,
-        )
-        cache_only_mode = True
-
-    # —— Extended watchlist: load active symbols (budget-aware) ————————————————
+    # —— Extended watchlist: load active symbols ————————————————————————————————
+    # FMP is the data source and is effectively uncapped (FMP plan = 300/min,
+    # config fmp_daily_calls_budget=0 means no cap), so active extended symbols
+    # are always included in the scan whenever the live (non-dry-run) path runs.
     ew_cfg = extended_watchlist_config or {}
     ew_enabled = bool(ew_cfg.get("enabled", True))
     extended_tickers: list[str] = []
+    # symbol → theme_name, used to thread a finer watchlist_source label below.
+    _extended_theme_by_symbol: dict[str, str] = {}
     _ew_obj = None
 
     if ew_enabled:
@@ -204,21 +184,22 @@ def run(
                 confidence_threshold=float(ew_cfg.get("confidence_threshold", 0.80)),
             )
             active_entries = _ew_obj.get_active_symbols()
-            # Budget guard: only add extended symbols if we have headroom.
-            # Heuristic: need at least len(static) + 5 calls to include extras.
-            calls_used = cache.calls_today
-            budget_headroom = max_calls - calls_used - len(static_watchlist) - 5
-            if budget_headroom > 0 and not cache_only_mode:
+            # FMP-primary: no AV daily-call cap to ration against, so always
+            # include the active extended symbols on the live path.
+            if active_entries and not cache_only_mode:
                 extended_tickers = [e["symbol"] for e in active_entries]
-                if extended_tickers:
-                    logger.info(
-                        "ExtendedWatchlist: adding %d extended symbols to scan: %s",
-                        len(extended_tickers),
-                        ", ".join(extended_tickers),
-                    )
+                _extended_theme_by_symbol = {
+                    e["symbol"].upper(): (e.get("theme_name") or "")
+                    for e in active_entries
+                }
+                logger.info(
+                    "ExtendedWatchlist: adding %d extended symbols to scan: %s",
+                    len(extended_tickers),
+                    ", ".join(extended_tickers),
+                )
             elif active_entries:
                 logger.info(
-                    "ExtendedWatchlist: budget headroom insufficient — skipping %d extended symbols: %s",
+                    "ExtendedWatchlist: cache-only mode — skipping %d extended symbols: %s",
                     len(active_entries),
                     ", ".join(e["symbol"] for e in active_entries),
                 )
@@ -230,9 +211,7 @@ def run(
     extra = [t for t in extended_tickers if t.upper() not in static_upper]
     watchlist = list(static_watchlist) + extra
 
-    av = WatchlistAVClient(cache=cache, max_calls=max_calls, budget=_shared_budget)
-
-    # Optional FMP client for fallback when AV budget is exhausted or returns bad data.
+    # FMP is the primary (and only) market-data client.
     _fmp_client = None
     _ds_cfg = dict(data_sources_config or {})
     if _ds_cfg.get("fmp_enabled", True):
@@ -240,14 +219,13 @@ def run(
             from fmp_client import FMPClient, FMPError
             fmp_budget = int(config.get("fmp_daily_calls_budget", 230))
             _fmp_client = FMPClient(daily_budget=fmp_budget)
-            logger.info("FMP fallback client ready (budget=%d/day)", fmp_budget)
+            logger.info("FMP client ready (budget=%d/day)", fmp_budget)
         except Exception as exc:
-            logger.info("FMP fallback client not available: %s", exc)
+            logger.info("FMP client not available: %s", exc)
 
     scanner = WatchlistScanner(
         watchlist=watchlist,
         cache=cache,
-        av_client=av,
         price_change_alert_pct=float(config.get("price_change_alert_pct", 3.0)),
         volume_spike_factor=float(config.get("volume_spike_factor", 1.5)),
         theme_score_threshold=float(config.get("theme_score_threshold", 0.40)),
@@ -261,12 +239,19 @@ def run(
     result = scanner.run(dry_run=cache_only_mode)
 
     # —— Tag results with watchlist_source and record outcomes —————————————————————
+    # Static symbols → "static". Extended (discovery-promoted) symbols carry a
+    # finer label "discovery:<theme_name>" when the promoting theme is known,
+    # falling back to "extended_theme". watchlist_source is consumed downstream
+    # by performance_feedback.py; any string is acceptable there.
     extended_upper = {t.upper() for t in extended_tickers}
     alerted_tickers = {a["ticker"].upper() for a in result.get("alerts", [])}
     for r in result.get("results", []):
         sym = r.get("ticker", "").upper()
         if sym in extended_upper:
-            r["watchlist_source"] = "extended_theme"
+            _theme_name = _extended_theme_by_symbol.get(sym, "")
+            r["watchlist_source"] = (
+                f"discovery:{_theme_name}" if _theme_name else "extended_theme"
+            )
         else:
             r["watchlist_source"] = "static"
 
@@ -352,7 +337,7 @@ def run(
     scan_status = ((result.get("scan_summary") or {}).get("scan_status")) or "ok"
     data_health = build_data_health_context(
         scan_status=scan_status,
-        extra_sources=["alphavantage"],
+        extra_sources=["fmp"],
     )
     result = _apply_signal_meta_layer(
         result,
@@ -467,7 +452,7 @@ def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="watchlist_scanner",
-        description="Alpha Vantage watchlist scanner — fundamentals + news + technicals",
+        description="FMP-primary watchlist scanner — fundamentals + news + technicals",
     )
     parser.add_argument("--config",     default="config.json",      help="Path to config.json or config/ directory")
     parser.add_argument("--profile",    default=None,               help="Optional structured config profile name")
@@ -501,8 +486,8 @@ def main() -> None:
     except ImportError:
         pass
 
-    if not os.environ.get("ALPHA_VANTAGE_API_KEY"):
-        print("ERROR: ALPHA_VANTAGE_API_KEY not set. Add it to your .env file.")
+    if not os.environ.get("FMP_API_KEY"):
+        print("ERROR: FMP_API_KEY not set. Add it to your .env file.")
         sys.exit(1)
 
     try:

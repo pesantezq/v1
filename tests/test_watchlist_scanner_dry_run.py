@@ -31,18 +31,17 @@ class TestWatchlistScannerDryRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "outputs"
             with patch("watchlist_scanner.cache_manager.CacheManager", return_value=_FakeCache()):
-                with patch("watchlist_scanner.alpha_vantage_client.WatchlistAVClient"):
-                    with patch("watchlist_scanner.scanner.WatchlistScanner", _FakeScanner):
-                        with patch("watchlist_scanner.__main__._write_signals_json") as mock_signals:
-                            with patch("watchlist_scanner.__main__._write_alerts_csv") as mock_alerts:
-                                with patch("watchlist_scanner.__main__._write_summary_md") as mock_summary:
-                                    run(
-                                        config={},
-                                        dry_run=True,
-                                        output_dir=str(output_dir),
-                                        extended_watchlist_config={"enabled": False},
-                                        scraped_intel_config={"enabled": False},
-                                    )
+                with patch("watchlist_scanner.scanner.WatchlistScanner", _FakeScanner):
+                    with patch("watchlist_scanner.__main__._write_signals_json") as mock_signals:
+                        with patch("watchlist_scanner.__main__._write_alerts_csv") as mock_alerts:
+                            with patch("watchlist_scanner.__main__._write_summary_md") as mock_summary:
+                                run(
+                                    config={},
+                                    dry_run=True,
+                                    output_dir=str(output_dir),
+                                    extended_watchlist_config={"enabled": False},
+                                    scraped_intel_config={"enabled": False},
+                                )
 
         mock_signals.assert_not_called()
         mock_alerts.assert_not_called()

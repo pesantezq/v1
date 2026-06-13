@@ -35,7 +35,6 @@ TAG_TO_FILES: dict[str, list[str]] = {
     "projections":          ["projections.py", "contribution_engine.py"],
     "contribution_engine":  ["contribution_engine.py", "projections.py"],
     "watchlist_scanner":    ["watchlist_scanner/scanner.py",
-                             "watchlist_scanner/alpha_vantage_client.py",
                              "watchlist_scanner/fundamentals_engine.py",
                              "watchlist_scanner/__main__.py"],
     "fundamentals_engine":  ["watchlist_scanner/fundamentals_engine.py",

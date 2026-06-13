@@ -296,7 +296,7 @@ async def _tool_doctor() -> list[types.TextContent]:
         status["overall"] = "error"
 
     # 4. Environment variables — presence only, never values
-    required_vars = ("FMP_API_KEY", "ALPHA_VANTAGE_API_KEY")
+    required_vars = ("FMP_API_KEY",)
     optional_vars = ("EMAIL_PASSWORD", "EMAIL_SENDER", "EMAIL_RECIPIENT")
 
     for var in required_vars:

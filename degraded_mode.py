@@ -16,7 +16,6 @@ def infer_degraded_reason(
     fallback_used: bool = False,
     watchlist_source: str = "none",
     scan_status: str | None = None,
-    av_budget_exhausted: bool = False,
     missing_data_ratio: float | None = None,
     missing_data_threshold: float = 0.50,
 ) -> str | None:
@@ -24,7 +23,6 @@ def infer_degraded_reason(
     Infer a degraded-mode reason from scan / API context.
 
     New parameters (backward-compatible defaults):
-        av_budget_exhausted:   True when Alpha Vantage daily budget was hit.
         missing_data_ratio:    Fraction of symbols with missing critical data.
         missing_data_threshold: Ratio above which 'missing_critical_data' fires.
     """
@@ -41,8 +39,6 @@ def infer_degraded_reason(
         return "budget_exhausted"
     if "http 5" in err:
         return "fmp_5xx"
-    if av_budget_exhausted:
-        return "av_budget_exhausted"
     if (
         missing_data_ratio is not None
         and missing_data_ratio >= missing_data_threshold
@@ -84,11 +80,11 @@ def infer_data_sources_used(
 
 def infer_data_mode(data_sources_used: list[str]) -> str:
     normalized = [s for s in data_sources_used if s]
-    if not normalized or normalized == ["live"] or normalized == ["fmp"] or normalized == ["alphavantage"]:
+    if not normalized or normalized == ["live"] or normalized == ["fmp"]:
         return "live"
     if all(src in {"fallback", "cache"} for src in normalized):
         return "fallback"
-    if "fmp" in normalized or "alphavantage" in normalized or "live" in normalized:
+    if "fmp" in normalized or "live" in normalized:
         return "mixed"
     return "fallback"
 
@@ -107,8 +103,6 @@ def infer_confidence_penalty(
         penalty = 0.25
     elif degraded_reason in {"cache_only", "budget_exhausted", "missing_critical_data"}:
         penalty = 0.20
-    elif degraded_reason == "av_budget_exhausted":
-        penalty = 0.15
     else:
         penalty = 0.15
     if stale_cache_days is not None and stale_cache_days > DEFAULT_STALE_DAYS:
@@ -117,7 +111,7 @@ def infer_confidence_penalty(
 
 
 def compute_fallback_depth(data_sources_used: list[str]) -> int:
-    return len([src for src in data_sources_used if src not in {"live", "fmp", "alphavantage", "rss", "sp500_cache"}])
+    return len([src for src in data_sources_used if src not in {"live", "fmp", "rss", "sp500_cache"}])
 
 
 def build_data_health_context(

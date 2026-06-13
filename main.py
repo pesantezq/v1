@@ -142,11 +142,6 @@ try:
 except ImportError:
     _run_memo_email_delivery = None  # type: ignore[assignment]
 
-try:
-    from api_budget import AVDailyBudget as _AVDailyBudget
-except ImportError:
-    _AVDailyBudget = None  # type: ignore[assignment,misc]
-
 
 def _persist_guardrail_violations(
     store: PortfolioStateStore,
@@ -679,14 +674,7 @@ def run_portfolio_update(
         # 2. FETCH MARKET DATA
         # =====================
         logger.info("Fetching market data...")
-        _av_budget = None
-        if _AVDailyBudget is not None:
-            try:
-                _av_budget = _AVDailyBudget()
-                logger.info("AV budget: %s", _av_budget.status_line())
-            except Exception as _budget_err:
-                logger.warning("AV budget init failed (non-fatal): %s", _budget_err)
-        market_client = create_market_client(config.market_data, budget=_av_budget)
+        market_client = create_market_client(config.market_data)
         
         holdings, failed_symbols = update_holdings_with_prices(
             config.holdings, market_client
@@ -2630,8 +2618,6 @@ def run_portfolio_update(
                 holdings=holdings,
                 holding_rationale=getattr(config, 'holding_rationale', {}) or {},
                 guardrail_violations=_guardrail_viols,
-                av_budget_remaining=_av_budget.remaining() if _av_budget is not None else None,
-                av_budget_total=25,
                 fmp_circuit_breaker_open=_fmp_cb_open,
                 fmp_disabled_until=_fmp_until,
                 scanner_enabled=bool(config.scanner_enabled),
@@ -2690,8 +2676,6 @@ def run_portfolio_update(
                             f"reason={_run_data_health.get('degraded_reason') or 'unknown'} "
                             f"sources={','.join(_run_data_health.get('data_sources_used', ['fallback']))}"
                         )
-                    if _av_budget is not None and _av_budget.remaining() < 5:
-                        _degraded.append(f"[DEGRADED] AV budget low: {_av_budget.status_line()}")
                     if store is not None and store.is_subsystem_disabled("fmp"):
                         _sh = store.get_subsystem_health("fmp") or {}
                         _degraded.append(

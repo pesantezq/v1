@@ -47,7 +47,7 @@ def _write_config(base: Path, *, holdings=None, cash=464.16) -> Path:
             "target_cash_weight": 0.05,
             "rebalance_rules": {"min_drift": 0.05},
         },
-        "providers": {"alpha_vantage": {"enabled": True}},
+        "providers": {"fmp": {"enabled": True}},
     }
     path = base / "config.json"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

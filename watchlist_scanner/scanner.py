@@ -29,7 +29,6 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from watchlist_scanner.alpha_vantage_client import WatchlistAVClient, BudgetExceeded
 from watchlist_scanner.alert_filter import should_emit_alert
 from watchlist_scanner.alert_ranking import apply_priority_score
 from watchlist_scanner.approved_config_loader import load_approved_weights
@@ -38,7 +37,6 @@ from watchlist_scanner import theme_engine as te
 from watchlist_scanner.fundamentals_engine import (
     parse_fmp_profile,
     parse_fmp_fundamentals_bundle,
-    parse_overview,
     fundamental_context_score,
     derive_fundamentals_score,
     derive_valuation_score,
@@ -53,13 +51,10 @@ except ImportError:  # pragma: no cover — fmp_client is always present in this
 from watchlist_scanner.confidence import compute_confidence
 from watchlist_scanner.config import (
     DEFAULT_WATCHLIST,
-    MAX_DAILY_CALLS,
     PRICE_CHANGE_ALERT_PCT,
     VOLUME_SPIKE_FACTOR,
     THEME_SCORE_THRESHOLD,
     MIN_SIGNAL_SCORE,
-    CACHE_TTL_DAILY_SECONDS,
-    CACHE_TTL_OVERVIEW_SECONDS,
     CONFIDENCE_HIGH_THRESHOLD,
     CONFIDENCE_MEDIUM_THRESHOLD,
     CONFIDENCE_MIN_THRESHOLD,
@@ -375,7 +370,6 @@ class WatchlistScanner:
     Args:
         watchlist:              Ticker symbols to scan.
         cache:                  Shared CacheManager instance.
-        av_client:              Shared WatchlistAVClient instance.
         price_change_alert_pct: Min |price_change| % to flag.
         volume_spike_factor:    Multiplier over 20-day avg volume.
         theme_score_threshold:  Min theme score to include in output.
@@ -386,7 +380,6 @@ class WatchlistScanner:
         self,
         watchlist: list[str],
         cache: CacheManager,
-        av_client: WatchlistAVClient,
         price_change_alert_pct: float = PRICE_CHANGE_ALERT_PCT,
         volume_spike_factor: float = VOLUME_SPIKE_FACTOR,
         theme_score_threshold: float = THEME_SCORE_THRESHOLD,
@@ -404,7 +397,6 @@ class WatchlistScanner:
     ) -> None:
         self.watchlist = watchlist
         self._cache = cache
-        self._av = av_client
         self._price_alert_pct = price_change_alert_pct
         self._spike_factor = volume_spike_factor
         self._theme_threshold = theme_score_threshold
@@ -418,11 +410,10 @@ class WatchlistScanner:
         self._ranking_config = dict(ranking_config or {})
         # Root is used to locate theme_opportunities.json; defaults to repo root.
         self._root: Path = Path(root) if root is not None else Path(__file__).resolve().parents[1]
-        # FMP fallback configuration
+        # FMP primary-data configuration
         self._fmp = fmp_client
         _ds = dict(data_sources or {})
         self._fmp_enabled = fmp_client is not None and _ds.get("fmp_enabled", True)
-        self._prefer_fmp_on_budget = _ds.get("prefer_fmp_on_budget_exhausted", True)
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -440,8 +431,8 @@ class WatchlistScanner:
             }
         """
         logger.info(
-            "WatchlistScanner: starting scan of %d symbols (budget %d/%d calls)",
-            len(self.watchlist), self._cache.calls_today, self._av._max_calls,
+            "WatchlistScanner: starting scan of %d symbols (FMP-primary)",
+            len(self.watchlist),
         )
 
         # ── Step 0: Load approved ranking weights (optional, non-blocking) ────
@@ -545,14 +536,12 @@ class WatchlistScanner:
             )
 
         # ── Step 1: Fetch news for the entire watchlist ───────────────────────
-        # Provider order: FMP stock_news (primary) → AV NEWS_SENTIMENT (fallback).
-        # FMP news runs regardless of AV budget state (independent provider).
-        # AV news is tried only when FMP returns nothing and budget permits.
+        # FMP stock_news is the sole news provider. Runs even in dry_run (the
+        # FMP client manages its own cache + budget).
         _news_ttl = int(self._signals_config.get("fmp_news_ttl_minutes", FMP_NEWS_TTL_MINUTES))
-        news_source: str = "missing"
+        news_source: str = "none"
         articles: list[dict] = []
 
-        # FMP primary (runs even in dry_run — independent of AV budget)
         if self._fmp_enabled and self._fmp is not None:
             try:
                 fmp_arts = self._fmp.get_stock_news(
@@ -565,19 +554,6 @@ class WatchlistScanner:
             except Exception as fmp_exc:
                 logger.warning("FMP news fetch failed: %s", fmp_exc)
 
-        # AV fallback (only when FMP returned nothing and budget allows)
-        if news_source != "fmp" and not dry_run:
-            try:
-                fetched = self._av.get_news_sentiment(self.watchlist, limit=50)
-                if fetched:
-                    articles = fetched
-                    news_source = "alpha_vantage"
-                    logger.info("AV news fallback: %d articles", len(articles))
-            except BudgetExceeded as exc:
-                logger.warning("Skipping AV news fetch — %s", exc)
-            except Exception as exc:
-                logger.warning("AV news fetch failed: %s", exc)
-
         # ── Step 2: Build per-ticker news lookup ─────────────────────────────
         ticker_articles: dict[str, list[dict]] = {sym: [] for sym in self.watchlist}
         for art in articles:
@@ -586,18 +562,17 @@ class WatchlistScanner:
                 if sym in ticker_articles:
                     ticker_articles[sym].append(art)
 
-        # ── Step 3: Fundamentals (FMP primary → AV OVERVIEW fallback) ─────────
-        # FMP profile + ratios bundle is the primary source for all watchlist
-        # symbols.  AV OVERVIEW is attempted only for symbols where FMP has no
-        # profile, and only when the AV budget permits (non-dry_run path).
+        # ── Step 3: Fundamentals (FMP profile + ratios bundle) ────────────────
+        # FMP is the sole fundamentals source for all watchlist symbols. Symbols
+        # FMP cannot supply a profile for are marked "missing" (and treated as
+        # neutral-fundamentals downstream, not penalised).
         #
-        # overview_source: "fresh" | "cached" | "budget_skipped"
-        # _fundamentals_source_map: "fmp" | "alpha_vantage" | "cache" | "missing"
+        # overview_source:          "fresh" | "missing"
+        # _fundamentals_source_map: "fmp"   | "missing"
         fundamentals_map:         dict[str, dict] = {}
         overview_source:          dict[str, str]  = {}
         _fundamentals_source_map: dict[str, str]  = {}
 
-        # FMP primary pass — uses pre-fetched profiles + ratios
         if self._fmp_enabled:
             for _sym in self.watchlist:
                 _prof = _fmp_profiles.get(_sym)
@@ -608,78 +583,22 @@ class WatchlistScanner:
                     overview_source[_sym]          = "fresh"
                     _fundamentals_source_map[_sym] = "fmp"
                     logger.debug(
-                        "Fundamentals FMP primary for %s (sector=%s, profit_margin=%s)",
+                        "Fundamentals FMP for %s (sector=%s, profit_margin=%s)",
                         _sym,
                         fundamentals_map[_sym].get("sector"),
                         fundamentals_map[_sym].get("profit_margin"),
                     )
 
-        # AV fallback — for symbols without an FMP profile
-        _av_fund_symbols = [s for s in self.watchlist if s not in _fundamentals_source_map]
-
-        if _av_fund_symbols and not dry_run:
-            _av_budget_exhausted = False
-            _av_order = sorted(_av_fund_symbols, key=lambda s: (s not in _fresh_symbols))
-            for _sym in _av_order:
-                cache_key = f"overview_{_sym}"
-                if _av_budget_exhausted:
-                    stale = self._cache.get_stale(cache_key)
-                    if stale:
-                        fundamentals_map[_sym]         = parse_overview(stale)
-                        overview_source[_sym]          = "cached"
-                        _fundamentals_source_map[_sym] = "cache"
-                    else:
-                        overview_source[_sym]          = "budget_skipped"
-                        _fundamentals_source_map[_sym] = "missing"
-                    continue
-                try:
-                    raw_ov = self._av.get_overview(_sym)
-                    if raw_ov:
-                        fundamentals_map[_sym] = parse_overview(raw_ov)
-                        logger.debug("AV OVERVIEW loaded for %s (sector=%s)",
-                                     _sym, fundamentals_map[_sym].get("sector"))
-                    overview_source[_sym]          = "fresh"
-                    _fundamentals_source_map[_sym] = "alpha_vantage"
-                except BudgetExceeded:
-                    _av_budget_exhausted = True
-                    stale = self._cache.get_stale(cache_key)
-                    if stale:
-                        fundamentals_map[_sym]         = parse_overview(stale)
-                        overview_source[_sym]          = "cached"
-                        _fundamentals_source_map[_sym] = "cache"
-                    else:
-                        overview_source[_sym]          = "budget_skipped"
-                        _fundamentals_source_map[_sym] = "missing"
-                except Exception as exc:
-                    logger.warning("AV OVERVIEW fetch failed for %s: %s", _sym, exc)
-                    stale = self._cache.get_stale(cache_key)
-                    if stale:
-                        fundamentals_map[_sym]         = parse_overview(stale)
-                        overview_source[_sym]          = "cached"
-                        _fundamentals_source_map[_sym] = "cache"
-                    else:
-                        overview_source[_sym]          = "cached"
-                        _fundamentals_source_map[_sym] = "missing"
-
-        elif _av_fund_symbols and dry_run:
-            # dry_run + no FMP profile: use stale AV cache only (no API calls)
-            for _sym in _av_fund_symbols:
-                stale = self._cache.get_stale(f"overview_{_sym}")
-                if stale:
-                    fundamentals_map[_sym]         = parse_overview(stale)
-                    overview_source[_sym]          = "cached"
-                    _fundamentals_source_map[_sym] = "cache"
-                else:
-                    overview_source[_sym]          = "budget_skipped"
-                    _fundamentals_source_map[_sym] = "missing"
+        # Symbols without an FMP profile → neutral / missing (no other provider).
+        for _sym in self.watchlist:
+            if _sym not in _fundamentals_source_map:
+                overview_source[_sym]          = "missing"
+                _fundamentals_source_map[_sym] = "missing"
 
         _n_fmp_fund  = sum(1 for v in _fundamentals_source_map.values() if v == "fmp")
-        _n_av_fund   = sum(1 for v in _fundamentals_source_map.values() if v == "alpha_vantage")
-        _n_cach_fund = sum(1 for v in _fundamentals_source_map.values() if v == "cache")
         _n_miss_fund = sum(1 for v in _fundamentals_source_map.values() if v == "missing")
         logger.info(
-            "Fundamentals: %d FMP, %d AV fresh, %d cached, %d missing",
-            _n_fmp_fund, _n_av_fund, _n_cach_fund, _n_miss_fund,
+            "Fundamentals: %d FMP, %d missing", _n_fmp_fund, _n_miss_fund,
         )
 
         # ── Step 4: Scan each symbol ──────────────────────────────────────────
@@ -693,15 +612,15 @@ class WatchlistScanner:
                     ov_source=overview_source.get(symbol, "fresh"),
                     dry_run=dry_run,
                     fmp_quote=_fmp_quotes.get(symbol),
-                    fundamentals_source=_fundamentals_source_map.get(symbol, "alpha_vantage"),
+                    fundamentals_source=_fundamentals_source_map.get(symbol, "missing"),
                     news_source=news_source,
                     fmp_historical=_fmp_historical.get(symbol),
                 )
                 if result:
                     results.append(result)
-            except BudgetExceeded:
-                # Both AV and FMP have been exhausted — stop gracefully.
-                logger.warning("All budgets exhausted mid-scan — stopping after %d symbols", len(results))
+            except _FMPBudgetExceeded:
+                # FMP call budget exhausted mid-scan — stop gracefully.
+                logger.warning("FMP budget exhausted mid-scan — stopping after %d symbols", len(results))
                 break
             except Exception as exc:
                 logger.warning("Error scanning %s: %s", symbol, exc)
@@ -712,11 +631,9 @@ class WatchlistScanner:
 
         # Log historical data routing summary
         _n_fmp_hist = sum(1 for r in results if r.get("historical_source") == "fmp")
-        _n_av_hist  = sum(1 for r in results if r.get("historical_source") == "alpha_vantage")
         _n_tot      = len(results)
         logger.info(
-            "FMP historical used for %d/%d symbols — AV historical fallback used for %d",
-            _n_fmp_hist, _n_tot, _n_av_hist,
+            "FMP historical used for %d/%d symbols", _n_fmp_hist, _n_tot,
         )
 
         # ── Step 4b: Soft theme alignment enrichment (additive, non-blocking) ──
@@ -883,45 +800,22 @@ class WatchlistScanner:
         ov_source: str = "fresh",
         dry_run: bool = False,
         fmp_quote: dict[str, Any] | None = None,
-        fundamentals_source: str = "alpha_vantage",
-        news_source: str = "alpha_vantage",
+        fundamentals_source: str = "missing",
+        news_source: str = "none",
         fmp_historical: list[dict] | None = None,
     ) -> Optional[WatchlistRow]:
         """Fetch OHLCV + compute technicals + classify themes + score for one symbol."""
 
         # --- Daily OHLCV ---------------------------------------------------------
-        # Provider order:
+        # Provider order (FMP-primary):
         #   1. FMP quote        → price, 1d change, sma50, volume (live)
         #   2. FMP historical   → SMA20, 5d change (enriches FMP quote or standalone)
-        #   3. AV OHLCV         → fallback when FMP unavailable (non-dry_run only)
-        #   4. Stale AV cache   → last resort
-        df: Optional[pd.DataFrame] = None
+        # When FMP supplies neither, technicals stay empty (price_data_source="missing").
         tech: dict[str, Any] = {}
         price_data_source:  str = "missing"
         historical_source:  str = "missing"
-        _fallback_reason_parts: list[str] = []
-
-        def _df_from_raw_av(raw: dict) -> Optional[pd.DataFrame]:
-            ts = raw.get("Time Series (Daily)", {})
-            rows = []
-            for d_str, v in sorted(ts.items(), reverse=True):
-                try:
-                    close = float(v.get("4. close", 0))
-                    rows.append({
-                        "date":      pd.to_datetime(d_str),
-                        "open":      float(v.get("1. open", 0)),
-                        "high":      float(v.get("2. high", 0)),
-                        "low":       float(v.get("3. low", 0)),
-                        "close":     close,
-                        "adj_close": close,
-                        "volume":    float(v.get("5. volume", 0)),
-                    })
-                except (ValueError, TypeError):
-                    continue
-            return pd.DataFrame(rows).set_index("date") if rows else None
 
         # ── 1. FMP quote: current price, 1d change, sma50, volume ─────────────
-        # Runs regardless of dry_run — FMP is independent of AV budget.
         if fmp_quote and self._fmp_enabled:
             _fmp_tech = _technicals_from_fmp_quote(fmp_quote, self._spike_factor)
             if _fmp_tech:
@@ -963,58 +857,6 @@ class WatchlistScanner:
                         tech.get("volume_avg20"),
                     )
 
-        _fmp_is_primary = price_data_source == "fmp"
-
-        # ── 3. AV OHLCV: fallback when FMP unavailable (non-dry_run only) ─────
-        # Skip entirely when FMP has provided both quote and full historical —
-        # all technicals (SMA20, 5d change, volume_avg20) are already populated.
-        _av_ohlcv_needed = not (_fmp_is_primary and historical_source == "fmp")
-
-        if not dry_run and _av_ohlcv_needed:
-            try:
-                _av_df = self._av.get_daily_ohlcv(symbol, outputsize="compact")
-                if _av_df is not None:
-                    _av_tech = _compute_technicals(_av_df, self._spike_factor)
-                    if not _fmp_is_primary:
-                        # AV is the sole live source
-                        tech = _av_tech
-                        price_data_source = "alpha_vantage"
-                        historical_source = "alpha_vantage"
-                    elif historical_source != "fmp":
-                        # FMP has quote but no historical; AV provides SMA20 / 5d change
-                        for _k in ("price_change_5d", "sma20", "above_sma20",
-                                   "volume_avg20", "data_days"):
-                            if _av_tech.get(_k) is not None:
-                                tech[_k] = _av_tech[_k]
-                        historical_source = "alpha_vantage"
-            except BudgetExceeded:
-                if not _fmp_is_primary:
-                    _fallback_reason_parts.append("AV OHLCV budget exhausted")
-            except Exception as _av_exc:
-                logger.debug("AV OHLCV failed for %s: %s", symbol, _av_exc)
-
-            # ── 4. Stale AV cache: last resort ────────────────────────────────
-            if not tech:
-                stale_raw = self._cache.get_stale(f"daily_{symbol}")
-                if stale_raw:
-                    _stale_df = _df_from_raw_av(stale_raw)
-                    if _stale_df is not None:
-                        tech = _compute_technicals(_stale_df, self._spike_factor)
-                        price_data_source = "cache"
-                        historical_source = "cache"
-
-        elif not _fmp_is_primary:
-            # dry_run + no FMP data: try fresh AV cache (no API calls)
-            cached_raw = self._cache.get(f"daily_{symbol}", CACHE_TTL_DAILY_SECONDS)
-            if cached_raw:
-                df = _df_from_raw_av(cached_raw)
-            price_data_source = "cache" if df is not None else "missing"
-            historical_source = price_data_source
-
-        # Compute technicals from df if not already populated
-        if not tech and df is not None:
-            tech = _compute_technicals(df, self._spike_factor)
-
         # --- Technical data completeness label --------------------------------
         _t_price   = tech.get("price") is not None
         _t_sma20   = tech.get("sma20") is not None
@@ -1042,9 +884,9 @@ class WatchlistScanner:
         avg_sentiment  = _compute_avg_sentiment(articles)
 
         # --- Fundamental context score ----------------------------------------
-        # Use neutral score when OVERVIEW was budget_skipped to avoid penalising
-        # the symbol for missing data rather than poor fundamentals.
-        if ov_source == "budget_skipped":
+        # Use neutral score when fundamentals are missing (no FMP profile) to
+        # avoid penalising the symbol for absent data rather than poor fundamentals.
+        if ov_source == "missing":
             fund_score = _NEUTRAL_FUND_SCORE
         else:
             fund_score = fundamental_context_score(fundamentals)
@@ -1055,10 +897,10 @@ class WatchlistScanner:
         )
 
         # --- Data quality label -----------------------------------------------
-        # fresh:   live price (FMP or AV) + live fundamentals (AV fresh or FMP profile)
-        # partial: live price data, fundamentals from cache only
-        # cached:  no live price data (stale cache or missing)
-        _has_live_price = price_data_source in ("fmp", "alpha_vantage")
+        # fresh:   live FMP price + live FMP fundamentals
+        # partial: live FMP price, fundamentals missing
+        # cached:  no live price data (missing)
+        _has_live_price = price_data_source == "fmp"
         _has_live_fund  = ov_source == "fresh" or fundamentals_source == "fmp"
         if _has_live_price and _has_live_fund:
             data_quality = "fresh"
@@ -1152,17 +994,15 @@ class WatchlistScanner:
             "technical_source":    (
                 "fmp_quote+historical" if price_data_source == "fmp" and historical_source == "fmp"
                 else "fmp_quote"        if price_data_source == "fmp"
-                else "alpha_vantage"    if price_data_source == "alpha_vantage"
                 else price_data_source
             ),
             "provider_health":     (
                 "fmp_primary" if price_data_source == "fmp" and fundamentals_source == "fmp"
                 else "fmp_partial" if price_data_source == "fmp" or fundamentals_source == "fmp"
-                else "av_primary"  if price_data_source == "alpha_vantage"
-                else "cache_only"
+                else "missing"
             ),
-            "fallback_used":       price_data_source == "cache",
-            "fallback_reason":     "; ".join(_fallback_reason_parts) if _fallback_reason_parts else "",
+            "fallback_used":       False,
+            "fallback_reason":     "",
         }
 
     def _is_alert(self, result: WatchlistRow) -> bool:
