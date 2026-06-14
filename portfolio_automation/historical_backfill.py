@@ -172,6 +172,25 @@ def _persist_archive(root: Path, ticker: str, rows: list[dict[str, Any]],
     )
 
 
+def _budget_exhausted(fmp_client: Any) -> bool:
+    """
+    True when the client's daily call budget would be exceeded.
+
+    ``FMPClient.get_historical_prices`` returns an empty list (not an exception)
+    when the daily budget is spent and no cache is available — indistinguishable
+    from a genuinely-empty history. Consulting the client's own counter lets the
+    caller surface ``budget_exhausted`` instead of a misleading empty result.
+    """
+    try:
+        counter = getattr(fmp_client, "_counter", None)
+        budget = getattr(fmp_client, "_budget", None)
+        if counter is None or budget is None:
+            return False
+        return bool(counter.would_exceed(budget))
+    except Exception:
+        return False
+
+
 def _fetch_one(
     fmp_client: Any,
     ticker: str,
@@ -183,6 +202,10 @@ def _fetch_one(
         if not isinstance(rows, list):
             return (ticker, None, "fmp_returned_non_list")
         if not rows:
+            # Distinguish a budget-exhausted empty from a genuinely-empty history
+            # so callers do not mistake a spent quota for "no data exists".
+            if _budget_exhausted(fmp_client):
+                return (ticker, None, "budget_exhausted")
             return (ticker, [], "fmp_returned_empty")
         return (ticker, rows, None)
     except Exception as exc:

@@ -1679,6 +1679,30 @@ official score.
 
 Operator-readable Markdown companion (state buckets + status + disclaimer).
 
+#### `crowd_radar_activation_check.json`
+
+Observe-only pre-flight readiness probe (producer:
+`social_intelligence/activation_check.py`, daily Stage 9c2). Pure — no network,
+no fetch. Answers "is Crowd Radar safe + ready to start collecting?".
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | bool | `config.json crowd_radar.enabled` |
+| `credentials_present` | bool | all three `REDDIT_*` env vars set |
+| `source_status` | str | effective status on activation: `ok / disabled / no_credentials / source_terms_blocked` |
+| `source_terms_status` | str | aggregate registry compliance over enabled sources: `approved / review_needed / blocked / no_sources` |
+| `rate_limit_configured` | bool | every enabled source carries a non-empty `rate_limit` |
+| `raw_text_storage_allowed` | bool | conservative AND across enabled sources (Reddit default false) |
+| `ai_processing_allowed` | bool | conservative AND across enabled sources |
+| `sandbox_only_assertion` | bool | hardcoded true (`SANDBOX_ONLY and DISCOVERY_ONLY`) |
+| `decision_engine_blocked` | bool | hardcoded true (`NO_TRADE`) — cannot feed `decision_plan.json` |
+| `last_smoke_test_status` | str | from `crowd_radar_smoke_test.json` marker, else `never_run` |
+| `ready_to_collect` | bool | all activation gates green |
+| `warnings[]` | list | blocking reasons / notes |
+
+Companion: `crowd_radar_activation_check.md`. Consumed by `/daily-tool-analysis`
+(discovery-health lens). Never carries a trade verb.
+
 #### `crowd_mention_history.json`
 
 Rolling per-ticker daily mention-count ledger — the velocity z-score baseline.

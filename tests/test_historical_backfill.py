@@ -197,6 +197,26 @@ class TestBackfillRun(unittest.TestCase):
             # No archive written
             self.assertFalse(archive_path_for(root, "AAPL").exists())
 
+    def test_budget_exhaustion_surfaced_not_generic_empty(self):
+        """FMP budget exhaustion must read as 'budget_exhausted', not a generic
+        empty history — so a spent quota is never mistaken for 'no data exists'."""
+        from portfolio_automation.historical_backfill import _budget_exhausted, _fetch_one
+
+        # Over-budget client returns [] for an uncached symbol (the real client's
+        # behaviour). _fetch_one must label it budget_exhausted, not empty.
+        over = _StubFMPClient(over_budget=True)
+        self.assertTrue(_budget_exhausted(over))
+        sym, rows, err = _fetch_one(over, "XLB", 5)
+        self.assertEqual(err, "budget_exhausted")
+        self.assertIsNone(rows)
+
+        # A genuinely-empty history (budget fine) keeps the distinct generic label.
+        ok = _StubFMPClient(over_budget=False)
+        self.assertFalse(_budget_exhausted(ok))
+        sym2, rows2, err2 = _fetch_one(ok, "XLB", 5)
+        self.assertEqual(err2, "fmp_returned_empty")
+        self.assertEqual(rows2, [])
+
     def test_per_ticker_error_isolated(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

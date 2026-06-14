@@ -251,6 +251,14 @@ run_aux_stage "Sandbox lane status" \
 run_aux_stage "Crowd Radar (public knowledge velocity)" \
     python -m portfolio_automation.social_intelligence.public_knowledge_velocity --root "${REPO_ROOT}" --run-mode discovery
 
+# Stage 9c2 — Crowd Radar activation checklist (observe-only readiness probe).
+# Pure (no network): reports whether Crowd Radar is safe + ready to collect
+# (flag, creds, source-terms, rate-limit, storage/AI policy, sandbox + decision
+# invariants, last smoke test). Writes outputs/sandbox/discovery/
+# crowd_radar_activation_check.json. Non-blocking; never aborts the run.
+run_aux_stage "Crowd Radar activation check" \
+    python -m portfolio_automation.social_intelligence.activation_check --root "${REPO_ROOT}" --run-mode discovery
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
