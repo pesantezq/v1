@@ -202,5 +202,22 @@
                        operator_post_url, dispatch_url=operator_dispatch_url) }}
   {% endif %}
 
+  {# --------------------------------------------------------------- #}
+  {# FMP Data Budget (observe-only) — governor usage/cache/bandwidth.  #}
+  {# --------------------------------------------------------------- #}
+  {% if data_budget and data_budget.available %}
+  <section aria-label="FMP data budget">
+    {{ ui.section_header("FMP Data Budget", "Observe-only — call/cache/bandwidth governor", "") }}
+    <dl class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 text-sm">
+      <div><dt class="text-slate-400">Status</dt><dd class="font-medium">{{ data_budget.overall_status }}</dd></div>
+      <div><dt class="text-slate-400">Calls this run</dt><dd class="font-medium">{{ data_budget.calls_this_run }}</dd></div>
+      <div><dt class="text-slate-400">Cache hit rate</dt><dd class="font-medium">{{ data_budget.cache_hit_rate_pct if data_budget.cache_hit_rate_pct is not none else "—" }}%</dd></div>
+      <div><dt class="text-slate-400">Bandwidth (of cap)</dt><dd class="font-medium">{{ data_budget.bandwidth_pct if data_budget.bandwidth_pct is not none else "—" }}%</dd></div>
+      <div><dt class="text-slate-400">Discovery skipped</dt><dd class="font-medium">{{ data_budget.discovery_skipped }}</dd></div>
+      <div><dt class="text-slate-400">Backtest skipped</dt><dd class="font-medium">{{ data_budget.backtest_skipped }}</dd></div>
+    </dl>
+  </section>
+  {% endif %}
+
 </div>
 {% endblock %}

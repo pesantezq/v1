@@ -407,6 +407,12 @@ def page_dash_system(
         ctx["deploy_apply_enabled"] = _deploy_apply_enabled()
     except Exception:
         pass
+    # FMP data-budget panel (observe-only; reads the 3 governor artifacts).
+    try:
+        from gui_v2.data.dash_data_budget import data_budget_view
+        ctx["data_budget"] = data_budget_view(REPO_ROOT)
+    except Exception:
+        pass
     return _render(request, "dashboard/system.html", **ctx)
 
 
