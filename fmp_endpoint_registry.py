@@ -167,6 +167,16 @@ REGISTRY: dict[str, dict] = {
         "classification": "premium_optional",
         "usage": "optional bulk acceleration — not for core pipeline",
     },
+    # ── P2: Lightweight single-symbol quote for GUI refresh ───────────────────
+    "quote_short": {
+        "endpoint":      "/stable/quote-short",
+        "per_symbol":    True,
+        "starter_safe":  True,
+        "priority":      "P2",
+        "required_daily": False,
+        "classification": "core_stable_ok",
+        "usage": "lightweight single-symbol price for GUI refresh",
+    },
     # ── P3: Social sentiment (paid Starter+ entitlement; PROBE-ONLY) ───────────
     # Crowd Radar no-extra-cost policy: NOT starter-safe, never required, only
     # ever entitlement-probed against the existing key. v4 legacy fallback noted.

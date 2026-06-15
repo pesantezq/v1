@@ -254,6 +254,7 @@ class FMPClient:
         self._cache = _DiskCache(_dir)
         self._counter = _CallCounter(_dir / 'call_counter.json')
         self._last_call_ts: float = 0.0
+        self._last_response_bytes: int = 0
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -285,7 +286,9 @@ class FMPClient:
                     url, headers={'User-Agent': 'PortfolioBot/1.0'}
                 )
                 with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                    data = json.loads(resp.read().decode('utf-8'))
+                    raw = resp.read()
+                    self._last_response_bytes = len(raw)
+                    data = json.loads(raw.decode('utf-8'))
                 if isinstance(data, dict) and 'Error Message' in data:
                     raise FMPError(f"FMP API error: {data['Error Message']}")
                 self._counter.increment()
@@ -366,6 +369,11 @@ class FMPClient:
     def calls_today(self) -> int:
         """Number of API calls made so far today."""
         return self._counter.today_count
+
+    @property
+    def last_response_bytes(self) -> int:
+        """Bytes of the most recent HTTP response body (0 if none / cache hit)."""
+        return self._last_response_bytes
 
     def get_sp500_constituents(self, ttl_days: int = 7) -> List[Dict]:
         """
@@ -927,6 +935,20 @@ class FMPClient:
             "(cached=%d, fetched=%d, stale=%d, missing=%d)",
             n_with_price, n_total, n_cached, n_fetched, n_stale, n_missing,
         )
+        return result
+
+    def get_quote_short(self, symbol: str, ttl_hours: int = 1) -> dict:
+        """Lightweight single-symbol price via stable/quote-short (GUI use)."""
+        cache_key = f"quote_short_{symbol.upper()}"
+        ttl_seconds = ttl_hours * 3600
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached
+        if self._counter.would_exceed(self._budget):
+            return self._cache.get_stale(cache_key) or {}
+        raw = self._raw_get("quote-short", {"symbol": symbol.upper()})
+        result = raw[0] if isinstance(raw, list) and raw else (raw or {})
+        self._cache.set(cache_key, result)
         return result
 
     def get_stock_news(
