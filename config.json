@@ -212,7 +212,7 @@
       "daily":             {"call_budget": 0,    "priority": "high"},
       "weekly_review":     {"call_budget": 800,  "priority": "medium"},
       "monthly":           {"call_budget": 1500, "priority": "medium"},
-      "discovery":         {"call_budget": 200,  "priority": "low"},
+      "discovery":         {"call_budget": 450,  "priority": "low"},
       "historical_replay": {"call_budget": 0,    "priority": "low", "cache_only": true}
     }
   },

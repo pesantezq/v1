@@ -7,7 +7,9 @@ DEFAULT_RUN_MODES: dict[str, dict[str, Any]] = {
     "daily":             {"call_budget": 0,    "priority": "high"},   # 0 = uncapped (honors config uncap)
     "weekly_review":     {"call_budget": 800,  "priority": "medium"},
     "monthly":           {"call_budget": 1500, "priority": "medium"},
-    "discovery":         {"call_budget": 200,  "priority": "low"},
+    # 450 covers a cold crowd-intelligence run over the capped universe (40 symbols
+    # x ~9 per-symbol endpoints + ~11 shared ≈ 371) with headroom.
+    "discovery":         {"call_budget": 450,  "priority": "low"},
     "historical_replay": {"call_budget": 0,    "priority": "low", "cache_only": True},
 }
 
