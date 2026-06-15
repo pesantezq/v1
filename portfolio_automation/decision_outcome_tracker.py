@@ -171,11 +171,8 @@ def _augment_price_map_with_fmp(
 
     if fmp_client is None:
         try:
-            from fmp_client import FMPClient
-            # Honor the config budget; `is not None` so an explicit 0 = "no cap"
-            # reaches FMPClient instead of falling to its 230-call default.
-            _budget = _load_fmp_budget()
-            fmp_client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
+            from portfolio_automation.data_budget.factory import governed_client
+            fmp_client = governed_client("daily")
         except Exception as exc:
             logger.debug("decision_outcome_tracker: no FMP client (%s)", exc)
             return price_map
@@ -208,12 +205,10 @@ def _try_build_price_fetcher() -> Callable[[list[str]], dict[str, float]] | None
     if not get_secret("FMP_API_KEY"):
         return None
     try:
-        from fmp_client import FMPClient
-
-        # Honor the config budget; `is not None` so an explicit 0 = "no cap"
-        # reaches FMPClient instead of falling to its 230-call default.
-        _budget = _load_fmp_budget()
-        client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
+        from portfolio_automation.data_budget.factory import governed_client
+        # Route through the budget governor (run-mode 'daily'); the governed
+        # client proxies get_batch_quotes and honors the config budget/uncap.
+        client = governed_client("daily")
 
         def _fetcher(symbols: list[str]) -> dict[str, float]:
             if not symbols:

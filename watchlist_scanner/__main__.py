@@ -216,10 +216,9 @@ def run(
     _ds_cfg = dict(data_sources_config or {})
     if _ds_cfg.get("fmp_enabled", True):
         try:
-            from fmp_client import FMPClient, FMPError
-            fmp_budget = int(config.get("fmp_daily_calls_budget", 230))
-            _fmp_client = FMPClient(daily_budget=fmp_budget)
-            logger.info("FMP client ready (budget=%d/day)", fmp_budget)
+            from portfolio_automation.data_budget.factory import governed_client
+            _fmp_client = governed_client("daily")
+            logger.info("FMP client ready (governed)")
         except Exception as exc:
             logger.info("FMP client not available: %s", exc)
 

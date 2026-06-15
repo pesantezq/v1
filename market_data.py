@@ -27,11 +27,10 @@ class FMPMarketClient:
     ``get_batch_quotes`` (stable/quote).
     """
 
-    def __init__(self, fmp_client: Any = None, daily_budget: int = 0):
+    def __init__(self, fmp_client: Any = None, daily_budget: int = 0, run_mode: str = "daily"):
         if fmp_client is None:
-            from fmp_client import FMPClient
-            # daily_budget<=0 means uncapped (matches config.json convention).
-            fmp_client = FMPClient(daily_budget=daily_budget if daily_budget > 0 else 1_000_000)
+            from portfolio_automation.data_budget.factory import governed_client
+            fmp_client = governed_client(run_mode)
         self._fmp = fmp_client
 
     def get_prices(self, symbols: list[str]) -> Dict[str, Optional[float]]:
@@ -58,6 +57,7 @@ def create_market_client(
     config: Dict[str, Any],
     budget: Any = None,  # legacy AV-budget arg, ignored (FMP has its own budget)
     fmp_client: Any = None,
+    run_mode: str = "daily",
 ) -> "FMPMarketClient":
     """Factory: build the FMP-backed holdings-price client from config.
 
@@ -67,6 +67,7 @@ def create_market_client(
     return FMPMarketClient(
         fmp_client=fmp_client,
         daily_budget=int(config.get('fmp_daily_calls_budget', 0) or 0),
+        run_mode=run_mode,
     )
 
 

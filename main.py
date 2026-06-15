@@ -819,7 +819,8 @@ def run_portfolio_update(
                     )
                 _scanner_meta['fmp_attempted'] = True
 
-                fmp = FMPClient(daily_budget=config.fmp_daily_calls_budget)
+                from portfolio_automation.data_budget.factory import governed_client
+                fmp = governed_client("daily")
                 sp500_universe = SP500Universe(fmp)
                 candidate_scanner = CandidateScanner(
                     min_mkt_cap=float(config.scanner.get('min_mkt_cap', 5e9)),
@@ -1262,7 +1263,8 @@ def run_portfolio_update(
                 if "sp500" in _mu_cfg.get("groups", []):
                     if not _sp500_for_universe:
                         try:
-                            _fmp_uni = FMPClient(daily_budget=config.fmp_daily_calls_budget)
+                            from portfolio_automation.data_budget.factory import governed_client
+                            _fmp_uni = governed_client("daily")
                             _sp500_for_universe = [
                                 c["symbol"]
                                 for c in _fmp_uni.get_sp500_constituents()
@@ -1287,7 +1289,8 @@ def run_portfolio_update(
                 # Most S&P 500 symbols will be cache-hits from step 4d.
                 _mc_batch_quotes: dict = {}
                 try:
-                    _fmp_mc = FMPClient(daily_budget=config.fmp_daily_calls_budget)
+                    from portfolio_automation.data_budget.factory import governed_client
+                    _fmp_mc = governed_client("daily")
                     _mc_batch_quotes = _fmp_mc.get_batch_quotes(universe_symbols)
                     logger.info(
                         "MARKET COVERAGE: %d quotes fetched (%d budget used today)",

@@ -143,15 +143,8 @@ def evaluate_pending_signal_feedback(
     # still pass fmp_client=None to keep the strict AV-only behavior.
     if fmp_client is None:
         try:
-            from fmp_client import FMPClient  # local import to keep test isolation simple
-            # Read daily budget from config so the cap honors the operator's setting.
-            # `is not None` (not truthiness) so an explicit 0 = "no cap" reaches
-            # FMPClient instead of being dropped to its 230-call default.
-            try:
-                _budget = _load_fmp_budget()
-                fmp_client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
-            except Exception:
-                fmp_client = FMPClient()
+            from portfolio_automation.data_budget.factory import governed_client
+            fmp_client = governed_client("daily")
         except Exception as exc:
             logger.debug("evaluate_pending_signal_feedback: no FMP fallback (%s)", exc)
             fmp_client = None

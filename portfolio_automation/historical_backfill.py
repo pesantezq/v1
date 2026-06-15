@@ -248,10 +248,8 @@ def run_historical_backfill(
         try:
             import sys as _sys
             _sys.path.insert(0, str(root_path))
-            from utils import load_config
-            from fmp_client import FMPClient
-            cfg = load_config(str(root_path / "config.json"))
-            fmp_client = FMPClient(daily_budget=cfg.fmp_daily_calls_budget)
+            from portfolio_automation.data_budget.factory import governed_client
+            fmp_client = governed_client("historical_replay")
         except Exception as exc:
             logger.error("historical_backfill: FMP client init failed: %s", exc)
             payload = _build_payload(

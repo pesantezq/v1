@@ -164,7 +164,11 @@ class FMPBudgetGovernor:
                now_month: Optional[str] = None) -> Any:
         if fmp_client is None:
             from fmp_client import FMPClient
-            fmp_client = FMPClient(cache_dir=self._cache_dir)
+            # daily_budget=0 => the inner client is uncapped; the GOVERNOR is the
+            # budget authority (token bucket + run-mode budget + monthly bandwidth).
+            # Letting the inner FMPClient also enforce its 230 default would
+            # double-cap and silently throttle under the governor.
+            fmp_client = FMPClient(cache_dir=self._cache_dir, daily_budget=0)
         if _killed(self._config):
             return fmp_client  # kill-switch: today's proven behavior
         bucket = _TokenBucket(rate_per_min=self._rate, burst=self._burst)

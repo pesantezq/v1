@@ -153,11 +153,10 @@ def fetch_news_articles(
 
     if fmp_client is None:
         try:
-            from fmp_client import FMPClient
-            budget = _load_fmp_budget()
-            # `budget is not None` (not truthiness) so an explicit 0 = "no cap"
-            # reaches FMPClient instead of being dropped to its 230 default.
-            fmp_client = FMPClient(daily_budget=budget) if budget is not None else FMPClient()
+            from portfolio_automation.data_budget.factory import governed_client
+            # Route through the budget governor (run-mode 'daily'); the governed
+            # client proxies get_stock_news and honors the config budget/uncap.
+            fmp_client = governed_client("daily")
         except Exception as exc:
             logger.warning("news runner: could not instantiate FMPClient — %s", exc)
             return []
