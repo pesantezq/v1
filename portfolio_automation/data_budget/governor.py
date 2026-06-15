@@ -66,8 +66,10 @@ def _extract_symbols(args, kwargs) -> list[str]:
 
 
 def _empty_like(method_name: str):
-    # Mirror the shape callers expect from skipped calls (dict for quotes, list for history).
-    return {} if "quote" in method_name or "profile" in method_name else []
+    # Mirror the shape callers expect from skipped calls: quote methods return a
+    # dict ({sym: {...}} / single quote); everything else (history, bulk/batch
+    # profiles, ratios, key-metrics — all List[Dict]) returns an empty list.
+    return {} if "quote" in method_name else []
 
 
 def _wait_for_token(bucket: "_TokenBucket", *, max_wait_s: float = 2.0) -> None:
@@ -113,14 +115,15 @@ class GovernedFMPClient:
             skip = self._sched.should_skip(self._run_mode,
                                            bandwidth_exhausted=self._bandwidth_exhausted())
             over = self._sched.over_run_budget(self._run_mode, calls_so_far=self._calls_this_run)
-            cache_only = self._sched.is_cache_only(self._run_mode)
-            if skip or over or cache_only:
-                reason = ("bandwidth_guard" if skip else
-                          "run_budget" if over else "cache_only")
+            if skip or over:
+                reason = "bandwidth_guard" if skip else "run_budget"
                 self._ledger.record(run_mode=self._run_mode, endpoint=name, symbols=symbols,
                                     cache_hit=False, bytes_=0, skipped_reason=reason,
                                     ts=self._now_iso())
                 return _empty_like(name)
+            # cache_only modes (historical_replay) fall through to the cache-first
+            # inner client: a cache hit makes 0 live calls; a miss makes 1 (spec:
+            # "cache-only by default; live only if cache missing").
             if not self._bucket.try_consume(1):
                 # high-priority waits briefly; low-priority skips
                 if self._sched.priority(self._run_mode) == "low":

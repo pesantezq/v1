@@ -100,6 +100,22 @@ class TestGovernedClientBehavior(unittest.TestCase):
                              since="2000-01-01T00:00:00+00:00"), 1)
             self.assertEqual(gov.ledger.monthly_bytes(month="2026-06"), 123)
 
+    def test_cache_only_mode_passes_through_to_client(self):
+        # historical_replay (cache_only) must reach the cache-first inner client,
+        # NOT be skipped — a cache hit serves cache, a miss makes one live call.
+        with tempfile.TemporaryDirectory() as td:
+            gov = FMPBudgetGovernor(
+                db_path=Path(td) / "fmp_budget.db", cache_dir=Path(td) / "cache",
+                config={"enabled": True, "monthly_bandwidth_gb": 20,
+                        "rate_per_min": 240, "burst": 300})
+            fake = MagicMock()
+            fake.get_historical_prices.return_value = [{"date": "2026-06-15", "close": 1.0}]
+            fake.last_response_bytes = 0
+            gc = gov.client(run_mode="historical_replay", fmp_client=fake, now_month="2026-06")
+            out = gc.get_historical_prices("AAPL")
+            fake.get_historical_prices.assert_called_once()
+            self.assertEqual(out, [{"date": "2026-06-15", "close": 1.0}])
+
     def test_low_priority_skipped_when_bandwidth_over_guard(self):
         with tempfile.TemporaryDirectory() as td:
             gov = FMPBudgetGovernor(

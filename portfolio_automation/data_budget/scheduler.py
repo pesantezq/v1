@@ -34,8 +34,13 @@ class RunModeScheduler:
         return bool(self._mode(run_mode).get("cache_only"))
 
     def over_run_budget(self, run_mode: str, *, calls_so_far: int) -> bool:
+        # cache_only modes (e.g. historical_replay) are governed by cache-first
+        # pass-through, NOT a positive call budget — never report them as
+        # over-budget, or every call would be skipped and the cache never served.
+        if self.is_cache_only(run_mode):
+            return False
         budget = self.call_budget(run_mode)
-        if budget <= 0 and not self.is_cache_only(run_mode):
+        if budget <= 0:
             return False  # uncapped
         return calls_so_far >= budget
 

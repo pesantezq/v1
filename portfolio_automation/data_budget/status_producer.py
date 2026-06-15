@@ -6,6 +6,7 @@ from typing import Any
 
 from portfolio_automation.data_budget.usage_ledger import UsageLedger
 from portfolio_automation.data_budget.cache import cache_stats
+from portfolio_automation.data_governance import OutputNamespace, safe_write_text
 
 _OBSERVE_ONLY = True
 
@@ -65,9 +66,9 @@ def write_status_artifacts(*, ledger: UsageLedger, cache_dir: Path,
     usage, cache, budget = build_status(
         ledger=ledger, cache_dir=cache_dir, portfolio_symbols=portfolio_symbols,
         month=month, monthly_bandwidth_gb=monthly_bandwidth_gb, run_modes=run_modes)
-    latest = Path(base_dir) / "latest"
-    latest.mkdir(parents=True, exist_ok=True)
     for name, payload in (("fmp_usage_status.json", usage),
                           ("fmp_cache_status.json", cache),
                           ("data_budget_status.json", budget)):
-        (latest / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # OutputNamespace.LATEST governance (CLAUDE.md: all writes go through it).
+        safe_write_text(OutputNamespace.LATEST, name,
+                        json.dumps(payload, indent=2), base_dir=base_dir)

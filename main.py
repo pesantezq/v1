@@ -2263,8 +2263,8 @@ def run_portfolio_update(
             _pnl_root = _decision_explainer_root_from_output_dir(output_dir)
             _pnl_fmp = None
             try:
-                from fmp_client import FMPClient as _PnlFMP
-                _pnl_fmp = _PnlFMP(daily_budget=config.fmp_daily_calls_budget)
+                from portfolio_automation.data_budget.factory import governed_client
+                _pnl_fmp = governed_client("daily")
             except Exception as _pnl_fmp_err:
                 logger.debug(
                     "PNL ADVISORS: FMP client unavailable (advisors will degrade): %s",
