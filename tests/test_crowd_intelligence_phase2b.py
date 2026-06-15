@@ -165,6 +165,31 @@ class TestNoFmpAndNoDecisionImpact(unittest.TestCase):
             self.assertEqual(decisions[0]["ticker"], "AAPL")
 
 
+class TestUniverseTickerFilter(unittest.TestCase):
+    def test_synthetic_decision_symbols_filtered(self):
+        from portfolio_automation.crowd_intelligence.artifact_writer import _load_universe, _is_ticker_like
+        # real tickers (incl class-share dot/dash) pass; synthetic decision entries fail
+        for ok in ("AAPL", "QQQ", "NASA", "BRK.B", "BF-B", "XLRE"):
+            self.assertTrue(_is_ticker_like(ok), ok)
+        for bad in ("EMERGENCY_FUND_2026-06-15", "DRIFT_QQQ_2026-06-15", "CASH", "_X", "TOOLONGSYM"):
+            if bad == "CASH":
+                continue  # CASH is a plausible 4-letter shape; not a target here
+            self.assertFalse(_is_ticker_like(bad), bad)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "config.json").write_text(json.dumps(
+                {"portfolio": {"holdings": [{"symbol": "QQQ"}, {"symbol": "GLD"}]}}))
+            (root / "outputs" / "latest").mkdir(parents=True)
+            (root / "outputs" / "latest" / "decision_plan.json").write_text(json.dumps(
+                {"decisions": [{"symbol": "KLAC"}, {"symbol": "EMERGENCY_FUND_2026-06-15"},
+                               {"symbol": "DRIFT_QQQ_2026-06-15"}, {"symbol": "INTC"}]}))
+            uni = _load_universe(root)
+            self.assertIn("KLAC", uni)
+            self.assertIn("QQQ", uni)
+            self.assertNotIn("EMERGENCY_FUND_2026-06-15", uni)
+            self.assertNotIn("DRIFT_QQQ_2026-06-15", uni)
+
+
 class TestDailyWiringNonFatal(unittest.TestCase):
     def test_run_returns_status_dict_not_raises_on_bad_root(self):
         from portfolio_automation.crowd_intelligence.artifact_writer import run

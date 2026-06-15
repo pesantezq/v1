@@ -52,15 +52,29 @@ def write_artifacts(signals: list, status: dict, *, base_dir: Path | str = "outp
                     json.dumps(status, indent=2), base_dir=base_dir)
 
 
+import re as _re
+
+# Real exchange tickers: uppercase, ≤7 chars, optional single . or - class suffix
+# (AAPL, QQQ, BRK.B, BF-B). Rejects synthetic decision_plan entries like
+# EMERGENCY_FUND_2026-06-15 / DRIFT_QQQ_2026-06-15 (underscores, date suffix) so the
+# universe cap is spent only on symbols FMP can actually return data for.
+_TICKER_RE = _re.compile(r"^[A-Z][A-Z0-9]{0,5}([.\-][A-Z]{1,4})?$")
+
+
+def _is_ticker_like(sym: str) -> bool:
+    return bool(_TICKER_RE.match(sym)) and "_" not in sym
+
+
 def _load_universe(root: Path, *, max_symbols: int = 40) -> list[str]:
     """Holdings ∪ decision_plan advisory-pick symbols (so the GUI's advisory picks
-    actually get crowd context), deduped and capped to bound FMP calls."""
+    actually get crowd context), deduped, ticker-shape filtered, and capped to bound
+    FMP calls."""
     syms: list[str] = []
     seen: set[str] = set()
 
     def _add(sym):
         s = str(sym or "").upper().strip()
-        if s and s not in seen:
+        if s and s not in seen and _is_ticker_like(s):
             seen.add(s)
             syms.append(s)
 
