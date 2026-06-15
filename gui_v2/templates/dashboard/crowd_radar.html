@@ -8,104 +8,168 @@
      hx-target="#dashboard-crowd-radar-content"
      hx-select="#dashboard-crowd-radar-content"
      hx-swap="outerHTML"
-     class="space-y-7">
+     class="space-y-8 text-[15px]">
 
-  {{ ui.page_header("Crowd Radar", "Public-knowledge velocity · crowd-state classifier — sandbox, observe-only",
+  {# 1. Page header — title + sandbox subtitle + compact refresh (via page_header). #}
+  {{ ui.page_header("Crowd Radar",
+                    "Sandbox-only crowd intelligence. Never triggers trades or allocation changes.",
                     "/dashboard/crowd-radar", "dashboard-crowd-radar-content") }}
 
-  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-3 text-sm text-sky-200">
     <span class="font-semibold">Sandbox research intelligence only. Not a trade recommendation.</span>
     Crowd-knowledge state may adjust research priority only; it never triggers
     BUY / SELL / HOLD / REBALANCE / TRIM / SCALE / PROMOTE or any allocation change.
   </div>
 
+  {# 2. Summary status strip — four large readable stats. #}
+  <section aria-label="Crowd radar summary" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {{ ui.hero_stat("Active Sources", active_source_count ~ " / " ~ total_source_count,
+                    active_source_severity, "governed sources") }}
+    {{ ui.hero_stat("Data Quality", data_quality_label, data_quality_severity,
+                    source_status | status_label) }}
+    {{ ui.hero_stat("Tickers Detected", ticker_count,
+                    "green" if ticker_count else "gray", "classified") }}
+    {{ ui.hero_stat("Last Updated",
+                    (state_updated_at | human_time) if state_updated_at else "—",
+                    "gray", "sandbox discovery") }}
+  </section>
+
   {% if warnings %}
-  <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2 text-xs text-amber-200">
+  <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2.5 text-sm text-amber-200">
     Data-quality notes: {{ warnings[:4]|join(" · ") }}
   </div>
   {% endif %}
 
-  {# --- Multi-source readiness: shown BEFORE ticker states (no-extra-cost lane) --- #}
-  {% if source_health_rows %}
+  {# 3. Source Health — readable table (Source / Status / Reason / Action). #}
   <section aria-label="Crowd source health">
     {{ ui.section_header("Source Health", "no paid data sources enabled", "crowd_source_health.json") }}
-    <div class="rounded-xl bg-zinc-900/60 border border-zinc-800 px-4 py-2.5 text-xs text-zinc-300 mb-3">
-      Ready to collect: <span class="font-semibold">{{ multi_source.ready_to_collect }}</span> ·
-      Active: <span class="text-emerald-300">{{ multi_source.active_sources|join(", ") or "none" }}</span> ·
-      Probe-only: <span class="text-sky-300">{{ multi_source.probe_only_sources|join(", ") or "none" }}</span> ·
-      Blocked (no-extra-cost): <span class="text-zinc-500">{{ multi_source.blocked_sources|join(", ") or "none" }}</span>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for s in source_health_rows %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 flex items-center justify-between">
-        <span class="font-mono text-zinc-100">{{ s.source }}</span>
-        {{ ui.badge(s.badge, s.status|status_label) }}
-      </div>{% endfor %}
-    </div>
-    {% if multi_source.entitlement_warnings %}
-    <div class="mt-2 text-[11px] text-amber-300/80">Entitlement: {{ multi_source.entitlement_warnings|join(" · ") }}</div>
+    {% if source_health_rows %}
+    {% call ui.responsive_table() %}
+    <table class="min-w-full text-sm border-separate border-spacing-0">
+      <thead>
+        <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
+          <th class="py-2 pr-4 font-medium">Source</th>
+          <th class="py-2 pr-4 font-medium">Status</th>
+          <th class="py-2 pr-4 font-medium">Reason</th>
+          <th class="py-2 font-medium">Action / Next Step</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in source_health_rows %}
+        <tr class="border-t border-zinc-800 align-top">
+          <td class="py-3 pr-4 font-mono text-zinc-100 whitespace-nowrap">{{ s.source }}</td>
+          <td class="py-3 pr-4 whitespace-nowrap">{{ ui.badge(s.badge, s.status | status_label) }}</td>
+          <td class="py-3 pr-4 text-zinc-300">{{ s.reason }}</td>
+          <td class="py-3 text-zinc-400">{{ s.action or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+    {% else %}
+    {{ ui.empty_state("No source health reported",
+                      "The multi-source connector lane has not run yet, or crowd_source_health.json is absent.") }}
     {% endif %}
   </section>
 
-  {% if multi_source.top_mention_velocity %}
-  <section aria-label="Top mention velocity">
-    {{ ui.section_header("Top Mention Velocity", multi_source.labels|join(" · ") or "research priority only", "crowd_multi_source_velocity.json") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for r in multi_source.top_mention_velocity %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
-        <span class="font-mono font-semibold text-zinc-100">{{ r.ticker }}</span>
-        <div class="text-xs text-zinc-400 font-mono">
-          vel {{ "%.2f"|format(r.mention_velocity or 0) }} ·
-          breadth {{ r.source_breadth }} ·
-          hype {{ "%.2f"|format(r.hype_risk_score or 0) }} ·
-          conf {{ "%.2f"|format(r.confidence or 0) }}
-        </div>
-        {% if r.labels %}<div class="text-[11px] text-zinc-500">{{ r.labels|join(" · ") }}</div>{% endif %}
-      </div>{% endfor %}
+  {# 4. Mention Velocity — ranked, horizontally scrollable on mobile. #}
+  {% if velocity_rows %}
+  <section aria-label="Mention velocity">
+    {{ ui.section_header("Mention Velocity", "ranked by velocity · research priority only",
+                         "crowd_multi_source_velocity.json") }}
+    {% if velocity_low_conf %}
+    <div class="rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2.5 text-sm text-amber-200 mb-3">
+      Low confidence — only one governed source is active, so source breadth cannot corroborate these mentions.
     </div>
+    {% endif %}
+    {% call ui.responsive_table() %}
+    <table class="min-w-full text-sm border-separate border-spacing-0">
+      <thead>
+        <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
+          <th class="py-2 pr-4 font-medium">#</th>
+          <th class="py-2 pr-4 font-medium">Ticker</th>
+          <th class="py-2 pr-4 font-medium text-right">Velocity</th>
+          <th class="py-2 pr-4 font-medium text-right">Breadth</th>
+          <th class="py-2 pr-4 font-medium text-right">Hype</th>
+          <th class="py-2 pr-4 font-medium text-right">Confidence</th>
+          <th class="py-2 font-medium">Signal / Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in velocity_rows %}
+        <tr class="border-t border-zinc-800">
+          <td class="py-2.5 pr-4 font-mono text-zinc-500">{{ r.rank }}</td>
+          <td class="py-2.5 pr-4 font-mono font-semibold text-zinc-100 whitespace-nowrap">{{ r.ticker }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-200">{{ "%.2f"|format(r.velocity) }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ r.breadth if r.breadth is not none else "—" }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(r.hype) }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(r.confidence) }}</td>
+          <td class="py-2.5 text-zinc-400">{{ r.signal }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
   </section>
   {% endif %}
-  {% endif %}
 
+  {# 5. Research Confidence — the three trust cards (status / backtest / compliance). #}
   {% if cards %}
-  <section aria-label="Crowd radar summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-    {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
-  </section>
-  {% endif %}
-
-  {% for sec in sections %}
-  <section aria-label="{{ sec.label }}">
-    {{ ui.section_header(sec.label, "research priority only", "crowd_knowledge_state.json") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for r in sec.rows %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
-        <div class="flex items-center justify-between">
-          <span class="font-mono font-semibold text-zinc-100">{{ r.ticker }}</span>
-          {{ ui.badge(sec.status if sec.status != "ok" else "green", r.crowd_state|status_label) }}
-        </div>
-        <div class="text-xs text-zinc-400 font-mono">
-          conf {{ "%.2f"|format(r.confidence or 0) }} ·
-          vel {{ "%.2f"|format(r.score_components.velocity_z or 0) }} ·
-          dd {{ "%.2f"|format(r.score_components.dd_density or 0) }} ·
-          ev {{ "%.2f"|format(r.score_components.evidence_score or 0) }}
-        </div>
-        <div class="text-xs text-zinc-500">
-          priority {{ "%.1f"|format(r.crowd_research_priority_score or 0) }} ·
-          next: <span class="text-sky-300">{{ r.recommended_next_step|status_label }}</span>
-        </div>
-        {% if r.risk_flags %}
-        <div class="text-[11px] text-rose-300/70">{{ r.risk_flags[:3]|join(" · ") }}</div>
-        {% endif %}
-      </div>{% endfor %}
+  <section aria-label="Research confidence">
+    {{ ui.section_header("Research Confidence", "is the displayed data trustworthy?", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
     </div>
   </section>
-  {% endfor %}
-
-  {% if not has_data %}
-  {{ ui.empty_state("Crowd Radar not yet produced",
-                    "Enable crowd_radar in config + set REDDIT_* credentials, then run the
-                     discovery lane. The layer ships disabled and degrades safely when off.") }}
   {% endif %}
+
+  {# 6. Advisory output — the crowd-state classifications, or an honest why-not. #}
+  <section aria-label="Advisory output">
+    {{ ui.section_header("Advisory Output", "observe-only", "crowd_knowledge_state.json") }}
+    {% if advisory.produced %}
+      {% for sec in sections %}
+      <div class="mb-4">
+        <div class="text-xs uppercase tracking-wide text-zinc-400 mb-2">{{ sec.label }}</div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for r in sec.rows %}
+          <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-mono font-semibold text-zinc-100">{{ r.ticker }}</span>
+              {{ ui.badge(sec.status if sec.status != "ok" else "green", r.crowd_state | status_label) }}
+            </div>
+            <div class="text-sm text-zinc-400">
+              priority {{ "%.1f"|format(r.crowd_research_priority_score or 0) }} ·
+              next <span class="text-sky-300">{{ r.recommended_next_step | status_label }}</span>
+            </div>
+            {% if r.risk_flags %}
+            <div class="text-xs text-rose-300/70">{{ r.risk_flags[:3]|join(" · ") }}</div>
+            {% endif %}
+          </div>{% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="bg-zinc-900/60 rounded-xl border border-dashed border-zinc-700 px-6 py-8 space-y-5">
+        <div class="text-zinc-200 font-medium text-base">Crowd Radar did not produce an advisory today</div>
+        {% if advisory.why %}
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">Why</div>
+          <ul class="list-disc list-inside text-sm text-zinc-400 space-y-1">
+            {% for w in advisory.why %}<li>{{ w }}</li>{% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% if advisory.next_steps %}
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">Next steps</div>
+          <ul class="list-disc list-inside text-sm text-zinc-400 space-y-1">
+            {% for n in advisory.next_steps %}<li>{{ n }}</li>{% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </section>
 
 </div>
 {% endblock %}

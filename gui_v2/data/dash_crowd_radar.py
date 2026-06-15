@@ -30,6 +30,33 @@ _STATUS_FROM_QUALITY = {
     "degraded": "warning",
 }
 
+# Source status -> (plain-English reason, next-step action). Display-only mapping
+# derived from the connector's reported status; invents no runtime behavior.
+_SOURCE_REASON_ACTION: dict[str, tuple[str, str]] = {
+    "ok": ("Active — mention velocity flowing", ""),
+    "active": ("Active — mention velocity flowing", ""),
+    "not_entitled": ("Plan does not include this endpoint", "Enable FMP entitlement"),
+    "no_credentials": ("Missing API key / credentials", "Add API credentials"),
+    "not_configured": ("Missing config or token", "Configure source"),
+    "blocked_no_extra_cost": ("Disabled — would incur extra cost", "Out of scope (no paid sources)"),
+    "manual_reference_only": ("Manual reference only", ""),
+    "requires_manual_review": ("Terms-of-service review needed", "Review source ToS"),
+    "rate_limited": ("Rate limited by source", "Retry later"),
+    "budget_exhausted": ("Source budget exhausted", "Wait for budget reset"),
+    "degraded": ("Degraded — partial data", "Check connector logs"),
+    "disabled": ("Disabled in config", "Enable in config"),
+    "error": ("Error contacting source", "Check connector logs"),
+}
+
+# data_quality_status -> (display label, hero-stat severity).
+_QUALITY_DISPLAY: dict[str, tuple[str, str]] = {
+    "ok": ("OK", "green"),
+    "degraded": ("Degraded", "yellow"),
+    "insufficient_data": ("Insufficient Data", "yellow"),
+    "disabled": ("Disabled", "gray"),
+    "unknown": ("Unavailable", "gray"),
+}
+
 
 def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     root = Path(root)
@@ -111,15 +138,19 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         "manual_reference_only": "unknown", "rate_limited": "warning",
         "budget_exhausted": "warning", "degraded": "warning", "error": "red",
     }
-    source_health_rows = [
-        {
+    source_health_rows = []
+    for r in (health_doc.get("records") or []):
+        st = r.get("status") or "unknown"
+        reason, action = _SOURCE_REASON_ACTION.get(
+            st, (st.replace("_", " ").title(), "Review"))
+        source_health_rows.append({
             "source": r.get("source_name"),
-            "status": r.get("status"),
-            "badge": _STATUS_BADGE.get(r.get("status"), "unknown"),
+            "status": st,
+            "badge": _STATUS_BADGE.get(st, "unknown"),
+            "reason": reason,
+            "action": action,
             "warnings": r.get("warnings") or [],
-        }
-        for r in (health_doc.get("records") or [])
-    ]
+        })
     multi_source = {
         "ready_to_collect": activation_doc.get("ready_to_collect"),
         "cost_policy": activation_doc.get("cost_policy"),
@@ -137,6 +168,65 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
                       "No paid data sources enabled.",
     }
 
+    # --- Summary status strip (derived, display-only) ---
+    active_source_count = sum(1 for r in source_health_rows if r["status"] in ("ok", "active"))
+    total_source_count = len(source_health_rows)
+    if total_source_count == 0:
+        # Fall back to the compliance artifact's counts when health rows are absent.
+        active_source_count = compliance_doc.get("active_sources", 0) or 0
+        total_source_count = compliance_doc.get("total_sources", 0) or 0
+    if active_source_count >= 1:
+        active_source_severity = "green"
+    elif total_source_count > 0:
+        active_source_severity = "red"
+    else:
+        active_source_severity = "gray"
+    quality_label, quality_severity = _QUALITY_DISPLAY.get(data_quality, ("Unavailable", "gray"))
+
+    # --- Mention velocity ranked rows (sorted by velocity desc; display-only) ---
+    velocity_rows = []
+    for i, r in enumerate(sorted(multi_source["top_mention_velocity"],
+                                 key=lambda x: x.get("mention_velocity") or 0,
+                                 reverse=True), start=1):
+        velocity_rows.append({
+            "rank": i,
+            "ticker": r.get("ticker"),
+            "velocity": r.get("mention_velocity") or 0,
+            "breadth": r.get("source_breadth"),
+            "hype": r.get("hype_risk_score") or 0,
+            "confidence": r.get("confidence") or 0,
+            "signal": " · ".join(r.get("labels") or []) or "—",
+        })
+    # Low-confidence banner: only one governed source can corroborate breadth.
+    velocity_low_conf = bool(velocity_rows) and active_source_count <= 1
+
+    # --- Advisory output: did the layer produce usable research today? ---
+    advisory_produced = bool(records) and data_quality == "ok"
+    why: list[str] = []
+    next_steps: list[str] = []
+    if not advisory_produced:
+        ent = [r for r in source_health_rows if r["status"] == "not_entitled"]
+        nocred = [r for r in source_health_rows if r["status"] == "no_credentials"]
+        active_names = [r["source"] for r in source_health_rows if r["status"] in ("ok", "active")]
+        if source_status == "disabled":
+            why.append("Crowd Radar is disabled in config.")
+        if ent:
+            why.append(f"{', '.join(r['source'] for r in ent)} is not entitled on the current plan.")
+        if active_names and len(active_names) == 1:
+            why.append(f"Only {active_names[0]} is active (single governed source).")
+        if data_quality == "insufficient_data":
+            why.append("Confidence is below the advisory threshold.")
+        if not records:
+            why.append("No tickers crossed the mention-velocity threshold.")
+        if not why:
+            why.append("Insufficient governed source coverage.")
+        if ent:
+            next_steps.append("Enable FMP social-sentiment entitlement.")
+        if nocred:
+            next_steps.append(f"Add credentials for {', '.join(r['source'] for r in nocred)}.")
+        next_steps.append("Run the discovery lane with the current sandbox source (ApeWisdom).")
+    advisory = {"produced": advisory_produced, "why": why, "next_steps": next_steps}
+
     return {
         "persona": "crowd_radar",
         "observe_only": True,
@@ -150,4 +240,15 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         # Multi-source source-health (shown above ticker states in the template).
         "source_health_rows": source_health_rows,
         "multi_source": multi_source,
+        # --- Redesign (2026-06-15): derived display-only fields ---
+        "active_source_count": active_source_count,
+        "total_source_count": total_source_count,
+        "active_source_severity": active_source_severity,
+        "data_quality_label": quality_label,
+        "data_quality_severity": quality_severity,
+        "ticker_count": len(records),
+        "state_updated_at": state_doc.get("created_at"),
+        "velocity_rows": velocity_rows,
+        "velocity_low_conf": velocity_low_conf,
+        "advisory": advisory,
     }
