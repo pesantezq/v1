@@ -21,32 +21,30 @@
     {% if d.priority %}<span class="font-mono">priority {{ "%.2f" | format(d.priority | float) }}</span>{% endif %}
     {% if d.confidence is not none and d.confidence != "" %}<span class="font-mono">conf {{ "%.0f" | format((d.confidence | float) * 100 if (d.confidence | float) <= 1 else (d.confidence | float)) }}%</span>{% endif %}
   </div>
-  {% if d.rationale %}
-  <p class="text-xs text-zinc-400 leading-snug">{{ d.rationale }}</p>
-  {% endif %}
-  {# Crowd context — observe-only context, NOT a trade signal. #}
-  {% if d.crowd_context %}
-  {% set cc = d.crowd_context %}
-  <div class="mt-1 rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2 space-y-1">
-    <div class="flex items-center gap-2 flex-wrap text-[11px]">
-      {{ ui.badge(cc.severity, "Crowd: " ~ cc.label) }}
-      {% if cc.present %}
-      <span class="font-mono text-zinc-500">score {{ "%+.2f"|format(cc.composite or 0) }} · conf {{ "%.0f"|format((cc.confidence or 0) * 100) }}% · trend {{ cc.trend }}{% if cc.composite_trend is not none %} ({{ "%+.2f"|format(cc.composite_trend) }}){% endif %}</span>
-      {% endif %}
-    </div>
-    {% for line in cc.lines %}
-    <p class="text-[11px] text-zinc-400 leading-snug">{{ line }}</p>
-    {% endfor %}
-    {% if cc.present and cc.top_reasons %}
-    <ul class="text-[11px] text-zinc-500 list-disc list-inside">
-      {% for r in cc.top_reasons %}<li>{{ r }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-    {% if cc.warnings %}<p class="text-[11px] text-amber-300/70">{{ cc.warnings[:2]|join(" · ") }}</p>{% endif %}
-    {% if cc.present %}
-    <p class="text-[10px] text-zinc-600">sources: {{ cc.enabled_sources|length }} enabled · {{ cc.disabled_sources|length }} disabled · freshness {{ "%.0f"|format((cc.data_freshness or 0) * 100) }}%</p>
-    {% endif %}
+  {% if d.pick %}
+  {% set p = d.pick %}
+  {# Signal strength bar + conviction band. #}
+  <div class="flex items-center gap-2 text-[11px]">
+    <span class="text-zinc-500">Signal</span>
+    <div class="flex-1 bg-zinc-800 rounded-full h-1.5"><div class="h-1.5 rounded-full {% if p.confidence_pct >= 70 %}bg-emerald-500/70{% elif p.confidence_pct >= 40 %}bg-amber-500/70{% else %}bg-zinc-600{% endif %}" style="width: {{ p.signal_strength }}%"></div></div>
+    <span class="font-mono text-zinc-400">{{ p.conviction }} {{ p.confidence_pct }}%</span>
   </div>
+  {% if p.thesis %}<p class="text-xs text-zinc-300 leading-snug">{{ p.thesis }}</p>{% endif %}
+  {# Three reasoning rows — portfolio first (primary), crowd subordinate, then catalyst/risk. #}
+  <dl class="space-y-1.5 text-[11px]">
+    <div class="flex gap-2"><dt class="w-16 shrink-0 text-zinc-500 uppercase tracking-wide">Portfolio</dt><dd class="text-zinc-300">{{ p.portfolio_row }}</dd></div>
+    <div class="flex gap-2 items-start">
+      <dt class="w-16 shrink-0 text-zinc-500 uppercase tracking-wide">Crowd</dt>
+      <dd class="text-zinc-300 space-x-1">
+        {{ ui.badge("green" if p.crowd_agreement == "Agree" else "red" if p.crowd_agreement == "Disagree" else "blue", p.crowd_agreement) }}
+        <span class="{% if p.crowd_disagrees %}text-rose-300/80{% endif %}">{{ p.crowd_row }}</span>
+      </dd>
+    </div>
+    <div class="flex gap-2"><dt class="w-16 shrink-0 text-zinc-500 uppercase tracking-wide">Catalyst</dt><dd class="text-zinc-400">{{ p.catalyst_row }}</dd></div>
+  </dl>
+  <p class="text-[10px] text-zinc-600 italic">Crowd input is research context only.</p>
+  {% elif d.rationale %}
+  <p class="text-xs text-zinc-400 leading-snug">{{ d.rationale }}</p>
   {% endif %}
   <p class="text-[11px] text-zinc-600 italic flex items-center gap-1">
     <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>

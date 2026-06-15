@@ -110,6 +110,20 @@ social 0 (disabled) → composite −0.04, confidence 0.75. ETF holdings show ne
 `decision_plan.json` and all decision artifacts are untouched (test-asserted);
 API keys never appear in stored events/artifacts/errors.
 
+### Phase 2C — Portfolio tab integration (view-model)
+
+`gui_v2/data/portfolio_presenter.py` composes a display-only view-model from existing
+artifact data: **summary cards** (value/cash/drift/diversification), **Advisory Picks
+with Context** (each pick gets 3 reasoning rows — Portfolio / Crowd / Catalyst-Risk —
+a signal-strength bar, conviction band, and the note "Crowd input is research context
+only"), a right-side **Crowd Overlay** panel (active governed sources, coverage %,
+Agree/Inconclusive/Disagree summary, conviction legend, "View Crowd Details" link), and
+a **Why These Picks** reasoning strip. Crowd is always subordinate: it never changes a
+pick's action and an `Agree`/`Disagree` is classified from the crowd label vs the
+(unchanged) decision direction — disagreement is surfaced, never auto-suppresses a pick.
+Pure functions; no decision/scoring/allocation change. Mobile: cards stack, overlay
+drops below the advisory grid.
+
 ## Phase 2B — GUI context + advisory enrichment + daily wiring (observe-only)
 
 Surfaces the Phase-2A artifacts on the **Portfolio tab** advisory picks as

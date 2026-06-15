@@ -118,6 +118,23 @@ def _top_decisions(dp: dict | None, max_decisions: int = 5) -> list[dict[str, An
     return out
 
 
+def _build_portfolio_vm(decisions, crowd_by_symbol, crowd_status, holdings, rd, cash):
+    """Defensive wrapper around the presenter view-model — never breaks the page."""
+    try:
+        from gui_v2.data.portfolio_presenter import build_view_model
+        cash_summary = (cash.get("cash_summary") or {}) if isinstance(cash, dict) else {}
+        return build_view_model(
+            decisions=decisions, crowd_by_symbol=crowd_by_symbol or {},
+            crowd_status=crowd_status or {}, holdings=holdings or [],
+            risk_delta=rd or {}, cash_summary=cash_summary,
+            portfolio_value=(rd or {}).get("portfolio_value"))
+    except Exception:
+        return {"summary_cards": [], "advisory_picks": [], "advisory_count": 0,
+                "crowd_overlay": {"available": False, "active_sources": 0, "coverage_pct": 0,
+                                  "agree": 0, "disagree": 0, "inconclusive": 0, "legend": []},
+                "why_these_picks": []}
+
+
 # ---------------------------------------------------------------------------
 # Public collector
 # ---------------------------------------------------------------------------
@@ -197,12 +214,18 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     # Crowd context (observe-only, artifact-only) — attach per-pick context WITHOUT
     # touching the decision action/ticker. Never alters advisory selection.
     crowd_context_status = {"available": False, "banner": None}
+    crowd_by_symbol: dict[str, Any] = {}
     try:
         from gui_v2.data.dash_crowd_context import crowd_context_for
         _cc = crowd_context_for(root, [d.get("ticker") for d in decisions if d.get("ticker")])
         crowd_context_status = _cc["status"]
+        crowd_by_symbol = _cc["by_symbol"]
+        # enabled crowd categories (for the Crowd Overlay panel) from the status artifact
+        _ci_status = _read_json(latest / "crowd_intelligence_status.json") or {}
+        crowd_context_status["enabled_categories"] = [
+            c for c in (_ci_status.get("enabled_categories") or []) if c != "social_sentiment"]
         for d in decisions:
-            d["crowd_context"] = _cc["by_symbol"].get(str(d.get("ticker") or "").upper())
+            d["crowd_context"] = crowd_by_symbol.get(str(d.get("ticker") or "").upper())
     except Exception:
         pass
 
@@ -411,6 +434,15 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     portfolio_data = _portfolio_data(root)
     holdings = _holdings_from_real_snapshot(root)
 
+    # Presenter view-model (display-layer only). Attach each pick's structured
+    # context onto its decision row so decision_card renders the 3 reasoning rows
+    # without changing the action/ticker.
+    vm = _build_portfolio_vm(decisions, crowd_by_symbol, crowd_context_status,
+                             holdings, rd, cash)
+    _picks_by_sym = {p["ticker"]: p for p in vm.get("advisory_picks", [])}
+    for d in decisions:
+        d["pick"] = _picks_by_sym.get(str(d.get("ticker") or "").upper())
+
     return {
         "cards": cards,
         "persona": "portfolio",
@@ -418,6 +450,9 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         "decisions": decisions,
         # Crowd-intelligence context status (observe-only; banner for missing/stale)
         "crowd_context_status": crowd_context_status,
+        # Presenter view-model: summary cards, advisory picks w/ context, crowd overlay,
+        # why-these-picks. Display-layer composition only (no decision/scoring change).
+        "vm": vm,
         # Holdings from real snapshot keys (H1 fix — not from legacy portfolio.py)
         "holdings": holdings,
         "allocation": portfolio_data.get("allocation") or {},

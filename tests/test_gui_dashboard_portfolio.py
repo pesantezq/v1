@@ -304,8 +304,9 @@ def test_source_of_truth_invariant_in_rendered_html(monkeypatch, tmp_path):
         # 2. The observe-only banner must be present
         assert "Observe-only" in html
 
-        # 3. Advisory Decisions section heading must be present
-        assert "Advisory Decisions" in html
+        # 3. Advisory picks section heading must be present (renamed 2026-06-15:
+        #    "Advisory Decisions" -> "Advisory Picks with Context"; queue aria-label kept)
+        assert "Advisory Picks with Context" in html
 
         # 4. Forbidden labels must not appear anywhere
         for bad in _FORBIDDEN_LABELS:

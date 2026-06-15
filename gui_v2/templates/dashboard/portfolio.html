@@ -11,8 +11,21 @@
      hx-swap="outerHTML"
      class="space-y-7">
 
-  {{ ui.page_header("Portfolio", "Portfolio Manager view — advisory, read-only",
+  {{ ui.page_header("Portfolio", "Observe-only portfolio intelligence and advisory context.",
                     "/dashboard/portfolio", "dashboard-portfolio-content") }}
+
+  {# Observe-only mode banner — research/decision-support only, no execution. #}
+  <div class="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-4 py-2.5 text-sm">
+    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Observe-only</span>
+    <span class="text-emerald-200/90">StockBot is running in <span class="font-semibold">OBSERVE-ONLY</span> mode. No trades are placed — all insights are for research and decision support.</span>
+  </div>
+
+  {# Summary cards row — value / cash / drift / diversification. #}
+  {% if vm and vm.summary_cards %}
+  <section aria-label="Portfolio summary" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {% for c in vm.summary_cards %}{{ ui.hero_stat(c.label, c.value, c.severity, c.sub) }}{% endfor %}
+  </section>
+  {% endif %}
 
   {# Named card lookups (loader supplies all six; we re-present them). #}
   {% set insight_card  = cards | selectattr("title", "equalto", "Top Insight") | list | first %}
@@ -62,9 +75,27 @@
   {# Grouped by action. decision_plan.json is the sole source of      #}
   {# advisory action language; all verb badges live inside here.      #}
   {# --------------------------------------------------------------- #}
-  <section id="advisory-decisions" aria-label="Advisory decision queue">
+  {# Why These Picks — the reasoning stack (portfolio / quant / crowd-support / risk). #}
+  {% if vm and vm.why_these_picks %}
+  <section aria-label="Why these picks">
+    {{ ui.section_header("Why These Picks", "the reasoning stack behind each advisory pick", "") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {% for b in vm.why_these_picks %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="text-sm font-medium text-zinc-200">{{ b.title }}</div>
+        <p class="text-xs text-zinc-400 mt-1 leading-snug">{{ b.body }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# Advisory picks (left) + Crowd Overlay (right) — stacks on mobile. #}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+  <section id="advisory-decisions" aria-label="Advisory decision queue" class="lg:col-span-2">
     <div class="flex items-center gap-3 mb-3 flex-wrap">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Decisions</h2>
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Picks with Context</h2>
+      {% if vm %}<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ vm.advisory_count }} active ideas</span>{% endif %}
       <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
       <span class="inline-flex items-center gap-1 text-[11px] text-amber-300/80">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
@@ -120,6 +151,46 @@
                       "decision_plan.json is absent or empty — run the daily pipeline.") }}
     {% endif %}
   </section>
+
+  {# Crowd Overlay — supporting context across the shown picks (right on desktop,
+     below on mobile). Research context only; never drives a decision. #}
+  {% if vm and vm.crowd_overlay %}
+  {% set ov = vm.crowd_overlay %}
+  <aside aria-label="Crowd Overlay" class="lg:col-span-1 space-y-3">
+    {{ ui.section_header("Crowd Overlay", "research context only", "") }}
+    <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 space-y-3 text-sm">
+      <div>
+        <div class="text-zinc-400 text-xs uppercase tracking-wide">Active Crowd Sources (Governed)</div>
+        <div class="text-zinc-100 font-semibold">{{ ov.active_sources }} categories</div>
+        {% if ov.active_source_names %}<div class="text-[11px] text-zinc-500">{{ ov.active_source_names|join(" · ") }}</div>{% endif %}
+      </div>
+      <div>
+        <div class="text-zinc-400 text-xs uppercase tracking-wide">Crowd Coverage</div>
+        <div class="w-full bg-zinc-800 rounded-full h-2 mt-1"><div class="bg-emerald-500/70 h-2 rounded-full" style="width: {{ ov.coverage_pct }}%"></div></div>
+        <div class="text-[11px] text-zinc-500 mt-0.5">{{ ov.coverage_pct }}% of shown picks have crowd data</div>
+      </div>
+      <div>
+        <div class="text-zinc-400 text-xs uppercase tracking-wide">Crowd Agreement</div>
+        <div class="flex gap-2 mt-1 text-[11px] flex-wrap">
+          <span class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">Agree {{ ov.agree }}</span>
+          <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">Inconclusive {{ ov.inconclusive }}</span>
+          <span class="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30">Disagree {{ ov.disagree }}</span>
+        </div>
+      </div>
+      <div>
+        <div class="text-zinc-400 text-xs uppercase tracking-wide">Conviction Legend</div>
+        <ul class="text-[11px] text-zinc-400 mt-1 space-y-0.5">
+          {% for l in ov.legend %}<li><span class="font-mono text-zinc-300">{{ l.band }} ({{ l.range }})</span> — {{ l.desc }}</li>{% endfor %}
+        </ul>
+      </div>
+      <div class="pt-2 border-t border-zinc-800 text-[11px] text-zinc-500">
+        Crowd data is governance-filtered and used as research context only.
+        <a href="/dashboard/crowd-radar" class="text-sky-300 hover:text-sky-200 block mt-1">View Crowd Details &rarr;</a>
+      </div>
+    </div>
+  </aside>
+  {% endif %}
+  </div>
 
   {# --------------------------------------------------------------- #}
   {# Evidence panels — Risk / Capital / Watchlist / Memo (state only) #}
