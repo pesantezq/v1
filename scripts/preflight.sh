@@ -196,6 +196,15 @@ python -m py_compile \
     portfolio_automation/social_intelligence/ticker_extractor.py \
     portfolio_automation/social_intelligence/context_join.py \
     portfolio_automation/social_intelligence/activation_check.py \
+    portfolio_automation/social_intelligence/multi_source_crowd_aggregator.py \
+    portfolio_automation/social_sources/apewisdom_connector.py \
+    portfolio_automation/social_sources/fmp_social_sentiment_connector.py \
+    portfolio_automation/social_sources/finnhub_social_probe.py \
+    portfolio_automation/social_sources/stocktwits_probe.py \
+    portfolio_automation/social_sources/quiver_probe.py \
+    portfolio_automation/social_sources/source_health.py \
+    portfolio_automation/social_sources/dev_doc_audit.py \
+    portfolio_automation/social_sources/run_multi_source_crowd.py \
     portfolio_automation/portfolio_sim/run_portfolio_backtest.py \
     portfolio_automation/portfolio_sim/backtest_engine.py \
     portfolio_automation/portfolio_sim/tactics.py \
@@ -222,6 +231,7 @@ modules = [
     'portfolio_automation.news.run_news_intelligence',
     'portfolio_automation.social_intelligence.public_knowledge_velocity',
     'portfolio_automation.social_intelligence.activation_check',
+    'portfolio_automation.social_sources.run_multi_source_crowd',
     'portfolio_automation.portfolio_sim.run_portfolio_backtest',
     'portfolio_automation.portfolio_sim.run_portfolio_projection',
     'portfolio_automation.portfolio_sim.run_strategy_lab',

@@ -162,3 +162,36 @@ portfolio outputs are never touched. See `docs/PIPELINE_RUNBOOK.md`.
 `crowd_knowledge_state.json` is consumed by `/daily-tool-analysis` (market-discovery
 lens, `portfolio-discovery-health` agent) with a content-liveness check that flags
 "looks-fresh-but-empty" (status `ok` but zero records).
+
+## 13. No-extra-cost multi-source lane (2026-06-14)
+
+A dev-doc-audited, entitlement-probed multi-source layer sits alongside the
+Reddit-first orchestrator under `portfolio_automation/social_sources/` (Stage 9c1),
+governed by a `no_extra_cost` policy (`config.json crowd_radar.cost_policy`,
+`allow_paid_sources=false`, per-source `crowd_radar.source_policy`).
+
+| Source | Status | Why | Module |
+|---|---|---|---|
+| **ApeWisdom** | **active** | free, no-auth, official `/api/v1.0/filter/{filter}` | `apewisdom_connector.py` |
+| **FMP Social Sentiment** | probe-only | paid Starter+ entitlement; probe the existing key | `fmp_social_sentiment_connector.py` |
+| **Finnhub Social** | probe-only | premium-only (403=not_entitled); only if `FINNHUB_API_KEY` | `finnhub_social_probe.py` |
+| **Stocktwits** | requires_manual_review | partner-gated, no free tier, legacy endpoints undocumented — **no network** | `stocktwits_probe.py` |
+| **Quiver WSB** | blocked_no_extra_cost | paid (~$75/mo), no key in repo — **no network** | `quiver_probe.py` |
+
+Each connector implements the `CrowdSource` interface (`is_configured/probe/fetch/
+normalize/health`) and returns a structured `SourceResult` — never raises. The
+`multi_source_crowd_aggregator` merges normalized records, derives `mention_velocity,
+source_breadth, source_agreement, hype_risk_score, crowd_early_or_late_score`, caps
+confidence by breadth, and labels `mention_velocity_only` / `low_source_breadth` when
+only ApeWisdom is active.
+
+- **Endpoints verified:** see `docs/CROWD_SOURCE_DEV_DOC_AUDIT.md` (auto-generated).
+- **Credentials for more breadth:** `FINNHUB_API_KEY` (premium), a Starter+ FMP plan,
+  Stocktwits partner approval, `QUIVER_API_KEY` (paid). None required — the lane runs
+  on ApeWisdom alone at zero extra cost.
+- **Data stored:** aggregate mention counts + derived metrics only. **Not stored:**
+  raw Reddit/4chan/forum post text (`raw_text_storage_allowed=false`).
+- **Why it cannot trade:** sandbox-only namespace, `recommended_next_step` is a
+  research verb (`monitor`), tests assert no forbidden trade verb can be emitted; it
+  never writes `decision_plan.json` / config / signal registry. FMP endpoint
+  registered in `fmp_endpoint_registry.py` (`social_sentiment`, P3 premium_optional).

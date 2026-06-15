@@ -43,6 +43,8 @@ abort the run after the official plan has landed.
 | 8b | Discovery news integration | `portfolio_automation.discovery.news_integration` | `outputs/sandbox/discovery/news_enriched_candidates.json` |
 | 9 | Automatic promotion governance | `portfolio_automation.discovery.automatic_promotion_governance` | `outputs/sandbox/discovery/automatic_promotion_*.json` |
 | 9c | Crowd Radar (public knowledge velocity) | `portfolio_automation.social_intelligence.public_knowledge_velocity` | `outputs/sandbox/discovery/crowd_knowledge_state.json` + 4 more (observe-only, sandbox-only, **default-disabled**) |
+| 9c1 | Crowd Radar multi-source (no-extra-cost) | `portfolio_automation.social_sources.run_multi_source_crowd` | `crowd_source_dev_doc_audit.json` + `crowd_source_health.json` + `crowd_multi_source_velocity.json` + summary (ApeWisdom active; FMP/Finnhub probes; Stocktwits/Quiver blocked) |
+| 9c2 | Crowd Radar activation check | `portfolio_automation.social_intelligence.activation_check` | `crowd_radar_activation_check.json` (multi-source readiness; pure; reads 9c1 health) |
 | 10 | Daily memo + email | `watchlist_scanner.daily_memo` | `outputs/latest/daily_memo.{txt,md}` |
 | 11 | Daily run status | `portfolio_automation.daily_run_status` | `outputs/latest/daily_run_status.json` + `.md` |
 

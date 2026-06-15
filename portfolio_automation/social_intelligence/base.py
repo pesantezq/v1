@@ -54,6 +54,13 @@ class SourceStatus(str, Enum):
     SOURCE_TERMS_BLOCKED = "source_terms_blocked"
     INSUFFICIENT_DATA = "insufficient_data"
     ERROR = "error"
+    # --- multi-source / entitlement vocabulary (2026-06-14, no-extra-cost policy) ---
+    NOT_ENTITLED = "not_entitled"            # auth ok but the plan/key lacks this dataset
+    BUDGET_EXHAUSTED = "budget_exhausted"    # API call budget spent (distinct from empty)
+    NOT_CONFIGURED = "not_configured"        # no config/credentials and probe-only
+    REQUIRES_MANUAL_REVIEW = "requires_manual_review"  # official access terms unclear
+    BLOCKED_NO_EXTRA_COST = "blocked_no_extra_cost"    # paid source blocked by policy
+    MANUAL_REFERENCE_ONLY = "manual_reference_only"    # documented but not automated
 
 
 class CrowdState(str, Enum):

@@ -167,6 +167,19 @@ REGISTRY: dict[str, dict] = {
         "classification": "premium_optional",
         "usage": "optional bulk acceleration — not for core pipeline",
     },
+    # ── P3: Social sentiment (paid Starter+ entitlement; PROBE-ONLY) ───────────
+    # Crowd Radar no-extra-cost policy: NOT starter-safe, never required, only
+    # ever entitlement-probed against the existing key. v4 legacy fallback noted.
+    "social_sentiment": {
+        "endpoint":      "/stable/historical/social-sentiment",
+        "legacy_endpoint": "/api/v4/historical/social-sentiment",
+        "per_symbol":    True,
+        "starter_safe":  False,
+        "priority":      "P3",
+        "required_daily": False,
+        "classification": "premium_optional",
+        "usage": "Crowd Radar social-sentiment entitlement probe only — not core pipeline",
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,48 @@
   </div>
   {% endif %}
 
+  {# --- Multi-source readiness: shown BEFORE ticker states (no-extra-cost lane) --- #}
+  {% if source_health_rows %}
+  <section aria-label="Crowd source health">
+    {{ ui.section_header("Source Health", "no paid data sources enabled", "crowd_source_health.json") }}
+    <div class="rounded-xl bg-zinc-900/60 border border-zinc-800 px-4 py-2.5 text-xs text-zinc-300 mb-3">
+      Ready to collect: <span class="font-semibold">{{ multi_source.ready_to_collect }}</span> ·
+      Active: <span class="text-emerald-300">{{ multi_source.active_sources|join(", ") or "none" }}</span> ·
+      Probe-only: <span class="text-sky-300">{{ multi_source.probe_only_sources|join(", ") or "none" }}</span> ·
+      Blocked (no-extra-cost): <span class="text-zinc-500">{{ multi_source.blocked_sources|join(", ") or "none" }}</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for s in source_health_rows %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 flex items-center justify-between">
+        <span class="font-mono text-zinc-100">{{ s.source }}</span>
+        {{ ui.badge(s.badge, s.status|status_label) }}
+      </div>{% endfor %}
+    </div>
+    {% if multi_source.entitlement_warnings %}
+    <div class="mt-2 text-[11px] text-amber-300/80">Entitlement: {{ multi_source.entitlement_warnings|join(" · ") }}</div>
+    {% endif %}
+  </section>
+
+  {% if multi_source.top_mention_velocity %}
+  <section aria-label="Top mention velocity">
+    {{ ui.section_header("Top Mention Velocity", multi_source.labels|join(" · ") or "research priority only", "crowd_multi_source_velocity.json") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for r in multi_source.top_mention_velocity %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <span class="font-mono font-semibold text-zinc-100">{{ r.ticker }}</span>
+        <div class="text-xs text-zinc-400 font-mono">
+          vel {{ "%.2f"|format(r.mention_velocity or 0) }} ·
+          breadth {{ r.source_breadth }} ·
+          hype {{ "%.2f"|format(r.hype_risk_score or 0) }} ·
+          conf {{ "%.2f"|format(r.confidence or 0) }}
+        </div>
+        {% if r.labels %}<div class="text-[11px] text-zinc-500">{{ r.labels|join(" · ") }}</div>{% endif %}
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+  {% endif %}
+
   {% if cards %}
   <section aria-label="Crowd radar summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
     {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}

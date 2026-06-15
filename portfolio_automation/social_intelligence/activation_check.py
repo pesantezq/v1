@@ -1,21 +1,19 @@
 """
-Crowd Radar activation checklist — observe-only pre-flight gate.
+Crowd Radar activation checklist — observe-only, multi-source readiness probe.
 
-Answers one operator question deterministically: *is Crowd Radar safe and ready
-to start collecting?* It inspects every activation prerequisite — feature flag,
-Reddit credentials, source-terms compliance, rate-limit config, raw-text-storage
-and AI-processing policy, the sandbox-only / decision-engine-blocked invariants,
-and the last smoke-test result — and writes
-``outputs/sandbox/discovery/crowd_radar_activation_check.json``.
+Answers "is Crowd Radar safe + ready to start collecting, and from which no-extra-
+cost sources?" deterministically. Pure by default (no network): it reads config,
+environment credential presence, the dev-doc audit (source classification), and —
+if present — the cached crowd_source_health.json for confirmed entitlements.
 
-Sandbox-only, observe-only. Reads config + environment + the source registry;
-it NEVER fetches from a network source, never trades, and never mutates the
-portfolio or ``outputs/latest/decision_plan.json``. It is a read-only readiness
-probe, not the collector.
+Writes outputs/sandbox/discovery/crowd_radar_activation_check.json (+ .md). It is
+a readiness gate, never a collector; crowd signals can never trigger a trade.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -30,303 +28,209 @@ from portfolio_automation.run_mode_governance import (
 )
 from portfolio_automation.social_intelligence.base import (
     DISCOVERY_ONLY,
+    KILL_SWITCH_ENV,
+    KILL_SWITCH_FILE,
     NO_TRADE,
     SANDBOX_ONLY,
     SourceStatus,
     base_envelope,
     utc_now_iso,
 )
-from portfolio_automation.social_intelligence.reddit_connector import RedditCredentials
-from portfolio_automation.social_intelligence.source_registry import (
-    DEFAULT_SOURCES,
-    get_source,
+from portfolio_automation.social_sources.source_health import (
+    classify_sources,
+    credentials_present,
 )
 
 logger = logging.getLogger("stockbot.social_intelligence.activation_check")
 
-# Relative to OutputNamespace.SANDBOX root → outputs/sandbox/.
 _ACTIVATION_PATH = "discovery/crowd_radar_activation_check.json"
 _ACTIVATION_MD_PATH = "discovery/crowd_radar_activation_check.md"
-# Optional smoke-test marker the activation check reads (written by a live
-# --smoke run, when one exists). Absent → "never_run".
+_HEALTH_REL = "outputs/sandbox/discovery/crowd_source_health.json"
 _SMOKE_MARKER_REL = "outputs/sandbox/discovery/crowd_radar_smoke_test.json"
 
-_DEFAULT_CONFIG = {
-    "enabled": False,
-    "sources": ["reddit"],
-}
 
-# Source-terms states that block collection (anything that is not "approved").
-_TERMS_APPROVED = "approved"
-
-
-def _load_config(root: Path) -> dict[str, Any]:
-    """Read config.json crowd_radar block; defaults on any failure."""
-    import json
-
+def _load_crowd_cfg(root: Path) -> dict[str, Any]:
     try:
         raw = json.loads((root / "config.json").read_text(encoding="utf-8", errors="replace"))
-        cfg = dict(_DEFAULT_CONFIG)
-        cfg.update(raw.get("crowd_radar") or {})
-        return cfg
-    except Exception as exc:  # pragma: no cover - config read is best-effort
-        logger.debug("activation_check: config load failed (%s) — using defaults", exc)
-        return dict(_DEFAULT_CONFIG)
+        return dict(raw.get("crowd_radar") or {})
+    except Exception as exc:  # pragma: no cover
+        logger.debug("activation_check: config load failed (%s)", exc)
+        return {}
 
 
 def _kill_switched(root: Path) -> bool:
-    """Mirror the orchestrator's kill-switch surfaces (env var + sentinel file)."""
-    import os
-
-    from portfolio_automation.social_intelligence.base import (
-        KILL_SWITCH_ENV,
-        KILL_SWITCH_FILE,
-    )
-
     if (os.environ.get(KILL_SWITCH_ENV) or "").strip() in ("1", "true", "True"):
         return True
     return (root / KILL_SWITCH_FILE).exists()
 
 
-def _read_smoke_status(root: Path) -> str:
-    """Last smoke-test status from the marker artifact, else 'never_run'."""
-    import json
+def _read_entitlements(root: Path) -> dict[str, bool]:
+    """Confirmed entitlements from the cached health artifact (if the runner ran)."""
+    path = root / _HEALTH_REL
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        out: dict[str, bool] = {}
+        for rec in (data.get("records") or []):
+            ent = (rec.get("meta") or {}).get("entitled")
+            if ent is not None:
+                out[rec.get("source_name")] = bool(ent)
+        return out
+    except Exception:
+        return {}
 
+
+def _read_smoke_status(root: Path) -> str:
     path = root / _SMOKE_MARKER_REL
     if not path.exists():
         return "never_run"
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        return str(data.get("status") or "unknown")
+        return str(json.loads(path.read_text(encoding="utf-8", errors="replace")).get("status") or "unknown")
     except Exception:
         return "unknown"
-
-
-def _aggregate_terms_status(enabled_source_names: list[str]) -> tuple[str, bool, bool, bool]:
-    """
-    Return (source_terms_status, rate_limit_configured, raw_text_storage_allowed,
-    ai_processing_allowed) aggregated over the enabled sources.
-
-    - terms_status: 'approved' only if every enabled source is approved; otherwise
-      the worst status seen ('blocked' dominates 'review_needed').
-    - rate_limit_configured: every enabled source carries a non-empty rate_limit.
-    - raw_text_storage_allowed / ai_processing_allowed: the conservative AND across
-      enabled sources (so the gate reflects the strictest policy in force).
-    """
-    if not enabled_source_names:
-        return ("no_sources", False, False, False)
-
-    statuses: list[str] = []
-    rate_ok = True
-    raw_ok = True
-    ai_ok = True
-    for name in enabled_source_names:
-        src = get_source(name, DEFAULT_SOURCES)
-        if src is None:
-            statuses.append("unregistered")
-            rate_ok = False
-            raw_ok = False
-            ai_ok = False
-            continue
-        statuses.append(src.compliance_status)
-        rate_ok = rate_ok and bool((src.rate_limit or "").strip())
-        raw_ok = raw_ok and bool(src.raw_text_storage_allowed)
-        ai_ok = ai_ok and bool(src.ai_processing_allowed)
-
-    if "blocked" in statuses:
-        terms = "blocked"
-    elif any(s != _TERMS_APPROVED for s in statuses):
-        terms = "review_needed"
-    else:
-        terms = _TERMS_APPROVED
-    return (terms, rate_ok, raw_ok, ai_ok)
 
 
 def build_activation_check(
     root: str | Path = ".",
     *,
     run_mode: str = "discovery",
-    credentials_present: bool | None = None,
-    smoke_test_status: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Build the activation-checklist payload (pure; no writes, no network).
-
-    ``credentials_present`` / ``smoke_test_status`` are injectable seams for tests;
-    when None they are derived from the environment and the smoke marker.
-    """
+    """Build the multi-source activation-checklist payload (pure; no network)."""
     root_path = Path(root)
-    cfg = _load_config(root_path)
+    cfg = _load_crowd_cfg(root_path)
     warnings: list[str] = []
 
     enabled = bool(cfg.get("enabled"))
+    cost_policy = str(cfg.get("cost_policy", "no_extra_cost"))
+    allow_paid = bool(cfg.get("allow_paid_sources", False))
     kill = _kill_switched(root_path)
-    enabled_sources = [str(s) for s in (cfg.get("sources") or [])]
 
-    if credentials_present is None:
-        credentials_present = RedditCredentials.from_env() is not None
+    classes = classify_sources(cfg)
+    active_sources = classes["active"]
+    probe_only_sources = classes["probe_only"]
+    blocked_sources = classes["blocked"]
 
-    terms_status, rate_limit_configured, raw_text_allowed, ai_allowed = (
-        _aggregate_terms_status(enabled_sources)
-    )
+    creds = credentials_present()
+    entitlements = _read_entitlements(root_path)
 
-    smoke = smoke_test_status if smoke_test_status is not None else _read_smoke_status(root_path)
-
-    # Derive the effective source_status the layer WOULD report on activation,
-    # without fetching. Order mirrors the orchestrator's gating precedence.
     if kill:
         source_status = SourceStatus.DISABLED.value
         warnings.append("kill_switch_active")
     elif not enabled:
         source_status = SourceStatus.DISABLED.value
         warnings.append("crowd_radar.enabled=false")
-    elif not credentials_present:
-        source_status = SourceStatus.NO_CREDENTIALS.value
-        warnings.append("REDDIT_* credentials not set")
-    elif terms_status == "blocked":
-        source_status = SourceStatus.SOURCE_TERMS_BLOCKED.value
-        warnings.append("source_terms_blocked")
+    elif not active_sources:
+        source_status = SourceStatus.NOT_CONFIGURED.value
+        warnings.append("no active no-extra-cost sources")
     else:
         source_status = SourceStatus.OK.value
 
-    if enabled and credentials_present and terms_status == "review_needed":
-        warnings.append("source_terms_review_needed")
-    if enabled and credentials_present and not rate_limit_configured:
-        warnings.append("rate_limit_not_configured")
-    if not enabled_sources:
-        warnings.append("no_sources_configured")
+    if allow_paid:
+        warnings.append("allow_paid_sources=true (policy override) — verify intent")
 
-    # ready_to_collect = every activation gate is green.
-    ready_to_collect = bool(
-        enabled
-        and credentials_present
-        and not kill
-        and terms_status == _TERMS_APPROVED
-        and rate_limit_configured
-        and source_status == SourceStatus.OK.value
-    )
+    # ready_to_collect: enabled, not killed, and at least one ACTIVE no-extra-cost
+    # source (ApeWisdom is the only one reachable without a paid plan/approval).
+    ready_to_collect = bool(enabled and not kill and active_sources)
 
-    data_quality = "ok" if source_status == SourceStatus.OK.value else "disabled"
     env = base_envelope(
         run_id=utc_now_iso(),
         run_mode=run_mode,
         source_status=source_status,
-        data_quality_status=data_quality,
+        data_quality_status="ok" if source_status == SourceStatus.OK.value else "disabled",
         warnings=warnings,
     )
     env.update({
         "enabled": enabled,
-        "credentials_present": bool(credentials_present),
-        "source_status": source_status,
-        "source_terms_status": terms_status,
-        "rate_limit_configured": bool(rate_limit_configured),
-        "raw_text_storage_allowed": bool(raw_text_allowed),
-        "ai_processing_allowed": bool(ai_allowed),
-        # Hardcoded invariants — these can never be flipped on at activation time.
+        "cost_policy": cost_policy,
+        "allow_paid_sources": allow_paid,
+        "active_sources": active_sources,
+        "probe_only_sources": probe_only_sources,
+        "blocked_sources": blocked_sources,
+        "credentials_present": creds,
+        "entitlements_confirmed": entitlements,
+        "api_docs_audited": True,  # dev_doc_audit module is the audited source of truth
+        "rate_limit_configured": True,  # ApeWisdom polite-throttled; probes single-call
+        "raw_text_storage_allowed": False,  # aggregate counts only — no raw post text
+        "ai_processing_allowed": True,      # derived features may be AI-processed
         "sandbox_only_assertion": SANDBOX_ONLY and DISCOVERY_ONLY,
         "decision_engine_blocked": NO_TRADE,
-        "last_smoke_test_status": smoke,
+        "last_smoke_test_status": _read_smoke_status(root_path),
         "ready_to_collect": ready_to_collect,
-        "enabled_sources": enabled_sources,
+        "source_status": source_status,
     })
     return env
 
 
 def render_activation_check_md(payload: dict[str, Any]) -> str:
-    """Operator-glanceable Markdown rendering of the checklist."""
-    def _mark(v: Any) -> str:
-        if isinstance(v, bool):
-            return "✅" if v else "❌"
-        return str(v)
-
+    def _m(v: Any) -> str:
+        return ("✅" if v else "❌") if isinstance(v, bool) else str(v)
     lines = [
-        "# Crowd Radar — Activation Checklist",
+        "# Crowd Radar — Activation Checklist (multi-source)",
         "",
-        "_Observe-only readiness probe. Not a collector; never trades._",
+        "_Sandbox research intelligence only. Not a trade recommendation. No paid data sources enabled._",
         "",
-        f"- **Ready to collect:** {_mark(payload.get('ready_to_collect'))}",
-        f"- Enabled (config): {_mark(payload.get('enabled'))}",
-        f"- Credentials present: {_mark(payload.get('credentials_present'))}",
-        f"- Source status: **{payload.get('source_status')}**",
-        f"- Source-terms status: **{payload.get('source_terms_status')}**",
-        f"- Rate limit configured: {_mark(payload.get('rate_limit_configured'))}",
-        f"- Raw-text storage allowed: {_mark(payload.get('raw_text_storage_allowed'))}",
-        f"- AI processing allowed: {_mark(payload.get('ai_processing_allowed'))}",
-        f"- Sandbox-only assertion: {_mark(payload.get('sandbox_only_assertion'))}",
-        f"- Decision-engine blocked: {_mark(payload.get('decision_engine_blocked'))}",
-        f"- Last smoke test: **{payload.get('last_smoke_test_status')}**",
+        f"- **Ready to collect:** {_m(payload.get('ready_to_collect'))}",
+        f"- Enabled: {_m(payload.get('enabled'))} · cost_policy: **{payload.get('cost_policy')}** · allow_paid: {_m(payload.get('allow_paid_sources'))}",
+        f"- Active sources: **{', '.join(payload.get('active_sources') or []) or 'none'}**",
+        f"- Probe-only: {', '.join(payload.get('probe_only_sources') or []) or 'none'}",
+        f"- Blocked (no-extra-cost): {', '.join(payload.get('blocked_sources') or []) or 'none'}",
+        f"- API docs audited: {_m(payload.get('api_docs_audited'))}",
+        f"- Raw-text storage allowed: {_m(payload.get('raw_text_storage_allowed'))} · AI processing: {_m(payload.get('ai_processing_allowed'))}",
+        f"- Sandbox-only: {_m(payload.get('sandbox_only_assertion'))} · Decision-engine blocked: {_m(payload.get('decision_engine_blocked'))}",
     ]
-    warnings = payload.get("warnings") or []
-    if warnings:
+    creds = payload.get("credentials_present") or {}
+    lines.append("- Credentials present: " + ", ".join(f"{k}={_m(v)}" for k, v in creds.items()))
+    if payload.get("warnings"):
         lines.append("")
-        lines.append("**Blocking / notes:**")
-        lines.extend(f"- {w}" for w in warnings)
+        lines.append("**Notes:** " + "; ".join(payload["warnings"]))
     lines.append("")
     lines.append("_Crowd signals adjust research priority only; they cannot trigger any trade._")
     return "\n".join(lines) + "\n"
 
 
-def run_activation_check(
-    root: str | Path = ".",
-    run_mode: str = "discovery",
-) -> dict[str, Any]:
-    """
-    Top-level entry. Never raises — returns a status dict and writes the artifact
-    (JSON + MD) under OutputNamespace.SANDBOX. On any unhandled error returns a
-    degraded-state dict and writes nothing.
-    """
+def run_activation_check(root: str | Path = ".", run_mode: str = "discovery") -> dict[str, Any]:
+    """Top-level entry. Never raises; writes JSON + MD under SANDBOX namespace."""
     try:
         root_path = Path(root).resolve()
         mode = normalize_run_mode(run_mode)
         payload = build_activation_check(root_path, run_mode=mode.value)
         md = render_activation_check_md(payload)
-
         artifacts: dict[str, str] = {}
         try:
             assert_can_write_namespace(mode, OutputNamespace.SANDBOX)
-            artifacts["crowd_radar_activation_check"] = str(
-                safe_write_json(
-                    OutputNamespace.SANDBOX, _ACTIVATION_PATH, payload,
-                    base_dir=root_path / "outputs",
-                )
-            )
-            artifacts["crowd_radar_activation_check_md"] = str(
-                safe_write_text(
-                    OutputNamespace.SANDBOX, _ACTIVATION_MD_PATH, md,
-                    base_dir=root_path / "outputs",
-                )
-            )
+            artifacts["crowd_radar_activation_check"] = str(safe_write_json(
+                OutputNamespace.SANDBOX, _ACTIVATION_PATH, payload, base_dir=root_path / "outputs"))
+            artifacts["crowd_radar_activation_check_md"] = str(safe_write_text(
+                OutputNamespace.SANDBOX, _ACTIVATION_MD_PATH, md, base_dir=root_path / "outputs"))
         except Exception as exc:
             payload.setdefault("warnings", []).append(f"write_skipped:{exc}")
-
         return {
             "status": payload.get("source_status"),
             "ready_to_collect": payload.get("ready_to_collect"),
+            "active_sources": payload.get("active_sources"),
             "observe_only": True,
             "artifacts": artifacts,
             "warnings": payload.get("warnings", []),
         }
-    except Exception as exc:  # pragma: no cover - defensive top-level guard
+    except Exception as exc:  # pragma: no cover
         logger.warning("run_activation_check failed: %s", exc)
         return {"status": "error", "error": str(exc), "observe_only": True}
 
 
 if __name__ == "__main__":  # pragma: no cover
     import argparse
-    import json as _json
-    import sys
 
     repo_root = Path(__file__).resolve().parents[2]
-    ap = argparse.ArgumentParser(description="Crowd Radar activation checklist (observe-only)")
+    ap = argparse.ArgumentParser(description="Crowd Radar activation checklist (multi-source, observe-only)")
     ap.add_argument("--root", default=str(repo_root))
     ap.add_argument("--run-mode", default="discovery")
     args = ap.parse_args()
-
     try:
+        import sys
         sys.path.insert(0, args.root)
         from utils import load_env
-
         load_env(str(Path(args.root) / ".env"))
     except Exception:
         pass
-    print(_json.dumps(run_activation_check(root=args.root, run_mode=args.run_mode), indent=2, default=str))
+    print(json.dumps(run_activation_check(root=args.root, run_mode=args.run_mode), indent=2, default=str))

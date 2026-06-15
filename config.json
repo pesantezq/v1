@@ -380,6 +380,8 @@
   },
   "crowd_radar": {
     "enabled": false,
+    "cost_policy": "no_extra_cost",
+    "allow_paid_sources": false,
     "sources": [
       "reddit"
     ],
@@ -391,7 +393,32 @@
     "max_posts_per_source": 200,
     "min_mentions_for_state": 3,
     "min_backtest_sample": 20,
-    "research_priority_cap": 10.0
+    "research_priority_cap": 10.0,
+    "source_policy": {
+      "apewisdom": {
+        "enabled": true,
+        "max_pages": 1,
+        "filters": [
+          "wallstreetbets"
+        ]
+      },
+      "fmp_social_sentiment": {
+        "enabled": true,
+        "entitlement_probe_only_until_confirmed": true
+      },
+      "stocktwits": {
+        "enabled": false,
+        "probe_only": true
+      },
+      "finnhub_social": {
+        "enabled": false,
+        "probe_only": true
+      },
+      "quiver_wsb": {
+        "enabled": false,
+        "blocked_no_extra_cost": true
+      }
+    }
   },
   "portfolio_sim": {
     "enabled": true,

@@ -1703,6 +1703,38 @@ no fetch. Answers "is Crowd Radar safe + ready to start collecting?".
 Companion: `crowd_radar_activation_check.md`. Consumed by `/daily-tool-analysis`
 (discovery-health lens). Never carries a trade verb.
 
+**Multi-source evolution (2026-06-14):** the activation check is now multi-source
+(producer: `social_intelligence/activation_check.py`, daily Stage 9c2). Added
+fields: `cost_policy`, `allow_paid_sources`, `active_sources[]`,
+`probe_only_sources[]`, `blocked_sources[]`, `credentials_present{}` (per-source),
+`entitlements_confirmed{}` (from `crowd_source_health.json`), `api_docs_audited`.
+`ready_to_collect` = enabled AND not kill-switched AND ≥1 active no-extra-cost
+source (ApeWisdom).
+
+#### `crowd_source_dev_doc_audit.json` / `crowd_source_health.json` / `crowd_multi_source_velocity.json`
+
+No-extra-cost multi-source Crowd Radar lane (producer:
+`social_sources/run_multi_source_crowd.py`, daily Stage 9c1). All carry the
+standard envelope (`run_id, run_mode, created_at, schema_version, source_status,
+warnings, records`). Sandbox-only; never feed `decision_plan.json`.
+
+- **dev_doc_audit** — validated official-docs catalog per source: `endpoint_candidates,
+  auth_required, response_fields, cost_or_entitlement_status, allowed_under_no_extra_cost,
+  implementation_status (active/probe_only/blocked_no_extra_cost/requires_manual_review)`.
+  Also regenerates `docs/CROWD_SOURCE_DEV_DOC_AUDIT.md`.
+- **source_health** — per-source `status` + `meta.entitled` (apewisdom / fmp_social_sentiment /
+  stocktwits / finnhub_social / quiver_wsb).
+- **multi_source_velocity** — per-ticker `mention_velocity, source_breadth, source_agreement,
+  source_disagreement, sentiment_score_if_available, hype_risk_score, crowd_early_or_late_score,
+  confidence, labels[]` (`mention_velocity_only` / `low_source_breadth` when only ApeWisdom is
+  active). Companion `crowd_multi_source_summary.md`.
+
+Source policy (config `crowd_radar`): `cost_policy=no_extra_cost`,
+`allow_paid_sources=false`; per-source under `crowd_radar.source_policy`. ApeWisdom
+is the only active no-extra-cost source; FMP/Finnhub are entitlement-probed; Quiver
+is paid-blocked; Stocktwits is partner-gated (requires_manual_review). FMP endpoint
+registered in `fmp_endpoint_registry.py` (`social_sentiment`, P3 premium_optional).
+
 #### `crowd_mention_history.json`
 
 Rolling per-ticker daily mention-count ledger — the velocity z-score baseline.

@@ -1512,6 +1512,28 @@ def _enrichment_payload() -> dict[str, Any]:
 
 
 _CROWD_STATE_REL = ("outputs", "sandbox", "discovery", "crowd_knowledge_state.json")
+_CROWD_HEALTH_REL = ("outputs", "sandbox", "discovery", "crowd_source_health.json")
+
+# Per-source memo label mapped to its expected/acceptable statuses.
+_CROWD_SOURCE_LABELS = (
+    ("ApeWisdom", "apewisdom"),
+    ("FMP Social Sentiment", "fmp_social_sentiment"),
+    ("Stocktwits", "stocktwits"),
+    ("Finnhub Social", "finnhub_social"),
+    ("Quiver WSB", "quiver_wsb"),
+)
+
+
+def _crowd_source_health_lines(root_path: Path) -> list[str]:
+    """One-line-per-source health for the no-extra-cost multi-source lane."""
+    doc = _safe_load(root_path.joinpath(*_CROWD_HEALTH_REL))
+    if not doc:
+        return []
+    by_source = {r.get("source_name"): r.get("status") for r in (doc.get("records") or [])}
+    lines = ["Crowd Radar source health:"]
+    for label, key in _CROWD_SOURCE_LABELS:
+        lines.append(f"- {label}: {by_source.get(key, 'n/a')}")
+    return lines
 
 
 def _crowd_radar_section_lines(root_path: Path) -> list[str]:
@@ -1523,13 +1545,14 @@ def _crowd_radar_section_lines(root_path: Path) -> list[str]:
     disabled / produced nothing, so the caller renders a clean placeholder.
     """
     doc = _safe_load(root_path.joinpath(*_CROWD_STATE_REL))
+    health_lines = _crowd_source_health_lines(root_path)
     if not doc:
-        return []
+        return health_lines  # may still show the no-extra-cost source health
     status = doc.get("source_status", "unknown")
     quality = doc.get("data_quality_status", "unknown")
     records = doc.get("records") or []
     if not records:
-        return [
+        return health_lines + [
             f"Data quality: {quality} · Source: {status}",
             "No crowd-knowledge states classified this run.",
         ]
@@ -1558,7 +1581,7 @@ def _crowd_radar_section_lines(root_path: Path) -> list[str]:
             lines.append(ln)
     lines.append(f"Data quality: {quality} · Source: {status}")
     lines.append("Research priority only — not a trade recommendation.")
-    return lines
+    return health_lines + lines
 
 
 def _append_enrichment_text(append) -> None:

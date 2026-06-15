@@ -39,6 +39,10 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     velocity_doc = _read_json(disc / "public_knowledge_velocity.json") or {}
     backtest_doc = _read_json(disc / "social_signal_backtest.json") or {}
     compliance_doc = _read_json(disc / "social_source_compliance.json") or {}
+    # Multi-source no-extra-cost lane (Stage 9c1).
+    health_doc = _read_json(disc / "crowd_source_health.json") or {}
+    activation_doc = _read_json(disc / "crowd_radar_activation_check.json") or {}
+    multi_doc = _read_json(disc / "crowd_multi_source_velocity.json") or {}
 
     records = state_doc.get("records") or []
     source_status = state_doc.get("source_status") or "unknown"
@@ -98,6 +102,41 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         if rows:
             sections.append({"key": key, "label": label, "status": status, "rows": rows[:8]})
 
+    # --- Multi-source readiness: render source health BEFORE ticker states ---
+    # (per spec: Source Health / Active / Probe-Only / Blocked by No-Extra-Cost).
+    _STATUS_BADGE = {
+        "ok": "ok", "disabled": "unknown", "no_credentials": "unknown",
+        "not_configured": "unknown", "not_entitled": "warning",
+        "requires_manual_review": "warning", "blocked_no_extra_cost": "unknown",
+        "manual_reference_only": "unknown", "rate_limited": "warning",
+        "budget_exhausted": "warning", "degraded": "warning", "error": "red",
+    }
+    source_health_rows = [
+        {
+            "source": r.get("source_name"),
+            "status": r.get("status"),
+            "badge": _STATUS_BADGE.get(r.get("status"), "unknown"),
+            "warnings": r.get("warnings") or [],
+        }
+        for r in (health_doc.get("records") or [])
+    ]
+    multi_source = {
+        "ready_to_collect": activation_doc.get("ready_to_collect"),
+        "cost_policy": activation_doc.get("cost_policy"),
+        "allow_paid_sources": activation_doc.get("allow_paid_sources"),
+        "active_sources": activation_doc.get("active_sources") or [],
+        "probe_only_sources": activation_doc.get("probe_only_sources") or [],
+        "blocked_sources": activation_doc.get("blocked_sources") or [],
+        "entitlement_warnings": [
+            f"{r['source']}: {r['status']}" for r in source_health_rows
+            if r["status"] in ("not_entitled", "requires_manual_review")
+        ],
+        "labels": multi_doc.get("labels") or [],
+        "top_mention_velocity": (multi_doc.get("records") or [])[:10],
+        "disclaimer": "Sandbox research intelligence only. Not a trade recommendation. "
+                      "No paid data sources enabled.",
+    }
+
     return {
         "persona": "crowd_radar",
         "observe_only": True,
@@ -108,4 +147,7 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         "compliance_status": compliance_status,
         "warnings": warnings,
         "has_data": bool(records),
+        # Multi-source source-health (shown above ticker states in the template).
+        "source_health_rows": source_health_rows,
+        "multi_source": multi_source,
     }

@@ -251,6 +251,17 @@ run_aux_stage "Sandbox lane status" \
 run_aux_stage "Crowd Radar (public knowledge velocity)" \
     python -m portfolio_automation.social_intelligence.public_knowledge_velocity --root "${REPO_ROOT}" --run-mode discovery
 
+# Stage 9c1 — Multi-source Crowd Radar (no-extra-cost, API-first, observe-only).
+# Runs the dev-doc-audited source connectors (ApeWisdom active; FMP/Finnhub
+# entitlement probes; Stocktwits/Quiver blocked by no-extra-cost policy), the
+# multi-source aggregator, and writes crowd_source_dev_doc_audit / crowd_source_health
+# / crowd_multi_source_velocity + summary under outputs/sandbox/discovery/. Probes
+# only hit the network when a source is configured with credentials. Runs BEFORE
+# the activation check (9c2) so the health/entitlement artifact is fresh for it.
+# Non-blocking; never aborts the run.
+run_aux_stage "Crowd Radar multi-source" \
+    python -m portfolio_automation.social_sources.run_multi_source_crowd --root "${REPO_ROOT}" --run-mode discovery
+
 # Stage 9c2 — Crowd Radar activation checklist (observe-only readiness probe).
 # Pure (no network): reports whether Crowd Radar is safe + ready to collect
 # (flag, creds, source-terms, rate-limit, storage/AI policy, sandbox + decision

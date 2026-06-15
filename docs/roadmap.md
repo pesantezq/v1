@@ -1,5 +1,18 @@
 # Roadmap
 
+## Crowd Radar multi-source (no-extra-cost) — built (2026-06-14)
+
+- Dev-doc-audited, entitlement-probed multi-source connector lane under
+  `portfolio_automation/social_sources/` (Stage 9c1). Official docs for 5 sources
+  validated (`docs/CROWD_SOURCE_DEV_DOC_AUDIT.md`): **ApeWisdom active** (free,
+  no-auth); **FMP / Finnhub** entitlement-probed (paid/premium → probe-only);
+  **Stocktwits** partner-gated (requires_manual_review, no network); **Quiver**
+  paid (blocked_no_extra_cost, no network). `no_extra_cost` policy +
+  `allow_paid_sources=false`. Multi-source aggregator + multi-source activation
+  check. Observe-only, sandbox-only, default-disabled; never feeds decision_plan.
+  GUI source-health section + memo source-health lines. FMP endpoint registered
+  (P3 premium_optional). next_official_step unchanged (observe_and_iterate).
+
 ## Research-Backed Strategy Lab — built + ENABLED (2026-06-12)
 
 - **New sandbox sub-suite** on top of the Portfolio Simulation Suite: academic
