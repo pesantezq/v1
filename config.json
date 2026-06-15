@@ -379,7 +379,7 @@
     "promotion_require_dual_window_outperformance": true
   },
   "crowd_radar": {
-    "enabled": false,
+    "enabled": true,
     "cost_policy": "no_extra_cost",
     "allow_paid_sources": false,
     "sources": [
