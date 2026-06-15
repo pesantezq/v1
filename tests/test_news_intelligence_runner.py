@@ -12,14 +12,16 @@ already covered by tests/test_fmp_news_intelligence.py. Here we focus on:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from portfolio_automation.news.run_news_intelligence import (
+    _load_fmp_budget,
     collect_ticker_universe,
     fetch_news_articles,
     run,
@@ -145,6 +147,69 @@ class TestRunEndToEnd(unittest.TestCase):
             summary = run(root=root, fmp_client=MagicMock(get_stock_news=lambda *a, **k: []))
             self.assertIn("articles_fetched", summary)
             self.assertEqual(summary.get("articles_fetched"), 0)
+
+
+class TestFmpBudgetPropagation(unittest.TestCase):
+    """Regression: a config fmp_daily_calls_budget of 0 means 'no daily cap'
+    (FMPClient.would_exceed treats budget <= 0 as uncapped). The runner must
+    propagate that 0 verbatim, NOT coalesce it to None and fall back to the
+    hardcoded 230-call default — which starved news fetching to empty after the
+    2026-06-12 config change to budget=0."""
+
+    def _run_in_dir(self, cfg: dict | None):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            if cfg is not None:
+                (root / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+            prev = os.getcwd()
+            try:
+                os.chdir(root)
+                return _load_fmp_budget()
+            finally:
+                os.chdir(prev)
+
+    def test_zero_budget_preserved_as_uncapped(self):
+        # The bug: this returned None (→ FMPClient default 230). Must return 0.
+        self.assertEqual(self._run_in_dir({"api_limits": {"fmp_daily_calls_budget": 0}}), 0)
+
+    def test_positive_budget_read_verbatim(self):
+        self.assertEqual(self._run_in_dir({"api_limits": {"fmp_daily_calls_budget": 500}}), 500)
+
+    def test_absent_key_returns_none(self):
+        # Legacy fall-back: no key → None → caller uses FMPClient's own default.
+        self.assertIsNone(self._run_in_dir({"api_limits": {}}))
+
+    def test_missing_config_returns_none(self):
+        self.assertIsNone(self._run_in_dir(None))
+
+    def test_fetch_passes_zero_budget_to_fmpclient(self):
+        """End-to-end: with config budget=0, fetch_news_articles must construct
+        FMPClient(daily_budget=0), not fall through to the bare default ctor."""
+        import tempfile
+        recorded = {}
+
+        def _fake_ctor(*args, **kwargs):
+            recorded["daily_budget"] = kwargs.get("daily_budget", "MISSING")
+            client = MagicMock()
+            client.get_stock_news.return_value = []
+            return client
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "config.json").write_text(
+                json.dumps({"api_limits": {"fmp_daily_calls_budget": 0}}), encoding="utf-8"
+            )
+            prev = os.getcwd()
+            try:
+                os.chdir(root)
+                with patch("fmp_client.FMPClient", side_effect=_fake_ctor):
+                    fetch_news_articles(["AAPL"])
+            finally:
+                os.chdir(prev)
+
+        self.assertEqual(recorded.get("daily_budget"), 0,
+                         "explicit 0 budget must reach FMPClient, not be dropped to the default")
 
 
 if __name__ == "__main__":

@@ -57,14 +57,24 @@ def _normalize_ticker(value: Any) -> str:
 
 
 def _load_fmp_budget() -> int | None:
-    """Read fmp_daily_calls_budget from config.json; return None on any error."""
+    """Read fmp_daily_calls_budget from config.json.
+
+    Returns the configured int verbatim — INCLUDING 0, which FMPClient treats as
+    "no daily cap" (see FMPClient.would_exceed: ``budget <= 0`` disables the cap).
+    Returns None only when the key is absent or on any error, so the caller falls
+    back to FMPClient's built-in default. (Coalescing an explicit 0 to None here
+    silently re-imposed the legacy 230-call cap and starved news to empty — the
+    2026-06-12 regression after config set fmp_daily_calls_budget=0 to uncap.)
+    """
     try:
         cfg_path = Path("config.json")
         if not cfg_path.exists():
             return None
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         limits = (cfg.get("api_limits") or {}) if isinstance(cfg, dict) else {}
-        return int(limits.get("fmp_daily_calls_budget", 0)) or None
+        if "fmp_daily_calls_budget" not in limits:
+            return None
+        return int(limits["fmp_daily_calls_budget"])
     except Exception:
         return None
 
@@ -145,7 +155,9 @@ def fetch_news_articles(
         try:
             from fmp_client import FMPClient
             budget = _load_fmp_budget()
-            fmp_client = FMPClient(daily_budget=budget) if budget else FMPClient()
+            # `budget is not None` (not truthiness) so an explicit 0 = "no cap"
+            # reaches FMPClient instead of being dropped to its 230 default.
+            fmp_client = FMPClient(daily_budget=budget) if budget is not None else FMPClient()
         except Exception as exc:
             logger.warning("news runner: could not instantiate FMPClient — %s", exc)
             return []
