@@ -194,6 +194,18 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     dp = _read_json(latest / "decision_plan.json")
     decisions = _top_decisions(dp)
 
+    # Crowd context (observe-only, artifact-only) — attach per-pick context WITHOUT
+    # touching the decision action/ticker. Never alters advisory selection.
+    crowd_context_status = {"available": False, "banner": None}
+    try:
+        from gui_v2.data.dash_crowd_context import crowd_context_for
+        _cc = crowd_context_for(root, [d.get("ticker") for d in decisions if d.get("ticker")])
+        crowd_context_status = _cc["status"]
+        for d in decisions:
+            d["crowd_context"] = _cc["by_symbol"].get(str(d.get("ticker") or "").upper())
+    except Exception:
+        pass
+
     if dp is not None:
         total = (dp.get("total_decisions") or len((dp.get("decisions") or [])))
         ctx = dp.get("portfolio_context") or {}
@@ -404,6 +416,8 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         "persona": "portfolio",
         # Decision rows for the decision_card component (decision-core only)
         "decisions": decisions,
+        # Crowd-intelligence context status (observe-only; banner for missing/stale)
+        "crowd_context_status": crowd_context_status,
         # Holdings from real snapshot keys (H1 fix — not from legacy portfolio.py)
         "holdings": holdings,
         "allocation": portfolio_data.get("allocation") or {},

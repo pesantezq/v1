@@ -661,8 +661,15 @@ Probe-gated FMP crowd-context layer (`portfolio_automation/crowd_intelligence/`)
   Reads the Phase-1 capability map (skips PLAN_LOCKED), fetches AVAILABLE endpoints
   via the governed `FMPClient.get_json`, persists `crowd_raw_events` +
   `crowd_signal_daily`. Direct social sentiment is PLAN_LOCKED on Starter and stays
-  disabled (weight 0). Phase 2B wires the GUI crowd-context panel + daily cadence.
+  disabled (weight 0).
+- **Phase 2B — GUI context + daily wiring** (observe-only, artifact-only): the
+  Portfolio tab shows context-only crowd cards per advisory pick (label, score,
+  confidence, sources, reasons, enrichment lines) via `context_loader` +
+  `advisory_context_enricher` + `gui_v2/data/dash_crowd_context.py`. **Daily stage
+  7d3** (`run_aux_stage "Crowd intelligence"`) regenerates the artifacts post-pipeline,
+  non-blocking. No FMP/HTTP/governor in 2B; never changes decisions/allocations.
 
 See [Phase 1 spec](superpowers/specs/2026-06-15-crowd-intelligence-phase1-design.md),
 [Phase 2A spec](superpowers/specs/2026-06-15-crowd-intelligence-phase2a-design.md),
+[Phase 2B spec](superpowers/specs/2026-06-15-crowd-intelligence-phase2b-design.md),
 and `docs/CROWD_INTELLIGENCE.md`.

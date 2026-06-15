@@ -24,6 +24,30 @@
   {% if d.rationale %}
   <p class="text-xs text-zinc-400 leading-snug">{{ d.rationale }}</p>
   {% endif %}
+  {# Crowd context — observe-only context, NOT a trade signal. #}
+  {% if d.crowd_context %}
+  {% set cc = d.crowd_context %}
+  <div class="mt-1 rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2 space-y-1">
+    <div class="flex items-center gap-2 flex-wrap text-[11px]">
+      {{ ui.badge(cc.severity, "Crowd: " ~ cc.label) }}
+      {% if cc.present %}
+      <span class="font-mono text-zinc-500">score {{ "%+.2f"|format(cc.composite or 0) }} · conf {{ "%.0f"|format((cc.confidence or 0) * 100) }}%</span>
+      {% endif %}
+    </div>
+    {% for line in cc.lines %}
+    <p class="text-[11px] text-zinc-400 leading-snug">{{ line }}</p>
+    {% endfor %}
+    {% if cc.present and cc.top_reasons %}
+    <ul class="text-[11px] text-zinc-500 list-disc list-inside">
+      {% for r in cc.top_reasons %}<li>{{ r }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if cc.warnings %}<p class="text-[11px] text-amber-300/70">{{ cc.warnings[:2]|join(" · ") }}</p>{% endif %}
+    {% if cc.present %}
+    <p class="text-[10px] text-zinc-600">sources: {{ cc.enabled_sources|length }} enabled · {{ cc.disabled_sources|length }} disabled · freshness {{ "%.0f"|format((cc.data_freshness or 0) * 100) }}%</p>
+    {% endif %}
+  </div>
+  {% endif %}
   <p class="text-[11px] text-zinc-600 italic flex items-center gap-1">
     <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
     Advisory only &mdash; from decision_plan.json

@@ -192,6 +192,13 @@ run_aux_stage "FMP budget telemetry" \
 run_aux_stage "Data budget status" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.data_budget.run_status import run_data_budget_status; run_data_budget_status(root='.'); import json; b=json.load(open('outputs/latest/data_budget_status.json')); print('overall:', b.get('overall_status'), 'bw_pct:', b.get('monthly_bandwidth_pct'))"
 
+# Stage 7d3 — Crowd intelligence (observe-only context for holdings). Non-blocking:
+# run() swallows all errors and returns a status dict, so a failure WARNs and never
+# blocks the run. Reads only AVAILABLE FMP endpoints via the governor; never feeds
+# decision_plan / allocations / advisory selection.
+run_aux_stage "Crowd intelligence" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.crowd_intelligence.artifact_writer import run; s=run('.'); print('overall:', s.get('overall_status'), 'symbols:', s.get('symbols_count'))"
+
 # Stage 7e — Resolution-due probe: surface any signal whose 1d/3d/7d
 # outcome window has elapsed but whose outcome_return_Nd is null.
 run_aux_stage "Resolution-due probe" \

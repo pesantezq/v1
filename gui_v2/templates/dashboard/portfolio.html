@@ -72,6 +72,20 @@
       </span>
     </div>
 
+    {# Crowd-intelligence context banner (observe-only). #}
+    {% if crowd_context_status %}
+      {% if crowd_context_status.banner %}
+      <div class="rounded-xl bg-zinc-800/50 border border-zinc-700 px-4 py-2 text-xs text-zinc-400 mb-3">
+        {{ crowd_context_status.banner }}
+      </div>
+      {% elif crowd_context_status.social_disabled %}
+      <div class="rounded-xl bg-zinc-800/40 border border-zinc-800 px-4 py-2 text-[11px] text-zinc-500 mb-3">
+        Crowd context shown per pick below (context only, never a trade signal).
+        Direct FMP social sentiment is unavailable on the current Starter plan.
+      </div>
+      {% endif %}
+    {% endif %}
+
     {% if decisions %}
     {% set _order = ["BUY", "SELL", "SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT", "HOLD", "WAIT"] %}
     <div class="space-y-5">

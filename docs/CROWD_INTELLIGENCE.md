@@ -101,6 +101,33 @@ social 0 (disabled) → composite −0.04, confidence 0.75. ETF holdings show ne
 `decision_plan.json` and all decision artifacts are untouched (test-asserted);
 API keys never appear in stored events/artifacts/errors.
 
+## Phase 2B — GUI context + advisory enrichment + daily wiring (observe-only)
+
+Surfaces the Phase-2A artifacts on the **Portfolio tab** advisory picks as
+**context only**. Artifact-only: no FMP / HTTP / governor calls (test-asserted by a
+source grep). Never changes recommendation generation, scoring, allocations, risk
+caps, BUY/SELL/HOLD, or execution.
+
+- **`context_loader.py`** — reads `crowd_intelligence.json` + `_status.json`; returns
+  per-symbol context + `{available, stale, generated_at, social_disabled}`. Missing →
+  `not_generated`; unreadable → `unreadable`; age > 30h → `stale`.
+- **`advisory_context_enricher.py`** (pure) — context label
+  (**Supportive / Neutral / Caution / High Attention / Insufficient Data** — never
+  Bullish/Bearish/Buy/Sell) + explanation lines, all run through a **forbidden-phrase
+  guard** (`assert_safe`) so buy/sell/confirm/privileged language cannot be emitted.
+- **GUI** — `gui_v2/data/dash_crowd_context.py` feeds each advisory pick's
+  `decision_card` a context block (label badge, composite score, confidence, enabled/
+  disabled sources, freshness, ≤3 reasons, warnings, enrichment lines). The Portfolio
+  tab shows a status banner: unavailable / stale / "Direct FMP social sentiment is
+  unavailable on the current Starter plan."
+- **Empty/stale:** missing artifact → "Crowd context unavailable — artifact not
+  generated yet."; stale → "…may be stale — last generated at {ts}."; symbol absent →
+  "No crowd context available for this symbol."
+- **Daily wiring:** `run_daily_safe.sh` Stage 7d3 (`run_aux_stage "Crowd intelligence"`)
+  runs `artifact_writer.run('.')` post-pipeline. Non-blocking — `run()` swallows all
+  errors and returns a status dict, so a failure WARNs and never blocks the portfolio
+  run; it never mutates `decision_plan` or advisory selection.
+
 ## Rerunning after a plan change
 
 If you change FMP tiers, re-run the probe; `enabled_after_probe` / the canonical
