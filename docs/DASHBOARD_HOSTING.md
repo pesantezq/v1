@@ -67,11 +67,21 @@ sudo systemctl status cloudflared-stockbot.service
 
 ## Security
 
-- The dashboard keeps its own auth gate (`_require_auth`). It is now internet-reachable
-  by name, so optionally add a **Cloudflare Access** policy (Zero Trust → Access →
-  Applications) on the hostname to require email/SSO before the page loads — zero code.
+- **HTTP Basic auth is ENABLED** (2026-06-15). The gui_v2 `_require_auth` gate only
+  enforces when `GUI_V2_AUTH_USER` + `GUI_V2_AUTH_PASS` are set; both are now in
+  `/opt/stockbot/.env` (gitignored — never committed). Username `pesantez`; the
+  password lives only in `.env`. Unauthenticated requests get `401` at the app.
+  **Before this, the dashboard ran in "open mode" (no login)** — so anyone with the
+  URL could read it. Don't remove these env vars without a replacement lock.
+  To rotate: edit `GUI_V2_AUTH_PASS` in `.env` → `sudo systemctl restart stockbot-dashboard.service`.
 - The origin is bound to `127.0.0.1`, so `46.224.25.135:8502` is no longer publicly
   reachable; the tunnel is the only path in.
+- **Cloudflare Access (edge SSO/OTP) is recommended as defense-in-depth but NOT yet
+  configured** — the operator's corporate (Sectra) network blocks the Cloudflare Zero
+  Trust admin console. Add it later from a non-corporate device (phone/cellular):
+  Zero Trust → Access → Applications → Self-hosted, hostname
+  `dashboard.portfolio-ops-center.com`, policy Allow → Emails `pesantez.q@gmail.com`,
+  login One-time PIN. Do NOT put Access in front of the Schwab `stockbot.` host.
 
 ## Schwab callback (separate)
 
