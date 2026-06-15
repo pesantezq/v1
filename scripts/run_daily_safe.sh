@@ -187,6 +187,11 @@ run_aux_stage "Retune impact tracker" \
 run_aux_stage "FMP budget telemetry" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.fmp_budget_telemetry import run_fmp_budget_telemetry; r = run_fmp_budget_telemetry(root='.'); print('overall:', r.get('overall_status'), 'memo_line:', r.get('memo_line'))"
 
+# Stage 7d2 — Data budget status (governor usage ledger -> 3 observe-only
+# artifacts: fmp_usage_status / fmp_cache_status / data_budget_status). Non-blocking.
+run_aux_stage "Data budget status" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.data_budget.run_status import run_data_budget_status; run_data_budget_status(root='.'); import json; b=json.load(open('outputs/latest/data_budget_status.json')); print('overall:', b.get('overall_status'), 'bw_pct:', b.get('monthly_bandwidth_pct'))"
+
 # Stage 7e — Resolution-due probe: surface any signal whose 1d/3d/7d
 # outcome window has elapsed but whose outcome_return_Nd is null.
 run_aux_stage "Resolution-due probe" \
