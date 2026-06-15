@@ -202,6 +202,20 @@
   "api_limits": {
     "fmp_daily_calls_budget": 0
   },
+  "data_budget": {
+    "enabled": true,
+    "monthly_bandwidth_gb": 20,
+    "rate_per_min": 240,
+    "burst": 300,
+    "run_modes": {
+      "gui_refresh":       {"call_budget": 30,   "priority": "high"},
+      "daily":             {"call_budget": 0,    "priority": "high"},
+      "weekly_review":     {"call_budget": 800,  "priority": "medium"},
+      "monthly":           {"call_budget": 1500, "priority": "medium"},
+      "discovery":         {"call_budget": 200,  "priority": "low"},
+      "historical_replay": {"call_budget": 0,    "priority": "low", "cache_only": true}
+    }
+  },
   "data_sources": {
     "fmp_enabled": true,
     "prefer_fmp_on_budget_exhausted": true
