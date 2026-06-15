@@ -70,6 +70,30 @@ class UsageLedger:
                 (month,)).fetchone()[0]
         return round(hits / total, 4) if total else 0.0
 
+    def skipped_count(self, *, month: str, run_mode: str) -> int:
+        with self._conn() as cx:
+            row = cx.execute(
+                "SELECT COUNT(*) FROM api_usage_ledger "
+                "WHERE substr(ts,1,7)=? AND run_mode=? AND skipped_reason IS NOT NULL",
+                (month, run_mode)).fetchone()
+        return int(row[0] or 0)
+
+    def calls_by_run_mode(self, *, month: str) -> dict[str, int]:
+        with self._conn() as cx:
+            rows = cx.execute(
+                "SELECT run_mode, COUNT(*) FROM api_usage_ledger "
+                "WHERE substr(ts,1,7)=? AND cache_hit=0 AND skipped_reason IS NULL "
+                "GROUP BY run_mode", (month,)).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
+    def calls_by_endpoint(self, *, month: str) -> dict[str, int]:
+        with self._conn() as cx:
+            rows = cx.execute(
+                "SELECT endpoint, COUNT(*) FROM api_usage_ledger "
+                "WHERE substr(ts,1,7)=? AND cache_hit=0 AND skipped_reason IS NULL "
+                "GROUP BY endpoint", (month,)).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
     def prune(self, *, keep_days: int = 90, now_iso: str) -> int:
         """Delete rows older than keep_days (caller passes now to stay deterministic)."""
         from datetime import datetime, timedelta
