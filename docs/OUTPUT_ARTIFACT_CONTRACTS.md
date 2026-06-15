@@ -1818,3 +1818,30 @@ Forward Monte-Carlo (block-bootstrap). `assumptions` (illustration-not-forecast)
 Labeled volume/momentum PROXY backtest of the crowd-signal tactic (`proxy: true`,
 `measures` caveat). NOT the real crowd signal's record — the real evaluation is the
 forward shadow-track in `social_signal_backtest.json`.
+
+---
+
+## FMP Data Budget Governor (observe-only telemetry, 2026-06-15)
+
+Produced by `portfolio_automation/data_budget/status_producer.py` (pipeline Stage
+7d2 in `run_daily_safe.sh`; entrypoint `data_budget.run_status`). All three are
+`observe_only: true`, `role: telemetry`, cadence `daily`, `required: false`
+(absence = the governor has not run yet, which is inert). They never feed
+`decision_plan.json`. Consumed by `/daily-tool-analysis` (body line 6m, health via
+`data_budget.health.data_budget_health`) and the GUI System tab panel.
+
+### `outputs/latest/data_budget_status.json`
+`overall_status` (`ok`|`near_cap`|`constrained`), `monthly_bandwidth_bytes`,
+`monthly_bandwidth_gb_cap` (20), `monthly_bandwidth_pct`,
+`discovery_skipped_due_to_budget`, `backtest_skipped_due_to_budget`, `enabled`,
+`run_mode_budgets`. AMBER (never RED) when bandwidth ≥80% of cap or any
+low-priority run mode was skipped.
+
+### `outputs/latest/fmp_usage_status.json`
+`month`, `calls_by_run_mode`, `calls_by_endpoint` — per-run-mode / per-endpoint
+live-call counts for the month (cache hits and skips excluded), from the
+`api_usage_ledger` table in `data/fmp_budget.db`.
+
+### `outputs/latest/fmp_cache_status.json`
+`cache_hit_rate` (month), `file_count`, `total_size_bytes`, `portfolio_fresh`
+(per-holding fresh/stale map) — reuses `fmp_client._DiskCache`.

@@ -500,6 +500,42 @@ artifacts:
     severity_if_missing: warning
     consumer_status: consumed
 
+  data_budget_status.json:
+    path: outputs/latest/data_budget_status.json
+    label: fmp data budget status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: data_budget.status_producer
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+    consumer_status: consumed
+
+  fmp_usage_status.json:
+    path: outputs/latest/fmp_usage_status.json
+    label: fmp usage status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: data_budget.status_producer
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+
+  fmp_cache_status.json:
+    path: outputs/latest/fmp_cache_status.json
+    label: fmp cache status
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: data_budget.status_producer
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+
   ai_budget_summary.json:
     path: outputs/latest/ai_budget_summary.json
     label: ai budget summary

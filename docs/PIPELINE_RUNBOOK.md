@@ -590,3 +590,51 @@ is wired). Writes 5 artifacts under `outputs/sandbox/` + the auto-generated
 `docs/STRATEGY_CATALOG.md`. Disabled / insufficient-data → degraded artifact, no
 crash. Surfaced in the GUI Strategy Lab tab (Backtest + Projection sections).
 See [superpowers spec](superpowers/specs/2026-06-12-portfolio-tactic-backtest-design.md).
+
+---
+
+## FMP Budget-Aware Data Orchestrator (governor)
+
+A single guarded FMP access layer in `portfolio_automation/data_budget/` that
+wraps the existing `fmp_client.FMPClient` (keeping its file `_DiskCache` +
+`_CallCounter` + endpoint registry). **All** FMP call sites obtain their client
+via the factory instead of constructing `FMPClient` directly:
+
+```python
+from portfolio_automation.data_budget.factory import governed_client
+client = governed_client("daily")   # or gui_refresh / weekly_review / monthly / discovery / historical_replay
+```
+
+An AST guard test (`tests/test_data_budget_no_direct_construction.py`) forbids
+direct `FMPClient()` construction outside the sanctioned low-level set
+(`fmp_client.py`, the governor/factory, backtests, replay_runner, scripts, tests).
+
+**Limits enforced** (the governor is the budget authority; the inner FMPClient is
+constructed uncapped, `daily_budget=0`, so it does not double-cap):
+- **Token bucket** — `rate_per_min` 240 sustained, `burst` 300 hard cap (in-process,
+  per run). High-priority run modes wait briefly when the bucket is empty;
+  low-priority (discovery) skip → serve cache/stale.
+- **Per-run-mode call budgets** (`config.json data_budget.run_modes`) — `call_budget: 0`
+  means uncapped. Rationale: `gui_refresh` 30 (cache-first, light); `daily` 0
+  (uncapped — the main pipeline, matches `api_limits.fmp_daily_calls_budget=0`);
+  `weekly_review` 800 / `monthly` 1500 (bounded review windows); `discovery` 200
+  (low priority, first skipped); `historical_replay` `cache_only` (0 live — replay
+  from the 5y archive, fetch only on cache miss).
+- **Monthly bandwidth guard** — `monthly_bandwidth_gb` 20 (real response bytes summed
+  in the `api_usage_ledger`). At the cap, low-priority run modes are disabled;
+  portfolio/decision data is never blocked.
+
+**Storage**: `data/fmp_budget.db` (SQLite, separate from `portfolio.db`) —
+`api_usage_ledger` (per-call: ts, run_mode, endpoint, symbols, cache_hit, bytes,
+skipped_reason) + `symbol_data_policy` (per-symbol ttl/priority).
+
+**Artifacts** (Stage 7d2, observe-only): `fmp_usage_status.json`,
+`fmp_cache_status.json`, `data_budget_status.json` (see OUTPUT_ARTIFACT_CONTRACTS).
+Health folded into `/daily-tool-analysis` (line 6m) + GUI System panel.
+
+**Kill-switch** (instant revert to direct `fmp_client` behavior): any of
+`config.json data_budget.enabled=false`, env `STOCKBOT_FMP_GOVERNOR_DISABLED=1`,
+or a `config/fmp_governor.DISABLED` file. Ships **enabled**.
+
+See [design spec](superpowers/specs/2026-06-15-fmp-budget-governor-design.md) and
+[plan](superpowers/plans/2026-06-15-fmp-budget-governor.md).
