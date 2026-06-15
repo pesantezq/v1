@@ -14,6 +14,7 @@ from typing import Any
 from portfolio_automation.crowd_intelligence.capability_store import CapabilityStore
 from portfolio_automation.crowd_intelligence import crowd_signal_builder as builder
 from portfolio_automation.crowd_intelligence import normalization as norm
+from portfolio_automation.data_governance import OutputNamespace, safe_write_text
 
 _OBSERVE_ONLY = True
 
@@ -37,16 +38,18 @@ def _render_md(signals: list, status: dict) -> str:
 
 
 def write_artifacts(signals: list, status: dict, *, base_dir: Path | str = "outputs") -> None:
-    latest = Path(base_dir) / "latest"
-    latest.mkdir(parents=True, exist_ok=True)
     payload = {
         "observe_only": _OBSERVE_ONLY, "source": "crowd_intelligence",
         "generated_at": status.get("generated_at"), "weights": norm.WEIGHTS,
         "symbols": [asdict(s) for s in signals],
     }
-    (latest / "crowd_intelligence.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    (latest / "crowd_intelligence.md").write_text(_render_md(signals, status), encoding="utf-8")
-    (latest / "crowd_intelligence_status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
+    # OutputNamespace.LATEST governance (CLAUDE.md: all writes go through it).
+    safe_write_text(OutputNamespace.LATEST, "crowd_intelligence.json",
+                    json.dumps(payload, indent=2), base_dir=base_dir)
+    safe_write_text(OutputNamespace.LATEST, "crowd_intelligence.md",
+                    _render_md(signals, status), base_dir=base_dir)
+    safe_write_text(OutputNamespace.LATEST, "crowd_intelligence_status.json",
+                    json.dumps(status, indent=2), base_dir=base_dir)
 
 
 def _load_holdings(root: Path) -> list[str]:

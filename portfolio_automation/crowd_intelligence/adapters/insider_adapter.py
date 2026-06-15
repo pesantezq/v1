@@ -45,6 +45,18 @@ def run(symbol, *, client, usable, shared, now=None) -> CategoryResult:
                                               "insider_trade", {k: r.get(k) for k in
                                               ("acquisitionOrDisposition", "filingDate", "securitiesTransacted")}))
 
+    # Market-wide latest-insider feed (shared, pre-fetched once): fold in any rows
+    # for this symbol so the pre-fetch isn't wasted.
+    if "latest_insider_trading" in usable:
+        for r in (shared.get("latest_insider_trading") or []):
+            if isinstance(r, dict) and str(r.get("symbol", "")).upper() == sym_u:
+                b = _is_buy(r)
+                notional = abs(float(r.get("securitiesTransacted") or 1) or 1)
+                if b is True:
+                    buys.append(notional)
+                elif b is False:
+                    sells.append(notional)
+
     if "insider_trade_statistics" in usable and not (buys or sells):
         rows = fetch_endpoint(client, reg.entry("insider_trade_statistics"), symbol=symbol)
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)

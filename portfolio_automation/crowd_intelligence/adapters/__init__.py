@@ -11,14 +11,20 @@ from typing import Any, Callable
 
 # A small shared helper every adapter uses to call one registry endpoint through
 # the governed client, tolerating any failure (returns []).
-def fetch_endpoint(client: Any, reg_entry: dict, *, symbol: str | None = None) -> Any:
-    import re
+def fetch_endpoint(client: Any, reg_entry: dict | None, *, symbol: str | None = None,
+                   today: str | None = None) -> Any:
+    if not isinstance(reg_entry, dict):
+        return []  # unknown/missing registry entry — fail safe, never crash
+    from datetime import datetime, timezone
+    today = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     params = {}
     for k, v in (reg_entry.get("params_template") or {}).items():
         if isinstance(v, str) and "{symbol}" in v:
             if symbol is None:
                 return []  # per-symbol endpoint called without a symbol
             params[k] = v.replace("{symbol}", symbol)
+        elif isinstance(v, str) and "{today}" in v:
+            params[k] = v.replace("{today}", today)
         else:
             params[k] = v
     try:
