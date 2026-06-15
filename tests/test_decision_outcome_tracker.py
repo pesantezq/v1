@@ -757,5 +757,85 @@ class TestGuiDataLayer(unittest.TestCase):
             self.assertIn(key, result)
 
 
+class TestFmpBudgetLoad(unittest.TestCase):
+    """The decision-outcome price fetchers now honor config fmp_daily_calls_budget.
+    A value of 0 means 'no daily cap' (FMPClient.would_exceed treats budget <= 0
+    as uncapped) and must be propagated verbatim — not coalesced to None and
+    dropped to the hardcoded 230-call default (the prior config-blind behavior)."""
+
+    def _budget_in_dir(self, cfg):
+        import os
+        from portfolio_automation.decision_outcome_tracker import _load_fmp_budget
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            if cfg is not None:
+                (root / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+            prev = os.getcwd()
+            try:
+                os.chdir(root)
+                return _load_fmp_budget()
+            finally:
+                os.chdir(prev)
+
+    def test_zero_budget_preserved_as_uncapped(self):
+        self.assertEqual(self._budget_in_dir({"api_limits": {"fmp_daily_calls_budget": 0}}), 0)
+
+    def test_positive_budget_read_verbatim(self):
+        self.assertEqual(self._budget_in_dir({"api_limits": {"fmp_daily_calls_budget": 300}}), 300)
+
+    def test_absent_key_returns_none(self):
+        self.assertIsNone(self._budget_in_dir({"api_limits": {}}))
+
+    def test_missing_config_returns_none(self):
+        self.assertIsNone(self._budget_in_dir(None))
+
+    def _record_budget_in_dir(self, call):
+        """Run `call` in a temp cwd with config budget=0, patching FMPClient to
+        record the daily_budget it was constructed with."""
+        import os
+        from unittest.mock import MagicMock, patch
+        recorded = {}
+
+        def _fake_ctor(*args, **kwargs):
+            recorded["daily_budget"] = kwargs.get("daily_budget", "MISSING")
+            client = MagicMock()
+            client.get_batch_quotes.return_value = {}
+            return client
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "config.json").write_text(
+                json.dumps({"api_limits": {"fmp_daily_calls_budget": 0}}), encoding="utf-8"
+            )
+            prev = os.getcwd()
+            try:
+                os.chdir(root)
+                with patch("fmp_client.FMPClient", side_effect=_fake_ctor):
+                    call()
+            finally:
+                os.chdir(prev)
+        return recorded.get("daily_budget")
+
+    def test_augment_passes_zero_budget_to_fmpclient(self):
+        budget = self._record_budget_in_dir(
+            lambda: _augment_price_map_with_fmp({}, {"AAPL"}, fmp_client=None)
+        )
+        self.assertEqual(budget, 0, "explicit 0 budget must reach FMPClient, not the default")
+
+    def test_try_build_price_fetcher_passes_zero_budget(self):
+        import os
+        from portfolio_automation.decision_outcome_tracker import _try_build_price_fetcher
+        prev_key = os.environ.get("FMP_API_KEY")
+        os.environ["FMP_API_KEY"] = "test-key"
+        try:
+            budget = self._record_budget_in_dir(lambda: _try_build_price_fetcher())
+        finally:
+            if prev_key is None:
+                os.environ.pop("FMP_API_KEY", None)
+            else:
+                os.environ["FMP_API_KEY"] = prev_key
+        self.assertEqual(budget, 0, "explicit 0 budget must reach FMPClient, not the default")
+
+
 if __name__ == "__main__":
     unittest.main()

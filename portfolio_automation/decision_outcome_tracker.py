@@ -128,6 +128,24 @@ def _extract_price_map(watchlist_signals: dict[str, Any]) -> dict[str, float]:
     return price_map
 
 
+def _load_fmp_budget() -> int | None:
+    """Read fmp_daily_calls_budget from config.json for the FMP price fetchers.
+
+    Returns the configured int verbatim — INCLUDING 0, which FMPClient treats as
+    "no daily cap" (FMPClient.would_exceed: ``budget <= 0`` disables the cap).
+    Returns None only when the key is absent or on any error, so the caller falls
+    back to FMPClient's built-in default (the prior config-blind behavior).
+    """
+    try:
+        cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+        limits = (cfg.get("api_limits") or {}) if isinstance(cfg, dict) else {}
+        if "fmp_daily_calls_budget" not in limits:
+            return None
+        return int(limits["fmp_daily_calls_budget"])
+    except Exception:
+        return None
+
+
 def _augment_price_map_with_fmp(
     price_map: dict[str, float],
     decision_symbols: set[str],
@@ -154,7 +172,10 @@ def _augment_price_map_with_fmp(
     if fmp_client is None:
         try:
             from fmp_client import FMPClient
-            fmp_client = FMPClient()
+            # Honor the config budget; `is not None` so an explicit 0 = "no cap"
+            # reaches FMPClient instead of falling to its 230-call default.
+            _budget = _load_fmp_budget()
+            fmp_client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
         except Exception as exc:
             logger.debug("decision_outcome_tracker: no FMP client (%s)", exc)
             return price_map
@@ -189,7 +210,10 @@ def _try_build_price_fetcher() -> Callable[[list[str]], dict[str, float]] | None
     try:
         from fmp_client import FMPClient
 
-        client = FMPClient()
+        # Honor the config budget; `is not None` so an explicit 0 = "no cap"
+        # reaches FMPClient instead of falling to its 230-call default.
+        _budget = _load_fmp_budget()
+        client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
 
         def _fetcher(symbols: list[str]) -> dict[str, float]:
             if not symbols:
