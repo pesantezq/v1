@@ -52,13 +52,34 @@ def write_artifacts(signals: list, status: dict, *, base_dir: Path | str = "outp
                     json.dumps(status, indent=2), base_dir=base_dir)
 
 
-def _load_holdings(root: Path) -> list[str]:
+def _load_universe(root: Path, *, max_symbols: int = 40) -> list[str]:
+    """Holdings ∪ decision_plan advisory-pick symbols (so the GUI's advisory picks
+    actually get crowd context), deduped and capped to bound FMP calls."""
+    syms: list[str] = []
+    seen: set[str] = set()
+
+    def _add(sym):
+        s = str(sym or "").upper().strip()
+        if s and s not in seen:
+            seen.add(s)
+            syms.append(s)
+
     try:
         cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
-        return [str(h["symbol"]).upper() for h in (cfg.get("portfolio", {}).get("holdings") or [])
-                if isinstance(h, dict) and h.get("symbol")]
+        for h in (cfg.get("portfolio", {}).get("holdings") or []):
+            if isinstance(h, dict):
+                _add(h.get("symbol"))
     except Exception:
-        return []
+        pass
+    # Advisory picks (read-only; we never modify decision_plan).
+    try:
+        dp = json.loads((root / "outputs" / "latest" / "decision_plan.json").read_text(encoding="utf-8"))
+        for d in (dp.get("decisions") or []):
+            if isinstance(d, dict):
+                _add(d.get("symbol") or d.get("ticker"))
+    except Exception:
+        pass
+    return syms[:max_symbols]
 
 
 def run(root: str | Path = ".", *, symbols: list[str] | None = None) -> dict:
@@ -72,7 +93,7 @@ def run(root: str | Path = ".", *, symbols: list[str] | None = None) -> dict:
         capabilities = {}
         if caps_path.exists():
             capabilities = json.loads(caps_path.read_text(encoding="utf-8"))
-        universe = symbols or _load_holdings(root)
+        universe = symbols or _load_universe(root)
         now_iso = datetime.now(timezone.utc).isoformat()
         signals, events, status = builder.build_signals(
             universe, client=client, capabilities=capabilities, now_iso=now_iso)
