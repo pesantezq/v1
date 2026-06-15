@@ -26,6 +26,24 @@ class TestByteHook(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(self._client(td).last_response_bytes, 0)
 
+    def test_get_quote_short_uses_stable_base_url(self):
+        import tempfile, urllib.request
+        with tempfile.TemporaryDirectory() as td:
+            c = FMPClient(api_key="k", cache_dir=Path(td))
+            captured = {}
+            real_request = urllib.request.Request
+            def _capture_request(url, *a, **k):
+                captured["url"] = url
+                return real_request(url, *a, **k)
+            body = b'[{"symbol":"AAPL","price":1.0}]'
+            fake = MagicMock()
+            fake.__enter__.return_value.read.return_value = body
+            with patch("urllib.request.urlopen", return_value=fake), \
+                 patch("urllib.request.Request", side_effect=_capture_request):
+                c.get_quote_short("AAPL")
+            self.assertIn("/stable/quote-short", captured["url"])
+            self.assertNotIn("/api/quote-short", captured["url"])
+
 
 if __name__ == "__main__":
     unittest.main()

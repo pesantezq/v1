@@ -372,7 +372,9 @@ class FMPClient:
 
     @property
     def last_response_bytes(self) -> int:
-        """Bytes of the most recent HTTP response body (0 if none / cache hit)."""
+        """Bytes of the most recent HTTP response body. 0 until the first live
+        call; on a cache hit the caller skips _raw_get so this retains the prior
+        call's value (compare deltas across a call to detect a fresh fetch)."""
         return self._last_response_bytes
 
     def get_sp500_constituents(self, ttl_days: int = 7) -> List[Dict]:
@@ -946,7 +948,7 @@ class FMPClient:
             return cached
         if self._counter.would_exceed(self._budget):
             return self._cache.get_stale(cache_key) or {}
-        raw = self._raw_get("quote-short", {"symbol": symbol.upper()})
+        raw = self._raw_get("quote-short", {"symbol": symbol.upper()}, base_url=FMP_STABLE_BASE_URL)
         result = raw[0] if isinstance(raw, list) and raw else (raw or {})
         self._cache.set(cache_key, result)
         return result
