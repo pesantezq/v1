@@ -181,3 +181,10 @@ def probe_targets() -> list[dict]:
 
 def by_category(category: str) -> list[dict]:
     return [e for e in ENTRIES if e["category"] == category]
+
+
+_BY_ID = {e["endpoint_id"]: e for e in ENTRIES}
+
+
+def entry(endpoint_id: str) -> dict | None:
+    return _BY_ID.get(endpoint_id)

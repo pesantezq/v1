@@ -1863,3 +1863,24 @@ response_bytes, sample_fields, error_summary, last_checked_at}`. Mirror persiste
 
 ### `outputs/latest/fmp_crowd_probe_summary.md`
 Human-readable status summary + per-endpoint table.
+
+## Crowd Intelligence — normalized context (observe-only, 2026-06-15, Phase 2A)
+
+Produced by `portfolio_automation.crowd_intelligence.artifact_writer.run()` (manual
+entrypoint in 2A — not cron-wired). `observe_only: true`. Per-symbol crowd/market-
+attention context; **never feeds `decision_plan.json`, scoring, allocation, or trade
+execution**. Persisted to `data/crowd_intelligence.db` (`crowd_raw_events`,
+`crowd_signal_daily`). See `docs/CROWD_INTELLIGENCE.md`.
+
+### `outputs/latest/crowd_intelligence.json`
+`generated_at`, `observe_only`, `weights`, `symbols[]` — each
+`{symbol, composite_crowd_score (-1..1), confidence (0..1), category_scores{news,
+analyst, insider, congress, attention, social_sentiment}, enabled_sources,
+disabled_sources, top_reasons, warnings, data_freshness, source_records_count}`.
+
+### `outputs/latest/crowd_intelligence.md`
+Per-symbol readable table (crowd score, confidence, category scores, top reason).
+
+### `outputs/latest/crowd_intelligence_status.json`
+`overall_status, symbols_count, enabled_categories, disabled_categories (incl
+social_sentiment PLAN_LOCKED), fmp_calls_estimate, weights, warnings`.

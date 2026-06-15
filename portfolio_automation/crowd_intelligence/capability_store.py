@@ -19,6 +19,21 @@ CREATE TABLE IF NOT EXISTS fmp_endpoint_capabilities (
     last_checked_at TEXT,
     error_summary TEXT
 );
+CREATE TABLE IF NOT EXISTS crowd_raw_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT, endpoint_id TEXT, symbol TEXT, category TEXT,
+    event_time TEXT, normalized_event_type TEXT, raw_json TEXT, fetched_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_raw_symbol ON crowd_raw_events(symbol);
+CREATE TABLE IF NOT EXISTS crowd_signal_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL, signal_date TEXT NOT NULL,
+    news_score REAL, analyst_score REAL, insider_score REAL, congress_score REAL,
+    attention_score REAL, social_sentiment_score REAL, composite_crowd_score REAL,
+    confidence REAL, enabled_sources_json TEXT, disabled_sources_json TEXT,
+    explanation_json TEXT, created_at TEXT,
+    UNIQUE(symbol, signal_date)
+);
 """
 
 
@@ -61,3 +76,42 @@ class CapabilityStore:
                     d["sample_fields"] = []
                 out.append(d)
             return out
+
+    # --- Phase 2A: crowd_raw_events + crowd_signal_daily ---------------------
+    def record_events(self, events: list[dict]) -> int:
+        n = 0
+        with sqlite3.connect(self._path) as cx:
+            for e in events:
+                cx.execute(
+                    "INSERT INTO crowd_raw_events(provider, endpoint_id, symbol, category,"
+                    " event_time, normalized_event_type, raw_json, fetched_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (e.get("provider"), e.get("endpoint_id"), e.get("symbol"), e.get("category"),
+                     e.get("event_time"), e.get("normalized_event_type"),
+                     json.dumps(e.get("raw") or {}, default=str), e.get("fetched_at")))
+                n += 1
+        return n
+
+    def upsert_daily(self, rows: list[dict]) -> int:
+        cols = ("symbol", "signal_date", "news_score", "analyst_score", "insider_score",
+                "congress_score", "attention_score", "social_sentiment_score",
+                "composite_crowd_score", "confidence", "enabled_sources_json",
+                "disabled_sources_json", "explanation_json", "created_at")
+        with sqlite3.connect(self._path) as cx:
+            for r in rows:
+                cx.execute(
+                    f"INSERT INTO crowd_signal_daily({','.join(cols)}) VALUES ({','.join('?' * len(cols))})"
+                    " ON CONFLICT(symbol, signal_date) DO UPDATE SET "
+                    + ", ".join(f"{c}=excluded.{c}" for c in cols if c not in ("symbol", "signal_date")),
+                    tuple(r.get(c) for c in cols))
+        return len(rows)
+
+    def daily_rows(self) -> list[dict]:
+        with sqlite3.connect(self._path) as cx:
+            cx.row_factory = sqlite3.Row
+            return [dict(r) for r in cx.execute(
+                "SELECT * FROM crowd_signal_daily ORDER BY symbol, signal_date")]
+
+    def raw_event_count(self) -> int:
+        with sqlite3.connect(self._path) as cx:
+            return int(cx.execute("SELECT COUNT(*) FROM crowd_raw_events").fetchone()[0])

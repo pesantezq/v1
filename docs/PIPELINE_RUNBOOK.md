@@ -638,3 +638,31 @@ or a `config/fmp_governor.DISABLED` file. Ships **enabled**.
 
 See [design spec](superpowers/specs/2026-06-15-fmp-budget-governor-design.md) and
 [plan](superpowers/plans/2026-06-15-fmp-budget-governor.md).
+
+---
+
+## Crowd Intelligence (observe-only)
+
+Probe-gated FMP crowd-context layer (`portfolio_automation/crowd_intelligence/`).
+**Context only — never feeds `decision_plan.json`, scoring, allocation, or trades.**
+
+- **Phase 1 — capability probe** (manual diagnostic):
+  ```bash
+  cd /opt/stockbot && set -a; . ./.env; set +a
+  .venv/bin/python scripts/probe_fmp_crowd_endpoints.py
+  ```
+  → `outputs/latest/fmp_endpoint_capabilities.json` + summary + DB table. Re-run
+  after any FMP plan change.
+- **Phase 2A — normalized context** (manual entrypoint; NOT cron-wired yet):
+  ```bash
+  .venv/bin/python -m portfolio_automation.crowd_intelligence.artifact_writer
+  ```
+  → `crowd_intelligence.json` / `.md` / `_status.json` for the holdings universe.
+  Reads the Phase-1 capability map (skips PLAN_LOCKED), fetches AVAILABLE endpoints
+  via the governed `FMPClient.get_json`, persists `crowd_raw_events` +
+  `crowd_signal_daily`. Direct social sentiment is PLAN_LOCKED on Starter and stays
+  disabled (weight 0). Phase 2B wires the GUI crowd-context panel + daily cadence.
+
+See [Phase 1 spec](superpowers/specs/2026-06-15-crowd-intelligence-phase1-design.md),
+[Phase 2A spec](superpowers/specs/2026-06-15-crowd-intelligence-phase2a-design.md),
+and `docs/CROWD_INTELLIGENCE.md`.

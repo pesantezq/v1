@@ -953,6 +953,27 @@ class FMPClient:
         self._cache.set(cache_key, result)
         return result
 
+    def get_json(self, path: str, params: Optional[Dict] = None, *,
+                 ttl_seconds: int = 3600, base_url: Optional[str] = None) -> Any:
+        """Generic governed/cached GET for a full FMP path (e.g. '/stable/grades'
+        or '/api/v4/social-sentiment'). Cache-first + budget-guard + ledger via
+        _raw_get. Returns the parsed body, or the stale-cached value (else None)
+        when the daily budget would be exceeded. Used by the crowd-intelligence
+        adapters so every call is registry-driven, cached, and budget-counted."""
+        params = dict(params or {})
+        slug = path.strip("/").replace("/", "_")
+        key_params = "_".join(f"{k}={params[k]}" for k in sorted(params))
+        cache_key = f"json_{slug}_{key_params}" if key_params else f"json_{slug}"
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached
+        if self._counter.would_exceed(self._budget):
+            return self._cache.get_stale(cache_key)
+        domain = base_url or FMP_BASE_URL.rsplit("/api", 1)[0]  # https://financialmodelingprep.com
+        raw = self._raw_get(path.lstrip("/"), params, base_url=domain)
+        self._cache.set(cache_key, raw)
+        return raw
+
     def get_stock_news(
         self,
         tickers: List[str],

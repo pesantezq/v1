@@ -64,6 +64,43 @@ any paid upgrade.
   coverage (NOT in `STABLE_METHOD_MAP`; `required_daily=False`), so the canonical
   compliance test governs all crowd paths without being bypassed.
 
+## Phase 2A — backend adapters + normalized artifacts (observe-only)
+
+Five category adapters turn the AVAILABLE endpoints into a normalized per-symbol
+crowd context. **Context only — never creates or changes a BUY/SELL/HOLD,
+allocation, score, or trade.**
+
+- **Call path:** every runtime FMP call goes through the governed
+  `FMPClient.get_json(path, params, ttl_seconds=…)` via `governed_client("discovery")`
+  (cache + budget + ledger). No raw HTTP in adapters.
+- **Adapters** (`portfolio_automation/crowd_intelligence/adapters/`): `news`
+  (velocity/attention; **directional score neutral** — no sentiment on Starter; risk
+  keywords → warnings only), `analyst` (consensus distribution + recent grade
+  direction), `insider` (net buy/sell pressure, winsorized), `congress` (disclosed
+  activity, **dampened ×0.5, capped ±0.5, low weight**, no causal language),
+  `attention` (gainer/loser membership + most-active + sector/industry context).
+- **Composite** (`normalization.py`): news 0.25, analyst 0.25, insider 0.15,
+  congress 0.10, attention 0.25, **social 0.00 (PLAN_LOCKED)**; clamped to [-1,1].
+- **Confidence** = mean(source coverage, freshness, cross-category agreement,
+  completeness), [0,1].
+- **Artifacts:** `outputs/latest/crowd_intelligence.json` / `.md` /
+  `crowd_intelligence_status.json` (all `observe_only:true`). Persisted to
+  `data/crowd_intelligence.db` → `crowd_raw_events` + `crowd_signal_daily`.
+
+Run it (manual; not cron-wired in 2A):
+```bash
+cd /opt/stockbot && set -a; . ./.env; set +a
+.venv/bin/python -m portfolio_automation.crowd_intelligence.artifact_writer   # holdings universe
+```
+Example (AAPL, live): analyst +0.46 (consensus +0.57 / 110 ratings), insider −1.0
+(one recent sell), congress −0.05 (dampened), news velocity 1.4 (neutral direction),
+social 0 (disabled) → composite −0.04, confidence 0.75. ETF holdings show near-zero
+(no analyst/insider/congress data for ETFs) — data-honest.
+
+**Guardrails:** writes only the 3 crowd artifacts + the 2 SQLite tables;
+`decision_plan.json` and all decision artifacts are untouched (test-asserted);
+API keys never appear in stored events/artifacts/errors.
+
 ## Rerunning after a plan change
 
 If you change FMP tiers, re-run the probe; `enabled_after_probe` / the canonical
