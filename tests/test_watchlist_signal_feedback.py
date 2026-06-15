@@ -202,5 +202,41 @@ class TestWatchlistSignalFeedback(unittest.TestCase):
         self.assertEqual(annotated["results"][0]["signal_reliability"], "strong")
 
 
+class TestFmpBudgetLoad(unittest.TestCase):
+    """Regression: the signal-outcome resolution price-fetch fallback reads
+    fmp_daily_calls_budget from config. A value of 0 means 'no daily cap'
+    (FMPClient.would_exceed treats budget <= 0 as uncapped) and must be
+    propagated verbatim — NOT coalesced to None and dropped to the hardcoded
+    230-call default, which would silently throttle outcome resolution."""
+
+    import os as _os
+
+    def _budget_in_dir(self, cfg):
+        import os
+        from watchlist_scanner.performance_feedback import _load_fmp_budget
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            if cfg is not None:
+                (root / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+            prev = os.getcwd()
+            try:
+                os.chdir(root)
+                return _load_fmp_budget()
+            finally:
+                os.chdir(prev)
+
+    def test_zero_budget_preserved_as_uncapped(self):
+        self.assertEqual(self._budget_in_dir({"api_limits": {"fmp_daily_calls_budget": 0}}), 0)
+
+    def test_positive_budget_read_verbatim(self):
+        self.assertEqual(self._budget_in_dir({"api_limits": {"fmp_daily_calls_budget": 500}}), 500)
+
+    def test_absent_key_returns_none(self):
+        self.assertIsNone(self._budget_in_dir({"api_limits": {}}))
+
+    def test_missing_config_returns_none(self):
+        self.assertIsNone(self._budget_in_dir(None))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

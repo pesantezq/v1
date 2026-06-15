@@ -102,6 +102,25 @@ def record_scan_signals(
     return {"tracked": tracked, "skipped": skipped}
 
 
+def _load_fmp_budget() -> int | None:
+    """Read fmp_daily_calls_budget from config.json for the FMP price-fetch fallback.
+
+    Returns the configured int verbatim — INCLUDING 0, which FMPClient treats as
+    "no daily cap" (FMPClient.would_exceed: ``budget <= 0`` disables the cap).
+    Returns None only when the key is absent or on any error, so the caller falls
+    back to FMPClient's built-in default. Coalescing an explicit 0 to None here
+    silently re-imposed the legacy 230-call cap on outcome resolution.
+    """
+    try:
+        cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+        limits = (cfg.get("api_limits") or {}) if isinstance(cfg, dict) else {}
+        if "fmp_daily_calls_budget" not in limits:
+            return None
+        return int(limits["fmp_daily_calls_budget"])
+    except Exception:
+        return None
+
+
 def evaluate_pending_signal_feedback(
     *,
     db_path: str | Path = "data/portfolio.db",
@@ -126,10 +145,11 @@ def evaluate_pending_signal_feedback(
         try:
             from fmp_client import FMPClient  # local import to keep test isolation simple
             # Read daily budget from config so the cap honors the operator's setting.
+            # `is not None` (not truthiness) so an explicit 0 = "no cap" reaches
+            # FMPClient instead of being dropped to its 230-call default.
             try:
-                _cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
-                _budget = int((_cfg.get("api_limits") or {}).get("fmp_daily_calls_budget", 0)) or None
-                fmp_client = FMPClient(daily_budget=_budget) if _budget else FMPClient()
+                _budget = _load_fmp_budget()
+                fmp_client = FMPClient(daily_budget=_budget) if _budget is not None else FMPClient()
             except Exception:
                 fmp_client = FMPClient()
         except Exception as exc:

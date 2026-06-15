@@ -82,6 +82,32 @@ class TestReadBudgetState(unittest.TestCase):
             r = read_budget_state(root)
             self.assertFalse(r["available"])
 
+    def test_uncapped_when_budget_zero(self):
+        # Regression: fmp_daily_calls_budget=0 means "no daily cap" (the
+        # 2026-06-12 convention), NOT "no budget configured". The telemetry
+        # must report it as an available, uncapped, ok state — otherwise the
+        # daily check reads a misleading no_budget_configured / unavailable.
+        with tempfile.TemporaryDirectory() as td:
+            root = _make_repo(td, budget_count=900, budget_cap=0)
+            r = read_budget_state(root)
+            self.assertTrue(r["available"])
+            self.assertTrue(r.get("uncapped"))
+            self.assertEqual(r["status"], "ok")
+            self.assertEqual(r["budget"], 0)
+
+    def test_absent_budget_key_is_unconfigured(self):
+        # No key at all → genuinely unconfigured (distinct from explicit 0).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "config.json").write_text(json.dumps({"api_limits": {}}))
+            (root / "data" / "fmp_cache").mkdir(parents=True)
+            (root / "data" / "fmp_cache" / "call_counter.json").write_text(
+                json.dumps({"date": "2026-05-19", "count": 5})
+            )
+            r = read_budget_state(root)
+            self.assertFalse(r["available"])
+            self.assertEqual(r.get("reason"), "no_budget_configured")
+
 
 class TestReadNewsOutcome(unittest.TestCase):
     def test_reads_counts(self):

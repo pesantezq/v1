@@ -94,23 +94,41 @@ def read_budget_state(root: Path) -> dict[str, Any]:
         return {"available": False, "reason": "no_counter"}
     counter = _load_json_safe(counter_path) or {}
     cfg = _load_json_safe(root.joinpath(*_CONFIG_REL)) or {}
-    limits = cfg.get("api_limits") if isinstance(cfg, dict) else {}
-    budget = _safe_int((limits or {}).get("fmp_daily_calls_budget", 0)) or None
+    limits = (cfg.get("api_limits") or {}) if isinstance(cfg, dict) else {}
 
     if not isinstance(counter, dict):
         return {"available": False, "reason": "no_counter"}
-    if budget is None:
+    # Distinguish an explicit 0 (= "no daily cap", the operator's uncapped
+    # convention) from an absent key (genuinely unconfigured). Coalescing both
+    # to None misreported uncapped-0 as no_budget_configured.
+    if "fmp_daily_calls_budget" not in limits:
         return {"available": False, "reason": "no_budget_configured"}
+    budget = _safe_int(limits.get("fmp_daily_calls_budget"))
 
     count_today = _safe_int(counter.get("count"))
+
+    if budget <= 0:
+        # Uncapped: FMPClient.would_exceed treats budget <= 0 as no daily cap.
+        # Report an available, ok, uncapped state (status "ok" keeps the daily
+        # check's budget gate GREEN, which is correct — there is no cap to hit).
+        return {
+            "available": True,
+            "date": counter.get("date"),
+            "count_today": count_today,
+            "budget": 0,
+            "headroom": None,
+            "pct_used": None,
+            "status": "ok",
+            "uncapped": True,
+        }
+
     headroom = max(0, budget - count_today)
-    pct_used = round(count_today / budget, 4) if budget > 0 else None
+    pct_used = round(count_today / budget, 4)
     status = "ok"
-    if budget > 0:
-        if count_today >= budget:
-            status = "exhausted"
-        elif count_today >= int(budget * 0.90):
-            status = "near_cap"
+    if count_today >= budget:
+        status = "exhausted"
+    elif count_today >= int(budget * 0.90):
+        status = "near_cap"
     return {
         "available": True,
         "date": counter.get("date"),
@@ -119,6 +137,7 @@ def read_budget_state(root: Path) -> dict[str, Any]:
         "headroom": headroom,
         "pct_used": pct_used,
         "status": status,
+        "uncapped": False,
     }
 
 
