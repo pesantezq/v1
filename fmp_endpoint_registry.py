@@ -190,6 +190,38 @@ REGISTRY: dict[str, dict] = {
         "classification": "premium_optional",
         "usage": "Crowd Radar social-sentiment entitlement probe only — not core pipeline",
     },
+    # ── Crowd Intelligence candidates (observe-only; probe-confirmed 2026-06-15) ─
+    # Registered for compliance coverage. NOT in STABLE_METHOD_MAP — these are
+    # probe/adapter targets reached via the governed FMPClient.get_json, not
+    # implemented client methods. required_daily=False for all. Availability is
+    # confirmed by scripts/probe_fmp_crowd_endpoints.py (see docs/CROWD_INTELLIGENCE.md).
+    # News (Starter-confirmed AVAILABLE):
+    "fmp_articles":      {"endpoint": "/stable/fmp-articles",         "per_symbol": False, "starter_safe": True,  "priority": "P3", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: general FMP articles"},
+    "general_news":      {"endpoint": "/stable/news/general-latest",  "per_symbol": False, "starter_safe": True,  "priority": "P3", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: general market news latest"},
+    "stock_news_latest": {"endpoint": "/stable/news/stock-latest",    "per_symbol": False, "starter_safe": True,  "priority": "P2", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: latest stock news (velocity)"},
+    "crypto_news":       {"endpoint": "/stable/news/crypto-latest",   "per_symbol": False, "starter_safe": True,  "priority": "P3", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: crypto news latest"},
+    "forex_news":        {"endpoint": "/stable/news/forex-latest",    "per_symbol": False, "starter_safe": True,  "priority": "P3", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: forex news latest"},
+    # Analyst (Starter-confirmed AVAILABLE):
+    "stock_grades":      {"endpoint": "/stable/grades",               "per_symbol": True,  "starter_safe": True,  "priority": "P2", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: analyst grade actions"},
+    "grades_consensus":  {"endpoint": "/stable/grades-consensus",     "per_symbol": True,  "starter_safe": True,  "priority": "P2", "required_daily": False, "classification": "core_stable_ok",  "usage": "crowd: analyst grade consensus"},
+    # Insider (Starter-confirmed AVAILABLE):
+    "latest_insider_trading":   {"endpoint": "/stable/insider-trading/latest",     "per_symbol": False, "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: latest insider trades"},
+    "search_insider_trades":    {"endpoint": "/stable/insider-trading/search",     "per_symbol": True,  "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: insider trades by symbol"},
+    "insider_trade_statistics": {"endpoint": "/stable/insider-trading/statistics", "per_symbol": True,  "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: insider buy/sell ratio"},
+    # Congress (Starter-confirmed AVAILABLE):
+    "senate_trading":         {"endpoint": "/stable/senate-trades",          "per_symbol": True,  "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: senate trades by symbol"},
+    "senate_trading_by_name": {"endpoint": "/stable/senate-trades-by-name",  "per_symbol": False, "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: senate trades by member"},
+    "house_trading":          {"endpoint": "/stable/house-trades",           "per_symbol": True,  "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: house trades by symbol"},
+    "house_trading_by_name":  {"endpoint": "/stable/house-trades-by-name",   "per_symbol": False, "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: house trades by member"},
+    # Market attention (Starter-confirmed AVAILABLE):
+    "biggest_gainers":               {"endpoint": "/stable/biggest-gainers",                "per_symbol": False, "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: top gainers (attention)"},
+    "biggest_losers":                {"endpoint": "/stable/biggest-losers",                 "per_symbol": False, "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: top losers (attention)"},
+    "most_active":                   {"endpoint": "/stable/most-actives",                   "per_symbol": False, "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: most active (attention)"},
+    "sector_performance_snapshot":   {"endpoint": "/stable/sector-performance-snapshot",    "per_symbol": False, "starter_safe": True, "priority": "P2", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: sector performance snapshot"},
+    "industry_performance_snapshot": {"endpoint": "/stable/industry-performance-snapshot",  "per_symbol": False, "starter_safe": True, "priority": "P3", "required_daily": False, "classification": "core_stable_ok", "usage": "crowd: industry performance snapshot"},
+    # Direct social / RSS sentiment (legacy v4; probe-confirmed PLAN_LOCKED on Starter):
+    "social_sentiment_legacy":  {"endpoint": "/api/v4/social-sentiment",                  "per_symbol": True,  "starter_safe": False, "priority": "P3", "required_daily": False, "classification": "legacy_optional", "usage": "crowd: legacy social sentiment — PLAN_LOCKED on Starter (probe-only)"},
+    "stock_news_sentiment_rss": {"endpoint": "/api/v4/stock-news-sentiments-rss-feed",     "per_symbol": False, "starter_safe": False, "priority": "P3", "required_daily": False, "classification": "legacy_optional", "usage": "crowd: legacy news-sentiment RSS — PLAN_LOCKED on Starter (probe-only)"},
 }
 
 # ---------------------------------------------------------------------------

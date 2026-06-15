@@ -1845,3 +1845,21 @@ live-call counts for the month (cache hits and skips excluded), from the
 ### `outputs/latest/fmp_cache_status.json`
 `cache_hit_rate` (month), `file_count`, `total_size_bytes`, `portfolio_fresh`
 (per-holding fresh/stale map) — reuses `fmp_client._DiskCache`.
+
+---
+
+## Crowd Intelligence — capability probe (observe-only, 2026-06-15, Phase 1)
+
+Produced by `scripts/probe_fmp_crowd_endpoints.py` (manual diagnostic — NOT a daily
+cron producer in Phase 1). `observe_only: true`. Discovers which FMP endpoints the
+current plan exposes; feeds no decision/scoring/portfolio state. See
+`docs/CROWD_INTELLIGENCE.md`.
+
+### `outputs/latest/fmp_endpoint_capabilities.json`
+`generated_at`, `max_calls` (80), `calls_made`, `confirmed_baseline`, `summary`
+(status → count), `records[]` — per endpoint `{endpoint_id, category, status, http_status,
+response_bytes, sample_fields, error_summary, last_checked_at}`. Mirror persisted to
+`data/crowd_intelligence.db:fmp_endpoint_capabilities`.
+
+### `outputs/latest/fmp_crowd_probe_summary.md`
+Human-readable status summary + per-endpoint table.
