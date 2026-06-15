@@ -42,6 +42,8 @@ def crowd_context_for(root: Path | str, symbols: list[str]) -> dict[str, Any]:
             "label": label,
             "severity": enr.label_severity(label),
             "composite": sig.get("composite_crowd_score"),
+            "composite_trend": sig.get("composite_trend"),
+            "trend": sig.get("trend_label") or "building",
             "confidence": sig.get("confidence"),
             "enabled_sources": sig.get("enabled_sources") or [],
             "disabled_sources": sig.get("disabled_sources") or [],

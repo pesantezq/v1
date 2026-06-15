@@ -190,6 +190,40 @@ class TestUniverseTickerFilter(unittest.TestCase):
             self.assertNotIn("DRIFT_QQQ_2026-06-15", uni)
 
 
+class TestUniverseWatchlistAndTrend(unittest.TestCase):
+    def test_universe_includes_watchlist_single_names(self):
+        from portfolio_automation.crowd_intelligence.artifact_writer import _load_universe
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "config.json").write_text(json.dumps({"portfolio": {"holdings": [{"symbol": "QQQ"}]}}))
+            latest = root / "outputs" / "latest"; latest.mkdir(parents=True)
+            (latest / "decision_plan.json").write_text(json.dumps({"decisions": [{"symbol": "INTC"}]}))
+            (latest / "watchlist_signals.json").write_text(json.dumps(
+                {"results": [{"ticker": "NVDA"}, {"ticker": "AAPL"}, {"ticker": "EMERGENCY_FUND_2026-06-15"}]}))
+            uni = _load_universe(root)
+            self.assertIn("INTC", uni)   # picks first
+            self.assertIn("QQQ", uni)    # holdings
+            self.assertIn("NVDA", uni)   # watchlist single-name
+            self.assertIn("AAPL", uni)
+            self.assertNotIn("EMERGENCY_FUND_2026-06-15", uni)  # still ticker-filtered
+
+    def test_trend_labels(self):
+        from portfolio_automation.crowd_intelligence.artifact_writer import apply_trend
+        from portfolio_automation.crowd_intelligence.schemas import CrowdSignal
+
+        def _s(sym, comp):
+            return CrowdSignal(sym, comp, 0.7, {}, [], [], [], [], 0.9, 10)
+
+        sigs = [_s("UP", 0.40), _s("DN", -0.30), _s("FLAT", 0.10), _s("NEW", 0.50)]
+        apply_trend(sigs, {"UP": 0.10, "DN": 0.10, "FLAT": 0.12})  # NEW has no prior
+        by = {s.symbol: s for s in sigs}
+        self.assertEqual(by["UP"].trend_label, "rising")      # +0.30
+        self.assertEqual(by["DN"].trend_label, "falling")     # -0.40
+        self.assertEqual(by["FLAT"].trend_label, "flat")      # -0.02
+        self.assertEqual(by["NEW"].trend_label, "building")   # no history
+        self.assertIsNone(by["NEW"].composite_trend)
+
+
 class TestDailyWiringNonFatal(unittest.TestCase):
     def test_run_returns_status_dict_not_raises_on_bad_root(self):
         from portfolio_automation.crowd_intelligence.artifact_writer import run

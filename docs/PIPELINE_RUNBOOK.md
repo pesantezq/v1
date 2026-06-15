@@ -617,11 +617,12 @@ constructed uncapped, `daily_budget=0`, so it does not double-cap):
 - **Per-run-mode call budgets** (`config.json data_budget.run_modes`) — `call_budget: 0`
   means uncapped. Rationale: `gui_refresh` 30 (cache-first, light); `daily` 0
   (uncapped — the main pipeline, matches `api_limits.fmp_daily_calls_budget=0`);
-  `weekly_review` 800 / `monthly` 1500 (bounded review windows); `discovery` 450
+  `weekly_review` 800 / `monthly` 1500 (bounded review windows); `discovery` 650
   (low priority, first skipped — sized to cover a cold crowd-intelligence run over the
-  capped 40-symbol universe: ~9 per-symbol endpoints × 40 + ~11 shared ≈ 371, plus
-  headroom); `historical_replay` `cache_only` (0 live — replay from the 5y archive,
-  fetch only on cache miss).
+  capped 60-symbol universe: ~9 per-symbol endpoints × 60 + ~11 shared ≈ 551, plus
+  headroom; all within the existing paid Starter allowance — no extra cost);
+  `historical_replay` `cache_only` (0 live — replay from the 5y archive, fetch only on
+  cache miss).
 - **Monthly bandwidth guard** — `monthly_bandwidth_gb` 20 (real response bytes summed
   in the `api_usage_ledger`). At the cap, low-priority run modes are disabled;
   portfolio/decision data is never blocked.

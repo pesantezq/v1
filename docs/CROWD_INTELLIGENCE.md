@@ -87,7 +87,16 @@ allocation, score, or trade.**
   `crowd_intelligence_status.json` (all `observe_only:true`). Persisted to
   `data/crowd_intelligence.db` → `crowd_raw_events` + `crowd_signal_daily`.
 
-Run it (manual; not cron-wired in 2A):
+**Universe** (`_load_universe`, capped 60): advisory picks (decision_plan) **+**
+holdings (config) **+** daily watchlist single-names (`watchlist_signals.json`) —
+all free Starter artifacts; ticker-shape filtered (synthetic decision entries like
+`EMERGENCY_FUND_*` dropped). ETFs yield thin context; single names carry the signal.
+
+**Trend** (`composite_trend` / `trend_label`): each daily run compares a symbol's
+composite to its most-recent prior `crowd_signal_daily` row → `rising`/`falling`/`flat`
+(±0.05) or `building` until ≥2 days of history exist. Surfaced on the GUI context card.
+
+Run it (manual; also cron-wired as Stage 7d3):
 ```bash
 cd /opt/stockbot && set -a; . ./.env; set +a
 .venv/bin/python -m portfolio_automation.crowd_intelligence.artifact_writer   # holdings universe

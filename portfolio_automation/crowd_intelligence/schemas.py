@@ -47,3 +47,7 @@ class CrowdSignal:
     warnings: list[str]
     data_freshness: float
     source_records_count: int
+    # Trend vs the most-recent prior daily run (filled from crowd_signal_daily history;
+    # "building" until ≥2 days of history exist). Observe-only context.
+    composite_trend: float | None = None
+    trend_label: str = "building"

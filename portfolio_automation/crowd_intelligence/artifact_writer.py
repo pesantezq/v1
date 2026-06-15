@@ -65,10 +65,11 @@ def _is_ticker_like(sym: str) -> bool:
     return bool(_TICKER_RE.match(sym)) and "_" not in sym
 
 
-def _load_universe(root: Path, *, max_symbols: int = 40) -> list[str]:
-    """Holdings ∪ decision_plan advisory-pick symbols (so the GUI's advisory picks
-    actually get crowd context), deduped, ticker-shape filtered, and capped to bound
-    FMP calls."""
+def _load_universe(root: Path, *, max_symbols: int = 60) -> list[str]:
+    """Holdings ∪ decision_plan advisory-picks ∪ daily watchlist single-names (all
+    free artifacts), deduped, ticker-shape filtered, capped to bound governed FMP
+    calls. Picks come first (they're what the GUI shows), then holdings, then the
+    watchlist single-names that enrich coverage + build per-symbol history."""
     syms: list[str] = []
     seen: set[str] = set()
 
@@ -78,6 +79,16 @@ def _load_universe(root: Path, *, max_symbols: int = 40) -> list[str]:
             seen.add(s)
             syms.append(s)
 
+    latest = root / "outputs" / "latest"
+    # 1. Advisory picks first — these are what the GUI attaches context to.
+    try:
+        dp = json.loads((latest / "decision_plan.json").read_text(encoding="utf-8"))
+        for d in (dp.get("decisions") or []):
+            if isinstance(d, dict):
+                _add(d.get("symbol") or d.get("ticker"))
+    except Exception:
+        pass
+    # 2. Holdings.
     try:
         cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
         for h in (cfg.get("portfolio", {}).get("holdings") or []):
@@ -85,15 +96,29 @@ def _load_universe(root: Path, *, max_symbols: int = 40) -> list[str]:
                 _add(h.get("symbol"))
     except Exception:
         pass
-    # Advisory picks (read-only; we never modify decision_plan).
+    # 3. Daily watchlist single-names (free artifact) — enrich coverage + build history.
     try:
-        dp = json.loads((root / "outputs" / "latest" / "decision_plan.json").read_text(encoding="utf-8"))
-        for d in (dp.get("decisions") or []):
-            if isinstance(d, dict):
-                _add(d.get("symbol") or d.get("ticker"))
+        ws = json.loads((latest / "watchlist_signals.json").read_text(encoding="utf-8"))
+        for r in (ws.get("results") or ws.get("signals") or []):
+            if isinstance(r, dict):
+                _add(r.get("ticker") or r.get("symbol"))
     except Exception:
         pass
     return syms[:max_symbols]
+
+
+def apply_trend(signals: list, prior_by_sym: dict[str, float]) -> None:
+    """Set composite_trend + trend_label on each signal from prior-day composites.
+    'building' when no prior history; flat/rising/falling at ±0.05. Pure."""
+    for s in signals:
+        prev = prior_by_sym.get(s.symbol)
+        if prev is None:
+            s.trend_label = "building"
+            s.composite_trend = None
+        else:
+            s.composite_trend = round(s.composite_crowd_score - float(prev), 4)
+            s.trend_label = ("rising" if s.composite_trend >= 0.05
+                             else "falling" if s.composite_trend <= -0.05 else "flat")
 
 
 def run(root: str | Path = ".", *, symbols: list[str] | None = None) -> dict:
@@ -112,6 +137,13 @@ def run(root: str | Path = ".", *, symbols: list[str] | None = None) -> dict:
         signals, events, status = builder.build_signals(
             universe, client=client, capabilities=capabilities, now_iso=now_iso)
         store = CapabilityStore(root / "data" / "crowd_intelligence.db")
+        # Trend vs the most-recent PRIOR day — read history BEFORE writing today's row.
+        today = status["signal_date"]
+        prior_by_sym: dict[str, float] = {}
+        for r in store.daily_rows():  # ordered by (symbol, signal_date) ascending
+            if r.get("signal_date") and r["signal_date"] < today and r.get("composite_crowd_score") is not None:
+                prior_by_sym[r["symbol"]] = r["composite_crowd_score"]
+        apply_trend(signals, prior_by_sym)
         store.record_events(events)
         store.upsert_daily([{
             "symbol": s.symbol, "signal_date": status["signal_date"],

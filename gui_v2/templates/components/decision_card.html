@@ -31,7 +31,7 @@
     <div class="flex items-center gap-2 flex-wrap text-[11px]">
       {{ ui.badge(cc.severity, "Crowd: " ~ cc.label) }}
       {% if cc.present %}
-      <span class="font-mono text-zinc-500">score {{ "%+.2f"|format(cc.composite or 0) }} · conf {{ "%.0f"|format((cc.confidence or 0) * 100) }}%</span>
+      <span class="font-mono text-zinc-500">score {{ "%+.2f"|format(cc.composite or 0) }} · conf {{ "%.0f"|format((cc.confidence or 0) * 100) }}% · trend {{ cc.trend }}{% if cc.composite_trend is not none %} ({{ "%+.2f"|format(cc.composite_trend) }}){% endif %}</span>
       {% endif %}
     </div>
     {% for line in cc.lines %}
