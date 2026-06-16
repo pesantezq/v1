@@ -51,6 +51,43 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _load_unified_crowd_context(root: Path) -> dict:
+    """Per-symbol crowd context for the sim experiments, sourced from the unified
+    crowd bus. Maps the unified row onto the {velocity, state, confidence,
+    confirmed} shape the experiments expect:
+
+      * velocity   = cross_source_confirmation_score * 2  (so a rank only rises
+                     when BOTH lanes confirm attention; >=1.0 bump, >=1.5 ready).
+      * state      = unified crowd_state.
+      * confidence = unified crowd_confidence.
+      * confirmed  = crowd_state == 'confirmed_attention' (strongest cross-source).
+
+    Never raises; returns {} when the unified bus is unavailable (prior behavior).
+    """
+    try:
+        from portfolio_automation.crowd_intelligence.unified_loader import read_unified_crowd
+        out = read_unified_crowd(root)
+        if not out.get("available") or out.get("source") != "unified":
+            return {}
+        ctx: dict[str, Any] = {}
+        for tk, row in (out.get("by_ticker") or {}).items():
+            confirmation = float(row.get("cross_source_confirmation_score") or 0.0)
+            state = row.get("crowd_state") or "insufficient_data"
+            ctx[str(tk).upper()] = {
+                "velocity": round(confirmation * 2.0, 4),
+                "state": state,
+                "confidence": float(row.get("crowd_confidence") or 0.0),
+                "confirmed": state == "confirmed_attention",
+                "confirmation": confirmation,
+                "divergence": float(row.get("cross_source_divergence_score") or 0.0),
+                "retail_attention": row.get("retail_attention_score"),
+                "fmp_attention": row.get("fmp_attention_score"),
+            }
+        return ctx
+    except Exception:
+        return {}
+
+
 def load_production_baseline(root: Path) -> dict:
     """Snapshot what production looks like today (the 'before' for comparisons).
 
@@ -60,6 +97,11 @@ def load_production_baseline(root: Path) -> dict:
     """
     root = Path(root)
     out: dict[str, Any] = {"watchlist": [], "advisory": [], "crowd": {}}
+
+    # Unified crowd context (preferred). Joins ApeWisdom retail attention + FMP
+    # market/context attention; the sim lane may actively consume it. Falls back
+    # to {} (the prior always-empty behavior) when the unified bus is unavailable.
+    out["crowd"] = _load_unified_crowd_context(root)
 
     # Production watchlist (config + extended). Best-effort.
     cfg = _read_json(root / "config.json") or {}

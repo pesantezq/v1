@@ -1238,6 +1238,58 @@ artifacts:
     notes: next-stage Phase 11A — producer not yet shipped
 
   # ── Crowd Radar / Public Knowledge Velocity Layer (sandbox-only) ────────────
+  crowd_intelligence.json:
+    path: outputs/latest/crowd_intelligence.json
+    label: crowd intelligence (FMP lane)
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: crowd_intelligence
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Lane B per-ticker crowd context from AVAILABLE FMP endpoints (via the governor). Context lane; production-gated, never feeds decision_plan / allocations / advisory selection. Joins FMP institutional/analyst context; social_sentiment is PLAN_LOCKED (expected, not a fault). Consumed by /daily-tool-analysis line 6k2 + portfolio-discovery-health. Wired as run_daily_safe Stage 7d3.
+
+  crowd_intelligence_status.json:
+    path: outputs/latest/crowd_intelligence_status.json
+    label: crowd intelligence status (FMP lane)
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: crowd_intelligence
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Status companion to crowd_intelligence.json (overall_status, symbols_count, enabled/disabled categories). Context lane; production-gated, never feeds decision_plan. Consumed by /daily-tool-analysis content-liveness check line 6k2.
+
+  unified_crowd_intelligence.json:
+    path: outputs/latest/unified_crowd_intelligence.json
+    label: unified crowd intelligence bus
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: unified_writer
+    consumers: [daily-tool-analysis, portfolio-discovery-health, flock_intelligence, sim_governance]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Joins Lane A (ApeWisdom retail attention) + Lane B (FMP institutional context) into a single per-ticker crowd view. Simulation-active / production-gated; the active simulation lane may consume it, but it never feeds decision_plan / allocations / advisory selection. Human approval required for any production change. Wired as run_daily_safe Stage 9c3 (after both lanes). Consumed by /daily-tool-analysis line 6k3 + portfolio-discovery-health.
+
+  unified_crowd_intelligence_status.json:
+    path: outputs/latest/unified_crowd_intelligence_status.json
+    label: unified crowd intelligence status
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: unified_writer
+    consumers: [daily-tool-analysis, portfolio-discovery-health, flock_intelligence, sim_governance]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Status companion to unified_crowd_intelligence.json (overall_status, total/lane_a/lane_b/overlap tickers, state_counts, social_sentiment_status, warnings). Simulation-active / production-gated; never feeds decision_plan. 'degraded' (single-lane) is expected/report-only. Joins ApeWisdom retail + FMP context. Consumed by /daily-tool-analysis content-liveness check line 6k3.
+
   crowd_knowledge_state.json:
     path: outputs/sandbox/discovery/crowd_knowledge_state.json
     label: crowd knowledge state

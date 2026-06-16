@@ -73,6 +73,15 @@ class GroupMetrics:
     flock_score: float
     dispersion_score: float
     exhaustion_score: float
+    # --- unified-crowd-bus cross-source context (additive; observe-only) -------
+    # Group-level aggregates of the per-ticker unified fields. Default 0.0 so the
+    # legacy ApeWisdom-only path (no unified data) is byte-for-byte unchanged;
+    # populated only when load_crowd_metrics sourced from the unified bus. These
+    # are surfaced for explainability and DO NOT feed the classifier rules.
+    cross_source_confirmation: float = 0.0
+    cross_source_divergence: float = 0.0
+    fmp_context_score: float = 0.0
+    crowd_source: str = "legacy"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

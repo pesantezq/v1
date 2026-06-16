@@ -29,6 +29,47 @@ def _bucket(values: list[str]) -> dict[str, int]:
     return out
 
 
+def _summarize_unified_crowd(base_dir: str) -> dict:
+    """Compact unified-crowd evidence for the daily AI/product review packet.
+
+    Read-only; kept SMALL (ticker lists only, capped) so it adds negligible tokens
+    to the single consolidated review and never threatens the $0.50/day cap. No
+    extra AI call — this is packet context, embedded in the one existing review.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    def _tickers(rows, n=8):
+        return [str(r.get("ticker")) for r in (rows or [])[:n] if r.get("ticker")]
+
+    try:
+        path = _Path(base_dir) / "latest" / "unified_crowd_intelligence_status.json"
+        st = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"available": False}
+    return {
+        "available": True,
+        "overall_status": st.get("overall_status"),
+        "total_tickers": st.get("total_tickers"),
+        "lane_a_tickers": st.get("lane_a_tickers"),
+        "lane_b_tickers": st.get("lane_b_tickers"),
+        "overlap_tickers": st.get("overlap_tickers"),
+        "social_sentiment_status": st.get("social_sentiment_status"),
+        "crowd_confidence_avg": st.get("crowd_confidence_avg"),
+        "state_counts": st.get("state_counts", {}),
+        "top_confirmed_attention": _tickers(st.get("top_confirmed_attention")),
+        "top_divergent_attention": _tickers(st.get("top_divergent_attention")),
+        "top_retail_only_attention": _tickers(st.get("top_retail_only_attention")),
+        "top_institutional_context_only": _tickers(st.get("top_institutional_context_only")),
+        # confirmed cross-source attention = the candidates with the strongest
+        # evidence for a future production-readiness review (the reviewer may
+        # recommend; human approval is required for any production change).
+        "candidates_ready_for_production_review": _tickers(st.get("top_confirmed_attention")),
+        "note": "Simulation-active crowd evidence; never feeds the production "
+                "decision engine. Human approval required for any production change.",
+    }
+
+
 def build_daily_simulation_bundle(
     lane_result: dict,
     now: str,
@@ -87,6 +128,8 @@ def build_daily_simulation_bundle(
             },
         },
         # ── aggregate summaries ─────────────────────────────────────────────
+        # ── unified crowd evidence (compact; embedded in the one AI review) ──
+        "unified_crowd_summary": _summarize_unified_crowd(base_dir),
         "data_quality": _bucket([str(c.get("data_quality", "unknown")) for c in candidates]),
         "risk_summary": _bucket([str(c.get("risk_impact", "unknown")) for c in candidates]),
         "confidence_summary": {

@@ -2,12 +2,24 @@
 
 Every loader is defensive: a missing/malformed artifact degrades to an empty
 result, never raises. Reused upstream artifacts (no new paid data):
-  * crowd velocity / breadth   -> outputs/sandbox/discovery/crowd_multi_source_velocity.json
-                                  (+ public_knowledge_velocity.json when present)
+  * crowd velocity / breadth   -> the unified crowd bus
+                                  (outputs/latest/unified_crowd_intelligence.json) when
+                                  present, ELSE the legacy ApeWisdom multi-source +
+                                  public-knowledge velocity artifacts.
   * theme grouping             -> outputs/latest/theme_signals.json  (themes[].tickers)
   * sector grouping            -> data/fmp_cache/profile_stable_<TICKER>.json (data[0].sector)
   * price returns              -> outputs/performance/signal_outcomes.csv (outcome_return_1d)
   * prior flock states/vol     -> outputs/simulation/flock_state_history.json (this layer writes it)
+
+Crowd-source preference (2026-06-16): ``load_crowd_metrics`` now PREFERS the
+unified crowd bus (``read_unified_crowd``). When the unified artifact is present
+(source == 'unified') each per-ticker entry keeps the original contract keys
+(``velocity`` / ``breadth`` / ``mentions``) so all existing callers keep working,
+but is additionally ENRICHED with the unified fields (retail/fmp attention,
+cross-source confirmation/divergence, crowd_state, news/analyst/insider/congress
+context). When the unified bus is unavailable, the legacy ApeWisdom +
+public-knowledge code path is used unchanged. This is purely additive and
+observe-only: it never feeds the decision engine.
 """
 from __future__ import annotations
 
@@ -15,6 +27,8 @@ import csv
 import json
 from pathlib import Path
 from typing import Any
+
+from portfolio_automation.crowd_intelligence.unified_loader import read_unified_crowd
 
 
 def _read_json(path: Path) -> Any:
@@ -83,12 +97,27 @@ def load_universe(root: Path) -> list[str]:
 # Crowd metrics (velocity / breadth / mentions) — reuse existing artifacts
 # ---------------------------------------------------------------------------
 
-def load_crowd_metrics(root: Path) -> dict[str, dict[str, float]]:
-    """Per-ticker {velocity, breadth, mentions} from existing crowd artifacts.
+# Maps the unified retail_attention_score (0..1) onto a velocity-comparable
+# magnitude. The unified bus normalizes ApeWisdom mention velocity onto 0..1 by
+# dividing the excess-over-flat by RETAIL_ATTENTION_FULL_SCALE (=5.0); we invert
+# that here so the flock metrics see a velocity on the same order of magnitude as
+# the legacy mention-velocity path (a full-attention ticker -> ~5.0).
+_RETAIL_ATTENTION_VELOCITY_SCALE = 5.0
 
-    Prefers the active multi-source velocity artifact (ApeWisdom etc.); merges
-    the public-knowledge-velocity per-ticker features when present.
+
+def load_crowd_metrics(root: Path) -> dict[str, dict[str, float]]:
+    """Per-ticker {velocity, breadth, mentions} crowd metrics.
+
+    PREFERS the unified crowd bus (``read_unified_crowd``). When the unified
+    artifact is present (source == 'unified'), entries keep the original contract
+    keys (``velocity`` / ``breadth`` / ``mentions``) and are enriched with the
+    unified cross-source fields. Otherwise falls back to the legacy multi-source
+    velocity artifact (ApeWisdom etc.), merging public-knowledge-velocity features.
     """
+    unified = _load_unified_crowd_metrics(root)
+    if unified is not None:
+        return unified
+
     disc = root / "outputs" / "sandbox" / "discovery"
     out: dict[str, dict[str, float]] = {}
 
@@ -124,6 +153,78 @@ def load_crowd_metrics(root: Path) -> dict[str, dict[str, float]]:
         if isinstance(mc, (int, float)) and mc:
             cur["mentions"] = float(mc)
     return out
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _load_unified_crowd_metrics(root: Path) -> dict[str, dict[str, float]] | None:
+    """Build per-ticker metrics from the unified crowd bus, or None when the
+    unified artifact is unavailable (so callers fall back to the legacy path).
+
+    Keeps the legacy contract keys (velocity/breadth/mentions) and additively
+    enriches each entry with the unified cross-source fields. Never raises.
+    """
+    try:
+        unified = read_unified_crowd(root)
+    except Exception:
+        return None
+    if not isinstance(unified, dict) or unified.get("source") != "unified":
+        return None
+
+    by_ticker = unified.get("by_ticker") or {}
+    if not isinstance(by_ticker, dict) or not by_ticker:
+        return None
+
+    out: dict[str, dict[str, float]] = {}
+    for tk, row in by_ticker.items():
+        if not isinstance(row, dict):
+            continue
+        ticker = str(tk or "").upper()
+        if not ticker:
+            continue
+
+        retail = _as_float(row.get("retail_attention_score"))
+        fmp = _as_float(row.get("fmp_attention_score"))
+        breadth_total = _as_float(row.get("source_breadth_total")) or 0.0
+
+        # velocity: prefer retail attention (scaled to legacy magnitude); when
+        # retail is absent (FMP-only ticker) use the fmp attention so the group
+        # no longer goes dark just because ApeWisdom had no read.
+        if retail is not None:
+            velocity = retail * _RETAIL_ATTENTION_VELOCITY_SCALE
+        elif fmp is not None:
+            velocity = fmp * _RETAIL_ATTENTION_VELOCITY_SCALE
+        else:
+            velocity = 0.0
+
+        entry: dict[str, float] = {
+            "velocity": velocity,
+            "breadth": breadth_total,
+            "mentions": velocity,
+            # --- enriched unified fields (additive; callers may ignore) ---
+            "retail_attention": retail if retail is not None else 0.0,
+            "fmp_attention": fmp if fmp is not None else 0.0,
+            "confirmation": _as_float(row.get("cross_source_confirmation_score")) or 0.0,
+            "divergence": _as_float(row.get("cross_source_divergence_score")) or 0.0,
+            "source_breadth_total": breadth_total,
+            "source_breadth_social": _as_float(row.get("source_breadth_social")) or 0.0,
+            "source_breadth_fmp": _as_float(row.get("source_breadth_fmp")) or 0.0,
+            "news": _as_float(row.get("news_score")) or 0.0,
+            "analyst": _as_float(row.get("analyst_score")) or 0.0,
+            "insider": _as_float(row.get("insider_score")) or 0.0,
+            "congress": _as_float(row.get("congress_score")) or 0.0,
+            "crowd_confidence": _as_float(row.get("crowd_confidence")) or 0.0,
+        }
+        # crowd_state is a label (string), kept alongside the numeric metrics.
+        entry["crowd_state"] = row.get("crowd_state") or ""  # type: ignore[assignment]
+        out[ticker] = entry
+    return out or None
 
 
 # ---------------------------------------------------------------------------

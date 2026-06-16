@@ -2261,3 +2261,76 @@ class TestM5WatchListLengthAlignment:
         assert len(compact) <= 5
         assert len(extended) <= 5
 
+
+
+class TestUnifiedCrowdSummary:
+    """Crowd Radar section prefers the unified crowd bus, falls back cleanly."""
+
+    def _write_unified_status(self, tmp_path, **overrides):
+        from pathlib import Path
+        import json
+        payload = {
+            "schema_version": "1",
+            "observe_only": True,
+            "total_tickers": 126,
+            "lane_a_tickers": 100,
+            "lane_b_tickers": 46,
+            "overlap_tickers": 20,
+            "social_sentiment_status": "PLAN_LOCKED",
+            "top_confirmed_attention": [
+                {"ticker": "TSLA"}, {"ticker": "AMZN"}, {"ticker": "MRVL"},
+                {"ticker": "EXTRA"},
+            ],
+            "top_divergent_attention": [
+                {"ticker": "GOOGL"}, {"ticker": "SMCI"}, {"ticker": "NVDA"},
+            ],
+        }
+        payload.update(overrides)
+        d = Path(tmp_path) / "outputs" / "latest"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "unified_crowd_intelligence_status.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def test_unified_line_present_when_status_exists(self, tmp_path):
+        from watchlist_scanner.daily_memo import _crowd_radar_section_lines
+        self._write_unified_status(tmp_path)
+        lines = _crowd_radar_section_lines(tmp_path)
+        unified = [ln for ln in lines if ln.startswith("Unified Crowd:")]
+        assert len(unified) == 1
+        ln = unified[0]
+        assert "126 tickers" in ln
+        assert "retail 100/context 46/overlap 20" in ln
+        assert "confirmed: TSLA, AMZN, MRVL" in ln
+        assert "EXTRA" not in ln  # capped at 3
+        assert "divergent: GOOGL, SMCI, NVDA" in ln
+        assert "social_sentiment PLAN_LOCKED" in ln
+
+    def test_unified_summary_helper_compact(self, tmp_path):
+        from watchlist_scanner.daily_memo import _unified_crowd_summary_lines
+        self._write_unified_status(tmp_path)
+        lines = _unified_crowd_summary_lines(tmp_path)
+        assert len(lines) <= 2  # compact contract
+
+    def test_absent_unified_falls_back_without_error(self, tmp_path):
+        from watchlist_scanner.daily_memo import _crowd_radar_section_lines
+        # No unified status artifact, no crowd_knowledge_state -> empty, no crash
+        lines = _crowd_radar_section_lines(tmp_path)
+        assert isinstance(lines, list)
+        assert not any(ln.startswith("Unified Crowd:") for ln in lines)
+
+    def test_empty_unified_status_falls_back(self, tmp_path):
+        from watchlist_scanner.daily_memo import _crowd_radar_section_lines
+        self._write_unified_status(tmp_path, total_tickers=0)
+        lines = _crowd_radar_section_lines(tmp_path)
+        assert not any(ln.startswith("Unified Crowd:") for ln in lines)
+
+    def test_unified_line_present_in_text_memo(self, tmp_path, monkeypatch):
+        from watchlist_scanner import daily_memo as dm
+        self._write_unified_status(tmp_path)
+        # The crowd section reads via _enrichment_repo_root(); point it at tmp_path
+        # so the test is hermetic regardless of the live repo artifact.
+        monkeypatch.setattr(dm, "_enrichment_repo_root", lambda: tmp_path)
+        txt, md = dm.generate_daily_memo(root=tmp_path, write_files=False)
+        assert "Unified Crowd:" in txt
+        assert "Unified Crowd:" in md

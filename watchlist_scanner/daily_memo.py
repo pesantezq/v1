@@ -1513,6 +1513,7 @@ def _enrichment_payload() -> dict[str, Any]:
 
 _CROWD_STATE_REL = ("outputs", "sandbox", "discovery", "crowd_knowledge_state.json")
 _CROWD_HEALTH_REL = ("outputs", "sandbox", "discovery", "crowd_source_health.json")
+_UNIFIED_CROWD_STATUS_REL = ("outputs", "latest", "unified_crowd_intelligence_status.json")
 
 # Per-source memo label mapped to its expected/acceptable statuses.
 _CROWD_SOURCE_LABELS = (
@@ -1536,6 +1537,42 @@ def _crowd_source_health_lines(root_path: Path) -> list[str]:
     return lines
 
 
+def _unified_crowd_summary_lines(root_path: Path) -> list[str]:
+    """
+    One concise (max two) line(s) summarising the unified crowd bus.
+
+    Read-only consumer of outputs/latest/unified_crowd_intelligence_status.json.
+    Returns an empty list when the artifact is absent / empty so the caller
+    cleanly falls back to the existing crowd_knowledge_state behavior. Never a
+    buy/sell/hold recommendation.
+    """
+    doc = _safe_load(root_path.joinpath(*_UNIFIED_CROWD_STATUS_REL))
+    if not doc or not doc.get("total_tickers"):
+        return []
+
+    total = doc.get("total_tickers", 0)
+    lane_a = doc.get("lane_a_tickers", 0)
+    lane_b = doc.get("lane_b_tickers", 0)
+    overlap = doc.get("overlap_tickers", 0)
+    social = doc.get("social_sentiment_status", "n/a")
+
+    def _tickers(key: str, limit: int = 3) -> str:
+        rows = doc.get(key) or []
+        names = [str(r.get("ticker", "?")) for r in rows[:limit]]
+        return ", ".join(names)
+
+    confirmed = _tickers("top_confirmed_attention")
+    divergent = _tickers("top_divergent_attention")
+
+    parts = [f"Unified Crowd: {total} tickers (retail {lane_a}/context {lane_b}/overlap {overlap})"]
+    if confirmed:
+        parts.append(f"confirmed: {confirmed}")
+    if divergent:
+        parts.append(f"divergent: {divergent}")
+    parts.append(f"social_sentiment {social}")
+    return [" · ".join(parts)]
+
+
 def _crowd_radar_section_lines(root_path: Path) -> list[str]:
     """
     Compact Crowd Radar (Public Knowledge Velocity Layer) memo lines.
@@ -1545,9 +1582,12 @@ def _crowd_radar_section_lines(root_path: Path) -> list[str]:
     disabled / produced nothing, so the caller renders a clean placeholder.
     """
     doc = _safe_load(root_path.joinpath(*_CROWD_STATE_REL))
-    health_lines = _crowd_source_health_lines(root_path)
+    # Prefer the unified crowd bus summary when present; fall back to the
+    # existing crowd_knowledge_state lines below. Additive, never replaces them.
+    unified_lines = _unified_crowd_summary_lines(root_path)
+    health_lines = unified_lines + _crowd_source_health_lines(root_path)
     if not doc:
-        return health_lines  # may still show the no-extra-cost source health
+        return health_lines  # unified summary and/or no-extra-cost source health
     status = doc.get("source_status", "unknown")
     quality = doc.get("data_quality_status", "unknown")
     records = doc.get("records") or []

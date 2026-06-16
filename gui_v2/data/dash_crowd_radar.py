@@ -113,6 +113,55 @@ def _collect_flock(root: Path) -> dict[str, Any]:
     }
 
 
+def _collect_unified_crowd(root: Path) -> dict[str, Any]:
+    """Build the Unified Crowd Intelligence display view (read-only display of the
+    simulation-active, production-gated unified bus).
+
+    Joins the ApeWisdom retail-attention lane and the FMP market/context lane.
+    Reads outputs/latest/unified_crowd_intelligence_status.json; degrades to an
+    honest {has_data: False} on any error so the page never crashes.
+    """
+    try:
+        doc = _read_json(
+            root / "outputs" / "latest" / "unified_crowd_intelligence_status.json"
+        ) or {}
+        if not doc:
+            return {"has_data": False}
+
+        def _top(key: str) -> list[dict[str, Any]]:
+            rows = doc.get(key) or []
+            return [{
+                "ticker": r.get("ticker"),
+                "crowd_confidence": r.get("crowd_confidence"),
+                "retail_attention_score": r.get("retail_attention_score"),
+                "fmp_attention_score": r.get("fmp_attention_score"),
+                "confirmation": r.get("cross_source_confirmation_score"),
+                "divergence": r.get("cross_source_divergence_score"),
+                "explanation": r.get("explanation"),
+            } for r in rows[:10]]
+
+        return {
+            "has_data": True,
+            "source": doc.get("source") or "unified_crowd_intelligence_status",
+            "generated_at": doc.get("generated_at"),
+            "total_tickers": doc.get("total_tickers", 0),
+            "lane_a_tickers": doc.get("lane_a_tickers", 0),
+            "lane_b_tickers": doc.get("lane_b_tickers", 0),
+            "overlap_tickers": doc.get("overlap_tickers", 0),
+            "source_breadth_max": doc.get("source_breadth_max", 0),
+            "enabled_categories": doc.get("enabled_categories") or [],
+            "disabled_categories": doc.get("disabled_categories") or [],
+            "social_sentiment_status": doc.get("social_sentiment_status"),
+            "crowd_confidence_avg": doc.get("crowd_confidence_avg"),
+            "top_confirmed": _top("top_confirmed_attention"),
+            "top_retail_only": _top("top_retail_only_attention"),
+            "top_divergent": _top("top_divergent_attention"),
+            "top_institutional": _top("top_institutional_context_only"),
+        }
+    except Exception:
+        return {"has_data": False}
+
+
 def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     root = Path(root)
     disc = root / "outputs" / "sandbox" / "discovery"
@@ -283,10 +332,12 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     advisory = {"produced": advisory_produced, "why": why, "next_steps": next_steps}
 
     flock = _collect_flock(root)
+    unified_crowd = _collect_unified_crowd(root)
 
     return {
         "persona": "crowd_radar",
         "flock": flock,
+        "unified_crowd": unified_crowd,
         "observe_only": True,
         "cards": cards,
         "sections": sections,

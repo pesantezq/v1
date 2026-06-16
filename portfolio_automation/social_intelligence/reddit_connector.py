@@ -13,6 +13,14 @@ Design goals (from the feature spec):
 Author handles are hashed before they leave this module; raw bodies are returned
 in transient :class:`RawPost` objects for in-process feature extraction and are
 persisted by the orchestrator ONLY if the source permits raw-text storage.
+
+Status (2026-06-16): Reddit's legacy Data API now gates *new* app credentials
+behind an approved moderation use case, which this research workload does not have.
+This connector therefore stays in its graceful-disabled state
+(``SourceStatus.NO_CREDENTIALS``) unless official OAuth credentials are provided.
+It is NOT scraped and NOT used by the Unified Crowd Intelligence bus — the unified
+bus sources retail attention from ApeWisdom (a free, no-auth Reddit aggregator) via
+``crowd_multi_source_velocity.json``. No ToS bypass is performed here.
 """
 from __future__ import annotations
 
@@ -90,7 +98,13 @@ def fetch_subreddit_posts(
     warnings: list[str] = []
     creds = credentials or RedditCredentials.from_env()
     if creds is None:
-        return FetchResult(SourceStatus.NO_CREDENTIALS, [], ["REDDIT_* credentials not set"])
+        return FetchResult(
+            SourceStatus.NO_CREDENTIALS,
+            [],
+            ["unavailable_no_credentials: REDDIT_* not set",
+             "disabled_no_official_api: legacy Data API gated to moderation use cases",
+             "not_used_in_unified_bus: retail attention sourced from ApeWisdom"],
+        )
 
     # Resolve the HTTP + auth implementations (real or injected).
     if http_get is None or oauth_token_fn is None:
