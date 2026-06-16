@@ -41,8 +41,17 @@
       </dd>
     </div>
     <div class="flex gap-2"><dt class="w-16 shrink-0 text-zinc-500 uppercase tracking-wide">Catalyst</dt><dd class="text-zinc-400">{{ p.catalyst_row }}</dd></div>
+    {% if d.flock_context %}
+    <div class="flex gap-2 items-start">
+      <dt class="w-16 shrink-0 text-zinc-500 uppercase tracking-wide">Flock</dt>
+      <dd class="text-zinc-300 space-x-1">
+        {{ ui.badge(d.flock_context.severity, d.flock_context.label) }}
+        {% if d.flock_context.present %}<span class="text-zinc-400">{{ d.flock_context.meaning }}</span>{% endif %}
+      </dd>
+    </div>
+    {% endif %}
   </dl>
-  <p class="text-[10px] text-zinc-600 italic">Crowd input is research context only.</p>
+  <p class="text-[10px] text-zinc-600 italic">Crowd &amp; flock input is simulation/research context only.</p>
   {% elif d.rationale %}
   <p class="text-xs text-zinc-400 leading-snug">{{ d.rationale }}</p>
   {% endif %}

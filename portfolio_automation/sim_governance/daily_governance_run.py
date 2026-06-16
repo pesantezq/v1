@@ -131,6 +131,22 @@ def run_daily_governance(
             _safe_status(status, base_dir)
         return status
 
+    # ── Step 1: Flock Intelligence producer (writes simulation artifacts that
+    #            the lane's baseline then consumes). Non-blocking. ────────────
+    try:
+        from portfolio_automation.flock_intelligence.producer import run_flock_intelligence
+        flock = run_flock_intelligence(root, now, base_dir=base_dir, write_files=write_files)
+        rpt = flock.get("report", {})
+        status["stages"]["flock_intelligence"] = {
+            "ok": True, "group_count": rpt.get("group_count", 0),
+            "data_quality": rpt.get("data_quality_status", "unknown"),
+            "watchlist_candidate_count": len(
+                (flock.get("watchlist_candidates") or {}).get("candidates", [])),
+        }
+    except Exception as exc:
+        logger.warning("daily_governance: flock_intelligence failed: %s", exc)
+        status["stages"]["flock_intelligence"] = {"ok": False, "error": str(exc)}
+
     # ── Step 2: active simulation lane (after production baseline exists) ────
     try:
         baseline = _enrich_baseline(root, simulation_lane.load_production_baseline(root))

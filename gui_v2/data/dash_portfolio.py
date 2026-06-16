@@ -229,6 +229,18 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     except Exception:
         pass
 
+    # Flock context (simulation-only, artifact-only) — per-pick crowd-structure
+    # context. Never touches the decision action/ticker; never feeds decision_plan.
+    flock_context_status = {"available": False, "banner": None}
+    try:
+        from gui_v2.data.dash_flock_context import flock_context_for
+        _fc = flock_context_for(root, [d.get("ticker") for d in decisions if d.get("ticker")])
+        flock_context_status = _fc["status"]
+        for d in decisions:
+            d["flock_context"] = _fc["by_symbol"].get(str(d.get("ticker") or "").upper())
+    except Exception:
+        pass
+
     if dp is not None:
         total = (dp.get("total_decisions") or len((dp.get("decisions") or [])))
         ctx = dp.get("portfolio_context") or {}
@@ -450,6 +462,8 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         "decisions": decisions,
         # Crowd-intelligence context status (observe-only; banner for missing/stale)
         "crowd_context_status": crowd_context_status,
+        # Flock Intelligence per-pick context status (simulation-only)
+        "flock_context_status": flock_context_status,
         # Presenter view-model: summary cards, advisory picks w/ context, crowd overlay,
         # why-these-picks. Display-layer composition only (no decision/scoring change).
         "vm": vm,

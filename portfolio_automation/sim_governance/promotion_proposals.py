@@ -40,8 +40,18 @@ def _rollback_plan_for(proposal_type: str, symbol: str | None) -> str:
                 "the watchlist loader; production reverts to the baseline watchlist.")
     if proposal_type == S.PROPOSAL_WATCHLIST_REMOVE:
         return f"Restore {sym} to the approved-watchlist overlay; baseline membership returns."
-    if proposal_type in (S.PROPOSAL_WATCHLIST_RANK, S.PROPOSAL_WATCHLIST_TAG):
+    if proposal_type in (S.PROPOSAL_WATCHLIST_RANK, S.PROPOSAL_WATCHLIST_TAG,
+                         S.PROPOSAL_FLOCK_WATCHLIST_LOGIC):
         return f"Delete the {sym} overlay entry; ranking/tags revert to baseline."
+    if proposal_type in (S.PROPOSAL_FLOCK_CONTEXT_DISPLAY, S.PROPOSAL_FLOCK_ADVISORY_CONTEXT,
+                         S.PROPOSAL_FLOCK_RISK_OVERLAY):
+        return (f"Delete the {sym} flock-context/risk overlay entry and re-run the advisory "
+                "loader; the displayed flock context reverts to absent (decision_engine "
+                "untouched; display-only).")
+    if proposal_type == S.PROPOSAL_FLOCK_SCORING_ADJUSTMENT:
+        return (f"Remove the {sym} flock scoring-adjustment overlay; simulation confidence "
+                "reverts to the unadjusted baseline. Production scoring is unaffected unless "
+                "this overlay is separately enabled.")
     # advisory / crowd context
     return (f"Delete the {sym} advisory overlay entry and re-run the advisory loader; "
             "the decision plan reverts to baseline inputs (decision_engine untouched).")

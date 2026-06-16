@@ -58,6 +58,61 @@ _QUALITY_DISPLAY: dict[str, tuple[str, str]] = {
 }
 
 
+# Flock Intelligence section ordering: (state value, display label, card status).
+_FLOCK_SECTIONS: list[tuple[str, str, str]] = [
+    ("flock_forming", "Forming Flocks", "info"),
+    ("flock_confirmed", "Confirmed Flocks", "ok"),
+    ("flock_exhaustion", "Exhaustion Risk", "warning"),
+    ("flock_dispersing", "Dispersion Risk", "warning"),
+    ("flock_broken", "Broken Flocks", "red"),
+    ("insufficient_data", "Insufficient Data", "unknown"),
+]
+
+
+def _collect_flock(root: Path) -> dict[str, Any]:
+    """Build the simulation-only Flock Intelligence view (observe-only).
+
+    Reads outputs/simulation/flock_intelligence.json; degrades to an honest
+    empty/not-produced state when the artifact is missing.
+    """
+    doc = _read_json(root / "outputs" / "simulation" / "flock_intelligence.json") or {}
+    groups = doc.get("groups") or []
+    by_state: dict[str, list[dict]] = {}
+    for g in groups:
+        by_state.setdefault(g.get("flock_state", "insufficient_data"), []).append(g)
+
+    sections: list[dict[str, Any]] = []
+    for key, label, status in _FLOCK_SECTIONS:
+        rows = sorted(by_state.get(key, []),
+                      key=lambda r: r.get("flock_score", 0), reverse=True)
+        if rows:
+            sections.append({"key": key, "label": label, "status": status,
+                             "rows": [{
+                                 "group": r.get("group"),
+                                 "group_kind": r.get("group_kind"),
+                                 "state": r.get("flock_state"),
+                                 "flock_score": r.get("flock_score"),
+                                 "dispersion_score": r.get("dispersion_score"),
+                                 "breadth": r.get("crowd_breadth"),
+                                 "velocity": r.get("crowd_velocity"),
+                                 "concentration": r.get("mention_concentration"),
+                                 "correlation": r.get("price_correlation_to_group"),
+                                 "confidence": r.get("confidence"),
+                                 "explanation": r.get("explanation"),
+                             } for r in rows[:8]]})
+    return {
+        "has_data": bool(groups),
+        "data_quality_status": doc.get("data_quality_status", "unknown"),
+        "group_count": doc.get("group_count", 0),
+        "ticker_count": doc.get("ticker_count", 0),
+        "sections": sections,
+        "generated_at": doc.get("generated_at"),
+        "disclaimer": doc.get("disclaimer",
+                              "Flock Intelligence is simulation-only research context; "
+                              "never affects trades or allocation."),
+    }
+
+
 def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     root = Path(root)
     disc = root / "outputs" / "sandbox" / "discovery"
@@ -227,8 +282,11 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         next_steps.append("Run the discovery lane with the current sandbox source (ApeWisdom).")
     advisory = {"produced": advisory_produced, "why": why, "next_steps": next_steps}
 
+    flock = _collect_flock(root)
+
     return {
         "persona": "crowd_radar",
+        "flock": flock,
         "observe_only": True,
         "cards": cards,
         "sections": sections,

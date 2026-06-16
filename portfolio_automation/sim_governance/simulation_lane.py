@@ -85,7 +85,127 @@ def load_production_baseline(root: Path) -> dict:
                 "rank": d.get("final_rank_score") or d.get("rank"),
             })
     out["advisory"] = advisory
+
+    # Flock Intelligence simulation context (observe-only sim artifacts). The
+    # flock producer runs earlier in the pipeline and writes these; the lane
+    # consumes them to emit flock SimulationCandidates. Degrades to {} on miss.
+    sim = root / "outputs" / "simulation"
+    out["flock"] = {
+        "report": _read_json(sim / "flock_intelligence.json") or {},
+        "watchlist_candidates": _read_json(sim / "flock_watchlist_candidates.json") or {},
+        "advisory_context": _read_json(sim / "flock_advisory_context.json") or {},
+    }
     return out
+
+
+_FLOCK_DECISIVE_STATES = frozenset({
+    "flock_confirmed", "flock_exhaustion", "flock_dispersing", "flock_broken",
+})
+
+
+def experiment_flock_intelligence(baseline: dict) -> list[S.SimulationCandidate]:
+    """Turn Flock Intelligence simulation context into SimulationCandidates.
+
+    Emits (per the spec's proposal types):
+      * watchlist add/tag/rank          -> PROPOSAL_FLOCK_WATCHLIST_LOGIC
+      * advisory flock-context display  -> PROPOSAL_FLOCK_ADVISORY_CONTEXT
+      * exhaustion/dispersion caution   -> PROPOSAL_FLOCK_RISK_OVERLAY
+      * confirmed/forming confidence    -> PROPOSAL_FLOCK_SCORING_ADJUSTMENT
+
+    ``ready_for_production_review`` is a HINT only (confident + decisive state);
+    the AI/product review decides, and only DECISION_READY yields a *pending*
+    proposal. Production is never changed here.
+    """
+    flock = baseline.get("flock") or {}
+    cands: list[S.SimulationCandidate] = []
+
+    # 1. Watchlist candidates derived by the flock producer.
+    wl = (flock.get("watchlist_candidates") or {}).get("candidates", []) or []
+    for c in wl:
+        sym = str(c.get("ticker") or "").upper()
+        if not sym:
+            continue
+        state = c.get("flock_state", "")
+        conf = float(c.get("confidence", 0.0) or 0.0)
+        cid = S.make_candidate_id(S.PROPOSAL_FLOCK_WATCHLIST_LOGIC, sym,
+                                  salt=f"{c.get('action')}:{state}")
+        cands.append(S.SimulationCandidate(
+            candidate_id=cid, workflow=S.WORKFLOW_WATCHLIST,
+            proposal_type=S.PROPOSAL_FLOCK_WATCHLIST_LOGIC, symbol=sym,
+            what_changed=f"Flock {c.get('action')} {sym} ({state}) tags={c.get('tags')}",
+            why_changed=c.get("rationale", "Flock Intelligence simulation signal"),
+            source_evidence=["outputs/simulation/flock_watchlist_candidates.json"],
+            production_baseline=None,
+            simulated_value={"action": c.get("action"), "tags": c.get("tags"),
+                             "sim_rank_delta": c.get("sim_rank_delta")},
+            risk_impact="medium" if state in _FLOCK_DECISIVE_STATES else "low",
+            confidence=conf, data_quality="ok",
+            ready_for_production_review=(conf >= 0.7 and state in _FLOCK_DECISIVE_STATES),
+            proposed_production_change={"op": c.get("action"), "symbol": sym,
+                                        "tags": c.get("tags"),
+                                        "rank_delta": c.get("sim_rank_delta")},
+        ))
+
+    # 2. Advisory flock-context overlays for current advisory picks.
+    advisory_syms = {str(p.get("symbol", "")).upper()
+                     for p in baseline.get("advisory", []) or [] if p.get("symbol")}
+    by_symbol = (flock.get("advisory_context") or {}).get("by_symbol", {}) or {}
+    dq = (flock.get("report") or {}).get("data_quality_status", "unknown")
+    for sym, ctx in by_symbol.items():
+        sym = str(sym).upper()
+        if sym not in advisory_syms:
+            continue
+        state = ctx.get("flock_state", "")
+        conf = float(ctx.get("confidence", 0.0) or 0.0)
+        decisive = state in _FLOCK_DECISIVE_STATES
+        # context display candidate (always)
+        cands.append(S.SimulationCandidate(
+            candidate_id=S.make_candidate_id(S.PROPOSAL_FLOCK_ADVISORY_CONTEXT, sym, salt=state),
+            workflow=S.WORKFLOW_ADVISORY, proposal_type=S.PROPOSAL_FLOCK_ADVISORY_CONTEXT,
+            symbol=sym, what_changed=f"Attach flock context '{ctx.get('label')}' to {sym}",
+            why_changed=ctx.get("meaning", "Flock structure context for the advisory pick"),
+            source_evidence=["outputs/simulation/flock_advisory_context.json"],
+            production_baseline={"symbol": sym, "flock_context": None},
+            simulated_value={"symbol": sym, "flock_context": ctx.get("label"),
+                             "flock_state": state},
+            risk_impact="medium" if decisive else "low", confidence=conf,
+            data_quality=dq if dq in ("ok", "degraded", "stale") else "unknown",
+            ready_for_production_review=(conf >= 0.7 and decisive),
+            proposed_production_change={"op": "flock_context", "symbol": sym,
+                                        "flock_state": state, "label": ctx.get("label")},
+        ))
+        # risk overlay for crowded/dispersing structure
+        if state in ("flock_exhaustion", "flock_dispersing", "flock_broken"):
+            cands.append(S.SimulationCandidate(
+                candidate_id=S.make_candidate_id(S.PROPOSAL_FLOCK_RISK_OVERLAY, sym, salt=state),
+                workflow=S.WORKFLOW_ADVISORY, proposal_type=S.PROPOSAL_FLOCK_RISK_OVERLAY,
+                symbol=sym, what_changed=f"Flag {sym} with flock risk '{state}'",
+                why_changed=ctx.get("meaning", "Crowd structure indicates elevated risk"),
+                source_evidence=["outputs/simulation/flock_intelligence.json"],
+                production_baseline=None,
+                simulated_value={"symbol": sym, "risk": state,
+                                 "dispersion_score": ctx.get("dispersion_score")},
+                risk_impact="medium", confidence=conf, data_quality="ok",
+                ready_for_production_review=(conf >= 0.7),
+                proposed_production_change={"op": "flock_risk", "symbol": sym, "risk": state},
+            ))
+        # scoring adjustment for cohesive flocks
+        elif state in ("flock_confirmed", "flock_forming"):
+            cands.append(S.SimulationCandidate(
+                candidate_id=S.make_candidate_id(S.PROPOSAL_FLOCK_SCORING_ADJUSTMENT, sym, salt=state),
+                workflow=S.WORKFLOW_ADVISORY, proposal_type=S.PROPOSAL_FLOCK_SCORING_ADJUSTMENT,
+                symbol=sym, what_changed=f"Simulation confidence nudge for {sym} ({state})",
+                why_changed="Cohesive flock supports a small simulation-confidence boost",
+                source_evidence=["outputs/simulation/flock_intelligence.json"],
+                production_baseline=None,
+                simulated_value={"symbol": sym, "scoring_hint": "boost",
+                                 "flock_score": ctx.get("flock_score")},
+                risk_impact="low", confidence=conf, data_quality="ok",
+                ready_for_production_review=False,  # scoring changes need extra scrutiny
+                proposed_production_change={"op": "flock_scoring", "symbol": sym,
+                                            "hint": "boost"},
+            ))
+    return cands
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +310,7 @@ DEFAULT_EXPERIMENTS: list[Experiment] = [
     experiment_watchlist_discovery_adds,
     experiment_watchlist_rerank,
     experiment_advisory_crowd_context,
+    experiment_flock_intelligence,
 ]
 
 
@@ -224,6 +345,13 @@ def materialize_simulated_views(baseline: dict, candidates: list[S.SimulationCan
                 rec["crowd_context"] = chg.get("crowd_context")
             elif op == "rank":
                 rec["rank"] = chg.get("rank")
+            elif op == "flock_context":
+                rec["flock_context"] = chg.get("label")
+                rec["flock_state"] = chg.get("flock_state")
+            elif op == "flock_risk":
+                rec["flock_risk"] = chg.get("risk")
+            elif op == "flock_scoring":
+                rec["flock_scoring_hint"] = chg.get("hint")
 
     return {
         "simulated_watchlist": sim_watchlist,

@@ -1316,6 +1316,59 @@ artifacts:
     consumer_status: consumed
     notes: Rolling per-ticker daily mention-count ledger (window 20). Self-consumed — the velocity z-score baseline. Only written on runs that actually ingest posts (a disabled/no-credentials run does not append). Absent until the layer is enabled.
 
+  # ── Flock Intelligence (simulation-only crowd flocking/dispersion) ──────────
+  flock_intelligence.json:
+    path: outputs/simulation/flock_intelligence.json
+    label: flock intelligence report
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: flock_intelligence
+    consumers: [daily-tool-analysis, portfolio-discovery-health]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-group flock-state classification (forming/confirmed/exhaustion/dispersing/broken/insufficient) + per-ticker context. Simulation-only, observe-only; written by the flock producer as Step 1 of the sim-governance daily lane (Stage 10e). Consumed by /daily-tool-analysis sim-gov heartbeat (Step 4 line 6n) + the Crowd page Flock Intelligence section. Production use requires an approved promotion proposal. Shipped 2026-06-16.
+
+  flock_watchlist_candidates.json:
+    path: outputs/simulation/flock_watchlist_candidates.json
+    label: flock watchlist candidates
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: flock_intelligence
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Simulation watchlist adds/tags/rank-deltas derived from flock states (flock_forming adds, crowded_trade/dispersion_risk tags). Consumed by the sim-governance simulation lane (experiment_flock_intelligence) which emits flock_watchlist_candidate_logic proposals. Simulation-only; production gated by human approval.
+
+  flock_advisory_context.json:
+    path: outputs/simulation/flock_advisory_context.json
+    label: flock advisory context
+    lens: market_discovery
+    role: advisor
+    required: false
+    cadence: daily
+    producer: flock_intelligence
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-symbol advisory flock context (state/label/meaning) consumed by the Portfolio page per-pick Flock row and by the sim-governance lane (flock_advisory_context_logic proposals). Observe-only; never feeds decision_plan.
+
+  flock_state_history.json:
+    path: outputs/simulation/flock_state_history.json
+    label: flock state history ledger
+    lens: market_discovery
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: flock_intelligence
+    consumers: [flock_intelligence]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Per-group prior flock-state + avg-correlation + volatility ledger. Self-consumed — enables dispersion/broken detection ("a prior flock existed") across runs.
+
   # ── Portfolio simulation suite (sandbox-only) ───────────────────────────────
   portfolio_backtest.json:
     path: outputs/sandbox/portfolio_backtest.json
