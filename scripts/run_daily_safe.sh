@@ -139,6 +139,22 @@ run_aux_stage() {
 run_aux_stage "News intelligence (pre-pipeline)" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.news.run_news_intelligence import run; s = run(root='.'); print('articles:', s.get('articles_fetched', 0), 'packets:', s.get('evidence_packet_count', 0))"
 
+# Stage 0b — Schwab read-only broker sync (observe-only). MOVED here ahead of the
+# decision run (operator-approved 2026-06-16) to fix the 24h-boundary holdings flap:
+# main.py's §1a broker overlay reads schwab_positions.json /
+# schwab_portfolio_snapshot.json via holdings_resolver, and those are written ONLY
+# by schwab_sync. Running the sync first means the overlay consumes a same-run-fresh
+# snapshot instead of yesterday's, so holdings_resolver's exactly-24h stale gate no
+# longer flips broker-vs-config holdings near the cron boundary. READ-ONLY: no trade
+# path exists (AST-enforced in brokers/). Fail-closed: absent SCHWAB_* creds / OAuth
+# token it writes status=unconfigured and no-ops the rest. Wrapped non-blocking so a
+# Schwab API / token failure degrades to error/AMBER and never aborts the pipeline —
+# when it fails the prior snapshot stays on disk and the overlay falls back to config
+# exactly as before. Still runs before Stage 11 so daily_run_status + the registry +
+# the wiring probe count broker_sync_status fresh. Proposal stays operator-applied.
+run_aux_stage "Schwab broker sync" \
+    python -m portfolio_automation.brokers.schwab_sync --sync --reconcile
+
 section "Daily Pipeline"
 run_cmd=(python main.py --run-mode daily)
 if [ "${DRY_RUN_MODE:-0}" = "1" ]; then
@@ -296,19 +312,12 @@ run_aux_stage "Daily memo + email" \
 run_aux_stage "Next-stage research/strategy lane" \
     python -m portfolio_automation.next_stage.run_next_stage --root "${REPO_ROOT}"
 
-# Stage 10c — Schwab read-only broker sync (observe-only). Refreshes
-# broker_sync_status.json + (when authenticated) the read-only portfolio
-# snapshot / positions / reconciliation proposal. READ-ONLY: no trade path
-# exists (AST-enforced in brokers/). Fail-closed: when SCHWAB_* creds / OAuth
-# token are absent it writes status=unconfigured and no-ops the rest. Wrapped
-# non-blocking so a Schwab API / token failure degrades to error/AMBER and never
-# aborts the pipeline. Runs before Stage 11 so daily_run_status + the registry +
-# the wiring probe count broker_sync_status fresh. Proposal stays operator-applied.
-run_aux_stage "Schwab broker sync" \
-    python -m portfolio_automation.brokers.schwab_sync --sync --reconcile
+# Stage 10c — Schwab read-only broker sync MOVED to Stage 0b (above, ahead of the
+# decision run) on 2026-06-16 to fix the 24h-boundary holdings flap. See Stage 0b.
 
 # Stage 10d — Schwab re-auth email heads-up (observe-only). Reads the
-# broker_sync_status.json just written by Stage 10c; when the 7-day refresh token
+# broker_sync_status.json written by Stage 0b (Schwab sync, now pre-pipeline);
+# when the 7-day refresh token
 # is due_soon/expired it sends ONE email per expiry window via the shared
 # memo_email_sender SMTP transport. Default-INERT (SCHWAB_REAUTH_EMAIL_ENABLED=0) —
 # no-ops silently until the operator opts in. Non-blocking; never aborts the run.

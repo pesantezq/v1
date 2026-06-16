@@ -187,6 +187,25 @@ def test_schwab_sync_runs_before_daily_run_status(daily: str) -> None:
     )
 
 
+def test_schwab_sync_runs_before_decision_run(daily: str) -> None:
+    """The Schwab snapshot must refresh BEFORE the decision run reads it.
+
+    24h-boundary flap fix (operator-approved 2026-06-16): the §1a broker overlay
+    in main.py reads schwab_positions.json / schwab_portfolio_snapshot.json via
+    holdings_resolver. Those artifacts are written only by schwab_sync. If the
+    sync runs AFTER `main.py --run-mode daily`, the decision run consumes the
+    PRIOR day's snapshot, and holdings_resolver's exactly-24h stale gate
+    (_STALE_AFTER_S) flips broker-vs-config holdings near the cron boundary —
+    a different holdings input to the protected decision core on alternating
+    runs. Sync must precede the decision run so the overlay reads same-run-fresh
+    broker data (and falls back to config identically when Schwab is down)."""
+    assert daily.index("schwab_sync") < daily.index("main.py --run-mode daily"), (
+        "schwab_sync must run before `main.py --run-mode daily` so the §1a broker "
+        "overlay reads a same-run-fresh Schwab snapshot instead of yesterday's, "
+        "eliminating the 24h-boundary holdings flap."
+    )
+
+
 def test_broker_sync_status_cadence_is_daily() -> None:
     entry = _registry_entry("broker_sync_status.json")
     assert entry is not None, "broker_sync_status.json missing from registry"
