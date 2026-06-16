@@ -298,6 +298,17 @@ run_aux_stage "Crowd Radar multi-source" \
 run_aux_stage "Crowd Radar activation check" \
     python -m portfolio_automation.social_intelligence.activation_check --root "${REPO_ROOT}" --run-mode discovery
 
+# Stage 9c3 — Unified Crowd Intelligence Bus (observe-only; joins Lane A + Lane B).
+# Runs AFTER both crowd lanes have written: Lane B = crowd_intelligence
+# (Stage 7d3, artifact_writer.run) + Lane A = multi-source crowd (Stage 9c1,
+# run_multi_source_crowd). Joins ApeWisdom retail attention with FMP institutional
+# context into a single per-ticker view (outputs/latest/unified_crowd_intelligence
+# .json + _status.json + .md). run() is non-blocking: it swallows all errors and
+# returns a status dict, so a failure WARNs and never blocks the run. Never feeds
+# decision_plan / allocations / advisory selection.
+run_aux_stage "Unified Crowd Intelligence Bus" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.crowd_intelligence.unified_writer import run; s=run('.'); print('unified_crowd:', s.get('overall_status'), 'tickers:', s.get('total_tickers'))"
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"

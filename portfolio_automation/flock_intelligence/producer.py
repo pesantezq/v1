@@ -79,6 +79,28 @@ def build_group_metrics(group: str, kind: str, tickers: list[str],
                                 prior_breadth=(prior or {}).get("breadth"),
                                 vol_change=vol_change, momentum=momentum)
 
+    # Unified-crowd-bus cross-source aggregates (additive, observe-only). When the
+    # crowd dict came from the unified bus its entries carry these enrichment keys;
+    # the legacy ApeWisdom path has none -> the means stay 0.0 and crowd_source
+    # stays "legacy", so the legacy output is unchanged. The classifier never reads
+    # these — they are explainability context only.
+    enriched = [c for c in crowd_sub.values() if c and "retail_attention" in c]
+    if enriched:
+        def _mean(key: str) -> float:
+            vals = [float(c.get(key, 0.0) or 0.0) for c in enriched]
+            return sum(vals) / len(vals) if vals else 0.0
+        confirmation = round(_mean("confirmation"), 4)
+        divergence = round(_mean("divergence"), 4)
+        # FMP context = mean of the absolute directional category scores (how much
+        # institutional/market context backs this group, regardless of direction).
+        fmp_ctx = [abs(float(c.get(k, 0.0) or 0.0))
+                   for c in enriched for k in ("news", "analyst", "insider", "congress")]
+        fmp_context = round(sum(fmp_ctx) / len(fmp_ctx), 4) if fmp_ctx else 0.0
+        crowd_source = "unified"
+    else:
+        confirmation = divergence = fmp_context = 0.0
+        crowd_source = "legacy"
+
     return GroupMetrics(
         group=group, group_kind=kind, tickers=tickers, n_tickers=len(tickers),
         n_with_returns=n_with_returns, history_points=history_points,
@@ -87,6 +109,8 @@ def build_group_metrics(group: str, kind: str, tickers: list[str],
         avg_correlation=avg_corr, prior_avg_correlation=prior_corr,
         return_spread=ret_spread, group_momentum=momentum, volatility_change=vol_change,
         flock_score=fscore, dispersion_score=dscore, exhaustion_score=escore,
+        cross_source_confirmation=confirmation, cross_source_divergence=divergence,
+        fmp_context_score=fmp_context, crowd_source=crowd_source,
     )
 
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from portfolio_automation.crowd_intelligence.context_loader import load_crowd_context
 from portfolio_automation.crowd_intelligence import advisory_context_enricher as enr
+from portfolio_automation.crowd_intelligence.unified_loader import read_unified_crowd
 
 
 def _banner(ctx: dict) -> str | None:
@@ -23,18 +24,42 @@ def _banner(ctx: dict) -> str | None:
 def crowd_context_for(root: Path | str, symbols: list[str]) -> dict[str, Any]:
     ctx = load_crowd_context(root)
     social_disabled = bool(ctx.get("social_disabled"))
+    # Additive: read the joined unified-crowd lane (display-only here, never raises).
+    try:
+        unified = read_unified_crowd(root)
+        unified_by_ticker = unified.get("by_ticker") or {}
+    except Exception:
+        unified_by_ticker = {}
     by_symbol: dict[str, Any] = {}
+    def _unified_for(sym: str) -> dict[str, Any] | None:
+        row = unified_by_ticker.get(sym)
+        if not isinstance(row, dict):
+            return None
+        return {
+            "crowd_state": row.get("crowd_state"),
+            "retail_attention_score": row.get("retail_attention_score"),
+            "fmp_attention_score": row.get("fmp_attention_score"),
+            "cross_source_confirmation_score": row.get("cross_source_confirmation_score"),
+            "cross_source_divergence_score": row.get("cross_source_divergence_score"),
+            "explanation": row.get("explanation"),
+        }
+
     for sym in {str(s).upper() for s in (symbols or [])}:
         sig = ctx["by_symbol"].get(sym)
+        unified_sub = _unified_for(sym)
         if not ctx["available"]:
             by_symbol[sym] = {"present": False, "label": "Insufficient Data",
                               "severity": "gray",
                               "lines": ["Crowd context unavailable — artifact not generated yet."]}
+            if unified_sub is not None:
+                by_symbol[sym]["unified"] = unified_sub
             continue
         if sig is None:
             by_symbol[sym] = {"present": False, "label": "Insufficient Data",
                               "severity": "gray",
                               "lines": ["No crowd context available for this symbol."]}
+            if unified_sub is not None:
+                by_symbol[sym]["unified"] = unified_sub
             continue
         label = enr.context_label(sig)
         by_symbol[sym] = {
@@ -52,6 +77,8 @@ def crowd_context_for(root: Path | str, symbols: list[str]) -> dict[str, Any]:
             "warnings": sig.get("warnings") or [],
             "lines": enr.enrich(sig, label, social_disabled=social_disabled),
         }
+        if unified_sub is not None:
+            by_symbol[sym]["unified"] = unified_sub
     return {
         "status": {
             "available": ctx["available"], "stale": ctx["stale"],

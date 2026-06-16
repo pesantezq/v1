@@ -86,6 +86,10 @@ def build_review_packet(bundle: dict, now: str) -> dict:
             "decision_engine_untouched": True,
         },
         "comparison_vs_production_baseline": bundle.get("comparison_vs_production_baseline", {}),
+        # Unified crowd evidence: compact context for the reviewer (no extra AI
+        # call). The reviewer may RECOMMEND production-readiness from it; it can
+        # never approve. Cost rides the single consolidated review under the cap.
+        "unified_crowd_summary": bundle.get("unified_crowd_summary", {}),
         "artifact_refs": bundle.get("artifact_refs", []),
     }
     packet["estimated_prompt_tokens"] = estimate_packet_tokens(packet)

@@ -220,5 +220,85 @@
     {% endif %}
   </section>
 
+  {# Unified Crowd Intelligence — joins ApeWisdom (retail attention) with FMP (market/context attention). #}
+  <section aria-label="Unified crowd intelligence">
+    {{ ui.section_header("Unified Crowd Intelligence",
+                         "ApeWisdom retail attention joined with FMP market/context attention",
+                         "sandbox") }}
+    {% if unified_crowd and unified_crowd.has_data %}
+      <p class="text-xs text-zinc-500 mb-3">
+        <span class="font-semibold text-zinc-400">ApeWisdom</span> = retail attention ·
+        <span class="font-semibold text-zinc-400">FMP</span> = market / context attention (news · analyst · insider · congress) ·
+        <span class="font-semibold text-zinc-400">Unified</span> = the two lanes joined per ticker.
+      </p>
+
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        {{ ui.hero_stat("Tickers (Unified)", unified_crowd.total_tickers, "blue", "joined across both lanes") }}
+        {{ ui.hero_stat("Retail Lane (ApeWisdom)", unified_crowd.lane_a_tickers, "blue", "retail attention") }}
+        {{ ui.hero_stat("Context Lane (FMP)", unified_crowd.lane_b_tickers, "blue", "market / context attention") }}
+        {{ ui.hero_stat("Overlap", unified_crowd.overlap_tickers, "green", "in both lanes · breadth max " ~ unified_crowd.source_breadth_max) }}
+      </div>
+
+      <p class="text-xs text-zinc-500 mb-4">
+        Enabled categories: <span class="text-zinc-300">{{ unified_crowd.enabled_categories | join(", ") or "—" }}</span>.
+        {% if unified_crowd.disabled_categories %}
+        Disabled: <span class="text-zinc-400">{{ unified_crowd.disabled_categories | join(", ") }}</span>
+        {% if unified_crowd.social_sentiment_status %}(social sentiment: {{ unified_crowd.social_sentiment_status }}){% endif %}.
+        {% endif %}
+      </p>
+
+      {% set _lists = [
+        ("Top Confirmed Attention", "ok", unified_crowd.top_confirmed,
+         "Retail velocity aligns with FMP context — strongest cross-source signal."),
+        ("Top Retail-Only Attention", "info", unified_crowd.top_retail_only,
+         "Retail attention without confirming market/context signal."),
+        ("Top Divergent Attention", "warning", unified_crowd.top_divergent,
+         "Retail and FMP attention disagree."),
+        ("Top Institutional Context Only", "info", unified_crowd.top_institutional,
+         "FMP market/context attention without retail interest.")
+      ] %}
+      {% for label, status, rows, note in _lists %}
+      {% if rows %}
+      <div class="mb-4">
+        <div class="text-xs uppercase tracking-wide text-zinc-400 mb-1">{{ label }}</div>
+        <div class="text-[11px] text-zinc-600 mb-2">{{ note }}</div>
+        {% call ui.responsive_table() %}
+        <table class="min-w-full text-sm border-separate border-spacing-0">
+          <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
+              <th class="py-2 pr-4 font-medium">Ticker</th>
+              <th class="py-2 pr-4 font-medium text-right">Retail Attn</th>
+              <th class="py-2 pr-4 font-medium text-right">FMP Context</th>
+              <th class="py-2 pr-4 font-medium text-right">Confirmation</th>
+              <th class="py-2 pr-4 font-medium text-right">Divergence</th>
+              <th class="py-2 pr-4 font-medium text-right">Confidence</th>
+              <th class="py-2 font-medium">Explanation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            <tr class="border-t border-zinc-800">
+              <td class="py-2.5 pr-4 font-semibold text-zinc-100 whitespace-nowrap">{{ r.ticker }}</td>
+              <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-200">{{ "%.2f"|format(r.retail_attention_score) if r.retail_attention_score is not none else "—" }}</td>
+              <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-200">{{ "%.2f"|format(r.fmp_attention_score) if r.fmp_attention_score is not none else "—" }}</td>
+              <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(r.confirmation or 0) }}</td>
+              <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(r.divergence or 0) }}</td>
+              <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(r.crowd_confidence or 0) }}</td>
+              <td class="py-2.5 text-zinc-400">{{ r.explanation }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endcall %}
+      </div>
+      {% endif %}
+      {% endfor %}
+      <p class="text-[11px] text-zinc-600 italic">Unified Crowd Intelligence is sandbox research context; it never triggers trades or allocation changes.</p>
+    {% else %}
+      {{ ui.empty_state("Unified Crowd Intelligence not yet produced",
+                        "No unified_crowd_intelligence_status.json artifact found, or neither the retail (ApeWisdom) nor the market/context (FMP) lane produced joinable data this run.") }}
+    {% endif %}
+  </section>
+
 </div>
 {% endblock %}

@@ -122,7 +122,7 @@ def build_advisory_picks(decisions: list[dict], crowd_by_symbol: dict[str, dict]
             risk_bits.append(crowd["warnings"][0])
         catalyst_row = " · ".join(risk_bits) if risk_bits else "No specific catalyst/risk flagged"
 
-        picks.append({
+        pick = {
             "ticker": sym, "action": action, "confidence_pct": conf,
             "conviction": conviction_band(conf),
             "thesis": d.get("rationale") or "Advisory pick from decision_plan",
@@ -134,7 +134,18 @@ def build_advisory_picks(decisions: list[dict], crowd_by_symbol: dict[str, dict]
             "catalyst_row": catalyst_row,
             "signal_strength": conf,  # 0-100 bar
             "crowd_disagrees": crowd_agree == "Disagree",
-        })
+        }
+        # Additive display-only: surface joined unified-crowd context when present.
+        # Does NOT touch action / confidence / scoring fields.
+        unified = (crowd or {}).get("unified") if isinstance(crowd, dict) else None
+        if isinstance(unified, dict):
+            pick["unified_crowd_state"] = unified.get("crowd_state")
+            pick["unified_retail_attention"] = unified.get("retail_attention_score")
+            pick["unified_fmp_context"] = unified.get("fmp_attention_score")
+            pick["unified_confirmation"] = unified.get("cross_source_confirmation_score")
+            pick["unified_divergence"] = unified.get("cross_source_divergence_score")
+            pick["unified_explanation"] = unified.get("explanation")
+        picks.append(pick)
     return picks
 
 
