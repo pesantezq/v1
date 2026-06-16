@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from gui_v2.data.shared import card
+from gui_v2.data.dash_simulation_charts import collect_simulation_charts_view
 
 
 def _load(path: Path) -> Any:
@@ -115,6 +116,7 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
         "backtest": _backtest_view(backtest),
         "projection": _projection_view(projection),
         "strategy_lab": _strategy_lab_view(strategy_lab),
+        "simulation_charts": collect_simulation_charts_view(root),
     }
 
 

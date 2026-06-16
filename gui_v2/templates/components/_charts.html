@@ -1,0 +1,146 @@
+{# ───────────────────────────────────────────────────────────────────────────
+   Dependency-light inline-SVG chart components for the Simulation Graphs section.
+   No JS, no external libraries — pure SVG + Tailwind utility classes, matching the
+   dashboard's zinc/severity design tokens. All charts are sandbox / observe-only.
+
+   The data loader (gui_v2/data/dash_simulation_charts.py) pre-computes all geometry,
+   so these macros only draw what they are given. Each chart dict carries:
+     {title, help_text, takeaway, available, missing_reason, kind, ...geometry}
+─────────────────────────────────────────────────────────────────────────── #}
+
+{# role → stroke/fill color class for line series #}
+{% macro _line_color(role) -%}
+{%- if role == 'low' %}stroke-zinc-600{% elif role == 'high' %}stroke-sky-400{% else %}stroke-emerald-400{% endif -%}
+{%- endmacro %}
+
+{# ── Line chart (Growth Over Time, Was Performance Consistent?) ── #}
+{% macro _line(chart) -%}
+{% set g = chart.geometry %}
+<svg viewBox="0 0 100 50" class="w-full" style="height:auto" role="img"
+     aria-label="{{ chart.title }} line chart (sandbox simulation)">
+  <rect x="0" y="0" width="100" height="50" fill="none"/>
+  {% if g.zero_y is defined %}
+  <line x1="4" y1="{{ g.zero_y }}" x2="96" y2="{{ g.zero_y }}" stroke="currentColor"
+        class="text-zinc-700" stroke-width="0.4" stroke-dasharray="1.5,1.5" vector-effect="non-scaling-stroke"/>
+  {% endif %}
+  {% for pl in g.polylines %}
+  <polyline points="{{ pl.points_str }}" fill="none"
+            class="{{ _line_color(pl.role) }}" stroke-width="1.2"
+            stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+  {% endfor %}
+</svg>
+<div class="flex items-center justify-between text-[11px] text-zinc-600 mt-1">
+  <span>{{ g.x_labels[0] if g.x_labels }}</span>
+  <span class="text-zinc-500">range {{ g.y_min_label }} – {{ g.y_max_label }}</span>
+  <span>{{ g.x_labels[-1] if g.x_labels }}</span>
+</div>
+{% if chart.legend %}
+<div class="flex flex-wrap gap-3 mt-2 text-[11px]">
+  {% for l in chart.legend %}
+  <span class="inline-flex items-center gap-1 text-zinc-400">
+    <span class="inline-block w-3 h-0.5 rounded {{ 'bg-zinc-600' if l.role=='low' else ('bg-sky-400' if l.role=='high' else 'bg-emerald-400') }}"></span>{{ l.label }}
+  </span>
+  {% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{# ── Scatter (Risk vs Return) ── #}
+{% macro _scatter(chart) -%}
+{% set g = chart.geometry %}
+<svg viewBox="0 0 100 50" class="w-full" style="height:auto" role="img"
+     aria-label="{{ chart.title }} scatter plot (sandbox simulation)">
+  <line x1="4" y1="44" x2="96" y2="44" stroke="currentColor" class="text-zinc-800" stroke-width="0.4" vector-effect="non-scaling-stroke"/>
+  <line x1="4" y1="5" x2="4" y2="44" stroke="currentColor" class="text-zinc-800" stroke-width="0.4" vector-effect="non-scaling-stroke"/>
+  {% for d in g.dots %}
+  <circle cx="{{ d.cx }}" cy="{{ d.cy }}" r="1.4" class="fill-sky-400/80">
+    <title>{{ d.label }} · return {{ d.return_pct }}% · risk {{ d.risk_pct }}%{% if d.drawdown_pct is not none %} · worst drop {{ d.drawdown_pct }}%{% endif %}</title>
+  </circle>
+  {% endfor %}
+</svg>
+<div class="flex items-center justify-between text-[11px] text-zinc-600 mt-1">
+  <span>← lower risk · risk {{ g.x_min_label }}–{{ g.x_max_label }} · higher risk →</span>
+  <span>return {{ g.y_min_label }}–{{ g.y_max_label }}</span>
+</div>
+{%- endmacro %}
+
+{# ── Horizontal bars (How Deep the Losses Got) ── #}
+{% macro _bars(chart) -%}
+<div class="space-y-1.5">
+  {% for b in chart.bars %}
+  <div class="flex items-center gap-2 text-[11px]">
+    <span class="w-28 shrink-0 truncate text-zinc-400" title="{{ b.label }}">{{ b.label }}</span>
+    <div class="flex-1 bg-zinc-800 rounded-full h-2">
+      <div class="h-2 rounded-full bg-amber-500/70" style="width: {{ b.pct_width }}%"></div>
+    </div>
+    <span class="w-12 text-right font-mono text-zinc-300">{{ b.value_pct }}{{ chart.value_suffix }}</span>
+  </div>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{# ── Money bars (How Contributions Change the Outcome) ── #}
+{% macro _bars_money(chart) -%}
+<div class="space-y-2">
+  {% for b in chart.bars %}
+  <div class="text-[11px]">
+    <div class="flex items-center justify-between text-zinc-400">
+      <span>{{ b.label }}</span>
+      <span class="font-mono text-zinc-300">${{ '{:,.0f}'.format(b.final_balance) }}</span>
+    </div>
+    <div class="bg-zinc-800 rounded-full h-2 mt-0.5">
+      <div class="h-2 rounded-full bg-emerald-500/70" style="width: {{ b.pct_width }}%"></div>
+    </div>
+    <div class="text-[10px] text-zinc-600 mt-0.5">+${{ '{:,.0f}'.format(b.net_gain) }} on top of ${{ '{:,.0f}'.format(b.contributed) }} contributed</div>
+  </div>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{# ── Chart card wrapper — title, Sandbox badge, help text, body, takeaway,
+      Source & safety details, empty-state. `chart` is a loader-shaped dict. ── #}
+{% macro chart_card(chart, source_files=None) -%}
+<div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-4 space-y-2.5 hover:border-zinc-700 transition">
+  <div class="flex items-start justify-between gap-2">
+    <div>
+      <h3 class="text-sm font-semibold text-zinc-100">{{ chart.title }}</h3>
+      {% if chart.help_text %}<p class="text-[11px] text-zinc-500 mt-0.5 leading-snug">{{ chart.help_text }}</p>{% endif %}
+    </div>
+    <span role="status" aria-label="sandbox" class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-sky-500/10 text-sky-300 border-sky-500/25">Sandbox</span>
+  </div>
+
+  {% if chart.available %}
+  <div class="text-zinc-400 pt-1">
+    {% if chart.kind == 'line' %}{{ _line(chart) }}
+    {% elif chart.kind == 'scatter' %}{{ _scatter(chart) }}
+    {% elif chart.kind == 'bars' %}{{ _bars(chart) }}
+    {% elif chart.kind == 'bars_money' %}{{ _bars_money(chart) }}
+    {% endif %}
+  </div>
+  {% if chart.takeaway %}
+  <div class="rounded-lg bg-zinc-800/50 border border-zinc-800 px-3 py-2 text-xs text-zinc-300 leading-snug">
+    <span class="text-zinc-500 font-medium">Takeaway · </span>{{ chart.takeaway }}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="rounded-lg bg-zinc-900/60 border border-dashed border-zinc-700 px-4 py-6 text-center">
+    <div class="text-xs text-zinc-400">{{ chart.missing_reason or "Not enough simulation data to draw this chart yet." }}</div>
+  </div>
+  {% endif %}
+
+  <details class="group">
+    <summary class="flex items-center gap-1 cursor-pointer text-[11px] text-zinc-600 hover:text-zinc-400 select-none list-none">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Source &amp; safety
+    </summary>
+    <div class="mt-1.5 pl-1 space-y-1 text-[11px] text-zinc-500">
+      <div>Simulation-only / observe-only research context. Does not change <span class="font-mono">decision_plan.json</span>, does not create trades, and is not official advice.</div>
+      {% if source_files %}
+      <ul class="flex flex-wrap gap-1">
+        {% for f in source_files %}<li class="font-mono text-zinc-500 bg-zinc-800/70 rounded px-1.5 py-0.5">{{ f }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </details>
+</div>
+{%- endmacro %}

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "components/_ui.html" as ui %}
+{% import "components/_charts.html" as charts %}
 {% block title %}Strategy Lab &mdash; StockBot{% endblock %}
 {% block content %}
 <div id="dashboard-strategy-lab-content"
@@ -22,6 +23,63 @@
   {% if cards %}
   <section aria-label="Strategy lab summary" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
     {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
+  </section>
+  {% endif %}
+
+  {# ── Simulation Graphs (visual backtest evidence — sandbox only) ──────── #}
+  {% set sc = simulation_charts %}
+  {% if sc %}
+  <section aria-label="Simulation Graphs" class="space-y-4">
+    {{ ui.section_header("Simulation Graphs", "visual backtest evidence — sandbox only", "simulation_charts.json") }}
+
+    <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+      Simulation-only. These charts do not create trades, rebalance instructions, or official
+      advisory actions. Official advisory actions come only from <span class="font-mono">decision_plan.json</span>.
+    </div>
+
+    {% if not sc.available %}
+      {{ ui.empty_state("Simulation charts are not available yet",
+                        sc.empty_message or "Run the simulation/backtest pipeline to generate outputs/latest/simulation_charts.json.") }}
+    {% else %}
+      {% if sc.stale_message %}
+      <div class="rounded-lg bg-amber-500/10 border border-amber-500/25 px-3 py-2 text-xs text-amber-200">{{ sc.stale_message }}</div>
+      {% endif %}
+      {% if sc.limited_message %}
+      <div class="rounded-lg bg-zinc-800/60 border border-zinc-700 px-3 py-2 text-xs text-zinc-400">{{ sc.limited_message }}</div>
+      {% endif %}
+
+      {# Summary cards #}
+      {% if sc.summary %}
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {% for s in sc.summary %}
+        <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+          <span class="absolute left-0 top-0 bottom-0 w-1
+            {%- if s.severity == 'green' %} bg-emerald-500/70
+            {%- elif s.severity == 'amber' %} bg-amber-500/70
+            {%- elif s.severity == 'sky' %} bg-sky-500/60
+            {%- else %} bg-zinc-700{% endif %}"></span>
+          <div class="text-[11px] uppercase tracking-wide text-zinc-500 pl-1.5">{{ s.title }}</div>
+          <div class="flex items-baseline gap-2 pl-1.5">
+            <span class="text-lg font-semibold text-zinc-100">{{ s.value_label }}</span>
+            {% if s.strategy %}<span class="text-xs text-zinc-400 truncate" title="{{ s.strategy }}">{{ s.strategy }}</span>{% endif %}
+          </div>
+          {% if s.plain_english %}<p class="text-[11px] text-zinc-500 leading-snug pl-1.5">{{ s.plain_english }}</p>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Chart grid — stacks on mobile, two-up on desktop #}
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {% for key in sc.chart_order %}
+          {% if sc.charts.get(key) %}{{ charts.chart_card(sc.charts[key], sc.source_files) }}{% endif %}
+        {% endfor %}
+      </div>
+
+      {% if sc.generated_at %}
+      <div class="text-[11px] text-zinc-600">Simulation charts generated {{ sc.generated_at | human_time }}.</div>
+      {% endif %}
+    {% endif %}
   </section>
   {% endif %}
 

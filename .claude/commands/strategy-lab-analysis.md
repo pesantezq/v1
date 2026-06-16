@@ -20,6 +20,19 @@ Reads (all `outputs/sandbox/`): `strategy_leaderboard.json`,
 `research_strategy_catalog.json`, `walk_forward_results.json`,
 `factor_exposure_report.json`.
 
+**Also check the Simulation Graphs artifact** (`outputs/latest/simulation_charts.json`,
+the Strategy Lab dashboard's plain-English chart source — observe-only/sandbox, produced
+by `run_daily_safe.sh` Stage 10b2; see `docs/SIMULATION_CHARTS.md`):
+```bash
+.venv/bin/python -c "import json,pathlib; p=pathlib.Path('outputs/latest/simulation_charts.json'); d=json.loads(p.read_text()) if p.exists() else {}; ch=d.get('charts',{}); av=[k for k,c in ch.items() if c.get('available')]; print('present:', bool(d), '| status:', d.get('status','ok' if d else 'absent'), '| charts available:', av or 'NONE', '| sources:', d.get('source_files_present'))"
+```
+- **AMBER content_liveness** — artifact present (`generated_at` set) but **every** chart
+  `available:false` (looks-fresh-but-empty: it ran but found no usable upstream series →
+  check that `strategy_comparison.json` / `portfolio_backtest.json` / `portfolio_projection.json`
+  exist and are populated). Absent artifact is the inert pre-pipeline state (report, don't alert).
+- It is sandbox/observe-only and **never RED** — it never feeds `decision_plan.json`.
+  `allocation_drift` being empty is expected (no upstream composition series yet), not a finding.
+
 ## Step 2 — Triage
 
 - **RED** — `looks_fresh_but_empty` (status `ok` but zero tactics scored → the lab

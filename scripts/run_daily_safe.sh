@@ -312,6 +312,16 @@ run_aux_stage "Daily memo + email" \
 run_aux_stage "Next-stage research/strategy lane" \
     python -m portfolio_automation.next_stage.run_next_stage --root "${REPO_ROOT}"
 
+# Stage 10b2 — Simulation Charts (observe-only). Pure read+aggregate of the existing
+# sandbox simulation artifacts (strategy_comparison.json [daily], portfolio_backtest.json
+# + portfolio_projection.json [weekly]) into a single normalized, human-readable
+# outputs/latest/simulation_charts.json that the Strategy Lab dashboard renders as
+# plain-English charts. Runs AFTER Stage 10b (which writes strategy_comparison.json) and
+# before Stage 11 so daily_run_status + the registry count it fresh. No network/LLM; never
+# writes decision_plan.json; never trades. Charts without source data degrade honestly.
+run_aux_stage "Simulation charts" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.simulation_charts import run_simulation_charts; r = run_simulation_charts('.'); print('sources present:', r.get('source_files_present'))"
+
 # Stage 10c — Schwab read-only broker sync MOVED to Stage 0b (above, ahead of the
 # decision run) on 2026-06-16 to fix the 24h-boundary holdings flap. See Stage 0b.
 

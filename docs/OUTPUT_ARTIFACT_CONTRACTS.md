@@ -1884,3 +1884,30 @@ Per-symbol readable table (crowd score, confidence, category scores, top reason)
 ### `outputs/latest/crowd_intelligence_status.json`
 `overall_status, symbols_count, enabled_categories, disabled_categories (incl
 social_sentiment PLAN_LOCKED), fmp_calls_estimate, weights, warnings`.
+
+## Simulation Charts — normalized backtest evidence (observe-only, 2026-06-16)
+
+Produced by `portfolio_automation.simulation_charts.run_simulation_charts(root)`
+(wired as `run_daily_safe.sh` Stage 10b2). Pure read+aggregate of existing sandbox
+artifacts — **no network/LLM, never writes `decision_plan.json`, never trades, never
+emits buy/sell/hold language**. Sources: `outputs/sandbox/strategy_comparison.json`
+(daily), `outputs/sandbox/portfolio_backtest.json` + `outputs/sandbox/portfolio_projection.json`
+(weekly). Consumed by the Strategy Lab "Simulation Graphs" section
+(`gui_v2/data/dash_simulation_charts.py`). Charts with no upstream source data degrade
+to an honest empty state — never fabricated. Severity: `optional_missing` (absence is
+expected before the simulation/backtest pipeline has run; a valid empty-state fallback
+exists). See `docs/SIMULATION_CHARTS.md`.
+
+### `outputs/latest/simulation_charts.json`
+`schema_version, source, generated_at, observe_only:true, sandbox_only:true,
+no_trade:true, disclaimer, source_files[], source_files_present[],
+safety{mode:"sandbox", official_advisory_source:"decision_plan.json",
+can_execute_trades:false}, summary{best_growth, best_risk_control, best_balance,
+biggest_pain_point — each {strategy, <metric>, plain_english}},
+charts{growth_over_time, drawdown, risk_return, rolling_outperformance,
+contribution_sensitivity, allocation_drift}`. Each chart carries
+`{title, help_text, takeaway, available}` plus either a body
+(`series` / `points` / `bars`) when available, or `missing_reason` when not.
+`allocation_drift` is currently always `available:false` (no upstream artifact tracks
+per-sleeve composition over time yet). On an unhandled producer error the artifact
+degrades to `{status:"error", observe_only:true, safety{...}}`.
