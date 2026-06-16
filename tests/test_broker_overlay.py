@@ -104,3 +104,23 @@ def test_apply_overlay_config_fallback_returns_unchanged(tmp_path, monkeypatch):
     before = [(h.symbol, h.shares) for h in cfg.holdings]
     cfg2 = hrmod.apply_broker_overlay_to_config(cfg, str(tmp_path))
     assert [(h.symbol, h.shares) for h in cfg2.holdings] == before
+
+
+def test_apply_overlay_records_config_source_on_fallback(tmp_path, monkeypatch):
+    # Telemetry must reflect THIS run: a config-fallback (stale broker) run must
+    # write holdings_source="config", not leave a stale "broker" value from a
+    # prior successful overlay. This is what the daily check's
+    # decision_on_config_while_broker_ok signal reads.
+    import json as _json
+    import portfolio_automation.holdings_resolver as hrmod
+    from utils import load_config
+    monkeypatch.setattr(hrmod, "resolve_holdings", lambda root, now=None: {
+        "holdings_source": "config", "confidence_modifier": 0.8,
+        "reason": "broker_data_stale"})
+    cfg = load_config("/opt/stockbot/config.json")
+    hrmod.apply_broker_overlay_to_config(cfg, str(tmp_path))
+    p = tmp_path / "outputs" / "latest" / "decision_holdings_source.json"
+    assert p.exists()
+    payload = _json.loads(p.read_text())
+    assert payload["holdings_source"] == "config"
+    assert payload["reason"] == "broker_data_stale"

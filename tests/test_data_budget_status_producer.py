@@ -30,6 +30,20 @@ class TestStatusProducer(unittest.TestCase):
             self.assertTrue(budget["discovery_skipped_due_to_budget"])
             self.assertAlmostEqual(cache["cache_hit_rate"], 1 / 3, places=2)
 
+    def test_rate_limited_skip_does_not_flip_budget_flag(self):
+        # A transient token-bucket rate_limited discovery skip must NOT set
+        # discovery_skipped_due_to_budget (it would mislabel a healthy run AMBER).
+        with tempfile.TemporaryDirectory() as td:
+            lg = UsageLedger(Path(td) / "fmp_budget.db")
+            lg.record(run_mode="discovery", endpoint="quote", symbols=["X"],
+                      cache_hit=False, bytes_=0, skipped_reason="rate_limited",
+                      ts="2026-06-15T09:00:00+00:00")
+            _, _, budget = build_status(
+                ledger=lg, cache_dir=Path(td) / "cache",
+                portfolio_symbols=[], month="2026-06",
+                monthly_bandwidth_gb=20, run_modes={})
+            self.assertFalse(budget["discovery_skipped_due_to_budget"])
+
     def test_write_creates_three_artifacts(self):
         with tempfile.TemporaryDirectory() as td:
             lg = self._seed(td)

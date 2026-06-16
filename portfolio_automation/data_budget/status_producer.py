@@ -21,6 +21,9 @@ def build_status(*, ledger: UsageLedger, cache_dir: Path, portfolio_symbols: lis
     monthly_bytes = ledger.monthly_bytes(month=month)
     cap_bytes = int(float(monthly_bandwidth_gb) * 1024**3)
     hit_rate = ledger.cache_hit_rate(month=month)
+    # Budget-only skips (run_budget / bandwidth_guard) — transient rate_limited
+    # skips are excluded by skipped_count's default so they don't flip these
+    # "..._due_to_budget" flags (which gate the AMBER health signal).
     discovery_skipped = ledger.skipped_count(month=month, run_mode="discovery") > 0
     replay_skipped = ledger.skipped_count(month=month, run_mode="historical_replay") > 0
 

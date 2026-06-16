@@ -70,12 +70,28 @@ class UsageLedger:
                 (month,)).fetchone()[0]
         return round(hits / total, 4) if total else 0.0
 
-    def skipped_count(self, *, month: str, run_mode: str) -> int:
+    def skipped_count(self, *, month: str, run_mode: str,
+                      reasons: tuple[str, ...] = ("run_budget", "bandwidth_guard")) -> int:
+        """Count budget-driven skips for a run_mode in a month.
+
+        Defaults to budget reasons only (``run_budget`` / ``bandwidth_guard``) so
+        that transient token-bucket ``rate_limited`` skips are NOT mislabeled as
+        budget exhaustion (they drain the per-second bucket at the tail of a tight
+        loop, not the run/bandwidth budget). Pass ``reasons=()`` to count every
+        non-null skip reason.
+        """
         with self._conn() as cx:
-            row = cx.execute(
-                "SELECT COUNT(*) FROM api_usage_ledger "
-                "WHERE substr(ts,1,7)=? AND run_mode=? AND skipped_reason IS NOT NULL",
-                (month, run_mode)).fetchone()
+            if reasons:
+                placeholders = ",".join("?" for _ in reasons)
+                row = cx.execute(
+                    "SELECT COUNT(*) FROM api_usage_ledger "
+                    f"WHERE substr(ts,1,7)=? AND run_mode=? AND skipped_reason IN ({placeholders})",
+                    (month, run_mode, *reasons)).fetchone()
+            else:
+                row = cx.execute(
+                    "SELECT COUNT(*) FROM api_usage_ledger "
+                    "WHERE substr(ts,1,7)=? AND run_mode=? AND skipped_reason IS NOT NULL",
+                    (month, run_mode)).fetchone()
         return int(row[0] or 0)
 
     def calls_by_run_mode(self, *, month: str) -> dict[str, int]:

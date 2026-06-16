@@ -198,6 +198,7 @@ def broker_overlaid_portfolio(portfolio_block: dict, root: "Path | str",
     if res.get("holdings_source") != "broker":
         block["holdings_source"] = "config"
         block["confidence_modifier"] = res.get("confidence_modifier", 1.0)
+        block["reason"] = res.get("reason")
         return block
     by_sym = {str(h.get("symbol", "")).upper(): dict(h) for h in cfg_holdings if isinstance(h, dict)}
     merged: list = []
@@ -220,7 +221,27 @@ def broker_overlaid_portfolio(portfolio_block: dict, root: "Path | str",
     block["cash_available"] = res.get("cash", block.get("cash_available"))
     block["holdings_source"] = "broker"
     block["confidence_modifier"] = res.get("confidence_modifier", 1.0)
+    block["reason"] = res.get("reason")
     return block
+
+
+def _write_holdings_source_telemetry(root: "Path | str", *, source: str,
+                                     confidence_modifier: float,
+                                     reason: str | None) -> None:
+    """Record which holdings source drove the current decision run (observe-only).
+
+    Written on BOTH the broker and config-fallback branches so the artifact
+    always reflects THIS run — never a stale value carried from a prior
+    broker-success run. Never raises (telemetry must not break a run).
+    """
+    try:
+        from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+        safe_write_json(OutputNamespace.LATEST, "decision_holdings_source.json",
+                        {"observe_only": True, "holdings_source": source,
+                         "confidence_modifier": confidence_modifier, "reason": reason},
+                        base_dir=str(Path(root) / "outputs"))
+    except Exception:
+        pass
 
 
 def apply_broker_overlay_to_config(config, root: "Path | str", now=None):
@@ -236,9 +257,15 @@ def apply_broker_overlay_to_config(config, root: "Path | str", now=None):
                               for h in getattr(config, "holdings", []) or []],
                  "cash_available": getattr(config, "cash_available", 0.0)}
         overlaid = broker_overlaid_portfolio(block, root, now=now)
-        if overlaid.get("holdings_source") != "broker":
-            return config
-        if not getattr(config, "holdings", None):
+        if overlaid.get("holdings_source") != "broker" or not getattr(config, "holdings", None):
+            # Decisions ran on CONFIG holdings (broker disabled/stale/missing, or
+            # no config holdings to overlay). Record honestly so the daily check's
+            # decision_on_config_while_broker_ok signal reflects THIS run instead
+            # of a stale broker value left by a prior successful overlay.
+            _write_holdings_source_telemetry(
+                root, source="config",
+                confidence_modifier=overlaid.get("confidence_modifier", 1.0),
+                reason=overlaid.get("reason"))
             return config
         HoldingCls = type(config.holdings[0])
         new_holdings = []
@@ -252,14 +279,10 @@ def apply_broker_overlay_to_config(config, root: "Path | str", now=None):
         config.holdings = new_holdings
         config.cash_available = overlaid.get("cash_available", config.cash_available)
         # observe-only telemetry: which source drove this run (non-fatal)
-        try:
-            from portfolio_automation.data_governance import OutputNamespace, safe_write_json
-            safe_write_json(OutputNamespace.LATEST, "decision_holdings_source.json",
-                            {"observe_only": True, "holdings_source": overlaid.get("holdings_source"),
-                             "confidence_modifier": overlaid.get("confidence_modifier")},
-                            base_dir=str(Path(root) / "outputs"))
-        except Exception:
-            pass
+        _write_holdings_source_telemetry(
+            root, source=overlaid.get("holdings_source"),
+            confidence_modifier=overlaid.get("confidence_modifier", 1.0),
+            reason=overlaid.get("reason"))
     except Exception:
         return config
     return config

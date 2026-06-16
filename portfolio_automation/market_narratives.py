@@ -300,6 +300,7 @@ def load_all_inputs(base_dir: str | Path = "outputs") -> dict[str, Any]:
 
     paths: dict[str, Path] = {
         "news_intelligence":         _latest("news_intelligence.json"),
+        "theme_signals":             _latest("theme_signals.json"),
         "decision_plan":             _latest("decision_plan.json"),
         "system_decision_summary":   _latest("system_decision_summary.json"),
         "data_quality_report":       _latest("data_quality_report.json"),
@@ -520,6 +521,54 @@ def _extract_themes_from_news(news_intel: dict | None) -> list[NarrativeTheme]:
             description=f"Appeared in {count} news evidence packet(s).",
         ))
     return themes
+
+
+def _extract_themes_from_theme_signals(theme_signals: dict | None) -> list[NarrativeTheme]:
+    """Fallback theme source: the theme engine's ``theme_signals.json``.
+
+    Used only when ``_extract_themes_from_news`` yields nothing (e.g. news
+    evidence packets carry no ``themes`` because upstream summaries are empty).
+    The theme engine computes themes independently, so this keeps the narrative
+    populated when the news-derived path degrades. All input-derived strings are
+    passed through ``sanitize_label`` for the same safety reason as the news path.
+    """
+    if not isinstance(theme_signals, dict):
+        return []
+    raw = theme_signals.get("themes") or []
+    if not isinstance(raw, list):
+        return []
+
+    scored: list[tuple[float, NarrativeTheme]] = []
+    for t in raw:
+        if not isinstance(t, dict):
+            continue
+        name = sanitize_label(t.get("name") or "")
+        if not name:
+            continue
+        confidence = t.get("confidence")
+        confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.0
+        evidence = t.get("evidence_items") or t.get("direct_mentions") or []
+        signal_count = len(evidence) if isinstance(evidence, list) and evidence else 1
+        tickers = [
+            sanitize_label(s) for s in (t.get("tickers") or [])
+            if isinstance(s, str) and sanitize_label(s)
+        ]
+        persistence = t.get("persistence_7d")
+        persist_str = (
+            f", {int(persistence)}d persistence"
+            if isinstance(persistence, (int, float)) and persistence else ""
+        )
+        scored.append((confidence, NarrativeTheme(
+            theme=name,
+            signal_count=signal_count,
+            sources=tickers[:5],
+            description=sanitize_narrative_text(
+                f"From theme engine (confidence {confidence:.2f}{persist_str})."
+            ),
+        )))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [theme for _, theme in scored[:6]]
 
 
 def _extract_risks_catalysts(
@@ -875,6 +924,7 @@ def build_market_narrative_report(
         )
 
     news_intel = _get("news_intelligence")
+    theme_signals = _get("theme_signals")
     decision_plan = _get("decision_plan")
     sys_summary = _get("system_decision_summary")
     dq_report = _get("data_quality_report")
@@ -887,8 +937,12 @@ def build_market_narrative_report(
     missing = [s.artifact for s in all_summaries if not s.available]
     data_available = bool(used)
 
-    # Build components
+    # Build components. Themes come from news evidence packets first; if that
+    # feed is empty (e.g. degraded news summaries) fall back to the theme
+    # engine's own theme_signals.json so the narrative isn't left themeless.
     themes = _extract_themes_from_news(news_intel)
+    if not themes:
+        themes = _extract_themes_from_theme_signals(theme_signals)
     risks, catalysts = _extract_risks_catalysts(news_intel, enriched)
     discovery = _build_discovery_context(enriched, emerging)
     dq_notes = _extract_data_quality_notes(dq_report)

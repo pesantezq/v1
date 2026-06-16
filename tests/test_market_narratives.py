@@ -57,7 +57,57 @@ from portfolio_automation.market_narratives import (
     _SAFETY_DISCLAIMER,
     _PROHIBITED_INSTRUCTION_PATTERNS,
     _sanitize_text,
+    _extract_themes_from_theme_signals,
 )
+
+
+def _theme_signals_payload() -> dict:
+    return {
+        "observe_only": True,
+        "themes": [
+            {"name": "AI Infrastructure", "confidence": 0.9,
+             "evidence_items": ["a", "b", "c"], "tickers": ["NVDA", "AMD"],
+             "persistence_7d": 7},
+            {"name": "Healthcare Innovation", "confidence": 0.85,
+             "evidence_items": ["x"], "tickers": [], "persistence_7d": 3},
+        ],
+    }
+
+
+class TestThemeSignalsFallback:
+    def test_extract_themes_from_theme_signals_sorted_by_confidence(self):
+        themes = _extract_themes_from_theme_signals(_theme_signals_payload())
+        assert [t.theme for t in themes] == ["AI Infrastructure", "Healthcare Innovation"]
+        assert themes[0].sources == ["NVDA", "AMD"]
+        assert themes[0].signal_count == 3
+
+    def test_extract_themes_from_theme_signals_handles_garbage(self):
+        assert _extract_themes_from_theme_signals(None) == []
+        assert _extract_themes_from_theme_signals({"themes": "nope"}) == []
+        assert _extract_themes_from_theme_signals({"themes": [{}, {"name": ""}]}) == []
+
+    def test_fallback_populates_when_news_themes_empty(self, tmp_path):
+        # News present but carries NO themes → fresh-but-empty before the fix.
+        _write_latest(tmp_path, "news_intelligence.json",
+                      {"observe_only": True, "evidence_packets": [
+                          {"entity_key": "NVDA", "themes": []}]})
+        _write_latest(tmp_path, "theme_signals.json", _theme_signals_payload())
+        inputs = load_all_inputs(tmp_path)
+        for period in ("daily", "weekly", "monthly"):
+            report = build_market_narrative_report(period, inputs, tmp_path)
+            assert report.key_themes, f"{period} should fall back to theme_signals"
+            assert report.key_themes[0].theme == "AI Infrastructure"
+
+    def test_news_themes_take_priority_over_fallback(self, tmp_path):
+        _write_latest(tmp_path, "news_intelligence.json", _news_intel_payload())
+        _write_latest(tmp_path, "theme_signals.json", _theme_signals_payload())
+        inputs = load_all_inputs(tmp_path)
+        report = build_market_narrative_report("daily", inputs, tmp_path)
+        # News themes (ai_infrastructure / earnings_guidance) win; the theme-engine
+        # fallback ("AI Infrastructure" titled) is not consulted.
+        theme_names = {t.theme for t in report.key_themes}
+        assert "ai_infrastructure" in theme_names
+        assert "AI Infrastructure" not in theme_names
 
 
 # ---------------------------------------------------------------------------
