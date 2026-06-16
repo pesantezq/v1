@@ -23,6 +23,7 @@ are **never touched**. Production application happens at the *input boundary*
 
 ```
 production baseline (existing pipeline)
+  -> flock_intelligence.run_flock_intelligence   (Step 1; writes SIMULATION flock artifacts)
   -> simulation_lane.run_simulation_lane         (active; writes SANDBOX, may change sim outputs)
   -> daily_simulation_bundle.build_*             (outputs/simulation/daily_simulation_bundle.json)
   -> ai_review_packet.build/write_*              (outputs/promotion_review/daily_ai_review_packet.{json,md})
@@ -92,9 +93,50 @@ reviewed, and the pending/approved/rejected/deferred queue, labeled
 *Simulation Active* / *Production Pending Approval* / *Approved for Production* /
 *Applied to Production*.
 
+## Flock Intelligence (simulation-only crowd flocking/dispersion)
+
+`portfolio_automation/flock_intelligence/` detects when a theme/sector/ticker
+cluster is **forming a flock**, becoming **crowded/exhausted**, **dispersing**, or
+**broken** — simulation-only research context that never feeds `decision_plan.json`.
+
+- **Inputs (no new paid data):** existing crowd velocity/breadth
+  (`crowd_multi_source_velocity.json`), theme grouping (`theme_signals.json`),
+  FMP-cache sectors, and `signal_outcomes.csv` returns. Degrades gracefully.
+- **Metrics (`metrics.py`, pure):** crowd velocity, crowd/source breadth, mention
+  concentration (HHI), average pairwise price correlation, return spread, group
+  momentum/volatility, and three transparent 0..1 scores — `flock_score`,
+  `dispersion_score`, `exhaustion_score`.
+- **States (`states.py`):** `flock_forming / flock_confirmed / flock_exhaustion /
+  flock_dispersing / flock_broken / insufficient_data`, each with confidence +
+  explanation. Dispersion/broken require a prior flock (tracked in
+  `flock_state_history.json`).
+- **Artifacts (SIMULATION namespace):** `flock_intelligence.json`,
+  `flock_watchlist_candidates.json`, `flock_advisory_context.json`,
+  `flock_state_history.json`. Written by the producer as **Step 1** of the daily
+  governance run.
+- **Governance:** `experiment_flock_intelligence` (registered in the active
+  simulation lane) turns flock context into `SimulationCandidate`s that change the
+  simulated watchlist + advisory. Five proposal types
+  (`flock_context_production_display`, `flock_watchlist_candidate_logic`,
+  `flock_advisory_context_logic`, `flock_simulation_scoring_adjustment`,
+  `flock_risk_overlay`) flow through the **same** consolidated $0.50/day AI review
+  (no extra call) and reach production only via human-approved proposals.
+- **GUI:** Crowd page "Flock Intelligence" section + Portfolio per-pick "Flock"
+  row (observe-only, honest fallbacks).
+- **Health:** the 4 flock artifacts are registered in `artifact_registry.yaml`;
+  `/daily-tool-analysis` emits a Flock heartbeat (line 6o) + a content-liveness
+  check (groups built but all `insufficient_data` → dispatch
+  `portfolio-discovery-health`).
+
 ## Tests
 
 `tests/test_sim_governance.py` (24) + `tests/test_sim_governance_pipeline.py` (5)
 cover every spec §11 assertion: active simulation, production protection, the
 $0.50 single-call gate, the promotion workflow (incl. AI-cannot-self-approve and
 invalid-approval rejection), the watchlist/advisory loaders, and rollback.
+
+Flock Intelligence adds 36 tests: `tests/test_flock_metrics.py` (metrics +
+classifier), `test_flock_producer.py` (producer + fallbacks + namespace
+isolation), `test_flock_sim_governance.py` (active behavior, packet inclusion,
+single AI call + cap, pending-only proposals, production gating), and
+`test_flock_gui.py` (Crowd section, Portfolio per-pick context, fallbacks).
