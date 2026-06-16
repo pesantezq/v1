@@ -1892,9 +1892,11 @@ Produced by `portfolio_automation.simulation_charts.run_simulation_charts(root)`
 artifacts — **no network/LLM, never writes `decision_plan.json`, never trades, never
 emits buy/sell/hold language**. Sources: `outputs/sandbox/strategy_comparison.json`
 (daily), `outputs/sandbox/portfolio_backtest.json` + `outputs/sandbox/portfolio_projection.json`
-(weekly). Consumed by the Strategy Lab "Simulation Graphs" section
-(`gui_v2/data/dash_simulation_charts.py`). Charts with no upstream source data degrade
-to an honest empty state — never fabricated. Severity: `optional_missing` (absence is
+(weekly). Consumed by (all observe-only): the Strategy Lab "Simulation Graphs" section
+(`collect_simulation_charts_view`), the Portfolio page "Simulation Context" card
+(`simulation_context_preview`, chart-free summary), and the daily memo's "Simulation
+Review" section (`watchlist_scanner/daily_memo.py:_load_simulation_review_data`). Charts
+with no upstream source data degrade to an honest empty state — never fabricated. Severity: `optional_missing` (absence is
 expected before the simulation/backtest pipeline has run; a valid empty-state fallback
 exists). See `docs/SIMULATION_CHARTS.md`.
 

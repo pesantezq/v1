@@ -23,6 +23,22 @@ def _hash(p: Path) -> str | None:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _clear_dashboard_auth_env(monkeypatch):
+    """Keep dashboard route-render tests deterministic.
+
+    The daily-memo / email path calls ``load_dotenv()`` (correct in production),
+    which writes the operator's real ``GUI_V2_AUTH_USER`` / ``GUI_V2_AUTH_PASS``
+    from ``.env`` straight into ``os.environ`` — a direct write monkeypatch cannot
+    revert. Once any such test runs, every later route-render test that expects an
+    unauthenticated 200 instead gets a 401. Clearing the two vars at the start of
+    every test neutralizes that leak; tests that exercise auth set them explicitly
+    via their own ``monkeypatch.setenv`` (which runs after this fixture).
+    """
+    monkeypatch.delenv("GUI_V2_AUTH_USER", raising=False)
+    monkeypatch.delenv("GUI_V2_AUTH_PASS", raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _protect_scoring_registry():
     before = {p: _hash(p) for p in _PROTECTED}

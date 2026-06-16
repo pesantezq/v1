@@ -192,6 +192,48 @@
   {% endif %}
   </div>
 
+  {# Simulation Context — compact research-only preview; full charts in Strategy Lab. #}
+  {% if simulation_context %}
+  {% set simc = simulation_context %}
+  <section aria-label="Simulation Context">
+    {{ ui.section_header("Simulation Context", "research context only — sandbox", "simulation_charts.json") }}
+    {% if simc.available %}
+    <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 space-y-2 text-sm">
+      {% if simc.stale %}
+      <div class="rounded-lg bg-amber-500/10 border border-amber-500/25 px-3 py-1.5 text-[11px] text-amber-200">Simulation data may be stale. Last generated: {{ simc.generated_at }}.</div>
+      {% endif %}
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-zinc-500">Best balanced strategy</div>
+          <div class="text-zinc-100 font-medium">{{ simc.best_balanced.strategy or "—" }}</div>
+        </div>
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-zinc-500">Best growth strategy</div>
+          <div class="text-zinc-100 font-medium">{{ simc.best_growth.strategy or "—" }}{% if simc.best_growth.return_pct is not none %} <span class="text-emerald-300 font-mono text-xs">{{ simc.best_growth.return_pct }}%</span>{% endif %}</div>
+        </div>
+        <div>
+          <div class="text-[11px] uppercase tracking-wide text-zinc-500">Biggest pain point</div>
+          <div class="text-zinc-100 font-medium">{{ simc.biggest_pain_point.strategy or "—" }}{% if simc.biggest_pain_point.max_drawdown_pct is not none %} <span class="text-amber-300 font-mono text-xs">-{{ simc.biggest_pain_point.max_drawdown_pct }}%</span>{% endif %}</div>
+        </div>
+      </div>
+      {% if simc.main_lesson %}
+      <div class="text-xs text-zinc-300 leading-snug pt-1"><span class="text-zinc-500">Main lesson · </span>{{ simc.main_lesson }}</div>
+      {% endif %}
+      <div class="pt-2 border-t border-zinc-800 text-[11px] text-zinc-500">
+        Research context only. Official advisory actions still come from <span class="font-mono">decision_plan.json</span>.
+        <a href="/dashboard/strategy-lab" class="text-sky-300 hover:text-sky-200 block mt-1">View full simulation graphs in Strategy Lab &rarr;</a>
+      </div>
+    </div>
+    {% else %}
+    <div class="rounded-xl bg-zinc-900/60 border border-dashed border-zinc-700 px-4 py-3 text-xs text-zinc-500">
+      Simulation context is not available yet. {{ simc.note or "Run the simulation/backtest pipeline." }}
+      Research context only — official advisory actions still come from <span class="font-mono">decision_plan.json</span>.
+      <a href="/dashboard/strategy-lab" class="text-sky-300 hover:text-sky-200 block mt-1">Open Strategy Lab &rarr;</a>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
   {# --------------------------------------------------------------- #}
   {# Evidence panels — Risk / Capital / Watchlist / Memo (state only) #}
   {# These are NOT advisory actions; badges show status, never verbs. #}

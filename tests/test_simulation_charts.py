@@ -233,3 +233,93 @@ def test_loader_returns_stable_defaults(tmp_path):
     for key in ("available", "status", "summary", "charts", "safety"):
         assert key in v
     assert v["safety"]["can_execute_trades"] is False
+
+
+# ── simulation_context_preview (Portfolio card + memo source) ───────────────
+
+from gui_v2.data.dash_simulation_charts import simulation_context_preview
+
+
+def test_preview_from_written_artifact(tmp_path):
+    _seed_sandbox(tmp_path)
+    run_simulation_charts(tmp_path)
+    p = simulation_context_preview(tmp_path)
+    assert p["available"] is True
+    assert p["best_balanced"]["strategy"]
+    assert p["best_growth"]["strategy"]
+    assert p["biggest_pain_point"]["strategy"]
+    assert p["main_lesson"]
+    assert p["official_advisory_source"] == "decision_plan.json"
+
+
+def test_preview_fallback_from_comparison(tmp_path):
+    sb = tmp_path / "outputs" / "sandbox"; sb.mkdir(parents=True)
+    (sb / "strategy_comparison.json").write_text(json.dumps(_comparison()))
+    p = simulation_context_preview(tmp_path)
+    assert p["available"] is True
+    assert p["best_growth"]["strategy"] == "Charlie"  # highest return in _comparison()
+
+
+def test_preview_missing_is_graceful(tmp_path):
+    p = simulation_context_preview(tmp_path)
+    assert p["available"] is False
+    assert p["observe_only"] is True
+    assert p["official_advisory_source"] == "decision_plan.json"
+
+
+def test_preview_malformed_does_not_crash(tmp_path):
+    latest = tmp_path / "outputs" / "latest"; latest.mkdir(parents=True)
+    (latest / "simulation_charts.json").write_text("{bad json")
+    p = simulation_context_preview(tmp_path)
+    assert p["available"] is False  # no exception
+
+
+def test_preview_no_forbidden_language(tmp_path):
+    _seed_sandbox(tmp_path); run_simulation_charts(tmp_path)
+    blob = json.dumps(simulation_context_preview(tmp_path)).lower()
+    for phrase in _FORBIDDEN:
+        assert phrase not in blob
+
+
+# ── daily memo Simulation Review section ────────────────────────────────────
+
+from watchlist_scanner.daily_memo import (
+    _build_simulation_review_section,
+    _build_simulation_review_section_md,
+    _simulation_review_bullets,
+)
+
+_MEMO_DATA = {"summary": {
+    "best_balance": {"strategy": "Long-Term Compounding", "plain_english": "x"},
+    "best_growth": {"strategy": "Boom Bucket", "return_pct": 20.0},
+    "biggest_pain_point": {"strategy": "Boom Bucket", "max_drawdown_pct": 41.5},
+}}
+
+
+def test_memo_section_at_most_three_bullets():
+    assert len(_simulation_review_bullets(_MEMO_DATA)) <= 3
+    assert len(_simulation_review_bullets(_MEMO_DATA)) == 3
+
+
+def test_memo_section_has_sandbox_disclaimer():
+    txt = _build_simulation_review_section(_MEMO_DATA)
+    low = txt.lower()
+    assert "sandbox" in low
+    assert "research context only" in low
+    assert "does not change decision_plan.json" in low
+    assert "not buy/sell" in low  # sanctioned disclaimer phrasing (mirrors discovery)
+
+
+def test_memo_section_no_forbidden_or_bare_verbs():
+    blob = (_build_simulation_review_section(_MEMO_DATA) + _build_simulation_review_section_md(_MEMO_DATA)).lower()
+    for w in ("actionable", "promoted", "validated", "enter position", "exit position",
+              "deploy capital", "official watchlist promotion", "official recommendation"):
+        assert w not in blob
+    # no bare trade verbs except the sanctioned 'not buy/sell' negation
+    stripped = blob.replace("not buy/sell", "")
+    assert not re.search(r"\b(buy|sell|hold|execute|rebalance)\b", stripped)
+
+
+def test_memo_section_empty_when_no_data():
+    assert _build_simulation_review_section({"summary": {}}) == ""
+    assert _build_simulation_review_section_md({"summary": {}}) == ""

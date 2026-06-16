@@ -581,6 +581,82 @@ def test_no_forbidden_labels_in_collector_output(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Simulation Context preview card (added 2026-06-16)
+# ---------------------------------------------------------------------------
+
+_SIM_FORBIDDEN = (
+    "execute trade", "buy now", "sell now", "place order", "rebalance now",
+    "promotion approved", "official recommendation", "auto-trade", "auto-approve",
+)
+
+
+def _seed_sim_for_portfolio(tmp_path):
+    """Seed sandbox strategy_comparison so the preview's live fallback populates."""
+    latest = tmp_path / "outputs" / "latest"; latest.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True, exist_ok=True)
+    sb = tmp_path / "outputs" / "sandbox"; sb.mkdir(parents=True, exist_ok=True)
+    sb.joinpath("strategy_comparison.json").write_text(json.dumps({"comparison": [
+        {"strategy_id": "a", "name": "Long-Term Compounding", "after_tax_return_estimate": 0.12,
+         "expected_volatility": 0.30, "max_drawdown_estimate": 0.18, "final_strategy_rank": 0.81},
+        {"strategy_id": "b", "name": "Boom Bucket", "after_tax_return_estimate": 0.22,
+         "expected_volatility": 0.55, "max_drawdown_estimate": 0.42, "final_strategy_rank": 0.6}]}))
+
+
+def test_portfolio_view_includes_simulation_context(tmp_path):
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+    _seed_sim_for_portfolio(tmp_path)
+    v = collect_portfolio_view(tmp_path)
+    assert "simulation_context" in v
+    simc = v["simulation_context"]
+    assert simc["available"] is True
+    assert simc["best_balanced"]["strategy"] == "Long-Term Compounding"   # highest rank
+    assert simc["best_growth"]["strategy"] == "Boom Bucket"               # highest return
+    assert simc["biggest_pain_point"]["strategy"] == "Boom Bucket"        # deepest drawdown
+    assert simc["official_advisory_source"] == "decision_plan.json"
+
+
+def test_portfolio_simulation_context_missing_is_graceful(tmp_path):
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    v = collect_portfolio_view(tmp_path)
+    simc = v["simulation_context"]
+    assert simc["available"] is False
+    assert simc["official_advisory_source"] == "decision_plan.json"
+
+
+def test_portfolio_renders_simulation_context_card(monkeypatch, tmp_path):
+    from gui_v2 import app as app_module
+    _seed_sim_for_portfolio(tmp_path)
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    r = TestClient(app_module.app).get("/dashboard/portfolio")
+    assert r.status_code == 200
+    t = r.text
+    assert "Simulation Context" in t
+    assert "research context only" in t.lower()
+    assert "Official advisory actions still come from" in t  # names decision_plan.json
+    assert "/dashboard/strategy-lab" in t                    # link to full charts
+    assert "Best balanced strategy" in t
+    # no trade-execution language anywhere on the page
+    low = t.lower()
+    for bad in _SIM_FORBIDDEN:
+        assert bad not in low, f"forbidden phrase '{bad}' in portfolio page"
+
+
+def test_portfolio_simulation_context_card_missing_state_renders(monkeypatch, tmp_path):
+    from gui_v2 import app as app_module
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    r = TestClient(app_module.app).get("/dashboard/portfolio")
+    assert r.status_code == 200
+    t = r.text
+    assert "Simulation Context" in t
+    assert "not available yet" in t.lower()
+    assert "decision_plan.json" in t  # official source still named in the empty state
+
+
 def test_today_view_observe_only_flag(tmp_path):
     """collect_today_view must return observe_only: True."""
     from gui_v2.data.dash_today import collect_today_view

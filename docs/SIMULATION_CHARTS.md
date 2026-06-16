@@ -35,6 +35,24 @@ outputs/sandbox/portfolio_projection.json  (weekly)  ─┘        │ pure read
 - The producer is **pure** (no network/LLM). The GUI loader pre-computes all SVG geometry
   so the template only draws — no JS, no external chart library.
 
+## Where it's surfaced (consumers)
+
+1. **Strategy Lab** (`/dashboard/strategy-lab`) — the full "Simulation Graphs" section:
+   summary cards + the six charts. Loader: `collect_simulation_charts_view`.
+2. **Portfolio page** (`/dashboard/portfolio`) — a compact **Simulation Context** card
+   (best balanced / best growth / biggest pain point + one plain-English lesson). It shows
+   no charts, links to Strategy Lab for the full view, and states that official advisory
+   actions still come from `decision_plan.json`. Loader: `simulation_context_preview`
+   (chart-free; same artifact, with a live `strategy_comparison.json` fallback).
+3. **Daily memo** (`watchlist_scanner/daily_memo.py`) — a short **Simulation Review**
+   section (≤3 bullets: best balanced, best growth + risk caveat, bumpiest-ride drawdown
+   lesson) in both the `.txt` and `.md` memo, labelled *Sandbox Only* with the
+   "Not buy/sell guidance; does not change decision_plan.json" disclaimer. Loaded via
+   `_load_simulation_review_data`; the section is omitted entirely when no data exists.
+
+All three are observe-only research context — none create trades, emit buy/sell/hold
+language, or change `decision_plan.json`.
+
 ## The six charts (human-readable names)
 
 | Chart | Source | Notes |

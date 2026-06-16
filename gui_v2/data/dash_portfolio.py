@@ -19,6 +19,7 @@ from gui_v2.data.shared import card, _read_json
 from gui_v2.data.portfolio import collect_portfolio_view as _portfolio_data
 from gui_v2.data.risk_impact import collect_risk_impact_view as _risk_data
 from gui_v2.data.dash_schwab_holdings import schwab_holdings
+from gui_v2.data.dash_simulation_charts import simulation_context_preview
 
 
 # ---------------------------------------------------------------------------
@@ -476,4 +477,7 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         "observe_only": (dp.get("observe_only") if isinstance(dp, dict) else True),
         # Live Schwab holdings (read-only display; never feeds decision_plan)
         "schwab_holdings": schwab_holdings(root),
+        # Simulation Context preview (research context only; full charts live in
+        # Strategy Lab). Observe-only — never feeds decision_plan or any action.
+        "simulation_context": simulation_context_preview(root),
     }

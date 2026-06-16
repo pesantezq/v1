@@ -2083,10 +2083,76 @@ def _pattern_confirmed_candidates(
 # Compact memo builders
 # ---------------------------------------------------------------------------
 
+_SIM_CHARTS_REL = ("outputs", "latest", "simulation_charts.json")
+_SIM_SAFETY_NOTE = (
+    "Sandbox simulation comparison — research context only. Not buy/sell guidance; "
+    "does not change decision_plan.json."
+)
+
+
+def _load_simulation_review_data(root_path: Path) -> "dict[str, Any] | None":
+    """Load the simulation_charts summary for the memo's Simulation Review section.
+    Returns None when the artifact is absent/malformed/empty (non-fatal)."""
+    try:
+        p = root_path.joinpath(*_SIM_CHARTS_REL)
+        if not p.exists():
+            return None
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        summ = doc.get("summary") if isinstance(doc, dict) else None
+        if not isinstance(summ, dict) or not summ:
+            return None
+        return {"summary": summ, "generated_at": doc.get("generated_at")}
+    except Exception as exc:
+        logger.warning("daily_memo: simulation review load failed (non-fatal) — %s", exc)
+        return None
+
+
+def _simulation_review_bullets(data: dict[str, Any]) -> list[str]:
+    """At most 3 plain-English bullets — best balanced, best growth (+risk caveat),
+    bumpiest ride (drawdown lesson). No buy/sell/hold/execute language."""
+    s = (data or {}).get("summary") or {}
+    bal = s.get("best_balance") or {}
+    grw = s.get("best_growth") or {}
+    pain = s.get("biggest_pain_point") or {}
+    bullets: list[str] = []
+    if bal.get("strategy"):
+        bullets.append(f"Best balanced strategy: {bal['strategy']}")
+    if grw.get("strategy"):
+        rp = grw.get("return_pct")
+        cav = f" (~{rp}% simulated growth)" if rp is not None else ""
+        bullets.append(f"Best growth: {grw['strategy']}{cav} — expect larger swings than the balanced pick")
+    if pain.get("strategy"):
+        dd = pain.get("max_drawdown_pct")
+        ddtxt = f" (~{dd}% deepest simulated drawdown)" if dd is not None else ""
+        bullets.append(f"Bumpiest ride: {pain['strategy']}{ddtxt}")
+    return bullets[:3]
+
+
+def _build_simulation_review_section(data: dict[str, Any]) -> str:
+    bullets = _simulation_review_bullets(data)
+    if not bullets:
+        return ""
+    out = [_LINE, "  SIMULATION REVIEW  [Sandbox Only]", _LINE, f"  {_SIM_SAFETY_NOTE}", ""]
+    out.extend(f"  - {b}" for b in bullets)
+    out.append("")
+    return "\n".join(out)
+
+
+def _build_simulation_review_section_md(data: dict[str, Any]) -> str:
+    bullets = _simulation_review_bullets(data)
+    if not bullets:
+        return ""
+    out = ["### Simulation Review (Sandbox Only)", "", f"_{_SIM_SAFETY_NOTE}_", ""]
+    out.extend(f"- {b}" for b in bullets)
+    out.append("")
+    return "\n".join(out)
+
+
 def build_daily_memo(
     summary: dict[str, Any],
     *,
     discovery_data: "dict[str, Any] | None" = None,
+    simulation_data: "dict[str, Any] | None" = None,
 ) -> str:
     """
     Build a compact, decision-focused plain-text memo.
@@ -2281,6 +2347,14 @@ def build_daily_memo(
             a("  DISCOVERY RESEARCH  [Sandbox Only]")
             a(_LINE)
             a("  Discovery data unavailable (loading error).")
+
+    if simulation_data is not None:
+        try:
+            section = _build_simulation_review_section(simulation_data)
+            if section:
+                a(section)
+        except Exception as exc:
+            logger.warning("daily_memo: simulation review section failed — %s", exc)
             a("")
 
     a(_LINE)
@@ -2295,6 +2369,7 @@ def build_daily_memo_md(
     summary: dict[str, Any],
     *,
     discovery_data: "dict[str, Any] | None" = None,
+    simulation_data: "dict[str, Any] | None" = None,
 ) -> str:
     """
     Build a compact, decision-focused Markdown memo.
@@ -2459,6 +2534,14 @@ def build_daily_memo_md(
             a("_Discovery data unavailable (loading error)._")
             a("")
 
+    if simulation_data is not None:
+        try:
+            section = _build_simulation_review_section_md(simulation_data)
+            if section:
+                a(section)
+        except Exception as exc:
+            logger.warning("daily_memo: simulation review section (md) failed — %s", exc)
+
     a("---")
     a(f"_Advisory only — no trades executed. Generated: {gen_display}_")
 
@@ -2502,8 +2585,14 @@ def generate_daily_memo(
     except Exception as exc:
         logger.warning("daily_memo: discovery sandbox load failed (non-fatal) — %s", exc)
 
-    memo_txt = build_daily_memo(summary, discovery_data=discovery_data)
-    memo_md  = build_daily_memo_md(summary, discovery_data=discovery_data)
+    simulation_data: "dict[str, Any] | None" = None
+    try:
+        simulation_data = _load_simulation_review_data(root_path)
+    except Exception as exc:
+        logger.warning("daily_memo: simulation review load failed (non-fatal) — %s", exc)
+
+    memo_txt = build_daily_memo(summary, discovery_data=discovery_data, simulation_data=simulation_data)
+    memo_md  = build_daily_memo_md(summary, discovery_data=discovery_data, simulation_data=simulation_data)
 
     if write_files:
         txt_path = root_path.joinpath(*_MEMO_TXT_REL)

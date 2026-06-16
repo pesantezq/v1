@@ -246,3 +246,66 @@ def collect_simulation_charts_view(root: Path) -> dict[str, Any]:
         }
     except Exception:
         return _empty_view("Simulation charts are not available yet.")
+
+
+def _summary_payload(root: Path) -> dict:
+    """Load just the summary block from the artifact, or build it live from the
+    sandbox comparison as a fallback. Returns {} when nothing is available."""
+    payload = _load(root / "outputs" / "latest" / "simulation_charts.json")
+    if payload.get("summary"):
+        return payload
+    try:
+        from portfolio_automation.simulation_charts import build_simulation_charts
+        sb = root / "outputs" / "sandbox"
+        comparison = _load(sb / "strategy_comparison.json")
+        backtest = _load(sb / "portfolio_backtest.json")
+        projection = _load(sb / "portfolio_projection.json")
+        if not (comparison.get("comparison") or backtest.get("status") == "ok" or projection.get("status") == "ok"):
+            return {}
+        return build_simulation_charts(comparison=comparison, backtest=backtest, projection=projection)
+    except Exception:
+        return {}
+
+
+def simulation_context_preview(root: Path) -> dict[str, Any]:
+    """Compact, chart-free summary for the Portfolio page card + the daily memo.
+
+    Read-only / observe-only — research context only. Surfaces the best-balanced,
+    best-growth, and biggest-drawdown strategies plus a plain-English lesson, and
+    degrades to ``available: False`` when no simulation data exists. It carries NO
+    advisory action and points the reader to Strategy Lab + decision_plan.json.
+    """
+    try:
+        root = Path(root)
+        payload = _summary_payload(root)
+        summary = payload.get("summary") if isinstance(payload, dict) else None
+        if not summary:
+            return {"available": False, "observe_only": True,
+                    "note": "Run the simulation/backtest pipeline to populate simulation context.",
+                    "official_advisory_source": "decision_plan.json"}
+
+        def _pick(key):
+            c = summary.get(key) or {}
+            return {"strategy": c.get("strategy"), "plain_english": c.get("plain_english") or "",
+                    "return_pct": c.get("return_pct"), "max_drawdown_pct": c.get("max_drawdown_pct"),
+                    "score": c.get("score")}
+
+        balanced = _pick("best_balance")
+        growth = _pick("best_growth")
+        pain = _pick("biggest_pain_point")
+        main_lesson = balanced["plain_english"] or growth["plain_english"] or ""
+        age = _age_seconds(payload.get("generated_at"))
+        return {
+            "available": bool(balanced["strategy"] or growth["strategy"]),
+            "observe_only": True,
+            "best_balanced": balanced,
+            "best_growth": growth,
+            "biggest_pain_point": pain,
+            "main_lesson": main_lesson,
+            "generated_at": payload.get("generated_at"),
+            "stale": age is not None and age > _STALE_AFTER_S,
+            "official_advisory_source": "decision_plan.json",
+        }
+    except Exception:
+        return {"available": False, "observe_only": True,
+                "official_advisory_source": "decision_plan.json"}
