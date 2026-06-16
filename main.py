@@ -483,7 +483,7 @@ Examples:
 
     parser.add_argument(
         '--llm-provider',
-        choices=['ollama', 'anthropic', 'openai'],
+        choices=['openai', 'anthropic'],
         default=None,
         help='Optional provider override for theme-engine LLM tasks during this run'
     )
@@ -2993,7 +2993,6 @@ def main() -> int:
         if args.run_mode == "daily":
             try:
                 from agent.llm_adapters import (
-                    resolve_ollama_base_url,
                     resolve_provider,
                     resolve_task_provider,
                 )
@@ -3005,22 +3004,14 @@ def main() -> int:
                     task_provider=task_providers.get(args.run_mode),
                     fallback_task_provider=theme_cfg.get("llm_provider"),
                 )
-                llm_provider = llm_provider or resolve_provider(None, default="ollama")
+                llm_provider = llm_provider or resolve_provider(None, default="openai")
                 fallback_chain = [llm_provider]
                 if llm_provider == "anthropic":
                     llm_model = os.environ.get("ANTHROPIC_MODEL") or theme_cfg.get("anthropic_model", "claude-haiku-4-5-20251001")
                     base_url = "(n/a)"
-                elif llm_provider == "openai":
+                else:
                     llm_model = os.environ.get("OPENAI_MODEL") or theme_cfg.get("openai_model", "")
                     base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
-                else:
-                    llm_model = os.environ.get("OLLAMA_MODEL") or theme_cfg.get("ollama_model", "gemma3:4b")
-                    try:
-                        base_url = resolve_ollama_base_url(
-                            os.environ.get("OLLAMA_BASE_URL") or theme_cfg.get("ollama_base_url")
-                        )
-                    except Exception as exc:
-                        base_url = f"<invalid: {exc}>"
                 logger.info(
                     "LLM startup: task=%s provider=%s model=%s base_url=%s fallback_chain=%s",
                     f"theme_engine.{args.run_mode}",

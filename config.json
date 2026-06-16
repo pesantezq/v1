@@ -301,7 +301,6 @@
       "https://seekingalpha.com/market_currents.xml"
     ],
     "max_items_per_run": 30,
-    "ollama_model": "qwen2.5:7b-instruct",
     "max_theme_boost_points": 10,
     "min_confidence": 0.6,
     "output_dir": "outputs/latest",

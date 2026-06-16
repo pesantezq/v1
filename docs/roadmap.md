@@ -239,7 +239,7 @@ Key components:
 - `AIBudgetConfig` — enable/disable, observe_only, daily/monthly limits
 - `AIUsageEvent` — per-call record with timestamp, tokens, cost, allowed flag
 - `AIBudgetSummary` — aggregated daily/monthly totals with warning/blocked status
-- `estimate_ai_cost()` — static pricing table covering Anthropic, OpenAI, Ollama/local
+- `estimate_ai_cost()` — static pricing table covering Anthropic, OpenAI, local
 - `check_ai_budget()` — returns AIUsageEvent; warns at threshold, blocks when
   `observe_only=False` and limit exceeded
 - `with_ai_budget` — context manager; raises `AIBudgetExceeded` only when not observe_only
@@ -248,7 +248,7 @@ Key components:
 - `write_ai_budget_summary()` — writes JSON + Markdown to `outputs/latest/` (LATEST)
 
 Pricing coverage: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-7,
-gpt-4o-mini, gpt-4o, and all Ollama/local models ($0). Unknown models annotated
+gpt-4o-mini, gpt-4o, and all local models ($0). Unknown models annotated
 with `unknown_pricing: true` in event metadata, cost estimated as $0.00.
 
 Pipeline integration: non-blocking summary write after all AI call sections.

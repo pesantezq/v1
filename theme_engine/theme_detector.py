@@ -1,5 +1,6 @@
 """
-Theme Detector — extracts investing themes from headlines through the configured LLM provider.
+Theme Detector — extracts investing themes from headlines through the configured LLM provider
+(OpenAI primary, Anthropic fallback).
 
 In testing_mode (or when STOCKBOT_TESTING=1 env is set) no network call is made;
 a deterministic mock response is returned instead.
@@ -12,7 +13,7 @@ import logging
 import os
 from typing import Any
 
-from agent.llm_adapters import call_provider, resolve_ollama_base_url, resolve_provider
+from agent.llm_adapters import call_provider, resolve_provider
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,13 @@ MOCK_THEMES: list[dict[str, Any]] = [
 class ThemeDetector:
     """Detect investing themes from a list of headline dicts using the selected provider.
 
+    Theme detection runs through OpenAI by default (primary) with Anthropic as
+    the fallback provider.
+
     Args:
         model:        LLM model name for the selected provider.
-        endpoint:     Backward-compatible Ollama endpoint hint.
-        provider:     Provider name: ollama | anthropic | openai.
-        base_url:     Optional OpenAI-compatible base URL for Ollama/OpenAI.
+        provider:     Provider name: openai | anthropic (default openai).
+        base_url:     Optional OpenAI-compatible base URL.
         api_key:      Optional API key override.
         testing_mode: If True, return MOCK_THEMES without any network call.
         timeout:      HTTP request timeout in seconds.
@@ -120,8 +123,7 @@ class ThemeDetector:
 
     def __init__(
         self,
-        model: str = "gemma3:4b",
-        endpoint: str = "http://localhost:11434/api/generate",
+        model: str = "",
         provider: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -129,9 +131,8 @@ class ThemeDetector:
         timeout: int = 60,
     ) -> None:
         self.model = model
-        self.provider = resolve_provider(provider, default="ollama")
-        self.endpoint = endpoint
-        self.base_url = self._resolve_base_url(base_url, endpoint)
+        self.provider = resolve_provider(provider, default="openai")
+        self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
         # Respect env var as well as constructor flag
@@ -163,7 +164,7 @@ class ThemeDetector:
             headlines=headlines_text,
         )
 
-        raw = self._call_ollama(prompt)
+        raw = self._call_llm(prompt)
         if raw is None:
             return []
 
@@ -171,7 +172,7 @@ class ThemeDetector:
         if themes is None:
             # One retry with stricter instruction
             logger.warning("ThemeDetector: JSON parse failed, retrying once")
-            raw2 = self._call_ollama(prompt + _RETRY_SUFFIX)
+            raw2 = self._call_llm(prompt + _RETRY_SUFFIX)
             if raw2 is None:
                 return []
             themes = self._parse_response(raw2)
@@ -184,21 +185,8 @@ class ThemeDetector:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _resolve_base_url(self, base_url: str | None, endpoint: str | None) -> str | None:
-        """Map legacy Ollama endpoint inputs onto the new OpenAI-compatible base URL."""
-        if self.provider != "ollama":
-            return base_url
-        if base_url:
-            return resolve_ollama_base_url(base_url)
-        if endpoint:
-            legacy = endpoint.rstrip("/")
-            if legacy.endswith("/api/generate"):
-                legacy = legacy[: -len("/api/generate")]
-            return resolve_ollama_base_url(legacy)
-        return resolve_ollama_base_url()
-
-    def _call_ollama(self, prompt: str) -> str | None:
-        """Backwards-compatible call seam; now routes through the selected provider."""
+    def _call_llm(self, prompt: str) -> str | None:
+        """Route the prompt through the selected provider (OpenAI primary, Anthropic fallback)."""
         try:
             return call_provider(
                 provider=self.provider,

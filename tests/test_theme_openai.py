@@ -204,23 +204,23 @@ class TestOpenAIConfigResolution(unittest.TestCase):
         """Per-mode task_providers entry beats llm.provider."""
         config = {
             "llm": {"provider": "openai", "model": "gpt-4o-mini"},
-            "task_providers": {"daily": "ollama"},
-            "ollama_model": "gemma3:4b",
+            "task_providers": {"daily": "anthropic"},
+            "anthropic_model": "claude-haiku-4-5-20251001",
         }
         ctx = self._ctx(config)
-        self.assertEqual(ctx["provider"], "ollama")
+        self.assertEqual(ctx["provider"], "anthropic")
 
-    def test_llm_block_missing_falls_back_to_ollama(self):
-        """No llm block → default provider remains ollama."""
-        config = {"ollama_model": "gemma3:4b"}
+    def test_llm_block_missing_falls_back_to_openai(self):
+        """No llm block → default provider is openai."""
+        config = {"openai_model": "gpt-4o-mini"}
         ctx = self._ctx(config)
-        self.assertEqual(ctx["provider"], "ollama")
+        self.assertEqual(ctx["provider"], "openai")
 
     def test_llm_block_non_dict_ignored(self):
-        """Malformed llm key (string instead of dict) does not crash; falls back to ollama."""
+        """Malformed llm key (string instead of dict) does not crash; falls back to openai."""
         config = {"llm": "openai"}
         ctx = self._ctx(config)
-        self.assertEqual(ctx["provider"], "ollama")
+        self.assertEqual(ctx["provider"], "openai")
 
     def test_base_url_set_for_openai_provider(self):
         """OpenAI provider context includes the correct base URL."""

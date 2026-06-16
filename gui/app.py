@@ -28,7 +28,7 @@ import streamlit as st
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-from agent.llm_adapters import resolve_ollama_base_url, validate_ollama_connection
+from agent.llm_adapters import validate_openai_connection
 from gui_operator_data import (
     load_operator_dashboard_data,
     load_profit_attribution,
@@ -4815,54 +4815,38 @@ def _render_rotation_tab(rot_events: list) -> None:
 # -- v2 helpers --------------------------------------------------------------
 
 
-def _get_ollama_status(cfg: dict) -> dict:
+def _get_llm_status(cfg: dict) -> dict:
     """
-    Check Ollama: running, configured model, model availability.
-    Returns dict: running, base_url, model, model_available, available_models, error.
+    Check OpenAI reachability (the primary LLM provider).
+    Returns dict: running, base_url, model, model_available, error,
+    timed_out, timeout_seconds, latency_ms, provider.
     """
-    base_url = (
-        os.environ.get("OLLAMA_BASE_URL", "")
-        or cfg.get("theme_engine", {}).get("ollama_base_url", "")
-        or "http://localhost:11434/v1"
-    )
-    model = (
-        os.environ.get("OLLAMA_MODEL", "")
-        or cfg.get("theme_engine", {}).get("ollama_model", "gemma3:4b")
-    )
     result = {
-        "running": False, "base_url": base_url, "model": model,
-        "model_available": False, "available_models": [], "error": "",
-        "timed_out": False, "timeout_seconds": 20,
+        "running": False, "base_url": "", "model": "", "provider": "openai",
+        "model_available": False, "error": "",
+        "timed_out": False, "timeout_seconds": 20, "latency_ms": None,
     }
     try:
         timeout = max(
             5,
             int(
                 os.environ.get(
-                    "OLLAMA_HEALTH_TIMEOUT",
-                    cfg.get("theme_engine", {}).get("ollama_health_timeout_seconds", 20),
+                    "LLM_HEALTH_TIMEOUT",
+                    cfg.get("theme_engine", {}).get("llm_health_timeout_seconds", 20),
                 )
             ),
         )
-        normalized_base_url = resolve_ollama_base_url(base_url)
-        check = validate_ollama_connection(
-            model=model,
-            base_url=normalized_base_url,
-            timeout=timeout,
-        )
-        result["base_url"] = normalized_base_url
-        result["available_models"] = check.get("available_models", [])
+        check = validate_openai_connection(timeout=timeout)
         result["timeout_seconds"] = timeout
-        result["model_available"] = check.get("ok", False)
+        result["provider"] = check.get("provider", "openai")
+        result["base_url"] = check.get("base_url", "")
+        result["model"] = check.get("model", "")
+        result["latency_ms"] = check.get("latency_ms")
+        result["model_available"] = bool(check.get("ok"))
         message = str(check.get("message", "") or "")
         message_lower = message.lower()
         result["timed_out"] = "timed out" in message_lower
-        result["running"] = (
-            bool(check.get("ok"))
-            or "not installed" in message_lower
-            or bool(result["available_models"])
-            or result["timed_out"]
-        )
+        result["running"] = bool(check.get("ok")) or result["timed_out"]
         if not check.get("ok"):
             result["error"] = message
     except Exception as exc:
@@ -5192,7 +5176,7 @@ def page_run_controls() -> None:
         st.markdown("**AI Agent** (`python -m agent`)")
         agent_mode    = st.selectbox("Mode", ["daily", "weekly", "monthly"], key="ag_mode")
         agent_offline = st.checkbox("Force offline (no LLM)", key="ag_offline",
-                                    help="--no-network: templated memo, no Ollama/Claude needed.")
+                                    help="--no-network: templated memo, no LLM provider needed.")
         if st.button("Run AI Agent", width="stretch", key="btn_agent"):
             cmd = [PYTHON, "-m", "agent", "--mode", agent_mode]
             if agent_offline:
@@ -5599,44 +5583,36 @@ def page_api_health() -> None:
     st.title("API & Model Health")
     cfg_raw = _load_config()
 
-    # -- Ollama ---------------------------------------------------------------
-    st.subheader("Ollama (local LLM)")
-    ollama = _get_ollama_status(cfg_raw)
+    # -- LLM reachability (OpenAI primary, Anthropic fallback) ----------------
+    st.subheader("LLM Provider (OpenAI primary)")
+    llm = _get_llm_status(cfg_raw)
 
     o1, o2 = st.columns(2)
-    o1.markdown(f"**Base URL:** `{ollama['base_url']}`")
-    o2.markdown(f"**Configured model:** `{ollama['model']}`")
+    o1.markdown(f"**Provider:** `{llm['provider']}`")
+    o2.markdown(f"**Base URL:** `{llm['base_url'] or '(unset)'}`")
+    st.markdown(f"**Configured model:** `{llm['model'] or '(unset)'}`")
 
-    if ollama["running"]:
-        st.success("Ollama: **running**")
-        if ollama["model_available"]:
-            st.success(f"Model `{ollama['model']}`: **available**")
-        elif ollama.get("timed_out"):
-            st.warning(
-                f"Model `{ollama['model']}` is installed, but the dashboard health check timed out after "
-                f"{ollama.get('timeout_seconds', 20)}s.  \n"
-                "Ollama is reachable, but this model is responding slowly right now.  \n"
-                "Fix: raise `OLLAMA_HEALTH_TIMEOUT`, use a lighter local model, or retry once the model is warm."
-            )
-        else:
-            st.warning(
-                f"Model `{ollama['model']}` is **not installed**.  \n"
-                f"Fix: `ollama pull {ollama['model']}`  \n"
-                f"Available models: "
-                + (", ".join(f"`{m}`" for m in ollama["available_models"]) or "_(none installed)_")
-            )
-        if ollama["available_models"]:
-            with st.expander("All installed models"):
-                for m in ollama["available_models"]:
-                    st.markdown(f"- `{m}`")
+    if llm["model_available"]:
+        latency = llm.get("latency_ms")
+        latency_note = f" ({latency}ms)" if latency is not None else ""
+        st.success(f"OpenAI: **reachable**{latency_note}")
+        st.success(f"Model `{llm['model']}`: **responding**")
+    elif llm.get("timed_out"):
+        st.warning(
+            f"OpenAI health check timed out after {llm.get('timeout_seconds', 20)}s.  \n"
+            f"Model `{llm['model']}` may be responding slowly right now.  \n"
+            "Fix: raise `LLM_HEALTH_TIMEOUT`, or retry."
+        )
     else:
         st.error(
-            f"Ollama: **not reachable**  \n"
-            f"Error: `{ollama['error']}`  \n"
-            "Fix: start Ollama with `ollama serve`, or install from https://ollama.ai"
+            f"OpenAI: **not reachable**  \n"
+            f"Error: `{llm['error']}`  \n"
+            "Fix: set `OPENAI_API_KEY` + `OPENAI_MODEL` in your .env, and verify "
+            "`OPENAI_BASE_URL` points to an OpenAI-compatible /v1 endpoint."
         )
         st.info(
-            "Ollama is only required for the Theme Engine and AI Agent (daily/weekly modes). "
+            "OpenAI is the primary LLM provider (Anthropic is the fallback). "
+            "It is only required for the Theme Engine and AI Agent (daily/weekly modes). "
             "Portfolio analysis runs without it."
         )
 
@@ -5780,7 +5756,7 @@ def page_config_editor() -> None:
             t1, t2 = st.columns(2)
             scan_on   = t1.checkbox("S&P 500 Scanner (FMP)",            value=bool(scanner.get("enabled", False)), help="Requires FMP_API_KEY")
             sleeve_on = t2.checkbox("Speculative Sleeve",                value=bool(sleeve.get("enabled",  False)))
-            theme_on  = t1.checkbox("Theme Engine (RSS + Ollama)",       value=bool(theme.get("enabled",   False)), help="Requires local Ollama")
+            theme_on  = t1.checkbox("Theme Engine (RSS + LLM)",          value=bool(theme.get("enabled",   False)), help="Requires OpenAI (primary) or Anthropic (fallback)")
             wl_on     = t2.checkbox("Watchlist Scanner",                 value=bool(wl.get("enabled",      False)))
             ml_on     = t1.checkbox("ML Advisor",                        value=bool(ml.get("enabled",      True)))
 
@@ -6115,14 +6091,15 @@ def page_diagnostics() -> None:
             else:
                 st.warning(out.strip() or "(no output)")
 
-        st.subheader("Ollama")
-        if st.button("Ping Ollama", key="btn_ollama_diag"):
-            try:
-                with urllib.request.urlopen("http://localhost:11434/api/version", timeout=4) as r:
-                    data = json.loads(r.read())
-                st.success(f"Running -- version `{data.get('version', 'unknown')}`")
-            except Exception as exc:
-                st.warning(f"Not reachable -- {exc}")
+        st.subheader("LLM (OpenAI)")
+        if st.button("Ping OpenAI", key="btn_llm_diag"):
+            status = _get_llm_status(_load_config())
+            if status["model_available"]:
+                latency = status.get("latency_ms")
+                latency_note = f" ({latency}ms)" if latency is not None else ""
+                st.success(f"Reachable -- model `{status['model']}`{latency_note}")
+            else:
+                st.warning(f"Not reachable -- {status['error'] or 'unknown error'}")
 
         st.subheader("Run Lock")
         lock = DATA_DIR / "run.lock"
@@ -6289,16 +6266,13 @@ def page_diagnostics() -> None:
                     st.warning(out.strip() or "(no output)")
 
         with m3:
-            st.markdown("**Ollama**")
-            if st.button("Test Ollama", key="btn_maint_ollama"):
-                try:
-                    with urllib.request.urlopen(
-                        "http://localhost:11434/api/version", timeout=4
-                    ) as r:
-                        d = json.loads(r.read())
-                    st.success(f"Running -- v{d.get('version', '?')}")
-                except Exception as exc:
-                    st.error(f"Not reachable: {exc}")
+            st.markdown("**LLM (OpenAI)**")
+            if st.button("Test OpenAI", key="btn_maint_llm"):
+                status = _get_llm_status(_load_config())
+                if status["model_available"]:
+                    st.success(f"Reachable -- model `{status['model']}`")
+                else:
+                    st.error(f"Not reachable: {status['error'] or 'unknown error'}")
 
         st.divider()
         st.subheader("Open Folders")
@@ -6411,7 +6385,7 @@ def page_diagnostics() -> None:
         st.code(
             "# Watchlist Scanner\n"
             f"{PYTHON} -m watchlist_scanner\n\n"
-            "# Theme Engine (requires Ollama)\n"
+            "# Theme Engine (requires an LLM provider: OpenAI primary / Anthropic fallback)\n"
             f"{PYTHON} -m theme_engine --mode daily\n\n"
             "# AI Agent\n"
             f"{PYTHON} -m agent --mode daily\n"

@@ -1,9 +1,7 @@
 """
 Offline tests for the theme engine.
 
-All tests run without Ollama and without any network calls.
-Integration test (TestOllamaIntegration) is skipped unless
-STOCKBOT_ENABLE_OLLAMA_TEST=1 is set in the environment.
+All tests run without any network calls (the LLM call is mocked).
 
 Test classes:
     TestRSSCollector         — feed parsing, dedup, summary truncation
@@ -12,7 +10,6 @@ Test classes:
     TestThemeStore           — SQLite persistence, JSON output files
     TestApplyThemeBoosts     — boost calculation, caps, low-confidence gate
     TestScannerIntegration   — scanner stability without theme signals
-    TestOllamaIntegration    — real Ollama call (gated by env var)
 """
 
 import json
@@ -209,7 +206,7 @@ class TestThemeDetector(unittest.TestCase):
 
     def test_empty_headlines_returns_empty_list(self):
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", return_value=None):
+        with patch.object(detector, "_call_llm", return_value=None):
             result = detector.detect([])
         self.assertEqual(result, [])
 
@@ -226,7 +223,7 @@ class TestThemeDetector(unittest.TestCase):
             ]
         })
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", return_value=raw_json):
+        with patch.object(detector, "_call_llm", return_value=raw_json):
             result = detector.detect([{"title": "Nvidia earnings"}])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "AI Infrastructure")
@@ -235,7 +232,7 @@ class TestThemeDetector(unittest.TestCase):
     def test_markdown_fenced_json_parsed(self):
         raw = "```json\n" + json.dumps({"themes": [{"name": "Cybersecurity", "confidence": 0.7, "rationale": "Breaches", "evidence_items": [], "direct_mentions": []}]}) + "\n```"
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", return_value=raw):
+        with patch.object(detector, "_call_llm", return_value=raw):
             result = detector.detect([{"title": "Security"}])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "Cybersecurity")
@@ -251,7 +248,7 @@ class TestThemeDetector(unittest.TestCase):
             return valid_json
 
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", side_effect=_side_effect):
+        with patch.object(detector, "_call_llm", side_effect=_side_effect):
             result = detector.detect([{"title": "Payments growth"}])
         self.assertEqual(call_count[0], 2)
         self.assertEqual(len(result), 1)
@@ -261,7 +258,7 @@ class TestThemeDetector(unittest.TestCase):
             "themes": [{"name": "X", "confidence": 1.5, "rationale": "", "evidence_items": [], "direct_mentions": []}]
         })
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", return_value=raw_json):
+        with patch.object(detector, "_call_llm", return_value=raw_json):
             result = detector.detect([{"title": "X"}])
         self.assertEqual(result[0]["confidence"], 1.0)
 
@@ -272,7 +269,7 @@ class TestThemeDetector(unittest.TestCase):
         ]
         raw_json = json.dumps({"themes": themes})
         detector = ThemeDetector(testing_mode=False)
-        with patch.object(detector, "_call_ollama", return_value=raw_json):
+        with patch.object(detector, "_call_llm", return_value=raw_json):
             result = detector.detect([{"title": "Anything"}])
         self.assertLessEqual(len(result), 5)
 
@@ -304,21 +301,16 @@ class TestThemeDetector(unittest.TestCase):
         self.assertEqual(mock_call.call_args.kwargs["provider"], "openai")
         self.assertEqual(mock_call.call_args.kwargs["model"], "gpt-4o-mini")
 
-    def test_legacy_ollama_endpoint_normalized_to_v1(self):
-        detector = ThemeDetector(
-            provider="ollama",
-            endpoint="http://localhost:11434/api/generate",
-            testing_mode=False,
-        )
-        self.assertEqual(detector.base_url, "http://localhost:11434/v1")
+    # NOTE: test_legacy_ollama_endpoint_normalized_to_v1 was deleted — it only
+    # validated the removed `endpoint=` arg / deleted `_resolve_base_url` Ollama mapping.
 
 
 class TestThemeProviderRouting(unittest.TestCase):
 
     def test_global_override_beats_task_provider(self):
         config = {
-            "task_providers": {"daily": "ollama"},
-            "ollama_model": "gemma3:4b",
+            "task_providers": {"daily": "anthropic"},
+            "anthropic_model": "claude-haiku-4-5-20251001",
             "openai_model": "gpt-4o-mini",
         }
         with patch.dict(os.environ, {"STOCKBOT_LLM_PROVIDER": "openai"}, clear=False):
@@ -335,10 +327,10 @@ class TestThemeProviderRouting(unittest.TestCase):
         self.assertEqual(context["provider"], "anthropic")
 
     def test_no_task_provider_preserves_default_routing(self):
-        config = {"ollama_model": "gemma3:4b"}
+        config = {"openai_model": "gpt-4o-mini"}
         with patch.dict(os.environ, {"STOCKBOT_LLM_PROVIDER": ""}, clear=False):
             context = _resolve_theme_task_context(mode="daily", config=config)
-        self.assertEqual(context["provider"], "ollama")
+        self.assertEqual(context["provider"], "openai")
 
     def test_run_writes_llm_metadata_for_llm_backed_execution(self):
         from theme_engine.__main__ import run
@@ -907,19 +899,20 @@ class TestScannerIntegration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TestOllamaIntegration (gated — real network call)
+# TestLlmIntegration (gated — real network call via OpenAI primary)
 # ---------------------------------------------------------------------------
 
 @unittest.skipUnless(
-    os.getenv("STOCKBOT_ENABLE_OLLAMA_TEST") == "1",
-    "Set STOCKBOT_ENABLE_OLLAMA_TEST=1 to run Ollama integration tests",
+    os.getenv("STOCKBOT_ENABLE_LLM_TEST") == "1",
+    "Set STOCKBOT_ENABLE_LLM_TEST=1 to run real LLM integration tests",
 )
-class TestOllamaIntegration(unittest.TestCase):
+class TestLlmIntegration(unittest.TestCase):
 
-    def test_ollama_detect_returns_list(self):
-        """Real Ollama call — requires local Ollama running with gemma3:4b."""
+    def test_llm_detect_returns_list(self):
+        """Real LLM call — requires OPENAI_API_KEY set in the environment."""
         detector = ThemeDetector(
-            model="gemma3:4b",
+            provider="openai",
+            model="gpt-4o-mini",
             testing_mode=False,
             timeout=90,
         )

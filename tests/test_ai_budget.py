@@ -87,7 +87,8 @@ class TestEstimateAiCost(unittest.TestCase):
         self.assertAlmostEqual(cost, 1.50, places=4)
 
     def test_free_provider_returns_zero(self):
-        cost = estimate_ai_cost("ollama", "gemma3:4b", 1_000_000, 1_000_000)
+        # "local" is now the sole free provider (ollama removed in OpenAI refactor).
+        cost = estimate_ai_cost("local", "some-model", 1_000_000, 1_000_000)
         self.assertEqual(cost, 0.0)
 
     def test_local_provider_returns_zero(self):
@@ -95,12 +96,11 @@ class TestEstimateAiCost(unittest.TestCase):
         self.assertEqual(cost, 0.0)
 
     def test_free_provider_case_insensitive(self):
-        cost = estimate_ai_cost("OLLAMA", "gemma3:4b", 500_000, 500_000)
+        cost = estimate_ai_cost("LOCAL", "some-model", 500_000, 500_000)
         self.assertEqual(cost, 0.0)
 
-    def test_known_free_model_returns_zero(self):
-        cost = estimate_ai_cost(None, "gemma3:4b", 1_000_000, 0)
-        self.assertEqual(cost, 0.0)
+    # test_known_free_model_returns_zero deleted: gemma3:4b free-pricing entry was
+    # removed in the ollama->OpenAI refactor; no remaining known-free model to assert.
 
     def test_unknown_model_returns_zero(self):
         cost = estimate_ai_cost("somevendor", "unknown-model-xyz", 1_000_000, 1_000_000)

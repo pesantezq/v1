@@ -43,14 +43,16 @@ If this errors, the RSS collector cannot parse feeds. Check
 `requirements.txt` to confirm feedparser is pinned (it is, as of 2026-05-28).
 
 ```bash
-curl -sS --max-time 2 http://localhost:11434/v1/models 2>&1 | head -3
+cd /opt/stockbot && .venv/bin/python -c "from agent.llm_adapters import validate_openai_connection; print(validate_openai_connection())" 2>&1 | head -3
 ```
 
-If "Connection refused", local Ollama is down. Check
-`config.json:theme_engine.provider` — if `provider: "ollama"` and Ollama
-is unreachable, theme detection silently emits empty themes. Verify
-fallback chain is configured for a remote provider if Ollama is the
-intended default.
+If this reports a failure (e.g. auth error or no key), OpenAI is
+unreachable. Confirm `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`) is
+set in `.env`, then check `config.json:theme_engine.provider` — if the
+primary provider is `openai` and it is unreachable, theme detection
+silently emits empty themes. Verify the Anthropic fallback
+(`ANTHROPIC_API_KEY`) is configured so theme detection can still run when
+OpenAI is down.
 
 ### Layer 2 — RSS / theme producers
 

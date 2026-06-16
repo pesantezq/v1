@@ -468,7 +468,7 @@ pattern_loop_progress:
   authorized_by: owner  # 2026-06-01; overrides observe_and_iterate for this scope
   protected_step_5_started: false
   steps:
-    step_0_baseline_run: done          # live run AI-suppressed (provider=ollama); watchlist_signals.json 22 rows, non-degraded
+    step_0_baseline_run: done          # live run AI-suppressed; watchlist_signals.json 22 rows, non-degraded
     step_1_real_signal_ingestion: done # backtesting/signal_sources.py + run_poc(signals_source=...); 11 tests; full suite green
     step_1b_direction_resolution: done # backtesting/direction_resolution.py (signal_direction/directional_outcome) + run_poc added_metrics.directional; 16 tests; observe-only, long-only metrics unchanged
     step_2_walk_forward_oos: done      # backtesting/walk_forward.py (rolling OOS folds + dependency-free Wilson 95% CI); 9 tests; observe-only, no artifact writes; new suite green (full-suite failures pre-existing/env-dep)

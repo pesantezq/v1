@@ -237,8 +237,8 @@
   },
   "agent": {
     "task_providers": {
-      "standalone": "ollama",
-      "weekly": "ollama",
+      "standalone": "openai",
+      "weekly": "openai",
       "monthly": "anthropic",
       "maintainer": "anthropic"
     }
@@ -251,9 +251,8 @@
     ],
     "max_items_per_run": 30,
     "task_providers": {
-      "daily": "ollama"
+      "daily": "openai"
     },
-    "ollama_model": "gemma3:4b",
     "max_theme_boost_points": 10,
     "min_confidence": 0.6,
     "output_dir": "outputs/latest",

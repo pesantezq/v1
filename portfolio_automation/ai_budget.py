@@ -49,14 +49,10 @@ _PRICING_PER_MILLION: dict[str, tuple[float, float]] = {
     "gpt-4o-2024-11-20":          (2.50,  10.00),
     "gpt-4-turbo":                (10.00, 30.00),
     "gpt-3.5-turbo":              (0.50,   1.50),
-    # Ollama / local models (free)
-    "gemma3:4b":                  (0.00,   0.00),
-    "llama3":                     (0.00,   0.00),
-    "mistral":                    (0.00,   0.00),
 }
 
 # Providers where all models are always free
-_FREE_PROVIDERS: frozenset[str] = frozenset({"ollama", "local"})
+_FREE_PROVIDERS: frozenset[str] = frozenset({"local"})
 
 # ---------------------------------------------------------------------------
 # Exceptions

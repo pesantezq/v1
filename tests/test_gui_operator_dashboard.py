@@ -428,7 +428,7 @@ class TestGuiOperatorDashboard(unittest.TestCase):
                 "tasks": [
                     {
                         "completed_at": "2026-04-16T09:40:00",
-                        "resolved_provider": "ollama",
+                        "resolved_provider": "openai",
                         "actual_provider": "offline_stub",
                         "actual_model": "(offline)",
                         "llm_fallback_triggered": True,

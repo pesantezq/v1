@@ -130,7 +130,7 @@ Required per-event fields:
 
 - `timestamp` — ISO 8601 timestamp string (UTC) when the event was recorded
 - `task_name` — string identifying the caller; currently `"ai_decision_validator"`
-- `provider` — LLM provider string: `"anthropic"`, `"openai"`, `"ollama"`, or `"local"`
+- `provider` — LLM provider string: `"anthropic"`, `"openai"`, or `"local"`
 - `model` — model name string (e.g. `"gemma3:4b"`, `"claude-haiku-4-5-20251001"`)
 - `run_id` — string or `null`; pipeline run identifier when available
 - `prompt_tokens` — int; estimated input token count (see note on estimation below)

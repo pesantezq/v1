@@ -111,7 +111,6 @@ Static pricing table in `_PRICING_PER_MILLION` (USD per million tokens):
 | Anthropic | claude-opus-4-7 | $15.00 | $75.00 |
 | OpenAI | gpt-4o-mini | $0.15 | $0.60 |
 | OpenAI | gpt-4o | $2.50 | $10.00 |
-| Ollama | (all) | $0.00 | $0.00 |
 | Local | (all) | $0.00 | $0.00 |
 
 Unknown models return $0.00 with `unknown_pricing: true` in event metadata.
@@ -191,7 +190,7 @@ If recording fails, a `WARNING` log is emitted and the original LLM call result
 ```json
 {
   "task_name": "ai_decision_validator",
-  "provider": "ollama",
+  "provider": "openai",
   "model": "gemma3:4b",
   "prompt_tokens": 116,
   "completion_tokens": 7,

@@ -5,7 +5,7 @@ Tests for agent/bundle_builder.py.
 
 All tests are fully offline — they create temporary directories with small
 CSV/JSON fixtures and verify the bundle fields.  No network calls, no FMP,
-no Ollama, no Claude.
+no OpenAI, no Anthropic.
 """
 
 import csv

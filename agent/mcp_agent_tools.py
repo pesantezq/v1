@@ -16,12 +16,12 @@ Safety contract
 - Never modifies config.json or investment allocations
 - Never imports investment-logic modules (adjustment, scoring, portfolio, etc.)
 - All reads and writes stay inside the repo root
-- Ollama and Claude calls are optional; graceful fallback if unavailable
+- OpenAI and Claude calls are optional; graceful fallback if unavailable
 
 Tools
 -----
   agent_health_check()          — env dirs, db, env-var presence
-  test_ollama_connection()      — ping localhost:11434
+  test_openai_connection()      — minimal OpenAI API probe
   test_claude_connection()      — minimal Anthropic API probe
   simulate_agent_run(mode)      — synthesise bundle → LLM → test_decision_memo.md
   validate_guardrails()         — cap checks from config + data files (no investment imports)
@@ -46,7 +46,8 @@ Install dependency (same as stockbot-mcp):
 
 Optional LLM environment variables:
 
-  OLLAMA_MODEL        default: gemma3:4b
+  OPENAI_MODEL        required for test_openai_connection / primary memo generation
+  OPENAI_API_KEY      required for test_openai_connection / primary memo generation
   ANTHROPIC_API_KEY   required for test_claude_connection / Claude fallback
   ANTHROPIC_MODEL     default: claude-haiku-4-5-20251001
 
@@ -55,12 +56,12 @@ Example usage from Claude Code:
   agent_health_check()
     → structured JSON: status ok/warning/error + per-check details
 
-  test_ollama_connection()
-    → {"ollama_status": "ok", "latency_ms": 312, "model_used": "gemma3:4b"}
+  test_openai_connection()
+    → {"openai_status": "ok", "latency_ms": 312, "model_used": "gpt-..."}
 
   simulate_agent_run(mode="daily")
-    → generates outputs/latest/test_decision_memo.md using Ollama (or Claude fallback)
-    → returns {"memo_created": true, "model_used": "ollama", "output_path": "..."}
+    → generates outputs/latest/test_decision_memo.md using OpenAI (or Claude fallback)
+    → returns {"memo_created": true, "model_used": "openai", "output_path": "..."}
 """
 
 import asyncio
@@ -70,8 +71,6 @@ import re
 import sqlite3
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -119,8 +118,8 @@ def _json_result(obj: dict) -> list[types.TextContent]:
 
 # ── LLM config helpers ────────────────────────────────────────────────────────
 
-def _ollama_model() -> str:
-    return os.environ.get("OLLAMA_MODEL", "gemma3:4b")
+def _openai_model() -> str:
+    return os.environ.get("OPENAI_MODEL", "").strip()
 
 
 def _claude_model() -> str:
@@ -145,11 +144,11 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
         types.Tool(
-            name="test_ollama_connection",
+            name="test_openai_connection",
             description=(
-                "Verify that the local Ollama LLM runtime is reachable at "
-                "localhost:11434. Sends a minimal generate request and measures latency. "
-                "Returns {ollama_status, latency_ms, model_used}."
+                "Verify that the OpenAI API is reachable and authenticated. "
+                "Sends a single-token probe using the configured model and measures latency. "
+                "Returns {openai_status, latency_ms, model_used}. Never prints API keys."
             ),
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
@@ -168,7 +167,7 @@ async def list_tools() -> list[types.Tool]:
                 "Simulate the AI agent pipeline for the given run mode without "
                 "triggering real investment actions. Loads (or synthesises) "
                 "outputs/latest/agent_bundle.json, generates a test memo via "
-                "Ollama (or Claude fallback), and writes "
+                "OpenAI (or Claude fallback), and writes "
                 "outputs/latest/test_decision_memo.md. "
                 "Returns {memo_created, model_used, output_path}."
             ),
@@ -236,8 +235,8 @@ async def call_tool(
     args = arguments or {}
     if name == "agent_health_check":
         return await _tool_agent_health_check()
-    if name == "test_ollama_connection":
-        return await _tool_test_ollama_connection()
+    if name == "test_openai_connection":
+        return await _tool_test_openai_connection()
     if name == "test_claude_connection":
         return await _tool_test_claude_connection()
     if name == "simulate_agent_run":
@@ -340,7 +339,7 @@ async def _tool_agent_health_check() -> list[types.TextContent]:
 
     # 5. Environment variables — presence only, never values
     env_required = ("FMP_API_KEY", "ANTHROPIC_API_KEY")
-    env_optional = ("OLLAMA_MODEL", "ANTHROPIC_MODEL", "EMAIL_PASSWORD")
+    env_optional = ("OPENAI_MODEL", "OPENAI_API_KEY", "ANTHROPIC_MODEL", "EMAIL_PASSWORD")
     for var in env_required:
         if os.environ.get(var):
             _chk(f"env:{var}", "ok", "set")
@@ -348,7 +347,7 @@ async def _tool_agent_health_check() -> list[types.TextContent]:
             _chk(f"env:{var}", "warning", "NOT SET")
     for var in env_optional:
         val = os.environ.get(var)
-        _chk(f"env:{var}", "ok", f"set ({val})" if var == "OLLAMA_MODEL" and val else ("set" if val else "not set (optional)"))
+        _chk(f"env:{var}", "ok", f"set ({val})" if var == "OPENAI_MODEL" and val else ("set" if val else "not set (optional)"))
 
     # 6. mcp package importable
     try:
@@ -361,53 +360,35 @@ async def _tool_agent_health_check() -> list[types.TextContent]:
     return _json_result({"status": overall, "checks": checks})
 
 
-# ── Tool: test_ollama_connection ──────────────────────────────────────────────
+# ── Tool: test_openai_connection ──────────────────────────────────────────────
 
-def _do_ollama_ping(model: str) -> dict:
-    """Blocking Ollama request — run via asyncio.to_thread."""
-    payload = json.dumps({
-        "model": model,
-        "prompt": "Respond with the single word: OK",
-        "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        response_text = body.get("response", "").strip()
-        return {
-            "ollama_status": "ok",
-            "latency_ms": latency_ms,
-            "model_used": model,
-            "response": response_text,
-        }
-    except urllib.error.URLError as exc:
-        return {
-            "ollama_status": "error",
+async def _tool_test_openai_connection() -> list[types.TextContent]:
+    model = _openai_model()
+    if not model:
+        return _json_result({
+            "openai_status": "error",
             "latency_ms": None,
             "model_used": model,
-            "error": f"Connection failed: {exc.reason}",
-        }
-    except Exception as exc:
-        return {
-            "ollama_status": "error",
+            "error": "OPENAI_MODEL not set in environment",
+        })
+    if not (get_secret("OPENAI_API_KEY") or ""):
+        return _json_result({
+            "openai_status": "error",
             "latency_ms": None,
             "model_used": model,
-            "error": str(exc),
-        }
+            "error": "OPENAI_API_KEY not set in environment",
+        })
 
+    from agent.llm_adapters import validate_openai_connection
 
-async def _tool_test_ollama_connection() -> list[types.TextContent]:
-    model = _ollama_model()
-    result = await asyncio.to_thread(_do_ollama_ping, model)
-    return _json_result(result)
+    result = await asyncio.to_thread(validate_openai_connection, model=model)
+    return _json_result({
+        "openai_status": "ok" if result.get("ok") else "error",
+        "latency_ms": result.get("latency_ms"),
+        "model_used": result.get("model", model),
+        "response": result.get("response"),
+        "error": None if result.get("ok") else _redact(str(result.get("message", ""))),
+    })
 
 
 # ── Tool: test_claude_connection ──────────────────────────────────────────────
@@ -579,25 +560,14 @@ def _build_memo_prompt(bundle: dict, mode: str) -> str:
     )
 
 
-def _do_ollama_generate(model: str, prompt: str) -> tuple[str, int]:
-    """Call Ollama /api/generate. Returns (response_text, latency_ms)."""
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"num_predict": 300},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def _do_openai_generate(model: str, prompt: str) -> tuple[str, int]:
+    """Call the OpenAI chat completions API. Returns (response_text, latency_ms)."""
+    from agent.llm_adapters import call_openai
+
     t0 = time.monotonic()
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
+    text = call_openai(model=model, prompt=prompt, max_tokens=400, timeout=60)
     latency_ms = int((time.monotonic() - t0) * 1000)
-    return body.get("response", "").strip(), latency_ms
+    return text.strip(), latency_ms
 
 
 def _do_claude_generate(model: str, api_key: str, prompt: str) -> tuple[str, int]:
@@ -635,8 +605,8 @@ def _static_stub_memo(bundle: dict, mode: str) -> str:
         f"\n- Growth mode: {cfg.get('growth_mode', 'unknown')} | "
         f"Contribution: ${cfg.get('monthly_contribution', 0):,}/month\n\n"
         f"## Key Action\n\n"
-        f"No LLM configured. Set OLLAMA_MODEL or ANTHROPIC_API_KEY to enable "
-        f"AI-generated memos.\n\n"
+        f"No LLM configured. Set OPENAI_MODEL + OPENAI_API_KEY (or ANTHROPIC_API_KEY "
+        f"for the fallback) to enable AI-generated memos.\n\n"
         f"---\n*This is a TEST memo generated by the AI agent test harness.*\n"
     )
 
@@ -652,16 +622,24 @@ async def _tool_simulate_agent_run(args: dict) -> list[types.TextContent]:
     # Step 2: build prompt
     prompt = _build_memo_prompt(bundle, mode)
 
-    # Step 3: LLM routing — Ollama → Claude → static stub
+    # Step 3: LLM routing — OpenAI → Claude → static stub
     model_used = "none"
     memo_text = ""
     error_detail = ""
 
-    ollama_model = _ollama_model()
-    try:
-        memo_text, _ = await asyncio.to_thread(_do_ollama_generate, ollama_model, prompt)
-        model_used = f"ollama:{ollama_model}"
-    except Exception as ollama_exc:
+    openai_model = _openai_model()
+    openai_key = get_secret("OPENAI_API_KEY") or ""
+    openai_exc: Exception | None = None
+    if openai_model and openai_key:
+        try:
+            memo_text, _ = await asyncio.to_thread(_do_openai_generate, openai_model, prompt)
+            model_used = f"openai:{openai_model}"
+        except Exception as exc:
+            openai_exc = exc
+    else:
+        openai_exc = RuntimeError("OPENAI_MODEL and OPENAI_API_KEY must both be set")
+
+    if not memo_text:
         # Try Claude fallback
         api_key = get_secret("ANTHROPIC_API_KEY") or ""
         if api_key:
@@ -681,7 +659,9 @@ async def _tool_simulate_agent_run(args: dict) -> list[types.TextContent]:
                 memo_text = _static_stub_memo(bundle, mode)
                 model_used = "static_stub"
         else:
-            error_detail = f"Ollama unavailable ({_redact(str(ollama_exc))}); ANTHROPIC_API_KEY not set"
+            error_detail = (
+                f"OpenAI unavailable ({_redact(str(openai_exc))}); ANTHROPIC_API_KEY not set"
+            )
             memo_text = _static_stub_memo(bundle, mode)
             model_used = "static_stub"
 

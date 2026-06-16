@@ -11,7 +11,7 @@ from pathlib import Path
 from agent.llm_adapters import (
     call_provider,
     resolve_provider,
-    validate_ollama_connection,
+    validate_openai_connection,
 )
 
 
@@ -48,7 +48,8 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         default=None,
-        help="Provider to check (ollama | anthropic | openai). Defaults to STOCKBOT_LLM_PROVIDER or ollama.",
+        choices=["openai", "anthropic"],
+        help="Provider to check (openai | anthropic). Defaults to STOCKBOT_LLM_PROVIDER or openai.",
     )
     parser.add_argument(
         "--model",
@@ -78,15 +79,14 @@ def main() -> int:
 
     load_env(str(root / ".env"))
 
-    provider = resolve_provider(args.provider, default="ollama")
-    if provider == "ollama":
-        result = validate_ollama_connection(
+    provider = resolve_provider(args.provider, default="openai")
+    if provider == "openai":
+        result = validate_openai_connection(
             model=args.model,
             timeout=args.timeout,
         )
     else:
-        env_model_key = "ANTHROPIC_MODEL" if provider == "anthropic" else "OPENAI_MODEL"
-        model = args.model or os.environ.get(env_model_key, "")
+        model = args.model or os.environ.get("ANTHROPIC_MODEL", "")
         result = _run_generic_provider_check(
             provider=provider,
             model=model,

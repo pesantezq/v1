@@ -49,7 +49,7 @@ IMPORTANCE_KEYWORDS: dict[str, list[str]] = {
     "scanner":       ["scanner", "candidate", "watchlist", "universe", "sleeve"],
     "output":        ["output", "digest", "report", "memo", "file_output"],
     "config":        ["config", "settings", "utils", "constants"],
-    "agent":         ["agent", "llm", "prompt", "bundle", "ollama", "claude"],
+    "agent":         ["agent", "llm", "prompt", "bundle", "openai", "claude"],
     "theme":         ["theme", "rss", "topic"],
     "core_logic":    ["scoring", "adjustment", "finance", "recommendation",
                       "portfolio", "contribution", "drawdown", "projection",
@@ -578,18 +578,18 @@ def build_integrations(root: Path, py_files: list[Path]) -> list[dict]:
             "optional": True,
         },
         {
-            "name": "Ollama (local LLM)",
-            "keywords": ["ollama", "api/generate", "api/chat"],
+            "name": "OpenAI API",
+            "keywords": ["openai", "OPENAI_API_KEY", "chat/completions"],
             "files": ["agent/llm_adapters.py", "theme_engine/theme_detector.py"],
-            "purpose": "Daily/weekly AI narrative generation and theme detection",
-            "auth": "None (local)",
+            "purpose": "Daily/weekly AI narrative generation and theme detection (primary)",
+            "auth": "OPENAI_API_KEY env var",
             "optional": True,
         },
         {
             "name": "Anthropic Claude API",
             "keywords": ["anthropic", "claude", "ANTHROPIC_API_KEY"],
             "files": ["agent/llm_adapters.py"],
-            "purpose": "Monthly AI memos; maintainer patch generation",
+            "purpose": "Fallback AI memos; maintainer patch generation",
             "auth": "ANTHROPIC_API_KEY env var",
             "optional": True,
         },
@@ -814,15 +814,15 @@ def build_prompt_helpers(
             "scenario": "Changing AI agent narrative / prompts",
             "inspect_first": ["agent/prompts.py", "agent/agent_runner.py",
                                "agent/llm_adapters.py", "agent/bundle_builder.py"],
-            "notes": "LLM routing: daily/weekly → Ollama → Claude fallback. "
-                     "monthly → Claude. Offline stub active when STOCKBOT_TESTING=1. "
+            "notes": "LLM routing: OpenAI primary → Claude fallback. "
+                     "Offline stub active when STOCKBOT_TESTING=1. "
                      "Bundle JSON is in outputs/latest/agent_bundle.json.",
         },
         {
             "scenario": "Changing theme engine or RSS collection",
             "inspect_first": ["theme_engine/theme_detector.py", "theme_engine/rss_collector.py",
                                "theme_engine/theme_mapper.py", "data/themes_catalog.json"],
-            "notes": "Theme detection uses Ollama. testing_mode=True or STOCKBOT_TESTING=1 "
+            "notes": "Theme detection uses OpenAI. testing_mode=True or STOCKBOT_TESTING=1 "
                      "returns MOCK_THEMES. Theme boosts are applied in "
                      "scanner/candidate_scanner.py:apply_theme_boosts().",
         },
@@ -891,7 +891,7 @@ def infer_purpose(root: Path) -> dict:
             "Weekly: same as daily + always send digest",
             "Monthly: same + contribution plan + Claude AI memo + CAGR projections",
             "Watchlist scan: standalone Alpha Vantage scan with fundamental/technical/theme scoring",
-            "Theme engine: RSS ingestion → Ollama theme detection → candidate boosts",
+            "Theme engine: RSS ingestion → OpenAI theme detection → candidate boosts",
         ],
         "readme_excerpt": " ".join(purpose_lines)[:300],
         "main_docstring": main_doc.splitlines()[0][:200] if main_doc else "",

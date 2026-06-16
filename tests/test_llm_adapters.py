@@ -7,30 +7,37 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from agent.llm_adapters import (
-    call_ollama,
-    resolve_ollama_base_url,
+    call_openai,
     resolve_provider,
     resolve_task_provider,
-    validate_ollama_connection,
+    validate_openai_connection,
 )
 
 
 class TestLLMAdapters(unittest.TestCase):
 
-    def test_resolve_provider_defaults_to_ollama(self):
+    def test_resolve_provider_defaults_to_openai(self):
         with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": ""}, clear=False):
-            self.assertEqual(resolve_provider(None, default="ollama"), "ollama")
+            self.assertEqual(resolve_provider(None), "openai")
 
     def test_resolve_provider_rejects_unknown_value(self):
         with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": ""}, clear=False):
             with self.assertRaises(RuntimeError):
-                resolve_provider("not-a-provider", default="ollama")
+                resolve_provider("not-a-provider")
+
+    # NOTE: ollama is no longer a supported provider; resolving it now raises.
+    def test_resolve_provider_rejects_removed_ollama(self):
+        with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": ""}, clear=False):
+            with self.assertRaises(RuntimeError):
+                resolve_provider("ollama")
 
     def test_resolve_task_provider_precedence(self):
+        # Repointed off the removed "ollama" task_provider; the global override
+        # (STOCKBOT_LLM_PROVIDER) still beats the cli/task selections below it.
         with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": "openai"}, clear=False):
             resolved = resolve_task_provider(
                 cli_provider="anthropic",
-                task_provider="ollama",
+                task_provider="anthropic",
                 fallback_task_provider="anthropic",
             )
         self.assertEqual(resolved, "anthropic")
@@ -44,23 +51,14 @@ class TestLLMAdapters(unittest.TestCase):
             )
         self.assertEqual(resolved, "openai")
 
-    def test_resolve_ollama_base_url_adds_v1_suffix(self):
-        self.assertEqual(
-            resolve_ollama_base_url("http://localhost:11434"),
-            "http://localhost:11434/v1",
-        )
-
-    def test_resolve_ollama_base_url_rejects_invalid_url(self):
-        with self.assertRaises(RuntimeError) as ctx:
-            resolve_ollama_base_url("localhost:11434")
-        self.assertIn("OLLAMA_BASE_URL", str(ctx.exception))
-
-    def test_call_ollama_uses_chat_completions_and_parses_text(self):
+    def test_call_openai_uses_chat_completions_and_parses_text(self):
+        # Repointed from the removed call_ollama happy-path test; preserves the
+        # generic OpenAI-compatible /v1/chat/completions parse coverage.
         body = {
             "choices": [
                 {
                     "message": {
-                        "content": "OK from Ollama",
+                        "content": "OK from OpenAI",
                     }
                 }
             ]
@@ -72,18 +70,19 @@ class TestLLMAdapters(unittest.TestCase):
         mock_ctx.__exit__.return_value = False
 
         with patch("urllib.request.urlopen", return_value=mock_ctx) as mock_urlopen:
-            text = call_ollama(
-                model="gemma3:4b",
+            text = call_openai(
+                model="gpt-4o-mini",
                 prompt="Reply with OK",
-                base_url="http://localhost:11434/v1",
-                api_key="ollama",
+                base_url="https://api.openai.com/v1",
+                api_key="test-key",
             )
 
-        self.assertEqual(text, "OK from Ollama")
+        self.assertEqual(text, "OK from OpenAI")
         request = mock_urlopen.call_args.args[0]
         self.assertTrue(request.full_url.endswith("/v1/chat/completions"))
 
-    def test_call_ollama_reports_malformed_response(self):
+    def test_call_openai_reports_malformed_response(self):
+        # Repointed from the removed call_ollama malformed-response test.
         body = {"unexpected": "shape"}
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps(body).encode("utf-8")
@@ -93,45 +92,50 @@ class TestLLMAdapters(unittest.TestCase):
 
         with patch("urllib.request.urlopen", return_value=mock_ctx):
             with self.assertRaises(RuntimeError) as ctx:
-                call_ollama(
-                    model="gemma3:4b",
+                call_openai(
+                    model="gpt-4o-mini",
                     prompt="Reply with OK",
-                    base_url="http://localhost:11434/v1",
-                    api_key="ollama",
+                    base_url="https://api.openai.com/v1",
+                    api_key="test-key",
                 )
         self.assertIn("malformed response", str(ctx.exception).lower())
 
-    def test_call_ollama_missing_model_message_suggests_pull(self):
-        with patch(
-            "agent.llm_adapters._call_openai_compatible_chat",
-            side_effect=RuntimeError("Ollama API error: HTTP 404 - model 'gemma3:4b' not found"),
-        ):
-            with self.assertRaises(RuntimeError) as ctx:
-                call_ollama(
-                    model="gemma3:4b",
-                    prompt="Reply with OK",
-                    base_url="http://localhost:11434/v1",
-                    api_key="ollama",
+    def test_validate_openai_connection_reports_missing_api_key(self):
+        # Repointed from the removed validate_ollama_connection test; preserves
+        # the health-probe "ok=False with a helpful message" coverage.
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}, clear=False):
+            with patch("agent.llm_adapters.get_secret", return_value=""):
+                result = validate_openai_connection(
+                    model="gpt-4o-mini",
+                    base_url="https://api.openai.com/v1",
+                    api_key="",
+                    timeout=5,
                 )
-        self.assertIn("ollama pull gemma3:4b", str(ctx.exception))
 
-    def test_validate_ollama_connection_reports_missing_model(self):
-        tags_body = {"models": [{"name": "llama3.2:3b"}]}
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["provider"], "openai")
+        self.assertIn("OPENAI_API_KEY", result["message"])
+
+    def test_validate_openai_connection_ok_on_successful_response(self):
+        body = {"choices": [{"message": {"content": "OK"}}]}
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(tags_body).encode("utf-8")
+        mock_resp.read.return_value = json.dumps(body).encode("utf-8")
         mock_ctx = MagicMock()
         mock_ctx.__enter__.return_value = mock_resp
         mock_ctx.__exit__.return_value = False
 
         with patch("urllib.request.urlopen", return_value=mock_ctx):
-            result = validate_ollama_connection(
-                model="gemma3:4b",
-                base_url="http://localhost:11434/v1",
+            result = validate_openai_connection(
+                model="gpt-4o-mini",
+                base_url="https://api.openai.com/v1",
+                api_key="test-key",
                 timeout=5,
             )
 
-        self.assertFalse(result["ok"])
-        self.assertIn("ollama pull gemma3:4b", result["message"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["response"], "OK")
+        self.assertIn("latency_ms", result)
 
 
 if __name__ == "__main__":

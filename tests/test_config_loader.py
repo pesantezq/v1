@@ -121,16 +121,16 @@ def _structured_base() -> dict:
     data["portfolio"]["rebalance_band_pct"] = 0.12
     data["theme_engine"].update(
         {
-            "llm_provider": "ollama",
-            "ollama_base_url": "http://localhost:11434/v1",
-            "ollama_api_key": "ollama",
-            "task_providers": {"daily": "ollama"},
+            "llm_provider": "openai",
+            "openai_base_url": "https://api.openai.com/v1",
+            "openai_model": "gpt-4o-mini",
+            "task_providers": {"daily": "openai"},
         }
     )
     data["agent"] = {
         "task_providers": {
-            "standalone": "ollama",
-            "weekly": "ollama",
+            "standalone": "openai",
+            "weekly": "openai",
             "monthly": "anthropic",
             "maintainer": "anthropic",
         }
@@ -246,10 +246,10 @@ class TestConfigLoader(unittest.TestCase):
 
             resolved = load_runtime_config_dict(str(path), record_history=False)
 
-            self.assertEqual(resolved["theme_engine"]["llm_provider"], "ollama")
-            self.assertEqual(resolved["theme_engine"]["ollama_base_url"], "http://localhost:11434/v1")
-            self.assertEqual(resolved["theme_engine"]["ollama_api_key"], "ollama")
-            self.assertEqual(resolved["theme_engine"]["task_providers"]["daily"], "ollama")
+            self.assertEqual(resolved["theme_engine"]["llm_provider"], "openai")
+            self.assertEqual(resolved["theme_engine"]["openai_base_url"], "https://api.openai.com/v1")
+            self.assertEqual(resolved["theme_engine"]["openai_model"], "gpt-4o-mini")
+            self.assertEqual(resolved["theme_engine"]["task_providers"]["daily"], "openai")
             self.assertEqual(resolved["agent"]["task_providers"]["monthly"], "anthropic")
 
 

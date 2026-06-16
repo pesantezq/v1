@@ -409,7 +409,7 @@ def main() -> int:
         "--providers",
         nargs="+",
         required=True,
-        help="Providers to compare, for example: ollama anthropic openai",
+        help="Providers to compare, for example: openai anthropic",
     )
     parser.add_argument(
         "--config",

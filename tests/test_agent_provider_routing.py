@@ -23,27 +23,33 @@ class TestAgentProviderRouting(unittest.TestCase):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_daily_run_uses_selected_provider_first(self):
+        # Repointed from ollama to openai (ollama removed); preserves the
+        # "explicit provider is used first + metadata is recorded" coverage.
         from agent.agent_runner import run
 
         with patch("agent.agent_runner.call_provider", return_value="# provider memo") as mock_call:
-            with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://localhost:11434/v1"}, clear=False):
+            with patch.dict(
+                "os.environ",
+                {"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"},
+                clear=False,
+            ):
                 with self.assertLogs("stockbot.agent.runner", level="INFO") as captured:
                     result = run(
                         mode="daily",
                         offline=False,
-                        provider="ollama",
-                        ollama_model="gemma3:4b",
+                        provider="openai",
+                        openai_model="gpt-4o-mini",
                         claude_model="claude-haiku-4-5-20251001",
                         root=self.root,
                     )
 
         self.assertEqual(result["mode"], "daily")
-        self.assertEqual(mock_call.call_args.kwargs["provider"], "ollama")
-        self.assertEqual(mock_call.call_args.kwargs["model"], "gemma3:4b")
+        self.assertEqual(mock_call.call_args.kwargs["provider"], "openai")
+        self.assertEqual(mock_call.call_args.kwargs["model"], "gpt-4o-mini")
         memo = (self.root / "outputs" / "latest" / "decision_memo.md").read_text(encoding="utf-8")
         self.assertIn("provider memo", memo)
         self.assertTrue(
-            any("resolved_provider=ollama" in message for message in captured.output)
+            any("resolved_provider=openai" in message for message in captured.output)
         )
         metadata = json.loads(
             (self.root / "outputs" / "latest" / "agent_llm_metadata.json").read_text(encoding="utf-8")
@@ -60,59 +66,65 @@ class TestAgentProviderRouting(unittest.TestCase):
         self.assertIn("success", task_meta)
         self.assertIn("error_type", task_meta)
         self.assertIn("fallback_reason", task_meta)
-        self.assertEqual(task_meta["resolved_provider"], "ollama")
-        self.assertEqual(task_meta["actual_provider"], "ollama")
-        self.assertEqual(task_meta["model"], "gemma3:4b")
-        self.assertEqual(task_meta["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(task_meta["resolved_provider"], "openai")
+        self.assertEqual(task_meta["actual_provider"], "openai")
+        self.assertEqual(task_meta["model"], "gpt-4o-mini")
+        self.assertEqual(task_meta["base_url"], "https://api.openai.com/v1")
         self.assertTrue(task_meta["success"])
         self.assertIsNone(task_meta["error_type"])
         self.assertIsNone(task_meta["fallback_reason"])
         self.assertFalse(task_meta["fallback_triggered"])
         self.assertTrue(
             any(
-                "Agent LLM summary: task=agent.daily resolved=ollama actual=ollama model=gemma3:4b llm_fallback=no"
+                "Agent LLM summary: task=agent.daily resolved=openai actual=openai model=gpt-4o-mini llm_fallback=no"
                 in message
                 for message in captured.output
             )
         )
 
     def test_daily_run_falls_back_after_provider_failure(self):
+        # Repointed from ollama->anthropic to openai->anthropic; preserves the
+        # "first provider fails, fallback succeeds" coverage.
         from agent.agent_runner import run
 
         def _side_effect(*, provider, model, prompt, max_tokens):
-            if provider == "ollama":
-                raise RuntimeError("ollama unavailable")
+            if provider == "openai":
+                raise RuntimeError("openai unavailable")
             return "# fallback memo"
 
         with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
-            with patch.dict("os.environ", {"OLLAMA_BASE_URL": "http://localhost:11434/v1"}, clear=False):
+            with patch.dict(
+                "os.environ",
+                {"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"},
+                clear=False,
+            ):
                 with self.assertLogs("stockbot.agent.runner", level="INFO") as captured:
                     run(
                         mode="daily",
                         offline=False,
-                        provider="ollama",
-                        ollama_model="gemma3:4b",
+                        provider="openai",
+                        openai_model="gpt-4o-mini",
                         claude_model="claude-haiku-4-5-20251001",
                         root=self.root,
                     )
 
         providers = [call.kwargs["provider"] for call in mock_call.call_args_list]
-        self.assertEqual(providers[:2], ["ollama", "anthropic"])
+        self.assertEqual(providers[:2], ["openai", "anthropic"])
         memo = (self.root / "outputs" / "latest" / "decision_memo.md").read_text(encoding="utf-8")
         self.assertIn("fallback memo", memo)
         metadata = json.loads(
             (self.root / "outputs" / "latest" / "agent_llm_metadata.json").read_text(encoding="utf-8")
         )
         task_meta = metadata["tasks"][0]
-        self.assertEqual(task_meta["resolved_provider"], "ollama")
+        self.assertEqual(task_meta["resolved_provider"], "openai")
         self.assertEqual(task_meta["actual_provider"], "anthropic")
         self.assertTrue(task_meta["success"])
         self.assertEqual(task_meta["error_type"], "RuntimeError")
-        self.assertIn("ollama failed: ollama unavailable", task_meta["fallback_reason"])
+        self.assertIn("openai failed: openai unavailable", task_meta["fallback_reason"])
         self.assertTrue(task_meta["fallback_triggered"])
         self.assertTrue(
             any(
-                "Agent LLM summary: task=agent.daily resolved=ollama actual=anthropic model=claude-haiku-4-5-20251001 llm_fallback=yes"
+                "Agent LLM summary: task=agent.daily resolved=openai actual=anthropic model=claude-haiku-4-5-20251001 llm_fallback=yes"
                 in message
                 for message in captured.output
             )
@@ -127,45 +139,47 @@ class TestAgentProviderRouting(unittest.TestCase):
         with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
             with patch.dict(
                 "os.environ",
-                {"STOCKBOT_LLM_PROVIDER": "openai", "OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"},
+                {"STOCKBOT_LLM_PROVIDER": "anthropic", "OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"},
                 clear=False,
             ):
                 run(
                     mode="monthly",
                     offline=False,
                     provider=None,
-                    ollama_model="gemma3:4b",
-                    claude_model="claude-haiku-4-5-20251001",
                     openai_model="gpt-4o-mini",
+                    claude_model="claude-haiku-4-5-20251001",
+                    root=self.root,
+                    agent_config={"task_providers": {"monthly": "openai"}},
+                )
+
+        # Global override (anthropic) wins the first slot; the default
+        # openai->anthropic chain supplies the remaining (deduped) order.
+        providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
+        self.assertEqual(providers, ["anthropic", "openai"])
+
+    def test_task_config_beats_default_routing(self):
+        from agent.agent_runner import run
+
+        def _side_effect(*, provider, model, prompt, max_tokens):
+            raise RuntimeError(f"{provider} unavailable")
+
+        with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
+            with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": "", "OPENAI_API_KEY": "", "OPENAI_MODEL": ""}, clear=False):
+                run(
+                    mode="monthly",
+                    offline=False,
+                    provider=None,
+                    openai_model="gpt-4o-mini",
+                    claude_model="claude-haiku-4-5-20251001",
                     root=self.root,
                     agent_config={"task_providers": {"monthly": "anthropic"}},
                 )
 
-        providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:3]]
-        self.assertEqual(providers, ["openai", "anthropic", "ollama"])
-
-    def test_task_config_beats_default_monthly_routing(self):
-        from agent.agent_runner import run
-
-        def _side_effect(*, provider, model, prompt, max_tokens):
-            raise RuntimeError(f"{provider} unavailable")
-
-        with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
-            with patch.dict("os.environ", {"STOCKBOT_LLM_PROVIDER": "", "OPENAI_API_KEY": "", "OPENAI_MODEL": ""}, clear=False):
-                run(
-                    mode="monthly",
-                    offline=False,
-                    provider=None,
-                    ollama_model="gemma3:4b",
-                    claude_model="claude-haiku-4-5-20251001",
-                    root=self.root,
-                    agent_config={"task_providers": {"monthly": "ollama"}},
-                )
-
+        # Task-config (anthropic) takes the first slot; default chain fills the rest.
         providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
-        self.assertEqual(providers, ["ollama", "anthropic"])
+        self.assertEqual(providers, ["anthropic", "openai"])
 
-    def test_no_task_config_preserves_default_monthly_routing(self):
+    def test_no_task_config_preserves_default_routing(self):
         from agent.agent_runner import run
 
         def _side_effect(*, provider, model, prompt, max_tokens):
@@ -177,14 +191,15 @@ class TestAgentProviderRouting(unittest.TestCase):
                     mode="monthly",
                     offline=False,
                     provider=None,
-                    ollama_model="gemma3:4b",
+                    openai_model="gpt-4o-mini",
                     claude_model="claude-haiku-4-5-20251001",
                     root=self.root,
                     agent_config={},
                 )
 
+        # Default chain is now openai->anthropic for all modes (no ollama).
         providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
-        self.assertEqual(providers, ["anthropic", "ollama"])
+        self.assertEqual(providers, ["openai", "anthropic"])
 
     def test_standalone_task_provider_applies_when_mode_specific_key_absent(self):
         from agent.agent_runner import run
@@ -202,17 +217,17 @@ class TestAgentProviderRouting(unittest.TestCase):
                     mode="daily",
                     offline=False,
                     provider=None,
-                    ollama_model="gemma3:4b",
-                    claude_model="claude-haiku-4-5-20251001",
                     openai_model="gpt-4o-mini",
+                    claude_model="claude-haiku-4-5-20251001",
                     root=self.root,
-                    agent_config={"task_providers": {"standalone": "openai"}},
+                    agent_config={"task_providers": {"standalone": "anthropic"}},
                 )
 
-        providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:3]]
-        self.assertEqual(providers, ["openai", "ollama", "anthropic"])
+        # standalone preference (anthropic) leads; default chain dedupes the rest.
+        providers = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
+        self.assertEqual(providers, ["anthropic", "openai"])
 
-    def test_main_respects_env_provider_override_and_default_monthly_fallback_order(self):
+    def test_main_respects_env_provider_override_and_default_fallback_order(self):
         import sys
         from agent import agent_runner
 
@@ -221,28 +236,31 @@ class TestAgentProviderRouting(unittest.TestCase):
 
         original_argv = sys.argv[:]
         try:
+            # .env forces the anthropic provider first; default chain dedupes openai after.
             (self.root / ".env").write_text(
-                "STOCKBOT_LLM_PROVIDER=ollama\nOLLAMA_MODEL=gemma3:4b\nOLLAMA_BASE_URL=http://localhost:11434/v1\n",
+                "STOCKBOT_LLM_PROVIDER=anthropic\n",
                 encoding="utf-8",
             )
             with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
-                with patch.dict("os.environ", {"OPENAI_API_KEY": "", "OPENAI_MODEL": ""}, clear=False):
+                # OPENAI_MODEL set so the openai candidate actually reaches
+                # call_provider (otherwise it short-circuits before the call).
+                with patch.dict("os.environ", {"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"}, clear=False):
                     import os
                     os.environ.pop("STOCKBOT_LLM_PROVIDER", None)
                     sys.argv = ["agent", "--mode", "monthly", "--root", str(self.root)]
                     agent_runner.main()
                 forced_order = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
-                self.assertEqual(forced_order, ["ollama", "anthropic"])
+                self.assertEqual(forced_order, ["anthropic", "openai"])
 
             (self.root / ".env").unlink(missing_ok=True)
             with patch("agent.agent_runner.call_provider", side_effect=_side_effect) as mock_call:
-                with patch.dict("os.environ", {"OPENAI_API_KEY": "", "OPENAI_MODEL": ""}, clear=False):
+                with patch.dict("os.environ", {"OPENAI_API_KEY": "test", "OPENAI_MODEL": "gpt-4o-mini"}, clear=False):
                     import os
                     os.environ.pop("STOCKBOT_LLM_PROVIDER", None)
                     sys.argv = ["agent", "--mode", "monthly", "--root", str(self.root)]
                     agent_runner.main()
                 default_order = [call.kwargs["provider"] for call in mock_call.call_args_list[:2]]
-                self.assertEqual(default_order, ["anthropic", "ollama"])
+                self.assertEqual(default_order, ["openai", "anthropic"])
         finally:
             sys.argv = original_argv
 

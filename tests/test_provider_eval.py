@@ -30,26 +30,26 @@ class TestProviderEval(unittest.TestCase):
     def test_build_eval_row_contains_manual_scoring_fields(self):
         row = _build_eval_row(
             task="agent_daily",
-            requested_provider="ollama",
+            requested_provider="openai",
             metadata={
                 "run_id": "run-1",
-                "resolved_provider": "ollama",
-                "actual_provider": "ollama",
-                "actual_model": "gemma3:4b",
+                "resolved_provider": "openai",
+                "actual_provider": "openai",
+                "actual_model": "gpt-4o-mini",
                 "latency_ms": 1234,
                 "success": True,
                 "fallback_triggered": False,
-                "actual_base_url": "http://localhost:11434/v1",
+                "actual_base_url": "https://api.openai.com/v1",
                 "error_type": None,
                 "fallback_reason": None,
                 "git_commit": "abc1234",
             },
-            output_file="outputs/evals/test_eval/artifacts/agent_daily__ollama.md",
+            output_file="outputs/evals/test_eval/artifacts/agent_daily__openai.md",
         )
 
         self.assertEqual(row["run_id"], "run-1")
-        self.assertEqual(row["provider"], "ollama")
-        self.assertEqual(row["model"], "gemma3:4b")
+        self.assertEqual(row["provider"], "openai")
+        self.assertEqual(row["model"], "gpt-4o-mini")
         self.assertEqual(row["latency_ms"], 1234)
         self.assertTrue(row["success"])
         self.assertEqual(row["manual_score_relevance"], "")
@@ -61,10 +61,10 @@ class TestProviderEval(unittest.TestCase):
     def test_build_eval_row_includes_fallback_note(self):
         row = _build_eval_row(
             task="agent_daily",
-            requested_provider="ollama",
+            requested_provider="openai",
             metadata={
                 "run_id": "run-2",
-                "resolved_provider": "ollama",
+                "resolved_provider": "openai",
                 "actual_provider": "anthropic",
                 "actual_model": "claude-haiku-4-5-20251001",
                 "latency_ms": 2200,
@@ -72,32 +72,32 @@ class TestProviderEval(unittest.TestCase):
                 "fallback_triggered": True,
                 "actual_base_url": "(n/a)",
                 "error_type": "RuntimeError",
-                "fallback_reason": "ollama failed: timeout",
+                "fallback_reason": "openai failed: timeout",
                 "git_commit": "abc1234",
             },
-            output_file="outputs/evals/test_eval/artifacts/agent_daily__ollama.md",
+            output_file="outputs/evals/test_eval/artifacts/agent_daily__openai.md",
         )
 
         self.assertEqual(row["provider"], "anthropic")
         self.assertTrue(row["fallback_triggered"])
         self.assertIn("actual_provider=anthropic", row["notes"])
-        self.assertIn("ollama failed: timeout", row["notes"])
+        self.assertIn("openai failed: timeout", row["notes"])
 
     def test_artifact_filename_reflects_requested_and_actual_provider(self):
         same = _artifact_filename(
             task="agent_daily",
-            requested_provider="ollama",
-            actual_provider="ollama",
+            requested_provider="openai",
+            actual_provider="openai",
             suffix=".md",
         )
         fallback = _artifact_filename(
             task="agent_daily",
-            requested_provider="ollama",
+            requested_provider="openai",
             actual_provider="anthropic",
             suffix=".md",
         )
-        self.assertEqual(same, "agent_daily__requested-ollama.md")
-        self.assertEqual(fallback, "agent_daily__requested-ollama__actual-anthropic.md")
+        self.assertEqual(same, "agent_daily__requested-openai.md")
+        self.assertEqual(fallback, "agent_daily__requested-openai__actual-anthropic.md")
 
     def test_run_and_collect_reuses_sidecar_and_copies_artifact(self):
         source_output = self.root / "outputs" / "latest" / "decision_memo.md"
@@ -113,12 +113,12 @@ class TestProviderEval(unittest.TestCase):
                     {
                         "run_id": "agent-daily-1",
                         "task": "agent.daily",
-                        "resolved_provider": "ollama",
-                        "actual_provider": "ollama",
-                        "model": "gemma3:4b",
-                        "actual_model": "gemma3:4b",
-                        "base_url": "http://localhost:11434/v1",
-                        "actual_base_url": "http://localhost:11434/v1",
+                        "resolved_provider": "openai",
+                        "actual_provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "actual_model": "gpt-4o-mini",
+                        "base_url": "https://api.openai.com/v1",
+                        "actual_base_url": "https://api.openai.com/v1",
                         "latency_ms": 1500,
                         "success": True,
                         "error_type": None,
@@ -145,18 +145,18 @@ class TestProviderEval(unittest.TestCase):
             row = _run_and_collect(
                 root=self.root,
                 task="agent_daily",
-                provider="ollama",
+                provider="openai",
                 eval_dir=self.eval_dir,
                 config="config.json",
                 profile=None,
             )
 
-        self.assertEqual(row["provider"], "ollama")
+        self.assertEqual(row["provider"], "openai")
         self.assertTrue(row["success"])
         copied = self.root / row["output_file"]
         self.assertTrue(copied.exists())
         self.assertEqual(copied.read_text(encoding="utf-8"), "# memo")
-        self.assertIn("requested-ollama", copied.name)
+        self.assertIn("requested-openai", copied.name)
 
     def test_disable_fallback_sets_eval_env_flag(self):
         def _fake_subprocess(*args, **kwargs):
@@ -215,22 +215,22 @@ class TestProviderEval(unittest.TestCase):
                 {
                     "run_id": "run-1",
                     "task": "agent_daily",
-                    "provider": "ollama",
-                    "model": "gemma3:4b",
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
                     "latency_ms": 1500,
                     "success": True,
                     "fallback_triggered": False,
-                    "output_file": "outputs/evals/test_eval/artifacts/agent_daily__ollama.md",
+                    "output_file": "outputs/evals/test_eval/artifacts/agent_daily__openai.md",
                     "manual_score_relevance": "",
                     "manual_score_clarity": "",
                     "manual_score_structure": "",
                     "manual_score_actionability": "",
                     "manual_score_hallucination_risk": "",
                     "notes": "",
-                    "requested_provider": "ollama",
-                    "resolved_provider": "ollama",
-                    "actual_provider": "ollama",
-                    "base_url": "http://localhost:11434/v1",
+                    "requested_provider": "openai",
+                    "resolved_provider": "openai",
+                    "actual_provider": "openai",
+                    "base_url": "https://api.openai.com/v1",
                     "error_type": "",
                     "fallback_reason": "",
                     "git_commit": "abc1234",
@@ -245,35 +245,35 @@ class TestProviderEval(unittest.TestCase):
         summary_path = self.eval_dir / "provider_eval_summary.md"
         rows = [
             {
-                "requested_provider": "ollama",
-                "actual_provider": "ollama",
+                "requested_provider": "openai",
+                "actual_provider": "openai",
                 "success": True,
                 "fallback_triggered": False,
                 "latency_ms": 1500,
-                "output_file": "outputs/evals/test_eval/artifacts/agent_daily__requested-ollama.md",
+                "output_file": "outputs/evals/test_eval/artifacts/agent_daily__requested-openai.md",
             },
             {
-                "requested_provider": "ollama",
+                "requested_provider": "openai",
                 "actual_provider": "anthropic",
                 "success": True,
                 "fallback_triggered": True,
                 "latency_ms": 2200,
-                "output_file": "outputs/evals/test_eval/artifacts/agent_daily__requested-ollama__actual-anthropic.md",
+                "output_file": "outputs/evals/test_eval/artifacts/agent_daily__requested-openai__actual-anthropic.md",
             },
         ]
         _write_eval_summary(
             summary_path,
             task="agent_daily",
-            providers=["ollama", "anthropic"],
+            providers=["openai", "anthropic"],
             rows=rows,
         )
 
         content = summary_path.read_text(encoding="utf-8")
         self.assertIn("# Provider Evaluation Summary", content)
         self.assertIn("`agent_daily`", content)
-        self.assertIn("`ollama, anthropic`", content)
-        self.assertIn("agent_daily__requested-ollama.md", content)
-        self.assertIn("agent_daily__requested-ollama__actual-anthropic.md", content)
+        self.assertIn("`openai, anthropic`", content)
+        self.assertIn("agent_daily__requested-openai.md", content)
+        self.assertIn("agent_daily__requested-openai__actual-anthropic.md", content)
 
 
 if __name__ == "__main__":

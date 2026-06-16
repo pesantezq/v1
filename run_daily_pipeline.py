@@ -454,7 +454,7 @@ def _main() -> None:
             "examples:\n"
             "  python run_daily_pipeline.py                       # full run\n"
             "  python run_daily_pipeline.py --dry-run             # no API calls\n"
-            "  python run_daily_pipeline.py --skip-theme-engine   # skip Ollama\n"
+            "  python run_daily_pipeline.py --skip-theme-engine   # skip theme discovery\n"
             "  python run_daily_pipeline.py --skip-scan           # skip Alpha Vantage\n"
             "  python run_daily_pipeline.py --send-email          # + email memo\n"
             "  python run_daily_pipeline.py --debug               # verbose logs"
@@ -466,7 +466,7 @@ def _main() -> None:
     )
     parser.add_argument(
         "--skip-theme-engine", action="store_true",
-        help="Skip step 1 (theme discovery) — useful when Ollama is unavailable",
+        help="Skip step 1 (theme discovery) — useful when the LLM provider is unavailable",
     )
     parser.add_argument(
         "--skip-scan", action="store_true",

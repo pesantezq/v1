@@ -3,7 +3,7 @@ tests/test_agent_runner_offline_mode.py
 
 Tests for agent/agent_runner.py in offline (--no-network / STOCKBOT_TESTING=1) mode.
 
-All tests are fully offline — no Ollama, no Claude, no network.
+All tests are fully offline — no OpenAI, no Anthropic, no network.
 """
 
 import json

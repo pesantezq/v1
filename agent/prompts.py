@@ -2,9 +2,9 @@
 agent/prompts.py — LLM prompt templates for the AI agent layer.
 
 Three templates:
-  OLLAMA_DAILY_WEEKLY_PROMPT_TEMPLATE  — for daily/weekly decision memos (Ollama)
-  CLAUDE_MONTHLY_PROMPT_TEMPLATE       — for monthly Capital Deployment Memo (Claude)
-  CLAUDE_MAINTAINER_PROMPT_TEMPLATE    — for maintainer patch generation (Claude)
+  DAILY_WEEKLY_PROMPT_TEMPLATE    — for daily/weekly decision memos
+  MONTHLY_PROMPT_TEMPLATE         — for monthly Capital Deployment Memo
+  MAINTAINER_PROMPT_TEMPLATE      — for maintainer patch generation
 
 All templates accept keyword arguments via str.format_map() or .format():
   {agent_bundle_json}     — JSON string of the agent bundle
@@ -15,7 +15,7 @@ All templates accept keyword arguments via str.format_map() or .format():
   {today}                 — today's date string YYYY-MM-DD
 
 Usage example:
-    prompt = OLLAMA_DAILY_WEEKLY_PROMPT_TEMPLATE.format_map({
+    prompt = DAILY_WEEKLY_PROMPT_TEMPLATE.format_map({
         "agent_bundle_json": bundle_str,
         "log_tail": log_str,
         "mode": "daily",
@@ -24,10 +24,10 @@ Usage example:
 """
 
 # ---------------------------------------------------------------------------
-# Daily / Weekly — Ollama
+# Daily / Weekly
 # ---------------------------------------------------------------------------
 
-OLLAMA_DAILY_WEEKLY_PROMPT_TEMPLATE = """\
+DAILY_WEEKLY_PROMPT_TEMPLATE = """\
 You are a portfolio monitoring assistant for a long-term, rules-based investing system.
 Today is {today}. Run mode: {mode}.
 
@@ -70,10 +70,10 @@ Output only the memo. Do not add commentary, disclaimers, or preamble.
 """
 
 # ---------------------------------------------------------------------------
-# Monthly — Claude
+# Monthly
 # ---------------------------------------------------------------------------
 
-CLAUDE_MONTHLY_PROMPT_TEMPLATE = """\
+MONTHLY_PROMPT_TEMPLATE = """\
 You are a senior portfolio analyst writing the monthly Capital Deployment Memo for a young investor (age 24, 35-year horizon, accumulation_aggressive growth mode, $1,000/month contribution).
 
 Today is {today}. This is the MONTHLY memo — the most important report of the month.
@@ -135,10 +135,10 @@ Output only the memo. No preamble, no disclaimers, no markdown code fences.
 """
 
 # ---------------------------------------------------------------------------
-# Maintainer — Claude
+# Maintainer
 # ---------------------------------------------------------------------------
 
-CLAUDE_MAINTAINER_PROMPT_TEMPLATE = """\
+MAINTAINER_PROMPT_TEMPLATE = """\
 You are a senior Python engineer maintaining a portfolio automation system.
 You have been given a set of APPROVED code actions to implement.
 
@@ -180,9 +180,9 @@ def build_daily_weekly_prompt(
     mode: str,
     today: str,
 ) -> str:
-    """Render the daily/weekly Ollama prompt."""
+    """Render the daily/weekly prompt."""
     mode_title = mode.capitalize()
-    return OLLAMA_DAILY_WEEKLY_PROMPT_TEMPLATE.format_map({
+    return DAILY_WEEKLY_PROMPT_TEMPLATE.format_map({
         "agent_bundle_json": agent_bundle_json,
         "log_tail": log_tail,
         "mode": mode,
@@ -196,8 +196,8 @@ def build_monthly_prompt(
     log_tail: str,
     today: str,
 ) -> str:
-    """Render the monthly Claude prompt."""
-    return CLAUDE_MONTHLY_PROMPT_TEMPLATE.format_map({
+    """Render the monthly prompt."""
+    return MONTHLY_PROMPT_TEMPLATE.format_map({
         "agent_bundle_json": agent_bundle_json,
         "log_tail": log_tail,
         "today": today,
@@ -209,8 +209,8 @@ def build_maintainer_prompt(
     repo_tree: str,
     snippets: str,
 ) -> str:
-    """Render the maintainer Claude prompt."""
-    return CLAUDE_MAINTAINER_PROMPT_TEMPLATE.format_map({
+    """Render the maintainer prompt."""
+    return MAINTAINER_PROMPT_TEMPLATE.format_map({
         "approved_actions_json": approved_actions_json,
         "repo_tree": repo_tree,
         "snippets": snippets,

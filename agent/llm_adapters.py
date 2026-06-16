@@ -2,13 +2,14 @@
 Shared LLM adapter layer for StockBot.
 
 Supported provider values:
-  ollama
-  anthropic
-  openai
+  openai      (primary)
+  anthropic   (fallback)
 
-The existing `call_ollama()` and `call_claude()` entry points are preserved so
-older call sites keep working, while newer code can route through
-`call_provider()` and `validate_ollama_connection()`.
+OpenAI is the primary provider; Anthropic remains as a fallback. The
+`call_claude()` and `call_openai()` entry points are preserved so existing
+call sites keep working, while newer code routes through `call_provider()`.
+`validate_openai_connection()` is the LLM-reachability health probe consumed
+by the GUI health panel and the discovery-health checks.
 """
 
 from __future__ import annotations
@@ -27,11 +28,7 @@ from portfolio_automation.env import get_secret
 
 logger = logging.getLogger("stockbot.agent.llm_adapters")
 
-SUPPORTED_PROVIDERS = {"anthropic", "ollama", "openai"}
-
-_DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"
-_DEFAULT_OLLAMA_MODEL = "gemma3:4b"
-_DEFAULT_OLLAMA_API_KEY = "ollama"
+SUPPORTED_PROVIDERS = {"anthropic", "openai"}
 
 _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
@@ -47,7 +44,7 @@ def normalize_provider(provider: Optional[str]) -> Optional[str]:
     return resolve_provider(raw, default=raw)
 
 
-def resolve_provider(provider: Optional[str], *, default: str = "ollama") -> str:
+def resolve_provider(provider: Optional[str], *, default: str = "openai") -> str:
     """Resolve the provider selection from arg/env/default."""
     raw = (provider or os.environ.get("STOCKBOT_LLM_PROVIDER") or default).strip().lower()
     if raw not in SUPPORTED_PROVIDERS:
@@ -86,34 +83,6 @@ def resolve_task_provider(
     return None
 
 
-def resolve_ollama_base_url(base_url: Optional[str] = None) -> str:
-    """Normalize an Ollama base URL to the OpenAI-compatible `/v1` form."""
-    raw = (base_url or os.environ.get("OLLAMA_BASE_URL") or _DEFAULT_OLLAMA_BASE_URL).strip()
-    if not raw:
-        raise RuntimeError(
-            "OLLAMA_BASE_URL is empty. Set OLLAMA_BASE_URL to an OpenAI-compatible Ollama URL, "
-            "for example http://localhost:11434/v1"
-        )
-    normalized = raw.rstrip("/")
-    if normalized.endswith("/api"):
-        normalized = normalized[:-4]
-    if normalized.endswith("/api/generate"):
-        normalized = normalized[: -len("/api/generate")]
-    if not normalized.startswith(("http://", "https://")):
-        raise RuntimeError(
-            f"OLLAMA_BASE_URL '{raw}' is invalid. It must start with http:// or https:// "
-            "(example: http://localhost:11434/v1)"
-        )
-    if not normalized.endswith("/v1"):
-        normalized = f"{normalized}/v1"
-    return normalized
-
-
-def _ollama_root_url(base_url: Optional[str] = None) -> str:
-    normalized = resolve_ollama_base_url(base_url)
-    return normalized[:-3] if normalized.endswith("/v1") else normalized
-
-
 def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
     try:
         body = exc.read().decode("utf-8", errors="replace")
@@ -136,7 +105,7 @@ def _extract_chat_text(body: dict[str, Any]) -> str:
     if not choices:
         raise RuntimeError(
             "malformed response from the chat completions endpoint: missing 'choices'. "
-            "Verify OLLAMA_BASE_URL points to Ollama's /v1 endpoint."
+            "Verify OPENAI_BASE_URL points to an OpenAI-compatible /v1 endpoint."
         )
     message = choices[0].get("message", {})
     content = message.get("content", "")
@@ -152,7 +121,7 @@ def _extract_chat_text(body: dict[str, Any]) -> str:
     if not text:
         raise RuntimeError(
             "malformed response from the chat completions endpoint: empty message content. "
-            "Verify the Ollama model is compatible with /v1/chat/completions."
+            "Verify the model is compatible with /v1/chat/completions."
         )
     return text
 
@@ -216,67 +185,6 @@ def _call_openai_compatible_chat(
         ) from exc
     except Exception as exc:
         raise RuntimeError(f"{provider_label} API error: {redact(str(exc))}") from exc
-
-
-def call_ollama(
-    model: str,
-    prompt: str,
-    timeout: int = 90,
-    max_tokens: int = 1200,
-    base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> str:
-    """
-    Call Ollama through its OpenAI-compatible `/v1/chat/completions` endpoint.
-    """
-    resolved_model = (model or os.environ.get("OLLAMA_MODEL") or _DEFAULT_OLLAMA_MODEL).strip()
-    if not resolved_model:
-        raise RuntimeError(
-            "OLLAMA_MODEL is not set. Set OLLAMA_MODEL to an installed Ollama tag, "
-            f"for example {_DEFAULT_OLLAMA_MODEL}"
-        )
-    resolved_base_url = resolve_ollama_base_url(base_url)
-    resolved_key = (api_key or os.environ.get("OLLAMA_API_KEY") or _DEFAULT_OLLAMA_API_KEY).strip()
-
-    try:
-        return _call_openai_compatible_chat(
-            provider_label="Ollama",
-            model=resolved_model,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            base_url=resolved_base_url,
-            api_key=resolved_key,
-        )
-    except RuntimeError as exc:
-        message = str(exc)
-        lowered = message.lower()
-        if "connection failed" in lowered:
-            raise RuntimeError(
-                f"{message}. Ollama may not be running or OLLAMA_BASE_URL may be wrong. "
-                f"Start it with: ollama serve"
-            ) from exc
-        if "http 404" in lowered and "not found" not in lowered:
-            raise RuntimeError(
-                f"Ollama endpoint not found at {resolved_base_url}. "
-                "Verify OLLAMA_BASE_URL ends with /v1, for example http://localhost:11434/v1"
-            ) from exc
-        if ("http 404" in lowered or "model" in lowered) and "not found" in lowered:
-            raise RuntimeError(
-                f"Ollama model '{resolved_model}' is not installed. "
-                f"Run: ollama pull {resolved_model}"
-            ) from exc
-        if "timed out" in lowered:
-            raise RuntimeError(
-                f"Ollama timed out for model '{resolved_model}' at {resolved_base_url}. "
-                "Retry after `ollama ps` or test the endpoint with `python -m tools.llm_smoke_test --provider ollama`."
-            ) from exc
-        if "malformed" in lowered:
-            raise RuntimeError(
-                f"Ollama returned a malformed response from {resolved_base_url}. "
-                "Verify OLLAMA_BASE_URL points to Ollama's OpenAI-compatible /v1 endpoint."
-            ) from exc
-        raise
 
 
 def call_openai(
@@ -363,15 +271,6 @@ def call_provider(
 ) -> str:
     """Route a prompt to the selected provider and return plain text."""
     resolved_provider = resolve_provider(provider, default=provider)
-    if resolved_provider == "ollama":
-        return call_ollama(
-            model=model,
-            prompt=prompt,
-            timeout=timeout,
-            max_tokens=max_tokens,
-            base_url=base_url,
-            api_key=api_key,
-        )
     if resolved_provider == "openai":
         return call_openai(
             model=model,
@@ -389,7 +288,7 @@ def call_provider(
     )
 
 
-def validate_ollama_connection(
+def validate_openai_connection(
     *,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -397,87 +296,58 @@ def validate_ollama_connection(
     timeout: int = 10,
 ) -> dict[str, Any]:
     """
-    Ping Ollama, verify the configured model is available, then run a tiny prompt.
+    Verify OpenAI reachability by running a tiny prompt. Returns a status dict
+    (same shape consumed by the GUI health panel + discovery-health checks).
     """
-    resolved_model = (model or os.environ.get("OLLAMA_MODEL") or _DEFAULT_OLLAMA_MODEL).strip()
-    resolved_base_url = resolve_ollama_base_url(base_url)
-    resolved_key = (api_key or os.environ.get("OLLAMA_API_KEY") or _DEFAULT_OLLAMA_API_KEY).strip()
-    tags_url = f"{_ollama_root_url(resolved_base_url)}/api/tags"
+    resolved_model = (model or os.environ.get("OPENAI_MODEL") or "").strip()
+    resolved_base_url = (base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_OPENAI_BASE_URL).strip()
+    key = (api_key or get_secret("OPENAI_API_KEY") or "").strip()
 
-    available_models: list[str] = []
-    try:
-        with urllib.request.urlopen(tags_url, timeout=max(3, timeout)) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        available_models = [str(m.get("name", "")).strip() for m in body.get("models", []) if m.get("name")]
-    except urllib.error.URLError as exc:
-        reason = redact(str(getattr(exc, "reason", exc)))
+    if not resolved_model:
         return {
             "ok": False,
-            "provider": "ollama",
+            "provider": "openai",
             "base_url": resolved_base_url,
             "model": resolved_model,
-            "message": (
-                f"Ollama is not reachable at {resolved_base_url} ({reason}). "
-                "Start it with: ollama serve"
-            ),
-            "available_models": [],
+            "message": "OPENAI_MODEL is not set. Set OPENAI_MODEL in your .env or shell environment.",
         }
-    except Exception as exc:
+    if not key:
         return {
             "ok": False,
-            "provider": "ollama",
+            "provider": "openai",
             "base_url": resolved_base_url,
             "model": resolved_model,
-            "message": f"Failed to query Ollama model list: {redact(str(exc))}",
-            "available_models": [],
-        }
-
-    base_model = resolved_model.split(":")[0]
-    model_available = any(name == resolved_model or name.startswith(base_model) for name in available_models)
-    if not model_available:
-        available = ", ".join(available_models) if available_models else "(none reported)"
-        return {
-            "ok": False,
-            "provider": "ollama",
-            "base_url": resolved_base_url,
-            "model": resolved_model,
-            "message": (
-                f"Ollama is running, but model '{resolved_model}' is not installed. "
-                f"Run: ollama pull {resolved_model}. Available models: {available}"
-            ),
-            "available_models": available_models,
+            "message": "OPENAI_API_KEY is not set. Set it in your .env file or shell environment.",
         }
 
     try:
         t0 = time.monotonic()
-        response = call_ollama(
+        response = call_openai(
             model=resolved_model,
             prompt="Reply with the single word OK.",
-            timeout=max(5, timeout),
             max_tokens=8,
+            api_key=key,
             base_url=resolved_base_url,
-            api_key=resolved_key,
+            timeout=max(5, timeout),
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {
             "ok": True,
-            "provider": "ollama",
+            "provider": "openai",
             "base_url": resolved_base_url,
             "model": resolved_model,
             "latency_ms": latency_ms,
             "response": response,
-            "available_models": available_models,
             "message": (
-                f"Ollama responded successfully via {resolved_base_url} "
+                f"OpenAI responded successfully via {resolved_base_url} "
                 f"using model '{resolved_model}'."
             ),
         }
     except Exception as exc:
         return {
             "ok": False,
-            "provider": "ollama",
+            "provider": "openai",
             "base_url": resolved_base_url,
             "model": resolved_model,
-            "available_models": available_models,
             "message": redact(str(exc)),
         }

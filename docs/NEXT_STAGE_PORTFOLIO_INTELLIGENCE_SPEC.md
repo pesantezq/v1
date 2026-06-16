@@ -100,7 +100,7 @@ Grading: `EXISTS` (built + tested), `PARTIAL` (foundation present, gaps named),
 
 ### 2.7 OpenAI / API integration — `EXISTS` (opportunity-prompt artifacts `PARTIAL`)
 - `theme_engine/` + `theme_discovery/` + `scraped_intel/`; provider routing
-  (ollama/anthropic/openai) via config; `ai_budget_summary.json`,
+  (openai/anthropic) via config; `ai_budget_summary.json`,
   `ai_usage_events.jsonl`, `theme_engine_llm_metadata.json`. Keyword fallback when LLM
   off. `scraped_intel` has trial/shadow **modes** (PROPOSED→APPROVED_FOR_SHADOW→TRIAL).
 - Missing: a first-class **market-opportunity prompt / review-card** artifact set and

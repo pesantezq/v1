@@ -10,8 +10,8 @@ Run modes:
     weekly  - same as daily, plus compute 7-day theme persistence
     monthly - same as weekly; persistence gate active for scanner boost
 
-All modes are safe to run without Ollama when theme_engine.testing_mode = true
-(or STOCKBOT_TESTING=1 env var is set).
+All modes are safe to run without an LLM provider when
+theme_engine.testing_mode = true (or STOCKBOT_TESTING=1 env var is set).
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from typing import Any
 
 from degraded_mode import build_data_health_context
 from agent.llm_adapters import (
-    resolve_ollama_base_url,
     resolve_provider,
     resolve_task_provider,
 )
@@ -186,7 +185,7 @@ def _resolve_theme_task_context(
         task_provider=task_providers.get(mode),
         fallback_task_provider=llm_block.get("provider") or te_cfg.get("llm_provider"),
     )
-    provider = provider_preference or resolve_provider(None, default="ollama")
+    provider = provider_preference or resolve_provider(None, default="openai")
     fallback_chain = [provider]
     if provider == "anthropic":
         model = (
@@ -194,21 +193,13 @@ def _resolve_theme_task_context(
             or te_cfg.get("anthropic_model", "claude-haiku-4-5-20251001")
         )
         base_url = "(n/a)"
-    elif provider == "openai":
+    else:  # openai (primary)
         model = (
             os.environ.get("OPENAI_MODEL")
             or llm_block.get("model")
             or te_cfg.get("openai_model", "")
         )
         base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
-    else:
-        model = os.environ.get("OLLAMA_MODEL") or te_cfg.get("ollama_model", "gemma3:4b")
-        try:
-            base_url = resolve_ollama_base_url(
-                os.environ.get("OLLAMA_BASE_URL") or te_cfg.get("ollama_base_url")
-            )
-        except Exception as exc:
-            base_url = f"<invalid: {exc}>"
     return {
         "task_name": task_name,
         "provider": provider,
@@ -252,8 +243,7 @@ def run(
     provider: str = context["provider"]
     fallback_chain = context["fallback_chain"]
     llm_model = context["model"]
-    ollama_base_url: str | None = te_cfg.get("ollama_base_url")
-    ollama_api_key: str | None = te_cfg.get("ollama_api_key")
+    llm_base_url: str | None = None if provider == "anthropic" else context["base_url"]
     output_dir: str = te_cfg.get("output_dir", "outputs/latest")
     testing_mode: bool = bool(te_cfg.get("testing_mode", False))
     min_confidence: float = float(te_cfg.get("min_confidence", 0.6))
@@ -275,8 +265,7 @@ def run(
     detector = ThemeDetector(
         model=llm_model,
         provider=provider,
-        base_url=ollama_base_url,
-        api_key=ollama_api_key,
+        base_url=llm_base_url,
         testing_mode=testing_mode,
     )
     logger.info(
@@ -391,7 +380,7 @@ def main() -> None:
     _configure_stdio_utf8()
     parser = argparse.ArgumentParser(
         prog="theme_engine",
-        description="Stock Bot Theme Engine — RSS + Ollama theme detection",
+        description="Stock Bot Theme Engine — RSS + LLM theme detection (OpenAI primary, Anthropic fallback)",
     )
     parser.add_argument(
         "--mode",
@@ -427,7 +416,7 @@ def main() -> None:
     parser.add_argument(
         "--provider",
         default=None,
-        help="Optional provider override for this run (ollama | anthropic | openai)",
+        help="Optional provider override for this run (openai | anthropic)",
     )
     args = parser.parse_args()
 

@@ -495,7 +495,7 @@ class TestLLMFallback(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator.call_provider" if False else
                    "portfolio_automation.ai_decision_validator._try_llm_enhance",
                    return_value=record):
-            enhanced = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b")
+            enhanced = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini")
 
         self.assertEqual(original_summary, enhanced["plain_english_summary"])
         self.assertFalse(enhanced["ai_used"])
@@ -723,7 +723,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=fake_record):
             with patch("agent.llm_adapters.call_provider", return_value="This decision is aligned with structural rules."):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertEqual("success", recorded[0]["status"])
@@ -753,7 +753,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value=response_text):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertGreater(recorded[0]["prompt_tokens"], 0)
@@ -766,8 +766,8 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         tmp_base = Path(_tf.mkdtemp()) / "outputs"
 
         _record_validator_event(
-            provider="ollama",
-            model="gemma3:4b",
+            provider="openai",
+            model="gpt-4o-mini",
             prompt_tokens=100,
             completion_tokens=50,
             status="success",
@@ -793,7 +793,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event", side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("connection refused")):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertEqual("error", recorded[0]["status"])
@@ -809,7 +809,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
             with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("timeout")):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(original_summary, result["plain_english_summary"])
         self.assertFalse(result.get("ai_used"))
@@ -830,7 +830,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_budget.record_ai_usage_event", side_effect=RuntimeError("disk full")):
             with patch("agent.llm_adapters.call_provider", return_value="Structurally aligned decision."):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertTrue(result.get("ai_used"))
 
@@ -846,7 +846,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch.dict("sys.modules", {"portfolio_automation.ai_budget": None}):
             with patch("agent.llm_adapters.call_provider", return_value="Aligned with structural rules."):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertTrue(result.get("ai_used"))
 
@@ -868,7 +868,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
             with patch("agent.llm_adapters.call_provider", side_effect=counting_provider):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, call_count["n"])
 
@@ -916,7 +916,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         self.assertNotIn("call_provider", src)
         self.assertNotIn("call_claude", src)
         self.assertNotIn("call_openai", src)
-        self.assertNotIn("call_ollama", src)
+        # call_ollama removed: helper deleted in ollama->OpenAI refactor; no analog remains.
         self.assertNotIn("import anthropic", src)
 
     # ------------------------------------------------------------------
@@ -933,7 +933,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value=""):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded), "exactly one event should be recorded")
         self.assertEqual("success", recorded[0]["status"])
@@ -951,7 +951,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value=None):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertFalse(recorded[0]["output_accepted"])
@@ -968,7 +968,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value="OK"):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertEqual("success", recorded[0]["status"])
@@ -986,7 +986,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value="Structurally aligned decision."):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertTrue(recorded[0]["output_accepted"])
@@ -1001,7 +1001,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
             with patch("agent.llm_adapters.call_provider", return_value=""):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertFalse(result.get("ai_used"))
         self.assertEqual(original_summary, result["plain_english_summary"])
@@ -1015,7 +1015,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
 
         with patch("portfolio_automation.ai_decision_validator._record_validator_event"):
             with patch("agent.llm_adapters.call_provider", return_value="Short."):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertFalse(result.get("ai_used"))
         self.assertEqual(original_summary, result["plain_english_summary"])
@@ -1030,7 +1030,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value=""):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(0, recorded[0]["completion_tokens"])
 
@@ -1044,7 +1044,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", return_value="   \n  "):
-                result = _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                result = _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual("empty_response", recorded[0]["fallback_reason"])
         self.assertFalse(result.get("ai_used"))
@@ -1059,7 +1059,7 @@ class TestAiBudgetInstrumentation(unittest.TestCase):
         with patch("portfolio_automation.ai_decision_validator._record_validator_event",
                    side_effect=lambda **kw: recorded.append(kw)):
             with patch("agent.llm_adapters.call_provider", side_effect=RuntimeError("timeout")):
-                _try_llm_enhance(record, row, provider="ollama", model="gemma3:4b", base_dir=self.base_dir)
+                _try_llm_enhance(record, row, provider="openai", model="gpt-4o-mini", base_dir=self.base_dir)
 
         self.assertEqual(1, len(recorded))
         self.assertEqual("error", recorded[0]["status"])

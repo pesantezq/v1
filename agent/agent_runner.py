@@ -11,16 +11,16 @@ CLI:
 
 Optional flags:
     --no-network             Force offline mode — no LLM calls, templated memo
-    --ollama-model <name>    Override Ollama model (default: env OLLAMA_MODEL or gemma3:4b)
+    --openai-model <name>    Override OpenAI model (default: env OPENAI_MODEL)
     --claude-model <name>    Override Claude model (default: env ANTHROPIC_MODEL or claude-haiku-4-5-20251001)
 
 Offline trigger:
     --no-network flag OR env STOCKBOT_TESTING=1
 
 LLM routing:
-    daily/weekly:  Ollama → (fallback Claude) → (fallback offline stub)
-    monthly:       Claude → (fallback offline stub)
-    maintainer:    Claude only (gated by approved_actions.json)
+    daily/weekly:  OpenAI → (fallback Claude) → (fallback offline stub)
+    monthly:       OpenAI → (fallback Claude) → (fallback offline stub)
+    maintainer:    OpenAI → (fallback Claude) (gated by approved_actions.json)
 
 Safety contract:
     - Never places trades
@@ -47,7 +47,6 @@ from agent.bundle_builder import build_bundle
 from agent.io_utils import read_json_safe, redact, tail_latest_log, write_markdown_atomic
 from agent.llm_adapters import (
     call_provider,
-    resolve_ollama_base_url,
     resolve_provider,
     resolve_task_provider,
 )
@@ -58,7 +57,6 @@ from agent.repo_tree import get_repo_tree
 # Defaults
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).parent.parent.resolve()
-_DEFAULT_OLLAMA_MODEL = "gemma3:4b"
 _DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 _DEFAULT_OPENAI_MODEL = ""
 
@@ -100,9 +98,9 @@ def main() -> None:
         help="Offline mode — skip LLM calls, write templated memos",
     )
     parser.add_argument(
-        "--ollama-model",
+        "--openai-model",
         default=None,
-        help="Ollama model name (overrides OLLAMA_MODEL env var)",
+        help="OpenAI model name (overrides OPENAI_MODEL env var)",
     )
     parser.add_argument(
         "--claude-model",
@@ -126,7 +124,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=["ollama", "anthropic", "openai"],
+        choices=["openai", "anthropic"],
         default=None,
         help="Optional provider override for this run",
     )
@@ -155,33 +153,26 @@ def main() -> None:
     agent_config = runtime_config.get("agent", {}) if isinstance(runtime_config, dict) else {}
     provider = args.provider or os.environ.get("STOCKBOT_LLM_PROVIDER", "").strip() or None
 
-    ollama_model = (
-        args.ollama_model
-        or os.environ.get("OLLAMA_MODEL", "")
-        or _DEFAULT_OLLAMA_MODEL
-    )
     claude_model = (
         args.claude_model
         or os.environ.get("ANTHROPIC_MODEL", "")
         or _DEFAULT_CLAUDE_MODEL
     )
-    openai_model = os.environ.get("OPENAI_MODEL", "").strip() or _DEFAULT_OPENAI_MODEL
-    try:
-        ollama_base_url = resolve_ollama_base_url(os.environ.get("OLLAMA_BASE_URL", "").strip() or None)
-    except Exception as exc:
-        ollama_base_url = f"<invalid: {exc}>"
+    openai_model = (
+        (args.openai_model or "").strip()
+        or os.environ.get("OPENAI_MODEL", "").strip()
+        or _DEFAULT_OPENAI_MODEL
+    )
 
     logger.info(
-        "Agent runner | mode=%s offline=%s provider=%s config=%s profile=%s ollama_model=%s ollama_base_url=%s claude_model=%s openai_model=%s",
+        "Agent runner | mode=%s offline=%s provider=%s config=%s profile=%s openai_model=%s claude_model=%s",
         args.mode,
         offline,
         provider or "auto",
         config_path,
         args.profile or "(default)",
-        ollama_model,
-        ollama_base_url,
-        claude_model,
         openai_model or "(unset)",
+        claude_model,
     )
 
     try:
@@ -189,7 +180,6 @@ def main() -> None:
             mode=args.mode,
             offline=offline,
             provider=provider,
-            ollama_model=ollama_model,
             claude_model=claude_model,
             openai_model=openai_model,
             root=root,
@@ -204,7 +194,6 @@ def run(
     mode: str,
     offline: bool = False,
     provider: str | None = None,
-    ollama_model: str = _DEFAULT_OLLAMA_MODEL,
     claude_model: str = _DEFAULT_CLAUDE_MODEL,
     openai_model: str = _DEFAULT_OPENAI_MODEL,
     root: Path = ROOT,
@@ -216,8 +205,7 @@ def run(
     Args:
         mode:         "daily", "weekly", or "monthly".
         offline:      If True, skip all LLM calls and write templated memos.
-        provider:     Optional provider preference (ollama | anthropic | openai).
-        ollama_model: Ollama model tag to use.
+        provider:     Optional provider preference (openai | anthropic).
         claude_model: Anthropic Claude model ID to use.
         openai_model: OpenAI model ID to use when provider=openai.
         root:         Repository root directory.
@@ -293,7 +281,6 @@ def run(
                 preferred_provider=resolved_provider,
                 openai_model=openai_model,
             ),
-            ollama_model=ollama_model,
             claude_model=claude_model,
             openai_model=openai_model,
             run_id=run_id,
@@ -308,7 +295,6 @@ def run(
             today=today,
             offline=offline,
             provider=resolved_provider,
-            ollama_model=ollama_model,
             claude_model=claude_model,
             openai_model=openai_model,
             errors=errors,
@@ -352,13 +338,12 @@ def run(
                 preferred_provider=resolved_provider,
                 openai_model=openai_model,
             ),
-            ollama_model=ollama_model,
             claude_model=claude_model,
             openai_model=openai_model,
             run_id=run_id,
             git_commit=git_commit,
         )
-        logger.info("Step 3/5: Generating monthly memo (Claude)...")
+        logger.info("Step 3/5: Generating monthly memo...")
         memo, memo_metadata = _generate_monthly_memo(
             bundle=bundle,
             bundle_str=bundle_str,
@@ -367,7 +352,6 @@ def run(
             offline=offline,
             provider=resolved_provider,
             claude_model=claude_model,
-            ollama_model=ollama_model,
             openai_model=openai_model,
             errors=errors,
         )
@@ -417,7 +401,6 @@ def run(
                 preferred_provider=maintainer_provider,
                 openai_model=openai_model,
             ),
-            ollama_model=ollama_model,
             claude_model=claude_model,
             openai_model=openai_model,
             run_id=run_id,
@@ -430,7 +413,6 @@ def run(
             out_dir=out_dir,
             provider=maintainer_provider,
             claude_model=claude_model,
-            ollama_model=ollama_model,
             openai_model=openai_model,
             offline=offline,
             files_written=files_written,
@@ -509,9 +491,9 @@ def _provider_chain(
     preferred_provider: str | None,
     openai_model: str,
 ) -> list[str]:
-    """Return provider fallback order while preserving current defaults."""
+    """Return provider fallback order: OpenAI primary, Anthropic fallback."""
     disable_fallback = os.environ.get("STOCKBOT_DISABLE_LLM_FALLBACK", "").strip() == "1"
-    default_chain = ["ollama", "anthropic"] if mode in ("daily", "weekly") else ["anthropic", "ollama"]
+    default_chain = ["openai", "anthropic"]
     chain: list[str] = []
 
     if preferred_provider:
@@ -523,9 +505,6 @@ def _provider_chain(
     for provider in default_chain:
         if provider not in chain:
             chain.append(provider)
-    if openai_model or os.environ.get("OPENAI_API_KEY"):
-        if "openai" not in chain:
-            chain.append("openai")
     return chain
 
 
@@ -548,7 +527,6 @@ def _log_task_startup(
     task_name: str,
     resolved_provider: str | None,
     fallback_chain: list[str],
-    ollama_model: str,
     claude_model: str,
     openai_model: str,
     run_id: str,
@@ -557,7 +535,6 @@ def _log_task_startup(
     selected_provider = fallback_chain[0] if fallback_chain else resolved_provider or "offline"
     model = _model_for_provider(
         selected_provider,
-        ollama_model=ollama_model,
         claude_model=claude_model,
         openai_model=openai_model,
     )
@@ -592,11 +569,6 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _base_url_for_provider(provider: str) -> str:
-    if provider == "ollama":
-        try:
-            return resolve_ollama_base_url(os.environ.get("OLLAMA_BASE_URL", "").strip() or None)
-        except Exception as exc:
-            return f"<invalid: {exc}>"
     if provider == "openai":
         return os.environ.get("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
     return "(n/a)"
@@ -783,12 +755,9 @@ def _build_data_mode_header(data_context: dict[str, Any]) -> str:
 def _model_for_provider(
     provider: str,
     *,
-    ollama_model: str,
     claude_model: str,
     openai_model: str,
 ) -> str:
-    if provider == "ollama":
-        return ollama_model
     if provider == "anthropic":
         return claude_model
     return openai_model or os.environ.get("OPENAI_MODEL", "").strip()
@@ -799,13 +768,11 @@ def _call_provider_for_prompt(
     provider: str,
     prompt: str,
     max_tokens: int,
-    ollama_model: str,
     claude_model: str,
     openai_model: str,
 ) -> tuple[str, str]:
     model = _model_for_provider(
         provider,
-        ollama_model=ollama_model,
         claude_model=claude_model,
         openai_model=openai_model,
     )
@@ -830,7 +797,6 @@ def _generate_daily_weekly_memo(
     today: str,
     offline: bool,
     provider: str | None,
-    ollama_model: str,
     claude_model: str,
     openai_model: str,
     errors: list,
@@ -871,7 +837,6 @@ def _generate_daily_weekly_memo(
                 provider=candidate,
                 prompt=prompt,
                 max_tokens=1200,
-                ollama_model=ollama_model,
                 claude_model=claude_model,
                 openai_model=openai_model,
             )
@@ -928,7 +893,6 @@ def _generate_monthly_memo(
     offline: bool,
     provider: str | None,
     claude_model: str,
-    ollama_model: str,
     openai_model: str,
     errors: list,
 ) -> tuple[str, dict[str, Any]]:
@@ -967,7 +931,6 @@ def _generate_monthly_memo(
                 provider=candidate,
                 prompt=prompt,
                 max_tokens=2000,
-                ollama_model=ollama_model,
                 claude_model=claude_model,
                 openai_model=openai_model,
             )
@@ -1022,7 +985,6 @@ def _run_maintainer(
     out_dir: Path,
     provider: str | None,
     claude_model: str,
-    ollama_model: str,
     openai_model: str,
     offline: bool,
     files_written: list,
@@ -1106,7 +1068,6 @@ def _run_maintainer(
                 provider=candidate,
                 prompt=prompt,
                 max_tokens=3000,
-                ollama_model=ollama_model,
                 claude_model=claude_model,
                 openai_model=openai_model,
             )
@@ -1518,7 +1479,7 @@ def _offline_stub_memo(bundle: dict, mode: str, today: str) -> str:
         f"## Risk Flags\n"
         f"{guardrail_str}\n\n"
         f"---\n"
-        f"*Set OLLAMA_MODEL or ANTHROPIC_API_KEY to enable AI-generated memos.*\n"
+        f"*Set OPENAI_MODEL + OPENAI_API_KEY (or ANTHROPIC_API_KEY for the fallback) to enable AI-generated memos.*\n"
     )
 
 

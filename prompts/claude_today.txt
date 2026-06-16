@@ -74,7 +74,7 @@ Tags: watchlist_scanner, api_budget, cache, reliability
 - Weekly: same as daily + always send digest
 - Monthly: same + contribution plan + Claude AI memo + CAGR projections
 - Watchlist scan: standalone Alpha Vantage scan with fundamental/technical/theme scoring
-- Theme engine: RSS ingestion â†’ Ollama theme detection â†’ candidate boosts
+- Theme engine: RSS ingestion â†’ OpenAI theme detection â†’ candidate boosts
 
 ## 2. Entry Points & Execution Flow
 

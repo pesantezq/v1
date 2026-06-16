@@ -752,74 +752,60 @@ Show me the last 60 lines of the most recent log.
 The AI agent runs **after** the deterministic engine and converts raw outputs into
 human-readable memos, escalation packets, and (optionally) maintainer patches.
 
-- **Provider-aware** — set `STOCKBOT_LLM_PROVIDER=ollama|anthropic|openai`
-- **Ollama-ready** — local models use Ollama's OpenAI-compatible `/v1` endpoints
+- **Provider-aware** — set `STOCKBOT_LLM_PROVIDER=openai|anthropic` (default `openai`)
+- **Two providers only** — OpenAI is primary, Anthropic is the fallback
 - **Fallback-safe** — the agent falls back before dropping to the offline stub
 - **Offline mode** — writes deterministic templated memos with no LLM at all
 
 ### Quick Start
 
 ```powershell
-# 1. Install optional deps (Claude needs anthropic SDK)
-pip install anthropic          # only needed for monthly / maintainer
+# 1. Install optional deps (Anthropic fallback needs the anthropic SDK)
+pip install openai anthropic
 
 # 2. Configure the preferred provider
 # .env
-STOCKBOT_LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434/v1
-OLLAMA_MODEL=gemma3:4b
-OLLAMA_API_KEY=ollama
+STOCKBOT_LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
 
 # 3. Optional: set Anthropic for fallback / monthly / maintainer
 # .env
 ANTHROPIC_API_KEY=sk-ant-...
 
 # 4. Smoke-test the provider first
-python -m tools.llm_smoke_test --provider ollama
+python -m tools.llm_smoke_test --provider openai
 
 # 5. Run the engine first, then the agent
-python main.py --run-mode daily --llm-provider ollama
-py -m agent --mode daily --provider ollama
+python main.py --run-mode daily --llm-provider openai
+py -m agent --mode daily --provider openai
 ```
 
-### Windows PowerShell Setup For Ollama
+### Windows PowerShell Setup
 
 ```powershell
-# 1. Install Ollama
-winget install Ollama.Ollama
+# 1. Set provider vars for the current shell
+$env:STOCKBOT_LLM_PROVIDER = "openai"
+$env:OPENAI_API_KEY = "sk-..."
+$env:OPENAI_MODEL = "gpt-4o-mini"
 
-# 2. Start the local Ollama service
-ollama serve
+# 2. Optional Anthropic fallback
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
 
-# 3. Pull the model StockBot should use
-ollama pull gemma3:4b
+# 3. Smoke test
+python -m tools.llm_smoke_test --provider openai
 
-# 4. Set provider vars for the current shell
-$env:STOCKBOT_LLM_PROVIDER = "ollama"
-$env:OLLAMA_BASE_URL = "http://localhost:11434/v1"
-$env:OLLAMA_MODEL = "gemma3:4b"
-$env:OLLAMA_API_KEY = "ollama"
-
-# 5. Smoke test
-python -m tools.llm_smoke_test --provider ollama
-
-# 6. Run the repo entry points
+# 4. Run the repo entry points
 py -m theme_engine --mode daily --dry-run
-python main.py --run-mode daily --llm-provider ollama --dry-run
-py -m agent --mode daily --provider ollama
+python main.py --run-mode daily --llm-provider openai --dry-run
+py -m agent --mode daily --provider openai
 ```
 
-If the smoke test says the model is missing, run:
-
-```powershell
-ollama pull gemma3:4b
-```
-
-To switch back later:
+To switch the default provider later:
 
 ```powershell
 $env:STOCKBOT_LLM_PROVIDER = "anthropic"
-# or clear the override entirely
+# or clear the override entirely (falls back to the default, openai)
 Remove-Item Env:\STOCKBOT_LLM_PROVIDER
 ```
 
@@ -830,11 +816,10 @@ py -m agent --mode daily|weekly|monthly [OPTIONS]
 
 Options:
   --no-network          Offline mode — write templated memos, no LLM calls
-  --ollama-model NAME   Override Ollama model (default: gemma3:4b)
   --claude-model NAME   Override Claude model (default: claude-haiku-4-5-20251001)
   --config PATH         Config file or config/ directory (default: config.json)
   --profile NAME        Optional structured config profile
-  --provider NAME       Provider override for this run
+  --provider NAME       Provider override for this run (openai | anthropic)
 
 Environment trigger for offline mode:
   STOCKBOT_TESTING=1    Same as --no-network (for unit tests / CI)
@@ -846,15 +831,12 @@ Environment trigger for offline mode:
 |----------|-------------|--------------|
 | `ALPHA_VANTAGE_API_KEY` | Engine (price fetch) | `.env` |
 | `FMP_API_KEY` | Engine scanner | `.env` |
-| `STOCKBOT_LLM_PROVIDER` | Preferred provider for `theme_engine` + `agent` | `.env` or shell |
-| `OLLAMA_BASE_URL` | Ollama OpenAI-compatible base URL | `.env` or shell |
-| `OLLAMA_API_KEY` | Placeholder API key for Ollama-compatible clients | `.env` or shell |
-| `OLLAMA_MODEL` | Ollama model for theme engine + agent | `.env` or shell |
-| `ANTHROPIC_API_KEY` | Agent monthly + maintainer | `.env` |
+| `STOCKBOT_LLM_PROVIDER` | Preferred provider (`openai` \| `anthropic`, default `openai`) for `theme_engine` + `agent` | `.env` or shell |
+| `OPENAI_API_KEY` | Primary provider (OpenAI) | `.env` |
+| `OPENAI_MODEL` | OpenAI model for theme engine + agent (optional override) | `.env` or shell |
+| `OPENAI_BASE_URL` | Optional OpenAI-compatible endpoint override | `.env` or shell |
+| `ANTHROPIC_API_KEY` | Fallback provider + agent monthly / maintainer | `.env` |
 | `ANTHROPIC_MODEL` | Agent Claude model (optional override) | `.env` or shell |
-| `OPENAI_API_KEY` | Optional when `STOCKBOT_LLM_PROVIDER=openai` | `.env` |
-| `OPENAI_MODEL` | Optional when `STOCKBOT_LLM_PROVIDER=openai` | `.env` or shell |
-| `OPENAI_BASE_URL` | Optional OpenAI-compatible override | `.env` or shell |
 
 ### Task-Specific Provider Preferences
 
@@ -864,13 +846,13 @@ Use config for workflow-specific routing and keep `STOCKBOT_LLM_PROVIDER` as the
 {
   "theme_engine": {
     "task_providers": {
-      "daily": "ollama"
+      "daily": "openai"
     }
   },
   "agent": {
     "task_providers": {
-      "standalone": "ollama",
-      "weekly": "ollama",
+      "standalone": "openai",
+      "weekly": "openai",
       "monthly": "anthropic",
       "maintainer": "anthropic"
     }
@@ -880,10 +862,10 @@ Use config for workflow-specific routing and keep `STOCKBOT_LLM_PROVIDER` as the
 
 Resolution order:
 
-1. CLI arg such as `python main.py --llm-provider openai`, `py -m theme_engine --provider ollama`, or `py -m agent --provider anthropic`
+1. CLI arg such as `python main.py --llm-provider openai`, `py -m theme_engine --provider openai`, or `py -m agent --provider anthropic`
 2. `STOCKBOT_LLM_PROVIDER`
 3. Task-specific config such as `theme_engine.task_providers.daily` or `agent.task_providers.monthly`
-4. Existing built-in fallback order
+4. Existing built-in fallback order (OpenAI primary → Anthropic fallback)
 
 ### Agent Output Files
 
@@ -908,19 +890,19 @@ If a CLI provider or STOCKBOT_LLM_PROVIDER is set:
 
 If no CLI provider and STOCKBOT_LLM_PROVIDER are unset:
   daily / weekly:
-    1. Try Ollama
+    1. Try OpenAI (primary)
     2. Fall back to Anthropic
     3. Use the offline stub if neither is available
 
   monthly / maintainer:
     1. Try Anthropic
-    2. Fall back to Ollama
+    2. Fall back to OpenAI
     3. Use the offline stub / blocked note if neither is available
 
 Task-specific config can change the first provider when the global override is absent:
-  - theme_engine.task_providers.daily=ollama keeps daily theme detection local
+  - theme_engine.task_providers.daily=openai keeps daily theme detection on OpenAI
   - agent.task_providers.monthly=anthropic keeps monthly memo generation on Claude
-  - agent.task_providers.maintainer=openai routes maintainer work to an OpenAI-compatible endpoint
+  - agent.task_providers.maintainer=openai routes maintainer work to OpenAI
 ```
 
 ### Recommended Task Scheduler Chaining
@@ -933,16 +915,16 @@ Scheduler-safe wrapper example:
 $workdir = "C:\PersonalWork\v1"
 Set-Location $workdir
 
-python -m tools.llm_smoke_test --provider ollama
+python -m tools.llm_smoke_test --provider openai
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Ollama smoke test failed. Aborting scheduled run."
+    Write-Error "OpenAI smoke test failed. Aborting scheduled run."
     exit 1
 }
 
-python main.py --run-mode daily --llm-provider ollama
+python main.py --run-mode daily --llm-provider openai
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-py -m agent --mode daily --provider ollama
+py -m agent --mode daily --provider openai
 exit $LASTEXITCODE
 ```
 
@@ -969,21 +951,20 @@ Register-ScheduledTask -TaskName "StockBot-Agent-Daily" `
 
 ### PowerShell Examples
 
-Daily run on Ollama:
+Daily run on OpenAI:
 
 ```powershell
 Set-Location C:\PersonalWork\v1
 
 Remove-Item Env:\STOCKBOT_LLM_PROVIDER -ErrorAction SilentlyContinue
-$env:OLLAMA_BASE_URL = "http://localhost:11434/v1"
-$env:OLLAMA_MODEL = "gemma3:4b"
-$env:OLLAMA_API_KEY = "ollama"
+$env:OPENAI_API_KEY = "your_openai_key_here"
+$env:OPENAI_MODEL = "gpt-4o-mini"
 
-python -m tools.llm_smoke_test --provider ollama
+python -m tools.llm_smoke_test --provider openai
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
-python main.py --run-mode daily --llm-provider ollama
-py -m agent --mode daily --provider ollama
+python main.py --run-mode daily --llm-provider openai
+py -m agent --mode daily --provider openai
 ```
 
 Monthly run on Anthropic:
@@ -1019,25 +1000,25 @@ Use the evaluation helper to run the same task across providers, reuse the exist
 Daily memo comparison:
 
 ```powershell
-python -m tools.provider_eval --task agent_daily --providers ollama anthropic openai
+python -m tools.provider_eval --task agent_daily --providers openai anthropic
 ```
 
 Daily memo comparison without fallback:
 
 ```powershell
-python -m tools.provider_eval --task agent_daily --providers ollama anthropic openai --disable-fallback
+python -m tools.provider_eval --task agent_daily --providers openai anthropic --disable-fallback
 ```
 
 Monthly memo comparison:
 
 ```powershell
-python -m tools.provider_eval --task agent_monthly --providers anthropic openai ollama
+python -m tools.provider_eval --task agent_monthly --providers anthropic openai
 ```
 
 Daily theme comparison:
 
 ```powershell
-python -m tools.provider_eval --task theme_daily --providers ollama anthropic openai
+python -m tools.provider_eval --task theme_daily --providers openai anthropic
 ```
 
 Each run writes:
@@ -1048,8 +1029,8 @@ Each run writes:
 
 Artifact naming is review-oriented:
 
-- same-provider success: `agent_daily__requested-ollama.md`
-- fallback case: `agent_daily__requested-ollama__actual-anthropic.md`
+- same-provider success: `agent_daily__requested-openai.md`
+- fallback case: `agent_daily__requested-openai__actual-anthropic.md`
 
 The CSV includes automatic telemetry such as provider, model, latency, success, fallback, and copied output path, plus blank manual review columns:
 
@@ -1098,7 +1079,7 @@ agent/
   __main__.py          # py -m agent entry point
   agent_runner.py      # Main pipeline: bundle → LLM → write files
   bundle_builder.py    # Synthesise agent_bundle.json from CSV/JSON/SQLite
-  llm_adapters.py      # call_ollama() + call_claude()
+  llm_adapters.py      # call_openai() + call_claude()
   prompts.py           # 3 prompt templates (daily/weekly, monthly, maintainer)
   io_utils.py          # redact(), write_markdown_atomic(), tail_latest_log()
   repo_tree.py         # get_repo_tree() — compact tree for maintainer prompt
@@ -1112,7 +1093,7 @@ python -m unittest tests.test_agent_bundle_builder -v    # 17 tests
 python -m unittest tests.test_agent_runner_offline_mode -v  # 14 tests
 ```
 
-All agent tests are fully offline — no Ollama, no Claude API, no network.
+All agent tests are fully offline — no OpenAI, no Claude API, no network.
 
 ---
 

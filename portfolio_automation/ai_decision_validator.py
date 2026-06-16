@@ -357,9 +357,7 @@ def _resolve_llm_model(provider: str, llm_model: str | None) -> str:
         return llm_model
     if provider == "anthropic":
         return (os.environ.get("ANTHROPIC_MODEL") or "claude-haiku-4-5-20251001").strip()
-    if provider == "openai":
-        return (os.environ.get("OPENAI_MODEL") or "").strip()
-    return (os.environ.get("OLLAMA_MODEL") or "gemma3:4b").strip()
+    return (os.environ.get("OPENAI_MODEL") or "").strip()
 
 
 def build_ai_validation(
@@ -376,7 +374,7 @@ def build_ai_validation(
     provider = (
         llm_provider
         or os.environ.get("STOCKBOT_LLM_PROVIDER")
-        or "ollama"
+        or "openai"
     ).strip().lower()
     model = _resolve_llm_model(provider, llm_model)
 
