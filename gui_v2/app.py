@@ -446,6 +446,23 @@ def page_dash_crowd_radar(
     return _render(request, "dashboard/crowd_radar.html", **ctx)
 
 
+@app.get("/dashboard/governance", response_class=HTMLResponse)
+def page_dash_governance(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    # Simulation/production two-lane governance visibility (spec §10). Shows the
+    # ACTIVE simulation lane, the human-gated production lane, AI-review cost vs
+    # the $0.50/day cap, and the pending/approved/rejected/deferred promotion
+    # queue. Observe-from-the-GUI: no production change is triggered here.
+    try:
+        from gui_v2.data.dash_governance import collect_governance_view
+        ctx = collect_governance_view(REPO_ROOT)
+    except Exception:
+        ctx = {"persona": "governance", "observe_only": False, "cards": [],
+               "pending_proposals": [], "has_data": False}
+    return _render(request, "dashboard/governance.html", **ctx)
+
+
 @app.get("/dashboard/strategy-tax", response_class=HTMLResponse)
 def page_dash_strategy_tax(
     request: Request, _a: str | None = Depends(_require_auth)

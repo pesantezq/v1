@@ -211,6 +211,27 @@ def run(
     extra = [t for t in extended_tickers if t.upper() not in static_upper]
     watchlist = list(static_watchlist) + extra
 
+    # ── Production watchlist overlay (sim-governance, gated) ───────────────
+    # Apply ONLY human-approved watchlist proposals from the promotion workflow.
+    # Pending/rejected/simulation-only items are ignored by construction (the
+    # overlay artifact contains only approved ops). Default-OFF: when the config
+    # flag is false this is a strict no-op and the baseline watchlist is unchanged.
+    try:
+        _sg = (config.get("sim_governance") or {})
+        _sg_overlay_on = bool((_sg.get("production_application") or {}).get("apply_watchlist_overlay", False))
+        if _sg_overlay_on and _sg.get("enabled", True):
+            from portfolio_automation.sim_governance.production_overlays import load_production_watchlist
+            _ov = load_production_watchlist(watchlist, base_dir="outputs", enabled=True)
+            _before = list(watchlist)
+            watchlist = _ov["watchlist"]
+            if _ov.get("applied_proposal_ids"):
+                logger.info(
+                    "sim_governance: applied %d approved watchlist proposal(s); %d -> %d symbols",
+                    len(_ov["applied_proposal_ids"]), len(_before), len(watchlist),
+                )
+    except Exception as _sg_err:
+        logger.warning("sim_governance watchlist overlay failed (non-fatal): %s", _sg_err)
+
     # FMP is the primary (and only) market-data client.
     _fmp_client = None
     _ds_cfg = dict(data_sources_config or {})

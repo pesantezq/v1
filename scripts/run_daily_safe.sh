@@ -315,6 +315,18 @@ run_aux_stage "Schwab broker sync" \
 run_aux_stage "Schwab re-auth notifier" \
     python -m portfolio_automation.brokers.schwab_reauth_notifier --send
 
+# Stage 10e — Simulation-governance daily lane. Runs AFTER the production
+# baseline artifacts (decision_plan, watchlist, discovery, crowd) already exist:
+# active simulation lane → daily simulation bundle → consolidated AI/product
+# review packet → ONE gated AI review (<= $0.50/day, else deferred) → pending
+# production proposals → apply already human-approved proposals to the production
+# overlays. Simulation lane is ACTIVE (may change SANDBOX/SIMULATION outputs);
+# production overlays are human-gated and default-OFF. Every step non-blocking;
+# never writes decision_plan or scoring. Runs before Stage 11 so daily_run_status
+# + the registry + the wiring probe count its artifacts fresh.
+run_aux_stage "Simulation-governance daily lane" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.sim_governance.daily_governance_run import run_daily_governance; r = run_daily_governance('.'); print('enabled:', r.get('enabled'), 'stages:', list(r.get('stages', {}).keys()), 'pending:', r.get('pending_proposal_count'), 'approved:', r.get('approved_proposal_count'))"
+
 # Stage 11 — Daily run status (reads its own log; runs last so it captures
 # all preceding stages). Provides operator-glanceable ok/partial/failed.
 run_aux_stage "Daily run status" \

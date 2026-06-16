@@ -42,6 +42,16 @@ class OutputNamespace(str, Enum):
     PORTFOLIO   = "portfolio"
     LATEST      = "latest"
     USER        = "user"
+    # ── Simulation-governance lane (added 2026-06-16) ──────────────────────
+    # SIMULATION holds the consolidated daily simulation bundle produced by the
+    # active simulation/test lane. PROMOTION_REVIEW holds the AI/product review
+    # packet + verdicts + pending production proposals. PROMOTION_APPROVALS holds
+    # the human-approval manifest and the production-application audit trail.
+    # These are distinct from SANDBOX (raw experiment artifacts) so the gated
+    # promotion workflow has its own auditable partitions.
+    SIMULATION          = "simulation"
+    PROMOTION_REVIEW    = "promotion_review"
+    PROMOTION_APPROVALS = "promotion_approvals"
 
 
 class DataGovernanceError(Exception):
@@ -64,13 +74,16 @@ class OutputPathPolicy:
 
 # Subdirectory under base_dir for each namespace
 _NAMESPACE_SUBDIR: dict[OutputNamespace, str] = {
-    OutputNamespace.LIVE:       "live",
-    OutputNamespace.HISTORICAL: "backtest",
-    OutputNamespace.SANDBOX:    "sandbox",
-    OutputNamespace.POLICY:     "policy",
-    OutputNamespace.PORTFOLIO:  "portfolio",
-    OutputNamespace.LATEST:     "latest",
-    OutputNamespace.USER:       "users",
+    OutputNamespace.LIVE:                "live",
+    OutputNamespace.HISTORICAL:          "backtest",
+    OutputNamespace.SANDBOX:             "sandbox",
+    OutputNamespace.POLICY:              "policy",
+    OutputNamespace.PORTFOLIO:           "portfolio",
+    OutputNamespace.LATEST:              "latest",
+    OutputNamespace.USER:                "users",
+    OutputNamespace.SIMULATION:          "simulation",
+    OutputNamespace.PROMOTION_REVIEW:    "promotion_review",
+    OutputNamespace.PROMOTION_APPROVALS: "promotion_approvals",
 }
 
 # Namespaces that include user_id as a path segment
@@ -324,5 +337,20 @@ def get_policies(base_dir: Path | str = "outputs") -> dict[OutputNamespace, Outp
             root=base / "users",
             description="Future per-user scoped outputs",
             user_scoped=True,
+        ),
+        OutputNamespace.SIMULATION: OutputPathPolicy(
+            namespace=OutputNamespace.SIMULATION,
+            root=base / "simulation",
+            description="Active simulation/test lane — consolidated daily simulation bundle",
+        ),
+        OutputNamespace.PROMOTION_REVIEW: OutputPathPolicy(
+            namespace=OutputNamespace.PROMOTION_REVIEW,
+            root=base / "promotion_review",
+            description="AI/product review packet, verdicts, and pending production proposals",
+        ),
+        OutputNamespace.PROMOTION_APPROVALS: OutputPathPolicy(
+            namespace=OutputNamespace.PROMOTION_APPROVALS,
+            root=base / "promotion_approvals",
+            description="Human approvals + production-application audit trail and snapshots",
         ),
     }

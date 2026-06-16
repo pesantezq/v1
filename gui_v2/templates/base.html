@@ -59,7 +59,7 @@
         </span>
         {# Desktop persona top-nav — hidden on mobile (md:hidden sibling provides bottom-nav) #}
         <nav class="hidden md:flex gap-1 text-sm">
-          {% for _n in [("/dashboard/today","Today"),("/dashboard/portfolio","Portfolio"),("/dashboard/quant","Quant"),("/dashboard/strategy-lab","Strategy"),("/dashboard/crowd-radar","Crowd"),("/dashboard/strategy-tax","Tax"),("/dashboard/system","System"),("/dashboard/memo","Memo")] %}
+          {% for _n in [("/dashboard/today","Today"),("/dashboard/portfolio","Portfolio"),("/dashboard/quant","Quant"),("/dashboard/strategy-lab","Strategy"),("/dashboard/crowd-radar","Crowd"),("/dashboard/strategy-tax","Tax"),("/dashboard/governance","Governance"),("/dashboard/system","System"),("/dashboard/memo","Memo")] %}
           {% set _active = _path.startswith(_n[0]) %}
           <a href="{{ _n[0] }}"
              {% if _active %}aria-current="page"{% endif %}

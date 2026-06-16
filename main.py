@@ -2019,6 +2019,41 @@ def run_portfolio_update(
                 portfolio_context=_de_portfolio_ctx,
                 exit_advisor_plan=_exit_advisor_plan_for_de,
             )
+            # ── Advisory production overlay (sim-governance, gated) ──────────
+            # Apply ONLY human-approved advisory proposals as ADDITIVE
+            # annotations (overlay_context / overlay_rank_hint / overlay_strategy)
+            # on the already-built decision rows. This is an input-boundary
+            # overlay in the broker-overlay tradition: it NEVER touches
+            # decision_engine scoring or the signal/confidence/score semantics.
+            # Default-OFF — strict no-op unless the operator flips the flag AND a
+            # proposal has been human-approved.
+            try:
+                _sg = (config.get('sim_governance') or {})
+                _sg_adv_on = bool((_sg.get('production_application') or {}).get('apply_advisory_overlay', False))
+                if _sg_adv_on and _sg.get('enabled', True) and isinstance(_decision_plan, list):
+                    from portfolio_automation.sim_governance.production_overlays import (
+                        load_production_advisory as _sg_load_adv,
+                    )
+                    _sg_ov = _sg_load_adv(_decision_plan, base_dir='outputs', enabled=True)
+                    _sg_by_sym = {
+                        str(r.get('symbol', '')).upper(): r
+                        for r in _sg_ov.get('advisory', []) if r.get('symbol')
+                    }
+                    for _row in _decision_plan:
+                        _ann = _sg_by_sym.get(str(_row.get('symbol', '')).upper())
+                        if _ann:
+                            for _k in ('overlay_context', 'overlay_rank_hint',
+                                       'overlay_strategy', 'overlay_proposal_id'):
+                                if _k in _ann:
+                                    _row[_k] = _ann[_k]
+                    if _sg_ov.get('applied_proposal_ids'):
+                        logger.info(
+                            "sim_governance: applied %d approved advisory overlay annotation(s)",
+                            len(_sg_ov['applied_proposal_ids']),
+                        )
+            except Exception as _sg_adv_err:
+                logger.warning("sim_governance advisory overlay failed (non-fatal): %s", _sg_adv_err)
+
             _decision_plan_summary: str = _summarize_decision_plan(
                 _decision_plan, _de_portfolio_ctx
             )

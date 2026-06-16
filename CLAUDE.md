@@ -89,12 +89,33 @@ cat .agent/phase_status.yaml            # per-step roadmap status
 
 ## Observe-Only Default
 
-- All new observability layers must set `observe_only: true` as a hardcoded field in output artifacts.
-- Do not remove or make `observe_only` conditional unless explicitly approved.
+The system is NOT observe-only as a whole — it is **two-lane** (operator-set 2026-06-16):
+
+- **Simulation / Test lane is ACTIVE.** Experimental advisory, watchlist, crowd, discovery,
+  ranking, and strategy logic is fully implemented and *allowed to change simulation outputs*
+  once its tests pass. Simulation lanes write only to the `SANDBOX` / `SIMULATION` namespaces
+  and never touch production.
+- **Production lane is PROTECTED + human-gated.** Production behavior changes only after a
+  human approves a promotion proposal. Production loaders apply *only* approved proposals and
+  ignore raw simulation artifacts, pending proposals, rejected proposals, and invalid approvals.
+- **AI/product review may recommend production readiness but can never approve it.** Human
+  approval is the production gate.
+
+Rules for new layers:
+
+- A new layer that is purely observational must still set `observe_only: true` as a hardcoded
+  field, and `observe_only` must not be made conditional unless explicitly approved.
 - Non-blocking pipeline integration: wrap all new calls in `try/except`.
-- Sole approved exception: `backtesting/auto_apply.py` emits `observe_only: false` by design —
-  it is the one gated mutating path (see Protected Semantics → Sanctioned exception). It is
-  default-inert and fully audited; this does not relax observe-only for any other module.
+- **Two sanctioned mutating paths** (both gated, default-inert/default-off, and fully audited):
+  1. `backtesting/auto_apply.py` — gated registry `default_weight` apply (see Protected
+     Semantics → Sanctioned exception).
+  2. `portfolio_automation/sim_governance/` — the two-lane promotion workflow. Its simulation
+     lane emits `observe_only: false` because it is active by design (sandbox-scoped); its
+     production application mutates production behavior ONLY via human-approved proposals
+     materialized into gated, default-OFF overlay artifacts. See `docs/SIM_GOVERNANCE.md`.
+  Neither path relaxes observe-only for any other module, and neither changes `decision_engine.py`
+  or any score semantics. Health agents should treat an applied/approved promotion event as a
+  thing to VERIFY (against its approval record + audit trail), not an observe-only violation to revert.
 
 ## Output Namespace Rules
 

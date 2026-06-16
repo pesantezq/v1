@@ -534,5 +534,25 @@
       "enabled": true,
       "note": "GUI Repair button dispatches an unattended worker. Containment: isolated worktree, never merges/pushes, protected-path guard, production-impact gate. Emergency stop: create config/operator_worker.DISABLED."
     }
+  },
+  "sim_governance": {
+    "enabled": true,
+    "note": "Simulation/Test lane is ACTIVE: experiments may change simulation outputs once tests pass. Production promotion is human-gated. See docs/SIM_GOVERNANCE.md.",
+    "simulation_lane": {
+      "enabled": true
+    },
+    "ai_review": {
+      "enabled": true,
+      "daily_cost_cap_usd": 0.5,
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "max_calls_per_day": 1,
+      "note": "ONE consolidated advisory+watchlist review per day. If estimated cost > daily_cost_cap_usd the call is skipped and a deferred-review artifact is written."
+    },
+    "production_application": {
+      "apply_watchlist_overlay": false,
+      "apply_advisory_overlay": false,
+      "note": "Master switches for the live production overlays. The full pending->approve->apply mechanism is built, tested, and writes approved overlay artifacts. Flipping these two flags to true is the final human production-boundary step that lets the live watchlist/advisory loaders consume approved overlays."
+    }
   }
 }
