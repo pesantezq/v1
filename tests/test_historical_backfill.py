@@ -61,6 +61,13 @@ def _write_config(root: Path, static_watchlist: list[str]) -> None:
     }))
 
 
+def _write_universe_lists(root: Path, *, broad: list[str], sector: list[str]) -> None:
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    lines = ["broad_market_etfs: [" + ", ".join(broad) + "]",
+             "sector_etfs: [" + ", ".join(sector) + "]"]
+    (root / "config" / "universe_lists.yaml").write_text("\n".join(lines) + "\n")
+
+
 def _write_extended_active(root: Path, symbols: list[str]) -> None:
     db_path = root / "data" / "portfolio.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +119,29 @@ class TestUniverseBuilding(unittest.TestCase):
     def test_no_config_returns_empty(self):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(build_universe(Path(td)), [])
+
+    def test_includes_simulation_price_universe(self):
+        """The backfill universe must cover the simulation suite's price universe
+        (broad/sector ETFs declared in config/universe_lists.yaml). Regression for
+        the 2026-06-17 missing_price_history:XLI walk-forward warning — XLI is
+        requested by a sim tactic but was never in the watchlist/top100 universe,
+        so its 5y archive was never fetched."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, ["AAPL"])
+            _write_universe_lists(root, broad=["SPY"], sector=["XLI", "XLF"])
+            uni = build_universe(root)
+            self.assertIn("XLI", uni)   # the symbol that was dropping
+            self.assertIn("XLF", uni)
+            self.assertIn("SPY", uni)
+            self.assertIn("AAPL", uni)  # watchlist source still honored
+
+    def test_universe_lists_absent_is_failsafe(self):
+        """No universe_lists.yaml → behavior unchanged (watchlist-only)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, ["AAPL", "MSFT"])
+            self.assertEqual(build_universe(root), ["AAPL", "MSFT"])
 
 
 class TestArchiveFreshness(unittest.TestCase):

@@ -107,23 +107,52 @@ def _load_top100_symbols(root: Path) -> list[str]:
         return []
 
 
+def _load_simulation_price_universe(root: Path) -> list[str]:
+    """Broad-market + sector ETFs the simulation suite prices off the archive.
+
+    The portfolio_sim/strategy-lab tactics derive their universe from
+    ``config/universe_lists.yaml`` (see portfolio_sim/universe.py), then load
+    each ticker's 5y history from this backfill's archive — with no live-FMP
+    fallback. So any ETF declared there but absent from the watchlist/top100
+    universe (e.g. XLI) would never get an archive and silently drop out of a
+    walk-forward fold. Including it here keeps the two universes coupled.
+    Fail-safe: missing file / unreadable YAML / no PyYAML → empty list."""
+    path = root / "config" / "universe_lists.yaml"
+    if not path.exists():
+        return []
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return []
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as exc:
+        logger.debug("historical_backfill: universe_lists read failed: %s", exc)
+        return []
+    out: list[str] = []
+    for key in ("broad_market_etfs", "sector_etfs"):
+        for sym in data.get(key) or []:
+            if isinstance(sym, str) and sym.strip():
+                out.append(sym.strip().upper())
+    return out
+
+
 def build_universe(root: Path) -> list[str]:
-    """Union of static watchlist + extended_watchlist active + top100 candidates.
+    """Union of static watchlist + extended_watchlist active + top100 candidates
+    + the simulation suite's broad/sector-ETF price universe.
     Deduplicated, sorted alphabetically for deterministic ordering."""
     seen: set[str] = set()
     ordered: list[str] = []
-    for sym in _load_static_watchlist(root):
-        if sym and sym not in seen:
-            seen.add(sym)
-            ordered.append(sym)
-    for sym in _load_extended_active(root):
-        if sym and sym not in seen:
-            seen.add(sym)
-            ordered.append(sym)
-    for sym in _load_top100_symbols(root):
-        if sym and sym not in seen:
-            seen.add(sym)
-            ordered.append(sym)
+    for source in (
+        _load_static_watchlist(root),
+        _load_extended_active(root),
+        _load_top100_symbols(root),
+        _load_simulation_price_universe(root),
+    ):
+        for sym in source:
+            if sym and sym not in seen:
+                seen.add(sym)
+                ordered.append(sym)
     ordered.sort()
     return ordered
 
