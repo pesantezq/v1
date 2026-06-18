@@ -199,7 +199,7 @@ def _age_hours(created_at: str) -> float | None:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return round((datetime.now(timezone.utc) - dt).total_seconds() / 3600, 1)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError):
         return None
 
 

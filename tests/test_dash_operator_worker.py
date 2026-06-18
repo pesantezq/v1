@@ -40,3 +40,20 @@ def test_degrades_without_orders_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(oc, "quarantine_inventory", lambda root: [])
     v = oc.operator_worker_view(tmp_path)
     assert v["orders"] == [] and v["degraded"] is False
+
+
+def test_age_hours_handles_nonstring_created_at(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(json.dumps({"operator_worker": {}}))
+    # Seed a work order with an int created_at (malformed JSONL record)
+    rec = {"work_order_id": "wo_int", "status": "queued", "created_at": 12345,
+           "status_history": [{"status": "queued", "at": "2020-01-01T00:00:00+00:00"}]}
+    d = Path(tmp_path) / "outputs" / "operator_control"
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "work_orders.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    monkeypatch.setattr(oc, "quarantine_inventory", lambda root: [])
+    # Must not raise AttributeError
+    v = oc.operator_worker_view(tmp_path)
+    wo = next(o for o in v["orders"] if o["work_order_id"] == "wo_int")
+    assert wo["age_hours"] is None
+    assert wo["stale"] is False
