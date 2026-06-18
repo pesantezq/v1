@@ -266,6 +266,14 @@ def _edit_enabled() -> bool:
     return auth_configured and edit_flag
 
 
+def _operator_edit_enabled() -> bool:
+    """Cancel requires auth configured AND GUI_V2_OPERATOR_EDIT=1 (mirrors
+    portfolio-edit gating; a read-only authenticated viewer cannot cancel)."""
+    user = os.environ.get("GUI_V2_AUTH_USER", "").strip()
+    pw = os.environ.get("GUI_V2_AUTH_PASS", "").strip()
+    return bool(user and pw) and os.environ.get("GUI_V2_OPERATOR_EDIT", "").strip() == "1"
+
+
 def _parse_holdings_from_form(form_data) -> list[dict[str, Any]]:
     """
     Parse multi-value form data into a list of holding dicts.
@@ -545,6 +553,17 @@ def page_dash_portfolio_config(
     enabled = _edit_enabled()
     view = _dash_portfolio_config(REPO_ROOT, edit_enabled=enabled)
     return _render(request, "dashboard/portfolio_config.html", **view)
+
+
+@app.get("/dashboard/operator", response_class=HTMLResponse)
+def page_dash_operator(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """GET /dashboard/operator — read-only operator worker control surface."""
+    from gui_v2.data.operator_control import operator_worker_view
+    view = operator_worker_view(REPO_ROOT)
+    edit_enabled = _operator_edit_enabled()
+    return _render(request, "operator.html", view=view, edit_enabled=edit_enabled)
 
 
 @app.post("/dashboard/portfolio-config/validate", response_class=HTMLResponse)

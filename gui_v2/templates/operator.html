@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">Operator Worker</h1>
+
+{% if request.query_params.get("msg") %}
+<div class="mb-4 rounded-md border px-3 py-2 text-sm
+  {{ 'border-red-700 text-red-300' if request.query_params.get('level')=='error'
+     else 'border-emerald-700 text-emerald-300' }}">
+  {{ request.query_params.get("msg") }}
+</div>
+{% endif %}
+
+{{ ui.section_header("Readiness", view.readiness.overall_ready ~ " gates ready", "") }}
+<table class="w-full text-sm mb-6">
+  <thead><tr><th class="text-left">Gate</th><th>Status</th><th>Source</th><th class="text-left">Detail</th></tr></thead>
+  <tbody>
+  {% for name, g in view.readiness.gates.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{{ ui.badge(g.status, g.status) }}</td>
+      <td>{{ g.source }}</td>
+      <td>{{ g.reason }}
+        {% if g.source == "declared" and g.declared_at %}
+          <span class="text-zinc-500">— declared by {{ g.declared_by }} @ {{ g.declared_at }};
+          evidence: {{ g.evidence|join(", ") }}</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{{ ui.section_header("Cost", "telemetry (not a gate)", "") }}
+<p class="text-sm mb-6">Lifetime ${{ "%.2f"|format(view.cost.lifetime_usd) }} ·
+  cap {{ "$%.2f"|format(view.cost.cap_usd) if view.cost.cap_configured else "unconfigured ⚠" }}
+  {% if view.cost.cap_pct is not none %}· {{ view.cost.cap_pct }}% used{% endif %}</p>
+
+{{ ui.section_header("Work Orders", view.counts.open ~ " open · " ~ view.counts.failed ~ " failed · " ~ view.counts.cancelled ~ " cancelled · " ~ view.counts.stale ~ " stale", "") }}
+<table class="w-full text-sm mb-6">
+  <thead><tr><th class="text-left">ID</th><th>Status</th><th>Age (h)</th><th>Probe/Skill</th><th></th></tr></thead>
+  <tbody>
+  {% for o in view.orders %}
+    <tr>
+      <td><a class="underline" href="/dashboard/operator/report/{{ o.work_order_id }}">{{ o.work_order_id }}</a></td>
+      <td>{{ ui.badge(o.status, o.status) }}{% if o.stale %} <span class="text-amber-400">stale</span>{% endif %}</td>
+      <td>{{ o.age_hours if o.age_hours is not none else "—" }}</td>
+      <td class="text-zinc-400">{{ o.probe_id or "—" }} / {{ o.skill_id or "—" }}</td>
+      <td>
+      {% if o.cancellable and edit_enabled %}
+        <form method="post" action="/dashboard/operator/cancel"
+              onsubmit="return confirm('Cancel {{ o.work_order_id }}? This is a terminal, audited action.');">
+          <input type="hidden" name="work_order_id" value="{{ o.work_order_id }}">
+          <input type="text" name="reason" required maxlength="280" placeholder="reason (required)"
+                 class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs">
+          <button type="submit" class="text-red-400 underline text-xs">Cancel</button>
+        </form>
+      {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{{ ui.section_header("Quarantine Inventory", view.quarantine|length ~ " worktree(s)", "") }}
+<table class="w-full text-sm">
+  <thead><tr><th class="text-left">Worktree</th><th>Branch</th><th>Ancestor?</th><th>Unique commits</th><th>Patch-equiv*</th><th>In main?</th><th></th></tr></thead>
+  <tbody>
+  {% for e in view.quarantine %}
+    <tr>
+      <td class="text-zinc-400">{{ e.worktree }}</td>
+      <td>{{ e.branch }}</td>
+      <td>{{ "yes" if e.is_ancestor_of_main else "no" }}</td>
+      <td>{{ e.unique_commits }}</td>
+      <td>{{ "yes" if e.patch_equivalent_in_main else ("?" if e.patch_equivalent_in_main is none else "no") }}</td>
+      <td>{{ ui.badge("green" if e.already_in_main else "amber", "in main" if e.already_in_main else "review") }}</td>
+      <td><a class="underline text-xs" href="/dashboard/operator/quarantine/{{ e.work_order_id }}/diff">view diff</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="text-xs text-zinc-500 mt-2">* patch-equivalence is heuristic, not guaranteed.</p>
+{% endblock %}
