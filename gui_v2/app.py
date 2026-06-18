@@ -973,6 +973,13 @@ def dashboard_operator_cancel(
 
     # --- authorization gate ---
     if not _operator_edit_enabled():
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_rejected",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={"why": "edit_disabled", "actor_source": actor_source},
+        )
         return _operator_redirect(
             "Cancellation disabled (set GUI_V2_OPERATOR_EDIT=1).", "error"
         )
@@ -992,6 +999,13 @@ def dashboard_operator_cancel(
     # --- bounded reason ---
     reason = (reason or "").strip()
     if not reason:
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_rejected",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={"why": "empty_reason", "actor_source": actor_source},
+        )
         return _operator_redirect("A cancellation reason is required.", "error")
     reason = reason[:280]
 

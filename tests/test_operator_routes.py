@@ -118,3 +118,59 @@ def test_cancel_unknown_id_audits_failure(tmp_path, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 303 and "level=error" in r.headers["location"]
+
+
+def test_cancel_edit_disabled_audits_rejection(tmp_path, monkeypatch):
+    """Verify that edit-disabled branch emits an audit event."""
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(appmod, "_operator_edit_enabled", lambda: False)
+    monkeypatch.setattr(appmod, "_require_auth", lambda *a, **k: "bob")
+    r = client.post(
+        "/dashboard/operator/cancel",
+        data={"work_order_id": "wo_test", "reason": "cancel_reason"},
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    # Should reject and return error redirect
+    assert r.status_code == 303
+    assert "level=error" in r.headers["location"]
+    # Verify audit event was recorded
+    audit_log_path = Path(tmp_path) / "outputs" / "operator_control" / "audit_log.jsonl"
+    assert audit_log_path.exists()
+    with open(audit_log_path) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    cancel_rejected = [e for e in events if e.get("event_type") == "work_order_cancel_rejected"]
+    assert len(cancel_rejected) == 1
+    evt = cancel_rejected[0]
+    assert evt["actor"] == "bob"
+    assert evt["work_order_id"] == "wo_test"
+    assert evt["details"]["why"] == "edit_disabled"
+    assert evt["details"]["actor_source"] == "dashboard_auth"
+
+
+def test_cancel_empty_reason_audits_rejection(tmp_path, monkeypatch):
+    """Verify that empty-reason branch emits an audit event."""
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(appmod, "_operator_edit_enabled", lambda: True)
+    monkeypatch.setattr(appmod, "_require_auth", lambda *a, **k: "charlie")
+    r = client.post(
+        "/dashboard/operator/cancel",
+        data={"work_order_id": "wo_empty", "reason": "   "},
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    # Should reject and return error redirect
+    assert r.status_code == 303
+    assert "level=error" in r.headers["location"]
+    # Verify audit event was recorded
+    audit_log_path = Path(tmp_path) / "outputs" / "operator_control" / "audit_log.jsonl"
+    assert audit_log_path.exists()
+    with open(audit_log_path) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    cancel_rejected = [e for e in events if e.get("event_type") == "work_order_cancel_rejected"]
+    assert len(cancel_rejected) == 1
+    evt = cancel_rejected[0]
+    assert evt["actor"] == "charlie"
+    assert evt["work_order_id"] == "wo_empty"
+    assert evt["details"]["why"] == "empty_reason"
+    assert evt["details"]["actor_source"] == "dashboard_auth"
