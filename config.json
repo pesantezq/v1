@@ -529,6 +529,23 @@
     }
   },
   "operator_control": {
+    "worker_container": {
+      "enabled": false,
+      "podman_path": "/usr/bin/podman",
+      "image_ref": "localhost/stockbot-worker",
+      "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "container_uid": 1000,
+      "container_gid": 1000,
+      "resource_limits": {
+        "pids": 512,
+        "memory": "2g",
+        "cpus": "2",
+        "tmpfs_size": "512m"
+      },
+      "env_allowlist": ["HOME", "PATH", "CLAUDE_CONFIG_DIR"],
+      "cap_drop_exceptions": [],
+      "note": "Phase 1 config schema. enabled=false until image is built and digest recorded. Image digest MUST be set before enabling."
+    },
     "autonomous_worker": {
       "enabled": true,
       "note": "GUI Repair button dispatches an unattended worker. Containment: isolated worktree, never merges/pushes, protected-path guard, production-impact gate. Emergency stop: create config/operator_worker.DISABLED."
