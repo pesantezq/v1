@@ -191,3 +191,20 @@ def test_quarantine_diff_malicious_id_404(tmp_path, monkeypatch):
     monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
     r = client.get("/dashboard/operator/quarantine/..%2f..%2fetc%2fpasswd/diff")
     assert r.status_code in (404, 422)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: No-mutation guard — GET /dashboard/operator never touches decision_plan
+# ---------------------------------------------------------------------------
+
+
+def test_get_operator_does_not_mutate_decision_plan(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps({"operator_worker": {}}))
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    dp = latest / "decision_plan.json"
+    dp.write_text('{"sentinel": 1}')
+    before = dp.read_text()
+    client.get("/dashboard/operator")
+    assert dp.read_text() == before  # GET never touches decision_plan
