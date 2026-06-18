@@ -1132,7 +1132,7 @@ architecture
 - `docs/FEEDBACK_LOOP.md`
 - `docs/FMP_COMPLIANCE.md`
 - `docs/CHANGELOG_DECISIONS.md`
-- proposed module: `portfolio_automation/historical_decision_replay.py`
+- proposed module (design-only placeholder name): historical decision replay — later implemented as the `portfolio_automation/historical_replay/` package (see `portfolio_automation/historical_replay/replay_decision_simulator.py`, which tags rows `source="historical_replay"`). The standalone `historical_decision_replay.py` file was never created.
 
 ### Decision
 
