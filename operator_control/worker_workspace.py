@@ -4,6 +4,7 @@ repository's .git is never shared or mounted. Create -> (worker edits) ->
 extract+validate diff -> destroy."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,8 +37,13 @@ def create_isolated_workspace(repo_root: str, workspace_root: str, work_order_id
 
 
 def extract_validated_diff(ws_path: str) -> str:
-    mb = _git(ws_path, "rev-parse", "main").stdout.strip()
-    out = _git(ws_path, "diff", "--stat", f"{mb}..HEAD").stdout if mb else ""
+    # Use origin/main as the merge-base so worker commits on the local main
+    # branch are visible in the range (main..HEAD would always be empty).
+    result = _git(ws_path, "rev-parse", "origin/main")
+    mb = result.stdout.strip()
+    if result.returncode != 0 or not re.fullmatch(r"[0-9a-f]{7,64}", mb):
+        return ""
+    out = _git(ws_path, "diff", "--stat", f"{mb}..HEAD").stdout
     return out[:_MAX_DIFF]
 
 
@@ -46,4 +52,4 @@ def destroy_workspace(path: str, workspace_root: str) -> None:
     root = Path(workspace_root).resolve()
     if root not in rp.parents:
         raise ValueError(f"refusing to destroy path outside workspace_root: {rp}")
-    shutil.rmtree(rp, ignore_errors=True)
+    shutil.rmtree(rp)

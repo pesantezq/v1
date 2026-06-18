@@ -41,3 +41,18 @@ def test_destroy_removes_clone(tmp_path):
     repo = _prod_repo(tmp_path); wsr = tmp_path / "wsroot"
     p = ws.create_isolated_workspace(str(repo), str(wsr), "wo_abc")
     ws.destroy_workspace(p, str(wsr)); assert not Path(p).exists()
+
+def test_extract_validated_diff_returns_stat_for_new_commit(tmp_path):
+    repo = _prod_repo(tmp_path); wsr = tmp_path / "wsroot"
+    p = ws.create_isolated_workspace(str(repo), str(wsr), "wo_diff")
+    _run(p, "git", "config", "user.email", "t@t"); _run(p, "git", "config", "user.name", "t")
+    (Path(p) / "changed.txt").write_text("new content\n")
+    _run(p, "git", "add", "."); _run(p, "git", "commit", "-qm", "add changed.txt")
+    diff = ws.extract_validated_diff(p)
+    assert diff, "expected non-empty diff stat"
+    assert "changed.txt" in diff
+
+def test_extract_validated_diff_returns_empty_for_non_git_dir(tmp_path):
+    bare_dir = tmp_path / "notgit"; bare_dir.mkdir()
+    result = ws.extract_validated_diff(str(bare_dir))
+    assert result == ""
