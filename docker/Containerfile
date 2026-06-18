@@ -8,4 +8,5 @@ ENV PATH="/opt/venv/bin:${PATH}"
 RUN useradd -m -u 1000 -s /usr/sbin/nologin worker
 COPY docker/worker_attest.sh /usr/local/bin/worker_attest.sh
 RUN chmod 0555 /usr/local/bin/worker_attest.sh
+RUN mkdir -p /attest && chown 1000:1000 /attest
 USER worker
