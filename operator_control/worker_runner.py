@@ -222,74 +222,91 @@ def _worker_container_cfg(root) -> dict | None:
         return None
 
 
-def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root: str) -> dict:
-    """Run claude inside the rootless Podman container.
+def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root: str,
+                       work_order_id: str) -> dict:
+    """Run claude inside the rootless Podman container on a disposable isolated clone.
 
-    Fail-closed: any startup or attestation failure returns ok=False without
-    falling back to the direct path. The worker_settings.json is copied into
-    the clone as /work/.worker_settings.json before launch so the container
-    worker can locate it at the fixed in-container path.
+    The clone's .git is self-contained under workspace_root — the production
+    repository's .git is never shared or mounted. Fail-closed: any startup or
+    attestation failure returns ok=False without falling back to the direct path.
     """
     import time
-    settings_src = Path(__file__).parent / "worker_settings.json"
-    settings_dst = Path(worktree_path) / ".worker_settings.json"
+    config_json_path = str(Path(root) / "config.json")
+    ws = None
     try:
-        shutil.copy2(str(settings_src), str(settings_dst))
-    except Exception as exc:
-        return {"ok": False, "execution_mode": "container", "isolated": False,
-                "error": f"failed to copy worker_settings.json into worktree: {exc}",
-                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+        ws = worker_workspace.create_isolated_workspace(root, cfg["workspace_root"], work_order_id)
 
-    claude_argv = ["claude", "-p", prompt_md, "--output-format", "json",
-                   "--settings", "/work/.worker_settings.json"]
-    if mode == "safe_repair":
-        claude_argv += ["--permission-mode", "acceptEdits"]
+        settings_src = Path(__file__).parent / "worker_settings.json"
+        settings_dst = Path(ws) / ".worker_settings.json"
+        try:
+            shutil.copy2(str(settings_src), str(settings_dst))
+        except Exception as exc:
+            return {"ok": False, "execution_mode": "container", "isolated": False,
+                    "stdout": "", "stderr": "",
+                    "error": f"failed to copy worker_settings.json into clone: {exc}",
+                    "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
 
-    attest_dir = str(Path(worktree_path) / ".attest")
-    Path(attest_dir).mkdir(parents=True, exist_ok=True)
+        claude_argv = ["claude", "-p", prompt_md, "--output-format", "json",
+                       "--settings", "/work/.worker_settings.json"]
+        if mode == "safe_repair":
+            claude_argv += ["--permission-mode", "acceptEdits"]
 
-    spec = worker_container.build_container_launch_spec(
-        cfg=cfg, workspace_dir=str(worktree_path), creds_dir=cfg["credentials_dir"],
-        attest_dir=attest_dir, claude_argv=claude_argv)
-    argv = ["runuser", "-u", cfg["run_as_user"], "--", *spec]
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=cfg["resource_limits"]["timeout_seconds"])
-    except Exception as exc:
-        return {"ok": False, "execution_mode": "container", "isolated": False,
-                "error": f"container startup failed: {exc}",
-                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+        attest_dir = str(Path(ws) / ".attest")
+        Path(attest_dir).mkdir(parents=True, exist_ok=True)
 
-    # Verify attestation — fail-closed: missing or invalid attestation is fatal.
-    try:
-        att = json.loads((Path(attest_dir) / "worker_attestation.json").read_text())
-    except Exception:
-        att = {}
-    cfg_mtime = os.path.getmtime(str(Path(root) / "config.json"))
-    ok_att, att_reasons = worker_container.verify_runtime_attestation(
-        att, cfg, now=time.time(), image_build_ts=cfg_mtime, config_mtime=cfg_mtime)
+        spec = worker_container.build_container_launch_spec(
+            cfg=cfg, workspace_dir=ws, creds_dir=cfg["credentials_dir"],
+            attest_dir=attest_dir, claude_argv=claude_argv)
+        argv = ["runuser", "-u", cfg["run_as_user"], "--", *spec]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=cfg["resource_limits"]["timeout_seconds"])
+        except Exception as exc:
+            return {"ok": False, "execution_mode": "container", "isolated": False,
+                    "stdout": "", "stderr": "",
+                    "error": f"container startup failed: {exc}",
+                    "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
 
-    # Persist attestation for readiness tracking regardless of pass/fail.
-    out_path = Path(root) / cfg.get("attestation_path", "outputs/operator_control/worker_attestation.json")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        out_path.write_text(json.dumps(att))
-    except Exception:
-        pass  # non-fatal; attestation persistence is observability, not a gate
+        # Verify attestation — fail-closed: missing or invalid attestation is fatal.
+        try:
+            att = json.loads((Path(attest_dir) / "worker_attestation.json").read_text())
+        except Exception:
+            att = {}
+        image_build_ts = cfg.get("image_build_ts") or os.path.getmtime(config_json_path)
+        config_mtime = os.path.getmtime(config_json_path)
+        ok_att, att_reasons = worker_container.verify_runtime_attestation(
+            att, cfg, now=time.time(), image_build_ts=image_build_ts, config_mtime=config_mtime)
 
-    if not ok_att:
-        return {"ok": False, "execution_mode": "container", "isolated": False,
-                "error": "attestation failed: " + "; ".join(att_reasons),
-                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+        # Persist attestation for readiness tracking regardless of pass/fail.
+        out_path = Path(root) / cfg.get("attestation_path", "outputs/operator_control/worker_attestation.json")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            out_path.write_text(json.dumps(att))
+        except Exception:
+            pass  # non-fatal; attestation persistence is observability, not a gate
 
-    parsed = _parse_claude_json(proc)
-    parsed["execution_mode"] = "container"
-    parsed["isolated"] = True
-    return parsed
+        if not ok_att:
+            return {"ok": False, "execution_mode": "container", "isolated": False,
+                    "stdout": "", "stderr": "",
+                    "error": "attestation failed: " + "; ".join(att_reasons),
+                    "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+        diff_stat = worker_workspace.extract_validated_diff(ws)
+        parsed = _parse_claude_json(proc)
+        parsed["execution_mode"] = "container"
+        parsed["isolated"] = True
+        parsed["diff_stat"] = diff_stat
+        return parsed
+    finally:
+        if ws is not None:
+            try:
+                worker_workspace.destroy_workspace(ws, cfg["workspace_root"])
+            except Exception:
+                pass
 
 
 def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
-                   root: str = ".") -> dict:
+                   root: str = ".", work_order_id: str = "") -> dict:
     """Route a claude invocation to the container or direct path.
 
     Container mode (when ``operator_control.worker_container.enabled=true`` in
@@ -324,7 +341,7 @@ def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
                           f"rootless={caps['rootless_ok']}"),
                 "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
 
-    return _run_via_container(worktree_path, prompt_md, mode, cfg, root)
+    return _run_via_container(worktree_path, prompt_md, mode, cfg, root, work_order_id)
 
 
 def _run_tests(worktree_path, tests) -> dict:
@@ -478,6 +495,7 @@ def run(root, work_order_id, actor="cli") -> dict:
             wt, (wt / "WORKER_PROMPT.md").read_text(encoding="utf-8"),
             mode=order.get("mode", "diagnose"),
             root=str(root),
+            work_order_id=work_order_id,
         )
         # Cost is incurred regardless of outcome — log it once, immediately,
         # in the operational ledger (NOT the FMP/AI decision budget).

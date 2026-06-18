@@ -532,19 +532,26 @@
     "worker_container": {
       "enabled": false,
       "podman_path": "/usr/bin/podman",
+      "run_as_user": "stockbot-worker",
       "image_ref": "localhost/stockbot-worker",
       "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_build_ts": null,
       "container_uid": 1000,
       "container_gid": 1000,
+      "credentials_dir": "/home/stockbot-worker/.claude-worker",
+      "workspace_root": "/var/lib/stockbot-worker/ws",
+      "attestation_path": "outputs/operator_control/worker_attestation.json",
+      "attestation_max_age_days": 30,
       "resource_limits": {
         "pids": 512,
         "memory": "2g",
         "cpus": "2",
-        "tmpfs_size": "512m"
+        "tmpfs_size": "512m",
+        "timeout_seconds": 1800
       },
       "env_allowlist": ["HOME", "PATH", "CLAUDE_CONFIG_DIR"],
       "cap_drop_exceptions": [],
-      "note": "Phase 1 config schema. enabled=false until image is built and digest recorded. Image digest MUST be set before enabling."
+      "note": "Phase 1 config schema. enabled=false until image is built and digest+image_build_ts recorded (see docs/operator_worker_container.md). Image digest MUST be set before enabling."
     },
     "autonomous_worker": {
       "enabled": true,
