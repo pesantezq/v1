@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates libcap2-bin nodejs npm && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code@2.1.181
+WORKDIR /opt/app
+COPY requirements.txt /opt/app/requirements.txt
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN useradd -m -u 1000 -s /usr/sbin/nologin worker
+COPY docker/worker_attest.sh /usr/local/bin/worker_attest.sh
+RUN chmod 0555 /usr/local/bin/worker_attest.sh
+USER worker
