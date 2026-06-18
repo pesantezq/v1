@@ -74,6 +74,41 @@ def validate_container_configuration(cfg: dict) -> tuple[bool, list[str]]:
     return (not reasons), reasons
 
 
+def verify_runtime_attestation(attestation: dict, cfg: dict, *, now: float,
+                               image_build_ts: float, config_mtime: float) -> tuple[bool, list[str]]:
+    a = attestation or {}
+    reasons: list[str] = []
+    if a.get("execution_mode") != "container":
+        reasons.append("execution_mode not 'container'")
+    if a.get("uid") != cfg.get("container_uid") or a.get("uid") in (None, 0):
+        reasons.append("effective uid mismatch / root")
+    if a.get("gid") != cfg.get("container_gid") or a.get("gid") in (None, 0):
+        reasons.append("effective gid mismatch / root")
+    if a.get("rootless") is not True:
+        reasons.append("runtime not rootless")
+    if a.get("no_new_privileges") is not True:
+        reasons.append("no_new_privileges not effective")
+    if list(a.get("effective_caps") or []) != []:
+        reasons.append("effective capabilities not empty")
+    if a.get("socket_mounts_present"):
+        reasons.append("runtime socket mounted")
+    if a.get("host_home_mounted"):
+        reasons.append("host home mounted")
+    if a.get("image_digest") != cfg.get("image_digest"):
+        reasons.append("image digest mismatch vs approved")
+    # freshness
+    ts = a.get("generated_at_ts")
+    if not isinstance(ts, (int, float)):
+        reasons.append("attestation missing/invalid timestamp (stale)")
+    else:
+        if ts < max(image_build_ts, config_mtime):
+            reasons.append("attestation stale (older than image build / config change)")
+        max_age = float(cfg.get("attestation_max_age_days", 30)) * 86400.0
+        if now - ts > max_age:
+            reasons.append("attestation stale (exceeds max age)")
+    return (not reasons), reasons
+
+
 def _run(argv: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
