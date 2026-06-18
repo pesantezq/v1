@@ -57,8 +57,15 @@ def test_spec_env_allowlist_only_and_no_api_key():
     envs = [s[i+1] for i, a in enumerate(s) if a in ("-e", "--env")]
     names = [e.split("=")[0] for e in envs]
     assert "ANTHROPIC_API_KEY" not in names
-    assert set(names) <= {"HOME", "PATH", "CLAUDE_CONFIG_DIR"}
+    # STOCKBOT_IMAGE_DIGEST is an unconditional config-constant injection, not from allowlist.
+    assert set(names) <= {"HOME", "PATH", "CLAUDE_CONFIG_DIR", "STOCKBOT_IMAGE_DIGEST"}
 
 def test_spec_claude_argv_is_last_and_unmodified():
     s = _spec()
     assert s[-5:] == ["claude", "-p", "do the thing", "--output-format", "json"]
+
+def test_spec_injects_image_digest_env():
+    s = _spec()
+    # Find all --env values
+    envs = [s[i+1] for i, a in enumerate(s) if a == "--env"]
+    assert f"STOCKBOT_IMAGE_DIGEST={CFG['image_digest']}" in envs

@@ -41,3 +41,19 @@ def test_stale_older_than_max_age_fails():
     old = {**GOOD, "generated_at_ts": 1000.0}
     ok, r = verify_runtime_attestation(old, CFG, now=1000.0 + 31*86400, image_build_ts=900.0, config_mtime=900.0)
     assert not ok and any("stale" in x.lower() or "age" in x.lower() for x in r)
+
+def test_digest_roundtrip_passes_when_env_injected():
+    # Simulates what worker_attest.sh emits when STOCKBOT_IMAGE_DIGEST is injected correctly.
+    attest = {**GOOD, "image_digest": CFG["image_digest"]}
+    ok, reasons = verify_runtime_attestation(attest, CFG, **KW)
+    assert ok and reasons == []
+
+def test_digest_roundtrip_fails_when_env_unknown():
+    # Simulates what worker_attest.sh emits when the env was NOT injected (defaulted to "unknown").
+    attest = {**GOOD, "image_digest": "unknown"}
+    ok, reasons = verify_runtime_attestation(attest, CFG, **KW)
+    assert not ok and any("digest" in r for r in reasons)
+
+def test_bool_timestamp_fails():
+    ok, r = verify_runtime_attestation({**GOOD, "generated_at_ts": True}, CFG, **KW)
+    assert not ok and any("timestamp" in x.lower() or "stale" in x.lower() for x in r)

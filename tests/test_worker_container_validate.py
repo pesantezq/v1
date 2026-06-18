@@ -27,6 +27,11 @@ def test_rejects_root_uid():
     ok, reasons = validate_container_configuration(cfg)
     assert not ok and any("uid" in r.lower() for r in reasons)
 
+def test_rejects_root_gid():
+    cfg = {**BASE, "container_gid": 0}
+    ok, reasons = validate_container_configuration(cfg)
+    assert not ok and any("gid" in r.lower() for r in reasons)
+
 def test_rejects_root_run_as_user():
     cfg = {**BASE, "run_as_user": "root"}
     ok, reasons = validate_container_configuration(cfg)

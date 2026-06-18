@@ -32,10 +32,10 @@ set -euo pipefail
 IMAGE_REF="localhost/stockbot-worker"
 CONTAINERFILE="docker/Containerfile"
 WORKER_USER="stockbot-worker"
-WORKER_UID=2000
-WORKER_GID=2000
-SUBUID_RANGE="2000:65536"
-SUBGID_RANGE="2000:65536"
+WORKER_UID=1000
+WORKER_GID=1000
+SUBUID_RANGE="1000:65536"
+SUBGID_RANGE="1000:65536"
 CREDS_DIR="/opt/stockbot-worker-creds"
 ATTEST_OUT="outputs/operator_control/worker_attestation.json"
 
@@ -188,8 +188,10 @@ cmd_pin() {
     "image_digest": "sha256:<PASTE_DIGEST_HERE>",
     "image_build_ts": <PASTE_EPOCH_HERE>,
     "run_as_user": "stockbot-worker",
-    "container_uid": 2000,
-    "container_gid": 2000,
+    "container_uid": 1000,
+    "container_gid": 1000,
+    "credentials_dir": "/home/stockbot-worker/.claude-worker",
+    "workspace_root": "/var/lib/stockbot-worker/ws",
     "attestation_path": "outputs/operator_control/worker_attestation.json",
     "attestation_max_age_days": 30,
     "env_allowlist": ["OPENAI_API_KEY", "FMP_API_KEY"],
@@ -241,7 +243,7 @@ cmd_attest() {
     ATTEST_DIR="$(pwd)/$(dirname "${ATTEST_OUT}")"
     mkdir -p "${ATTEST_DIR}"
     podman run --rm \
-        --user=2000:2000 \
+        --user=1000:1000 \
         --read-only \
         --security-opt=no-new-privileges \
         --cap-drop=ALL \

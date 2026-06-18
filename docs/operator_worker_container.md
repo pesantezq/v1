@@ -8,7 +8,7 @@ container that isolates the autonomous operator worker from the production VPS f
 ## Overview
 
 The operator worker runs short-lived advisory/repair tasks inside a rootless Podman container
-under a dedicated non-root system account (`stockbot-worker`, uid 2000). The container is:
+under a dedicated non-root system account (`stockbot-worker`, uid 1000). The container is:
 
 - **Read-only filesystem** with three explicit volume mounts only.
 - **No capabilities** (`--cap-drop=ALL`), no new privileges.
@@ -85,8 +85,8 @@ bash scripts/worker_container_setup.sh account
 Prints:
 
 ```bash
-sudo groupadd --gid 2000 stockbot-worker          # if the group doesn't exist yet
-sudo useradd --system --uid 2000 --gid 2000 \
+sudo groupadd --gid 1000 stockbot-worker          # if the group doesn't exist yet
+sudo useradd --system --uid 1000 --gid 1000 \
     --no-create-home --shell /usr/sbin/nologin stockbot-worker
 ```
 
@@ -107,8 +107,8 @@ bash scripts/worker_container_setup.sh subid
 Prints:
 
 ```bash
-echo 'stockbot-worker:2000:65536' | sudo tee -a /etc/subuid
-echo 'stockbot-worker:2000:65536' | sudo tee -a /etc/subgid
+echo 'stockbot-worker:1000:65536' | sudo tee -a /etc/subuid
+echo 'stockbot-worker:1000:65536' | sudo tee -a /etc/subgid
 ```
 
 These ranges allow the `stockbot-worker` account to run rootless Podman containers
@@ -202,8 +202,10 @@ Prints the JSON fragment to add under `operator_control` in `config.json`:
   "image_digest": "sha256:<PASTE_DIGEST_HERE>",
   "image_build_ts": <PASTE_EPOCH_HERE>,
   "run_as_user": "stockbot-worker",
-  "container_uid": 2000,
-  "container_gid": 2000,
+  "container_uid": 1000,
+  "container_gid": 1000,
+  "credentials_dir": "/home/stockbot-worker/.claude-worker",
+  "workspace_root": "/var/lib/stockbot-worker/ws",
   "attestation_path": "outputs/operator_control/worker_attestation.json",
   "attestation_max_age_days": 30,
   "env_allowlist": ["OPENAI_API_KEY", "FMP_API_KEY"],
@@ -264,8 +266,8 @@ Runs the `worker_attest.sh` script inside the container and writes
 ```json
 {
   "execution_mode": "container",
-  "uid": 2000,
-  "gid": 2000,
+  "uid": 1000,
+  "gid": 1000,
   "rootless": true,
   "no_new_privileges": true,
   "effective_caps": [],

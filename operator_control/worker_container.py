@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Any
 
 WO_ID_RE = re.compile(r"^wo_[A-Za-z0-9_]+$")
 
@@ -43,6 +42,8 @@ def build_container_launch_spec(*, cfg: dict, workspace_dir: str, creds_dir: str
         if name == "ANTHROPIC_API_KEY":
             continue
         argv += ["--env", f"{name}={_env_value(name)}"]
+    # Always inject the approved digest so worker_attest.sh can record it for attestation.
+    argv += ["--env", f"STOCKBOT_IMAGE_DIGEST={cfg['image_digest']}"]
     argv.append(image)
     argv += list(claude_argv)
     return argv
@@ -98,7 +99,7 @@ def verify_runtime_attestation(attestation: dict, cfg: dict, *, now: float,
         reasons.append("image digest mismatch vs approved")
     # freshness
     ts = a.get("generated_at_ts")
-    if not isinstance(ts, (int, float)):
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
         reasons.append("attestation missing/invalid timestamp (stale)")
     else:
         if ts < max(image_build_ts, config_mtime):
