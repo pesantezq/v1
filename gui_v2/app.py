@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
@@ -1064,6 +1064,28 @@ def dashboard_operator_cancel(
         return _operator_redirect(f"Cannot cancel {work_order_id}: {exc}", "error")
 
     return _operator_redirect(f"Cancelled {work_order_id}.", "success")
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboard/operator/quarantine/{work_order_id}/diff (Task 6)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/dashboard/operator/quarantine/{work_order_id}/diff", response_class=PlainTextResponse)
+def dashboard_operator_quarantine_diff(
+    work_order_id: str, _a: str | None = Depends(_require_auth)
+) -> PlainTextResponse:
+    """GET /dashboard/operator/quarantine/{work_order_id}/diff
+
+    Read-only, bounded quarantine diff stat for a work order. Validation and
+    output bounding are handled entirely inside quarantine_diff — the id is
+    never interpolated here. An unknown or invalid id returns 404.
+    """
+    from gui_v2.data.operator_quarantine import quarantine_diff
+    res = quarantine_diff(REPO_ROOT, work_order_id)
+    if not res["found"]:
+        raise HTTPException(status_code=404, detail="no quarantine diff for that order")
+    return res["stat"]
 
 
 # ---------------------------------------------------------------------------

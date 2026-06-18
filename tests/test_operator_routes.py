@@ -174,3 +174,20 @@ def test_cancel_empty_reason_audits_rejection(tmp_path, monkeypatch):
     assert evt["work_order_id"] == "wo_empty"
     assert evt["details"]["why"] == "empty_reason"
     assert evt["details"]["actor_source"] == "dashboard_auth"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: GET /dashboard/operator/quarantine/{work_order_id}/diff
+# ---------------------------------------------------------------------------
+
+
+def test_quarantine_diff_unknown_404(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+    r = client.get("/dashboard/operator/quarantine/wo_missing/diff")
+    assert r.status_code == 404
+
+
+def test_quarantine_diff_malicious_id_404(tmp_path, monkeypatch):
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+    r = client.get("/dashboard/operator/quarantine/..%2f..%2fetc%2fpasswd/diff")
+    assert r.status_code in (404, 422)
