@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -102,6 +103,15 @@ def _require_auth(
             headers={"WWW-Authenticate": 'Basic realm="StockBot Dashboard"'},
         )
     return credentials.username
+
+
+def _require_auth_dep(
+    credentials: HTTPBasicCredentials | None = Depends(_security),
+) -> str | None:
+    """Thin indirection so tests can monkeypatch ``appmod._require_auth`` and
+    have the patched version picked up at request time via
+    ``Depends(_require_auth_dep)``."""
+    return _require_auth(credentials)
 
 
 _SEVERITY_PALETTE = {
@@ -272,6 +282,25 @@ def _operator_edit_enabled() -> bool:
     user = os.environ.get("GUI_V2_AUTH_USER", "").strip()
     pw = os.environ.get("GUI_V2_AUTH_PASS", "").strip()
     return bool(user and pw) and os.environ.get("GUI_V2_OPERATOR_EDIT", "").strip() == "1"
+
+
+def _same_origin(request: Request) -> bool:
+    """CSRF-equivalent: require the POST's Origin/Referer host to match the
+    request Host header.  The app has no token framework, so host-matching is
+    the practical barrier against cross-site form submissions."""
+    host = request.headers.get("host", "")
+    src = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not src:
+        return False
+    return urlparse(src).netloc == host
+
+
+def _operator_redirect(msg: str, level: str = "success") -> RedirectResponse:
+    """303 redirect to the operator page with a flash-style msg+level query string."""
+    return RedirectResponse(
+        url=f"/dashboard/operator?msg={quote(msg)}&level={level}",
+        status_code=303,
+    )
 
 
 def _parse_holdings_from_form(form_data) -> list[dict[str, Any]]:
@@ -907,6 +936,120 @@ def page_operator_report(
         report_text=report_text,
         work_order_id=work_order_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /dashboard/operator/cancel — safe, audited work-order cancellation
+# ---------------------------------------------------------------------------
+
+
+@app.post("/dashboard/operator/cancel")
+def dashboard_operator_cancel(
+    request: Request,
+    work_order_id: str = Form(...),
+    reason: str = Form(...),
+    _a: str | None = Depends(_require_auth_dep),
+) -> RedirectResponse:
+    """Cancel a queued or running work order.
+
+    Safety checklist (all enforced before any mutation):
+    - Actor from auth only — never from the form body.
+    - Authorization gate: GUI_V2_OPERATOR_EDIT=1 + auth configured.
+    - CSRF-equivalent: Origin/Referer host must match the request Host.
+    - Bounded reason: required, stripped, max 280 chars.
+    - State validation + race-safe: read current status; delegate ALL
+      mutation to transition_work_order (domain API, validates state graph).
+    - Idempotent: already-cancelled → audited no-op, success redirect.
+    - Success audit is emitted by transition_work_order (work_order_cancelled).
+      Failure/rejection paths emit their own explicit audit events here.
+    """
+    from operator_control import audit_log
+    from operator_control import work_orders as wo
+    from operator_control.repair_policies import WorkOrderValidationError
+
+    # --- actor from auth, NEVER from form ---
+    actor: str = _a if _a else "dashboard-manual"
+    actor_source: str = "dashboard_auth" if _a else "dashboard_open_mode"
+
+    # --- authorization gate ---
+    if not _operator_edit_enabled():
+        return _operator_redirect(
+            "Cancellation disabled (set GUI_V2_OPERATOR_EDIT=1).", "error"
+        )
+
+    # --- CSRF-equivalent: same-origin check ---
+    if not _same_origin(request):
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_rejected",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={"why": "cross-origin rejected", "actor_source": actor_source},
+            safety_result="rejected: cross-origin",
+        )
+        return _operator_redirect("Rejected: cross-origin request.", "error")
+
+    # --- bounded reason ---
+    reason = (reason or "").strip()
+    if not reason:
+        return _operator_redirect("A cancellation reason is required.", "error")
+    reason = reason[:280]
+
+    # --- state validation + race-safe ---
+    current = wo.get_work_order(REPO_ROOT, work_order_id)
+    if current is None:
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_rejected",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={
+                "reason": reason,
+                "why": "unknown id",
+                "actor_source": actor_source,
+            },
+            safety_result="rejected: unknown id",
+        )
+        return _operator_redirect(f"Unknown work order {work_order_id}.", "error")
+
+    # --- idempotent: already cancelled ---
+    if current.get("status") == "cancelled":
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_noop",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={"reason": reason, "actor_source": actor_source},
+        )
+        return _operator_redirect(f"{work_order_id} already cancelled.", "success")
+
+    # --- mutate through validated domain API ---
+    try:
+        wo.transition_work_order(
+            REPO_ROOT,
+            work_order_id,
+            new_status="cancelled",
+            actor=actor,
+            note=f"[{actor_source}] {reason}",
+        )
+        # transition_work_order already emits work_order_cancelled audit event
+    except WorkOrderValidationError as exc:
+        audit_log.record_event(
+            REPO_ROOT,
+            event_type="work_order_cancel_rejected",
+            actor=actor,
+            work_order_id=work_order_id,
+            details={
+                "reason": reason,
+                "why": str(exc),
+                "from": current.get("status"),
+                "actor_source": actor_source,
+            },
+            safety_result=f"rejected: {exc}",
+        )
+        return _operator_redirect(f"Cannot cancel {work_order_id}: {exc}", "error")
+
+    return _operator_redirect(f"Cancelled {work_order_id}.", "success")
 
 
 # ---------------------------------------------------------------------------
