@@ -238,7 +238,7 @@ cmd_attest() {
     _info "Requires: image built + pinned digest in config.json."
     _info ""
     DIGEST=$(podman image inspect --format '{{.Digest}}' "${IMAGE_REF}" 2>/dev/null | head -1 || echo "unknown")
-    ATTEST_DIR="$(pwd)/$(dirname ${ATTEST_OUT})"
+    ATTEST_DIR="$(pwd)/$(dirname "${ATTEST_OUT}")"
     mkdir -p "${ATTEST_DIR}"
     podman run --rm \
         --user=2000:2000 \
@@ -296,7 +296,7 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
     return 0 2>/dev/null || true
 fi
 
-case "$1" in
+case "${1:-}" in
     check)   cmd_check ;;
     account) cmd_account ;;
     subid)   cmd_subid ;;

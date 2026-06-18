@@ -8,13 +8,13 @@ S = Path("scripts/worker_container_setup.sh").read_text()
 
 def test_setup_covers_required_steps():
     for kw in ("useradd", "subuid", "subgid", "enable-linger", "podman build",
-               "sha256", "stockbot-worker"):
+               "sha256", "image_build_ts", "stockbot-worker"):
         assert kw in S, f"keyword not found in setup script: {kw!r}"
 
 
 def test_setup_does_not_auto_execute_dangerously():
     # must be guarded behind an explicit subcommand / main guard, not run on source
-    assert ('"$1"' in S) or ('case "$1"' in S) or ('if [ "$#"' in S), (
+    assert ('"$1"' in S) or ('case "$1"' in S) or ('case "${1:-}"' in S) or ('if [ "$#"' in S), (
         "setup script is not guarded by a subcommand dispatcher"
     )
 
