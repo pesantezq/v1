@@ -1,4 +1,6 @@
 import json
+import time
+from pathlib import Path
 from portfolio_automation.operator_worker_readiness import (
     operator_worker_readiness, RECOGNIZED_STATUSES, DECLARED_GATES,
 )
@@ -14,6 +16,29 @@ def _write_config(tmp_path, declared=None, cost_cap=None):
     if cost_cap is not None:
         cfg["operator_control"]["cost_cap_usd_per_day"] = cost_cap
     (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+
+def _wc_cfg(tmp_path, **over):
+    base = {"enabled": True, "podman_path": "/usr/bin/podman", "image_ref": "localhost/stockbot-worker",
+            "image_digest": "sha256:abc", "container_uid": 1000, "container_gid": 1000,
+            "run_as_user": "stockbot-worker",
+            "resource_limits": {"pids": 512, "memory": "2g", "cpus": "2", "tmpfs_size": "512m", "timeout_seconds": 1800},
+            "env_allowlist": ["HOME"], "cap_drop_exceptions": [],
+            "attestation_path": "outputs/operator_control/worker_attestation.json",
+            "attestation_max_age_days": 30}
+    base.update(over)
+    (tmp_path / "config.json").write_text(json.dumps({"operator_control": {"worker_container": base}}))
+
+
+def _write_attest(tmp_path, **over):
+    a = {"generated_at_ts": time.time(), "execution_mode": "container", "uid": 1000, "gid": 1000,
+         "rootless": True, "no_new_privileges": True, "effective_caps": [],
+         "mounts": ["/work:rw"], "image_digest": "sha256:abc",
+         "socket_mounts_present": False, "host_home_mounted": False}
+    a.update(over)
+    p = tmp_path / "outputs" / "operator_control"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "worker_attestation.json").write_text(json.dumps(a))
 
 
 def test_five_primary_gates_present(tmp_path):
@@ -92,3 +117,46 @@ def test_degraded_on_unreadable_root(tmp_path):
     assert r["observe_only"] is True
     assert r["overall_ready"] == "0/5"
     assert "error" in r
+
+
+# ---------------------------------------------------------------------------
+# New _auth_gate tests: static checks AND fresh attestation
+# ---------------------------------------------------------------------------
+
+def test_auth_amber_when_no_attestation(tmp_path, monkeypatch):
+    _wc_cfg(tmp_path)
+    monkeypatch.setattr("portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+                        lambda cfg: {"podman_present": True, "image_present": True, "digest_pinned": True, "rootless_ok": True})
+    g = operator_worker_readiness(tmp_path)["gates"]["auth"]
+    assert g["status"] == "amber" and "not runtime-verified" in g["reason"]
+
+
+def test_auth_green_when_static_and_fresh_attestation(tmp_path, monkeypatch):
+    _wc_cfg(tmp_path)
+    _write_attest(tmp_path)
+    monkeypatch.setattr("portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+                        lambda cfg: {"podman_present": True, "image_present": True, "digest_pinned": True, "rootless_ok": True})
+    g = operator_worker_readiness(tmp_path)["gates"]["auth"]
+    assert g["status"] == "green"
+
+
+def test_auth_amber_when_last_run_direct(tmp_path, monkeypatch):
+    _wc_cfg(tmp_path)
+    _write_attest(tmp_path, execution_mode="direct")
+    monkeypatch.setattr("portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+                        lambda cfg: {"podman_present": True, "image_present": True, "digest_pinned": True, "rootless_ok": True})
+    g = operator_worker_readiness(tmp_path)["gates"]["auth"]
+    assert g["status"] == "amber"
+
+
+def test_auth_amber_when_digest_mismatch(tmp_path, monkeypatch):
+    _wc_cfg(tmp_path)
+    _write_attest(tmp_path, image_digest="sha256:zzz")
+    monkeypatch.setattr("portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+                        lambda cfg: {"podman_present": True, "image_present": True, "digest_pinned": True, "rootless_ok": True})
+    assert operator_worker_readiness(tmp_path)["gates"]["auth"]["status"] == "amber"
+
+
+def test_auth_amber_when_disabled(tmp_path):
+    _wc_cfg(tmp_path, enabled=False)
+    assert operator_worker_readiness(tmp_path)["gates"]["auth"]["status"] == "amber"

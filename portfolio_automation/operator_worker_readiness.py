@@ -10,8 +10,15 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
+
+from operator_control.worker_container import (
+    validate_container_configuration,
+    probe_container_capabilities,
+    verify_runtime_attestation,
+)
 
 RECOGNIZED_STATUSES = frozenset({"green", "amber", "red"})
 DECLARED_GATES = ("bounded_cmd", "rollback")
@@ -30,6 +37,8 @@ def _running_as_root() -> bool:
 def _in_container(root: Path) -> bool:
     if Path("/.dockerenv").exists():
         return True
+    if Path("/run/.containerenv").exists():
+        return True
     try:
         cg = Path("/proc/1/cgroup").read_text(encoding="utf-8")
         return any(t in cg for t in ("docker", "containerd", "libpod", "kubepods"))
@@ -38,11 +47,39 @@ def _in_container(root: Path) -> bool:
 
 
 def _auth_gate(root: Path) -> dict[str, Any]:
-    if _running_as_root() and not _in_container(root):
-        return _amber("runs as root, no container", "auto")
-    if _running_as_root():
-        return _amber("containerized but still root", "auto")
-    return {"status": "green", "reason": "non-root, containerized", "source": "auto"}
+    try:
+        cfg_all = json.loads((root / "config.json").read_text(encoding="utf-8"))
+    except Exception:
+        return _amber("worker_container config unreadable", "auto")
+    wc = (cfg_all.get("operator_control", {}) or {}).get("worker_container") or {}
+    if not wc.get("enabled"):
+        return _amber("container mode disabled — worker would run unisolated", "auto")
+    ok, reasons = validate_container_configuration(wc)
+    if not ok:
+        return _amber("static checks failed: " + "; ".join(reasons), "auto")
+    caps = probe_container_capabilities(wc)
+    if not all((caps["podman_present"], caps["image_present"], caps["digest_pinned"], caps["rootless_ok"])):
+        return _amber(f"capability probe failed ({caps})", "auto")
+    att_path = root / wc.get("attestation_path", "outputs/operator_control/worker_attestation.json")
+    try:
+        att = json.loads(att_path.read_text(encoding="utf-8"))
+    except Exception:
+        return _amber("configured but not runtime-verified (no attestation)", "auto")
+    cfg_path = str(root / "config.json")
+    image_build_ts = wc.get("image_build_ts") or os.path.getmtime(cfg_path)
+    config_mtime = os.path.getmtime(cfg_path)
+    a_ok, a_reasons = verify_runtime_attestation(
+        att, wc, now=time.time(),
+        image_build_ts=image_build_ts,
+        config_mtime=config_mtime,
+    )
+    if not a_ok:
+        return _amber("attestation invalid/stale: " + "; ".join(a_reasons), "auto")
+    return {
+        "status": "green",
+        "reason": "container-isolated, runtime-attested (egress: unrestricted — deferred)",
+        "source": "auto",
+    }
 
 
 def _audit_gate(root: Path) -> dict[str, Any]:
