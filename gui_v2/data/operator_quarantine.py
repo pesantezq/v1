@@ -68,9 +68,11 @@ def _entry(root: Path, branch: str, worktree: str) -> dict[str, Any]:
     uniq = _git(root, "rev-list", "--count", f"main..{branch}").stdout.strip()
     unique_commits = int(uniq) if uniq.isdigit() else 0
     mb = _git(root, "merge-base", "main", branch).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", mb):
+        mb = ""
     names = _git(root, "diff", "--name-only", f"{mb}..{branch}").stdout if mb else ""
     changed = [p for p in names.splitlines() if p][:MAX_PATHS]
-    stat = (_git(root, "diff", "--stat", f"{mb}..{branch}").stdout if mb else "")[:MAX_OUTPUT_BYTES]
+    stat = _git(root, "diff", "--stat", f"{mb}..{branch}").stdout if mb else ""
     # Heuristic patch-equivalence: git cherry marks '-' for commits already in main.
     cherry = _git(root, "cherry", "main", branch).stdout.splitlines()
     patch_equiv: bool | None
@@ -93,7 +95,7 @@ def quarantine_inventory(root: str | Path) -> list[dict[str, Any]]:
     inv: list[dict[str, Any]] = []
     for branch, worktree in _worktrees(root):
         wo_id = branch.removeprefix("operator/")
-        if not _WO_ID_RE.match(wo_id) or (valid and wo_id not in valid):
+        if not _WO_ID_RE.match(wo_id) or wo_id not in valid:
             continue  # only validated, well-formed IDs
         # repo-bound path check
         try:
@@ -116,5 +118,7 @@ def quarantine_diff(root: str | Path, work_order_id: str) -> dict[str, Any]:
     if _git(root, "rev-parse", "--verify", "--quiet", branch).returncode != 0:
         return {"found": False, "stat": ""}
     mb = _git(root, "merge-base", "main", branch).stdout.strip()
-    stat = (_git(root, "diff", "--stat", f"{mb}..{branch}").stdout if mb else "")[:MAX_OUTPUT_BYTES]
+    if not re.fullmatch(r"[0-9a-f]{7,64}", mb):
+        mb = ""
+    stat = _git(root, "diff", "--stat", f"{mb}..{branch}").stdout if mb else ""
     return {"found": True, "stat": stat}

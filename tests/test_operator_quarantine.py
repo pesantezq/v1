@@ -75,7 +75,23 @@ def test_missing_git_degrades(tmp_path, monkeypatch):
                         lambda root: [{"work_order_id": "wo_test_abc"}])
     monkeypatch.setattr(q, "_git", lambda *a, **k: q._failed_cp("git missing"))
     inv = q.quarantine_inventory(repo)
-    assert isinstance(inv, list)  # degrades to [] or entries with safe defaults
+    assert inv == []  # when _git always fails, worktree list is empty → no entries
+
+
+def test_inventory_fails_closed_when_no_valid_ids(tmp_path, monkeypatch):
+    """When list_work_orders returns [] (or raises), unregistered worktrees must NOT be surfaced."""
+    repo = _repo_with_worktree(tmp_path, diverge=True)
+    # Return empty list — simulates failure or empty registry
+    monkeypatch.setattr(q, "list_work_orders", lambda root: [])
+    inv = q.quarantine_inventory(repo)
+    assert inv == []  # fail-closed: wo_test_abc is not in valid IDs so must be excluded
+
+    # Also test when list_work_orders raises
+    def _raise(root):
+        raise RuntimeError("db unavailable")
+    monkeypatch.setattr(q, "list_work_orders", _raise)
+    inv2 = q.quarantine_inventory(repo)
+    assert inv2 == []  # _valid_ids catches the exception → valid=set() → wo_id not in valid → excluded
 
 
 def test_output_is_bounded(tmp_path, monkeypatch):
