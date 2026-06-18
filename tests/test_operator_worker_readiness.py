@@ -157,6 +157,28 @@ def test_auth_amber_when_digest_mismatch(tmp_path, monkeypatch):
     assert operator_worker_readiness(tmp_path)["gates"]["auth"]["status"] == "amber"
 
 
-def test_auth_amber_when_disabled(tmp_path):
+def test_auth_amber_when_disabled(tmp_path, monkeypatch):
     _wc_cfg(tmp_path, enabled=False)
+
+    def _probe_must_not_be_called(cfg):
+        raise AssertionError("probe_container_capabilities must not be called when disabled")
+
+    monkeypatch.setattr(
+        "portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+        _probe_must_not_be_called,
+    )
     assert operator_worker_readiness(tmp_path)["gates"]["auth"]["status"] == "amber"
+
+
+def test_auth_amber_when_config_removed_midcheck(tmp_path, monkeypatch):
+    """_auth_gate must not raise when os.path.getmtime raises OSError mid-check."""
+    _wc_cfg(tmp_path)
+    _write_attest(tmp_path)
+    monkeypatch.setattr(
+        "portfolio_automation.operator_worker_readiness.probe_container_capabilities",
+        lambda cfg: {"podman_present": True, "image_present": True, "digest_pinned": True, "rootless_ok": True},
+    )
+    monkeypatch.setattr("os.path.getmtime", lambda path: (_ for _ in ()).throw(OSError("file removed")))
+    g = operator_worker_readiness(tmp_path)["gates"]["auth"]
+    assert g["status"] == "amber"
+    assert "mtime" in g["reason"]

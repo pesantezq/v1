@@ -29,11 +29,6 @@ def _amber(reason: str, source: str) -> dict[str, Any]:
     return {"status": "amber", "reason": reason, "source": source}
 
 
-def _running_as_root() -> bool:
-    geteuid = getattr(os, "geteuid", None)
-    return bool(geteuid and geteuid() == 0)
-
-
 def _in_container(root: Path) -> bool:
     if Path("/.dockerenv").exists():
         return True
@@ -65,14 +60,17 @@ def _auth_gate(root: Path) -> dict[str, Any]:
         att = json.loads(att_path.read_text(encoding="utf-8"))
     except Exception:
         return _amber("configured but not runtime-verified (no attestation)", "auto")
-    cfg_path = str(root / "config.json")
-    image_build_ts = wc.get("image_build_ts") or os.path.getmtime(cfg_path)
-    config_mtime = os.path.getmtime(cfg_path)
-    a_ok, a_reasons = verify_runtime_attestation(
-        att, wc, now=time.time(),
-        image_build_ts=image_build_ts,
-        config_mtime=config_mtime,
-    )
+    try:
+        cfg_path = str(root / "config.json")
+        image_build_ts = wc.get("image_build_ts") or os.path.getmtime(cfg_path)
+        config_mtime = os.path.getmtime(cfg_path)
+        a_ok, a_reasons = verify_runtime_attestation(
+            att, wc, now=time.time(),
+            image_build_ts=image_build_ts,
+            config_mtime=config_mtime,
+        )
+    except OSError:
+        return _amber("config mtime unreadable", "auto")
     if not a_ok:
         return _amber("attestation invalid/stale: " + "; ".join(a_reasons), "auto")
     return {
