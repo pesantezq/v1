@@ -532,6 +532,22 @@
     "autonomous_worker": {
       "enabled": true,
       "note": "GUI Repair button dispatches an unattended worker. Containment: isolated worktree, never merges/pushes, protected-path guard, production-impact gate. Emergency stop: create config/operator_worker.DISABLED."
+    },
+    "readiness_declared": {
+      "bounded_cmd": {
+        "status": "amber",
+        "declared_by": "operator",
+        "declared_at": "2026-06-18T00:00:00Z",
+        "evidence": ["operator_control/protected_paths.py", "operator_control/worker_runner.py"],
+        "note": "Probe/skill allowlist + production-impact diff gate exist; no OS-level command sandbox yet."
+      },
+      "rollback": {
+        "status": "amber",
+        "declared_by": "operator",
+        "declared_at": "2026-06-18T00:00:00Z",
+        "evidence": ["operator_control/worker_runner.py", "tests/test_operator_worker_runner.py"],
+        "note": "Containment via never-merge/never-push + quarantine; no explicit applied-change rollback."
+      }
     }
   },
   "sim_governance": {
