@@ -129,7 +129,7 @@ def test_autonomous_completes_on_clean_diff_and_passing_tests(repo, monkeypatch)
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
     monkeypatch.setattr(worker_runner, "_invoke_claude",
-                        lambda wt, p, mode="diagnose": {"ok": True, "stdout": "done"})
+                        lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": "done"})
     monkeypatch.setattr(worker_runner.worktree, "changed_files",
                         lambda wt, base="main": ["operator_control/_scratch_note.py"])
     monkeypatch.setattr(worker_runner, "_run_tests",
@@ -145,7 +145,7 @@ def test_autonomous_quarantines_protected_path(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
     monkeypatch.setattr(worker_runner, "_invoke_claude",
-                        lambda wt, p, mode="diagnose": {"ok": True, "stdout": ""})
+                        lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": ""})
     monkeypatch.setattr(worker_runner.worktree, "changed_files",
                         lambda wt, base="main": ["scoring.py"])
     monkeypatch.setattr(worker_runner, "_run_tests",
@@ -164,7 +164,7 @@ def test_autonomous_fails_on_failing_tests(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
     monkeypatch.setattr(worker_runner, "_invoke_claude",
-                        lambda wt, p, mode="diagnose": {"ok": True, "stdout": ""})
+                        lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": ""})
     monkeypatch.setattr(worker_runner.worktree, "changed_files",
                         lambda wt, base="main": [])
     monkeypatch.setattr(worker_runner, "_run_tests",
@@ -199,7 +199,7 @@ def test_crash_never_leaves_order_running(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
 
-    def boom(wt, p, mode="diagnose"):
+    def boom(wt, p, mode="diagnose", **_):
         raise RuntimeError("simulated worker crash")
 
     monkeypatch.setattr(worker_runner, "_invoke_claude", boom)
@@ -214,8 +214,8 @@ def test_cost_logged_to_separate_ledger(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
     monkeypatch.setattr(worker_runner, "_invoke_claude",
-                        lambda wt, p, mode="diagnose": {"ok": True, "stdout": "",
-                                                        "cost_usd": 0.42, "num_turns": 3})
+                        lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": "",
+                                                              "cost_usd": 0.42, "num_turns": 3})
     monkeypatch.setattr(worker_runner.worktree, "changed_files", lambda wt, base="main": [])
     monkeypatch.setattr(worker_runner, "_run_tests", lambda wt, tests: {"passed": True, "output": "ok"})
     worker_runner.run(repo, order["work_order_id"], actor="auto")
@@ -235,7 +235,7 @@ def test_production_impact_gate_blocks_and_fails(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
 
-    def escaped_worker(wt, p, mode="diagnose"):
+    def escaped_worker(wt, p, mode="diagnose", **_):
         (repo / "config.json").write_text("{}")  # wrote to LIVE config (outside worktree)
         return {"ok": True, "stdout": "", "cost_usd": 0.01}
 
@@ -284,7 +284,7 @@ def test_autonomous_never_advances_main(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     order = _order(repo)
     monkeypatch.setattr(worker_runner, "_invoke_claude",
-                        lambda wt, p, mode="diagnose": {"ok": True, "stdout": ""})
+                        lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": ""})
     monkeypatch.setattr(worker_runner.worktree, "changed_files",
                         lambda wt, base="main": [])
     monkeypatch.setattr(worker_runner, "_run_tests",
@@ -383,7 +383,7 @@ def test_drain_runs_eligible_orders_when_enabled(repo, monkeypatch):
     _enable_autonomous(repo, monkeypatch)
     o1 = _order(repo)
     o2 = _order(repo, probe="pipeline.run_status", skill="diagnose_pipeline_status")
-    monkeypatch.setattr(worker_runner, "_invoke_claude", lambda wt, p, mode="diagnose": {"ok": True, "stdout": ""})
+    monkeypatch.setattr(worker_runner, "_invoke_claude", lambda wt, p, mode="diagnose", **_: {"ok": True, "stdout": ""})
     monkeypatch.setattr(worker_runner.worktree, "changed_files", lambda wt, base="main": [])
     monkeypatch.setattr(worker_runner, "_run_tests", lambda wt, tests: {"passed": True, "output": "ok"})
     res = worker_runner.drain(repo, max_orders=10, actor="cron")

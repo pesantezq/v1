@@ -32,6 +32,8 @@ from operator_control import (
     audit_log,
     report_path,
     worker_cost_log_path,
+    worker_container,
+    worker_workspace,
 )
 from operator_control.worker_prompts import render_prompt
 from operator_control.skill_registry import get_skill
@@ -134,8 +136,43 @@ def scaffold(root, work_order_id, actor="cli") -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dict:
-    """Run headless Claude Code in the worktree. Real subprocess; mocked in tests.
+def _parse_claude_json(proc) -> dict:
+    """Extract cost/turn/result fields from a completed claude subprocess.
+
+    Shared by the direct and container execution paths. Returns a dict with
+    ``ok``, ``stdout``, ``stderr``, ``error``, ``cost_usd``, ``num_turns``,
+    ``duration_ms``, and ``result_text``.
+    """
+    ok = proc.returncode == 0
+    error = None
+    cost_usd = 0.0
+    num_turns = None
+    duration_ms = None
+    result_text = None
+    try:
+        lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
+        parsed = json.loads(lines[-1]) if lines else {}
+        if isinstance(parsed, dict):
+            cost_usd = float(parsed.get("total_cost_usd") or 0.0)
+            num_turns = parsed.get("num_turns")
+            duration_ms = parsed.get("duration_ms")
+            result_text = parsed.get("result")
+            # is_error can be set even with a 0 exit code (e.g. an auth 401):
+            # treat that as a failed worker run, not a silent success.
+            if parsed.get("is_error"):
+                ok = False
+                error = parsed.get("result") or f"api_error_status={parsed.get('api_error_status')}"
+    except (json.JSONDecodeError, IndexError, ValueError, TypeError):
+        pass
+    if not ok and error is None:
+        error = (proc.stderr or "non-zero exit").strip()[:300]
+    return {"ok": ok, "stdout": proc.stdout, "stderr": proc.stderr, "error": error,
+            "cost_usd": cost_usd, "num_turns": num_turns, "duration_ms": duration_ms,
+            "result_text": result_text}
+
+
+def _run_direct_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dict:
+    """Run headless Claude Code directly (no container) in the worktree.
 
     Strips ANTHROPIC_API_KEY from the child env so the worker authenticates via
     the box's Claude Code login (subscription) instead of an external API key.
@@ -173,32 +210,121 @@ def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dic
     proc = subprocess.run(
         argv, cwd=str(worktree_path), capture_output=True, text=True, env=child_env,
     )
-    ok = proc.returncode == 0
-    error = None
-    cost_usd = 0.0
-    num_turns = None
-    duration_ms = None
-    result_text = None
+    return _parse_claude_json(proc)
+
+
+def _worker_container_cfg(root) -> dict | None:
+    """Read the operator_control.worker_container block from config.json, or None."""
     try:
-        lines = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
-        parsed = json.loads(lines[-1]) if lines else {}
-        if isinstance(parsed, dict):
-            cost_usd = float(parsed.get("total_cost_usd") or 0.0)
-            num_turns = parsed.get("num_turns")
-            duration_ms = parsed.get("duration_ms")
-            result_text = parsed.get("result")
-            # is_error can be set even with a 0 exit code (e.g. an auth 401):
-            # treat that as a failed worker run, not a silent success.
-            if parsed.get("is_error"):
-                ok = False
-                error = parsed.get("result") or f"api_error_status={parsed.get('api_error_status')}"
-    except (json.JSONDecodeError, IndexError, ValueError, TypeError):
-        pass
-    if not ok and error is None:
-        error = (proc.stderr or "non-zero exit").strip()[:300]
-    return {"ok": ok, "stdout": proc.stdout, "stderr": proc.stderr, "error": error,
-            "cost_usd": cost_usd, "num_turns": num_turns, "duration_ms": duration_ms,
-            "result_text": result_text}
+        cfg = json.loads((Path(root) / "config.json").read_text(encoding="utf-8"))
+        return (cfg.get("operator_control") or {}).get("worker_container")
+    except Exception:
+        return None
+
+
+def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root: str) -> dict:
+    """Run claude inside the rootless Podman container.
+
+    Fail-closed: any startup or attestation failure returns ok=False without
+    falling back to the direct path. The worker_settings.json is copied into
+    the clone as /work/.worker_settings.json before launch so the container
+    worker can locate it at the fixed in-container path.
+    """
+    import time
+    settings_src = Path(__file__).parent / "worker_settings.json"
+    settings_dst = Path(worktree_path) / ".worker_settings.json"
+    try:
+        shutil.copy2(str(settings_src), str(settings_dst))
+    except Exception as exc:
+        return {"ok": False, "execution_mode": "container", "isolated": False,
+                "error": f"failed to copy worker_settings.json into worktree: {exc}",
+                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+    claude_argv = ["claude", "-p", prompt_md, "--output-format", "json",
+                   "--settings", "/work/.worker_settings.json"]
+    if mode == "safe_repair":
+        claude_argv += ["--permission-mode", "acceptEdits"]
+
+    attest_dir = str(Path(worktree_path) / ".attest")
+    Path(attest_dir).mkdir(parents=True, exist_ok=True)
+
+    spec = worker_container.build_container_launch_spec(
+        cfg=cfg, workspace_dir=str(worktree_path), creds_dir=cfg["credentials_dir"],
+        attest_dir=attest_dir, claude_argv=claude_argv)
+    argv = ["runuser", "-u", cfg["run_as_user"], "--", *spec]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=cfg["resource_limits"]["timeout_seconds"])
+    except Exception as exc:
+        return {"ok": False, "execution_mode": "container", "isolated": False,
+                "error": f"container startup failed: {exc}",
+                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+    # Verify attestation — fail-closed: missing or invalid attestation is fatal.
+    try:
+        att = json.loads((Path(attest_dir) / "worker_attestation.json").read_text())
+    except Exception:
+        att = {}
+    cfg_mtime = os.path.getmtime(str(Path(root) / "config.json"))
+    ok_att, att_reasons = worker_container.verify_runtime_attestation(
+        att, cfg, now=time.time(), image_build_ts=cfg_mtime, config_mtime=cfg_mtime)
+
+    # Persist attestation for readiness tracking regardless of pass/fail.
+    out_path = Path(root) / cfg.get("attestation_path", "outputs/operator_control/worker_attestation.json")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        out_path.write_text(json.dumps(att))
+    except Exception:
+        pass  # non-fatal; attestation persistence is observability, not a gate
+
+    if not ok_att:
+        return {"ok": False, "execution_mode": "container", "isolated": False,
+                "error": "attestation failed: " + "; ".join(att_reasons),
+                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+    parsed = _parse_claude_json(proc)
+    parsed["execution_mode"] = "container"
+    parsed["isolated"] = True
+    return parsed
+
+
+def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
+                   root: str = ".") -> dict:
+    """Route a claude invocation to the container or direct path.
+
+    Container mode (when ``operator_control.worker_container.enabled=true`` in
+    config.json) is FAIL CLOSED: any failure — config invalid, podman missing,
+    image absent, rootless unavailable, startup failure, attestation failure —
+    returns ok=False and MUST NOT call _run_direct_claude.  There is NO
+    automatic fallback to direct.  Direct runs ONLY when container mode is
+    disabled (tagged isolated=False).
+    """
+    cfg = _worker_container_cfg(root)
+    if not (cfg and cfg.get("enabled")):
+        out = _run_direct_claude(worktree_path, prompt_md, mode)
+        out["execution_mode"] = "direct"
+        out["isolated"] = False
+        return out
+
+    # Container mode — FAIL CLOSED on any problem; never fall back to direct.
+    ok, reasons = worker_container.validate_container_configuration(cfg)
+    if not ok:
+        return {"ok": False, "execution_mode": "container", "isolated": False,
+                "error": "container config invalid: " + "; ".join(reasons),
+                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+    caps = worker_container.probe_container_capabilities(cfg)
+    if not (caps["podman_present"] and caps["image_present"]
+            and caps["digest_pinned"] and caps["rootless_ok"]):
+        return {"ok": False, "execution_mode": "container", "isolated": False,
+                "error": (f"container preconditions unmet: "
+                          f"podman={caps['podman_present']} "
+                          f"image={caps['image_present']} "
+                          f"digest={caps['digest_pinned']} "
+                          f"rootless={caps['rootless_ok']}"),
+                "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
+
+    return _run_via_container(worktree_path, prompt_md, mode, cfg, root)
 
 
 def _run_tests(worktree_path, tests) -> dict:
@@ -351,6 +477,7 @@ def run(root, work_order_id, actor="cli") -> dict:
         worker = _invoke_claude(
             wt, (wt / "WORKER_PROMPT.md").read_text(encoding="utf-8"),
             mode=order.get("mode", "diagnose"),
+            root=str(root),
         )
         # Cost is incurred regardless of outcome — log it once, immediately,
         # in the operational ledger (NOT the FMP/AI decision budget).
