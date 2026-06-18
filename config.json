@@ -554,8 +554,8 @@
       "note": "Phase 1 config schema. enabled=false until image is built and digest+image_build_ts recorded (see docs/operator_worker_container.md). Image digest MUST be set before enabling."
     },
     "autonomous_worker": {
-      "enabled": true,
-      "note": "GUI Repair button dispatches an unattended worker. Containment: isolated worktree, never merges/pushes, protected-path guard, production-impact gate. Emergency stop: create config/operator_worker.DISABLED."
+      "enabled": false,
+      "note": "Autonomous dispatch DISABLED 2026-06-18 pending Phase 1-3 hardening (container isolation shipped inert; cost cap + rollback still pending). Keep false until all 5 readiness gates green + adversarial review. Containment if ever re-enabled: isolated worktree, never merges/pushes, protected-path guard, production-impact gate, kill-switch config/operator_worker.DISABLED."
     },
     "readiness_declared": {
       "bounded_cmd": {
