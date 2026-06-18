@@ -44,11 +44,14 @@ from portfolio_automation.operator_worker_readiness import (
 
 
 def _write_config(tmp_path, declared=None, cost_cap=None):
-    cfg = {"operator_worker": {}}
+    # Real schema: worker config lives under the existing top-level
+    # "operator_control" object (alongside autonomous_worker), NOT a new
+    # "operator_worker" key.
+    cfg = {"operator_control": {}}
     if declared is not None:
-        cfg["operator_worker"]["readiness_declared"] = declared
+        cfg["operator_control"]["readiness_declared"] = declared
     if cost_cap is not None:
-        cfg["operator_worker"]["cost_cap_usd_per_day"] = cost_cap
+        cfg["operator_control"]["cost_cap_usd_per_day"] = cost_cap
     (tmp_path / "config.json").write_text(json.dumps(cfg))
 
 
@@ -232,7 +235,17 @@ def _declared_gate(name: str, cfg_block: dict[str, Any], root: Path) -> dict[str
     }
 
 
-def _cost(root: Path, ow_cfg: dict[str, Any]) -> dict[str, Any]:
+def _autonomous_enabled_safe(root: Path) -> bool:
+    """Canonical accessor — honors the operator_control.autonomous_worker.enabled
+    config AND the config/operator_worker.DISABLED kill-switch file."""
+    try:
+        from operator_control.worker_runner import autonomous_enabled
+        return bool(autonomous_enabled(root))
+    except Exception:
+        return False
+
+
+def _cost(root: Path, oc_cfg: dict[str, Any]) -> dict[str, Any]:
     lifetime = 0.0
     p = root / "outputs" / "operator_control" / "worker_cost_log.jsonl"
     try:
@@ -246,7 +259,7 @@ def _cost(root: Path, ow_cfg: dict[str, Any]) -> dict[str, Any]:
                 continue
     except OSError:
         pass
-    cap = ow_cfg.get("cost_cap_usd_per_day")
+    cap = oc_cfg.get("cost_cap_usd_per_day")
     cap_configured = isinstance(cap, (int, float)) and cap > 0
     cap_pct = round(lifetime / cap * 100, 1) if cap_configured else None
     return {"lifetime_usd": round(lifetime, 4),
@@ -258,8 +271,8 @@ def operator_worker_readiness(root: str | Path) -> dict[str, Any]:
     root = Path(root)
     try:
         cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
-        ow = cfg.get("operator_worker", {}) or {}
-        declared = ow.get("readiness_declared", {}) or {}
+        oc = cfg.get("operator_control", {}) or {}
+        declared = oc.get("readiness_declared", {}) or {}
         gates = {
             "auth": _auth_gate(root),
             "audit": _audit_gate(root),
@@ -272,8 +285,8 @@ def operator_worker_readiness(root: str | Path) -> dict[str, Any]:
             "observe_only": True,
             "gates": gates,
             "overall_ready": f"{green}/5",
-            "autonomous_enabled": bool(ow.get("enabled", False)),
-            "cost": _cost(root, ow),
+            "autonomous_enabled": _autonomous_enabled_safe(root),
+            "cost": _cost(root, oc),
         }
     except Exception as exc:  # degraded, never raises to caller
         return {"observe_only": True, "error": f"{type(exc).__name__}: {exc}",
@@ -284,10 +297,15 @@ def operator_worker_readiness(root: str | Path) -> dict[str, Any]:
 
 - [ ] **Step 4: Add the config block to `config.json`**
 
-Add under the top-level `operator_worker` object (create the object if absent). Use real evidence paths that exist; status starts at the honest current state:
+Add `readiness_declared` INTO the EXISTING top-level `operator_control` object
+(which already contains `autonomous_worker`). Do NOT create a new
+`operator_worker` top-level key. Use real evidence paths that exist; status
+starts at the honest current state. Leave `cost_cap_usd_per_day` unset (uncapped
+— honest current state):
 
 ```json
-"operator_worker": {
+"operator_control": {
+  "autonomous_worker": { "...": "existing — leave as-is" },
   "readiness_declared": {
     "bounded_cmd": {
       "status": "amber",
