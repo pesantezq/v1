@@ -14,13 +14,21 @@ SAFETY:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from operator_control.probe_registry import probes_for_view
 from operator_control.skill_registry import skill_for_probe_action
 from operator_control import work_orders as wo
+from operator_control.work_orders import list_work_orders
+from portfolio_automation.operator_worker_readiness import operator_worker_readiness
+from gui_v2.data.operator_quarantine import quarantine_inventory
 from gui_v2.data.shared import card
+
+STALE_HOURS = 24
+CANCELLABLE = frozenset({"queued", "awaiting_approval", "approved"})
+_OPEN = frozenset({"queued", "awaiting_approval", "claimed", "running", "approved"})
 
 # Human labels for the action buttons (the only place mode → label happens).
 _ACTION_LABELS = {
@@ -185,8 +193,55 @@ def today_operator_summary(root: Path | str) -> dict[str, Any]:
     }
 
 
+def _age_hours(created_at: str) -> float | None:
+    try:
+        dt = datetime.fromisoformat(created_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return round((datetime.now(timezone.utc) - dt).total_seconds() / 3600, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def operator_worker_view(root) -> dict[str, Any]:
+    """Compose the /dashboard/operator view-model (observe-only, live)."""
+    readiness = operator_worker_readiness(root)
+    try:
+        raw = list_work_orders(root)
+    except Exception:
+        raw = []
+    orders = []
+    counts = {k: 0 for k in ("open", "awaiting_approval", "failed", "quarantined",
+                              "cancelled", "completed", "stale")}
+    for o in raw:
+        status = o.get("status")
+        age = _age_hours(o.get("created_at"))
+        stale = bool(status in _OPEN and age is not None and age > STALE_HOURS)
+        orders.append({
+            "work_order_id": o.get("work_order_id"), "status": status,
+            "created_at": o.get("created_at"), "age_hours": age,
+            "probe_id": o.get("probe_id"), "skill_id": o.get("skill_id"),
+            "cancellable": status in CANCELLABLE, "stale": stale,
+        })
+        if status in _OPEN:
+            counts["open"] += 1
+        if status in counts:
+            counts[status] += 1
+        if stale:
+            counts["stale"] += 1
+    try:
+        quarantine = quarantine_inventory(root)
+    except Exception:
+        quarantine = []
+    counts["quarantined"] = len(quarantine)
+    return {"readiness": readiness, "cost": readiness.get("cost", {}),
+            "orders": orders, "counts": counts, "quarantine": quarantine,
+            "degraded": bool(readiness.get("error"))}
+
+
 __all__ = [
     "operator_control_context",
     "today_operator_summary",
     "worker_runner_status",
+    "operator_worker_view",
 ]
