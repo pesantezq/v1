@@ -164,6 +164,60 @@ def test_core_corpus_counts_as_daily():
     assert v["scraped.json"]["status"] == "silently_skipped"  # wired (core==daily) but stale
 
 
+# ── content predicate: narrative non-degeneracy (2026-06-18 triage) ──────────
+
+def test_narr_predicate_accepts_body_without_key_themes():
+    """A weekly/monthly narrative with key_themes==[] but a real body (headline +
+    summary, or a populated discovery_context) is NOT fresh_but_empty."""
+    from portfolio_automation.pipeline_wiring_probe import _content_predicates
+
+    narr = _content_predicates()["market_narrative_weekly.json"]
+    # Healthy thin-theme narrative: empty key_themes, full body.
+    assert narr({"key_themes": [], "data_available": True,
+                 "top_headline": "X", "executive_summary": "Y"}) is True
+    # Populated discovery_context alone also counts.
+    assert narr({"key_themes": [], "discovery_context": {"candidate_count": 4}}) is True
+    # Genuinely empty narrative still flags.
+    assert narr({"key_themes": [], "data_available": False,
+                 "discovery_context": {"candidate_count": 0}}) is False
+    # Original key_themes path still works.
+    assert narr({"key_themes": [{"theme": "ai"}]}) is True
+
+
+# ── config gate refinement: crowd mention-history Reddit feed (2026-06-18) ────
+
+def test_crowd_mention_gate_disabled_when_reddit_uncredentialed(tmp_path, monkeypatch):
+    """crowd_radar.enabled=True but the Reddit feed reports no_credentials → the
+    absent mention-history ledger is stale-by-design (disabled), not unwired."""
+    import json
+    import portfolio_automation.pipeline_wiring_probe as mod
+
+    (tmp_path / "config.json").write_text(json.dumps({"crowd_radar": {"enabled": True}}))
+    state_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+    state_dir.mkdir(parents=True)
+    (state_dir / "crowd_knowledge_state.json").write_text(
+        json.dumps({"source_status": "no_credentials"}))
+
+    gates = mod._config_gates(tmp_path)
+    assert gates["crowd_mention_history.json"] is False
+
+
+def test_crowd_mention_gate_enabled_when_reddit_feed_ok(tmp_path):
+    """When the Reddit feed is actually ingesting (source_status ok), the gate
+    stays enabled so a genuinely-broken ledger would still surface."""
+    import json
+    import portfolio_automation.pipeline_wiring_probe as mod
+
+    (tmp_path / "config.json").write_text(json.dumps({"crowd_radar": {"enabled": True}}))
+    state_dir = tmp_path / "outputs" / "sandbox" / "discovery"
+    state_dir.mkdir(parents=True)
+    (state_dir / "crowd_knowledge_state.json").write_text(
+        json.dumps({"source_status": "ok"}))
+
+    gates = mod._config_gates(tmp_path)
+    assert gates["crowd_mention_history.json"] is True
+
+
 # ── orchestrator: real-repo smoke + contract ─────────────────────────────────
 
 def test_run_probe_observe_only_and_contract(tmp_path):

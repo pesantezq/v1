@@ -229,7 +229,18 @@ def classify_producers(
 # content is non-degenerate. Catches "looks fresh but empty".
 def _content_predicates() -> dict[str, Any]:
     def _narr(d: dict) -> bool:
-        return bool((d.get("key_themes") or d.get("themes")) or d.get("themes_found"))
+        if (d.get("key_themes") or d.get("themes")) or d.get("themes_found"):
+            return True
+        # A narrative is non-degenerate even with key_themes==[] in a thin-theme
+        # period, as long as it carries real body content (headline + summary, or
+        # a populated discovery_context). Keying only on key_themes false-flagged
+        # otherwise-complete weekly/monthly narratives as fresh_but_empty.
+        # (2026-06-18 wiring-probe triage.)
+        if (d.get("discovery_context") or {}).get("candidate_count"):
+            return True
+        if d.get("data_available") and (d.get("top_headline") or d.get("executive_summary")):
+            return True
+        return False
 
     def _evidence(d: dict) -> bool:
         return bool(d.get("data_available") or d.get("ticker_contexts")
@@ -290,7 +301,12 @@ def _build_script_corpus(root: Path) -> dict[str, str]:
     """
     daily = _read_text(root / "scripts" / "run_daily_safe.sh")
     weekly = _read_text(root / "scripts" / "run_weekly_safe.sh")
-    monthly = _read_text(root / "scripts" / "monthly_check.sh")
+    # monthly cadence is driven by two cron scripts: the monthly check and the
+    # pattern-loop reconstruction (the sole scheduled caller of historical_backfill).
+    monthly = "\n".join((
+        _read_text(root / "scripts" / "monthly_check.sh"),
+        _read_text(root / "scripts" / "pattern_loop_reconstruct.sh"),
+    ))
     core = "\n".join(
         _read_text(root / p)
         for p in (
@@ -332,6 +348,25 @@ def _content_flags(root: Path) -> dict[str, bool]:
     return flags
 
 
+# Reddit-feed states under which the crowd mention-history ledger is stale-by-
+# design (the feed cannot ingest posts, so the ledger is never written). Used to
+# refine the too-coarse crowd_radar.enabled gate below.
+_CROWD_FEED_OFF_STATES = {"no_credentials", "disabled", "source_terms_blocked"}
+
+
+def _crowd_feed_status(root: Path) -> str | None:
+    """source_status of the Reddit-fed public-knowledge-velocity layer (the
+    producer that writes crowd_mention_history). Read from its sibling state
+    artifact; None if absent/unreadable."""
+    import json
+
+    path = root / "outputs" / "sandbox" / "discovery" / "crowd_knowledge_state.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("source_status")
+    except Exception:
+        return None
+
+
 def _config_gates(root: Path) -> dict[str, bool]:
     import json
 
@@ -345,6 +380,17 @@ def _config_gates(root: Path) -> dict[str, bool]:
         for key in path_keys:
             node = node.get(key) if isinstance(node, dict) else None
         gates[name] = bool(node) if node is not None else bool(default)
+
+    # Refine the crowd mention-history gate. crowd_radar.enabled is the umbrella
+    # flag and also covers the ApeWisdom lane, which does NOT feed this ledger —
+    # only the Reddit feed does. So enabled=True can coexist with an uncredentialed
+    # Reddit feed (the 2026-06-14 ApeWisdom enable defeated the original gate).
+    # When the layer's own status says the Reddit feed can't ingest, the absent
+    # ledger is stale-by-design → keep it `disabled`, not `unwired`/AMBER.
+    # (2026-06-18 wiring-probe triage.)
+    if gates.get("crowd_mention_history.json"):
+        if _crowd_feed_status(root) in _CROWD_FEED_OFF_STATES:
+            gates["crowd_mention_history.json"] = False
     return gates
 
 

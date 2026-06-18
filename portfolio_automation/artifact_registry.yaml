@@ -578,7 +578,9 @@ artifacts:
     lens: developer
     role: telemetry
     required: false
-    cadence: weekend
+    # Reconciled 2026-06-18: the only scheduled caller is pattern_loop_reconstruct.sh
+    # (cron monthly, 50 9 1 * *) via run_historical_backfill(); no weekend cron exists.
+    cadence: monthly
     producer: historical_backfill
     consumers: [daily-tool-analysis]
     severity_if_missing: info
