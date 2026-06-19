@@ -65,7 +65,8 @@ def test_enabled_all_caps_pass_runs_via_container(tmp_path, monkeypatch):
     # Patch _run_via_container to return container-mode success
     container_called = {"called": False}
 
-    def fake_container(worktree_path, prompt_md, mode, cfg, root, work_order_id=""):
+    def fake_container(worktree_path, prompt_md, mode, cfg, root, work_order_id="",
+                       max_turns=None, max_run_seconds=None):
         container_called["called"] = True
         return {"ok": True, "execution_mode": "container", "isolated": True,
                 "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
