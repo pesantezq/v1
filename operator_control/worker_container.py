@@ -19,6 +19,11 @@ def build_container_launch_spec(*, cfg: dict, workspace_dir: str, creds_dir: str
     uid, gid = cfg["container_uid"], cfg["container_gid"]
     argv = [
         cfg["podman_path"], "run", "--rm",
+        # keep-id maps the host worker uid -> the same container uid so the
+        # read-only :ro creds mount (a 0600 ~/.claude/.credentials.json owned by
+        # the host worker user) is readable inside. Without it, container uid 1000
+        # maps to a subuid and cannot read the secured creds (verified 2026-06-19).
+        "--userns=keep-id",
         f"--user={uid}:{gid}",
         "--read-only",
         "--security-opt=no-new-privileges",

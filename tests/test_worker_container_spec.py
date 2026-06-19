@@ -28,6 +28,9 @@ def test_spec_uses_digest_not_bare_tag():
 def test_spec_security_flags_present():
     s = " ".join(_spec())
     assert "--user" in s and "1000:1000" in s
+    # keep-id maps host worker uid -> same container uid so the :ro 0600 creds
+    # mount is readable inside (without it, container 1000 -> subuid -> EACCES).
+    assert "--userns=keep-id" in _spec()
     assert "--read-only" in s
     assert "--security-opt=no-new-privileges" in _spec() or "no-new-privileges" in s
     assert "--cap-drop=ALL" in _spec()
