@@ -119,6 +119,33 @@ def _run(argv: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
 
+def worker_cmd_prefix(cfg: dict) -> list[str]:
+    """Prefix that runs a podman command AS the rootless worker user, or [] to
+    run in-process. The image + rootless context live in the worker's storage
+    (not root's), so probing/launching as the current user (root) reports
+    image=False/rootless=False. Applies only when run_as_user is configured and
+    differs from the current user (needs runuser, i.e. root); degrades to [] for
+    a non-root caller (probe then reports honestly from the current context)."""
+    import pwd
+    user = cfg.get("run_as_user")
+    if not user:
+        return []
+    try:
+        if pwd.getpwuid(os.getuid()).pw_name == user:
+            return []  # already the worker user — no runuser needed
+    except Exception:
+        pass
+    uid = int(cfg.get("container_uid") or 1000)
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except Exception:
+        home = f"/home/{user}"
+    rd = f"/run/user/{uid}"
+    return ["runuser", "-u", user, "--", "env",
+            f"HOME={home}", f"XDG_RUNTIME_DIR={rd}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path={rd}/bus"]
+
+
 def probe_container_capabilities(cfg: dict) -> dict:
     podman = cfg.get("podman_path", "")
     podman_present = bool(podman) and os.path.exists(podman)
@@ -126,11 +153,12 @@ def probe_container_capabilities(cfg: dict) -> dict:
     digest_pinned = isinstance(cfg.get("image_digest"), str) and cfg["image_digest"].startswith("sha256:")
     rootless_ok = False
     if podman_present:
+        prefix = worker_cmd_prefix(cfg)  # probe the WORKER's rootless context, not root's
         try:
-            insp = _run([podman, "image", "exists",
+            insp = _run([*prefix, podman, "image", "exists",
                          f'{cfg["image_ref"]}@{cfg["image_digest"]}'])
             image_present = insp.returncode == 0
-            info = _run([podman, "info", "--format", "{{.Host.Security.Rootless}}"])
+            info = _run([*prefix, podman, "info", "--format", "{{.Host.Security.Rootless}}"])
             rootless_ok = info.stdout.strip() == "true"
         except Exception:
             pass
