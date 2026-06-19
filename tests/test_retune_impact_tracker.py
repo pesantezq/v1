@@ -29,6 +29,7 @@ from portfolio_automation.retune_impact_tracker import (
     compute_outcome_attribution,
     diff_against_baseline,
     run_retune_impact_tracker,
+    _load_ticker_sector,
 )
 
 
@@ -325,6 +326,81 @@ class TestSectorComposition(unittest.TestCase):
             r = compute_outcome_attribution(root=root)
             comp = r["by_fingerprint"]["AAAA"]["sector_composition"]
             self.assertIn("Unknown", comp)
+
+
+class TestEtfSectorNormalization(unittest.TestCase):
+    """Funds (isEtf/isFund) must not inherit FMP's issuer sector ("Financial
+    Services / Asset Management"). Sector-exposure ETFs map to their exposure
+    sector; all other funds bucket as "ETF/Index". Non-fund equities (incl.
+    crypto names FMP files under Financial Services) keep their raw sector."""
+
+    def _write_profile(
+        self,
+        root: Path,
+        ticker: str,
+        sector: str,
+        *,
+        industry: str = "",
+        is_etf: bool = False,
+        is_fund: bool = False,
+    ) -> None:
+        p = root / "data" / "fmp_cache" / f"profile_stable_{ticker}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stored_at": "x", "data": [{
+            "symbol": ticker, "sector": sector, "industry": industry,
+            "isEtf": is_etf, "isFund": is_fund,
+        }]}))
+
+    def test_broad_etf_buckets_as_etf_index(self):
+        # QQQ: FMP says "Financial Services / Asset Management", isEtf=True.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "QQQ", "Financial Services",
+                                 industry="Asset Management", is_etf=True)
+            self.assertEqual(_load_ticker_sector(root, "QQQ"), "ETF/Index")
+
+    def test_sector_spdr_maps_to_exposure_sector(self):
+        # XLE is an energy ETF mis-tagged "Financial Services" by FMP.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "XLE", "Financial Services",
+                                 industry="Asset Management", is_etf=True)
+            self.assertEqual(_load_ticker_sector(root, "XLE"), "Energy")
+
+    def test_sector_spdr_tech_maps_to_technology(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "XLK", "Financial Services",
+                                 industry="Asset Management", is_etf=True)
+            self.assertEqual(_load_ticker_sector(root, "XLK"), "Technology")
+
+    def test_fund_flag_also_normalizes(self):
+        # isFund=True (not isEtf) must also be caught.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "SOMEFUND", "Financial Services",
+                                 industry="Asset Management", is_fund=True)
+            self.assertEqual(_load_ticker_sector(root, "SOMEFUND"), "ETF/Index")
+
+    def test_crypto_equity_keeps_financial_services(self):
+        # RIOT is a real equity (isEtf/isFund False) FMP files under Financial
+        # Services. That's FMP-truth for an operating company — leave it.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "RIOT", "Financial Services",
+                                 industry="Financial - Capital Markets")
+            self.assertEqual(_load_ticker_sector(root, "RIOT"), "Financial Services")
+
+    def test_plain_equity_sector_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "NVDA", "Technology",
+                                 industry="Semiconductors")
+            self.assertEqual(_load_ticker_sector(root, "NVDA"), "Technology")
+
+    def test_missing_profile_still_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(_load_ticker_sector(Path(td), "NOPE"), "Unknown")
 
 
 if __name__ == "__main__":

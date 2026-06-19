@@ -52,6 +52,7 @@ from portfolio_automation.data_governance import (
     safe_write_json,
     safe_write_text,
 )
+from portfolio_automation.sector_mapping import normalize_sector
 
 logger = logging.getLogger("stockbot.portfolio_automation.universe_sanitation")
 
@@ -181,7 +182,12 @@ def _load_recent_signals(root: Path, lookback_days: int) -> dict[str, dict[str, 
 
 
 def _load_sector(root: Path, ticker: str) -> str:
-    """Reuse the same FMP profile cache convention as retune_impact_tracker."""
+    """Reuse the same FMP profile cache convention as retune_impact_tracker.
+
+    Funds are normalized to their exposure sector (or "ETF/Index") via
+    `sector_mapping.normalize_sector` so ETFs don't inherit FMP's issuer sector
+    ("Financial Services / Asset Management") and contaminate the sector: tag.
+    """
     p = root / "data" / "fmp_cache" / f"profile_stable_{ticker}.json"
     if not p.exists():
         return "Unknown"
@@ -192,9 +198,12 @@ def _load_sector(root: Path, ticker: str) -> str:
     if isinstance(data, list) and data:
         data = data[0]
     if isinstance(data, dict):
-        s = data.get("sector")
-        if isinstance(s, str) and s.strip():
-            return s.strip()
+        return normalize_sector(
+            ticker,
+            data.get("sector"),
+            is_etf=bool(data.get("isEtf")),
+            is_fund=bool(data.get("isFund")),
+        )
     return "Unknown"
 
 

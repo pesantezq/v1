@@ -24,12 +24,48 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from portfolio_automation.universe_sanitation import (
     _TOP_N,
     _aggregate_universe,
+    _load_sector,
     _rank_candidates,
     build_top100_daily,
     build_top100_monthly,
     build_top100_weekly,
     run_universe_sanitation,
 )
+
+
+class TestLoadSectorEtfNormalization(unittest.TestCase):
+    """_load_sector must normalize funds so the sector: rationale tag isn't
+    contaminated by FMP's issuer sector ("Financial Services / Asset Management").
+    """
+
+    def _write_profile(self, root, ticker, sector, *, is_etf=False, is_fund=False):
+        p = root / "data" / "fmp_cache" / f"profile_stable_{ticker}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"data": [{
+            "symbol": ticker, "sector": sector, "isEtf": is_etf, "isFund": is_fund,
+        }]}))
+
+    def test_broad_etf_buckets_as_etf_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "QQQ", "Financial Services", is_etf=True)
+            self.assertEqual(_load_sector(root, "QQQ"), "ETF/Index")
+
+    def test_sector_spdr_maps_to_exposure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "XLE", "Financial Services", is_etf=True)
+            self.assertEqual(_load_sector(root, "XLE"), "Energy")
+
+    def test_equity_sector_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_profile(root, "NVDA", "Technology")
+            self.assertEqual(_load_sector(root, "NVDA"), "Technology")
+
+    def test_missing_profile_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(_load_sector(Path(td), "NOPE"), "Unknown")
 
 
 def _write_config(root: Path, static_watchlist: list[str]) -> None:

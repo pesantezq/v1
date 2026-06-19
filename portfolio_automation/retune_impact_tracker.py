@@ -59,6 +59,7 @@ from portfolio_automation.data_governance import (
     safe_write_json,
     safe_write_text,
 )
+from portfolio_automation.sector_mapping import normalize_sector
 
 logger = logging.getLogger("stockbot.portfolio_automation.retune_impact_tracker")
 
@@ -430,13 +431,16 @@ _UNKNOWN_SECTOR = "Unknown"
 
 
 def _load_ticker_sector(root: Path, ticker: str) -> str:
-    """Resolve a ticker's sector from the FMP profile cache (no hardcoded
-    mappings). Returns "Unknown" if the cache is missing or malformed.
+    """Resolve a ticker's sector from the FMP profile cache. Returns "Unknown"
+    if the cache is missing or malformed.
 
-    Reads `data/fmp_cache/profile_stable_<TICKER>.json` and returns its
-    `data[0].sector` field. ETF profiles legitimately come back as
-    "Financial Services / Asset Management" because FMP classifies funds
-    that way — this is FMP-truth, not a mapping defect.
+    Reads `data/fmp_cache/profile_stable_<TICKER>.json` `data[0].sector`, with
+    one normalization: FMP files funds (`isEtf`/`isFund`) under their *issuer*
+    sector ("Financial Services / Asset Management"), which is useless for
+    sector attribution — it would fold an energy ETF, a tech ETF, and crypto
+    into one bogus "Financial Services" bucket. Normalization (sector-exposure
+    ETFs → exposure, other funds → "ETF/Index", non-funds keep raw sector) is
+    delegated to `sector_mapping.normalize_sector`.
     """
     safe_ticker = (ticker or "").strip().upper()
     if not safe_ticker:
@@ -455,8 +459,14 @@ def _load_ticker_sector(root: Path, ticker: str) -> str:
         first = data
     else:
         first = payload if isinstance(payload, dict) else {}
-    sector = (first or {}).get("sector")
-    return sector.strip() if isinstance(sector, str) and sector.strip() else _UNKNOWN_SECTOR
+    first = first or {}
+    return normalize_sector(
+        safe_ticker,
+        first.get("sector"),
+        is_etf=bool(first.get("isEtf")),
+        is_fund=bool(first.get("isFund")),
+        unknown=_UNKNOWN_SECTOR,
+    )
 
 
 def compute_outcome_attribution(
