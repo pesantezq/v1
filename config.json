@@ -557,6 +557,13 @@
       "enabled": false,
       "note": "Autonomous dispatch DISABLED 2026-06-18 pending Phase 1-3 hardening (container isolation shipped inert; cost cap + rollback still pending). Keep false until all 5 readiness gates green + adversarial review. Containment if ever re-enabled: isolated worktree, never merges/pushes, protected-path guard, production-impact gate, kill-switch config/operator_worker.DISABLED."
     },
+    "cost_cap": {
+      "usd_per_run": 3.0,
+      "usd_per_day": 10.0,
+      "max_turns_per_run": 40,
+      "max_run_seconds": 1200,
+      "note": "Phase 2 enforced cost cap. usd_* = money semantics (day-gate refuses dispatch / post-run AMBER flag); max_turns_per_run + max_run_seconds = hard rails that kill the child. Inert until autonomous_worker.enabled=true (Phase 4). Null/<=0 disables that knob."
+    },
     "readiness_declared": {
       "bounded_cmd": {
         "status": "amber",

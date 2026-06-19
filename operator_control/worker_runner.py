@@ -473,6 +473,48 @@ def read_cost_log(root, limit: int | None = None) -> list[dict]:
     return out[-limit:] if limit else out
 
 
+def _cost_cap_cfg(root) -> dict:
+    """Read operator_control.cost_cap. Each value is the positive number from
+    config, or None if absent/invalid (<=0). A missing block disables all caps
+    (additive / degrade-open)."""
+    try:
+        cfg = json.loads((Path(root) / "config.json").read_text(encoding="utf-8"))
+        block = (cfg.get("operator_control") or {}).get("cost_cap") or {}
+    except Exception:
+        block = {}
+
+    def _pos(key):
+        v = block.get(key)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+    mt = _pos("max_turns_per_run")
+    return {
+        "usd_per_run": _pos("usd_per_run"),
+        "usd_per_day": _pos("usd_per_day"),
+        "max_turns_per_run": int(mt) if mt else None,
+        "max_run_seconds": _pos("max_run_seconds"),
+    }
+
+
+def _rec_date(rec):
+    """Parse a cost-log record's UTC timestamp to a date, or None."""
+    ts = rec.get("timestamp")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc).date()
+    except (ValueError, AttributeError):
+        return None
+
+
+def _today_spend_usd(root) -> float:
+    """Sum cost_usd over cost-log records timestamped on the current UTC day."""
+    today = datetime.now(timezone.utc).date()
+    return round(sum(float(c.get("cost_usd") or 0.0)
+                     for c in read_cost_log(root)
+                     if _rec_date(c) == today), 6)
+
+
 def run(root, work_order_id, actor="cli") -> dict:
     """Autonomous path when gated on; otherwise falls back to scaffold."""
     root = Path(root)
