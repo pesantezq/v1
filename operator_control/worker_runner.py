@@ -270,7 +270,25 @@ def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root
         spec = worker_container.build_container_launch_spec(
             cfg=cfg, workspace_dir=ws, creds_dir=cfg["credentials_dir"],
             attest_dir=attest_dir, claude_argv=claude_argv)
-        argv = ["runuser", "-u", cfg["run_as_user"], "--", *spec]
+        # Rootless podman needs the WORKER user's own runtime dir + session bus.
+        # `runuser` does not set these, so without them the worker inherits the
+        # parent's (root's) XDG_RUNTIME_DIR=/run/user/0 and rootless crun fails
+        # ("XDG_RUNTIME_DIR not owned" / sd-bus "Interactive authentication
+        # required"). Set them explicitly from the worker's uid + home.
+        import pwd
+        worker_uid = int(cfg.get("container_uid") or 1000)
+        try:
+            worker_home = pwd.getpwnam(cfg["run_as_user"]).pw_dir
+        except Exception:
+            worker_home = f"/home/{cfg['run_as_user']}"
+        _runtime_dir = f"/run/user/{worker_uid}"
+        _env_prefix = [
+            "env",
+            f"HOME={worker_home}",
+            f"XDG_RUNTIME_DIR={_runtime_dir}",
+            f"DBUS_SESSION_BUS_ADDRESS=unix:path={_runtime_dir}/bus",
+        ]
+        argv = ["runuser", "-u", cfg["run_as_user"], "--", *_env_prefix, *spec]
         container_timeout = cfg["resource_limits"]["timeout_seconds"]
         if max_run_seconds:
             container_timeout = min(max_run_seconds, container_timeout)

@@ -224,6 +224,45 @@ def test_container_uses_isolated_clone_not_worktree_path(tmp_path, monkeypatch):
     assert out["execution_mode"] == "container"
 
 
+def test_container_run_sets_rootless_env_for_worker(tmp_path, monkeypatch):
+    """The runuser invocation must inject the worker's HOME/XDG_RUNTIME_DIR/DBUS
+    session bus, or rootless podman fails (inherits root's /run/user/0)."""
+    root, cfg = _full_container_cfg(tmp_path)
+    sentinel_ws = str(tmp_path / "ws" / "wo_env")
+    Path(sentinel_ws).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(wr.worker_workspace, "create_isolated_workspace",
+                        lambda *a, **k: sentinel_ws)
+    monkeypatch.setattr(wr.worker_workspace, "destroy_workspace", lambda *a, **k: None)
+    monkeypatch.setattr(wr.worker_workspace, "extract_validated_diff", lambda ws: "")
+    monkeypatch.setattr(wr.shutil, "copy2", lambda src, dst: None)
+    monkeypatch.setattr(wr.worker_container, "build_container_launch_spec",
+                        lambda **k: ["/usr/bin/podman", "run", "--rm", "image", "claude"])
+    monkeypatch.setattr(wr.worker_container, "verify_runtime_attestation",
+                        lambda *a, **k: (True, []))
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"type":"result","is_error":false,"total_cost_usd":0.01}'
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        return _Proc()
+    monkeypatch.setattr(wr.subprocess, "run", fake_run)
+
+    wr._run_via_container(str(tmp_path / "wt"), "prompt", "diagnose", cfg, str(root), "wo_env")
+
+    argv = captured["argv"]
+    assert argv[:3] == ["runuser", "-u", "stockbot-worker"]
+    assert "env" in argv
+    assert "XDG_RUNTIME_DIR=/run/user/1000" in argv
+    assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in argv
+    assert any(a.startswith("HOME=") for a in argv)
+    # the env prefix precedes the podman spec
+    assert argv.index("env") < argv.index("/usr/bin/podman")
+
+
 def test_container_destroys_clone_even_on_startup_failure(tmp_path, monkeypatch):
     """destroy_workspace must be called even when the container startup fails."""
     root, cfg = _full_container_cfg(tmp_path)
