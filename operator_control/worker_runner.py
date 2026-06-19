@@ -729,6 +729,74 @@ def cancel(root, work_order_id, actor="cli", note="") -> dict:
     )
 
 
+def quarantine_review(root) -> dict:
+    """Enumerate quarantined worktrees: failed orders whose .worktrees/<id> still
+    exists. Computes the diff vs main per item (salvageable = non-empty diff).
+    Derived live — no persisted artifact. Removes nothing."""
+    root = Path(root)
+    items = []
+    for o in wo.list_work_orders(root):
+        if o.get("status") != "failed":
+            continue
+        wid = o["work_order_id"]
+        wt = root / ".worktrees" / wid
+        if not wt.exists():
+            continue
+        try:
+            changed = worktree.changed_files(wt, base="main")
+        except Exception:
+            changed = []
+        rp = report_path(root, wid)
+        items.append({
+            "work_order_id": wid,
+            "worktree": str(wt),
+            "branch": f"operator/{wid}",
+            "changed_file_count": len(changed),
+            "salvageable": bool(changed),
+            "report_path": str(rp) if rp.exists() else None,
+        })
+    return {"pending": sum(1 for it in items if it["salvageable"]), "items": items}
+
+
+def quarantine_discard(root, work_order_id, actor="cli") -> dict:
+    """Explicit rollback: remove the quarantined worktree for a failed order. The
+    order's status stays 'failed' (the record of what happened); only the contained
+    worktree is discarded. Audits worker_quarantine_discarded."""
+    root = Path(root)
+    wt = root / ".worktrees" / work_order_id
+    existed = wt.exists()
+    if existed:
+        worktree.remove_worktree(root, wt, force=True)
+    audit_log.record_event(
+        root, event_type="worker_quarantine_discarded", actor=actor,
+        work_order_id=work_order_id,
+        details={"worktree": str(wt), "existed": existed},
+        safety_result="quarantine worktree removed (contained change discarded)",
+    )
+    return {"work_order_id": work_order_id, "worktree": str(wt), "removed": existed}
+
+
+def quarantine_salvage(root, work_order_id, actor="cli") -> dict:
+    """Report-only: return the MANUAL integration command for a human to review and
+    integrate the contained branch. Never merges/pushes/edits. Audits
+    worker_quarantine_salvaged."""
+    root = Path(root)
+    branch = f"operator/{work_order_id}"
+    wt = root / ".worktrees" / work_order_id
+    integration_command = (
+        f"# review first, then from the repo root:\n"
+        f"git -C {root} checkout main && git -C {root} merge --no-ff {branch}"
+    )
+    audit_log.record_event(
+        root, event_type="worker_quarantine_salvaged", actor=actor,
+        work_order_id=work_order_id,
+        details={"branch": branch, "worktree": str(wt)},
+        safety_result="quarantine salvage reported (manual integration; no auto-merge)",
+    )
+    return {"work_order_id": work_order_id, "branch": branch,
+            "worktree": str(wt), "integration_command": integration_command}
+
+
 def drain(root, max_orders: int = 10, actor: str = "cron") -> dict:
     """Run eligible orders through the autonomous path until none remain / max hit.
 
@@ -768,6 +836,7 @@ def status(root) -> dict:
         "autonomous_enabled": autonomous_enabled(root),
         "operational_cost_usd_total": total_cost,
         "operational_runs": len(cost_log),
+        "quarantine_pending": quarantine_review(root)["pending"],
     }
 
 
@@ -795,6 +864,13 @@ def _build_parser():
     spc.add_argument("--id", required=True)
     spc.add_argument("--actor", default="cli")
     spc.add_argument("--note", default="")
+    sub.add_parser("quarantine-review")
+    sqd = sub.add_parser("quarantine-discard")
+    sqd.add_argument("--id", required=True)
+    sqd.add_argument("--actor", default="cli")
+    sqs = sub.add_parser("quarantine-salvage")
+    sqs.add_argument("--id", required=True)
+    sqs.add_argument("--actor", default="cli")
     spn = sub.add_parser("run-next")
     spn.add_argument("--actor", default="cli")
     spd = sub.add_parser("drain")
@@ -831,6 +907,15 @@ def main(argv=None) -> int:
         if args.command == "cancel":
             print(json.dumps(cancel(root, args.id, actor=args.actor, note=args.note), indent=2))
             return 0
+        if args.command == "quarantine-review":
+            print(json.dumps(quarantine_review(root), indent=2))
+            return 0
+        if args.command == "quarantine-discard":
+            print(json.dumps(quarantine_discard(root, args.id, actor=args.actor), indent=2))
+            return 0
+        if args.command == "quarantine-salvage":
+            print(json.dumps(quarantine_salvage(root, args.id, actor=args.actor), indent=2))
+            return 0
         if args.command == "drain":
             print(json.dumps(drain(root, max_orders=args.max, actor=args.actor), indent=2))
             return 0
@@ -864,6 +949,9 @@ __all__ = [
     "complete",
     "fail",
     "cancel",
+    "quarantine_review",
+    "quarantine_discard",
+    "quarantine_salvage",
     "drain",
     "status",
     "read_cost_log",
