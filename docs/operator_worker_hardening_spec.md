@@ -24,7 +24,7 @@ Autonomous execution must not be enabled until ALL five hold:
 | 1 | **Authentication** | Uses `~/.claude` login (must NOT set `ANTHROPIC_API_KEY` or headless 401s). | Worker runs **as root** with git-isolation only — over-privileged. |
 | 2 | **Bounded command policies** | Probe/skill allowlist (rejects unknown `probe_id`); `mode=safe_repair`; production-impact diff gate (main/config/registry/decision_plan unchanged). | No **OS-level** command sandbox — it runs a full headless session. |
 | 3 | **Audit evidence** | `audit_log.jsonl` (event_type/actor/safety_result/details) + `worker_cost_log.jsonl` (cost/turns/duration/budget_scope). | ✅ Adequate. Cost-cap adjunct **CLOSED 2026-06-19** — spend is now enforced (see Phase 2 below); consider signing/append-only enforcement next. |
-| 4 | **Rollback behavior** | Never merges, never pushes; quarantines on protected-path diff; aborts on `main` HEAD move. | Containment only — no explicit *applied-change* rollback path; salvage of good quarantined work is manual. |
+| 4 | **Rollback behavior** | Never merges, never pushes; quarantines on protected-path diff; aborts on `main` HEAD move. | ✅ **CLOSED 2026-06-19** — explicit rollback path added: `cancel` verb clears dead orders without inflating `failed` count; quarantine-review path (salvage/discard) surfaces candidate diffs for human decision. See Phase 3. |
 | 5 | **Quarantine handling** | Protected-path diff guard quarantines bad runs into the worktree. | ✅ Works (verified: `wo_…4043c5` correctly quarantined a HEAD-moved run). |
 
 **Original two real blockers: precondition 1 + 2 → OS isolation (run unprivileged,
@@ -62,13 +62,16 @@ AMBER at ≥80% or any over-cap event. Inert until Phase 4 (autonomous disabled)
 Design + plan: `docs/superpowers/specs/2026-06-19-operator-worker-cost-cap-design.md`,
 `docs/superpowers/plans/2026-06-19-operator-worker-cost-cap.md`.
 
-### Phase 3 — explicit rollback + quarantine review (rounds out #4)
-- Add a `cancel`/`archive` terminal transition to `worker_runner` (today only
-  `fail` exists — clearing dead orders inflates the `failed` count).
-- Add a **quarantine-review** path: surface quarantined worktrees that contain a
-  candidate diff, diff them against current main, and offer salvage-or-discard
-  (the `wo_…4043c5` case — a real fix that main later reproduced — is the worked
-  example of why this is needed).
+### Phase 3 — explicit rollback + quarantine review (rounds out #4) — ✅ SHIPPED 2026-06-19
+Implemented `cancel` verb (`work_order_cancelled` audit event) as a terminal transition distinct
+from `fail` — clearing dead/abandoned orders no longer inflates the `failed` count. Added
+**quarantine-review** path: `quarantine-salvage` (emits `worker_quarantine_salvaged`, writes a
+branch-report for manual integration) and `quarantine-discard` (emits `worker_quarantine_discarded`,
+rolls back the contained worktree). The `wo_…4043c5` case (a real fix quarantined then
+independently reproduced in main) is the canonical worked example. A `quarantine_pending` counter
+is now exposed in `worker_runner.status()` and surfaced by the daily-check operator-control line
+(6g) with an AMBER trigger at `≥ 1`. Observe-only, never RED.
+Design + plan: `docs/superpowers/plans/2026-06-19-operator-worker-phase3-rollback-quarantine.md`.
 
 ### Phase 4 — enable gate
 - Only after Phases 1–3 land + tests: flip `autonomous_enabled=true` behind the
