@@ -67,6 +67,17 @@ def test_spec_claude_argv_is_last_and_unmodified():
     s = _spec()
     assert s[-5:] == ["claude", "-p", "do the thing", "--output-format", "json"]
 
+
+def test_spec_runs_attest_before_claude():
+    """The container must run worker_attest.sh (writes the attestation the host
+    verifies, fail-closed) before exec'ing claude. claude_argv stays last."""
+    s = _spec()
+    joined = " ".join(s)
+    # attest script + exec-through wrapper present, before the claude command
+    assert joined.index("/usr/local/bin/worker_attest.sh") < joined.index("claude")
+    assert any('exec "$@"' in part for part in s)
+    assert "/bin/sh" in s
+
 def test_spec_injects_image_digest_env():
     s = _spec()
     # Find all --env values

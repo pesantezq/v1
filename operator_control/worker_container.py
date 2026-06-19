@@ -50,7 +50,12 @@ def build_container_launch_spec(*, cfg: dict, workspace_dir: str, creds_dir: str
     # Always inject the approved digest so worker_attest.sh can record it for attestation.
     argv += ["--env", f"STOCKBOT_IMAGE_DIGEST={cfg['image_digest']}"]
     argv.append(image)
-    argv += list(claude_argv)
+    # Run the attestation script FIRST (writes /attest/worker_attestation.json that
+    # the host-side verify_runtime_attestation reads — fail-closed), then exec the
+    # claude command with its original args via "$@" (so claude's JSON stays on
+    # stdout; worker_attest.sh writes only to the /attest file). claude_argv stays
+    # last + unmodified.
+    argv += ["/bin/sh", "-c", '/usr/local/bin/worker_attest.sh && exec "$@"', "sh", *claude_argv]
     return argv
 
 
