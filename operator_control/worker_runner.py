@@ -526,6 +526,23 @@ def run(root, work_order_id, actor="cli") -> dict:
         if not autonomous_enabled(root):
             return scaffold(root, work_order_id, actor=actor)
 
+        # Pre-dispatch daily cost gate. Runs BEFORE _prepare so a deferred order
+        # is never claimed and no worktree is created — it stays eligible and is
+        # picked up once the UTC day rolls over.
+        cap = _cost_cap_cfg(root)
+        if cap["usd_per_day"] is not None:
+            today_usd = _today_spend_usd(root)
+            if today_usd >= cap["usd_per_day"]:
+                audit_log.record_event(
+                    root, event_type="worker_cost_cap_deferred", actor=actor,
+                    work_order_id=work_order_id,
+                    details={"today_usd": today_usd, "cap_usd": cap["usd_per_day"]},
+                    safety_result="deferred: daily cost cap",
+                )
+                return {"work_order_id": work_order_id, "mode_of_runner": "autonomous",
+                        "result": "deferred_cost_cap", "today_usd": today_usd,
+                        "cap_usd": cap["usd_per_day"]}
+
         order, wt, branch = _prepare(root, work_order_id, actor)
         wo.transition_work_order(
             root, work_order_id, new_status="running", actor=actor,
@@ -684,7 +701,10 @@ def drain(root, max_orders: int = 10, actor: str = "cron") -> dict:
         if not elig:
             break
         # Oldest-created first (list_work_orders is newest-first).
-        results.append(run(root, elig[-1]["work_order_id"], actor=actor))
+        res = run(root, elig[-1]["work_order_id"], actor=actor)
+        results.append(res)
+        if isinstance(res, dict) and res.get("result") == "deferred_cost_cap":
+            break  # daily cost cap reached — re-attempting would defer again
     return {"drained": len(results), "status": "ran", "results": results}
 
 
