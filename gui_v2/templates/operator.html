@@ -3,6 +3,16 @@
 {% block content %}
 <h1 class="text-xl font-semibold mb-4">Operator Worker</h1>
 
+<div class="mb-4 rounded-md border px-3 py-2 text-sm
+  {{ 'border-emerald-700 text-emerald-300' if view.readiness.autonomous_enabled else 'border-zinc-700 text-zinc-400' }}">
+  Autonomous execution:
+  {% if view.readiness.autonomous_enabled %}
+    <span class="font-semibold">ENABLED</span> — the worker may auto-dispatch in an isolated rootless container; never merges/pushes. Kill-switch: <code class="text-xs">touch config/operator_worker.DISABLED</code>
+  {% else %}
+    <span class="font-semibold">disabled</span> — scaffold-only (no autonomous execution)
+  {% endif %}
+</div>
+
 {% if request.query_params.get("msg") %}
 <div class="mb-4 rounded-md border px-3 py-2 text-sm
   {{ 'border-red-700 text-red-300' if request.query_params.get('level')=='error'
@@ -32,9 +42,14 @@
 </table>
 
 {{ ui.section_header("Cost", "telemetry (not a gate)", "") }}
-<p class="text-sm mb-6">Lifetime ${{ "%.2f"|format(view.cost.lifetime_usd) }} ·
-  cap {{ "$%.2f"|format(view.cost.cap_usd) if view.cost.cap_configured else "unconfigured ⚠" }}
-  {% if view.cost.cap_pct is not none %}· {{ view.cost.cap_pct }}% used{% endif %}</p>
+<p class="text-sm mb-6">
+  {% if view.cost.cap_configured %}
+    Today ${{ "%.2f"|format(view.cost.today_usd) }} / ${{ "%.2f"|format(view.cost.cap_usd) }} daily cap
+    {% if view.cost.cap_pct is not none %}<span class="{{ 'text-amber-400' if view.cost.cap_pct >= 80 else 'text-zinc-400' }}">({{ view.cost.cap_pct }}% used)</span>{% endif %}
+  {% else %}
+    cap <span class="text-amber-400">unconfigured ⚠</span>
+  {% endif %}
+  · lifetime ${{ "%.2f"|format(view.cost.lifetime_usd) }}</p>
 
 {{ ui.section_header("Work Orders", view.counts.open ~ " open · " ~ view.counts.failed ~ " failed · " ~ view.counts.cancelled ~ " cancelled · " ~ view.counts.stale ~ " stale", "") }}
 <table class="w-full text-sm mb-6">
