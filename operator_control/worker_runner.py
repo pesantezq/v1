@@ -267,6 +267,27 @@ def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root
         attest_dir = str(Path(ws) / ".attest")
         Path(attest_dir).mkdir(parents=True, exist_ok=True)
 
+        # The clone + attest dir are created by THIS process (root, when dispatched
+        # by the dashboard service); the container runs as the worker user (keep-id
+        # uid). chown the whole workspace to the worker so it can write /work (its
+        # edits) + /attest (the attestation). Best-effort: skipped if not permitted
+        # (e.g. caller already IS the worker user, where chown is unnecessary).
+        try:
+            _uid = int(cfg.get("container_uid") or 1000)
+            _gid = int(cfg.get("container_gid") or 1000)
+            if os.getuid() == 0:  # only root can chown to another uid
+                # follow_symlinks=False (lchown semantics) so a symlink in the clone
+                # can never redirect the chown to a file outside the sandbox.
+                for _dp, _dns, _fns in os.walk(ws, followlinks=False):
+                    os.chown(_dp, _uid, _gid, follow_symlinks=False)
+                    for _fn in _fns:
+                        try:
+                            os.chown(os.path.join(_dp, _fn), _uid, _gid, follow_symlinks=False)
+                        except FileNotFoundError:
+                            pass  # transient (e.g. a dangling symlink)
+        except (PermissionError, OSError):
+            pass
+
         spec = worker_container.build_container_launch_spec(
             cfg=cfg, workspace_dir=ws, creds_dir=cfg["credentials_dir"],
             attest_dir=attest_dir, claude_argv=claude_argv)
