@@ -205,3 +205,37 @@ def test_container_timeout_tightens_not_loosens(tmp_path, monkeypatch):
                                 "wo_c", max_turns=40, max_run_seconds=600)
     assert captured["timeout"] == 600  # min(600, 1800)
     assert out["ok"] is False  # the RuntimeError is caught -> error-dict
+
+
+def test_post_run_overage_flag_emitted(tmp_path, monkeypatch):
+    _write_config(tmp_path, {"usd_per_run": 3.0, "usd_per_day": 100.0})
+    from operator_control import work_orders as wo, worktree as wtree
+    order = {"work_order_id": "wo_big", "status": "queued", "probe_id": "p",
+             "skill_id": "s", "mode": "safe_repair", "requested_action": "x"}
+    monkeypatch.setattr(wr, "autonomous_enabled", lambda root: True)
+    monkeypatch.setattr(wo, "get_work_order", lambda root, wid: dict(order))
+    monkeypatch.setattr(wo, "transition_work_order", lambda root, wid, **kw: {"status": kw.get("new_status")})
+    # Stub _prepare to return a real temp worktree dir with the prompt file.
+    wtdir = tmp_path / "wt"
+    wtdir.mkdir()
+    (wtdir / "WORKER_PROMPT.md").write_text("PROMPT", encoding="utf-8")
+    monkeypatch.setattr(wr, "_prepare", lambda root, wid, actor: (dict(order), wtdir, "operator/wo_big"))
+    monkeypatch.setattr(wr, "get_skill", lambda sid: None)
+    monkeypatch.setattr(wr, "_production_snapshot", lambda root: {})
+    monkeypatch.setattr(wr, "_production_impact", lambda root, snap: [])
+    # The worker "ran" and reported a cost above the per-run cap.
+    monkeypatch.setattr(wr, "_invoke_claude",
+                        lambda *a, **k: {"ok": True, "cost_usd": 5.0, "num_turns": 3, "duration_ms": 1000})
+    monkeypatch.setattr(wtree, "changed_files", lambda wt, base="main": [])
+    monkeypatch.setattr(wr, "violating_paths", lambda diff: [])
+    monkeypatch.setattr(wr, "_run_tests", lambda wt, tests: {"passed": True})
+    monkeypatch.setattr(wr, "_write_report", lambda *a, **k: None)
+
+    res = wr.run(tmp_path, "wo_big", actor="test")
+
+    assert res["result"] == "completed"  # outcome unaffected by the flag
+    events = [json.loads(l) for l in (tmp_path / "outputs/operator_control/audit_log.jsonl").read_text().splitlines() if l.strip()]
+    flagged = [e for e in events if e["event_type"] == "worker_cost_cap_exceeded"]
+    assert len(flagged) == 1
+    assert flagged[0]["details"]["cost_usd"] == 5.0
+    assert flagged[0]["details"]["cap_usd"] == 3.0

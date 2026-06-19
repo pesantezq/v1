@@ -580,8 +580,18 @@ def run(root, work_order_id, actor="cli") -> dict:
         )
         # Cost is incurred regardless of outcome — log it once, immediately,
         # in the operational ledger (NOT the FMP/AI decision budget).
-        _record_cost(root, order, worker,
-                     status=("ok" if worker.get("ok") else "worker_error"))
+        rec = _record_cost(root, order, worker,
+                           status=("ok" if worker.get("ok") else "worker_error"))
+        # Per-run overage flag: the rails (max_turns/timeout) prevent large
+        # overages; this surfaces any run that still exceeded the per-run cap.
+        # Does NOT change the order's pass/fail outcome — money is already spent.
+        if cap["usd_per_run"] is not None and rec["cost_usd"] > cap["usd_per_run"]:
+            audit_log.record_event(
+                root, event_type="worker_cost_cap_exceeded", actor=actor,
+                work_order_id=work_order_id,
+                details={"cost_usd": rec["cost_usd"], "cap_usd": cap["usd_per_run"]},
+                safety_result="flagged: per-run cost cap exceeded",
+            )
 
         # FAILED GATE — no production impact. A contained worker must never
         # change main or a live production file. If it did (escaped the
