@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +139,8 @@ def _autonomous_enabled_safe(root: Path) -> bool:
 
 def _cost(root: Path, oc_cfg: dict[str, Any]) -> dict[str, Any]:
     lifetime = 0.0
+    today_total = 0.0
+    today = datetime.now(timezone.utc).date()
     p = root / "outputs" / "operator_control" / "worker_cost_log.jsonl"
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
@@ -145,15 +148,26 @@ def _cost(root: Path, oc_cfg: dict[str, Any]) -> dict[str, Any]:
             if not line:
                 continue
             try:
-                lifetime += float(json.loads(line).get("cost_usd") or 0.0)
+                rec = json.loads(line)
+                c = float(rec.get("cost_usd") or 0.0)
             except (ValueError, json.JSONDecodeError):
                 continue
+            lifetime += c
+            ts = rec.get("timestamp")
+            if ts:
+                try:
+                    d = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone(timezone.utc).date()
+                    if d == today:
+                        today_total += c
+                except (ValueError, AttributeError):
+                    pass
     except OSError:
         pass
-    cap = oc_cfg.get("cost_cap_usd_per_day")
-    cap_configured = isinstance(cap, (int, float)) and cap > 0
-    cap_pct = round(lifetime / cap * 100, 1) if cap_configured else None
+    cap = (oc_cfg.get("cost_cap") or {}).get("usd_per_day")
+    cap_configured = isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0
+    cap_pct = round(today_total / cap * 100, 1) if cap_configured else None
     return {"lifetime_usd": round(lifetime, 4),
+            "today_usd": round(today_total, 4),
             "cap_usd": cap if cap_configured else None,
             "cap_pct": cap_pct, "cap_configured": bool(cap_configured)}
 
@@ -182,5 +196,5 @@ def operator_worker_readiness(root: str | Path) -> dict[str, Any]:
     except Exception as exc:  # degraded, never raises to caller
         return {"observe_only": True, "error": f"{type(exc).__name__}: {exc}",
                 "gates": {}, "overall_ready": "0/5",
-                "cost": {"lifetime_usd": 0.0, "cap_usd": None,
-                         "cap_pct": None, "cap_configured": False}}
+                "cost": {"lifetime_usd": 0.0, "today_usd": 0.0,
+                         "cap_usd": None, "cap_pct": None, "cap_configured": False}}

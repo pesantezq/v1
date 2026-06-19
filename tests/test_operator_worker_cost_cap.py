@@ -239,3 +239,32 @@ def test_post_run_overage_flag_emitted(tmp_path, monkeypatch):
     assert len(flagged) == 1
     assert flagged[0]["details"]["cost_usd"] == 5.0
     assert flagged[0]["details"]["cap_usd"] == 3.0
+
+
+from portfolio_automation import operator_worker_readiness as owr
+
+
+def test_readiness_cost_today_window(tmp_path):
+    oc_cfg = {"cost_cap": {"usd_per_day": 10.0}}
+    p = tmp_path / "outputs" / "operator_control" / "worker_cost_log.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    with p.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"timestamp": now.isoformat(), "cost_usd": 2.0}) + "\n")
+        fh.write(json.dumps({"timestamp": now.isoformat(), "cost_usd": 3.0}) + "\n")
+        fh.write(json.dumps({"timestamp": (now - timedelta(days=1)).isoformat(), "cost_usd": 40.0}) + "\n")
+
+    cost = owr._cost(tmp_path, oc_cfg)
+
+    assert cost["cap_configured"] is True
+    assert cost["cap_usd"] == 10.0
+    assert cost["today_usd"] == pytest.approx(5.0)
+    assert cost["lifetime_usd"] == pytest.approx(45.0)
+    assert cost["cap_pct"] == pytest.approx(50.0)  # 5.0 / 10.0, NOT lifetime
+
+
+def test_readiness_cost_no_cap_block(tmp_path):
+    cost = owr._cost(tmp_path, {})
+    assert cost["cap_configured"] is False
+    assert cost["cap_usd"] is None
+    assert cost["cap_pct"] is None
