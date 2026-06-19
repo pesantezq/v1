@@ -252,7 +252,6 @@ def test_day_gate_ignores_yesterday_spend(tmp_path, monkeypatch):
     _write_config(tmp_path, {"usd_per_day": 10.0})
     _append_cost(tmp_path, 50.0, datetime.now(timezone.utc) - timedelta(days=1))
     _seed_order(tmp_path, monkeypatch)
-    sentinel = {"_prepared": False}
     monkeypatch.setattr(wr, "_prepare",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("reached prepare")))
     # Day-gate should NOT trip (yesterday excluded) -> it proceeds to _prepare,
