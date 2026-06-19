@@ -729,13 +729,19 @@ def cancel(root, work_order_id, actor="cli", note="") -> dict:
     )
 
 
-def quarantine_review(root) -> dict:
+def quarantine_review(root, orders=None) -> dict:
     """Enumerate quarantined worktrees: failed orders whose .worktrees/<id> still
     exists. Computes the diff vs main per item (salvageable = non-empty diff).
-    Derived live — no persisted artifact. Removes nothing."""
+    Derived live — no persisted artifact. Removes nothing.
+
+    ``orders`` may be passed in to avoid a second ``list_work_orders`` I/O call
+    when the caller (e.g. ``status()``) already holds the list.
+    """
     root = Path(root)
+    if orders is None:
+        orders = wo.list_work_orders(root)
     items = []
-    for o in wo.list_work_orders(root):
+    for o in orders:
         if o.get("status") != "failed":
             continue
         wid = o["work_order_id"]
@@ -763,6 +769,8 @@ def quarantine_discard(root, work_order_id, actor="cli") -> dict:
     order's status stays 'failed' (the record of what happened); only the contained
     worktree is discarded. Audits worker_quarantine_discarded."""
     root = Path(root)
+    if wo.get_work_order(root, work_order_id) is None:
+        raise WorkerRunnerError(f"unknown work order {work_order_id}")
     wt = root / ".worktrees" / work_order_id
     existed = wt.exists()
     if existed:
@@ -836,7 +844,7 @@ def status(root) -> dict:
         "autonomous_enabled": autonomous_enabled(root),
         "operational_cost_usd_total": total_cost,
         "operational_runs": len(cost_log),
-        "quarantine_pending": quarantine_review(root)["pending"],
+        "quarantine_pending": quarantine_review(root, orders=orders)["pending"],
     }
 
 

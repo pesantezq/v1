@@ -62,8 +62,8 @@ def test_cancel_unknown_id_raises(tmp_path):
         wr.cancel(tmp_path, "wo_does_not_exist", actor="test")
 
 
-def _seed_failed_with_worktree(root: Path, wid: str, with_diff: bool):
-    """Seed a failed order and a fake worktree dir; optionally with a changed file."""
+def _seed_failed_with_worktree(root: Path, wid: str):
+    """Seed a failed order and a fake worktree dir."""
     rec = {"work_order_id": wid, "status": "failed", "probe_id": "p", "skill_id": "s",
            "mode": "safe_repair", "requested_action": "x",
            "created_at": "2026-06-19T00:00:00+00:00",
@@ -79,8 +79,8 @@ def _seed_failed_with_worktree(root: Path, wid: str, with_diff: bool):
 
 
 def test_quarantine_review_identifies_salvageable(tmp_path, monkeypatch):
-    wt_diff = _seed_failed_with_worktree(tmp_path, "wo_diff", with_diff=True)
-    _seed_failed_with_worktree(tmp_path, "wo_nodiff", with_diff=False)
+    wt_diff = _seed_failed_with_worktree(tmp_path, "wo_diff")
+    _seed_failed_with_worktree(tmp_path, "wo_nodiff")
     # No worktree at all for this failed order:
     p = tmp_path / "outputs" / "operator_control" / "work_orders.jsonl"
     with p.open("a") as fh:
@@ -101,7 +101,7 @@ def test_quarantine_review_identifies_salvageable(tmp_path, monkeypatch):
 
 
 def test_quarantine_discard_removes_worktree(tmp_path, monkeypatch):
-    _seed_failed_with_worktree(tmp_path, "wo_kill", with_diff=True)
+    _seed_failed_with_worktree(tmp_path, "wo_kill")
     removed = {}
     monkeypatch.setattr(wr.worktree, "remove_worktree",
                         lambda root, path, force=False: removed.update(path=str(path), force=force))
@@ -113,7 +113,7 @@ def test_quarantine_discard_removes_worktree(tmp_path, monkeypatch):
 
 
 def test_quarantine_salvage_reports_only(tmp_path, monkeypatch):
-    _seed_failed_with_worktree(tmp_path, "wo_keep", with_diff=True)
+    _seed_failed_with_worktree(tmp_path, "wo_keep")
     called = {"removed": False}
     monkeypatch.setattr(wr.worktree, "remove_worktree",
                         lambda *a, **k: called.update(removed=True))
@@ -125,8 +125,15 @@ def test_quarantine_salvage_reports_only(tmp_path, monkeypatch):
 
 
 def test_status_includes_quarantine_pending(tmp_path, monkeypatch):
-    _seed_failed_with_worktree(tmp_path, "wo_p", with_diff=True)
+    _seed_failed_with_worktree(tmp_path, "wo_p")
     monkeypatch.setattr(wr.worktree, "changed_files", lambda w, base="main": ["f.py"])
     monkeypatch.setattr(wr.worktree, "list_worktrees", lambda root: [])
     st = wr.status(tmp_path)
     assert st["quarantine_pending"] == 1
+
+
+def test_quarantine_discard_unknown_id_raises(tmp_path):
+    # Seed an unrelated order so the log file exists (same pattern as cancel test).
+    _seed(tmp_path, "queued")
+    with pytest.raises(wr.WorkerRunnerError, match="unknown work order wo_missing"):
+        wr.quarantine_discard(tmp_path, "wo_missing", actor="test")
