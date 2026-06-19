@@ -72,9 +72,10 @@ def test_spec_runs_attest_before_claude():
     """The container must run worker_attest.sh (writes the attestation the host
     verifies, fail-closed) before exec'ing claude. claude_argv stays last."""
     s = _spec()
-    joined = " ".join(s)
-    # attest script + exec-through wrapper present, before the claude command
-    assert joined.index("/usr/local/bin/worker_attest.sh") < joined.index("claude")
+    # attest script (inside the sh -c arg) precedes the exact "claude" argv element
+    attest_idx = next(i for i, p in enumerate(s) if "worker_attest.sh" in p)
+    claude_idx = s.index("claude")  # exact element, not the ".claude" mount substring
+    assert attest_idx < claude_idx
     assert any('exec "$@"' in part for part in s)
     assert "/bin/sh" in s
 
