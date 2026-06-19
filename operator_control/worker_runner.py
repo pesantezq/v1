@@ -171,7 +171,9 @@ def _parse_claude_json(proc) -> dict:
             "result_text": result_text}
 
 
-def _run_direct_claude(worktree_path, prompt_md: str, mode: str = "diagnose") -> dict:
+def _run_direct_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
+                       max_turns: int | None = None,
+                       max_run_seconds: float | None = None) -> dict:
     """Run headless Claude Code directly (no container) in the worktree.
 
     Strips ANTHROPIC_API_KEY from the child env so the worker authenticates via
@@ -205,11 +207,19 @@ def _run_direct_claude(worktree_path, prompt_md: str, mode: str = "diagnose") ->
                 "error": "claude binary not found on PATH or ~/.local/bin"}
     argv = [claude_bin, "-p", prompt_md, "--output-format", "json",
             "--settings", str(settings)]
+    if max_turns:
+        argv += ["--max-turns", str(max_turns)]
     if mode == "safe_repair":
         argv += ["--permission-mode", "acceptEdits"]
-    proc = subprocess.run(
-        argv, cwd=str(worktree_path), capture_output=True, text=True, env=child_env,
-    )
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(worktree_path), capture_output=True, text=True,
+            env=child_env, timeout=max_run_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "stdout": "", "stderr": "", "cost_usd": 0.0,
+                "num_turns": None, "duration_ms": None, "result_text": None,
+                "error": f"killed: cost-cap wall-clock ceiling ({max_run_seconds}s)"}
     return _parse_claude_json(proc)
 
 
@@ -223,7 +233,8 @@ def _worker_container_cfg(root) -> dict | None:
 
 
 def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root: str,
-                       work_order_id: str) -> dict:
+                       work_order_id: str, max_turns: int | None = None,
+                       max_run_seconds: float | None = None) -> dict:
     """Run claude inside the rootless Podman container on a disposable isolated clone.
 
     The clone's .git is self-contained under workspace_root — the production
@@ -248,6 +259,8 @@ def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root
 
         claude_argv = ["claude", "-p", prompt_md, "--output-format", "json",
                        "--settings", "/work/.worker_settings.json"]
+        if max_turns:
+            claude_argv += ["--max-turns", str(max_turns)]
         if mode == "safe_repair":
             claude_argv += ["--permission-mode", "acceptEdits"]
 
@@ -258,13 +271,16 @@ def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root
             cfg=cfg, workspace_dir=ws, creds_dir=cfg["credentials_dir"],
             attest_dir=attest_dir, claude_argv=claude_argv)
         argv = ["runuser", "-u", cfg["run_as_user"], "--", *spec]
+        container_timeout = cfg["resource_limits"]["timeout_seconds"]
+        if max_run_seconds:
+            container_timeout = min(max_run_seconds, container_timeout)
         try:
             proc = subprocess.run(argv, capture_output=True, text=True,
-                                  timeout=cfg["resource_limits"]["timeout_seconds"])
+                                  timeout=container_timeout)
         except Exception as exc:
             return {"ok": False, "execution_mode": "container", "isolated": False,
                     "stdout": "", "stderr": "",
-                    "error": f"container startup failed: {exc}",
+                    "error": f"container startup failed (or cost-cap timeout): {exc}",
                     "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
 
         # Verify attestation — fail-closed: missing or invalid attestation is fatal.
@@ -306,7 +322,9 @@ def _run_via_container(worktree_path, prompt_md: str, mode: str, cfg: dict, root
 
 
 def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
-                   root: str = ".", work_order_id: str = "") -> dict:
+                   root: str = ".", work_order_id: str = "",
+                   max_turns: int | None = None,
+                   max_run_seconds: float | None = None) -> dict:
     """Route a claude invocation to the container or direct path.
 
     Container mode (when ``operator_control.worker_container.enabled=true`` in
@@ -318,7 +336,8 @@ def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
     """
     cfg = _worker_container_cfg(root)
     if not (cfg and cfg.get("enabled")):
-        out = _run_direct_claude(worktree_path, prompt_md, mode)
+        out = _run_direct_claude(worktree_path, prompt_md, mode,
+                                 max_turns=max_turns, max_run_seconds=max_run_seconds)
         out["execution_mode"] = "direct"
         out["isolated"] = False
         return out
@@ -341,7 +360,8 @@ def _invoke_claude(worktree_path, prompt_md: str, mode: str = "diagnose",
                           f"rootless={caps['rootless_ok']}"),
                 "cost_usd": 0.0, "num_turns": None, "duration_ms": None, "result_text": None}
 
-    return _run_via_container(worktree_path, prompt_md, mode, cfg, root, work_order_id)
+    return _run_via_container(worktree_path, prompt_md, mode, cfg, root, work_order_id,
+                              max_turns=max_turns, max_run_seconds=max_run_seconds)
 
 
 def _run_tests(worktree_path, tests) -> dict:
@@ -555,6 +575,8 @@ def run(root, work_order_id, actor="cli") -> dict:
             mode=order.get("mode", "diagnose"),
             root=str(root),
             work_order_id=work_order_id,
+            max_turns=cap["max_turns_per_run"],
+            max_run_seconds=cap["max_run_seconds"],
         )
         # Cost is incurred regardless of outcome — log it once, immediately,
         # in the operational ledger (NOT the FMP/AI decision budget).

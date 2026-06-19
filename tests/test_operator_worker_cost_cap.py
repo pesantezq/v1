@@ -124,3 +124,84 @@ def test_drain_stops_on_deferral(tmp_path, monkeypatch):
 
     assert calls["n"] == 1  # stopped after the first deferral, did not loop to 5
     assert out["drained"] == 1
+
+
+import subprocess
+
+
+def test_direct_path_includes_max_turns(tmp_path, monkeypatch):
+    captured = {}
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        captured["timeout"] = kw.get("timeout")
+        class P:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.1, "num_turns": 2, "result": "ok"}'
+            stderr = ""
+        return P()
+    monkeypatch.setattr(wr.shutil, "which", lambda b: "/usr/bin/claude")
+    monkeypatch.setattr(wr.subprocess, "run", fake_run)
+
+    wr._run_direct_claude(tmp_path, "PROMPT", mode="safe_repair",
+                          max_turns=40, max_run_seconds=1200)
+
+    assert "--max-turns" in captured["argv"]
+    assert captured["argv"][captured["argv"].index("--max-turns") + 1] == "40"
+    assert captured["timeout"] == 1200
+
+
+def test_direct_path_omits_rails_when_unset(tmp_path, monkeypatch):
+    captured = {}
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        captured["timeout"] = kw.get("timeout", "MISSING")
+        class P:
+            returncode = 0
+            stdout = '{"total_cost_usd": 0.1, "num_turns": 2, "result": "ok"}'
+            stderr = ""
+        return P()
+    monkeypatch.setattr(wr.shutil, "which", lambda b: "/usr/bin/claude")
+    monkeypatch.setattr(wr.subprocess, "run", fake_run)
+
+    wr._run_direct_claude(tmp_path, "PROMPT", mode="diagnose")
+
+    assert "--max-turns" not in captured["argv"]
+    assert captured["timeout"] is None  # subprocess.run(timeout=None) == no timeout
+
+
+def test_direct_path_timeout_returns_killed_dict(tmp_path, monkeypatch):
+    def fake_run(argv, **kw):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kw.get("timeout"))
+    monkeypatch.setattr(wr.shutil, "which", lambda b: "/usr/bin/claude")
+    monkeypatch.setattr(wr.subprocess, "run", fake_run)
+
+    out = wr._run_direct_claude(tmp_path, "PROMPT", mode="safe_repair",
+                                max_turns=40, max_run_seconds=5)
+
+    assert out["ok"] is False
+    assert out["cost_usd"] == 0.0
+    assert "cost-cap" in out["error"]
+
+
+def test_container_timeout_tightens_not_loosens(tmp_path, monkeypatch):
+    """max_run_seconds can only lower the container's existing timeout."""
+    from operator_control import worker_workspace, worker_container
+    cfg = {"workspace_root": str(tmp_path / "ws"), "run_as_user": "x",
+           "credentials_dir": str(tmp_path / "creds"), "image_build_ts": 1.0,
+           "resource_limits": {"timeout_seconds": 1800}}
+    (tmp_path / "ws").mkdir()
+    ws_dir = tmp_path / "ws" / "clone"
+    ws_dir.mkdir()
+    monkeypatch.setattr(worker_workspace, "create_isolated_workspace", lambda *a, **k: str(ws_dir))
+    monkeypatch.setattr(worker_workspace, "destroy_workspace", lambda *a, **k: None)
+    monkeypatch.setattr(worker_container, "build_container_launch_spec", lambda **k: ["true"])
+    captured = {}
+    def fake_run(argv, **kw):
+        captured["timeout"] = kw.get("timeout")
+        raise RuntimeError("stop after capture")  # we only need the timeout value
+    monkeypatch.setattr(wr.subprocess, "run", fake_run)
+    # worker_settings.json must exist for the copy2; it ships in the package dir.
+    out = wr._run_via_container(ws_dir, "PROMPT", "safe_repair", cfg, str(tmp_path),
+                                "wo_c", max_turns=40, max_run_seconds=600)
+    assert captured["timeout"] == 600  # min(600, 1800)
+    assert out["ok"] is False  # the RuntimeError is caught -> error-dict
