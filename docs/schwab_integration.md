@@ -141,6 +141,27 @@ brings up the tunnel, emails + prints the authorize URL, waits up to 5 minutes,
 then on a successful tap captures the code, exchanges it, and tears the tunnel
 down. Outcome is written to `outputs/latest/schwab_reauth_session_status.json`.
 
+> **The re-auth tunnel must NOT be shared with another service.** `--begin` runs
+> cloudflared with its own isolated `--config` (callback host → the ephemeral
+> listener, 404 fallback) so it ignores `~/.cloudflared/config.yml`. This is
+> required because cloudflared refuses the older `--url` flag whenever the
+> ambient config carries an `ingress` block. But isolation only fixes *this*
+> process — if a **persistent** cloudflared service is also serving the same
+> named tunnel (e.g. the gui_v2 dashboard reused `stockbot-reauth`), Cloudflare
+> load-balances callbacks across both connections and ~half hit the other
+> service's ingress → 404 → `outcome=timeout`. Give the re-auth flow its **own
+> dedicated tunnel**:
+>
+> ```bash
+> cloudflared tunnel create stockbot-schwab-reauth
+> cloudflared tunnel route dns stockbot-schwab-reauth schwab-reauth.portfolio-ops-center.com
+> ```
+> then set `SCHWAB_REAUTH_TUNNEL_NAME=stockbot-schwab-reauth` and
+> `SCHWAB_REDIRECT_URI=https://schwab-reauth.portfolio-ops-center.com/schwab/callback`
+> in `.env`, and register that redirect URI on the Schwab app. Leave the tunnel
+> created-but-not-running (`--begin` starts it on demand). Until a dedicated
+> tunnel is in place, fall back to the manual `exchange_code` flow (§2).
+
 #### Optional: email heads-up (out-of-band)
 
 For an unattended operator, the daily pipeline (Stage 10d, `schwab_reauth_notifier`) can also **email**

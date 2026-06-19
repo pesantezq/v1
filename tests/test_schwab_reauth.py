@@ -1,4 +1,5 @@
 import json
+import os
 import urllib.error
 import urllib.request
 from portfolio_automation.brokers import schwab_reauth as sr
@@ -91,17 +92,32 @@ class _FakeProc:
         self._alive = False
 
 
-def test_tunnel_manager_starts_and_tears_down(monkeypatch):
+def test_tunnel_manager_writes_isolated_config_and_tears_down(monkeypatch):
     captured = {}
     def fake_popen(cmd, **k):
         captured["cmd"] = cmd
+        i = cmd.index("--config")
+        captured["cfg_path"] = cmd[i + 1]
+        captured["cfg_body"] = open(cmd[i + 1]).read()
         return _FakeProc()
     monkeypatch.setattr(sr.subprocess, "Popen", fake_popen)
-    with sr.TunnelManager("stockbot-reauth", 12345) as tm:
-        assert "cloudflared" in captured["cmd"][0]
-        assert "http://127.0.0.1:12345" in captured["cmd"]
-        assert "stockbot-reauth" in captured["cmd"]
+    with sr.TunnelManager("stockbot-reauth", 12345, "stockbot.example.com") as tm:
+        cmd = captured["cmd"]
+        assert "cloudflared" in cmd[0]
+        # uses an isolated --config (NOT --url; cloudflared refuses --url when the
+        # ambient config has an ingress block, which is the dashboard-reuse bug).
+        assert "--config" in cmd and "--url" not in cmd
+        assert cmd[-2:] == ["run", "stockbot-reauth"]
+        # the isolated config routes the Schwab callback host to the listener,
+        # with a 404 fallback — independent of /root/.cloudflared/config.yml.
+        body = captured["cfg_body"]
+        assert "stockbot.example.com" in body
+        assert "http://127.0.0.1:12345" in body
+        assert "http_status:404" in body
+        assert os.path.exists(captured["cfg_path"])
     assert tm._proc.terminated is True
+    # temp config is removed on teardown
+    assert not os.path.exists(captured["cfg_path"])
 
 
 def test_surface_url_prints_and_emails(capsys):
@@ -164,6 +180,27 @@ def test_run_begin_success(tmp_path, monkeypatch):
     assert st["outcome"] == "success" and st["new_expires_at"] == "2026-06-26T00:00:00+00:00"
     p = get_output_path(OutputNamespace.LATEST, "schwab_reauth_session_status.json", base_dir=tmp_path)
     assert json.loads(p.read_text())["observe_only"] is True
+
+
+def test_run_begin_passes_callback_host_from_redirect_uri(tmp_path, monkeypatch):
+    _ready(monkeypatch)
+    monkeypatch.setattr(sr.oauth, "exchange_code", lambda code: {})
+    monkeypatch.setattr(sr.oauth, "refresh_token_status", lambda tok: {"expires_at": "x"})
+    seen = {}
+
+    class _CapTunnel:
+        def __init__(self, name, port, callback_host, *a, **k):
+            seen["name"] = name; seen["port"] = port; seen["host"] = callback_host
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    sr.run_begin(
+        base_dir=tmp_path,
+        env={"SCHWAB_REAUTH_TUNNEL_NAME": "t",
+             "SCHWAB_REDIRECT_URI": "https://stockbot.example.com/schwab/callback"},
+        tunnel_cls=_CapTunnel, listener_cls=lambda: _FakeListener({"code": "ABC"}),
+    )
+    assert seen["host"] == "stockbot.example.com"
 
 
 def test_run_begin_cloudflared_missing(tmp_path, monkeypatch):

@@ -14,6 +14,7 @@ import os
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -110,18 +111,42 @@ class _CallbackListener:
 
 
 class TunnelManager:
-    """Context manager: runs `cloudflared tunnel run --url http://127.0.0.1:<port>
-    <name>` and guarantees teardown on exit (terminate, then kill on timeout)."""
+    """Context manager: runs the named cloudflared tunnel with an ISOLATED config
+    that routes the Schwab callback host to the local listener, and guarantees
+    teardown on exit (terminate, then kill on timeout; temp config removed).
 
-    def __init__(self, tunnel_name: str, local_port: int) -> None:
+    Why an isolated `--config` instead of `--url`: cloudflared auto-loads
+    `~/.cloudflared/config.yml`, and it refuses the `--url` flag whenever that
+    config carries an `ingress` block. Once the dashboard reused this tunnel and
+    added an ingress block, `--url` silently broke and callbacks 404'd. We write
+    our own minimal ingress config (callback host → listener, 404 fallback) and
+    pass `--config`, so cloudflared ignores the ambient config entirely.
+    """
+
+    def __init__(self, tunnel_name: str, local_port: int, callback_host: str) -> None:
         self.tunnel_name = tunnel_name
         self.local_port = local_port
+        self.callback_host = callback_host
         self._proc: subprocess.Popen | None = None
+        self._cfg_path: str | None = None
+
+    def _write_config(self) -> str:
+        body = (
+            "ingress:\n"
+            f"  - hostname: {self.callback_host}\n"
+            f"    service: http://127.0.0.1:{self.local_port}\n"
+            "  - service: http_status:404\n"
+        )
+        fd, path = tempfile.mkstemp(prefix="schwab_reauth_cf_", suffix=".yml")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+        return path
 
     def __enter__(self) -> "TunnelManager":
+        self._cfg_path = self._write_config()
         self._proc = subprocess.Popen(
-            ["cloudflared", "tunnel", "run", "--url",
-             f"http://127.0.0.1:{self.local_port}", self.tunnel_name],
+            ["cloudflared", "--config", self._cfg_path,
+             "tunnel", "run", self.tunnel_name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return self
@@ -133,6 +158,11 @@ class TunnelManager:
                 self._proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+        if self._cfg_path:
+            try:
+                os.unlink(self._cfg_path)
+            except OSError:
+                pass
 
 
 def _surface_authorize_url(url: str, *, env: dict[str, str], notify: bool,
@@ -194,7 +224,8 @@ def run_begin(*, base_dir: str | Path = "outputs", env: dict[str, str] | None = 
         nonce = oauth.generate_state()
         url = oauth.build_authorize_url(state=nonce)
         _surface_authorize_url(url, env=env, notify=notify)
-        with tunnel_cls(ready["tunnel_name"], port):
+        callback_host = urlparse(env.get("SCHWAB_REDIRECT_URI", "")).hostname or ""
+        with tunnel_cls(ready["tunnel_name"], port, callback_host):
             try:
                 res = listener.result_q.get(timeout=timeout)
             except queue.Empty:
