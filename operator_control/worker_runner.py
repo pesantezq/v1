@@ -715,6 +715,20 @@ def fail(root, work_order_id, actor="cli", note="") -> dict:
     )
 
 
+def cancel(root, work_order_id, actor="cli", note="") -> dict:
+    """Clear a dead/abandoned order: transition to 'cancelled' (NOT 'failed', which
+    would inflate the failure count). The policy graph permits cancelled from
+    queued/awaiting_approval/approved/claimed; an illegal source status (running /
+    terminal) raises WorkOrderValidationError via transition_work_order."""
+    cur = wo.get_work_order(root, work_order_id)
+    if cur is None:
+        raise WorkerRunnerError(f"unknown work order {work_order_id}")
+    return wo.transition_work_order(
+        root, work_order_id, new_status="cancelled", actor=actor,
+        note=note or "cancelled by operator",
+    )
+
+
 def drain(root, max_orders: int = 10, actor: str = "cron") -> dict:
     """Run eligible orders through the autonomous path until none remain / max hit.
 
@@ -777,6 +791,10 @@ def _build_parser():
     spf.add_argument("--id", required=True)
     spf.add_argument("--actor", default="cli")
     spf.add_argument("--note", default="")
+    spc = sub.add_parser("cancel")
+    spc.add_argument("--id", required=True)
+    spc.add_argument("--actor", default="cli")
+    spc.add_argument("--note", default="")
     spn = sub.add_parser("run-next")
     spn.add_argument("--actor", default="cli")
     spd = sub.add_parser("drain")
@@ -810,6 +828,9 @@ def main(argv=None) -> int:
         if args.command == "fail":
             print(json.dumps(fail(root, args.id, actor=args.actor, note=args.note), indent=2))
             return 0
+        if args.command == "cancel":
+            print(json.dumps(cancel(root, args.id, actor=args.actor, note=args.note), indent=2))
+            return 0
         if args.command == "drain":
             print(json.dumps(drain(root, max_orders=args.max, actor=args.actor), indent=2))
             return 0
@@ -842,6 +863,7 @@ __all__ = [
     "run",
     "complete",
     "fail",
+    "cancel",
     "drain",
     "status",
     "read_cost_log",
