@@ -549,7 +549,7 @@
         "tmpfs_size": "512m",
         "timeout_seconds": 1800
       },
-      "env_allowlist": ["HOME", "PATH", "CLAUDE_CONFIG_DIR"],
+      "env_allowlist": ["OPENAI_API_KEY", "FMP_API_KEY"],
       "cap_drop_exceptions": [],
       "note": "Phase 1 config schema. enabled=false until image is built and digest+image_build_ts recorded (see docs/operator_worker_container.md). Image digest MUST be set before enabling."
     },
