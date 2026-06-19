@@ -136,7 +136,18 @@ Key facts:
   surfaced on the System-tab Worker Runner card and via
   `python -m operator_control.worker_runner cost`. This is the worker's own
   operational spend — **deliberately NOT part of** the FMP/AI decision budget
-  (`ai_budget_summary.json`). **No cost cap** — tracked, not throttled.
+  (`ai_budget_summary.json`).
+- **Enforced cost cap (2026-06-19, configured-but-inert).** `operator_control.cost_cap`
+  bounds the autonomous path in three layers: a **pre-dispatch daily gate**
+  (refuse dispatch once today's UTC spend ≥ `usd_per_day` — the order is *deferred*,
+  left eligible, not failed; `drain` stops; audits `worker_cost_cap_deferred`),
+  **per-run hard rails** (`--max-turns` = `max_turns_per_run` + a `subprocess`
+  timeout = `max_run_seconds`, which kill the headless child; the container timeout
+  can only tighten), and a **post-run overage flag** (`worker_cost_cap_exceeded`
+  audit if a run's cost > `usd_per_run`, outcome unchanged). Defaults: $3/run, $10/day,
+  40 turns, 1200s. A missing block or null/≤0 knob disables that limit. Inert until
+  the autonomous path is enabled (Phase 4). Utilization shows in the daily check
+  (today_usd / cap_usd, AMBER ≥80%). See `docs/operator_worker_hardening_spec.md`.
 
 ### Residual risk (read before relying on repair)
 The worker runs as the dashboard service's user (root) with only
