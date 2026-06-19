@@ -1,0 +1,6 @@
+# Worker container build only COPYs requirements.txt + docker/worker_attest.sh.
+# Exclude everything else so the build context stays tiny (repo is ~1.1G with
+# .git/outputs/.venv). Ignore all, then re-include exactly what the Containerfile needs.
+*
+!requirements.txt
+!docker/
