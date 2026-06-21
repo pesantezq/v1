@@ -395,15 +395,6 @@
     "enabled": true,
     "cost_policy": "no_extra_cost",
     "allow_paid_sources": false,
-    "sources": [
-      "reddit"
-    ],
-    "subreddits": [
-      "wallstreetbets",
-      "stocks",
-      "investing"
-    ],
-    "max_posts_per_source": 200,
     "min_mentions_for_state": 3,
     "min_backtest_sample": 20,
     "research_priority_cap": 10.0,
@@ -415,22 +406,35 @@
           "wallstreetbets"
         ]
       },
-      "fmp_social_sentiment": {
+      "bluesky": {
         "enabled": true,
-        "entitlement_probe_only_until_confirmed": true
+        "max_results_per_query": 25,
+        "max_pages": 2,
+        "polite_delay_s": 0.5,
+        "search_templates": ["${ticker}", "{company}"]
       },
-      "stocktwits": {
-        "enabled": false,
-        "probe_only": true
+      "mastodon": {
+        "enabled": true,
+        "instances": ["mastodon.social"],
+        "max_results_per_hashtag": 40,
+        "polite_delay_s": 0.5,
+        "search_hashtags": true
       },
-      "finnhub_social": {
-        "enabled": false,
-        "probe_only": true
-      },
-      "quiver_wsb": {
-        "enabled": false,
-        "blocked_no_extra_cost": true
+      "lemmy": {
+        "enabled": true,
+        "instances": ["lemmy.world"],
+        "communities": ["stocks", "investing"],
+        "max_results": 40,
+        "use_rss": true,
+        "polite_delay_s": 1.0
       }
+    },
+    "simulation_social_sentiment": {
+      "enabled": true,
+      "max_score_adjustment": 0.05,
+      "min_confidence": 0.6,
+      "min_source_count": 1,
+      "promotion_improvement_threshold": 0.02
     }
   },
   "portfolio_sim": {

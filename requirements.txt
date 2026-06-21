@@ -16,8 +16,11 @@ python-dotenv>=1.0.0
 # MCP server (Claude Code local integration)
 mcp>=1.0.0
 
-# RSS feed parsing (theme engine)
+# RSS feed parsing (theme engine + Lemmy connector)
 feedparser>=6.0.0
+
+# Safe XML parsing — prevents XXE and billion-laughs attacks in RSS/Atom feeds
+defusedxml>=0.7.1
 
 # LLM provider client (theme engine — gpt-4o-mini for theme detection)
 openai>=1.40.0

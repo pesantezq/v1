@@ -40,15 +40,16 @@
   </div>
   {% endif %}
 
-  {# 3. Source Health — readable table (Source / Status / Reason / Action). #}
+  {# 3. Source Health — readable table (Source / Type / Status / Reason / Action). #}
   <section aria-label="Crowd source health">
-    {{ ui.section_header("Source Health", "no paid data sources enabled", "crowd_source_health.json") }}
+    {{ ui.section_header("Source Health", "all active sources are free, no paid data", "crowd_source_health.json") }}
     {% if source_health_rows %}
     {% call ui.responsive_table() %}
     <table class="min-w-full text-sm border-separate border-spacing-0">
       <thead>
         <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
           <th class="py-2 pr-4 font-medium">Source</th>
+          <th class="py-2 pr-4 font-medium">Type</th>
           <th class="py-2 pr-4 font-medium">Status</th>
           <th class="py-2 pr-4 font-medium">Reason</th>
           <th class="py-2 font-medium">Action / Next Step</th>
@@ -58,6 +59,7 @@
         {% for s in source_health_rows %}
         <tr class="border-t border-zinc-800 align-top">
           <td class="py-3 pr-4 font-mono text-zinc-100 whitespace-nowrap">{{ s.source }}</td>
+          <td class="py-3 pr-4 text-zinc-500 whitespace-nowrap text-xs">{{ s.source_type | default("") }}</td>
           <td class="py-3 pr-4 whitespace-nowrap">{{ ui.badge(s.badge, s.status | status_label) }}</td>
           <td class="py-3 pr-4 text-zinc-300">{{ s.reason }}</td>
           <td class="py-3 text-zinc-400">{{ s.action or "—" }}</td>
@@ -70,6 +72,67 @@
     {{ ui.empty_state("No source health reported",
                       "The multi-source connector lane has not run yet, or crowd_source_health.json is absent.") }}
     {% endif %}
+  </section>
+
+  {# 3b. Social Sentiment Pipeline — simulation-active, production-gated. #}
+  {% set ss = social_sentiment %}
+  <section aria-label="Social sentiment pipeline">
+    {{ ui.section_header("Social Sentiment Pipeline",
+                         "text sentiment from Bluesky · Mastodon · Lemmy via FinBERT",
+                         "social_sentiment_status.json") }}
+    <div class="flex flex-wrap gap-2 mb-3 text-xs">
+      {% if ss.simulation_active %}
+      <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/25 font-medium">Simulation ACTIVE</span>
+      {% endif %}
+      {% if ss.production_gated %}
+      <span class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25 font-medium">Production GATED (human approval)</span>
+      {% endif %}
+      {% if not ss.feeds_decision_engine %}
+      <span class="px-2 py-0.5 rounded bg-zinc-700/40 text-zinc-400 border border-zinc-600/30">Does NOT feed decision engine</span>
+      {% endif %}
+    </div>
+    {% if ss.has_data %}
+    <p class="text-sm text-zinc-400 mb-3">
+      {{ ss.tickers_scored }} tickers scored in the most recent pipeline run.
+    </p>
+    {% if ss.top_adjustments %}
+    <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Simulation Adjustments (max ±0.05, bounded)</div>
+    {% call ui.responsive_table() %}
+    <table class="min-w-full text-sm border-separate border-spacing-0">
+      <thead>
+        <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
+          <th class="py-2 pr-4 font-medium">Ticker</th>
+          <th class="py-2 pr-4 font-medium text-right">Adjustment</th>
+          <th class="py-2 pr-4 font-medium text-right">Sentiment</th>
+          <th class="py-2 pr-4 font-medium text-right">Confidence</th>
+          <th class="py-2 pr-4 font-medium text-right">Sources</th>
+          <th class="py-2 font-medium">Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in ss.top_adjustments %}
+        <tr class="border-t border-zinc-800">
+          <td class="py-2.5 pr-4 font-mono font-semibold text-zinc-100 whitespace-nowrap">{{ a.ticker }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right {{ 'text-emerald-400' if a.adjustment > 0 else ('text-rose-400' if a.adjustment < 0 else 'text-zinc-500') }}">
+            {{ "%+.4f"|format(a.adjustment) }}
+          </td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">
+            {{ "%.3f"|format(a.sentiment_score) if a.sentiment_score is not none else "—" }}
+          </td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-300">{{ "%.2f"|format(a.confidence) }}</td>
+          <td class="py-2.5 pr-4 font-mono tabular-nums text-right text-zinc-400">{{ a.source_count }}</td>
+          <td class="py-2.5 text-zinc-400">{{ a.reason | replace("_", " ") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endcall %}
+    {% endif %}
+    {% else %}
+    {{ ui.empty_state("Social sentiment pipeline has not run yet",
+                      "Run the social sentiment pipeline to see text-derived sentiment scores. Connectors (Bluesky, Mastodon, Lemmy) + FinBERT scorer must be enabled in config.") }}
+    {% endif %}
+    <p class="text-[11px] text-zinc-600 mt-2 italic">Simulation-only. Never feeds decision_plan.json. Human approval required before any production effect.</p>
   </section>
 
   {# 4. Mention Velocity — ranked, horizontally scrollable on mobile. #}

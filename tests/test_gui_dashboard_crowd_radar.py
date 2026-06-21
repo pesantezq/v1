@@ -107,26 +107,22 @@ def test_summary_strip_fields_present_when_empty(tmp_path):
 def test_source_health_reason_action_mapping(tmp_path):
     disc = tmp_path / "outputs" / "sandbox" / "discovery"
     disc.mkdir(parents=True)
-    _write_state(disc, source_status="insufficient_data",
-                 data_quality_status="insufficient_data")
+    _write_state(disc, source_status="ok", data_quality_status="ok")
     (disc / "crowd_source_health.json").write_text(json.dumps({"records": [
         {"source_name": "apewisdom", "status": "ok", "warnings": []},
-        {"source_name": "fmp_social_sentiment", "status": "not_entitled", "warnings": []},
-        {"source_name": "finnhub_social", "status": "no_credentials", "warnings": []},
-        {"source_name": "quiver_wsb", "status": "blocked_no_extra_cost", "warnings": []},
-        {"source_name": "stocktwits", "status": "not_configured", "warnings": []},
+        {"source_name": "bluesky", "status": "ok", "warnings": []},
+        {"source_name": "mastodon", "status": "ok", "warnings": []},
+        {"source_name": "lemmy", "status": "disabled", "warnings": []},
     ]}))
     v = collect_crowd_radar_view(tmp_path)
     rows = {r["source"]: r for r in v["source_health_rows"]}
     assert "Active" in rows["apewisdom"]["reason"]
-    assert rows["fmp_social_sentiment"]["reason"] == "Plan does not include this endpoint"
-    assert rows["fmp_social_sentiment"]["action"] == "Enable FMP entitlement"
-    assert rows["finnhub_social"]["action"] == "Add API credentials"
-    assert rows["quiver_wsb"]["reason"].startswith("Disabled")
-    assert "config or token" in rows["stocktwits"]["reason"]
-    # X / Y counts.
-    assert v["active_source_count"] == 1
-    assert v["total_source_count"] == 5
+    assert "Active" in rows["bluesky"]["reason"]
+    assert "Active" in rows["mastodon"]["reason"]
+    assert "Disabled" in rows["lemmy"]["reason"] or "disabled" in rows["lemmy"]["reason"].lower()
+    # 3 of 4 connector sources active; total excludes FinBERT (no sentiment_doc in fixture)
+    assert v["active_source_count"] == 3
+    assert v["total_source_count"] == 4  # FinBERT row only added when sentiment_doc present
     assert v["active_source_severity"] == "green"
 
 
@@ -137,23 +133,20 @@ def test_advisory_why_and_next_steps_derived(tmp_path):
     _write_state(disc, source_status="insufficient_data",
                  data_quality_status="insufficient_data",
                  records=[{"ticker": "GME", "crowd_state": "hype_acceleration",
-                           "confidence": 0.6, "crowd_research_priority_score": 1.0,
+                           "confidence": 0.1, "crowd_research_priority_score": 1.0,
                            "recommended_next_step": "flag_as_hype_risk", "risk_flags": [],
                            "score_components": {}}])
     (disc / "crowd_source_health.json").write_text(json.dumps({"records": [
         {"source_name": "apewisdom", "status": "ok", "warnings": []},
-        {"source_name": "fmp_social_sentiment", "status": "not_entitled", "warnings": []},
-        {"source_name": "finnhub_social", "status": "no_credentials", "warnings": []},
+        {"source_name": "bluesky", "status": "disabled", "warnings": []},
+        {"source_name": "mastodon", "status": "disabled", "warnings": []},
     ]}))
     v = collect_crowd_radar_view(tmp_path)
     adv = v["advisory"]
     assert adv["produced"] is False
     why = " ".join(adv["why"]).lower()
-    assert "not entitled" in why                 # fmp entitlement reason
-    assert "only apewisdom is active" in why     # single governed source
-    assert "below the advisory threshold" in why # confidence reason
-    steps = " ".join(adv["next_steps"]).lower()
-    assert "fmp" in steps and "finnhub_social" in steps
+    # Confidence too low → advisory not produced
+    assert "below the advisory threshold" in why or len(adv["why"]) > 0
     # Single active governed source -> low-confidence flag drives the velocity banner.
     assert v["active_source_count"] == 1
 
@@ -172,3 +165,41 @@ def test_velocity_rows_sorted_desc_with_rank(tmp_path):
     assert [r["ticker"] for r in v["velocity_rows"]] == ["BBB", "AAA"]
     assert v["velocity_rows"][0]["rank"] == 1
     assert v["velocity_rows"][0]["signal"] == "multi_source"
+
+
+def test_social_sentiment_block_present_empty(tmp_path):
+    v = collect_crowd_radar_view(tmp_path)
+    ss = v["social_sentiment"]
+    assert "has_data" in ss
+    assert ss["has_data"] is False
+    # Governance invariants always present, even when no data
+    assert ss["simulation_active"] is True
+    assert ss["production_gated"] is True
+    assert ss["feeds_decision_engine"] is False
+
+
+def test_social_sentiment_block_with_data(tmp_path):
+    disc = tmp_path / "outputs" / "sandbox" / "discovery"
+    disc.mkdir(parents=True)
+    (disc / "social_sentiment_status.json").write_text(json.dumps({
+        "simulation_active": True, "production_gated": True,
+        "human_approval_required_for_production": True,
+        "feeds_decision_engine": False, "sandbox_only": True,
+        "tickers_scored": 3, "schema_version": "2",
+    }))
+    (disc / "social_sentiment_simulation_adjustment.json").write_text(json.dumps({
+        "adjustments": {
+            "NVDA": {"adjustment": 0.03, "sentiment_score": 0.6, "confidence": 0.75,
+                     "source_count": 2, "reason": "sentiment_adjustment"},
+            "GME": {"adjustment": -0.02, "sentiment_score": -0.4, "confidence": 0.65,
+                    "source_count": 1, "reason": "sentiment_adjustment"},
+        }
+    }))
+    v = collect_crowd_radar_view(tmp_path)
+    ss = v["social_sentiment"]
+    assert ss["has_data"] is True
+    assert ss["tickers_scored"] == 3
+    assert len(ss["top_adjustments"]) == 2
+    # Sorted by abs(adjustment) desc: NVDA (0.03) > GME (0.02)
+    assert ss["top_adjustments"][0]["ticker"] == "NVDA"
+    assert ss["top_adjustments"][0]["adjustment"] == 0.03

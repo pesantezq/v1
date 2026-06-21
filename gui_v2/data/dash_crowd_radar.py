@@ -162,6 +162,50 @@ def _collect_unified_crowd(root: Path) -> dict[str, Any]:
         return {"has_data": False}
 
 
+_SOURCE_TYPE: dict[str, str] = {
+    "apewisdom": "attention",
+    "bluesky": "text",
+    "mastodon": "text",
+    "lemmy": "text",
+    "finbert": "scorer",
+}
+
+_FINBERT_STATUS_BADGE: dict[str, str] = {
+    "ok": "ok",
+    "disabled": "unknown",
+    "not_yet_loaded": "info",
+}
+
+
+def _finbert_health_row() -> dict[str, Any] | None:
+    """Return a source health row for the FinBERT scorer (no network, never raises)."""
+    try:
+        from portfolio_automation.social_sentiment.finbert_scorer import FinBERTScorer
+        sc = FinBERTScorer({})
+        st = sc.status
+        reason_map = {
+            "ok": "Model loaded — scoring active",
+            "disabled": "Scorer disabled in config",
+            "not_yet_loaded": "Model not yet loaded (lazy init)",
+        }
+        is_unavail = st.startswith("scorer_unavailable:")
+        if is_unavail:
+            reason = f"Model unavailable ({st.split(':', 1)[-1][:60]})"
+            badge = "unknown"
+        else:
+            reason = reason_map.get(st, st)
+            badge = _FINBERT_STATUS_BADGE.get(st, "info")
+        return {
+            "source": "finbert", "source_type": "scorer",
+            "status": st, "badge": badge,
+            "reason": reason,
+            "action": "Set finbert.allow_download=true to download model" if is_unavail else "",
+            "warnings": [],
+        }
+    except Exception:
+        return None
+
+
 def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     root = Path(root)
     disc = root / "outputs" / "sandbox" / "discovery"
@@ -174,6 +218,9 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     health_doc = _read_json(disc / "crowd_source_health.json") or {}
     activation_doc = _read_json(disc / "crowd_radar_activation_check.json") or {}
     multi_doc = _read_json(disc / "crowd_multi_source_velocity.json") or {}
+    # Social sentiment pipeline (Phases 3-11).
+    sentiment_doc = _read_json(disc / "social_sentiment_status.json") or {}
+    sim_adj_doc = _read_json(disc / "social_sentiment_simulation_adjustment.json") or {}
 
     records = state_doc.get("records") or []
     source_status = state_doc.get("source_status") or "unknown"
@@ -247,14 +294,21 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         st = r.get("status") or "unknown"
         reason, action = _SOURCE_REASON_ACTION.get(
             st, (st.replace("_", " ").title(), "Review"))
+        source_name = r.get("source_name") or ""
         source_health_rows.append({
-            "source": r.get("source_name"),
+            "source": source_name,
+            "source_type": _SOURCE_TYPE.get(source_name, "unknown"),
             "status": st,
             "badge": _STATUS_BADGE.get(st, "unknown"),
             "reason": reason,
             "action": action,
             "warnings": r.get("warnings") or [],
         })
+    # Append FinBERT scorer health when the social sentiment pipeline has run.
+    if sentiment_doc:
+        fb_row = _finbert_health_row()
+        if fb_row:
+            source_health_rows.append(fb_row)
     multi_source = {
         "ready_to_collect": activation_doc.get("ready_to_collect"),
         "cost_policy": activation_doc.get("cost_policy"),
@@ -334,6 +388,30 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     flock = _collect_flock(root)
     unified_crowd = _collect_unified_crowd(root)
 
+    # Social Sentiment pipeline summary (Phases 3-11).
+    adj_items = (sim_adj_doc.get("adjustments") or {}).items()
+    social_sentiment = {
+        "has_data": bool(sentiment_doc),
+        "simulation_active": sentiment_doc.get("simulation_active", True),
+        "production_gated": sentiment_doc.get("production_gated", True),
+        "human_approval_required": sentiment_doc.get("human_approval_required_for_production", True),
+        "feeds_decision_engine": sentiment_doc.get("feeds_decision_engine", False),
+        "sandbox_only": sentiment_doc.get("sandbox_only", True),
+        "tickers_scored": sentiment_doc.get("tickers_scored", 0),
+        "run_id": sentiment_doc.get("run_id"),
+        "top_adjustments": sorted(
+            [
+                {"ticker": k, "adjustment": v.get("adjustment", 0),
+                 "sentiment_score": v.get("sentiment_score"),
+                 "confidence": v.get("confidence", 0),
+                 "source_count": v.get("source_count", 0),
+                 "reason": v.get("reason", "")}
+                for k, v in adj_items
+            ],
+            key=lambda x: abs(x["adjustment"]), reverse=True
+        )[:10],
+    }
+
     return {
         "persona": "crowd_radar",
         "flock": flock,
@@ -360,4 +438,5 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         "velocity_rows": velocity_rows,
         "velocity_low_conf": velocity_low_conf,
         "advisory": advisory,
+        "social_sentiment": social_sentiment,
     }

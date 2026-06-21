@@ -4,10 +4,14 @@ Tests for the multi-source Crowd Radar activation checklist
 
 Gatekeepers:
   - crowd_radar.enabled=false → disabled, not ready (no crash)
-  - enabled + ApeWisdom active → ready_to_collect true, all 16 fields present
+  - enabled + free sources active → ready_to_collect true, all required fields present
   - kill-switch forces disabled
   - run never mutates official outputs
   - artifact carries the no-trade / sandbox invariants and no trade verbs
+
+Updated 2026-06-21: removed probe_only / blocked assertions for deleted probes
+(FMP social sentiment, Finnhub, Stocktwits, Quiver are gone). Active set is
+now ApeWisdom (attention) + Bluesky/Mastodon/Lemmy (text, free).
 """
 from __future__ import annotations
 
@@ -35,10 +39,9 @@ def _write_config(root: Path, enabled: bool):
         "enabled": enabled, "cost_policy": "no_extra_cost", "allow_paid_sources": False,
         "source_policy": {
             "apewisdom": {"enabled": True, "max_pages": 1},
-            "fmp_social_sentiment": {"enabled": True, "entitlement_probe_only_until_confirmed": True},
-            "stocktwits": {"enabled": False, "probe_only": True},
-            "finnhub_social": {"enabled": False, "probe_only": True},
-            "quiver_wsb": {"enabled": False, "blocked_no_extra_cost": True},
+            "bluesky": {"enabled": True, "max_results_per_query": 25},
+            "mastodon": {"enabled": True, "instances": ["mastodon.social"]},
+            "lemmy": {"enabled": True, "instances": ["lemmy.world"]},
         },
     }}
     (root / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -46,8 +49,7 @@ def _write_config(root: Path, enabled: bool):
 
 def _clear(monkeypatch):
     for k in ("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT",
-              "FMP_API_KEY", "FINNHUB_API_KEY", "QUIVER_API_KEY", "STOCKTWITS_TOKEN",
-              "STOCKTWITS_API_KEY", "STOCKBOT_CROWD_RADAR_DISABLED"):
+              "STOCKBOT_CROWD_RADAR_DISABLED"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -67,16 +69,31 @@ def test_disabled_produces_disabled_artifact_no_crash(tmp_path, monkeypatch):
     assert result["status"] == "disabled"
 
 
-def test_enabled_with_active_apewisdom_is_ready(tmp_path, monkeypatch):
+def test_enabled_with_active_free_sources_is_ready(tmp_path, monkeypatch):
     _write_config(tmp_path, enabled=True)
     _clear(monkeypatch)
     payload = build_activation_check(tmp_path)
     assert "apewisdom" in payload["active_sources"]
-    assert set(payload["probe_only_sources"]) == {"fmp_social_sentiment", "finnhub_social"}
-    assert set(payload["blocked_sources"]) == {"stocktwits", "quiver_wsb"}
+    # Text connectors are active (bluesky/mastodon/lemmy enabled in config)
+    for src in ("bluesky", "mastodon", "lemmy"):
+        assert src in payload["active_sources"], f"{src} should be active"
+    # Probe-only and blocked are empty — all paid probes have been removed
+    assert payload["probe_only_sources"] == []
+    assert payload["blocked_sources"] == []
     assert payload["ready_to_collect"] is True
     assert payload["cost_policy"] == "no_extra_cost"
     assert payload["allow_paid_sources"] is False
+
+
+def test_no_deleted_probes_in_any_source_list(tmp_path, monkeypatch):
+    """Phase 2: removed probes must not appear in any source classification."""
+    _write_config(tmp_path, enabled=True)
+    _clear(monkeypatch)
+    payload = build_activation_check(tmp_path)
+    all_named = (payload["active_sources"] + payload["probe_only_sources"]
+                 + payload["blocked_sources"])
+    for dead in ("fmp_social_sentiment", "finnhub_social", "stocktwits", "quiver_wsb"):
+        assert dead not in all_named, f"Deleted probe '{dead}' still appears in activation check"
 
 
 def test_kill_switch_env_forces_disabled(tmp_path, monkeypatch):
