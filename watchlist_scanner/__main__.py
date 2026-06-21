@@ -400,15 +400,6 @@ def run(
                 round(confidence - data_health["degraded_confidence_penalty"], 3),
             )
 
-    performance_output_dir = Path(output_dir).parent / "performance"
-    run_signal_feedback_cycle(
-        result,
-        db_path=ew_cfg.get("db_path", "data/portfolio.db"),
-        cache_dir=cache_dir,
-        output_dir=performance_output_dir,
-        dry_run=manual_dry_run,
-        feedback_config=config.get("performance_feedback", {}),
-    )
     # P4.1 — Read prior run's kelly_sizing_advisor.json (if present) so the
     # conviction layer can scale band multipliers by realized hit-rate
     # × win/loss ratio. Read is best-effort; conviction falls back to
@@ -431,6 +422,17 @@ def run(
     apply_portfolio_construction_layer(
         result,
         portfolio_config=config.get("portfolio_construction", {}),
+    )
+    # Run after apply_conviction_layer so conviction_band is set on result rows
+    # before being persisted to the signal feedback DB.
+    performance_output_dir = Path(output_dir).parent / "performance"
+    run_signal_feedback_cycle(
+        result,
+        db_path=ew_cfg.get("db_path", "data/portfolio.db"),
+        cache_dir=cache_dir,
+        output_dir=performance_output_dir,
+        dry_run=manual_dry_run,
+        feedback_config=config.get("performance_feedback", {}),
     )
     _portfolio_out = Path(output_dir).parent / "portfolio"
     _prior_regime = _load_prior_regime(_portfolio_out)
