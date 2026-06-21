@@ -530,7 +530,7 @@ async def page_governance_decide(
         decision=decision,
         approver=approver,
         now=now,
-        base_dir=str(REPO_ROOT),
+        base_dir=str(REPO_ROOT / "outputs"),
         notes=notes,
     )
     if not result.get("ok"):
