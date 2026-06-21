@@ -309,6 +309,15 @@ run_aux_stage "Crowd Radar activation check" \
 run_aux_stage "Unified Crowd Intelligence Bus" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.crowd_intelligence.unified_writer import run; s=run('.'); print('unified_crowd:', s.get('overall_status'), 'tickers:', s.get('total_tickers'))"
 
+# Stage 9c4 — Social Sentiment Pipeline (free text connectors + FinBERT scoring).
+# Reads the top-N tickers from crowd_multi_source_velocity.json (Stage 9c1), fetches
+# text posts from Mastodon/Lemmy/Bluesky, scores with FinBERT, aggregates cross-source,
+# and writes social_sentiment_status.json + social_sentiment_simulation_adjustment.json
+# under outputs/sandbox/discovery/. Simulation-active / production-gated: adjustments
+# are sandbox-scoped and never touch decision_plan.json. Non-blocking; never aborts the run.
+run_aux_stage "Social Sentiment Pipeline" \
+    python -m portfolio_automation.social_sentiment.run_sentiment_pipeline --root "${REPO_ROOT}" --run-mode discovery
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"

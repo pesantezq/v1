@@ -423,18 +423,28 @@
       "lemmy": {
         "enabled": true,
         "instances": ["lemmy.world"],
-        "communities": ["stocks", "investing"],
-        "max_results": 40,
+        "communities": ["stocks", "investing", "finance"],
+        "max_results": 50,
         "use_rss": true,
-        "polite_delay_s": 1.0
+        "polite_delay_s": 0.5
       }
     },
     "simulation_social_sentiment": {
       "enabled": true,
       "max_score_adjustment": 0.05,
-      "min_confidence": 0.6,
+      "min_confidence": 0.15,
       "min_source_count": 1,
       "promotion_improvement_threshold": 0.02
+    },
+    "finbert": {
+      "allow_download": true,
+      "model_name": "ProsusAI/finbert",
+      "max_length": 512,
+      "batch_size": 16
+    },
+    "quality_gates": {
+      "min_posts": 1,
+      "min_unique_authors": 0
     }
   },
   "portfolio_sim": {
