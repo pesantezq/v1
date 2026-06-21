@@ -64,7 +64,7 @@
         <thead><tr class="text-left text-zinc-400">
           <th class="py-1 pr-4">Proposal</th><th class="py-1 pr-4">Type</th>
           <th class="py-1 pr-4">Symbol</th><th class="py-1 pr-4">Risk</th>
-          <th class="py-1 pr-4">Status</th><th class="py-1 pr-4">Rollback</th>
+          <th class="py-1 pr-4">Rollback</th><th class="py-1 pr-4">Action</th>
         </tr></thead>
         <tbody>
         {% for p in pending_proposals %}
@@ -73,8 +73,22 @@
             <td class="py-1 pr-4">{{ p.proposal_type }}</td>
             <td class="py-1 pr-4">{{ p.proposed_production_change.symbol or "—" }}</td>
             <td class="py-1 pr-4 text-xs">{{ p.risk_summary }}</td>
-            <td class="py-1 pr-4">{{ ui.status_badge("yellow", labels.pending) }}</td>
             <td class="py-1 pr-4 text-xs text-zinc-400">{{ p.rollback_plan }}</td>
+            <td class="py-1 pr-4">
+              <form method="post" action="/dashboard/governance/decide" class="flex gap-2">
+                <input type="hidden" name="proposal_id" value="{{ p.proposal_id }}">
+                <button type="submit" name="decision" value="approve"
+                  onclick="return confirm('Approve {{ p.proposal_id }}?')"
+                  class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">
+                  Approve
+                </button>
+                <button type="submit" name="decision" value="reject"
+                  onclick="return confirm('Reject {{ p.proposal_id }}?')"
+                  class="px-2 py-0.5 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">
+                  Reject
+                </button>
+              </form>
+            </td>
           </tr>
         {% endfor %}
         </tbody>

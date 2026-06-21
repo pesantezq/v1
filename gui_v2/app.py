@@ -500,6 +500,45 @@ def page_dash_governance(
     return _render(request, "dashboard/governance.html", **ctx)
 
 
+@app.post("/dashboard/governance/decide")
+async def page_governance_decide(
+    request: Request, _a: str | None = Depends(_require_auth)
+):
+    """
+    POST /dashboard/governance/decide — human approve or reject a pending proposal.
+
+    The deliberate GUI click is the human approval event. Writes to
+    outputs/promotion_approvals/approved_proposals.json via record_approval().
+    AI cannot self-approve: the schema validates is_human_approver() and rejects
+    any AI-marker string. POST→redirect→GET prevents resubmit on refresh.
+    """
+    import datetime
+    from portfolio_automation.sim_governance.promotion_approvals import record_approval
+
+    form = await request.form()
+    proposal_id = str(form.get("proposal_id", "")).strip()
+    decision = str(form.get("decision", "")).strip()
+    notes = str(form.get("notes", "")).strip() or None
+
+    if not proposal_id or decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="proposal_id and decision (approve|reject) required")
+
+    approver = _a or "operator"
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    result = record_approval(
+        proposal_id=proposal_id,
+        decision=decision,
+        approver=approver,
+        now=now,
+        base_dir=str(REPO_ROOT),
+        notes=notes,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("reason", "approval rejected"))
+
+    return RedirectResponse("/dashboard/governance", status_code=303)
+
+
 @app.get("/dashboard/strategy-tax", response_class=HTMLResponse)
 def page_dash_strategy_tax(
     request: Request, _a: str | None = Depends(_require_auth)
