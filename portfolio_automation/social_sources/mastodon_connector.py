@@ -87,7 +87,9 @@ class MastodonConnector:
             return self._inert()
         instance = self._instances[0]
         try:
-            url = f"https://{instance}/api/v1/timelines/public?limit=1"
+            # /api/v1/timelines/public requires auth on mastodon.social since 2023;
+            # /api/v1/timelines/tag/{hashtag} is still public on all instances.
+            url = f"https://{instance}/api/v1/timelines/tag/stocks?limit=1"
             data = self._http_get(url)
             ok = isinstance(data, list)
             return SourceResult(
