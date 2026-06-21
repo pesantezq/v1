@@ -596,8 +596,8 @@
       "note": "ONE consolidated advisory+watchlist review per day. If estimated cost > daily_cost_cap_usd the call is skipped and a deferred-review artifact is written."
     },
     "production_application": {
-      "apply_watchlist_overlay": false,
-      "apply_advisory_overlay": false,
+      "apply_watchlist_overlay": true,
+      "apply_advisory_overlay": true,
       "note": "Master switches for the live production overlays. The full pending->approve->apply mechanism is built, tested, and writes approved overlay artifacts. Flipping these two flags to true is the final human production-boundary step that lets the live watchlist/advisory loaders consume approved overlays."
     }
   }
