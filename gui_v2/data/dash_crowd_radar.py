@@ -206,6 +206,21 @@ def _finbert_health_row() -> dict[str, Any] | None:
         return None
 
 
+def _load_portfolio_tickers(root: Path) -> set[str]:
+    """Return current held ticker symbols from config holdings (shares > 0)."""
+    try:
+        import json
+        cfg = json.loads((root / "config.json").read_text())
+        holdings = (cfg.get("portfolio") or {}).get("holdings", []) or []
+        return {
+            str(h.get("symbol", "")).upper()
+            for h in holdings
+            if h.get("symbol") and float(h.get("shares", 0) or 0) > 0
+        }
+    except Exception:
+        return set()
+
+
 def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     root = Path(root)
     disc = root / "outputs" / "sandbox" / "discovery"
@@ -221,6 +236,8 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     # Social sentiment pipeline (Phases 3-11).
     sentiment_doc = _read_json(disc / "social_sentiment_status.json") or {}
     sim_adj_doc = _read_json(disc / "social_sentiment_simulation_adjustment.json") or {}
+
+    portfolio_tickers = _load_portfolio_tickers(root)
 
     records = state_doc.get("records") or []
     source_status = state_doc.get("source_status") or "unknown"
@@ -389,7 +406,34 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
     unified_crowd = _collect_unified_crowd(root)
 
     # Social Sentiment pipeline summary (Phases 3-11).
-    adj_items = (sim_adj_doc.get("adjustments") or {}).items()
+    all_adj: dict = sim_adj_doc.get("adjustments") or {}
+
+    def _adj_row(ticker: str, is_portfolio: bool) -> dict[str, Any]:
+        v = all_adj.get(ticker, {})
+        has_text = bool(v) and v.get("source_count", 0) > 0
+        return {
+            "ticker": ticker,
+            "adjustment": v.get("adjustment", 0.0),
+            "sentiment_score": v.get("sentiment_score"),
+            "confidence": v.get("confidence", 0.0),
+            "source_count": v.get("source_count", 0),
+            "reason": v.get("reason", "no_text_found" if not has_text else ""),
+            "is_portfolio": is_portfolio,
+            "has_text": has_text,
+        }
+
+    # Portfolio rows — always included, sorted by ticker name for stability.
+    portfolio_adj = [_adj_row(t, True) for t in sorted(portfolio_tickers)]
+    portfolio_with_text = sum(1 for r in portfolio_adj if r["has_text"])
+
+    # Discovery rows — non-portfolio tickers with non-zero adjustment, top 8.
+    discovery_adj = sorted(
+        [_adj_row(k, False) for k, v in all_adj.items()
+         if k not in portfolio_tickers and abs(v.get("adjustment", 0)) > 0],
+        key=lambda x: abs(x["adjustment"]),
+        reverse=True,
+    )[:8]
+
     social_sentiment = {
         "has_data": bool(sentiment_doc),
         "simulation_active": sentiment_doc.get("simulation_active", True),
@@ -399,16 +443,15 @@ def collect_crowd_radar_view(root: Path) -> dict[str, Any]:
         "sandbox_only": sentiment_doc.get("sandbox_only", True),
         "tickers_scored": sentiment_doc.get("tickers_scored", 0),
         "run_id": sentiment_doc.get("run_id"),
+        "portfolio_adj": portfolio_adj,
+        "portfolio_tickers_total": len(portfolio_tickers),
+        "portfolio_tickers_with_text": portfolio_with_text,
+        "discovery_adj": discovery_adj,
+        # kept for any existing consumers
         "top_adjustments": sorted(
-            [
-                {"ticker": k, "adjustment": v.get("adjustment", 0),
-                 "sentiment_score": v.get("sentiment_score"),
-                 "confidence": v.get("confidence", 0),
-                 "source_count": v.get("source_count", 0),
-                 "reason": v.get("reason", "")}
-                for k, v in adj_items
-            ],
-            key=lambda x: abs(x["adjustment"]), reverse=True
+            [_adj_row(k, k in portfolio_tickers) for k in all_adj],
+            key=lambda x: abs(x["adjustment"]),
+            reverse=True,
         )[:10],
     }
 
