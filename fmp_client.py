@@ -1015,7 +1015,9 @@ class FMPClient:
         try:
             raw = self._raw_get(
                 _EP_NEWS_STOCK,
-                {"tickers": ','.join(tickers), "limit": str(limit)},
+                # Stable news/stock filters by `symbols=` — the legacy v3 `tickers=`
+                # is silently ignored and returns a generic latest-news feed.
+                {"symbols": ','.join(tickers), "limit": str(limit)},
                 base_url=FMP_STABLE_BASE_URL,
             )
         except Exception as exc:
