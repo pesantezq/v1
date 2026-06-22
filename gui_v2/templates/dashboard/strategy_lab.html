@@ -257,6 +257,133 @@
   </section>
   {% endif %}
 
+  {# ── Crowd + Sentiment Comparison ────────────────────────────────────── #}
+  {% set cc = strategy_lab.crowd_comparison if strategy_lab and strategy_lab.available else none %}
+  {% if cc and cc.available %}
+  <section aria-label="Crowd and sentiment comparison">
+    {{ ui.section_header("Crowd + Sentiment Comparison", "identical-input variants · measure incremental signal value", "strategy_leaderboard.json") }}
+    <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+      Three variants built from the same anchor portfolio and price panel. Differences isolate the
+      value of proxy crowd-state signals and FinBERT sentiment independently.
+      Sandbox only — never feeds <span class="font-mono">decision_plan.json</span>.
+    </div>
+
+    {# Comparison table #}
+    <div class="overflow-x-auto rounded-xl border border-zinc-800 mt-3">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+            <th class="py-2.5 px-4">Variant</th>
+            <th class="py-2.5 px-4 text-right">Score</th>
+            <th class="py-2.5 px-4 text-right">Excess vs SPY</th>
+            <th class="py-2.5 px-4 text-right">Beats SPY</th>
+            <th class="py-2.5 px-4 text-right">Worst DD</th>
+            <th class="py-2.5 px-4 text-right">Δ score vs anchor</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {# Anchor row #}
+          {% if cc.anchor %}
+          {% set a = cc.anchor %}
+          <tr class="bg-zinc-900/30">
+            <td class="py-2.5 px-4">
+              <span class="text-zinc-100 font-medium">{{ a.name }}</span>
+              <span class="ml-2 text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">anchor</span>
+            </td>
+            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(a.strategy_score or 0) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (a.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((a.mean_excess_vs_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((a.prob_beat_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((a.worst_max_drawdown or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right text-zinc-600">—</td>
+          </tr>
+          {% endif %}
+
+          {# Crowd variant rows #}
+          {% for v in cc.variants %}
+          {% set delta = (v.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
+          <tr class="hover:bg-zinc-900/50">
+            <td class="py-2.5 px-4">
+              <span class="text-zinc-100">{{ v.name }}</span>
+              {% if v.approximate %}<span class="text-amber-400 ml-1" title="proxy crowd states from price/volume">*</span>{% endif %}
+            </td>
+            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(v.strategy_score or 0) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (v.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((v.mean_excess_vs_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((v.prob_beat_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((v.worst_max_drawdown or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-300' if delta >= 0 else 'text-rose-300' }}{% else %}text-zinc-600{% endif %}">
+              {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+
+          {# Sentiment diagnostic row (outside primary leaderboard) #}
+          {% if cc.sentiment_diagnostic %}
+          {% set sd = cc.sentiment_diagnostic %}
+          {% set delta = (sd.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
+          <tr class="hover:bg-zinc-900/50 border-t border-dashed border-zinc-700">
+            <td class="py-2.5 px-4">
+              <span class="text-zinc-400">{{ sd.name }}</span>
+              <span class="ml-2 text-[10px] bg-sky-900/60 text-sky-300 rounded px-1.5 py-0.5">diagnostic</span>
+            </td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.3f"|format(sd.strategy_score or 0) }}</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.1f"|format((sd.mean_excess_vs_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.0f"|format((sd.prob_beat_spy or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.1f"|format((sd.worst_max_drawdown or 0)*100) }}%</td>
+            <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-400' if delta >= 0 else 'text-rose-400' }}{% else %}text-zinc-600{% endif %} text-xs">
+              {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    {# By-window breakdown for crowd variants #}
+    {% if cc.variants %}
+    <details class="mt-3">
+      <summary class="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 select-none">
+        Per-window breakdown
+      </summary>
+      <div class="mt-2 space-y-3">
+        {% for v in cc.variants %}
+        {% if v.by_window %}
+        <div>
+          <div class="text-xs text-zinc-400 font-medium mb-1.5">{{ v.name }}</div>
+          <div class="overflow-x-auto rounded-lg border border-zinc-800">
+            <table class="w-full text-xs border-collapse">
+              <thead><tr class="bg-zinc-900/60 text-zinc-600 uppercase tracking-wide text-left">
+                <th class="py-1.5 px-3">Window</th>
+                <th class="py-1.5 px-3 text-right">Excess vs SPY</th>
+                <th class="py-1.5 px-3 text-right">CAGR</th>
+                <th class="py-1.5 px-3 text-right">Max DD</th>
+              </tr></thead>
+              <tbody class="divide-y divide-zinc-800/60">
+                {% for w in v.by_window %}
+                <tr>
+                  <td class="py-1.5 px-3 font-mono text-zinc-400">{{ w.window }}</td>
+                  <td class="py-1.5 px-3 text-right font-mono {{ 'text-emerald-300' if (w.excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((w.excess_vs_spy or 0)*100) }}%</td>
+                  <td class="py-1.5 px-3 text-right font-mono text-zinc-300">{{ "%+.1f"|format((w.cagr or 0)*100) }}%</td>
+                  <td class="py-1.5 px-3 text-right font-mono text-zinc-400">{{ "%.1f"|format((w.max_drawdown or 0)*100) }}%</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <p class="text-[11px] text-zinc-600 mt-2">
+      * proxy crowd states derived from price/volume (look-ahead-safe) — live crowd states activate once crowd radar accumulates observation history.
+      Diagnostic row is outside the ranked leaderboard and isolates sentiment-only signal (no crowd state logic).
+      Sandbox research only.
+    </p>
+  </section>
+  {% endif %}
+
   {# ── Forward projection (Monte-Carlo) ─────────────────────────────────── #}
   {% if projection and projection.available %}
   <section aria-label="Forward projection">

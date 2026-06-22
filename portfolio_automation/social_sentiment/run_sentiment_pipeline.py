@@ -39,6 +39,18 @@ def _load_top_tickers(root: Path, top_n: int) -> list[str]:
         return []
 
 
+def _load_portfolio_tickers(root: Path) -> list[str]:
+    """Load held portfolio tickers from config so sentiment always covers actual holdings."""
+    try:
+        cfg = json.loads((root / "config.json").read_text())
+        holdings = (cfg.get("portfolio") or {}).get("holdings", []) or []
+        return [str(h.get("symbol", "")).upper()
+                for h in holdings
+                if h.get("symbol") and float(h.get("shares", 0) or 0) > 0]
+    except Exception:
+        return []
+
+
 def _load_attention_data(root: Path) -> dict[str, float]:
     """Build {ticker: attention_score} from the velocity artifact for Phase 9 bus extension."""
     vel_path = root / _VELOCITY_ARTIFACT
@@ -84,15 +96,25 @@ def main() -> int:
                           "reason": "simulation_social_sentiment.enabled=false"}))
         return 0
 
-    # Pick tickers from velocity artifact
-    tickers = _load_top_tickers(root, args.top_n)
+    # Pick tickers: top-N crowd-velocity tickers + all current portfolio holdings
+    # Portfolio tickers are always included so the sentiment tilt has coverage
+    # over actual holdings even when they have low crowd velocity.
+    velocity_tickers = _load_top_tickers(root, args.top_n)
+    portfolio_tickers = _load_portfolio_tickers(root)
+    seen: set[str] = set()
+    tickers: list[str] = []
+    for t in velocity_tickers + portfolio_tickers:
+        if t not in seen:
+            seen.add(t)
+            tickers.append(t)
     if not tickers:
         print(json.dumps({"status": "skipped", "reason": "no_velocity_tickers",
                           "tickers_scored": 0}))
         return 0
 
-    logger.info("Running social sentiment pipeline for %d tickers: %s...",
-                len(tickers), tickers[:5])
+    portfolio_extras = [t for t in portfolio_tickers if t not in set(velocity_tickers)]
+    logger.info("Running social sentiment pipeline for %d tickers (%d portfolio extras): %s...",
+                len(tickers), len(portfolio_extras), tickers[:5])
 
     attention_data = _load_attention_data(root)
 

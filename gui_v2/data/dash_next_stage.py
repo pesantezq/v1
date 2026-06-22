@@ -120,12 +120,31 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
     }
 
 
+_CROWD_TACTIC_IDS = {"crowd_signal_only", "crowd_signal_plus_sentiment"}
+_ANCHOR_TACTIC_IDS = {"shadow_actual_baseline"}
+
+
+def _slim_row(r: dict | None) -> dict | None:
+    if not r:
+        return None
+    return {
+        "name": r.get("name"), "tactic_id": r.get("tactic_id"),
+        "strategy_score": r.get("strategy_score"),
+        "mean_excess_vs_spy": r.get("mean_excess_vs_spy"),
+        "prob_beat_spy": r.get("prob_beat_spy"),
+        "worst_max_drawdown": r.get("worst_max_drawdown"),
+        "approximate": r.get("approximate", False),
+        "by_window": r.get("by_window", []),
+    }
+
+
 def _strategy_lab_view(doc: dict) -> dict[str, Any]:
     """Compact Research Strategy Lab leaderboard view (observe-only)."""
     if not isinstance(doc, dict) or doc.get("status") != "ok":
         return {"available": False, "status": (doc or {}).get("status", "absent")}
+    all_rows = doc.get("leaderboard") or []
     rows = []
-    for r in (doc.get("leaderboard") or [])[:15]:
+    for r in all_rows[:15]:
         rows.append({
             "name": r.get("name"), "tactic_id": r.get("tactic_id"),
             "strategy_score": r.get("strategy_score"),
@@ -135,12 +154,24 @@ def _strategy_lab_view(doc: dict) -> dict[str, Any]:
             "academic_basis": r.get("academic_basis", ""),
             "still_works_oos": r.get("still_works_oos"),
             "approximate": r.get("approximate", False),
+            "is_crowd": r.get("tactic_id") in _CROWD_TACTIC_IDS,
         })
+    # Crowd comparison: anchor vs crowd_only vs crowd+sentiment vs diagnostic
+    anchor = next((r for r in all_rows if r.get("tactic_id") in _ANCHOR_TACTIC_IDS), None)
+    crowd_variants = [r for r in all_rows if r.get("tactic_id") in _CROWD_TACTIC_IDS]
+    diag_raw = doc.get("sentiment_diagnostic")
+    crowd_comparison = {
+        "available": bool(crowd_variants),
+        "anchor": _slim_row(anchor),
+        "variants": [_slim_row(r) for r in crowd_variants],
+        "sentiment_diagnostic": _slim_row(diag_raw),
+    }
     return {
         "available": True,
         "objective": doc.get("objective"),
         "tactic_count": doc.get("tactic_count"),
         "rows": rows,
+        "crowd_comparison": crowd_comparison,
         "created_at": doc.get("created_at"),
     }
 
