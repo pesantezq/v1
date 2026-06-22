@@ -198,10 +198,10 @@ python -m py_compile \
     portfolio_automation/social_intelligence/activation_check.py \
     portfolio_automation/social_intelligence/multi_source_crowd_aggregator.py \
     portfolio_automation/social_sources/apewisdom_connector.py \
-    portfolio_automation/social_sources/fmp_social_sentiment_connector.py \
-    portfolio_automation/social_sources/finnhub_social_probe.py \
-    portfolio_automation/social_sources/stocktwits_probe.py \
-    portfolio_automation/social_sources/quiver_probe.py \
+    portfolio_automation/social_sources/base.py \
+    portfolio_automation/social_sources/bluesky_connector.py \
+    portfolio_automation/social_sources/mastodon_connector.py \
+    portfolio_automation/social_sources/lemmy_connector.py \
     portfolio_automation/social_sources/source_health.py \
     portfolio_automation/social_sources/dev_doc_audit.py \
     portfolio_automation/social_sources/run_multi_source_crowd.py \
