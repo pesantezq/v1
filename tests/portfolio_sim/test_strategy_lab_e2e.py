@@ -90,3 +90,87 @@ def test_walk_forward_artifact_and_overfit(tmp_path):
     lb = json.loads((tmp_path / "outputs" / "sandbox" / "strategy_leaderboard.json").read_text())
     mom = [r for r in lb["leaderboard"] if r["tactic_id"] == "research_momentum_rotation"]
     assert mom  # present in leaderboard
+
+
+# ── Crowd + Sentiment Variant Tests ────────────────────────────────────────────
+
+def _write_sentiment_adj(root, tickers_adj: dict):
+    """Write a minimal social_sentiment_simulation_adjustment.json fixture."""
+    import os
+    d = root / "outputs" / "sandbox" / "discovery"
+    os.makedirs(d, exist_ok=True)
+    payload = {"adjustments": {t: {"adjustment": v, "confidence": 0.5, "source_count": 2}
+                                for t, v in tickers_adj.items()}}
+    (d / "social_sentiment_simulation_adjustment.json").write_text(json.dumps(payload))
+
+
+def test_crowd_only_in_leaderboard_without_sentiment(tmp_path):
+    _seed(tmp_path, enabled=True)
+    # No sentiment file → crowd_only should still appear; crowd_plus_sentiment absent
+    r = run_strategy_lab(root=tmp_path, run_mode="discovery")
+    assert r["status"] == "ok"
+    lb = json.loads((tmp_path / "outputs" / "sandbox" / "strategy_leaderboard.json").read_text())
+    ids = {row["tactic_id"] for row in lb["leaderboard"]}
+    assert "crowd_signal_only" in ids, "crowd_only variant must appear in leaderboard"
+    assert "crowd_signal_plus_sentiment" not in ids, "crowd+sentiment absent without data"
+    # warning emitted
+    assert any("sentiment_adjustments_unavailable" in w for w in r["warnings"])
+
+
+def test_crowd_variants_in_leaderboard_with_sentiment(tmp_path):
+    _seed(tmp_path, enabled=True)
+    _write_sentiment_adj(tmp_path, {"QQQ": 0.02, "GLD": -0.01})
+    r = run_strategy_lab(root=tmp_path, run_mode="discovery")
+    assert r["status"] == "ok"
+    lb = json.loads((tmp_path / "outputs" / "sandbox" / "strategy_leaderboard.json").read_text())
+    ids = {row["tactic_id"] for row in lb["leaderboard"]}
+    assert "crowd_signal_only" in ids
+    assert "crowd_signal_plus_sentiment" in ids
+
+
+def test_sentiment_diagnostic_in_payload_not_leaderboard(tmp_path):
+    _seed(tmp_path, enabled=True)
+    _write_sentiment_adj(tmp_path, {"QQQ": 0.02, "GLD": -0.01})
+    run_strategy_lab(root=tmp_path, run_mode="discovery")
+    lb = json.loads((tmp_path / "outputs" / "sandbox" / "strategy_leaderboard.json").read_text())
+    # Diagnostic is in the payload but NOT in the ranked leaderboard list
+    assert "sentiment_diagnostic" in lb
+    diagnostic_ids = {row["tactic_id"] for row in lb["leaderboard"]}
+    assert "sentiment_diagnostic" not in diagnostic_ids
+    # And it has the correct metadata
+    diag = lb["sentiment_diagnostic"]
+    assert diag["primary_leaderboard"] is False
+    assert "sentiment_diagnostic" in diag.get("tactic_id", "")
+
+
+def test_sentiment_diagnostic_artifact_written(tmp_path):
+    _seed(tmp_path, enabled=True)
+    _write_sentiment_adj(tmp_path, {"QQQ": 0.03})
+    r = run_strategy_lab(root=tmp_path, run_mode="discovery")
+    assert "sentiment_diagnostic" in r["artifacts"]
+    diag_path = tmp_path / "outputs" / "sandbox" / "strategy_sentiment_diagnostic.json"
+    assert diag_path.exists()
+    diag = json.loads(diag_path.read_text())
+    assert diag["primary_leaderboard"] is False
+    assert diag["observe_only"] is True
+
+
+def test_no_mutation_of_decision_plan_with_sentiment(tmp_path):
+    _seed(tmp_path, enabled=True)
+    _write_sentiment_adj(tmp_path, {"QQQ": 0.02})
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    plan = latest / "decision_plan.json"
+    plan.write_text(json.dumps({"x": 1}))
+    before = plan.read_text()
+    run_strategy_lab(root=tmp_path, run_mode="discovery")
+    assert plan.read_text() == before
+
+
+def test_crowd_source_in_coverage_complete(tmp_path):
+    _seed(tmp_path, enabled=True)
+    _write_sentiment_adj(tmp_path, {"QQQ": 0.01})
+    run_strategy_lab(root=tmp_path, run_mode="discovery")
+    cat = json.loads((tmp_path / "outputs" / "sandbox" / "research_strategy_catalog.json").read_text())
+    # crowd rows (source="crowd") must not break coverage_complete
+    assert cat["coverage_complete"] is True

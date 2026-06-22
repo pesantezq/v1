@@ -20,6 +20,7 @@ CAUTION_STATES = frozenset({"hype_acceleration", "reflexive_squeeze_risk", "crow
 DEFAULT_SLEEVE_TOTAL = 0.15
 DEFAULT_PER_IDEA = 0.05
 OVERLAY_TRIM = 0.8   # ×0.8 trim of a core holding flagged caution
+SENTIMENT_MAX_TILT = 0.05  # per-ticker hard cap (mirrors pipeline's max_score_adjustment)
 
 
 def build_crowd_sleeve(
@@ -96,6 +97,34 @@ def build_crowd_sleeve(
     return weights, underweight_flags, list(sleeve.keys())
 
 
+def apply_sentiment_tilt(
+    weights: dict[str, float],
+    adjustments: dict[str, dict[str, Any]],
+    *,
+    max_per_ticker: float = SENTIMENT_MAX_TILT,
+) -> dict[str, float]:
+    """
+    Apply bounded additive sentiment tilts to a weight vector, then renormalize.
+
+    Pure function — no side effects. Each adjustment is clamped to
+    [-max_per_ticker, max_per_ticker]. Weights floor at 0.0 (no shorting).
+    Result always sums to 1.0.
+    """
+    if not adjustments or not weights:
+        return dict(weights)
+    w = dict(weights)
+    for ticker, data in adjustments.items():
+        raw_adj = float(data.get("adjustment", 0.0))
+        if raw_adj == 0.0:
+            continue
+        tilt = max(-max_per_ticker, min(max_per_ticker, raw_adj))
+        w[ticker] = max(0.0, w.get(ticker, 0.0) + tilt)
+    total = sum(v for v in w.values() if v > 0)
+    if total <= 0:
+        return dict(weights)
+    return {k: v / total for k, v in w.items() if v > 0}
+
+
 def proxy_pseudo_state(volume_z: float, momentum: float) -> str:
     """
     Map a (volume z-score, trailing momentum) pair to a pseudo crowd state.
@@ -135,22 +164,37 @@ def _panel_proxy_states(panel, date: str, tickers: list[str], lookback: int = 20
 
 
 class CrowdTactic(TimeVaryingTactic):
-    """Time-varying crowd-signal tactic (live or proxy mode)."""
+    """Time-varying crowd-signal tactic (live or proxy mode), with optional sentiment tilt."""
 
     def __init__(self, core_weights: dict[str, float], *, mode: str = "proxy",
                  states_by_date: dict[str, list[dict]] | None = None,
                  sleeve_total: float = DEFAULT_SLEEVE_TOTAL, per_idea: float = DEFAULT_PER_IDEA,
-                 priority_weighted: bool = True, proxy_universe: list[str] | None = None):
+                 priority_weighted: bool = True, proxy_universe: list[str] | None = None,
+                 with_sentiment: bool = False,
+                 sentiment_adjustments: dict[str, dict[str, Any]] | None = None,
+                 max_sentiment_tilt: float = SENTIMENT_MAX_TILT,
+                 tactic_id: str | None = None,
+                 name: str | None = None):
+        _id = tactic_id or (
+            "crowd_signal_tactic_sentiment" if with_sentiment else "crowd_signal_tactic"
+        )
+        _name = name or (
+            "Crowd-Signal + Sentiment Tilt" if with_sentiment else "Crowd-Signal Tilt"
+        )
         super().__init__(
-            tactic_id="crowd_signal_tactic",
-            name="Crowd-Signal Tilt",
+            tactic_id=_id,
+            name=_name,
             source="crowd",
             target_weights=dict(core_weights),
             metadata={"mode": mode, "sleeve_total": sleeve_total, "per_idea": per_idea,
                       "priority_weighted": priority_weighted,
+                      "with_sentiment": with_sentiment,
                       "materialization": {"rules": [
                           "capped sleeve toward emerging_dd/crowd_validation/contrarian_neglect",
-                          "avoid-overlay ×0.8 trim on hype/squeeze/exhaustion core holdings"]}},
+                          "avoid-overlay ×0.8 trim on hype/squeeze/exhaustion core holdings",
+                          *(["bounded sentiment tilt ±{:.0%} per ticker after crowd-state logic".format(
+                              max_sentiment_tilt)
+                          ] if with_sentiment else [])]}},
             approximate=(mode == "proxy"),
         )
         self.core = dict(core_weights)
@@ -160,6 +204,9 @@ class CrowdTactic(TimeVaryingTactic):
         self.per_idea = per_idea
         self.priority_weighted = priority_weighted
         self.proxy_universe = proxy_universe or []
+        self.with_sentiment = with_sentiment
+        self.sentiment_adjustments = dict(sentiment_adjustments or {})
+        self.max_sentiment_tilt = max_sentiment_tilt
         self.last_flags: list[str] = []
 
     def _states_asof(self, date: str, ctx: dict | None) -> list[dict[str, Any]]:
@@ -179,4 +226,7 @@ class CrowdTactic(TimeVaryingTactic):
             self.core, states, sleeve_total=self.sleeve_total,
             per_idea=self.per_idea, priority_weighted=self.priority_weighted)
         self.last_flags = flags
+        if self.with_sentiment and self.sentiment_adjustments:
+            weights = apply_sentiment_tilt(
+                weights, self.sentiment_adjustments, max_per_ticker=self.max_sentiment_tilt)
         return weights

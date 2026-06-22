@@ -31,6 +31,33 @@ _RATIONALE = {
     "profile_boom_bucket": "Asymmetric-upside tilt to leverage/growth within hard caps.",
     "benchmark_spy": "The S&P 500 — the operator's primary beat-the-market benchmark.",
     "benchmark_qqq": "Nasdaq-100 — secondary benchmark.",
+    # Crowd + Sentiment variants (strategy lab comparison trio)
+    "crowd_signal_only": (
+        "Proxy crowd-signal tactic (no sentiment): derives pseudo crowd-states from price/volume "
+        "momentum, builds a capped sleeve (≤15% total / ≤5% per idea) toward emerging_dd / "
+        "crowd_validation / contrarian_neglect states, and applies a ×0.8 caution overlay on "
+        "hype/exhaustion/squeeze core holdings. Baseline for measuring sentiment lift."
+    ),
+    "crowd_signal_plus_sentiment": (
+        "Crowd-signal proxy + bounded FinBERT sentiment tilt: extends crowd_signal_only by "
+        "applying per-ticker sentiment adjustments (±5% cap) from the free social-text pipeline "
+        "after crowd-state logic but before final normalization. Enables isolating the incremental "
+        "value of sentiment vs. crowd-state classification alone."
+    ),
+    "crowd_signal_tactic": (
+        "Core crowd-signal tactic (backtest runner variant): proxy crowd-states + capped sleeve + "
+        "caution overlay. Used in run_portfolio_backtest.py for the pattern-loop; the strategy-lab "
+        "variant is crowd_signal_only."
+    ),
+    "crowd_signal_tactic_sentiment": (
+        "Crowd-signal tactic with sentiment tilt enabled (generic variant): crowd-state logic "
+        "followed by bounded FinBERT sentiment tilt. Sentiment active flag surfaced in metadata."
+    ),
+    "sentiment_diagnostic": (
+        "Diagnostic-only tactic outside the primary leaderboard: applies sentiment tilt directly "
+        "to the anchor portfolio weights with no crowd-state logic, isolating the pure signal of "
+        "FinBERT-scored social text independent of volume/momentum-derived crowd states."
+    ),
 }
 
 

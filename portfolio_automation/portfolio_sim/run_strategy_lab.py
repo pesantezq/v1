@@ -24,10 +24,11 @@ from portfolio_automation.run_mode_governance import (
 from portfolio_automation.portfolio_sim.backtest_engine import benchmark_total_return, run_backtest
 from portfolio_automation.portfolio_sim.prices import load_price_panel
 from portfolio_automation.portfolio_sim.rebalance import make_policy
+from portfolio_automation.portfolio_sim.crowd_tactic import CrowdTactic, apply_sentiment_tilt
 from portfolio_automation.portfolio_sim.research_library import research_tactics
 from portfolio_automation.portfolio_sim.sim_base import SimStatus, sim_envelope, utc_now_iso
 from portfolio_automation.portfolio_sim.strategy_score import rank, score
-from portfolio_automation.portfolio_sim.tactics import TimeVaryingTactic, all_static_tactics
+from portfolio_automation.portfolio_sim.tactics import Tactic, TimeVaryingTactic, all_static_tactics
 from portfolio_automation.portfolio_sim.windows import resolve_windows
 
 logger = logging.getLogger("stockbot.portfolio_sim.run_strategy_lab")
@@ -38,6 +39,9 @@ _CATALOG_JSON = "research_strategy_catalog.json"
 _WALK_FORWARD_JSON = "walk_forward_results.json"
 _FACTOR_JSON = "factor_exposure_report.json"
 _FACTOR_MD = "factor_attribution_summary.md"
+_SENTIMENT_DIAGNOSTIC_JSON = "strategy_sentiment_diagnostic.json"
+
+_SENTIMENT_ADJ_PATH = "outputs/sandbox/discovery/social_sentiment_simulation_adjustment.json"
 
 _DEFAULT_WINDOWS = ["trailing_1y", "trailing_3y", "trailing_5y", "ytd"]
 
@@ -61,6 +65,86 @@ def _config(root: Path) -> dict[str, Any]:
         "rebalance_rules": raw.get("rebalance_rules") or {},
         "leveraged": {str(h.get("symbol", "")).upper() for h in holdings if h.get("is_leveraged")},
     }
+
+
+def _load_sentiment_adjustments(root: Path) -> dict[str, dict[str, Any]]:
+    """Load per-ticker sentiment adjustments from social_sentiment_simulation_adjustment.json."""
+    try:
+        data = json.loads((root / _SENTIMENT_ADJ_PATH).read_text(encoding="utf-8", errors="replace"))
+        return data.get("adjustments", {})
+    except Exception:
+        return {}
+
+
+def _load_anchor_weights(root: Path) -> dict[str, float]:
+    """Load anchor weights from config holdings (shares-normalized, same as shadow tactics)."""
+    try:
+        raw = json.loads((root / "config.json").read_text(encoding="utf-8", errors="replace"))
+        holdings = (raw.get("portfolio") or {}).get("holdings", []) or []
+        raw_w = {
+            str(h.get("symbol", "")).upper(): float(h.get("shares", 0) or 0)
+            for h in holdings
+            if h.get("symbol") and float(h.get("shares", 0) or 0) > 0
+        }
+        total = sum(raw_w.values())
+        if total <= 0:
+            return {}
+        return {k: v / total for k, v in raw_w.items()}
+    except Exception:
+        return {}
+
+
+def _crowd_variant_tactics(
+    anchor_weights: dict[str, float],
+    sentiment_adjustments: dict[str, dict[str, Any]],
+) -> list[TimeVaryingTactic]:
+    """Build crowd_only and (if sentiment available) crowd_plus_sentiment tactics."""
+    if not anchor_weights:
+        return []
+    variants: list[TimeVaryingTactic] = [
+        CrowdTactic(
+            anchor_weights,
+            mode="proxy",
+            tactic_id="crowd_signal_only",
+            name="Crowd Signal (proxy, no sentiment)",
+        )
+    ]
+    if sentiment_adjustments:
+        variants.append(CrowdTactic(
+            anchor_weights,
+            mode="proxy",
+            with_sentiment=True,
+            sentiment_adjustments=sentiment_adjustments,
+            tactic_id="crowd_signal_plus_sentiment",
+            name="Crowd Signal + Sentiment Tilt",
+        ))
+    return variants
+
+
+def _build_sentiment_diagnostic(
+    anchor_weights: dict[str, float],
+    sentiment_adjustments: dict[str, dict[str, Any]],
+) -> Tactic | None:
+    """Anchor + sentiment only (no crowd-state logic) — scored outside primary leaderboard."""
+    if not anchor_weights or not sentiment_adjustments:
+        return None
+    tilted = apply_sentiment_tilt(anchor_weights, sentiment_adjustments)
+    return Tactic(
+        tactic_id="sentiment_diagnostic",
+        name="Sentiment Diagnostic (anchor + tilt, no crowd states)",
+        source="crowd",
+        target_weights=tilted,
+        metadata={
+            "with_sentiment": True,
+            "crowd_states": False,
+            "primary_leaderboard": False,
+            "observe_only": True,
+            "feeds_decision_engine": False,
+            "note": "Isolates the pure sentiment-tilt signal; "
+                    "compare vs crowd_signal_only to measure incremental sentiment value.",
+        },
+        approximate=True,
+    )
 
 
 def _factor_report(tactics, panel, root, run_id, mode) -> dict[str, Any]:
@@ -162,9 +246,20 @@ def run_strategy_lab(root: str | Path = ".", run_mode: str | RunMode = "discover
         warnings.append("portfolio_sim.strategy_lab disabled")
         return _write(root, run_id, mode, SimStatus.DISABLED.value, warnings, [], write_files)
 
-    tactics = all_static_tactics(root) + research_tactics(root)
+    # Load crowd + sentiment inputs (no error propagation — missing data → fewer variants)
+    anchor_weights = _load_anchor_weights(root)
+    sentiment_adj = _load_sentiment_adjustments(root)
+    crowd_variants = _crowd_variant_tactics(anchor_weights, sentiment_adj)
+    if not sentiment_adj:
+        warnings.append("sentiment_adjustments_unavailable:crowd_plus_sentiment_skipped")
+
+    tactics = all_static_tactics(root) + research_tactics(root) + crowd_variants
     bench_t = cfg["primary_benchmark"]
-    tickers = sorted({t for tac in tactics for t in tac.target_weights} | {bench_t})
+
+    # Include any tickers from the sentiment diagnostic in the price panel
+    diag_tac = _build_sentiment_diagnostic(anchor_weights, sentiment_adj)
+    extra_tickers = set(diag_tac.target_weights) if diag_tac else set()
+    tickers = sorted({t for tac in tactics for t in tac.target_weights} | extra_tickers | {bench_t})
     panel = load_price_panel(tickers, root)
     if len(panel.dates) < 2:
         warnings.append("price_panel_empty")
@@ -179,22 +274,36 @@ def run_strategy_lab(root: str | Path = ".", run_mode: str | RunMode = "discover
     factor_report = _factor_report(tactics, panel, root, run_id, mode)
     scored = [s for s in (_score_tactic(t, panel, windows, bench, cfg, wf_results) for t in tactics) if s]
     leaderboard = rank(scored)
+
+    # Sentiment diagnostic: scored but stored outside primary leaderboard
+    sentiment_diagnostic: dict[str, Any] | None = None
+    if diag_tac is not None:
+        ds = _score_tactic(diag_tac, panel, windows, bench, cfg)
+        if ds:
+            sentiment_diagnostic = {**ds, "primary_leaderboard": False,
+                                    "note": "anchor_plus_sentiment_only_no_crowd_states"}
+
     status = SimStatus.OK.value if leaderboard else SimStatus.INSUFFICIENT_DATA.value
     return _write(root, run_id, mode, status, warnings, leaderboard, write_files,
-                  windows=[w.key for w in windows], wf_results=wf_results, factor_report=factor_report)
+                  windows=[w.key for w in windows], wf_results=wf_results,
+                  factor_report=factor_report, sentiment_diagnostic=sentiment_diagnostic)
 
 
 def _write(root, run_id, mode, status, warnings, leaderboard, write_files, windows=None,
-           wf_results=None, factor_report=None) -> dict[str, Any]:
+           wf_results=None, factor_report=None, sentiment_diagnostic=None) -> dict[str, Any]:
     env = sim_envelope(run_id=run_id, run_mode=mode.value, status=status, warnings=warnings)
-    coverage_complete = all(row.get("academic_basis") or row["source"] in ("shadow", "baseline",
-                            "strategy_profile", "benchmark") for row in leaderboard)
+    # crowd source rows don't need academic_basis for coverage_complete
+    _documented_sources = ("shadow", "baseline", "strategy_profile", "benchmark", "crowd")
+    coverage_complete = all(row.get("academic_basis") or row["source"] in _documented_sources
+                            for row in leaderboard)
     payload = {**env, "objective": "maximize_excess_vs_sp500", "windows": windows or [],
                "tactic_count": len(leaderboard), "leaderboard": leaderboard}
+    if sentiment_diagnostic is not None:
+        payload["sentiment_diagnostic"] = sentiment_diagnostic
     catalog = {**env, "coverage_complete": coverage_complete,
                "undocumented": [r["tactic_id"] for r in leaderboard
                                 if not r.get("academic_basis") and r["source"] not in
-                                ("shadow", "baseline", "strategy_profile", "benchmark")],
+                                _documented_sources],
                "cards": leaderboard}
     artifacts: dict[str, str] = {}
     wrote = False
@@ -213,6 +322,13 @@ def _write(root, run_id, mode, status, warnings, leaderboard, write_files, windo
                 safe_write_json(OutputNamespace.SANDBOX, _FACTOR_JSON, factor_report, base_dir=base)
                 safe_write_text(OutputNamespace.SANDBOX, _FACTOR_MD,
                                 render_factor_md(factor_report), base_dir=base)
+            if sentiment_diagnostic is not None:
+                diag_payload = {**env, "observe_only": True, "primary_leaderboard": False,
+                                "result": sentiment_diagnostic}
+                safe_write_json(OutputNamespace.SANDBOX, _SENTIMENT_DIAGNOSTIC_JSON,
+                                diag_payload, base_dir=base)
+                artifacts["sentiment_diagnostic"] = str(
+                    base / "sandbox" / _SENTIMENT_DIAGNOSTIC_JSON)
             wrote = True
         except Exception as exc:
             logger.warning("strategy_lab: write skipped/failed (%s)", exc)
