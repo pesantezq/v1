@@ -104,6 +104,113 @@ class TestStageLogParsing(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+# A concatenated two-run log: run A failed preflight (leaving DAILY RUN FAILED),
+# run B ran clean but the daily_run_status stage parses the log *before* run B's
+# trailing "DAILY RUN PASSED" is written — so the only run-result marker present
+# is run A's FAILED. This reproduces the 2026-06-22 double-run false-positive.
+_DOUBLE_RUN_LOG = """== Daily Safe Wrapper ==
+Repo root: /tmp
+
+== Preflight ==
+
+== Compile Check ==
+[Errno 2] No such file or directory: 'portfolio_automation/social_sources/x.py'
+
+DAILY RUN FAILED
+
+== Daily Safe Wrapper ==
+Repo root: /tmp
+
+== Preflight ==
+
+== Summary ==
+PASS: Preflight completed successfully
+
+== Daily Pipeline ==
+Run 2026-06-22_daily already completed today — Exiting (idempotent).
+
+== Daily run status ==
+"""
+
+# A fully-written concatenated log where BOTH run-result markers are present
+# (run A FAILED, run B PASSED last). No pipeline_run_status available.
+_DOUBLE_RUN_LOG_BOTH_MARKERS = _DOUBLE_RUN_LOG + "\nDAILY RUN PASSED\n"
+
+
+class TestDailyPipelineStatusInference(unittest.TestCase):
+    """Daily Pipeline stage must be robust to double-run logs + idempotent skips."""
+
+    def test_idempotent_skip_with_passing_pipeline_status_not_failed(self):
+        # Log only carries run A's FAILED marker, but the structured
+        # pipeline_run_status (authored by main.py on run B) reports success
+        # with an idempotent skip. The structured contract must win.
+        pipeline_status = {
+            "success": True,
+            "exit_code": 0,
+            "steps": [
+                {"name": "run_portfolio_update", "status": "skipped",
+                 "skip_reason": "idempotent_already_completed"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "test.log"
+            log.write_text(_DOUBLE_RUN_LOG)
+            stages = scan_log_stages(log, pipeline_status=pipeline_status)
+            dp = [s for s in stages if s["name"] == "Daily Pipeline"]
+            self.assertEqual(len(dp), 1)
+            self.assertEqual(dp[0]["status"], "ok")
+            self.assertEqual(dp[0].get("skip_reason"), "idempotent_already_completed")
+
+    def test_pipeline_status_failure_marks_failed(self):
+        pipeline_status = {"success": False, "exit_code": 1, "steps": []}
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "test.log"
+            log.write_text(_FAKE_LOG)  # log says PASSED, but contract says failed
+            stages = scan_log_stages(log, pipeline_status=pipeline_status)
+            dp = [s for s in stages if s["name"] == "Daily Pipeline"]
+            self.assertEqual(dp[0]["status"], "failed")
+
+    def test_concatenated_log_last_marker_wins_without_status(self):
+        # No structured status — fall back to the LAST run-result marker so a
+        # prior failed run's FAILED cannot poison the current run.
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "test.log"
+            log.write_text(_DOUBLE_RUN_LOG_BOTH_MARKERS)
+            stages = scan_log_stages(log)
+            dp = [s for s in stages if s["name"] == "Daily Pipeline"]
+            self.assertEqual(dp[0]["status"], "ok")
+
+    def test_single_failed_run_still_failed(self):
+        # Backward-compat: a genuine single-run failure with no passing status
+        # must still report failed.
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "test.log"
+            log.write_text(_FAKE_LOG.replace("DAILY RUN PASSED", "DAILY RUN FAILED"))
+            stages = scan_log_stages(log)
+            dp = [s for s in stages if s["name"] == "Daily Pipeline"]
+            self.assertEqual(dp[0]["status"], "failed")
+
+    def test_build_reads_pipeline_run_status_for_idempotent_skip(self):
+        # End-to-end: build_daily_run_status must read pipeline_run_status.json
+        # and NOT roll up to overall_status=failed on an idempotent-skip rerun.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log = root / "logs" / "daily.log"
+            log.parent.mkdir(parents=True)
+            log.write_text(_DOUBLE_RUN_LOG)
+            latest = root / "outputs" / "latest"
+            latest.mkdir(parents=True)
+            (latest / "pipeline_run_status.json").write_text(json.dumps({
+                "success": True,
+                "exit_code": 0,
+                "steps": [{"name": "run_portfolio_update", "status": "skipped",
+                           "skip_reason": "idempotent_already_completed"}],
+            }))
+            payload = build_daily_run_status(root=root, log_path=log)
+            self.assertEqual(payload["stage_summary"]["failed"], 0)
+            self.assertNotEqual(payload["overall_status"], "failed")
+
+
 class TestArtifactScanning(unittest.TestCase):
     def test_classifies_fresh_vs_missing(self):
         with tempfile.TemporaryDirectory() as td:

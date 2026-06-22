@@ -297,7 +297,50 @@ def _load_json_safe(path: Path) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def scan_log_stages(log_path: Path) -> list[dict[str, Any]]:
+def _infer_daily_pipeline_status(
+    text: str, pipeline_status: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """
+    Decide the "Daily Pipeline" stage status, robust to double-run logs and
+    idempotent-skip reruns.
+
+    The structured ``pipeline_run_status.json`` contract (authored by main.py)
+    is authoritative when present: on a second same-day run main.py exits with
+    success + an ``idempotent_already_completed`` skip, but the shared log still
+    carries the first run's ``DAILY RUN FAILED`` marker (and the current run's
+    ``DAILY RUN PASSED`` is written only *after* this parser reads the log).
+    Anchoring to the structured status kills that false-positive.
+
+    Falls back to log markers when no structured status is available; on a
+    concatenated multi-run log the LAST run-result marker wins so a prior
+    failed run cannot poison the current run's status.
+    """
+    if isinstance(pipeline_status, dict):
+        success = pipeline_status.get("success")
+        if success is True:
+            steps = pipeline_status.get("steps") or []
+            skip_reason = next(
+                (s.get("skip_reason") for s in steps
+                 if s.get("skip_reason") == "idempotent_already_completed"),
+                None,
+            )
+            result: dict[str, Any] = {"status": "ok"}
+            if skip_reason:
+                result["skip_reason"] = skip_reason
+            return result
+        if success is False:
+            return {"status": "failed"}
+
+    last_passed = text.rfind("DAILY RUN PASSED")
+    last_failed = text.rfind("DAILY RUN FAILED")
+    if last_passed == -1 and last_failed == -1:
+        return None
+    return {"status": "ok"} if last_passed > last_failed else {"status": "failed"}
+
+
+def scan_log_stages(
+    log_path: Path, pipeline_status: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     """
     Parse a daily_safe_YYYY-MM-DD.log file into a stage timeline.
 
@@ -307,6 +350,10 @@ def scan_log_stages(log_path: Path) -> list[dict[str, Any]]:
     "Preflight" subsections (Repo Root, Virtual Environment, etc.) are
     grouped under a single "Preflight" entry to avoid noise. Recognized
     statuses: "ok", "warn", "unknown" (no trailing OK/WARN line found).
+
+    ``pipeline_status`` is the parsed ``pipeline_run_status.json`` payload; when
+    supplied it authoritatively decides the "Daily Pipeline" stage (see
+    :func:`_infer_daily_pipeline_status`).
     """
     if not log_path.exists():
         return []
@@ -371,11 +418,11 @@ def scan_log_stages(log_path: Path) -> list[dict[str, Any]]:
             name_to_status.setdefault("Preflight", {"status": "ok"})
 
     # The "Daily Pipeline" stage itself doesn't print "Daily Pipeline: OK" —
-    # it's the fail-fast first stage. Infer ok from "DAILY RUN PASSED".
-    if "DAILY RUN PASSED" in text:
-        name_to_status.setdefault("Daily Pipeline", {"status": "ok"})
-    elif "DAILY RUN FAILED" in text:
-        name_to_status.setdefault("Daily Pipeline", {"status": "failed"})
+    # it's the fail-fast first stage. Anchor to the structured pipeline_run_status
+    # contract when available; otherwise fall back to the (last) log marker.
+    dp_status = _infer_daily_pipeline_status(text, pipeline_status)
+    if dp_status is not None:
+        name_to_status.setdefault("Daily Pipeline", dp_status)
 
     for s in stages:
         ss = name_to_status.get(s["name"])
@@ -485,7 +532,8 @@ def build_daily_run_status(
     else:
         log_path = Path(log_path)
 
-    stages = scan_log_stages(log_path)
+    pipeline_status = _load_json_safe(root_path / "outputs" / "latest" / "pipeline_run_status.json")
+    stages = scan_log_stages(log_path, pipeline_status=pipeline_status)
     artifacts = scan_expected_artifacts(root_path)
     content_liveness = scan_content_liveness(root_path)
 
