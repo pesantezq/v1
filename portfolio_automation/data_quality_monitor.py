@@ -111,6 +111,7 @@ class DataQualitySummary:
     available: bool = True
     total_symbols: int = 0
     healthy_symbols: int = 0
+    info_symbols: int = 0
     warning_symbols: int = 0
     critical_symbols: int = 0
     missing_price_count: int = 0
@@ -352,6 +353,13 @@ def _compute_summary_line(summary: DataQualitySummary) -> str:
             f"{summary.warning_symbols} symbol(s) with warnings "
             f"({summary.healthy_symbols}/{summary.total_symbols} healthy)"
         )
+    if summary.info_symbols > 0:
+        # Info-only notices (e.g. ETFs/index with no single-issuer news) are not
+        # warnings — report them as informational so the count is not alarming.
+        return (
+            f"{summary.healthy_symbols}/{summary.total_symbols} symbols healthy "
+            f"({summary.info_symbols} with info notice(s))"
+        )
     return f"All {summary.total_symbols} symbols healthy"
 
 
@@ -407,6 +415,12 @@ def evaluate_data_quality(
 
     total = len(symbol_reports)
 
+    # Buckets follow the severity ladder and partition the symbol set:
+    #   healthy  = no issues
+    #   info     = has issues, but all are info-severity (e.g. missing news for an
+    #              ETF/index) — a notice, NOT a warning
+    #   warning  = >=1 warning-severity issue and no critical
+    #   critical = >=1 critical-severity issue
     healthy = sum(1 for r in symbol_reports if not r.issues)
     critical = sum(
         1 for r in symbol_reports
@@ -415,7 +429,12 @@ def evaluate_data_quality(
     warning = sum(
         1 for r in symbol_reports
         if (not any(i.severity == SEVERITY_CRITICAL for i in r.issues))
-        and r.issues
+        and any(i.severity == SEVERITY_WARNING for i in r.issues)
+    )
+    info = sum(
+        1 for r in symbol_reports
+        if r.issues
+        and all(i.severity == SEVERITY_INFO for i in r.issues)
     )
 
     missing_price_count = sum(1 for r in symbol_reports if r.missing_price)
@@ -485,6 +504,7 @@ def evaluate_data_quality(
         available=True,
         total_symbols=total,
         healthy_symbols=healthy,
+        info_symbols=info,
         warning_symbols=warning,
         critical_symbols=critical,
         missing_price_count=missing_price_count,
@@ -545,6 +565,7 @@ def summary_to_dict(summary: DataQualitySummary) -> dict:
         "available": summary.available,
         "total_symbols": summary.total_symbols,
         "healthy_symbols": summary.healthy_symbols,
+        "info_symbols": summary.info_symbols,
         "warning_symbols": summary.warning_symbols,
         "critical_symbols": summary.critical_symbols,
         "missing_price_count": summary.missing_price_count,
@@ -583,6 +604,7 @@ def build_data_quality_markdown(summary: DataQualitySummary) -> str:
     lines.append("|--------|-------|")
     lines.append(f"| Total symbols | {summary.total_symbols} |")
     lines.append(f"| Healthy | {summary.healthy_symbols} |")
+    lines.append(f"| Info notices | {summary.info_symbols} |")
     lines.append(f"| Warning | {summary.warning_symbols} |")
     lines.append(f"| Critical | {summary.critical_symbols} |")
     lines.append(f"| Missing price | {summary.missing_price_count} |")

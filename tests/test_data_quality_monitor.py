@@ -838,5 +838,96 @@ class TestMarkdownBuilder(unittest.TestCase):
         self.assertGreater(len(md), 0)
 
 
+# ---------------------------------------------------------------------------
+# Info-severity issues must not inflate the warning count (severity-bucket fix)
+# ---------------------------------------------------------------------------
+
+def _missing_news_only_record(ticker: str = "XLK") -> dict:
+    """Price/fundamentals healthy; news empty. Only issue is info-severity MISSING_NEWS."""
+    return {
+        "ticker": ticker,
+        "price": 150.0,
+        "data_quality": "fresh",
+        "data_mode": "live",
+        "fundamentals": {"sector": "Technology", "market_cap": 1_000_000_000},
+        "news": {"headline_count": 0, "avg_sentiment": 0.0},
+        "news_count": 0,
+    }
+
+
+class TestInfoSeverityNotCountedAsWarning(unittest.TestCase):
+    """A symbol whose only issue is info-severity (e.g. missing news) must not
+    be reported as a warning. Regression guard for the '24 warnings' misreport
+    where info-level MISSING_NEWS flags inflated warning_symbols."""
+
+    def test_missing_news_only_is_not_a_warning(self):
+        summary = evaluate_data_quality([_missing_news_only_record()])
+        self.assertEqual(summary.warning_symbols, 0)
+
+    def test_missing_news_only_counted_as_info(self):
+        summary = evaluate_data_quality([_missing_news_only_record()])
+        self.assertEqual(summary.info_symbols, 1)
+
+    def test_missing_news_only_not_healthy(self):
+        # It has an issue, so it is not "healthy", but it is not a warning either.
+        summary = evaluate_data_quality([_missing_news_only_record()])
+        self.assertEqual(summary.healthy_symbols, 0)
+
+    def test_many_missing_news_no_warnings_in_summary_line(self):
+        records = [_missing_news_only_record(t) for t in ("XLK", "XLF", "SPY", "QQQ")]
+        summary = evaluate_data_quality(records)
+        self.assertEqual(summary.warning_symbols, 0)
+        self.assertNotIn("warning", summary.summary_line.lower())
+
+    def test_real_warning_still_counted(self):
+        # A genuine warning-severity issue (stale price) must still count.
+        record = {
+            "ticker": "ZZZ",
+            "price": 100.0,
+            "data_quality": "stale",
+            "data_mode": "live",
+            "quote_age_minutes": 9999,
+            "fundamentals": {"sector": "Tech", "market_cap": 1_000_000_000},
+            "news": {"headline_count": 3},
+            "news_count": 3,
+        }
+        summary = evaluate_data_quality([record])
+        self.assertEqual(summary.warning_symbols, 1)
+        self.assertEqual(summary.info_symbols, 0)
+
+    def test_warning_plus_info_buckets_disjoint(self):
+        # One stale (warning) + two missing-news-only (info) + one healthy.
+        stale = {
+            "ticker": "ZZZ", "price": 100.0, "data_quality": "stale",
+            "data_mode": "live", "quote_age_minutes": 9999,
+            "fundamentals": {"sector": "Tech", "market_cap": 1_000_000_000},
+            "news": {"headline_count": 3}, "news_count": 3,
+        }
+        records = [
+            stale,
+            _missing_news_only_record("XLK"),
+            _missing_news_only_record("XLF"),
+            _healthy_record("AAPL"),
+        ]
+        summary = evaluate_data_quality(records)
+        self.assertEqual(summary.total_symbols, 4)
+        self.assertEqual(summary.healthy_symbols, 1)
+        self.assertEqual(summary.info_symbols, 2)
+        self.assertEqual(summary.warning_symbols, 1)
+        self.assertEqual(summary.critical_symbols, 0)
+        # buckets partition the total
+        self.assertEqual(
+            summary.healthy_symbols + summary.info_symbols
+            + summary.warning_symbols + summary.critical_symbols,
+            summary.total_symbols,
+        )
+
+    def test_summary_dict_exposes_info_symbols(self):
+        summary = evaluate_data_quality([_missing_news_only_record()])
+        d = summary_to_dict(summary)
+        self.assertIn("info_symbols", d)
+        self.assertEqual(d["info_symbols"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

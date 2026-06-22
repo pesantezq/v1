@@ -27,6 +27,8 @@ from gui_v2.data.shared import card, _read_json
 _THIN_SAMPLE_N = 30           # below this → "Thin sample"
 _INSUFFICIENT_HISTORY_N = 10  # below this → "Insufficient history"
 _CALIBRATION_GAP_CAUTION = 0.15  # above this gap → flag as caution
+_CALIBRATION_TREND_EPS = 0.02     # |latest-earliest gap| within this → "Stable"
+_BUCKET_OVERCONFIDENT_GAP = 0.10  # bucket gap beyond ±this → over/under-confident
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +44,98 @@ def _n_label(n: int | None) -> str | None:
     if n < _THIN_SAMPLE_N:
         return "Thin sample"
     return None
+
+
+def _calibration_gap_history(root: Path) -> list[tuple[str, float]]:
+    """Read overall_calibration_gap from each outputs/history/<date>/ snapshot.
+
+    Returns a chronologically-sorted list of (date, gap). ISO date dir names
+    sort lexically into chronological order. Observe-only; never raises.
+    """
+    hist_root = root / "outputs" / "history"
+    series: list[tuple[str, float]] = []
+    if not hist_root.is_dir():
+        return series
+    for snap in sorted(hist_root.glob("*/confidence_calibration.json")):
+        data = _read_json(snap) or {}
+        gap = data.get("overall_calibration_gap")
+        if isinstance(gap, (int, float)):
+            series.append((snap.parent.name, float(gap)))
+    return series
+
+
+def _bucket_confidence_annotation(buckets: list | None) -> str:
+    """Summarize which confidence buckets are over/under-confident.
+
+    A positive bucket calibration_gap means average confidence exceeds the
+    realized hit rate (overconfident); negative means underconfident.
+    """
+    over: list[str] = []
+    under: list[str] = []
+    for b in buckets or []:
+        if not isinstance(b, dict):
+            continue
+        gap = b.get("calibration_gap")
+        label = b.get("label")
+        if not isinstance(gap, (int, float)) or not label:
+            continue
+        if gap > _BUCKET_OVERCONFIDENT_GAP:
+            over.append(str(label))
+        elif gap < -_BUCKET_OVERCONFIDENT_GAP:
+            under.append(str(label))
+    parts: list[str] = []
+    if over:
+        parts.append(f"Overconfident buckets: {', '.join(over)}")
+    if under:
+        parts.append(f"Underconfident buckets: {', '.join(under)}")
+    return "; ".join(parts) if parts else "Buckets within tolerance"
+
+
+def _calibration_trend_card(calib: dict, history: list[tuple[str, float]]) -> dict:
+    """Build the 'Calibration Trend' card from the gap history + latest buckets.
+
+    Trend compares the earliest vs latest gap in the available history window:
+    a shrinking gap is 'Improving' (better calibrated), a growing gap is
+    'Worsening'. Needs >=2 snapshots; otherwise 'Insufficient history'.
+    """
+    bucket_note = _bucket_confidence_annotation(calib.get("buckets_5"))
+
+    if len(history) < 2:
+        return card(
+            "Calibration Trend",
+            status="unknown",
+            label="Insufficient history",
+            summary=(
+                "Need >=2 daily snapshots to trend the calibration gap. "
+                + bucket_note
+            ),
+            source_artifacts=["confidence_calibration.json"],
+            updated_at=calib.get("generated_at"),
+        )
+
+    earliest_gap = history[0][1]
+    latest_gap = history[-1][1]
+    delta = latest_gap - earliest_gap
+
+    if delta < -_CALIBRATION_TREND_EPS:
+        label, status = "Improving", "ok"
+    elif delta > _CALIBRATION_TREND_EPS:
+        label, status = "Worsening", "warning"
+    else:
+        label, status = "Stable", "info"
+
+    summary = (
+        f"Gap {earliest_gap:.3f} -> {latest_gap:.3f} over {len(history)} snapshots "
+        f"(delta {delta:+.3f}). {bucket_note}"
+    )
+    return card(
+        "Calibration Trend",
+        status=status,
+        label=label,
+        summary=summary,
+        source_artifacts=["confidence_calibration.json"],
+        updated_at=calib.get("generated_at"),
+    )
 
 
 def _efficacy_label_and_status(
@@ -160,6 +254,12 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
             summary="confidence_calibration.json absent — run daily pipeline",
             source_artifacts=["confidence_calibration.json"],
         ))
+
+    # 1b. Calibration Trend (history-aware + over/under-confident bucket annotation)
+    if calib:
+        cards.append(
+            _calibration_trend_card(calib, _calibration_gap_history(root))
+        )
 
     # ------------------------------------------------------------------
     # 2–4. Pattern Efficacy (weekly / monthly / yearly)

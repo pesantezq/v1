@@ -555,3 +555,113 @@ def test_no_forbidden_action_labels_in_quant_template():
     text = template_path.read_text(encoding="utf-8").lower()
     offenders = [label for label in _FORBIDDEN_LABELS if label in text]
     assert offenders == [], f"Forbidden labels in quant.html: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Calibration Trend card (history-aware + bucket annotation)
+# ---------------------------------------------------------------------------
+
+def _make_calibration_full(latest: Path, gap: float = 0.10,
+                           buckets: list[dict] | None = None) -> None:
+    """Latest calibration with overall gap and optional per-bucket gaps."""
+    _write(latest, "confidence_calibration.json", {
+        "generated_at": "2026-06-22T00:00:00",
+        "observe_only": True,
+        "insufficient_data": False,
+        "total_resolved": 300,
+        "min_required": 20,
+        "overall_hit_rate": 0.45,
+        "overall_average_confidence": 0.45 + gap,
+        "overall_calibration_gap": gap,
+        "buckets_5": buckets if buckets is not None else [],
+        "summary_line": "300 resolved decisions.",
+    })
+
+
+def _make_calibration_history(tmp_path: Path, dated_gaps: dict[str, float]) -> None:
+    """Write outputs/history/<date>/confidence_calibration.json snapshots."""
+    for date, gap in dated_gaps.items():
+        d = tmp_path / "outputs" / "history" / date
+        d.mkdir(parents=True, exist_ok=True)
+        _write(d, "confidence_calibration.json", {
+            "generated_at": f"{date}T00:00:00",
+            "observe_only": True,
+            "total_resolved": 200,
+            "overall_calibration_gap": gap,
+        })
+
+
+def _trend_card(view: dict) -> dict | None:
+    return next((c for c in view["cards"] if c["title"] == "Calibration Trend"), None)
+
+
+def test_calibration_trend_card_emitted(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.20)
+    _make_calibration_history(tmp_path, {
+        "2026-06-08": 0.30, "2026-06-15": 0.25, "2026-06-22": 0.20,
+    })
+    card = _trend_card(collect_quant_view(tmp_path))
+    assert card is not None
+    assert card["source_artifacts"]  # non-empty
+
+
+def test_calibration_trend_improving_when_gap_shrinks(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.20)
+    _make_calibration_history(tmp_path, {
+        "2026-06-08": 0.35, "2026-06-15": 0.28, "2026-06-22": 0.20,
+    })
+    card = _trend_card(collect_quant_view(tmp_path))
+    assert "Improving" in card["label"]
+
+
+def test_calibration_trend_worsening_when_gap_grows(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.35)
+    _make_calibration_history(tmp_path, {
+        "2026-06-08": 0.15, "2026-06-15": 0.25, "2026-06-22": 0.35,
+    })
+    card = _trend_card(collect_quant_view(tmp_path))
+    assert "Worsening" in card["label"]
+
+
+def test_calibration_trend_annotates_overconfident_buckets(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.20, buckets=[
+        {"label": "low", "count": 20, "calibration_gap": 0.02},
+        {"label": "high", "count": 100, "calibration_gap": 0.30},
+        {"label": "very_high", "count": 80, "calibration_gap": 0.40},
+    ])
+    _make_calibration_history(tmp_path, {"2026-06-22": 0.20})
+    card = _trend_card(collect_quant_view(tmp_path))
+    # overconfident buckets named in the summary
+    assert "high" in card["summary"].lower()
+
+
+def test_calibration_trend_insufficient_history(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.20)
+    # no history snapshots written
+    card = _trend_card(collect_quant_view(tmp_path))
+    assert card is not None
+    assert "Insufficient history" in card["label"]
+
+
+def test_calibration_trend_no_trade_verbs(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    latest = _make_latest(tmp_path)
+    _make_calibration_full(latest, gap=0.20, buckets=[
+        {"label": "high", "count": 100, "calibration_gap": 0.30},
+    ])
+    _make_calibration_history(tmp_path, {
+        "2026-06-15": 0.25, "2026-06-22": 0.20,
+    })
+    card = _trend_card(collect_quant_view(tmp_path))
+    blob = f"{card['label']} {card['summary']}"
+    assert not _TRADE_VERBS.search(blob), f"trade verb in trend card: {blob!r}"
