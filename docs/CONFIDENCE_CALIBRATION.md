@@ -120,6 +120,33 @@ Analysis requires at least 20 resolved decisions (configurable via `min_resolved
 
 This layer never edits `config/signal_registry.yaml`. The `suggested_review` flag and `note` fields are advisory only. Confidence floor tuning requires explicit operator action.
 
+## GUI: Calibration Trend Card
+
+The `/dashboard/quant` page renders a "Calibration Trend" card (built by
+`_calibration_trend_card` in `gui_v2/data/dash_quant.py`) next to the existing
+"Confidence Calibration" card in the "Confidence & Pattern Efficacy" section.
+It is observe-only and never raises.
+
+It trends the calibration gap over time by reading
+`overall_calibration_gap` from each `outputs/history/<date>/confidence_calibration.json`
+snapshot (`_calibration_gap_history`; ISO-date directory names sort
+chronologically). The label compares the earliest vs latest gap in the available
+history window:
+
+| Label | Status | Condition |
+|-------|--------|-----------|
+| Improving | ok | latest − earliest < −0.02 (gap shrinking → better calibrated) |
+| Worsening | warning | latest − earliest > +0.02 (gap growing) |
+| Stable | info | within ±0.02 |
+| Insufficient history | unknown | fewer than 2 snapshots |
+
+The ±0.02 stable band is `_CALIBRATION_TREND_EPS`.
+
+The card also annotates over/under-confident buckets from the latest
+`buckets_5` (`_bucket_confidence_annotation`): a bucket whose `calibration_gap`
+exceeds +0.10 is flagged overconfident, below −0.10 underconfident
+(`_BUCKET_OVERCONFIDENT_GAP`); otherwise "Buckets within tolerance".
+
 ## Pipeline Integration
 
 `run_calibration()` is called from `main.py` via `_run_calibration`. When `write_files=True`:

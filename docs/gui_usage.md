@@ -40,6 +40,7 @@ status.
 
 Content:
 - Signal outcomes summary (reads `outputs/performance/signal_outcomes.csv`)
+- Confidence Calibration + Calibration Trend cards (reads `confidence_calibration.json` plus `outputs/history/*/confidence_calibration.json` for the trend; see `docs/CONFIDENCE_CALIBRATION.md`)
 - Walk-forward / backtest health (reads output from `backtesting/backtest_health.py`)
 - Weight-tuning suggestions (reads `outputs/performance/weight_tuning_suggestions.json`)
 - Pattern-loop status cards

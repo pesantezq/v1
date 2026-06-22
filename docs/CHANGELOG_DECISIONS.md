@@ -69,6 +69,45 @@ Explicitly note:
 
 ---
 
+## Data-Quality Severity Buckets + Calibration Trend Card
+
+### Date
+
+`2026-06-22`
+
+### Area
+
+`output_contract`
+
+### Files / Functions
+
+- `portfolio_automation/data_quality_monitor.py` — `evaluate_data_quality()` bucket tally, `_compute_summary_line()`, `summary_to_dict()`, `build_data_quality_markdown()`; new `info_symbols` field on `DataQualitySummary`.
+- `gui_v2/data/dash_quant.py` — new `_calibration_gap_history`, `_bucket_confidence_annotation`, `_calibration_trend_card`; appended to `collect_quant_view()`.
+- `gui_v2/templates/dashboard/quant.html` — added "Calibration Trend" to the "Confidence & Pattern Efficacy" group ordering.
+- Commit `6a9a993b`.
+
+### Decision
+
+Two observe-only changes. (1) The data-quality monitor's per-symbol counts now follow the severity ladder and partition the symbol set: `healthy` (no issues), `info` (issues but all `info`-severity), `warning` (≥1 `warning`, no `critical`), `critical` (≥1 `critical`). A new `info_symbols` field is added to the summary, the `data_quality_report.json` dict, and the markdown report ("Info notices" row), and `summary_line` reads e.g. "1/25 symbols healthy (24 with info notice(s))" for info-only states. (2) A new "Calibration Trend" card on `/dashboard/quant` trends `overall_calibration_gap` across `outputs/history/*/confidence_calibration.json` snapshots (Improving / Worsening / Stable, ±0.02 band) and annotates over/under-confident `buckets_5` (gap beyond ±0.10).
+
+### Why
+
+`warning_symbols` previously counted any non-critical issue as a warning, so `info`-severity `MISSING_NEWS` notices — 24 of 25 symbols, including legitimately news-less ETFs (SPY/QQQ/XLK) — were misreported as "24 warnings". This was a counting bug, not a news outage; the news pipeline is healthy. The inflated count also generated a false "system-improvement" idea when it later dropped. The trend card surfaces calibration drift over time rather than a single-day snapshot.
+
+### Invariants Preserved
+
+Observe-only throughout; no `decision_engine.py` / score-semantics change; never writes `decision_plan.json`. The fix only *adds* `info_symbols` and reclassifies info-only symbols out of `warning_symbols` — existing fields keep their names and types. The trend card is read-only and never raises. News collection is unchanged.
+
+### Downstream Impact
+
+`data_quality_report.json` gains `info_symbols`; consumers reading `warning_symbols` will see lower (correct) counts when info-only notices are present. Markdown report gains an "Info notices" row. New GUI card on `/dashboard/quant` (consumes `confidence_calibration.json` + history snapshots). +13 tests (7 data-quality, 6 calibration-trend).
+
+### Artifact Health Severity
+
+No registry severity change. The bucket fix reduces spurious `warning`-class data-quality signals; info-only states no longer inflate the warning tally that daily health and the memo read.
+
+---
+
 ## Strategy + Tax-Aware Hardening
 
 ### Date

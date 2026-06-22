@@ -44,6 +44,7 @@ Written via `OutputNamespace.LATEST`:
   "available": true,
   "total_symbols": 20,
   "healthy_symbols": 15,
+  "info_symbols": 0,
   "warning_symbols": 4,
   "critical_symbols": 1,
   "missing_price_count": 1,
@@ -61,6 +62,30 @@ Written via `OutputNamespace.LATEST`:
 
 `issues` contains aggregate-level issues (excessive rates, system degraded mode).
 `symbols` contains per-symbol reports with their own `issues` arrays.
+
+---
+
+## Severity Buckets
+
+The per-symbol counts partition the symbol set along the severity ladder — each
+symbol falls into exactly one bucket based on the most severe issue it carries:
+
+| Field | Bucket | Definition |
+|-------|--------|------------|
+| `healthy_symbols` | healthy | No issues at all |
+| `info_symbols` | info | Has issues, but **all** are `info`-severity — a notice, not a warning (e.g. an ETF/index with no single-issuer news) |
+| `warning_symbols` | warning | At least one `warning`-severity issue and no `critical` issue |
+| `critical_symbols` | critical | At least one `critical`-severity issue |
+
+`info_symbols` was added on 2026-06-22. Before that, `warning_symbols` counted
+*any* symbol with a non-critical issue, so `info`-severity `MISSING_NEWS` notices
+(common for news-less ETFs like SPY/QQQ/XLK) were misreported as warnings. The
+buckets now respect severity, so an info-only state reads e.g.
+`"1/25 symbols healthy (24 with info notice(s))"` rather than
+`"24 symbol(s) with warnings"`. This was a counting fix, not a change to news
+collection — the news pipeline is unaffected.
+
+The markdown report includes an `Info notices` row reflecting `info_symbols`.
 
 ---
 

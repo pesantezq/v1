@@ -71,9 +71,10 @@ Required top-level fields:
 - `observe_only` — always `true`
 - `available` — bool; may be `false` when no records were available
 - `total_symbols` — int
-- `healthy_symbols` — int
-- `warning_symbols` — int
-- `critical_symbols` — int
+- `healthy_symbols` — int — symbols with no issues
+- `info_symbols` — int — symbols whose only issues are `info`-severity (e.g. ETF/index with no single-issuer news); not warnings (added 2026-06-22)
+- `warning_symbols` — int — symbols with ≥1 `warning`-severity issue and no `critical`
+- `critical_symbols` — int — symbols with ≥1 `critical`-severity issue
 - `missing_price_count` — int
 - `missing_fundamentals_count` — int
 - `missing_news_count` — int
