@@ -56,6 +56,18 @@ def record_scan_signals(
     store = WatchlistStateStore(db_path)
     signal_time = _safe_iso(scan_result.get("generated_at")) or datetime.now().isoformat()
     regime = scan_result.get("market_regime") if isinstance(scan_result.get("market_regime"), dict) else {}
+    # Defense-in-depth: recording signals while the regime is unset means every
+    # row falls back to the constant ("neutral", 0.0, "limited") triple, the
+    # degeneracy that collapsed signal_outcomes.csv. Surface it loudly so a
+    # producer-ordering re-regression cannot hide behind the silent fallback.
+    if not regime and (scan_result.get("results") or []):
+        logger.warning(
+            "record_scan_signals: market_regime is empty while recording %d "
+            "signal(s); regime tags will fall back to ('neutral', 0.0, "
+            "'limited'). Ensure detect_market_regime runs BEFORE "
+            "run_signal_feedback_cycle.",
+            len(scan_result.get("results") or []),
+        )
     tracked = 0
     skipped = 0
 

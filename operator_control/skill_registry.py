@@ -185,6 +185,34 @@ _SKILLS: tuple[Skill, ...] = (
         output_report_requirements=_REPORT_BASE,
     ),
     Skill(
+        skill_id="diagnose_regime_classifier",
+        name="Diagnose / repair regime classifier",
+        description="Diagnose why the market-regime classifier output is "
+        "degenerate (e.g. signal_outcomes regime_label collapsed to a constant) "
+        "and, in safe_repair mode, apply a narrow, reversible repair of the "
+        "regime PRODUCER WIRING in the simulation/test lane only. This skill is "
+        "for label-DIVERSITY/degeneracy defects (ordering, data flow, "
+        "serialization), NOT threshold tuning. Threshold edits to manufacture "
+        "diversity are forbidden.",
+        allowed_probe_ids=("quant.regime_classifier_health",),
+        allowed_modes=("diagnose", "propose_fix", "safe_repair"),
+        forbidden_actions=(
+            "Tune regime thresholds merely to manufacture label diversity",
+            "Change regime label assignment unsupported by classifier intent, "
+            "input scale, tests, and observed distributions",
+            "Rewrite protected historical signal_outcomes evidence or the "
+            "production signal-feedback DB",
+            "Mutate production allocations or production decision artifacts",
+        ),
+        required_tests=(
+            "python -m pytest -q tests/test_market_regime.py "
+            "tests/test_regime_classifier_degeneracy.py",
+        ),
+        risk_level="medium",
+        approval_required_for_modes=("propose_fix", "safe_repair"),
+        output_report_requirements=_REPORT_BASE,
+    ),
+    Skill(
         skill_id="diagnose_portfolio_risk",
         name="Diagnose portfolio risk / advisory queue",
         description="Explain a near-cap risk metric or the advisory decision "

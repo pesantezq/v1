@@ -210,6 +210,23 @@ _PROBES: tuple[Probe, ...] = (
         approval_required=True,
         observe_only_notice=_PROPOSAL_ONLY_NOTICE,
     ),
+    Probe(
+        probe_id="quant.regime_classifier_health",
+        display_name="Quant — regime classifier health / degeneracy",
+        source_view="quant",
+        source_artifact="outputs/latest/quant_watch_status.json",
+        severity="warning",
+        description="Market-regime classifier output diversity. Flags a "
+        "degenerate collapse (e.g. signal_outcomes regime_label stuck at a "
+        "single constant bucket). Supports simulation-lane diagnosis and a "
+        "narrow, reversible, human-approved producer-wiring repair. Never "
+        "tunes thresholds to manufacture diversity; never alters allocations "
+        "or production decisions.",
+        recommended_skill_id="diagnose_regime_classifier",
+        allowed_actions=("diagnose", "propose_fix", "safe_repair"),
+        risk_level="medium",
+        approval_required=True,
+    ),
     # ── Portfolio lens (advisory / read-only) ────────────────────────────
     Probe(
         probe_id="portfolio.risk_near_cap",

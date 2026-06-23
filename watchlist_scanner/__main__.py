@@ -423,17 +423,15 @@ def run(
         result,
         portfolio_config=config.get("portfolio_construction", {}),
     )
-    # Run after apply_conviction_layer so conviction_band is set on result rows
-    # before being persisted to the signal feedback DB.
-    performance_output_dir = Path(output_dir).parent / "performance"
-    run_signal_feedback_cycle(
-        result,
-        db_path=ew_cfg.get("db_path", "data/portfolio.db"),
-        cache_dir=cache_dir,
-        output_dir=performance_output_dir,
-        dry_run=manual_dry_run,
-        feedback_config=config.get("performance_feedback", {}),
-    )
+
+    # Classify the market regime BEFORE the signal-feedback cycle records this
+    # scan's signals. record_scan_signals() stamps result["market_regime"] onto
+    # every recorded outcome row; when the regime is computed *after* the
+    # feedback cycle the recorder reads an empty dict and silently falls back to
+    # the constant ("neutral", 0.0, "limited") triple, collapsing
+    # signal_outcomes.csv to a single degenerate bucket regardless of the real
+    # market state. (Producer-ordering fix — see
+    # docs/REGIME_CLASSIFIER_NEUTRAL_COLLAPSE.md.)
     _portfolio_out = Path(output_dir).parent / "portfolio"
     _prior_regime = _load_prior_regime(_portfolio_out)
     regime = detect_market_regime(
@@ -452,6 +450,19 @@ def run(
     result["scan_summary"]["market_regime_summary_line"] = regime["regime_summary_line"]
     if isinstance(result.get("portfolio_construction"), dict):
         result["portfolio_construction"]["market_regime"] = regime
+
+    # Run after apply_conviction_layer so conviction_band is set on result rows,
+    # and after regime classification so each recorded row carries the live
+    # regime label, before being persisted to the signal feedback DB.
+    performance_output_dir = Path(output_dir).parent / "performance"
+    run_signal_feedback_cycle(
+        result,
+        db_path=ew_cfg.get("db_path", "data/portfolio.db"),
+        cache_dir=cache_dir,
+        output_dir=performance_output_dir,
+        dry_run=manual_dry_run,
+        feedback_config=config.get("performance_feedback", {}),
+    )
 
     # Write outputs unless dry_run
     if not manual_dry_run:
