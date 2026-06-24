@@ -103,6 +103,12 @@ def write_strategy_artifacts(root: Path, now: datetime | None = None) -> dict[st
     try:
         cmp = build_comparison(root, now)
         metrics = cmp["metrics"]
+        # Mark the operator-approved active strategy (sandbox-only; observe-only).
+        from portfolio_automation.strategy.strategy_selection import (
+            load_active_selection, mark_operator_selected,
+        )
+        _active = load_active_selection(root).get("active_strategy_id")
+        mark_operator_selected(metrics, _active)
         ctx_positions = (_load_json_safe(root / "outputs" / "latest" / "schwab_positions.json")
                          if cmp["context_source"] == "broker" else None)
 
@@ -157,6 +163,7 @@ def write_strategy_artifacts(root: Path, now: datetime | None = None) -> dict[st
             "max_drawdown_estimate": m["max_drawdown_estimate"],
             "tax_efficiency": m["tax_efficiency"],
             "after_tax_degraded": m["after_tax_degraded"],
+            "operator_selected": m.get("operator_selected", False),
             "allowed_actions": list(_APPROVE_ACTIONS),
             "blocked_actions": list(BLOCKED_STRATEGY_ACTIONS),
         } for m in metrics]

@@ -36,6 +36,44 @@ def _age_hours(iso: str | None, now: datetime) -> float | None:
         return None
 
 
+def _load_path(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def check_active_strategy_selection(root: str | Path = ".") -> tuple[list[str], dict[str, Any]]:
+    """Surface the operator-approved active strategy and its liveness.
+
+    Returns ``(reasons, signals)``. An ``active_strategy_id`` that no longer
+    appears in the current ``strategy_review_queue.json`` is a stale selection
+    (AMBER). No selection, or a selection still in the queue, is clean.
+    """
+    root = Path(root)
+    reasons: list[str] = []
+    signals: dict[str, Any] = {}
+
+    sel = _load_path(root / "outputs" / "policy" / "active_strategy_selection.json") or {}
+    active = sel.get("active_strategy_id")
+    signals["active_strategy_id"] = active
+
+    dpath = root / "outputs" / "policy" / "strategy_decisions.jsonl"
+    try:
+        signals["strategy_decisions_count"] = sum(
+            1 for ln in dpath.read_text(encoding="utf-8").splitlines() if ln.strip())
+    except Exception:
+        signals["strategy_decisions_count"] = 0
+
+    if active:
+        q = _load_path(root / "outputs" / "latest" / "strategy_review_queue.json") or {}
+        ids = {r.get("strategy_id") for r in (q.get("queue") or [])}
+        if active not in ids:
+            reasons.append(
+                f"stale_active_strategy_selection: '{active}' not in current review queue")
+    return reasons, signals
+
+
 def assess_strategy_lab_health(root: str | Path = ".", now: datetime | None = None) -> dict[str, Any]:
     """Return {status, reasons[], signals{}} for the research strategy lab."""
     root = Path(root)
@@ -89,6 +127,11 @@ def assess_strategy_lab_health(root: str | Path = ".", now: datetime | None = No
     signals["factor_data_available"] = bool((factor or {}).get("factor_data_available"))
     if factor is not None and not signals["factor_data_available"]:
         reasons.append("factor_data_unavailable (run scripts/fetch_factor_data.sh)")
+
+    # operator-approved active strategy + liveness (AMBER on a stale selection)
+    sel_reasons, sel_signals = check_active_strategy_selection(root)
+    signals.update(sel_signals)
+    reasons.extend(sel_reasons)
 
     # classify
     red = any("looks_fresh_but_empty" in r for r in reasons)

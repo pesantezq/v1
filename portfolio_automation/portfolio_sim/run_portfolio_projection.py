@@ -26,6 +26,10 @@ from portfolio_automation.portfolio_sim.prices import load_price_panel
 from portfolio_automation.portfolio_sim.projection_engine import project
 from portfolio_automation.portfolio_sim.sim_base import SimStatus, sim_envelope, utc_now_iso
 from portfolio_automation.portfolio_sim.tactics import all_static_tactics
+from portfolio_automation.strategy.strategy_selection import (
+    load_active_selection,
+    resolve_anchor_tactic_id,
+)
 
 logger = logging.getLogger("stockbot.portfolio_sim.run_projection")
 
@@ -88,9 +92,18 @@ def run_portfolio_projection(
     if panel.missing:
         warnings.append(f"missing_price_history:{','.join(panel.missing[:8])}")
 
+    # Operator-approved active strategy re-anchors the projection (sandbox-only).
+    # The baseline fan is always kept; the selected strategy's fan is added
+    # alongside it. anchor_strategy_id is the operator's selection (or None).
+    selection = load_active_selection(root)
+    anchor_tid = resolve_anchor_tactic_id(
+        selection.get("active_strategy_id"), [t.tactic_id for t in tactics])
+    anchor_strategy_id = selection.get("active_strategy_id") if anchor_tid else None
+
     horizons = [int(round(y * 12)) for y in cfg["horizons_years"]]
     rows: list[dict[str, Any]] = []
     fans: dict[str, Any] = {}
+    selected_fans: dict[str, Any] = {}
     for tac in tactics:
         for hy, hm in zip(cfg["horizons_years"], horizons):
             res = project(tac.target_weights, matrix, tickers,
@@ -104,18 +117,24 @@ def run_portfolio_projection(
                          "horizon_years": hy, "horizon_label": f"{hy}y", **res.metrics})
             if tac.tactic_id == "shadow_actual_baseline":
                 fans[f"{hy}y"] = res.fan
+            if anchor_tid and tac.tactic_id == anchor_tid:
+                selected_fans[f"{hy}y"] = res.fan
 
     status = SimStatus.OK.value if rows else SimStatus.INSUFFICIENT_DATA.value
     return _write(root, run_id, mode, status, warnings, rows,
                   [f"{y}y" for y in cfg["horizons_years"]], fans, write_files,
-                  seed=cfg["seed"], target_cagr=cfg["target_cagr"])
+                  seed=cfg["seed"], target_cagr=cfg["target_cagr"],
+                  anchor_strategy_id=anchor_strategy_id, selected_fan=selected_fans)
 
 
 def _write(root, run_id, mode, status, warnings, rows, horizons, fans, write_files,
-           seed=None, target_cagr=None) -> dict[str, Any]:
+           seed=None, target_cagr=None, anchor_strategy_id=None,
+           selected_fan=None) -> dict[str, Any]:
     env = sim_envelope(run_id=run_id, run_mode=mode.value, status=status, warnings=warnings)
     payload = {**env, "assumptions": _ASSUMPTIONS, "seed": seed, "target_cagr": target_cagr,
-               "horizons": horizons, "rows": rows, "anchor_fan": fans}
+               "horizons": horizons, "rows": rows, "anchor_fan": fans,
+               "anchor_strategy_id": anchor_strategy_id,
+               "selected_fan": selected_fan or {}}
     artifacts: dict[str, str] = {}
     wrote = False
     if write_files:
@@ -132,6 +151,8 @@ def _write(root, run_id, mode, status, warnings, rows, horizons, fans, write_fil
             warnings.append(f"write_skipped:{exc}")
     return {"status": status, "run_mode": mode.value, "row_count": len(rows),
             "wrote_files": wrote, "artifacts": artifacts, "warnings": warnings,
+            "anchor_strategy_id": anchor_strategy_id,
+            "anchor_fan": fans, "selected_fan": selected_fan or {},
             "observe_only": True, "sandbox_only": True}
 
 

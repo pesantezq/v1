@@ -43,14 +43,19 @@ by `run_daily_safe.sh` Stage 10b2; see `docs/SIMULATION_CHARTS.md`):
   `stale` (>~8d, weekly cadence), `undocumented_tactics` (Strategy Documentation
   Requirement violated — add the `academic_basis`/rationale), `still_works_oos=false`
   tactic surfaced (walk-forward says it overfit — it is ranked down but flag it),
-  `factor_data_unavailable` (run `scripts/fetch_factor_data.sh` to enable attribution).
+  `factor_data_unavailable` (run `scripts/fetch_factor_data.sh` to enable attribution),
+  `stale_active_strategy_selection` (the operator-approved active strategy
+  `active_strategy_id` no longer appears in the current `strategy_review_queue.json`
+  — the selection re-anchors the sandbox projection on a profile that's gone; re-approve
+  a current profile or it falls back to the baseline anchor).
 - **GREEN** — ran, populated, documented, no failing-OOS tactic surfaced.
 
 ## Step 3 — Output
 
 Heartbeat: `"Strategy-Lab: {status} · {tactic_count} tactics · top {top_tactic}
 (score {top_score}, excess vs SPY {top_excess_vs_spy}) · coverage {complete|INCOMPLETE}
-· factors {available|missing} · OOS-fail {n}"`.
+· factors {available|missing} · OOS-fail {n} · active-strategy {active_strategy_id|none}
+({strategy_decisions_count} decisions)"`.
 
 For RED/AMBER, append the reasons. For coverage violations, name the undocumented
 tactics. For a `still_works_oos=false` tactic, name it (it overfit in walk-forward).

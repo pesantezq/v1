@@ -34,6 +34,7 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
     radar = _load(sb / "opportunity_radar.json") or {}
     comparison = _load(sb / "strategy_comparison.json") or {}
     review_q = _load(latest / "strategy_review_queue.json") or {}
+    active_sel = _load(root / "outputs" / "policy" / "active_strategy_selection.json") or {}
     shadow = _load(sb / "shadow_portfolios.json") or {}
     ideas = _load(latest / "system_improvement_ideas.json") or {}
     imp_q = _load(latest / "system_improvement_action_queue.json") or {}
@@ -107,6 +108,7 @@ def collect_strategy_lab_view(root: Path) -> dict[str, Any]:
         "radar": (radar.get("opportunities", []) or [])[:12],
         "strategies": metrics,
         "strategy_review_queue": review_q.get("queue", []) if isinstance(review_q, dict) else [],
+        "active_strategy_id": active_sel.get("active_strategy_id"),
         "shadow_portfolios": sp,
         "improvement_ideas": (ideas.get("ideas", []) or [])[:8],
         "improvement_queue": imp_q.get("queue", []) if isinstance(imp_q, dict) else [],

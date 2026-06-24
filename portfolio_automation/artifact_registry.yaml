@@ -1220,11 +1220,29 @@ artifacts:
     role: telemetry
     required: false
     cadence: on_demand
-    producer: approval_layer
-    consumers: []
+    producer: strategy_selection
+    consumers: [strategy-lab-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 11A — producer not yet shipped
+    consumer_status: consumed
+    notes: >-
+      Append-only audit of human approve/reject/defer decisions on Strategy Lab
+      profiles (POST /dashboard/strategy-lab/decide). Sandbox-only.
+
+  active_strategy_selection.json:
+    path: outputs/policy/active_strategy_selection.json
+    label: active strategy selection
+    lens: meta_governance
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: strategy_selection
+    consumers: [strategy_comparator, run_portfolio_projection, strategy-lab-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: >-
+      Single operator-approved active strategy (sandbox-only). Re-anchors the
+      sandbox projection/comparison; never feeds decision_plan.json. A new
+      approve supersedes the prior. Absent / active_strategy_id:null ⇒ none.
 
   strategy_outcomes.jsonl:
     path: outputs/policy/strategy_outcomes.jsonl

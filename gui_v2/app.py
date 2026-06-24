@@ -467,6 +467,74 @@ def page_dash_strategy_lab(
     return _render(request, "dashboard/strategy_lab.html", **ctx)
 
 
+@app.post("/dashboard/strategy-lab/decide")
+async def page_strategy_lab_decide(
+    request: Request, _a: str | None = Depends(_require_auth_dep)
+):
+    """POST /dashboard/strategy-lab/decide — human approve/reject/defer a strategy.
+
+    The deliberate GUI click is the human decision. ``approve`` writes
+    ``active_strategy_selection.json`` (POLICY) + appends ``strategy_decisions.jsonl``
+    and re-anchors the *sandbox* projection/comparison synchronously (guarded — a
+    slow/failed recompute never loses the persisted selection). ``reject``/``defer``
+    log only; ``reject`` of the active strategy clears it. Sandbox-only — never
+    feeds ``decision_plan.json``. AI cannot self-approve. POST→redirect→GET.
+    """
+    import json as _json
+    import logging as _logging
+    from portfolio_automation.strategy.strategy_selection import record_strategy_decision
+
+    form = await request.form()
+    strategy_id = str(form.get("strategy_id", "")).strip()
+    decision = str(form.get("decision", "")).strip()
+
+    if not strategy_id or decision not in ("approve", "reject", "defer"):
+        raise HTTPException(
+            status_code=400,
+            detail="strategy_id and decision (approve|reject|defer) required",
+        )
+
+    # Valid strategy ids + names come from the current review queue.
+    qpath = REPO_ROOT / "outputs" / "latest" / "strategy_review_queue.json"
+    valid_ids: list[str] = []
+    names: dict[str, str] = {}
+    try:
+        q = _json.loads(qpath.read_text(encoding="utf-8")).get("queue", [])
+        valid_ids = [r.get("strategy_id") for r in q]
+        names = {r.get("strategy_id"): r.get("name") for r in q}
+    except Exception:
+        pass
+
+    approver = _a or "operator"
+    result = record_strategy_decision(
+        strategy_id, decision, approver,
+        valid_strategy_ids=valid_ids,
+        strategy_name=names.get(strategy_id),
+        base_dir=str(REPO_ROOT / "outputs"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("reason", "decision rejected"))
+
+    # On approve, re-anchor the sandbox projection + comparison immediately.
+    # Guarded: the selection is already persisted, so a failed/slow recompute is
+    # non-fatal (tab simply shows the new anchor on the next sim run instead).
+    if decision == "approve":
+        try:
+            from portfolio_automation.portfolio_sim.run_portfolio_projection import (
+                run_portfolio_projection,
+            )
+            from portfolio_automation.strategy.strategy_comparator import (
+                write_strategy_artifacts,
+            )
+            run_portfolio_projection(root=str(REPO_ROOT), run_mode="weekly")
+            write_strategy_artifacts(REPO_ROOT)
+        except Exception as exc:  # pragma: no cover - guard
+            _logging.getLogger("gui_v2.strategy_lab").warning(
+                "strategy-lab re-anchor recompute skipped/failed: %s", exc)
+
+    return RedirectResponse("/dashboard/strategy-lab", status_code=303)
+
+
 @app.get("/dashboard/crowd-radar", response_class=HTMLResponse)
 def page_dash_crowd_radar(
     request: Request, _a: str | None = Depends(_require_auth)
