@@ -535,6 +535,73 @@ async def page_strategy_lab_decide(
     return RedirectResponse("/dashboard/strategy-lab", status_code=303)
 
 
+@app.post("/dashboard/strategy-lab/opportunity-decide")
+async def page_opportunity_decide(
+    request: Request, _a: str | None = Depends(_require_auth_dep)
+):
+    """POST /dashboard/strategy-lab/opportunity-decide — human decision on a
+    market-opportunity candidate (operator_action_queue.json).
+
+    Records the routing decision to ``user_decisions.jsonl`` (POLICY). The one
+    active effect is ``approve_to_watchlist_review``, which routes the candidate
+    to the extended-watchlist operator-promotion path (capacity-gated, guarded).
+    All other actions are record-only. Actions are restricted to the item's own
+    ``allowed_actions`` — the blocked trade verbs are un-invocable. AI cannot
+    self-approve. Observe-only sink; POST→redirect→GET.
+    """
+    import json as _json
+    import logging as _logging
+    from portfolio_automation.next_stage.opportunity_decisions import (
+        validate_opportunity_action, append_opportunity_decision,
+    )
+
+    form = await request.form()
+    opportunity_id = str(form.get("opportunity_id", "")).strip()
+    action = str(form.get("action", "")).strip()
+    if not opportunity_id or not action:
+        raise HTTPException(status_code=400, detail="opportunity_id and action required")
+
+    qpath = REPO_ROOT / "outputs" / "latest" / "operator_action_queue.json"
+    try:
+        queue = _json.loads(qpath.read_text(encoding="utf-8")).get("queue", [])
+    except Exception:
+        queue = []
+
+    approver = _a or "operator"
+    v = validate_opportunity_action(opportunity_id, action, approver, queue)
+    if not v.get("ok"):
+        raise HTTPException(status_code=400, detail=v.get("reason", "decision rejected"))
+
+    candidate = v.get("candidate")
+    promote_result = None
+    if v.get("should_promote"):
+        # Guarded: a failed promotion never loses the recorded decision.
+        try:
+            from watchlist_scanner.extended_watchlist import ExtendedWatchlist
+            full_cfg = _json.loads((REPO_ROOT / "config.json").read_text(encoding="utf-8"))
+            cfg = full_cfg.get("extended_watchlist", {})
+            ewl = ExtendedWatchlist(
+                db_path=REPO_ROOT / cfg.get("db_path", "data/portfolio.db"),
+                ttl_days=int(cfg.get("ttl_days", 7)),
+                max_symbols=int(cfg.get("max_symbols", 3)),
+                confidence_threshold=float(cfg.get("confidence_threshold", 0.8)),
+            )
+            static_wl = list(full_cfg.get("watchlist", []) or [])
+            promote_result = ewl.promote_operator_approved(
+                candidate, theme="operator_approved", confidence=0.9,
+                static_watchlist=static_wl)
+        except Exception as exc:  # pragma: no cover - guard
+            _logging.getLogger("gui_v2.opportunity").warning(
+                "operator-approved promotion skipped/failed: %s", exc)
+            promote_result = {"status": "error", "reason": str(exc)}
+
+    append_opportunity_decision(
+        opportunity_id, candidate, action, approver,
+        base_dir=str(REPO_ROOT / "outputs"), promote_result=promote_result)
+
+    return RedirectResponse("/dashboard/strategy-lab", status_code=303)
+
+
 @app.get("/dashboard/crowd-radar", response_class=HTMLResponse)
 def page_dash_crowd_radar(
     request: Request, _a: str | None = Depends(_require_auth)

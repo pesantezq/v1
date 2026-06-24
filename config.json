@@ -322,7 +322,7 @@
     "enabled": true,
     "confidence_threshold": 0.8,
     "ttl_days": 7,
-    "max_symbols": 3,
+    "max_symbols": 5,
     "db_path": "data/portfolio.db"
   },
   "scraped_intel": {

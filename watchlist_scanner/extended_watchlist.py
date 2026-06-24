@@ -290,6 +290,42 @@ class ExtendedWatchlist:
             "run_date": run_date,
         }
 
+    def promote_operator_approved(
+        self,
+        symbol: str,
+        theme: str = "operator_approved",
+        confidence: float = 0.9,
+        static_watchlist: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Promote a symbol on explicit human approval.
+
+        An operator approval is authoritative reinforcement: it bypasses the
+        multi-day-persistence / multi-theme gate (which exists to qualify
+        *automatic* discovery), but still respects every other gate —
+        static-watchlist membership, already-active (reinforce instead of
+        duplicate), and the ``max_symbols`` capacity cap.
+
+        Returns ``{status: promoted|reinforced|skipped, reason, symbol}``.
+        """
+        sym = (symbol or "").upper()
+        if not sym:
+            return {"status": "skipped", "reason": "empty_symbol", "symbol": sym}
+
+        static_upper = {s.upper() for s in (static_watchlist or [])}
+        if sym in static_upper:
+            return {"status": "skipped", "reason": "in_static_watchlist", "symbol": sym}
+
+        active_set = {r["symbol"] for r in self.get_active_symbols()}
+        if sym in active_set:
+            self._reinforce(sym, confidence, [theme])
+            return {"status": "reinforced", "reason": "already_active", "symbol": sym}
+
+        if len(active_set) >= self.max_symbols:
+            return {"status": "skipped", "reason": "extended_watchlist_full", "symbol": sym}
+
+        self._promote(sym, theme, [theme], confidence)
+        return {"status": "promoted", "reason": "operator_approved", "symbol": sym}
+
     def _promote(
         self,
         symbol: str,

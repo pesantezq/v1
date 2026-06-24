@@ -1168,11 +1168,15 @@ artifacts:
     role: telemetry
     required: false
     cadence: on_demand
-    producer: approval_layer
-    consumers: []
+    producer: opportunity_decisions
+    consumers: [daily-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: next-stage Phase 4 — producer not yet shipped
+    consumer_status: consumed
+    notes: >-
+      Append-only human decisions on market-opportunity candidates
+      (POST /dashboard/strategy-lab/opportunity-decide). approve_to_watchlist_review
+      routes to the capacity-gated extended-watchlist operator-promotion path;
+      other actions are record-only.
 
   system_improvement_history.jsonl:
     path: outputs/policy/system_improvement_history.jsonl

@@ -191,6 +191,18 @@
             <button type="submit" name="decision" value="defer" class="text-[11px] font-medium text-zinc-400 border border-zinc-700 rounded px-2 py-1 hover:bg-zinc-800">Defer</button>
           </form>
           {% endif %}
+          {% if src == "operator_action_queue.json" and it.id %}
+          <form method="post" action="/dashboard/strategy-lab/opportunity-decide" class="mt-2 flex gap-2 flex-wrap">
+            <input type="hidden" name="opportunity_id" value="{{ it.id }}">
+            {% for act in (it.allowed_actions or []) %}
+            <button type="submit" name="action" value="{{ act }}"
+              class="text-[11px] font-medium rounded px-2 py-1 border
+              {{ 'text-emerald-300 border-emerald-700 hover:bg-emerald-900/30' if act == 'approve_to_watchlist_review'
+                 else ('text-rose-300 border-rose-800 hover:bg-rose-900/30' if act == 'reject'
+                 else 'text-zinc-400 border-zinc-700 hover:bg-zinc-800') }}">{{ act.replace('_', ' ') }}</button>
+            {% endfor %}
+          </form>
+          {% endif %}
         </div>{% endfor %}
       </div>
     </div>
