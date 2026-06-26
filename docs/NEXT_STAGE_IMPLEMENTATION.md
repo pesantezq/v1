@@ -57,6 +57,29 @@ Daily improvement review: `.claude/commands/daily-system-improvement.md`.
 - Secrets/account numbers redacted/masked (reused from the broker layer).
 - Every producer degrades to a valid observe-only artifact on failure.
 
+## Unified decision suppression (Phase 3 ↔ Phase 4, added 2026-06-26)
+
+A recorded operator decision now suppresses an idea at **both** layers from a single
+`approval_queue.record_decision(...)` call:
+
+- **Action-queue layer** — `approval_queue.build_action_queues` already dropped decided
+  items via `_suppressed()` keyed on `item_id` (from `system_improvement_decisions.jsonl`).
+- **Producer/brief layer** — `system_improvement.build_system_improvement` now also calls
+  `_decision_suppressed_ids()`, which **reuses `approval_queue._suppressed`** (one set of
+  suppress/cooldown semantics) and matches the returned `item_id`s against the idea `id`
+  the build computes (`"si-" + _slug(idea_key)`).
+
+Semantics (shared): `mark_completed` / `mark_duplicate` / `approve_for_implementation`
+suppress permanently; `reject` / `defer` suppress until `cooldown_until` (14 days) elapses,
+then the idea resurfaces. The legacy `owner_decision`-in-`history.jsonl` path
+(`_cooldown_state`) is unchanged and still honored for back-compat. Legacy hand-written
+decision records keyed on `id` (not `item_id`) are tolerated without crashing — they simply
+do not suppress (use `record_decision()` so the correct `item_id` field is written).
+
+Observe-only; no scoring/decision-plan/broker behavior touched. Tests:
+`tests/test_system_improvement.py` (decision suppress / defer-resurface / legacy-tolerance)
+and `tests/test_opportunity_and_approval.py::test_one_decision_suppresses_both_brief_and_action_queue`.
+
 ## Open follow-ups
 - Cron wiring into the sandbox runner (documented; not installed).
 - Live forward-performance for shadow tracking (needs a price-series feed).

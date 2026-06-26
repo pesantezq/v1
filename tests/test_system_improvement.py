@@ -124,6 +124,63 @@ def test_completed_idea_not_resurfaced(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Unified suppression: a recorded operator decision (decisions.jsonl) closes the
+# idea at the producer/brief layer too — keyed on item_id, no history line needed.
+# ---------------------------------------------------------------------------
+
+
+def test_decision_mark_completed_suppresses_without_history_line(tmp_path):
+    L = _latest(tmp_path)
+    L.joinpath("data_quality_report.json").write_text(json.dumps({"critical_count": 3}))
+    p0 = si.build_system_improvement(tmp_path, _now())
+    item_id = next(i["id"] for i in p0["ideas"] if i["category"] == "data_quality")
+    pol = tmp_path / "outputs" / "policy"; pol.mkdir(parents=True)
+    # decisions.jsonl uses the record_decision() schema (item_id); NO history owner_decision line
+    pol.joinpath("system_improvement_decisions.jsonl").write_text(json.dumps({
+        "item_id": item_id, "queue": "system_improvement", "decision": "mark_completed",
+        "cooldown_until": None}) + "\n")
+    p1 = si.build_system_improvement(tmp_path, _now())
+    assert all(i["id"] != item_id for i in p1["ideas"])
+
+
+def test_decision_defer_cooldown_then_resurface(tmp_path):
+    L = _latest(tmp_path)
+    L.joinpath("data_quality_report.json").write_text(json.dumps({"critical_count": 3}))
+    p0 = si.build_system_improvement(tmp_path, _now())
+    item_id = next(i["id"] for i in p0["ideas"] if i["category"] == "data_quality")
+    pol = tmp_path / "outputs" / "policy"; pol.mkdir(parents=True)
+    dpath = pol.joinpath("system_improvement_decisions.jsonl")
+    # during cooldown → suppressed
+    future = (_now().date() + timedelta(days=10)).isoformat()
+    dpath.write_text(json.dumps({
+        "item_id": item_id, "queue": "system_improvement", "decision": "defer",
+        "cooldown_until": future}) + "\n")
+    assert all(i["id"] != item_id
+               for i in si.build_system_improvement(tmp_path, _now())["ideas"])
+    # after cooldown elapses → resurfaces
+    past = (_now().date() - timedelta(days=1)).isoformat()
+    dpath.write_text(json.dumps({
+        "item_id": item_id, "queue": "system_improvement", "decision": "defer",
+        "cooldown_until": past}) + "\n")
+    assert any(i["id"] == item_id
+               for i in si.build_system_improvement(tmp_path, _now())["ideas"])
+
+
+def test_legacy_id_field_decision_tolerated_no_crash(tmp_path):
+    """Legacy hand-written records keyed on 'id' (not 'item_id') must not crash the
+    build; they simply do not suppress (the known limitation this feature documents)."""
+    L = _latest(tmp_path)
+    L.joinpath("data_quality_report.json").write_text(json.dumps({"critical_count": 3}))
+    p0 = si.build_system_improvement(tmp_path, _now())
+    item_id = next(i["id"] for i in p0["ideas"] if i["category"] == "data_quality")
+    pol = tmp_path / "outputs" / "policy"; pol.mkdir(parents=True)
+    pol.joinpath("system_improvement_decisions.jsonl").write_text(json.dumps({
+        "id": item_id, "decision": "mark_completed"}) + "\n")  # legacy 'id' field
+    p1 = si.build_system_improvement(tmp_path, _now())  # must not raise
+    assert any(i["id"] == item_id for i in p1["ideas"])  # not suppressed (legacy field)
+
+
+# ---------------------------------------------------------------------------
 # Degradation + ranking
 # ---------------------------------------------------------------------------
 

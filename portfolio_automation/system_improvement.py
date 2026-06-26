@@ -339,6 +339,25 @@ def _priority(score: float) -> str:
     return "high" if score >= 0.65 else "medium" if score >= 0.45 else "low"
 
 
+def _decision_suppressed_ids(root: Path, today: date) -> set[str]:
+    """Item-ids suppressed by recorded operator decisions in
+    ``system_improvement_decisions.jsonl``.
+
+    Reuses ``approval_queue._suppressed`` — the SAME suppress/cooldown semantics the
+    operator action queue already applies — so a single ``record_decision(...)`` call
+    closes an idea at BOTH the action-queue layer and this producer/brief layer. Keyed
+    on ``item_id``, which equals the idea ``id`` the build computes. Non-fatal: any
+    failure (missing file, malformed JSON, legacy ``id``-only records) yields whatever
+    the shared helper returns, defaulting to an empty set on hard error.
+    """
+    try:
+        from portfolio_automation import approval_queue as _aq
+        path = root / "outputs" / "policy" / "system_improvement_decisions.jsonl"
+        return _aq._suppressed(_aq._read_jsonl(path), today)
+    except Exception:
+        return set()
+
+
 def _cooldown_state(history: list[dict[str, Any]], today: date) -> dict[str, str]:
     """Map idea_key → suppression reason for keys still in cooldown."""
     suppressed: dict[str, str] = {}
@@ -373,6 +392,7 @@ def build_system_improvement(root: Path, now: datetime | None = None) -> dict[st
     try:
         history = _read_history(root)
         suppressed = _cooldown_state(history, today)
+        decision_suppressed = _decision_suppressed_ids(root, today)
         open_keys: dict[str, str] = {}  # key -> id of an already-open idea this run
 
         raw: list[dict[str, Any]] = []
@@ -385,8 +405,12 @@ def build_system_improvement(root: Path, now: datetime | None = None) -> dict[st
         ideas: list[SystemImprovementIdea] = []
         for r in raw:
             key = idea_key(r["category"], r["title"])
-            if key in suppressed:
-                continue  # cooldown / completed → don't re-surface
+            iid = "si-" + _slug(key)
+            # cooldown / completed → don't re-surface. Two unified sources:
+            #  - legacy history owner_decision line (idea_key)
+            #  - recorded operator decision (decisions.jsonl, keyed on item_id == iid)
+            if key in suppressed or iid in decision_suppressed:
+                continue
             # sanitize: never emit market verbs
             blob = " ".join([r["title"], r["summary"], r["proposed_change"]])
             if _MARKET_VERBS.search(blob):
@@ -395,7 +419,6 @@ def build_system_improvement(root: Path, now: datetime | None = None) -> dict[st
             confidence = 0.6
             roadmap = 0.9 if r["category"] == Cat.ROADMAP_ALIGNMENT.value else 0.3
             rank = _final_rank(r["impact"], r["urgency"], r["effort"], risk, confidence, roadmap)
-            iid = "si-" + _slug(key)
             duplicate_of = open_keys.get(key)
             idea = SystemImprovementIdea(
                 id=iid, title=r["title"], category=r["category"], source="deterministic",

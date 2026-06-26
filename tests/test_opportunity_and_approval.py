@@ -133,3 +133,27 @@ def test_cooldown_elapses(tmp_path):
     aq.build_action_queues(tmp_path, _now())
     q = json.loads((L / "system_improvement_action_queue.json").read_text())
     assert "si-c" in {i["id"] for i in q["queue"]}
+
+
+def test_one_decision_suppresses_both_brief_and_action_queue(tmp_path):
+    """Unified suppression: a single record_decision() call must drop the idea from
+    BOTH the producer brief (system_improvement_ideas.json) and the operator action
+    queue (system_improvement_action_queue.json) — no manual history edit."""
+    import portfolio_automation.system_improvement as si
+    L = tmp_path / "outputs" / "latest"; L.mkdir(parents=True)
+    (tmp_path / "outputs" / "sandbox").mkdir(parents=True)
+    # A real detector-driven idea so the producer rebuild can re-emit it.
+    L.joinpath("data_quality_report.json").write_text(json.dumps({"critical_count": 3}))
+    p0 = si.build_system_improvement(tmp_path, _now())
+    item_id = next(i["id"] for i in p0["ideas"] if i["category"] == "data_quality")
+
+    aq.record_decision(tmp_path, "system_improvement", item_id, "mark_completed", now=_now())
+
+    # producer/brief layer
+    si.write_system_improvement_artifacts(tmp_path, _now())
+    ideas = json.loads((L / "system_improvement_ideas.json").read_text())["ideas"]
+    assert all(i["id"] != item_id for i in ideas)
+    # action-queue layer
+    aq.build_action_queues(tmp_path, _now())
+    q = json.loads((L / "system_improvement_action_queue.json").read_text())
+    assert item_id not in {i["id"] for i in q["queue"]}
