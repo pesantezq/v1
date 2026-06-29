@@ -121,7 +121,7 @@ When regime is `risk_off`, `significant_dip`, or `severe_dip`:
 ### Caps
 
 - `max_position_cap = 0.15`
-- `sector_cap = 0.35`
+- `sector_cap = 0.25`
 - `cash_reserve_pct = 0.05`
 - `min_position_pct = 0.01`
 
