@@ -1942,8 +1942,12 @@ def _advisor_stack_items(root: Path) -> list[str]:
                     f" · news {n.get('article_count_raw')} articles → "
                     f"{n.get('evidence_packet_count')} packets"
                 )
+            # budget <= 0 means "no daily cap" (FMPClient treats budget <= 0 as
+            # uncapped); render "N / uncapped" instead of a malformed "N/0".
+            _bud = b.get("budget")
+            _cap = "uncapped" if b.get("uncapped") or not _flt(_bud, 0) else _bud
             items.append(
-                f"FMP budget: {b.get('count_today')}/{b.get('budget')} "
+                f"FMP budget: {b.get('count_today')}/{_cap} "
                 f"({b.get('status')}){news_bit}"
             )
 

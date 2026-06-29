@@ -768,5 +768,48 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("Retune validated", verdict)
 
 
+class TestAdvisorStackFmpBudgetLine(unittest.TestCase):
+    """The Advisor Stack FMP-budget line must not render an uncapped budget as
+    a malformed "N/0" ratio. Per the project convention (FMPClient treats
+    budget <= 0 as uncapped), budget == 0 means "no daily cap", and the status
+    artifact carries an explicit ``uncapped: true`` flag. The operator line
+    should read "N / uncapped", never "N/0".
+    """
+
+    def _write(self, root: Path, budget_block: dict) -> None:
+        import json
+        (root / "outputs" / "latest").mkdir(parents=True, exist_ok=True)
+        (root / "outputs" / "latest" / "fmp_budget_status.json").write_text(
+            json.dumps({"budget": budget_block, "news": {"available": False}})
+        )
+
+    def test_uncapped_budget_renders_uncapped_not_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, {
+                "available": True, "count_today": 264, "budget": 0,
+                "status": "ok", "uncapped": True,
+            })
+            items = _advisor_stack_items(root)
+            fmp = [i for i in items if "FMP budget" in i]
+            self.assertEqual(len(fmp), 1, f"expected one FMP line, got {items}")
+            line = fmp[0]
+            self.assertNotIn("264/0", line)
+            self.assertIn("264", line)
+            self.assertIn("uncapped", line)
+
+    def test_capped_budget_still_renders_ratio(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, {
+                "available": True, "count_today": 100, "budget": 250,
+                "status": "ok", "uncapped": False,
+            })
+            items = _advisor_stack_items(root)
+            fmp = [i for i in items if "FMP budget" in i]
+            self.assertEqual(len(fmp), 1, f"expected one FMP line, got {items}")
+            self.assertIn("100/250", fmp[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
