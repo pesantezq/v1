@@ -8,13 +8,20 @@ from typing import Any
 # the allocation_engine retune so the portfolio snapshot's "suggested
 # deployment" headroom keeps pace with the wider per-position caps in the
 # decision plan. Reverts cleanly by restoring prior values.
+#
+# Targeted partial revert (operator-approved 2026-06-26): matches the
+# allocation_engine sector_cap pullback (see allocation_engine.DEFAULT_CONFIG) so
+# the snapshot's sector headroom tracks the tightened decision-plan caps. Pulls
+# max_sector_allocation 0.10→0.06 (toward the prior 0.04 without a full rollback)
+# to cap the Energy-style sector overload that drove the e2b5 gauge's -5.9pp 1d
+# underperformance. Reverts cleanly to 0.10.
 DEFAULT_PORTFOLIO_CONSTRUCTION_CONFIG = {
     "enabled": True,
     "observe_only": True,
     "baseline_position_pct": 0.04,
     "max_total_allocation": 0.30,
     "max_ticker_allocation": 0.05,
-    "max_sector_allocation": 0.10,
+    "max_sector_allocation": 0.06,
     "top_sector_warning_threshold": 0.40,
     "top3_ticker_warning_threshold": 0.70,
     "high_conviction_theme_warning_count": 2,

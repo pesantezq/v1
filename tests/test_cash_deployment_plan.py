@@ -128,8 +128,8 @@ def test_allocate_respects_position_cap():
             },
         ],
     )
-    # 20% × $10k = $2000 capped at 15% × $10k = $1500 (post-retune)
-    assert rows[0]["suggested_amount"] == pytest.approx(1500.0, rel=1e-3)
+    # 20% × $10k = $2000 capped at 12% × $10k = $1200 (2026-06-26 partial revert)
+    assert rows[0]["suggested_amount"] == pytest.approx(1200.0, rel=1e-3)
 
 
 def test_allocate_band_multiplier_for_starter():

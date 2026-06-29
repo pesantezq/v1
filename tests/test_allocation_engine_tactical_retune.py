@@ -38,11 +38,13 @@ class TestRetuneDefaults(unittest.TestCase):
     def test_momentum_base_is_6pct(self):
         self.assertAlmostEqual(DEFAULT_CONFIG["momentum_base_pct"], 0.06, places=4)
 
-    def test_max_position_cap_is_15pct(self):
-        self.assertAlmostEqual(DEFAULT_CONFIG["max_position_cap"], 0.15, places=4)
+    def test_max_position_cap_is_12pct(self):
+        # 2026-06-26 targeted partial revert: max_position_cap 0.15 -> 0.12
+        self.assertAlmostEqual(DEFAULT_CONFIG["max_position_cap"], 0.12, places=4)
 
-    def test_sector_cap_is_35pct(self):
-        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.35, places=4)
+    def test_sector_cap_is_25pct(self):
+        # 2026-06-26 targeted partial revert: sector_cap 0.35 -> 0.25
+        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.25, places=4)
 
     def test_low_confidence_multiplier_is_065(self):
         self.assertAlmostEqual(DEFAULT_CONFIG["low_confidence_multiplier"], 0.65, places=4)
@@ -109,7 +111,7 @@ class TestRetuneEndToEnd(unittest.TestCase):
         )
         self.assertAlmostEqual(s.suggested_pct, 0.065, places=4)
 
-    def test_max_position_cap_binds_at_15pct(self):
+    def test_max_position_cap_binds_at_12pct(self):
         # Drive raw sizing above the cap with a high vol_regime multiplier.
         s = suggest_allocation(
             opportunity=self._opp(),
@@ -122,7 +124,7 @@ class TestRetuneEndToEnd(unittest.TestCase):
                 "regime": "extreme_low_vol",
             },
         )
-        self.assertAlmostEqual(s.suggested_pct, 0.15, places=4)
+        self.assertAlmostEqual(s.suggested_pct, 0.12, places=4)
         self.assertIn("max_position_cap", s.capped_by)
 
 

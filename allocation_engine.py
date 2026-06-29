@@ -17,6 +17,19 @@ from watchlist_scanner.allocation_preview import _rank_multiplier as _policy_ran
 # Profit-maximization tactical retune (operator-approved 2026-05-18):
 # base sizes ~2×, max_position_cap nearly 2×, sector_cap 1.75×,
 # low_confidence_multiplier eased. Reverts cleanly by restoring prior values.
+#
+# Targeted partial revert (operator-approved 2026-06-26): the 2026-05-18 gauge
+# (fp e2b5ecab) underperformed the prior gauge d95e by -5.9pp hit-rate / -0.34pp
+# mean-return at 1d. Attribution showed the drag was CONCENTRATED, not broad:
+# the loosened sector_cap (0.20→0.35) let the engine overweight Energy into a
+# downturn (Energy mean_return flipped +0.33%→-1.54%, position count 18→39), and
+# Financials per-win return compressed (+1.00%→+0.29%) from diluted concentration.
+# Pull the sizing caps back toward the d95e direction WITHOUT a full rollback —
+# sector_cap 0.35→0.25, max_position_cap 0.15→0.12 — to cap sector overload and
+# restore concentration discipline in winning sectors. Base sizes,
+# low_confidence_multiplier, and ml_advisor are left untouched (Tech was stable
+# and 7d metrics improved). Mints a new gauge era on the next cron; the
+# attribution tracker re-scores it independently. Reverts cleanly to 0.35/0.15.
 DEFAULT_CONFIG = {
     "compounder_base_pct": 0.10,
     "momentum_base_pct": 0.06,
@@ -28,8 +41,8 @@ DEFAULT_CONFIG = {
     "degraded_penalty": 0.65,
     "risk_off_compounder_multiplier": 0.85,
     "risk_off_momentum_multiplier": 0.55,
-    "max_position_cap": 0.15,
-    "sector_cap": 0.35,
+    "max_position_cap": 0.12,
+    "sector_cap": 0.25,
     "cash_reserve_pct": 0.05,
     "min_position_pct": 0.01,
     # Fundamentals-based sizing guard — applied before sector/cash caps.

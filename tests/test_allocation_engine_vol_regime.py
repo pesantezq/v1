@@ -140,7 +140,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
         self.assertAlmostEqual(suggestion.suggested_pct, 0.12, places=4)
 
     def test_regime_multiplier_bounded_by_position_cap(self):
-        # Multiplier 2.0 → 10% × 2.0 = 20%, but max_position_cap is 15%.
+        # Multiplier 2.0 → 10% × 2.0 = 20%, but max_position_cap is 12%.
         suggestion = suggest_allocation(
             opportunity=_opportunity(),
             strategy_type="compounder",
@@ -148,7 +148,7 @@ class TestAllocationEngineVolRegime(unittest.TestCase):
             cash_available=20_000.0,
             vol_regime_plan=_vol_plan(multiplier=2.0, regime="low_vol"),
         )
-        self.assertAlmostEqual(suggestion.suggested_pct, 0.15, places=4)
+        self.assertAlmostEqual(suggestion.suggested_pct, 0.12, places=4)
         self.assertIn("max_position_cap", suggestion.capped_by)
 
     def test_regime_multiplier_combines_with_risk_off(self):

@@ -102,11 +102,12 @@ class TestSectorCapDefault(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def test_default_sector_cap_is_35_pct(self):
-        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.35, places=4)
+    def test_default_sector_cap_is_25_pct(self):
+        # 2026-06-26 targeted partial revert: sector_cap 0.35 -> 0.25
+        self.assertAlmostEqual(DEFAULT_CONFIG["sector_cap"], 0.25, places=4)
 
     def test_no_sector_exposure_allows_full_base_size(self):
-        # sector_cap=0.35, no existing exposure → headroom=0.35 > base 10% → no cap applied
+        # sector_cap=0.25, no existing exposure → headroom=0.25 > base 10% → no cap applied
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
@@ -118,45 +119,45 @@ class TestSectorCapDefault(unittest.TestCase):
         self.assertNotIn("sector_cap", suggestion.capped_by)
 
     def test_sector_nearly_full_limits_allocation(self):
-        # 32% already in sector, default cap 35% → 3% headroom < 10% base → cap kicks in
+        # 22% already in sector, default cap 25% → 3% headroom < 10% base → cap kicks in
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.32,
+            current_sector_exposure=0.22,
         )
         self.assertAlmostEqual(suggestion.suggested_pct, 0.03, places=4)
         self.assertIn("sector_cap", suggestion.capped_by)
 
     def test_sector_at_cap_zeroes_allocation(self):
-        # 35% already in sector, cap is 35% → 0% headroom → no allocation
+        # 25% already in sector, cap is 25% → 0% headroom → no allocation
         suggestion = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.35,
+            current_sector_exposure=0.25,
         )
         self.assertAlmostEqual(suggestion.suggested_pct, 0.0, places=4)
         self.assertAlmostEqual(suggestion.suggested_amount, 0.0, places=2)
 
     def test_sector_cap_can_be_disabled_with_none(self):
-        # 30% exposure with default cap 35% → 5% headroom < 10% base → capped at 5%.
+        # 20% exposure with default cap 25% → 5% headroom < 10% base → capped at 5%.
         # Passing sector_cap=None removes the cap entirely → full 10% comes through.
         capped = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.30,
+            current_sector_exposure=0.20,
         )
         uncapped = suggest_allocation(
             opportunity=self._opportunity(),
             strategy_type="compounder",
             portfolio_value=100_000.0,
             cash_available=20_000.0,
-            current_sector_exposure=0.30,
+            current_sector_exposure=0.20,
             config={"sector_cap": None},
         )
         self.assertAlmostEqual(capped.suggested_pct, 0.05, places=4)

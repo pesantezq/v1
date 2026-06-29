@@ -47,10 +47,12 @@ MULTIPLIER_NEUTRAL: float = 1.00
 MULTIPLIER_POOR: float = 0.75
 
 # Fallback sizing config when portfolio snapshot config is absent.
-# Mirrors allocation_engine DEFAULT_CONFIG after the 2026-05-18 retune.
+# Mirrors allocation_engine DEFAULT_CONFIG after the 2026-05-18 retune,
+# adjusted by the 2026-06-26 targeted partial revert (sector_cap 0.35->0.25,
+# max_position_cap 0.15->0.12). Keep in lock-step with allocation_engine.
 _DEFAULT_BASELINE_PCT: float = 0.02
-_DEFAULT_MAX_TICKER_PCT: float = 0.15
-_DEFAULT_MAX_SECTOR_PCT: float = 0.35
+_DEFAULT_MAX_TICKER_PCT: float = 0.12
+_DEFAULT_MAX_SECTOR_PCT: float = 0.25
 _DEFAULT_MAX_TOTAL_PCT: float = 0.40
 _DEFAULT_CONFIDENCE_THRESHOLD: float = 0.50
 

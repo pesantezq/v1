@@ -41,7 +41,7 @@ logger = logging.getLogger("stockbot.portfolio_automation.cash_deployment_plan")
 # Constants — mirror allocation_engine defaults; documented in spec.
 # ---------------------------------------------------------------------------
 
-_MAX_POSITION_PCT = 0.15          # mirrors allocation_engine max_position_cap
+_MAX_POSITION_PCT = 0.12          # mirrors allocation_engine max_position_cap (revert 2026-06-26)
 _SAFETY_FLOOR_PCT = 0.05          # never deploy below this cash level
 _DEFAULT_TARGET_CASH = 0.05       # fallback when config.target_cash_weight missing
 
