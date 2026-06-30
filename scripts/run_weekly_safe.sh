@@ -120,5 +120,11 @@ if src == 'fallback' or len(non_fb) == 0:
     printf '\n-- Research-backed strategy lab (sandbox, observe-only) --\n'
     python -m portfolio_automation.portfolio_sim.run_strategy_lab --root "${REPO_ROOT:-.}" --run-mode discovery || printf 'strategy_lab non-fatal failure\n'
 
+    printf '\n-- Strategy mandates + champion/challenger (Phase 9, sandbox, observe-only) --\n'
+    python -c "import os; os.chdir('${REPO_ROOT:-.}'); from portfolio_automation.strategy_mandate import build_strategy_mandates; r = build_strategy_mandates('.'); print('coverage_complete:', r.get('coverage_complete'), 'mandates:', len(r.get('mandates', {})), 'unmandated:', r.get('unmandated'))" || printf 'strategy_mandate non-fatal failure\n'
+
+    printf '\n-- Experiment registry review (Phase 8, sandbox, observe-only) --\n'
+    python -c "import os; os.chdir('${REPO_ROOT:-.}'); from portfolio_automation.experiment_registry import read_registry; reg = read_registry('.'); from collections import Counter; c = Counter(e.get('status') for e in reg); print('experiments:', len(reg), 'by_status:', dict(c))" || printf 'experiment_registry non-fatal failure\n'
+
     printf '\nDAILY RUN PASSED\n'
 } >> "$LOG_FILE" 2>&1
