@@ -562,6 +562,32 @@ def build_daily_run_status(
         "future_rejected_count": (_snap or {}).get("future_rejected_count", 0),
     }
 
+    # Phase 13: surface the remaining SQG producers on the operator status with
+    # graceful degrade (present=False when the artifact is absent). Each gets one
+    # headline field so the operator can glance the program's health.
+    def _latest(name: str) -> dict[str, Any]:
+        return _load_json_safe(root_path / "outputs" / "latest" / name) or {}
+    _scn, _qf, _sl = (_latest("scenario_risk.json"),
+                      _latest("quant_feedback.json"),
+                      _latest("semantic_liveness_status.json"))
+    sqg_surfaces = {
+        "scenario_risk": {
+            "present": bool(_scn),
+            "worst_case_scenario": _scn.get("worst_case_scenario"),
+            "degraded": _scn.get("degraded"),
+        },
+        "quant_feedback": {
+            "present": bool(_qf),
+            "evidence_status": _qf.get("evidence_status"),
+            "fallback_rate": _qf.get("fallback_rate"),
+        },
+        "semantic_liveness": {
+            "present": bool(_sl),
+            "overall_status": _sl.get("overall_status"),
+            "finding_count": _sl.get("finding_count", 0),
+        },
+    }
+
     stage_count = len(stages)
     ok_count = sum(1 for s in stages if s["status"] == "ok")
     warn_count = sum(1 for s in stages if s["status"] == "warn")
@@ -608,6 +634,7 @@ def build_daily_run_status(
         "optional_missing_count": len(optional_missing),
         "run_manifest": run_manifest_summary,
         "input_snapshot": input_snapshot_summary,
+        "sqg_surfaces": sqg_surfaces,
         "disclaimer": _DISCLAIMER,
     }
 

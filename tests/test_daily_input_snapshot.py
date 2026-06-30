@@ -185,3 +185,16 @@ def test_daily_run_status_input_snapshot_absent_is_safe(tmp_path):
     blk = build_daily_run_status(root=tmp_path)["input_snapshot"]
     assert blk == {"present": False, "snapshot_hash": None, "valid_count": 0,
                    "stale_count": 0, "missing_count": 0, "future_rejected_count": 0}
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 — operator surface exposes the new SQG producers (graceful degrade)
+# ---------------------------------------------------------------------------
+
+
+def test_daily_run_status_sqg_surfaces_block(tmp_path):
+    from portfolio_automation.daily_run_status import build_daily_run_status
+    blk = build_daily_run_status(root=tmp_path)["sqg_surfaces"]
+    # absent artifacts degrade gracefully (present=False), no crash
+    for key in ("scenario_risk", "quant_feedback", "semantic_liveness"):
+        assert key in blk and blk[key]["present"] is False
