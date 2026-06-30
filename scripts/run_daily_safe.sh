@@ -431,6 +431,13 @@ run_aux_stage "Artifact registry governance" \
 run_aux_stage "Pipeline wiring probe" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.pipeline_wiring_probe import run_pipeline_wiring_probe; r = run_pipeline_wiring_probe(root='.'); s = r.get('summary') or {}; print('overall:', r.get('overall_status'), 'audited:', s.get('total_audited'), 'unwired:', s.get('unwired'), 'mismatch:', s.get('cadence_mismatch'), 'skipped:', s.get('silently_skipped'), 'empty:', s.get('fresh_but_empty'))"
 
+# Stage 13b — Semantic-liveness meta-monitor (Phase 6): detect degenerate
+# (constant/default/zero-variance/class-disappeared) outputs with min-sample +
+# documented-exception guards, so a technically-green-but-broken pipeline can't
+# stay silent. Observe-only, AMBER-max; sub-RED findings route to quant-watch.
+run_aux_stage "Semantic-liveness probes" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.semantic_liveness import run_semantic_liveness; r = run_semantic_liveness('.'); print('status:', r.get('overall_status'), 'findings:', r.get('finding_count'))"
+
 # Stage 14 — Run context (Phase 1): stamp the manifest complete. Runs LAST so
 # completion means every prior stage finished; is_complete() flips True only
 # here, so a consumer reading outputs/policy/run_manifest.json knows the run is
