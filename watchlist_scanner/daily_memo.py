@@ -2209,6 +2209,25 @@ def _fmt_amt(value: Any) -> str:
         return "$0"
 
 
+_LEAD_NAME_ISSUE_IDS = (
+    "top_opportunity_missing_from_top_decisions",
+    "best_fit_missing",
+    "dominant_theme_not_represented",
+)
+
+
+def _lead_name_notes(rec: dict[str, Any]) -> list[str]:
+    """Resolved reconciliation notes that explain why the funded pick, the
+    model's top opportunity, and the best portfolio fit can be three different
+    symbols. Surfacing these removes the "which name is the lead?" ambiguity.
+    """
+    notes: list[str] = []
+    for issue in (rec.get("resolved_issues") or []):
+        if issue.get("id") in _LEAD_NAME_ISSUE_IDS and issue.get("message"):
+            notes.append(str(issue["message"]))
+    return notes[:3]
+
+
 def _investor_core_text(mc: dict[str, Any]) -> list[str]:
     """Investor-facing core block (plain text), sourced from memo_coherence."""
     if not mc:
@@ -2221,6 +2240,13 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
     para = inv.get("posture_paragraph")
     if para:
         out += [_LINE, "  TODAY'S POSTURE", _LINE, f"  {para}", ""]
+
+    notes = _lead_name_notes(rec)
+    if notes:
+        out += [_LINE, "  WHY THE LEAD NAMES DIFFER", _LINE]
+        for note in notes:
+            out.append(f"  - {note}")
+        out.append("")
 
     unresolved = rec.get("unresolved_issues") or []
     if unresolved:
@@ -2291,6 +2317,13 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
     para = inv.get("posture_paragraph")
     if para:
         out += ["## Today's Posture", "", f"> {para}", ""]
+
+    notes = _lead_name_notes(rec)
+    if notes:
+        out += ["## Why the Lead Names Differ", ""]
+        for note in notes:
+            out.append(f"- {note}")
+        out.append("")
 
     unresolved = rec.get("unresolved_issues") or []
     if unresolved:

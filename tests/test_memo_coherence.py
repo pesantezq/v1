@@ -466,3 +466,30 @@ class TestProbeAndValidator:
         from tools.validate_daily_memo_coherence import main
         rc = main([str(tmp_path)])  # no artifacts -> degraded, but never errors
         assert rc == 0
+
+
+class TestLeadNameRendering:
+    """The rendered investor core must explain why the funded pick, the model's
+    top opportunity, and the best portfolio fit can be three different symbols
+    (resolves the Q1 'which name is the lead?' ambiguity)."""
+
+    def test_lead_name_notes_rendered_in_investor_core(self):
+        from watchlist_scanner.daily_memo import _investor_core_text, _lead_name_notes
+        r = mc.build_memo_coherence(_sources())  # GOOGL top-opp absent, NOC best-fit unfunded
+        notes = _lead_name_notes(r["reconciliation"])
+        assert any("GOOGL" in n for n in notes)
+        assert any("NOC" in n for n in notes)
+        lines = _investor_core_text(r)
+        block = "\n".join(lines)
+        assert "WHY THE LEAD NAMES DIFFER" in block
+        assert "GOOGL" in block and "NOC" in block
+
+    def test_no_lead_name_block_when_aligned(self):
+        from watchlist_scanner.daily_memo import _lead_name_notes
+        src = _sources()
+        # make top opportunity + best fit the funded PANW so nothing diverges
+        src["system_decision_summary"]["top_opportunity"] = {"ticker": "PANW"}
+        src["system_decision_summary"]["best_portfolio_fit"] = {"ticker": "PANW"}
+        src["system_decision_summary"]["top_theme"] = {"name": "Semis", "tickers": ["PANW"]}
+        r = mc.build_memo_coherence(src)
+        assert _lead_name_notes(r["reconciliation"]) == []
