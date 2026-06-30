@@ -43,6 +43,40 @@ def _broker_aware_enabled(root: Path) -> bool:
         return False
 
 
+def resolve_decision_cash(
+    *,
+    ledger_balance: "float | None",
+    broker_fresh: bool,
+    broker_cash: "float | None",
+    config_cash: float,
+) -> "tuple[float, tuple[str, float, str] | None]":
+    """Resolve the cash balance the decision pipeline should use, plus an optional
+    ledger entry to append.
+
+    Policy (operator-approved 2026-06-30): a fresh, authenticated Schwab snapshot
+    is the source of truth for cash. When broker cash is fresh, use it AND
+    reconcile the ledger to it (so the append-only ledger tracks the true balance
+    going forward). When the broker is stale/absent, the ledger is the fallback.
+    On an empty ledger, seed from broker (if fresh) else config.
+
+    Returns ``(cash_to_use, ledger_entry_or_None)`` where ledger_entry is
+    ``(type, amount, note)`` suitable for ``store.add_cash_entry(*entry)``.
+    Read-only/advisory: never executes trades or writes to the broker.
+    """
+    has_broker = broker_fresh and broker_cash is not None
+    if ledger_balance is None:
+        seed = float(broker_cash) if has_broker else float(config_cash)
+        note = "initial seed from broker" if has_broker else "initial seed from config"
+        seed = round(seed, 2)
+        return seed, ("seed", seed, note)
+    if has_broker:
+        delta = round(float(broker_cash) - float(ledger_balance), 2)
+        entry = (("broker_reconcile", delta, "reconcile ledger to fresh Schwab balance")
+                 if abs(delta) >= 0.01 else None)
+        return round(float(broker_cash), 2), entry
+    return round(float(ledger_balance), 2), None
+
+
 def _parse_age_s(ts: str | None, now: datetime) -> float | None:
     if not ts:
         return None

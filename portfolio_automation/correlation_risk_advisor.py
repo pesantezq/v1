@@ -193,6 +193,7 @@ def build_plan(
     coverage: dict[str, int],
     status: str,
     notes: list[str],
+    holdings_source: str = "config",
 ) -> dict[str, Any]:
     effective_bets = round(effective_independent_bets(weights, corr), 3)
     pair_flags = build_pair_flags(weights, corr)
@@ -218,6 +219,7 @@ def build_plan(
         "observe_only": True,
         "schema_version": "1",
         "status": status,
+        "holdings_source": holdings_source,
         "lookback_days": _LOOKBACK_DAYS,
         "weights": {k: round(v, 4) for k, v in weights.items()},
         "coverage_by_symbol": coverage,
@@ -271,27 +273,54 @@ def _render_markdown(plan: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _holdings_with_weights(repo_root: Path) -> dict[str, float]:
-    cfg = _load_json_safe(repo_root / "config.json")
-    portfolio = cfg.get("portfolio") or {}
+def _holdings_with_weights(repo_root: Path) -> tuple[dict[str, float], str]:
+    """Return (normalized weights, holdings_source).
+
+    Prefers ACTUAL weights from the live Schwab snapshot (market_value of each
+    position / total holdings market value) when the broker is fresh; falls back
+    to config target_weight otherwise. Read-only. Weights sum to 1.0 across
+    active holdings.
+    """
     weights: dict[str, float] = {}
-    for h in portfolio.get("holdings") or []:
-        if not isinstance(h, dict):
-            continue
-        symbol = _safe_str(h.get("symbol")).upper()
-        target = _safe_float(h.get("target_weight"))
-        shares = _safe_float(h.get("shares"))
-        # Skip planned-but-not-bought rows (shares=0)
-        if not symbol or shares is None or shares <= 0:
-            continue
-        if target is None or target <= 0:
-            continue
-        weights[symbol] = target
-    # Normalize so weights sum to 1.0 across active holdings only.
+    holdings_source = "config"
+
+    # 1) Prefer broker (Schwab) actual market-value weights when fresh.
+    try:
+        from portfolio_automation.holdings_resolver import resolve_holdings
+        res = resolve_holdings(repo_root)
+        if res.get("holdings_source") == "broker":
+            mv: dict[str, float] = {}
+            for h in res.get("holdings") or []:
+                sym = _safe_str(h.get("symbol")).upper()
+                v = _safe_float(h.get("market_value"))
+                if sym and v is not None and v > 0:
+                    mv[sym] = v
+            if mv:
+                weights = mv
+                holdings_source = "broker"
+    except Exception:
+        pass
+
+    # 2) Fallback: config target_weight across active (shares>0) holdings.
+    if not weights:
+        cfg = _load_json_safe(repo_root / "config.json")
+        portfolio = cfg.get("portfolio") or {}
+        for h in portfolio.get("holdings") or []:
+            if not isinstance(h, dict):
+                continue
+            symbol = _safe_str(h.get("symbol")).upper()
+            target = _safe_float(h.get("target_weight"))
+            shares = _safe_float(h.get("shares"))
+            if not symbol or shares is None or shares <= 0:
+                continue
+            if target is None or target <= 0:
+                continue
+            weights[symbol] = target
+
     total = sum(weights.values())
     if total > 0:
         weights = {k: v / total for k, v in weights.items()}
-    return weights
+    return weights, holdings_source
 
 
 def _extract_closes_from_fmp(rows: list[dict[str, Any]], lookback: int) -> list[float]:
@@ -315,7 +344,7 @@ def run_correlation_risk_advisor(
     repo_root = Path(repo_root)
     base_dir = Path(base_dir)
 
-    weights = _holdings_with_weights(repo_root)
+    weights, holdings_source = _holdings_with_weights(repo_root)
     notes: list[str] = []
 
     if not weights:
@@ -323,6 +352,7 @@ def run_correlation_risk_advisor(
             weights={}, corr={}, coverage={},
             status="insufficient_data",
             notes=["no active holdings in config.json"],
+            holdings_source=holdings_source,
         )
         _write_artifacts(plan, base_dir)
         return plan
@@ -332,6 +362,7 @@ def run_correlation_risk_advisor(
             weights=weights, corr={}, coverage={s: 0 for s in weights},
             status="insufficient_data",
             notes=["fmp_client unavailable; correlation matrix not computed"],
+            holdings_source=holdings_source,
         )
         _write_artifacts(plan, base_dir)
         return plan
@@ -375,7 +406,7 @@ def run_correlation_risk_advisor(
 
     plan = build_plan(
         weights=weights, corr=corr, coverage=coverage,
-        status=status, notes=notes,
+        status=status, notes=notes, holdings_source=holdings_source,
     )
     _write_artifacts(plan, base_dir)
     return plan

@@ -658,15 +658,29 @@ def run_portfolio_update(
         # =====================
         # 1b. CASH LEDGER SYNC
         # =====================
+        # Policy (operator-approved 2026-06-30): a FRESH, authenticated Schwab
+        # snapshot is the source of truth for cash. When broker cash is fresh we
+        # use it for decisions AND reconcile the ledger to match, so the ledger
+        # tracks the true balance going forward. When the broker is stale/absent
+        # the ledger is the fallback (prior behavior). No trade, no broker write.
         if store is not None:
             try:
-                ledger_balance = store.get_cash_balance()
-                if ledger_balance is None:
-                    store.add_cash_entry("seed", config.cash_available, "initial seed from config")
-                    logger.info("Cash ledger seeded: %.2f", config.cash_available)
-                else:
-                    config.cash_available = ledger_balance
-                    logger.info("Cash balance from ledger: %.2f", ledger_balance)
+                from portfolio_automation.holdings_resolver import (
+                    resolve_holdings, resolve_decision_cash,
+                )
+                _hres = resolve_holdings(Path("."))
+                _cash, _entry = resolve_decision_cash(
+                    ledger_balance=store.get_cash_balance(),
+                    broker_fresh=_hres.get("holdings_source") == "broker",
+                    broker_cash=_hres.get("cash"),
+                    config_cash=config.cash_available,
+                )
+                if _entry is not None:
+                    store.add_cash_entry(*_entry)
+                config.cash_available = _cash
+                logger.info("Cash resolved: %.2f (source=%s%s)", _cash,
+                            _hres.get("holdings_source"),
+                            f", ledger {_entry[0]} {_entry[1]:+.2f}" if _entry else "")
             except Exception as _ledger_err:
                 logger.warning("Cash ledger sync failed (non-fatal): %s", _ledger_err)
 

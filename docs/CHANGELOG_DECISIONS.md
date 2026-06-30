@@ -133,6 +133,64 @@ identical `0.55` priorities, score sub-0.1% noise moves as hit/miss, omit econom
 - New artifact is **optional** (`optional_missing` when absent → memo degrades silently;
   Stage 9e is non-blocking). `missing_artifact_count` unaffected (additive). Memo wording
   changed (new investor-core + appendix sections). Owner step: `run_daily_safe.sh` Stage 9e.
+---
+
+## Schwab Balance as Cash Source of Truth (cash-ledger reconcile + advisor sourcing)
+
+### Date
+
+`2026-06-30`
+
+### Area
+
+- architecture
+- output_contract
+
+### Files / Functions
+
+- `portfolio_automation/holdings_resolver.py::resolve_decision_cash` (new pure helper).
+- `main.py` step 1b (cash ledger sync) — uses the helper.
+- `portfolio_automation/risk_delta_advisor.py::_load_holdings` — overlays broker holdings.
+- `portfolio_automation/correlation_risk_advisor.py::_holdings_with_weights` /
+  `build_plan` — broker market-value weights + `holdings_source`.
+- New: `tests/test_schwab_cash_truth.py`.
+
+### Decision
+
+A fresh, authenticated Schwab snapshot is now the **source of truth for cash** in the
+decision pipeline: when broker cash is fresh, decisions use it AND the append-only cash
+ledger is reconciled to it (one `broker_reconcile` entry) so the ledger tracks the true
+balance going forward; when the broker is stale/absent the ledger remains the fallback.
+Previously `main.py` step 1b unconditionally overwrote the broker-overlaid cash with a
+drifted ledger balance ($464.16 vs Schwab $3,150.60). Additionally, `risk_delta` and
+`correlation` advisors now source holdings through the broker overlay / `resolve_holdings`
+(actual Schwab shares + market-value weights) instead of reading raw config, and record
+`holdings_source`.
+
+### Why
+
+`broker_aware` was already enabled and the decision pipeline already used Schwab *holdings*,
+but cash was overridden by a stale ledger and two advisors read raw config — so the memo,
+dashboard, and risk/correlation views did not reflect the live Schwab balance.
+
+### Invariants Preserved
+
+- Read-only/advisory: no trades, no broker writes, no `decision_engine.py`/score changes.
+- Broker preference is gated on fresh (<24h) + authenticated snapshot; honest config/ledger
+  fallback otherwise (operator-approved policy, 2026-06-30). The reconcile only appends to the
+  cash ledger (never rewrites/deletes history); ledger remains authoritative when broker is down.
+
+### Downstream Impact
+
+- Decision `portfolio_context.cash` (and thus total_portfolio_value), memo, dashboard, and the
+  risk_delta/correlation artifacts now reflect Schwab when fresh. `correlation_risk_advisor.json`
+  + `risk_delta.json` gain a `holdings_source` field (additive). One `broker_reconcile` cash-ledger
+  entry is appended on the first run after a drift.
+
+### Artifact Health Severity
+
+- Additive `holdings_source` field; `missing_artifact_count` unaffected. Owner step: `main.py`
+  daily pipeline (cash ledger) + Stage 7b risk-delta + correlation advisor stage.
 
 ---
 
