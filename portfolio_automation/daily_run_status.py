@@ -549,6 +549,19 @@ def build_daily_run_status(
         "complete": is_complete(_manifest),
     }
 
+    # Phase 2: surface the immutable daily input snapshot so the operator can see
+    # the frozen decision-time input context + its validation. Observe-only read.
+    from portfolio_automation.daily_input_snapshot import read_input_snapshot
+    _snap = read_input_snapshot(root_path)
+    input_snapshot_summary = {
+        "present": _snap is not None,
+        "snapshot_hash": (_snap or {}).get("snapshot_hash"),
+        "valid_count": (_snap or {}).get("valid_count", 0),
+        "stale_count": (_snap or {}).get("stale_count", 0),
+        "missing_count": (_snap or {}).get("missing_count", 0),
+        "future_rejected_count": (_snap or {}).get("future_rejected_count", 0),
+    }
+
     stage_count = len(stages)
     ok_count = sum(1 for s in stages if s["status"] == "ok")
     warn_count = sum(1 for s in stages if s["status"] == "warn")
@@ -594,6 +607,7 @@ def build_daily_run_status(
         "required_missing_count": len(required_missing),
         "optional_missing_count": len(optional_missing),
         "run_manifest": run_manifest_summary,
+        "input_snapshot": input_snapshot_summary,
         "disclaimer": _DISCLAIMER,
     }
 

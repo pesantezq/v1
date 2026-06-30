@@ -239,6 +239,16 @@ run_aux_stage "Resolution-due probe" \
 run_aux_stage "Quant-watch probe ledger" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.quant_watch_probes import run_quant_watch; r = run_quant_watch(root='.', created_run='run_daily_safe'); print('overall:', r.get('overall_status'), 'active:', r.get('active_count'), 'registered:', len(r.get('registered_today') or []), 'escalated:', len(r.get('escalated_today') or []))"
 
+# Stage 7g — Daily input snapshot (Phase 2): freeze ONE point-in-time view of
+# every decision-time input (references + content hashes, not copies) so the
+# production decision and every daily simulation evaluate the SAME data and no
+# sim can read later information. Runs AFTER the decision pipeline + advisors so
+# the production baseline + holdings/risk/crowd inputs all exist; the snapshot
+# (+ its snapshot_hash) is what Phase 3 sims will read. Future-dated inputs are
+# rejected. Inherits run_id/data_as_of from the run manifest. Observe-only.
+run_aux_stage "Daily input snapshot" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.daily_input_snapshot import run_daily_input_snapshot; s = run_daily_input_snapshot('.'); print('run_id:', s.get('run_id'), 'hash:', (s.get('snapshot_hash') or '')[:12], 'valid:', s.get('valid_count'), 'stale:', s.get('stale_count'), 'missing:', s.get('missing_count'), 'future_rejected:', s.get('future_rejected_count'))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
