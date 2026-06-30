@@ -2228,6 +2228,59 @@ def _lead_name_notes(rec: dict[str, Any]) -> list[str]:
     return notes[:3]
 
 
+def _monthly_plan_rows(env: dict[str, Any]) -> list[tuple[str, str]]:
+    """(label, value) pairs for the Monthly Capital Plan, sourced from the
+    cash_deployment_plan monthly_capital_envelope.
+    """
+    if not env or env.get("status") != "ok":
+        return []
+
+    def amt(k):
+        return _fmt_amt(env.get(k))
+
+    remaining = env.get("monthly_capital_remaining")
+    before = env.get("monthly_capital_deployed_before_today")
+    rows = [
+        ("Portfolio value", amt("portfolio_value")),
+        ("Gross monthly contribution", amt("monthly_contribution_gross")),
+        (f"Cash reserve target ({env.get('cash_reserve_target_pct', 0) * 100:.1f}%)",
+         amt("cash_reserve_target_amount")),
+        ("Cash on hand", amt("cash_on_hand")),
+        ("Reserved to restore cash floor", amt("cash_reserve_shortfall")),
+        ("Net investable this cycle", amt("monthly_contribution_net_investable")),
+        ("Deployed before today",
+         (amt("monthly_capital_deployed_before_today") if before is not None else "unavailable")),
+        ("Funded today", amt("capital_funded_today")),
+        ("Remaining for later entries",
+         (_fmt_amt(remaining) if remaining is not None else "unavailable")),
+        ("Monthly utilization", f"{env.get('monthly_utilization_pct', 0)}%"),
+    ]
+    return rows
+
+
+def _funded_action_line_text(act: dict[str, Any]) -> list[str]:
+    """Detailed funded-action lines (text)."""
+    state = act.get("status") or act.get("presentation_state")
+    lines = [
+        f"  {state} {act.get('symbol')} — {_fmt_amt(act.get('funded_capital'))}"
+    ]
+    src = act.get("funding_source")
+    if src:
+        lines.append(f"      Funding source: {src.replace('_', ' ')}")
+    if act.get("pct_of_portfolio") is not None:
+        lines.append(f"      Portfolio size: {act.get('pct_of_portfolio')}%")
+    if act.get("pct_of_net_investable") is not None:
+        lines.append(f"      Monthly investable utilization: {act.get('pct_of_net_investable')}%")
+    if act.get("primary_risk"):
+        lines.append(f"      Entry condition: {act.get('primary_risk')}")
+    if act.get("held_for_pullback"):
+        lines.append(
+            f"      Next action: no same-day addition; "
+            f"{_fmt_amt(act.get('held_for_pullback'))} held for pullback/consolidation"
+        )
+    return lines
+
+
 def _investor_core_text(mc: dict[str, Any]) -> list[str]:
     """Investor-facing core block (plain text), sourced from memo_coherence."""
     if not mc:
@@ -2255,8 +2308,18 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
             out.append(f"  - {issue.get('message')}")
         out.append("")
 
-    out += [_LINE, "  FUNDED ACTIONS TODAY", _LINE]
-    if fund.get("available"):
+    env = fund.get("monthly_envelope") or {}
+    plan_rows = _monthly_plan_rows(env)
+    if plan_rows:
+        out += [_LINE, "  MONTHLY CAPITAL PLAN", _LINE]
+        for label, value in plan_rows:
+            out.append(f"  {label}: {value}")
+        if env.get("monthly_history_status") and env.get("monthly_history_status") != "ok":
+            out.append(f"  (monthly history: {env.get('monthly_history_status')} — see appendix)")
+        out.append("")
+    elif fund.get("available"):
+        # backward-compatible fallback when the envelope is absent
+        out += [_LINE, "  MONTHLY CAPITAL PLAN", _LINE]
         out.append(
             f"  Deployable {_fmt_amt(fund.get('max_deployable'))} "
             f"(cash {_fmt_amt(fund.get('deployable_from_cash'))} + incoming "
@@ -2264,15 +2327,13 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
             f"{_fmt_amt(fund.get('available_cash'))}"
             + (" [below 5% reserve]" if fund.get("below_safety_floor") else "")
         )
+        out.append("")
+
+    out += [_LINE, "  FUNDED ACTIONS TODAY", _LINE]
     funded = mc.get("funded_actions") or []
     if funded:
         for act in funded[:5]:
-            out.append(
-                f"  - {act.get('presentation_state')} {act.get('symbol')} — "
-                f"{_fmt_amt(act.get('funded_capital'))} ({act.get('funding_source')})"
-            )
-            if act.get("primary_risk"):
-                out.append(f"      risk: {act.get('primary_risk')}")
+            out += _funded_action_line_text(act)
     else:
         out.append("  No funded entries today.")
     out.append("")
@@ -2281,8 +2342,41 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
     if deferred:
         out += [_LINE, "  DEFERRED / BLOCKED OPPORTUNITIES", _LINE]
         for act in deferred[:6]:
-            reason = act.get("blocking_reason") or act.get("presentation_state")
-            out.append(f"  - {act.get('symbol')} — {act.get('presentation_state')} ({reason})")
+            state = act.get("presentation_state")
+            reason = act.get("blocking_reason")
+            suffix = f" ({reason})" if reason and reason != state else ""
+            out.append(f"  - {act.get('symbol')} — {state}{suffix}")
+        out.append("")
+
+    # Capital held back — distinguishes reserve restoration from retained capital.
+    if env.get("status") == "ok":
+        held_reserve = env.get("capital_held_for_reserve") or 0.0
+        held_future = env.get("capital_held_for_future_entries")
+        if held_reserve or held_future:
+            out += [_LINE, "  CAPITAL HELD BACK", _LINE]
+            if held_reserve:
+                out.append(f"  {_fmt_amt(held_reserve)} — RESERVED_FOR_CASH_FLOOR")
+            if held_future:
+                out.append(
+                    f"  {_fmt_amt(held_future)} — "
+                    f"HELD_FOR_PULLBACKS_AND_HIGHER_RANKED_OPPORTUNITIES"
+                )
+            out.append("")
+
+    # Concentration check (degrades honestly when no classification is available).
+    conc = fund.get("concentration") or {}
+    if conc:
+        out += [_LINE, "  CONCENTRATION CHECK", _LINE]
+        if not conc.get("available"):
+            out.append("  Concentration check unavailable: no canonical sector/theme classification.")
+        else:
+            for t in (conc.get("themes") or [])[:3]:
+                out.append(
+                    f"  {t.get('theme')}: {_fmt_amt(t.get('funded_today'))} funded "
+                    f"({t.get('pct_of_today_funded')}% of today, "
+                    f"{t.get('pct_of_net_investable')}% of net investable; "
+                    f"{_fmt_amt(t.get('remaining_under_theme_cap'))} under cap)"
+                )
         out.append("")
 
     main_opp = inv.get("main_opportunity")
@@ -2332,8 +2426,17 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
             out.append(f"- {issue.get('message')}")
         out.append("")
 
-    out += ["## Funded Actions Today", ""]
-    if fund.get("available"):
+    env = fund.get("monthly_envelope") or {}
+    plan_rows = _monthly_plan_rows(env)
+    if plan_rows:
+        out += ["## Monthly Capital Plan", ""]
+        for label, value in plan_rows:
+            out.append(f"- {label}: **{value}**")
+        if env.get("monthly_history_status") and env.get("monthly_history_status") != "ok":
+            out.append(f"- _monthly history: {env.get('monthly_history_status')} — see appendix_")
+        out.append("")
+    elif fund.get("available"):
+        out += ["## Monthly Capital Plan", ""]
         out.append(
             f"- Deployable **{_fmt_amt(fund.get('max_deployable'))}** "
             f"(cash {_fmt_amt(fund.get('deployable_from_cash'))} + incoming "
@@ -2341,15 +2444,27 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
             f"{_fmt_amt(fund.get('available_cash'))}"
             + (" _(below 5% reserve)_" if fund.get("below_safety_floor") else "")
         )
+        out.append("")
+
+    out += ["## Funded Actions Today", ""]
     funded = mc.get("funded_actions") or []
     if funded:
         for act in funded[:5]:
+            state = act.get("status") or act.get("presentation_state")
             out.append(
-                f"- **{act.get('presentation_state')}** `{act.get('symbol')}` — "
-                f"{_fmt_amt(act.get('funded_capital'))} ({act.get('funding_source')})"
+                f"- **{state}** `{act.get('symbol')}` — {_fmt_amt(act.get('funded_capital'))}"
             )
+            if act.get("funding_source"):
+                out.append(f"  - Funding source: {act.get('funding_source').replace('_', ' ')}")
+            if act.get("pct_of_portfolio") is not None:
+                out.append(f"  - Portfolio size: {act.get('pct_of_portfolio')}%")
+            if act.get("pct_of_net_investable") is not None:
+                out.append(f"  - Monthly investable utilization: {act.get('pct_of_net_investable')}%")
             if act.get("primary_risk"):
-                out.append(f"  - risk: {act.get('primary_risk')}")
+                out.append(f"  - Entry condition: {act.get('primary_risk')}")
+            if act.get("held_for_pullback"):
+                out.append(f"  - Next action: no same-day addition; "
+                            f"{_fmt_amt(act.get('held_for_pullback'))} held for pullback")
     else:
         out.append("- _No funded entries today._")
     out.append("")
@@ -2358,8 +2473,36 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
     if deferred:
         out += ["## Deferred / Blocked Opportunities", ""]
         for act in deferred[:6]:
-            reason = act.get("blocking_reason") or act.get("presentation_state")
-            out.append(f"- `{act.get('symbol')}` — **{act.get('presentation_state')}** ({reason})")
+            state = act.get("presentation_state")
+            reason = act.get("blocking_reason")
+            suffix = f" ({reason})" if reason and reason != state else ""
+            out.append(f"- `{act.get('symbol')}` — **{state}**{suffix}")
+        out.append("")
+
+    if env.get("status") == "ok":
+        held_reserve = env.get("capital_held_for_reserve") or 0.0
+        held_future = env.get("capital_held_for_future_entries")
+        if held_reserve or held_future:
+            out += ["## Capital Held Back", ""]
+            if held_reserve:
+                out.append(f"- {_fmt_amt(held_reserve)} — **RESERVED_FOR_CASH_FLOOR**")
+            if held_future:
+                out.append(f"- {_fmt_amt(held_future)} — **HELD_FOR_PULLBACKS_AND_HIGHER_RANKED_OPPORTUNITIES**")
+            out.append("")
+
+    conc = fund.get("concentration") or {}
+    if conc:
+        out += ["## Concentration Check", ""]
+        if not conc.get("available"):
+            out.append("- _Concentration check unavailable: no canonical sector/theme classification._")
+        else:
+            for t in (conc.get("themes") or [])[:3]:
+                out.append(
+                    f"- {t.get('theme')}: {_fmt_amt(t.get('funded_today'))} funded "
+                    f"({t.get('pct_of_today_funded')}% of today, "
+                    f"{t.get('pct_of_net_investable')}% of net investable; "
+                    f"{_fmt_amt(t.get('remaining_under_theme_cap'))} under cap)"
+                )
         out.append("")
 
     main_opp = inv.get("main_opportunity")
