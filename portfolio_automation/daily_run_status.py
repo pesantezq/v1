@@ -537,6 +537,18 @@ def build_daily_run_status(
     artifacts = scan_expected_artifacts(root_path)
     content_liveness = scan_content_liveness(root_path)
 
+    # Phase 1: surface the run manifest so the pipeline status identifies the
+    # exact coherent run (run_id) and whether it completed. Local import keeps
+    # the module import graph acyclic. Observe-only read; degrades to absent.
+    from portfolio_automation.run_manifest import read_manifest, is_complete
+    _manifest = read_manifest(root_path)
+    run_manifest_summary = {
+        "present": _manifest is not None,
+        "run_id": (_manifest or {}).get("run_id"),
+        "status": (_manifest or {}).get("status"),
+        "complete": is_complete(_manifest),
+    }
+
     stage_count = len(stages)
     ok_count = sum(1 for s in stages if s["status"] == "ok")
     warn_count = sum(1 for s in stages if s["status"] == "warn")
@@ -581,6 +593,7 @@ def build_daily_run_status(
         "content_warn_count": content_warn_count,
         "required_missing_count": len(required_missing),
         "optional_missing_count": len(optional_missing),
+        "run_manifest": run_manifest_summary,
         "disclaimer": _DISCLAIMER,
     }
 

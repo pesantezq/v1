@@ -131,6 +131,15 @@ run_aux_stage() {
     fi
 }
 
+# Stage 00 — Run context (Phase 1): write the immutable run manifest
+# (status=running) BEFORE any artifact is produced, so every artifact of this
+# run is traceable to one coherent run_id and the is_complete / coherent_run_ids
+# guards can reject incomplete or mixed-run inputs. A hard mid-run abort leaves
+# the manifest at status=running, which is_complete() correctly rejects.
+# Observe-only; never blocks the pipeline.
+run_aux_stage "Run context (manifest begin)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from datetime import datetime, timezone; from portfolio_automation.run_manifest import begin_run; m = begin_run('.', pipeline_mode='daily', started_at=datetime.now(timezone.utc).isoformat(), config_path='config.json'); print('run_id:', m['run_id'], 'commit:', m['source_commit'], 'cfg:', m['config_hash'][:8])"
+
 # Stage 0 — News intelligence (run BEFORE the daily pipeline so it gets
 # first claim on the FMP budget; one batched call populates the news cache
 # for the rest of the run). Uses portfolio holdings + yesterday's watchlist
@@ -394,3 +403,11 @@ run_aux_stage "Artifact registry governance" \
 # symptom. Observe-only, AMBER-max, never blocks the decision core.
 run_aux_stage "Pipeline wiring probe" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.pipeline_wiring_probe import run_pipeline_wiring_probe; r = run_pipeline_wiring_probe(root='.'); s = r.get('summary') or {}; print('overall:', r.get('overall_status'), 'audited:', s.get('total_audited'), 'unwired:', s.get('unwired'), 'mismatch:', s.get('cadence_mismatch'), 'skipped:', s.get('silently_skipped'), 'empty:', s.get('fresh_but_empty'))"
+
+# Stage 14 — Run context (Phase 1): stamp the manifest complete. Runs LAST so
+# completion means every prior stage finished; is_complete() flips True only
+# here, so a consumer reading outputs/policy/run_manifest.json knows the run is
+# whole (a run that aborts earlier stays status=running -> not complete).
+# Observe-only.
+run_aux_stage "Run context (manifest complete)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from datetime import datetime, timezone; from portfolio_automation.run_manifest import complete_run; m = complete_run('.', completed_at=datetime.now(timezone.utc).isoformat(), status='complete'); print('run_id:', m.get('run_id'), 'status:', m.get('status'))"

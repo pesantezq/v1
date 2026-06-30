@@ -154,3 +154,29 @@ def test_lineage_merges_into_envelope_without_breaking_safety():
     assert env["run_id"] == "r1"
     assert env["producer"] == "p"
     assert env["upstream_refs"] == ["decision_plan.json"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 wiring: daily_run_status surfaces the run manifest (DoD: "pipeline
+# status identifies the exact coherent run")
+# ---------------------------------------------------------------------------
+
+
+def test_daily_run_status_surfaces_run_manifest(tmp_path):
+    from portfolio_automation.daily_run_status import build_daily_run_status
+    (tmp_path / "config.json").write_text("{}")
+    rm.begin_run(tmp_path, pipeline_mode="daily", started_at=_NOW,
+                 config_path=tmp_path / "config.json")
+    payload = build_daily_run_status(root=tmp_path)
+    block = payload["run_manifest"]
+    assert block["present"] is True
+    assert block["run_id"] == "2026-06-30_daily_official"
+    assert block["status"] == "running"
+    assert block["complete"] is False
+
+
+def test_daily_run_status_run_manifest_absent_is_safe(tmp_path):
+    from portfolio_automation.daily_run_status import build_daily_run_status
+    payload = build_daily_run_status(root=tmp_path)
+    assert payload["run_manifest"] == {
+        "present": False, "run_id": None, "status": None, "complete": False}

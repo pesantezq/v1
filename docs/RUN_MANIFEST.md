@@ -76,12 +76,25 @@ artifact; the temp is cleaned up on any failure (no `.tmp` debris).
 - `tests/test_atomic_writes.py` — roundtrip, no temp leftover, and the keystone
   interrupted-`os.replace` test (original intact + temp cleaned).
 
-## Remaining Phase 1 wiring (next commits)
+## Pipeline wiring (DONE)
 
-1. `begin_run()` at the start of `run_daily_safe.sh` + `complete_run()` at the
-   end (records `failure_stage` on early exit) — Phase 12 cadence integration.
-2. Stamp `lineage(...)` onto the critical production artifacts
-   (`decision_plan`, `system_decision_summary`, `risk_delta`, memo).
-3. Extend the artifact-registry validator to check lineage presence + run_id
-   coherence (validate **more than existence**) and surface it in
-   `daily_run_status` / pipeline status.
+- `run_daily_safe.sh` **Stage 00** calls `begin_run()` (status=`running`) right
+  after env load, before any artifact is produced; **Stage 14** calls
+  `complete_run()` (status=`complete`) as the last stage. A hard mid-run abort
+  leaves the manifest at `running`, which `is_complete()` rejects — the
+  complete-run guard needs no extra trap logic.
+- `daily_run_status` surfaces a `run_manifest` block (`present`, `run_id`,
+  `status`, `complete`) so the operator-facing pipeline status **identifies the
+  exact coherent run**. (It runs at Stage 11, before Stage 14, so it honestly
+  reports `running` during the run; the manifest reads `complete` afterward.)
+
+## Remaining Phase 1 items (next slices)
+
+1. Stamp `lineage(...)` onto the non-protected critical artifacts
+   (`system_decision_summary`, `risk_delta`, memo). **`decision_plan` is left
+   manifest-traceable (via `run_id` + `data_as_of`) rather than stamped**, to
+   respect the protected `decision_engine.py` boundary (stamping it would
+   require editing a protected producer — needs explicit operator approval).
+2. Extend the artifact-registry validator to check lineage presence + `run_id`
+   coherence (validate **more than existence**) and register
+   `run_manifest.json` as a declared artifact.
