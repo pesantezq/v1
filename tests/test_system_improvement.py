@@ -233,3 +233,66 @@ def test_summarizer_hook_used_and_falls_back(tmp_path):
     si.write_system_improvement_artifacts(tmp_path, _now(), summarizer=boom)
     brief2 = (tmp_path / "outputs" / "latest" / "system_improvement_brief.md").read_text()
     assert "System Improvement Brief" in brief2
+
+
+# ---------------------------------------------------------------------------
+# Sim-governance lane detector (added 2026-06-30)
+# ---------------------------------------------------------------------------
+
+
+def _promo(tmp_path: Path) -> Path:
+    d = tmp_path / "outputs" / "promotion_review"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def test_detects_heuristic_fallback_review(tmp_path):
+    _promo(tmp_path).joinpath("daily_ai_review_result.json").write_text(json.dumps({
+        "status": "reviewed", "review_method": "heuristic_fallback",
+        "advisory_candidates_reviewed": 61, "watchlist_candidates_reviewed": 5,
+        "estimated_cost_usd": 0.0018, "daily_cost_cap_usd": 0.5,
+    }))
+    payload = si.build_system_improvement(tmp_path, _now())
+    idea = next((i for i in payload["ideas"] if "LLM reviewer" in i["title"]), None)
+    assert idea is not None
+    assert idea["category"] == "observability"
+    assert idea["observe_only"] is True
+
+
+def test_no_idea_when_review_is_llm(tmp_path):
+    _promo(tmp_path).joinpath("daily_ai_review_result.json").write_text(json.dumps({
+        "status": "reviewed", "review_method": "llm",
+        "advisory_candidates_reviewed": 61, "watchlist_candidates_reviewed": 5,
+    }))
+    payload = si.build_system_improvement(tmp_path, _now())
+    assert not any("LLM reviewer" in i["title"] for i in payload["ideas"])
+
+
+def test_detects_advisory_crowd_context_backlog(tmp_path):
+    props = [{"proposal_type": "crowd_context_change", "workflow": "advisory",
+              "proposed_production_change": {"symbol": s, "crowd_context": "confirmed_attention"}}
+             for s in ["GOOG", "GOOGL", "TTWO", "TSLA", "SMCI", "AVGO", "AAPL", "AMZN", "AMD"]]
+    _promo(tmp_path).joinpath("pending_proposals.json").write_text(json.dumps({
+        "pending_count": len(props), "proposals": props}))
+    payload = si.build_system_improvement(tmp_path, _now())
+    idea = next((i for i in payload["ideas"] if "crowd-context" in i["title"]), None)
+    assert idea is not None
+    assert idea["category"] == "sandbox_quality"
+    # never emits a market verb
+    blob = " ".join([idea["title"], idea["summary"], idea["proposed_change"]])
+    assert not re.search(r"\b(buy|sell|hold|trade)\b", blob, re.I)
+
+
+def test_no_backlog_idea_below_threshold(tmp_path):
+    props = [{"proposal_type": "crowd_context_change", "workflow": "advisory",
+              "proposed_production_change": {"symbol": s, "crowd_context": "x"}}
+             for s in ["AAA", "BBB"]]
+    _promo(tmp_path).joinpath("pending_proposals.json").write_text(json.dumps({"proposals": props}))
+    payload = si.build_system_improvement(tmp_path, _now())
+    assert not any("crowd-context" in i["title"] for i in payload["ideas"])
+
+
+def test_sim_governance_detector_graceful_when_absent(tmp_path):
+    _latest(tmp_path)  # no promotion_review dir at all
+    payload = si.build_system_improvement(tmp_path, _now())
+    assert isinstance(payload["ideas"], list)
