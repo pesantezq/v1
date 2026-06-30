@@ -318,6 +318,13 @@
     "idle_cash_threshold": 2000.0,
     "projection_years": 10
   },
+  "daily_memo_capital": {
+    "_comment": "Memo capital-envelope sizing bands. Reserve floor is canonical at portfolio.target_cash_weight (NOT redefined here). Advisory/observe-only; no execution.",
+    "starter_position_pct": 0.005,
+    "standard_position_pct": 0.01,
+    "max_new_position_pct_per_cycle": 0.015,
+    "theme_cap_pct_of_net_investable": 0.40
+  },
   "extended_watchlist": {
     "enabled": true,
     "confidence_threshold": 0.8,

@@ -1006,7 +1006,12 @@ policy — not invented), cash_reserve_amount, max_deployable, deployable_from_c
 deployable_from_incoming, gross_recommended_sized, funded_capital, unfunded_capital,
 funded_count, blocked_count, capital_decision_count, below_safety_floor, funded_actions[],
 blocked_actions[]}`. When `cash_deployment_plan.json` is absent: `{available:false, reason,
-status:"degraded"}`.
+status:"degraded"}`. When the producer emits a `monthly_capital_envelope` (schema v2), `funding`
+also carries `monthly_envelope` (the full envelope, below) and `concentration`; `max_deployable`
+then reflects `monthly_contribution_net_investable` and `funded_actions[*]` carry precise
+statuses (`FUNDED_STARTER`/`FUNDED_STANDARD`), `tranche_type`, `pct_of_portfolio`, and
+`pct_of_net_investable`. Deferred capital decisions read `DEFERRED_BY_MONTHLY_BUDGET` /
+`DEFERRED_BY_THEME_CAP` rather than a blanket `BLOCKED_BY_CASH`.
 
 `actions[*]` adds memo-layer fields to each protected decision (the `decision` field itself is
 unchanged): `presentation_state` (BUY_NOW/STARTER/ADD/ADD_ON_PULLBACK/WATCH/HOLD/TRIM/
@@ -1029,6 +1034,61 @@ Contract notes:
   fabricating values. The top-level `run_memo_coherence` never raises (returns
   `{status:"error", coherence_status:"degraded"}` on unhandled failure).
 - The `.md` sibling (`memo_coherence.md`) is the operator-facing diagnostics appendix.
+
+---
+
+### outputs/latest/cash_deployment_plan.json — monthly_capital_envelope (schema v2)
+
+Namespace: LATEST. Written by `portfolio_automation/cash_deployment_plan.py::run_cash_deployment_plan()`
+(invoked inside `main.py` during the daily pipeline, before Stage 9e). **Observe-only, no_trade,
+advisory.** v2 adds `monthly_capital_envelope` + `concentration` and enriches `deployment_rows`;
+all v1 fields (`cash_summary`, `deployment_rows`, `total_deployed_amount`, `remaining_budget`,
+`summary_line`, `notes`) are preserved for existing consumers (dashboard, memo_coherence).
+
+`monthly_capital_envelope` fields:
+
+| Field | Notes |
+|---|---|
+| `status` | `ok` \| `INSUFFICIENT_CAPITAL_DATA` (missing/zero portfolio value) |
+| `portfolio_value` | reserve **denominator**. Source precedence (read-only): live Schwab snapshot `totals.market_value` (= securities + cash; when `broker_sync_status` authenticated + snapshot fresh) → `decision_plan.portfolio_context.total_portfolio_value` → config. `portfolio_value_source` records which. |
+| `monthly_contribution_gross` | `config.portfolio.monthly_contribution` |
+| `cash_on_hand` | same precedence: Schwab `totals.cash` → `decision_plan.portfolio_context.cash` → `config.portfolio.cash_available`. `cash_source` records which. Read-only; does not enable `broker_aware` or alter the decision engine. |
+| `cash_reserve_target_pct` | canonical `config.portfolio.target_cash_weight` (NOT redefined) |
+| `cash_reserve_target_amount` | `round(reserve_pct × portfolio_value, 2)` |
+| `cash_reserve_shortfall` | `max(0, reserve_target − cash_on_hand)` |
+| `monthly_contribution_net_investable` | `max(0, gross − shortfall)` |
+| `monthly_capital_deployed_before_today` | from the deployment ledger (None if history unavailable) |
+| `capital_funded_today` | sum of funded `deployment_rows` |
+| `monthly_capital_deployed_total` | `before + today` |
+| `monthly_capital_remaining` | `max(0, net − deployed_total)` (None when history unavailable) |
+| `capital_held_for_reserve` | = `cash_reserve_shortfall` |
+| `capital_held_for_future_entries` | = `monthly_capital_remaining` |
+| `monthly_utilization_pct` | `100 × deployed_total / net_investable` |
+| `contribution_cycle{,_start,_end}` | calendar month (`YYYY-MM`, first…last day) |
+| `monthly_history_status` | `ok` \| `partial` (ledger began mid-cycle — prior deployment untracked) \| `unavailable` (read error) |
+| `rollover_behavior` | documented: no rollover — undeployed net-investable stays cash |
+| `calculation_timestamp`, `*_source` | provenance for portfolio/contribution/cash values |
+
+Contribution-cycle ledger: `outputs/policy/monthly_deployment_ledger.jsonl` (POLICY namespace,
+append-only; `{cycle, date, capital_funded, run_id, recorded_at, observe_only, no_trade}`).
+Idempotent via last-wins-per-date read; `deployed_before_today` sums cycle dates strictly before
+today. Never silently assumes zero (see `monthly_history_status`).
+
+`deployment_rows[*]` (v2 additions): `status` (FUNDED_STARTER/FUNDED_STANDARD/
+DEFERRED_BY_MONTHLY_BUDGET/DEFERRED_BY_THEME_CAP/BLOCKED_BY_CASH), `tranche_type`,
+`pct_of_portfolio`, `pct_of_net_investable`, `session_move_pct`, `entry_extended`,
+`held_for_pullback`, `sector`. Legacy `suggested_amount`/`suggested_pct`/`skipped_reason` kept.
+
+Sizing bands (config `daily_memo_capital`, with documented fallbacks): `starter_position_pct`
+(0.005), `standard_position_pct` (0.01), `max_new_position_pct_per_cycle` (0.015),
+`theme_cap_pct_of_net_investable` (0.40). Allocation runs within `monthly_capital_remaining`
+(not the full net every day). Extended entries (session move ≥ 8%) fund a starter tranche and
+record the remainder as `held_for_pullback`.
+
+`concentration`: `{available, theme_cap_pct_of_net_investable, theme_cap_amount,
+total_funded_today, classification_coverage, themes[]}` or `{available:false,
+reason:"no_canonical_sector_theme_classification"}` when no sector map is available (sourced
+read-only from `data/fmp_cache/profile_stable_*.json`; never inferred from ticker names).
 
 ---
 

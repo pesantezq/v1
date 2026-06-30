@@ -315,6 +315,12 @@ def build_candidates(
             "risk_flags": list(risk_flags),
             "entry_move_pct": move,
             "entry_extended": entry_extended,
+            # Explicit, unambiguous metric basis (not free prose). The decision
+            # reason reports the current-session return ("momentum: +X% today").
+            "entry_metric": ("session_return_pct" if move is not None else None),
+            "entry_metric_value": move,
+            "entry_metric_basis": ("current session return from decision_plan reason"
+                                   if move is not None else None),
             "primary_thesis": (d.get("reason") or d.get("decision_reason") or "").strip()[:200] or None,
             "primary_risk": _primary_risk(risk_flags, entry_extended, move),
             "why": structured.get("why") or [],
@@ -326,7 +332,8 @@ def build_candidates(
 
 def _primary_risk(risk_flags: list, entry_extended: bool, move: Optional[float]) -> Optional[str]:
     if entry_extended and move is not None:
-        return f"Extended +{move:.1f}% today — entry risk elevated; prefer starter/pullback."
+        # Explicit metric basis (session return), not the ambiguous word "today".
+        return f"Session move: +{move:.1f}% — entry risk elevated; prefer starter/pullback."
     if "degraded_data" in risk_flags:
         return "Degraded input data — lower conviction."
     if "low_confidence" in risk_flags:
@@ -353,6 +360,8 @@ def compute_funding(sources: dict[str, Any], candidates: list[dict[str, Any]]) -
 
     cash_summary = cdp.get("cash_summary") or {}
     rows = cdp.get("deployment_rows") or []
+    envelope = cdp.get("monthly_capital_envelope") or {}
+    concentration = cdp.get("concentration") or {}
     portfolio_value = _f(cash_summary.get("portfolio_value"))
     cash_available = _f(cash_summary.get("cash_available"))
     target_cash_pct = _f(cash_summary.get("target_cash_pct"), 0.05)
@@ -374,7 +383,6 @@ def compute_funding(sources: dict[str, Any], candidates: list[dict[str, Any]]) -
     gross_known = 0.0
     cumulative = 0.0
 
-    # funded set = deployment rows with amount>0 and no skipped_reason
     sorted_rows = sorted(
         [r for r in rows if isinstance(r, dict)],
         key=lambda r: _f(r.get("priority")),
@@ -383,10 +391,16 @@ def compute_funding(sources: dict[str, Any], candidates: list[dict[str, Any]]) -
     for r in sorted_rows:
         amt = _f(r.get("suggested_amount"))
         sym = r.get("symbol")
-        skipped = r.get("skipped_reason")
+        # Precise status from the envelope-aware allocator (falls back to legacy
+        # skipped_reason string for older artifacts).
+        status = r.get("status") or r.get("skipped_reason")
         gross_known += amt
-        if skipped or amt <= 0:
-            blocked.append({"symbol": sym, "requested_capital": amt, "blocking_reason": skipped or "zero_size"})
+        if amt <= 0:
+            blocked.append({
+                "symbol": sym, "requested_capital": amt,
+                "blocking_reason": status or "zero_size",
+                "status": status or "BLOCKED_BY_CASH",
+            })
             continue
         cumulative += amt
         source_tag = "cash_on_hand" if cumulative <= cash_on_hand_deployable + 1e-6 else "incoming_contributions"
@@ -397,25 +411,42 @@ def compute_funding(sources: dict[str, Any], candidates: list[dict[str, Any]]) -
             "funding_source": source_tag,
             "priority": round(_f(r.get("priority")), 4),
             "conviction_band": r.get("conviction_band"),
+            "status": status,
+            "tranche_type": r.get("tranche_type"),
+            "pct_of_portfolio": r.get("pct_of_portfolio"),
+            "pct_of_net_investable": r.get("pct_of_net_investable"),
+            "held_for_pullback": r.get("held_for_pullback"),
+            "sector": r.get("sector"),
         })
 
-    # capital decisions in the plan but NOT in deployment rows → ranked out / unfunded
+    # capital decisions in the plan but NOT in deployment rows → ranked out / unfunded.
+    # With a monthly envelope present this is a budget/rank deferral, not cash blockage.
+    has_envelope = bool(envelope) and envelope.get("status") == "ok"
+    unfunded_status = "DEFERRED_BY_MONTHLY_BUDGET" if has_envelope else "beyond_deployment_budget"
     deferred_unsized: list[dict] = []
     for sym in sorted(capital_symbols - set(row_by_symbol.keys()), key=lambda s: str(s)):
-        deferred_unsized.append({"symbol": sym, "requested_capital": None, "blocking_reason": "beyond_deployment_budget"})
+        deferred_unsized.append({
+            "symbol": sym, "requested_capital": None,
+            "blocking_reason": unfunded_status, "status": unfunded_status,
+        })
 
     funded_capital = round(funded_capital, 2)
     gross_known = round(gross_known, 2)
     unfunded_capital = round(max(0.0, gross_known - funded_capital), 2)
 
-    return {
+    # Prefer the canonical monthly envelope's net-investable as the deployable
+    # ceiling; fall back to the legacy total_deployable.
+    max_deployable = _f(envelope.get("monthly_contribution_net_investable"), total_deployable) \
+        if has_envelope else round(total_deployable, 2)
+
+    result = {
         "available": True,
         "status": "ok" if not below_floor else "warning",
         "portfolio_value": round(portfolio_value, 2),
         "available_cash": round(cash_available, 2),
         "cash_reserve_pct": target_cash_pct,
         "cash_reserve_amount": reserve_amount,
-        "max_deployable": round(total_deployable, 2),
+        "max_deployable": round(max_deployable, 2),
         "deployable_from_cash": cash_on_hand_deployable,
         "deployable_from_incoming": incoming_deployable,
         "gross_recommended_sized": gross_known,
@@ -433,6 +464,12 @@ def compute_funding(sources: dict[str, Any], candidates: list[dict[str, Any]]) -
             if incoming_deployable > 0 else None
         ),
     }
+    # Surface the full monthly capital envelope + concentration for the memo.
+    if envelope:
+        result["monthly_envelope"] = envelope
+    if concentration:
+        result["concentration"] = concentration
+    return result
 
 
 def _blocking_reason_for(symbol: Any, funding: dict[str, Any]) -> Optional[str]:
@@ -462,6 +499,27 @@ def _funding_source_for(symbol: Any, funding: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _precise_status_for(symbol: Any, funding: dict[str, Any]) -> Optional[str]:
+    """Return the envelope-aware precise status for a symbol, if any."""
+    if not funding.get("available"):
+        return None
+    for bucket in ("funded_actions", "blocked_actions"):
+        for r in funding.get(bucket) or []:
+            if r.get("symbol") == symbol and r.get("status"):
+                return r.get("status")
+    return None
+
+
+def _funded_row_for(symbol: Any, funding: dict[str, Any]) -> dict[str, Any]:
+    """Return the funding funded-row (per-position sizing fields) for a symbol."""
+    if not funding.get("available"):
+        return {}
+    for r in funding.get("funded_actions") or []:
+        if r.get("symbol") == symbol:
+            return r
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # 3b. finalize action records (presentation_state needs funding)
 # ---------------------------------------------------------------------------
@@ -487,22 +545,34 @@ def finalize_actions(candidates: list[dict[str, Any]], funding: dict[str, Any]) 
             else:
                 block_class = "cash"
         sandbox = (c.get("source") in {"sandbox", "discovery", "crowd"})
-        state = derive_presentation_state(
-            decision,
-            band=c.get("band") or "",
-            funded=funded,
-            blocking_reason=block_class,
-            entry_extended=bool(c.get("entry_extended")),
-            degraded=bool(c.get("_degraded")),
-            sandbox=sandbox,
-        )
+        # Prefer the precise monthly-envelope status when the capital layer
+        # produced one (FUNDED_STARTER / DEFERRED_BY_MONTHLY_BUDGET / ...).
+        precise = _precise_status_for(sym, funding) if is_capital else None
+        if precise and not sandbox and not c.get("_degraded"):
+            state = precise
+        else:
+            state = derive_presentation_state(
+                decision,
+                band=c.get("band") or "",
+                funded=funded,
+                blocking_reason=block_class,
+                entry_extended=bool(c.get("entry_extended")),
+                degraded=bool(c.get("_degraded")),
+                sandbox=sandbox,
+            )
         entry_ctx = "extended" if c.get("entry_extended") else ("normal" if c.get("entry_move_pct") is not None else "unknown")
         rec = {k: v for k, v in c.items() if not k.startswith("_")}
+        frow = _funded_row_for(sym, funding) if funded else {}
         rec.update({
             "presentation_state": state,
             "requested_capital": funded_amt if funded else (None if not is_capital else 0.0),
             "funded_capital": funded_amt if funded else (0.0 if is_capital else None),
             "funding_source": _funding_source_for(sym, funding) if funded else None,
+            # per-position sizing carried from the monthly-envelope funding row
+            "pct_of_portfolio": frow.get("pct_of_portfolio"),
+            "pct_of_net_investable": frow.get("pct_of_net_investable"),
+            "tranche_type": frow.get("tranche_type"),
+            "held_for_pullback": frow.get("held_for_pullback"),
             "blocking_reason": block_reason_raw,
             "entry_context": entry_ctx,
             "eligibility": "sandbox" if sandbox else "advisory",

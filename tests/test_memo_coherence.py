@@ -279,8 +279,12 @@ class TestEntryContext:
         panw = next(a for a in r["actions"] if a["symbol"] == "PANW")  # +9.14%
         assert panw["entry_extended"] is True
         assert panw["entry_context"] == "extended"
-        assert panw["presentation_state"] in {"STARTER", "ADD_ON_PULLBACK"}
-        assert "Extended" in (panw["primary_risk"] or "")
+        assert panw["presentation_state"] in {"STARTER", "ADD_ON_PULLBACK", "FUNDED_STARTER"}
+        # Extension language must name its metric basis (no ambiguous "today").
+        assert "Session move" in (panw["primary_risk"] or "")
+        assert "today" not in (panw["primary_risk"] or "")
+        assert panw["entry_metric"] == "session_return_pct"
+        assert panw["entry_metric_basis"]
 
     def test_entry_normal_no_warning(self):  # AC18
         r = mc.build_memo_coherence(_sources())

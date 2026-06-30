@@ -195,7 +195,8 @@ def test_build_plan_envelope():
     assert plan["total_deployed_amount"] == 500.0
     assert plan["remaining_budget"] == 500.0
     assert plan["notes"] == ["hello"]
-    assert plan["schema_version"] == "1"
+    # schema v2 adds monthly_capital_envelope + concentration (additive; v1 fields kept)
+    assert plan["schema_version"] == "2"
 
 
 # ---------------------------------------------------------------------------

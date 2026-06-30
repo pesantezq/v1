@@ -231,3 +231,31 @@ honest degraded states. No renderer makes network calls.
 - Deterministic fallbacks preserved; degraded inputs → honest degraded states.
 - Reuses existing reserve policy, ±1% band, correlation advisor, sector mapping,
   probe registry, data-governance writers — no parallel system.
+
+---
+
+## 6. Follow-up shipped: Monthly Capital Envelope (2026-06-30)
+
+Funding was upgraded from "full net-investable deployable every day" to a **monthly capital
+envelope** in the canonical capital producer (`cash_deployment_plan.py`, schema v1→v2) — not a
+parallel engine.
+
+- **Formulas (amount-based, decimal-safe).** `reserve_target = reserve_pct × portfolio_value`;
+  `reserve_shortfall = max(0, reserve_target − cash_on_hand)`;
+  `net_investable = max(0, gross_contribution − reserve_shortfall)`;
+  `remaining = max(0, net_investable − deployed_before_today − funded_today)`.
+- **Reserve denominator** = `portfolio_value`; reserve % is canonical `portfolio.target_cash_weight`.
+- **Cycle** = calendar month; **no rollover**. Prior deployment from an append-only ledger
+  (`outputs/policy/monthly_deployment_ledger.jsonl`), idempotent via last-wins-per-date.
+- **Degraded**: `INSUFFICIENT_CAPITAL_DATA`; `monthly_history_status` ok/partial/unavailable —
+  never silently assumes zero prior deployment.
+- **New statuses** replace blanket `BLOCKED_BY_CASH`: FUNDED_STARTER/FUNDED_STANDARD/
+  RESERVED_FOR_CASH_FLOOR/HELD_FOR_PULLBACK/DEFERRED_BY_MONTHLY_BUDGET/DEFERRED_BY_THEME_CAP/…
+- **Config** `config.daily_memo_capital`: starter 0.005, standard 0.01, max/cycle 0.015,
+  theme cap 0.40 of net investable.
+- **Memo**: Monthly Capital Plan, Funded Actions (% of portfolio + % of net investable + tranche
+  + entry basis), Capital Held Back, Concentration Check (honest degrade). Extension language now
+  names its basis ("Session move: +X%"), never "today".
+
+Full field-level contract: `docs/OUTPUT_ARTIFACT_CONTRACTS.md` →
+`cash_deployment_plan.json — monthly_capital_envelope (schema v2)`.

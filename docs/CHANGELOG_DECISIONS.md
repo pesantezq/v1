@@ -69,6 +69,77 @@ Explicitly note:
 
 ---
 
+## Monthly Capital Envelope for the Daily Memo
+
+### Date
+
+`2026-06-30`
+
+### Area
+
+- output_contract
+- architecture
+
+### Files / Functions
+
+- `portfolio_automation/cash_deployment_plan.py` — `compute_monthly_envelope`,
+  `contribution_cycle`, ledger helpers (`read_deployment_ledger`/`resolve_prior_deployment`/
+  `append_deployment_ledger`), `capital_config`, `allocate_within_envelope`,
+  `compute_concentration`, `_sector_map_from_cache`; `build_plan`/`run_cash_deployment_plan`
+  emit the envelope (schema v1→v2).
+- `portfolio_automation/memo_coherence.py` — `compute_funding` consumes the envelope +
+  precise statuses; explicit extension-metric basis (no ambiguous "today").
+- `watchlist_scanner/daily_memo.py` — Monthly Capital Plan / Funded Actions (per-position %) /
+  Capital Held Back / Concentration Check sections.
+- `config.json` — `daily_memo_capital` sizing bands + theme cap (reserve stays
+  `portfolio.target_cash_weight`).
+- New: `tests/test_monthly_capital_envelope.py` (32). New ledger:
+  `outputs/policy/monthly_deployment_ledger.jsonl`.
+
+### Decision
+
+The memo now manages a **monthly capital envelope** instead of treating the full incoming
+contribution as deployable every day. It distinguishes gross contribution, reserve restoration,
+net investable, deployed-before-today (from an append-only contribution-cycle ledger), funded
+today, remaining, and capital held for reserve vs future entries; sizes each funded position as
+a % of portfolio and of net investable; replaces blanket `BLOCKED_BY_CASH` with precise statuses
+(`DEFERRED_BY_MONTHLY_BUDGET`, `RESERVED_FOR_CASH_FLOOR`, `HELD_FOR_PULLBACK`, …); adds a
+theme-concentration check; and labels entry-extension by its metric basis.
+
+Formulas (amount-based, decimal-safe): `reserve_target = reserve_pct × portfolio_value`;
+`shortfall = max(0, reserve_target − cash)`; `net_investable = max(0, gross − shortfall)`;
+`remaining = max(0, net_investable − deployed_before_today − funded_today)`. Reserve denominator
+= **portfolio_value**. Contribution cycle = calendar month; **no rollover** (undeployed capital
+stays cash). Allocation runs within the **remaining** envelope, not the full net each day.
+
+### Why
+
+The memo previously reported the full net-investable as deployable daily and labeled deferred
+recommendations `BLOCKED_BY_CASH` even when capital was merely reserved or withheld by policy.
+
+### Invariants Preserved
+
+- Advisory only; `observe_only`/`no_trade` hardcoded. No scoring/ranking/decision changes; no
+  broker orders; no production promotion. Reserve stays canonical at `target_cash_weight` (not
+  duplicated). cash_deployment_plan v2 is additive — all v1 fields preserved for the dashboard +
+  memo_coherence. Missing data degrades explicitly (`INSUFFICIENT_CAPITAL_DATA`,
+  `monthly_history_status: partial|unavailable`); never silently assumes zero prior deployment.
+
+### Downstream Impact
+
+- `cash_deployment_plan.json` schema_version "1"→"2" (+`monthly_capital_envelope`,
+  +`concentration`, enriched rows). New `monthly_deployment_ledger.jsonl`. Memo gains four
+  investor sections. `memo_coherence` funding surfaces the envelope. Tests updated for the
+  schema bump + new extension language.
+
+### Artifact Health Severity
+
+- v2 fields are additive; `missing_artifact_count` unaffected. Envelope absence (old artifact)
+  → memo falls back to the legacy deployable line. Owner step: `main.py` daily pipeline
+  (cash_deployment_plan), consumed by Stage 9e/10.
+
+---
+
 ## Daily Memo Decision-Coherence Reconciliation Layer
 
 ### Date

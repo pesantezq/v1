@@ -186,6 +186,7 @@ section "Compile Check"
 python -m py_compile \
     main.py fmp_client.py fmp_endpoint_registry.py fmp_endpoint_compliance.py \
     portfolio_automation/risk_delta_advisor.py \
+    portfolio_automation/cash_deployment_plan.py \
     portfolio_automation/retune_impact_tracker.py \
     portfolio_automation/fmp_budget_telemetry.py \
     portfolio_automation/daily_run_status.py \
