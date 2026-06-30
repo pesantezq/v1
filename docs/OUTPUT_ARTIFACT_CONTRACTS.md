@@ -1050,9 +1050,9 @@ all v1 fields (`cash_summary`, `deployment_rows`, `total_deployed_amount`, `rema
 | Field | Notes |
 |---|---|
 | `status` | `ok` \| `INSUFFICIENT_CAPITAL_DATA` (missing/zero portfolio value) |
-| `portfolio_value` | reserve **denominator**; from `decision_plan.portfolio_context.total_portfolio_value` |
+| `portfolio_value` | reserve **denominator**. Source precedence (read-only): live Schwab snapshot `totals.market_value` (= securities + cash; when `broker_sync_status` authenticated + snapshot fresh) → `decision_plan.portfolio_context.total_portfolio_value` → config. `portfolio_value_source` records which. |
 | `monthly_contribution_gross` | `config.portfolio.monthly_contribution` |
-| `cash_on_hand` | `config.portfolio.cash_available` |
+| `cash_on_hand` | same precedence: Schwab `totals.cash` → `decision_plan.portfolio_context.cash` → `config.portfolio.cash_available`. `cash_source` records which. Read-only; does not enable `broker_aware` or alter the decision engine. |
 | `cash_reserve_target_pct` | canonical `config.portfolio.target_cash_weight` (NOT redefined) |
 | `cash_reserve_target_amount` | `round(reserve_pct × portfolio_value, 2)` |
 | `cash_reserve_shortfall` | `max(0, reserve_target − cash_on_hand)` |

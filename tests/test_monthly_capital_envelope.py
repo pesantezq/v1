@@ -279,6 +279,71 @@ def _setup_outputs(tmp_path, *, contribution=758.0, cash=151.0, pv=7851.97):
     return base
 
 
+class TestCapitalBasis:
+    """portfolio_value + cash_on_hand prefer the live read-only Schwab snapshot."""
+
+    def _write_schwab(self, base, *, ts, authed=True, mv=10544.53, cash=3150.6):
+        latest = base / "latest"
+        latest.mkdir(parents=True, exist_ok=True)
+        (latest / "schwab_portfolio_snapshot.json").write_text(json.dumps({
+            "snapshot_timestamp": ts, "generated_at": ts,
+            "totals": {"market_value": mv, "cash": cash},
+        }))
+        (latest / "broker_sync_status.json").write_text(json.dumps({
+            "authenticated": authed, "overall_status": "ok" if authed else "error",
+        }))
+
+    def test_prefers_fresh_authed_schwab(self):
+        import tempfile
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "outputs"
+            now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+            self._write_schwab(base, ts="2026-06-30T09:00:00+00:00")
+            dp = {"portfolio_context": {"total_portfolio_value": 7851.97, "cash": 464.16}}
+            pv, cash, pv_src, cash_src = cdp.resolve_capital_basis(base, dp, {}, now)
+            assert pv == pytest.approx(10544.53, abs=TOL)
+            assert cash == pytest.approx(3150.6, abs=TOL)
+            assert pv_src == "schwab_snapshot" and cash_src == "schwab_snapshot"
+
+    def test_stale_schwab_falls_to_context(self):
+        import tempfile
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "outputs"
+            now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+            self._write_schwab(base, ts="2026-06-01T00:00:00+00:00")  # >24h stale
+            dp = {"portfolio_context": {"total_portfolio_value": 7851.97, "cash": 464.16}}
+            pv, cash, pv_src, cash_src = cdp.resolve_capital_basis(base, dp, {}, now)
+            assert pv == pytest.approx(7851.97, abs=TOL)
+            assert cash == pytest.approx(464.16, abs=TOL)
+            assert pv_src == "decision_plan.portfolio_context"
+
+    def test_unauthed_schwab_falls_to_context(self):
+        import tempfile
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "outputs"
+            now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+            self._write_schwab(base, ts="2026-06-30T09:00:00+00:00", authed=False)
+            dp = {"portfolio_context": {"total_portfolio_value": 7851.97, "cash": 464.16}}
+            pv, _, pv_src, _ = cdp.resolve_capital_basis(base, dp, {}, now)
+            assert pv == pytest.approx(7851.97, abs=TOL)
+            assert pv_src == "decision_plan.portfolio_context"
+
+    def test_no_broker_no_context_uses_config(self):
+        import tempfile
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d) / "outputs"
+            (base / "latest").mkdir(parents=True)
+            now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+            cfg = {"portfolio": {"cash_available": 150.6}}
+            pv, cash, pv_src, cash_src = cdp.resolve_capital_basis(base, {}, cfg, now)
+            assert cash == pytest.approx(150.6, abs=TOL)
+            assert cash_src == "config.portfolio.cash_available"
+
+
 class TestEndToEnd:
     def test_run_writes_envelope_and_is_idempotent(self, tmp_path):
         base = _setup_outputs(tmp_path)

@@ -797,6 +797,60 @@ def _portfolio_value_from_context(
     return cash
 
 
+# Broker snapshot considered fresh within this window (mirrors holdings_resolver).
+_BROKER_STALE_AFTER_S = 24 * 3600
+
+
+def _snapshot_fresh(snapshot: dict[str, Any], now: datetime) -> bool:
+    ts = snapshot.get("snapshot_timestamp") or snapshot.get("generated_at")
+    if not ts or not isinstance(ts, str):
+        return False
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (now - dt).total_seconds() <= _BROKER_STALE_AFTER_S
+    except ValueError:
+        return False
+
+
+def resolve_capital_basis(
+    base_dir: Path,
+    decision_plan_payload: dict[str, Any],
+    cfg: dict[str, Any],
+    now: datetime,
+) -> tuple[float, float, str, str]:
+    """Resolve (portfolio_value, cash_on_hand, pv_source, cash_source) for the
+    advisory capital envelope, preferring the LIVE read-only Schwab snapshot.
+
+    Precedence (read-only; never enables broker_aware, never feeds decision_plan):
+      1. Schwab snapshot totals (authenticated + fresh) — totals.market_value is
+         the TOTAL account value (securities + cash); totals.cash is cash on hand.
+      2. decision_plan.portfolio_context (total_portfolio_value + cash) — the
+         basis the live decision pipeline actually used.
+      3. config.portfolio (cash_available).
+    """
+    latest = Path(base_dir) / "latest"
+    snap = _load_json_safe(latest / "schwab_portfolio_snapshot.json")
+    sync = _load_json_safe(latest / "broker_sync_status.json")
+    totals = (snap.get("totals") or {}) if isinstance(snap, dict) else {}
+    authed = bool(sync.get("authenticated")) and _safe_str(sync.get("overall_status")) == "ok"
+    pv_b = _safe_float(totals.get("market_value"))
+    cash_b = _safe_float(totals.get("cash"))
+    if authed and _snapshot_fresh(snap, now) and pv_b and pv_b > 0 and cash_b is not None:
+        return round(pv_b, 2), round(cash_b, 2), "schwab_snapshot", "schwab_snapshot"
+
+    pc = decision_plan_payload.get("portfolio_context") or {}
+    pv = _safe_float(pc.get("total_portfolio_value"))
+    cash_ctx = _safe_float(pc.get("cash"))
+    cfg_cash = _safe_float((cfg.get("portfolio") or {}).get("cash_available")) or 0.0
+    if pv and pv > 0:
+        if cash_ctx is not None:
+            return round(pv, 2), round(cash_ctx, 2), "decision_plan.portfolio_context", "decision_plan.portfolio_context"
+        return round(pv, 2), round(cfg_cash, 2), "decision_plan.portfolio_context", "config.portfolio.cash_available"
+    return round(cfg_cash, 2), round(cfg_cash, 2), "config.portfolio.cash_available", "config.portfolio.cash_available"
+
+
 def run_cash_deployment_plan(
     repo_root: Path | str,
     *,
@@ -816,11 +870,15 @@ def run_cash_deployment_plan(
 
     portfolio_cfg = cfg.get("portfolio") or {}
     monthly_contribution = _safe_float(portfolio_cfg.get("monthly_contribution")) or 0.0
-    cash_available = _safe_float(portfolio_cfg.get("cash_available")) or 0.0
     target_cash_pct = _safe_float(portfolio_cfg.get("target_cash_weight")) or _DEFAULT_TARGET_CASH
     bands = capital_config(cfg)
 
-    portfolio_value = _portfolio_value_from_context(decision_plan_payload, cfg)
+    # Prefer the LIVE read-only Schwab balance for the advisory capital view, so
+    # the memo + dashboard reflect the broker, not stale config. Read-only;
+    # does not enable broker_aware or change the decision engine.
+    portfolio_value, cash_available, pv_source, cash_source = resolve_capital_basis(
+        base_dir, decision_plan_payload, cfg, datetime.now(timezone.utc)
+    )
 
     # Legacy cash_summary block (kept for backward-compat consumers).
     cash_summary = compute_available_cash(
@@ -900,6 +958,8 @@ def run_cash_deployment_plan(
         capital_funded_today=capital_funded_today,
         cycle_id=cycle_id, cycle_start=cycle_start, cycle_end=cycle_end,
         monthly_history_status=history_status,
+        portfolio_value_source=pv_source,
+        cash_source=cash_source,
     )
 
     concentration = compute_concentration(
