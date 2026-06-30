@@ -204,6 +204,13 @@ run_aux_stage "System decision summary" \
 run_aux_stage "Risk delta panel" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.risk_delta_advisor import run_risk_delta_advisor; r = run_risk_delta_advisor(root='.'); print('status:', r.get('status'), 'overall:', r.get('overall_status'), 'top_pos:', (r.get('concentration_top') or {}).get('symbol'), 'lev:', r.get('leverage_exposure'), 'var_pct:', r.get('var_pct'))"
 
+# Stage 7b2 — Scenario risk (Phase 11): deterministic stress illustrations
+# (broad/nasdaq/semis/vol/rate/gold/liquidity) on the current weights — NOT
+# forecasts. Reads risk_delta weights; ETF look-through is not fabricated.
+# Observe-only.
+run_aux_stage "Scenario risk" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.scenario_risk import build_scenario_risk; r = build_scenario_risk('.'); print('degraded:', r.get('degraded'), 'positions:', r.get('n_positions'), 'worst:', r.get('worst_case_scenario'))"
+
 # Stage 7c — Retune impact tracker (gauge fingerprint vs baseline).
 run_aux_stage "Retune impact tracker" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.retune_impact_tracker import run_retune_impact_tracker; r = run_retune_impact_tracker(root='.'); print('fingerprint:', r.get('fingerprint'), 'changes:', r.get('changes_count'), 'appended:', r.get('history_row_appended'))"
