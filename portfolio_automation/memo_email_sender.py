@@ -90,6 +90,23 @@ def _env_str(name: str, default: str = "", env: dict[str, str] | None = None) ->
     return (env or os.environ).get(name, default).strip()
 
 
+def _env_str_fallback(names: "list[str] | tuple[str, ...]", default: str = "",
+                      env: dict[str, str] | None = None) -> str:
+    """Return the first non-empty value among *names*, else *default*.
+
+    Used so memo email can fall back to the system-wide generic mail config
+    (``SMTP_SERVER`` / ``EMAIL_USER`` / ``EMAIL_PASS`` / ``EMAIL_TO`` — the same
+    vars the Schwab re-auth notifier and ``tools/notify_status.py`` already use)
+    when the dedicated ``MEMO_EMAIL_*`` overrides are not set. The dedicated
+    name always wins when present, so existing configs are unchanged.
+    """
+    for name in names:
+        value = _env_str(name, "", env)
+        if value:
+            return value
+    return default
+
+
 def _parse_addrs(raw: str) -> list[str]:
     """Split comma- or semicolon-separated address string; drop blank entries."""
     if not raw:
@@ -144,14 +161,19 @@ def load_memo_email_config(
 
     The password is read but never logged or written to any artifact.
     """
+    # `enabled` is INTENTIONALLY gated on MEMO_EMAIL_ENABLED only — the presence
+    # of the system-wide generic mail config must never silently start emailing
+    # the memo. Only the transport/credentials/recipients fall back to the
+    # generic names; turning memo email on stays a deliberate opt-in.
     cfg = MemoEmailConfig(
         enabled=_env_bool("MEMO_EMAIL_ENABLED", False, env),
         dry_run=_env_bool("MEMO_EMAIL_DRY_RUN", True, env),
-        smtp_host=_env_str("MEMO_EMAIL_SMTP_HOST", "", env),
-        smtp_port=int(_env_str("MEMO_EMAIL_SMTP_PORT", "587", env) or "587"),
-        username=_env_str("MEMO_EMAIL_USERNAME", "", env),
-        from_addr=_env_str("MEMO_EMAIL_FROM", "", env),
-        to_addrs=_parse_addrs(_env_str("MEMO_EMAIL_TO", "", env)),
+        smtp_host=_env_str_fallback(["MEMO_EMAIL_SMTP_HOST", "SMTP_SERVER"], "", env),
+        smtp_port=int(_env_str_fallback(["MEMO_EMAIL_SMTP_PORT", "SMTP_PORT"], "587", env) or "587"),
+        username=_env_str_fallback(["MEMO_EMAIL_USERNAME", "EMAIL_USER"], "", env),
+        # from defaults to the authenticated username when not set explicitly.
+        from_addr=_env_str_fallback(["MEMO_EMAIL_FROM", "EMAIL_USER"], "", env),
+        to_addrs=_parse_addrs(_env_str_fallback(["MEMO_EMAIL_TO", "EMAIL_TO"], "", env)),
         cc_addrs=_parse_addrs(_env_str("MEMO_EMAIL_CC", "", env)),
         bcc_addrs=_parse_addrs(_env_str("MEMO_EMAIL_BCC", "", env)),
         use_tls=_env_bool("MEMO_EMAIL_USE_TLS", True, env),
@@ -159,7 +181,7 @@ def load_memo_email_config(
         strict_failure=_env_bool("MEMO_EMAIL_STRICT_FAILURE", False, env),
         force_resend=_env_bool("MEMO_EMAIL_FORCE_RESEND", False, env),
     )
-    cfg.password = _env_str("MEMO_EMAIL_PASSWORD", "", env)
+    cfg.password = _env_str_fallback(["MEMO_EMAIL_PASSWORD", "EMAIL_PASS"], "", env)
     return cfg
 
 
