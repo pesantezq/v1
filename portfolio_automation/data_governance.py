@@ -23,7 +23,9 @@ marking where the migration should happen.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -238,7 +240,24 @@ def safe_write_text(
     out_path = get_output_path(namespace, filename, user_id=user_id, base_dir=base_dir)
     validate_output_path(namespace, out_path, user_id=user_id, base_dir=base_dir)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(content, encoding=encoding)
+    # Atomic write (Phase 1): serialize to a temp file in the SAME directory,
+    # then os.replace() — an interrupted write never leaves a valid-looking
+    # partial artifact and never clobbers a prior good artifact. The temp is
+    # cleaned up on any failure so no ``.tmp`` debris is left behind.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(out_path.parent), prefix=f".{out_path.name}.", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(content)
+        os.replace(tmp_name, out_path)
+    except BaseException:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return out_path
 
 

@@ -58,6 +58,40 @@ def observe_only_envelope(generated_at: str, **extra: Any) -> dict[str, Any]:
     return env
 
 
+def lineage(
+    *,
+    run_id: str,
+    data_as_of: str,
+    producer: str,
+    source_commit: str,
+    config_hash: str,
+    upstream_refs: list[str] | None = None,
+    quality: str = "ok",
+    freshness: str = "fresh",
+) -> dict[str, Any]:
+    """Canonical artifact-lineage fields (Phase 1).
+
+    Splat into :func:`observe_only_envelope` so every critical artifact is
+    traceable to its run + provenance::
+
+        env = observe_only_envelope(now, **lineage(run_id=..., data_as_of=...,
+              producer="decision_engine", source_commit=sha, config_hash=h))
+
+    Pure: no I/O, no clock. Defaults keep the keys present (``upstream_refs``
+    becomes ``[]``, not ``None``) so consumers can rely on the shape.
+    """
+    return {
+        "run_id": run_id,
+        "data_as_of": data_as_of,
+        "producer": producer,
+        "source_commit": source_commit,
+        "config_hash": config_hash,
+        "upstream_refs": list(upstream_refs or []),
+        "quality": quality,
+        "freshness": freshness,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Artifact contract descriptor
 # ---------------------------------------------------------------------------
