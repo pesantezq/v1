@@ -312,6 +312,86 @@ def detect_roadmap_alignment(root: Path) -> list[dict[str, Any]]:
         impact=0.6, urgency=0.4, effort=0.6)]
 
 
+def detect_from_sim_governance(root: Path) -> list[dict[str, Any]]:
+    """Sim-governance lane health → improvement ideas (observe-only).
+
+    Two conditions, both surfaced from the lane's own artifacts:
+
+    1. The daily consolidated AI/product review runs the deterministic
+       heuristic fallback rather than the LLM reviewer. The ``reviewer=`` seam
+       threads cleanly from ``run_daily_governance`` to ``run_daily_ai_review``,
+       but the production entrypoint (``run_daily_safe.sh`` Stage 10e) calls
+       ``run_daily_governance('.')`` with no reviewer, so promotion verdicts
+       carry no model judgment.
+    2. Advisory ``crowd_context_change`` proposals accumulate as pending — a
+       fast-refreshing daily signal (crowd_state flips day to day) routed
+       through a slow, permanent human-approval gate.
+    """
+    out: list[dict[str, Any]] = []
+
+    review = _load_json_safe(root / "outputs" / "promotion_review" / "daily_ai_review_result.json")
+    if isinstance(review, dict) and review.get("status") == "reviewed":
+        method = str(review.get("review_method") or "")
+        reviewed = (int(review.get("advisory_candidates_reviewed") or 0)
+                    + int(review.get("watchlist_candidates_reviewed") or 0))
+        if method.startswith("heuristic_fallback") and reviewed > 0:
+            est = review.get("estimated_cost_usd")
+            cap = review.get("daily_cost_cap_usd")
+            out.append(_mk(
+                "Wire the LLM reviewer into the daily sim-governance review",
+                Cat.OBSERVABILITY.value,
+                "The daily consolidated promotion review runs the deterministic "
+                "heuristic fallback, not the model — the reviewer= seam is never "
+                "injected at the production entrypoint, so ready_for_production_review "
+                "verdicts carry no LLM judgment.",
+                [f"daily_ai_review_result.json: review_method={method}",
+                 f"estimated_cost_usd={est} vs daily_cost_cap_usd={cap} (well under cap)",
+                 "run_daily_safe.sh Stage 10e calls run_daily_governance('.') with no reviewer="],
+                "Construct an OpenAI-backed reviewer Callable and pass it into "
+                "run_daily_governance(reviewer=...); estimated cost is far under the daily cap.",
+                affected_modules=["portfolio_automation/sim_governance/daily_governance_run.py",
+                                  "portfolio_automation/sim_governance/daily_ai_review.py",
+                                  "scripts/run_daily_safe.sh"],
+                affected_artifacts=["daily_ai_review_result.json"],
+                impact=0.6, urgency=0.45, effort=0.4,
+                acceptance=["daily_ai_review_result.review_method == 'llm'"],
+                tests=["tests/test_daily_ai_review.py"]))
+
+    pending = _load_json_safe(root / "outputs" / "promotion_review" / "pending_proposals.json")
+    if isinstance(pending, dict):
+        props = pending.get("proposals") or []
+        adv_ctx = [p for p in props if isinstance(p, dict)
+                   and p.get("proposal_type") == "crowd_context_change"
+                   and p.get("workflow") == "advisory"]
+        if len(adv_ctx) >= 5:
+            syms = sorted({str(p.get("proposed_production_change", {}).get("symbol"))
+                           for p in adv_ctx
+                           if isinstance(p.get("proposed_production_change"), dict)})
+            out.append(_mk(
+                "Auto-refresh advisory crowd-context instead of per-day approval",
+                Cat.SANDBOX_QUALITY.value,
+                f"{len(adv_ctx)} advisory crowd_context_change proposals are pending "
+                "human approval. crowd_state is a fast-refreshing daily signal (it flips "
+                "confirmed/divergent/insufficient day to day), so routing it through a "
+                "permanent approval gate makes today's read stale tomorrow and "
+                "accumulates a recurring backlog.",
+                [f"pending_proposals.json: {len(adv_ctx)} crowd_context_change advisory pending",
+                 "symbols: " + ", ".join(syms[:9]),
+                 "evidence_refs cite outputs/sandbox/crowd_radar (absent); real signal is "
+                 "outputs/latest/unified_crowd_intelligence.json"],
+                "Have the advisory overlay read unified_crowd_intelligence crowd_state live "
+                "each run (self-refreshing context annotation) rather than minting one "
+                "pending proposal per symbol per day; repair the evidence_ref provenance.",
+                affected_modules=["portfolio_automation/sim_governance/production_overlays.py",
+                                  "portfolio_automation/sim_governance/promotion_proposals.py"],
+                affected_artifacts=["pending_proposals.json", "unified_crowd_intelligence.json"],
+                impact=0.55, urgency=0.5, effort=0.5,
+                acceptance=["advisory crowd_context proposals no longer accumulate as pending",
+                            "advisory overlay crowd_context matches the daily unified bus"],
+                tests=["tests/test_sim_governance.py"]))
+    return out
+
+
 _DETECTORS: tuple[Callable[[Path], list[dict[str, Any]]], ...] = (
     detect_from_artifact_registry,
     detect_from_data_quality,
@@ -319,6 +399,7 @@ _DETECTORS: tuple[Callable[[Path], list[dict[str, Any]]], ...] = (
     detect_from_ai_budget,
     detect_from_calibration,
     detect_roadmap_alignment,
+    detect_from_sim_governance,
 )
 
 
