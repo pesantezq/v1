@@ -496,17 +496,32 @@ _VOL_REGIME_REL = ("outputs", "latest", "vol_regime_advisor.json")
 _PORTFOLIO_SNAPSHOT_REL = ("outputs", "portfolio", "portfolio_snapshot.json")
 
 
-def _load_holdings(root: Path) -> tuple[list[dict], float]:
-    """Return (holdings list, portfolio_value). Best-effort across sources."""
+def _load_holdings(root: Path) -> tuple[list[dict], float, str]:
+    """Return (holdings list, portfolio_value, holdings_source).
+
+    Prefers the live Schwab snapshot via ``broker_overlaid_portfolio`` (which
+    merges broker shares with config per-symbol metadata — is_leveraged,
+    leverage_factor, target_weight — so concentration + leverage stay correct),
+    falling back to raw config holdings when the broker is stale/absent. Read-only.
+    """
     cfg = _load_json_safe(root.joinpath(*_CONFIG_REL))
     portfolio = cfg.get("portfolio") or {} if isinstance(cfg, dict) else {}
     holdings = list(portfolio.get("holdings") or [])
+    holdings_source = "config"
+    try:
+        from portfolio_automation.holdings_resolver import broker_overlaid_portfolio
+        overlaid = broker_overlaid_portfolio(portfolio, root)
+        if isinstance(overlaid, dict) and overlaid.get("holdings"):
+            holdings = list(overlaid.get("holdings") or holdings)
+            holdings_source = overlaid.get("holdings_source", "config")
+    except Exception:
+        pass
 
     plan = _load_json_safe(root.joinpath(*_DECISION_PLAN_REL))
     ctx = plan.get("portfolio_context") or {} if isinstance(plan, dict) else {}
     portfolio_value = _safe_float(ctx.get("total_portfolio_value")) or 0.0
 
-    return holdings, portfolio_value
+    return holdings, portfolio_value, holdings_source
 
 
 def _load_caps(root: Path) -> tuple[float, float]:
@@ -551,7 +566,7 @@ def run_risk_delta_advisor(
     """Top-level: read inputs, build artifact, optionally write to LATEST."""
     root_path = Path(root).resolve()
     try:
-        holdings, portfolio_value = _load_holdings(root_path)
+        holdings, portfolio_value, holdings_source = _load_holdings(root_path)
         concentration_cap, leverage_cap = _load_caps(root_path)
         sigma_annual = _load_sigma(root_path)
         quotes = _load_quotes(root_path)
@@ -564,6 +579,8 @@ def run_risk_delta_advisor(
             sigma_annual=sigma_annual,
             quotes=quotes,
         )
+        if isinstance(payload, dict):
+            payload["holdings_source"] = holdings_source
 
         artifacts: dict[str, str] = {}
         if write_files:
