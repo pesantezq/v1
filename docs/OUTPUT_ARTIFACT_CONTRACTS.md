@@ -966,6 +966,72 @@ The discovery section does **not** produce a new artifact — it is part of the 
 
 ---
 
+### outputs/latest/memo_coherence.json (+ .md)
+
+Namespace: LATEST. Written by `portfolio_automation/memo_coherence.py::run_memo_coherence()`
+(pipeline Stage 9e; also computed in-process by `generate_daily_memo()`). **Observe-only,
+advisory** reconciliation layer; reads already-produced artifacts and never recomputes a
+decision or any protected score, never mutates `decision_plan.json`, never executes trades.
+
+Required top-level fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `generated_at` | string (ISO) | |
+| `schema_version` | string | currently `"1"` |
+| `source` | string | `"memo_coherence"` |
+| `observe_only` | bool | always `true` |
+| `no_trade` | bool | always `true` |
+| `snapshot_timestamp` | string\|null | newest source `generated_at` |
+| `source_artifacts` | object | per-source `{present, generated_at, age_minutes, fresh}` |
+| `freshness` | object | `{max_skew_minutes, stale_sources[], snapshot_timestamp}` |
+| `reconciliation` | object | `{status, fields{}, issues[], resolved_issues[], unresolved_issues[], issue_count, unresolved_count}` |
+| `funding` | object | funded/unfunded split (see below) |
+| `actions` | array | one enriched record per decision (ranked) |
+| `funded_actions` / `deferred_actions` | array | subsets of `actions` |
+| `ranking` | object | `{tie_break_rule, default_fallback_priority, default_fallback_count, distinct_priorities, total_actions}` |
+| `overlap` | object | `{available, etf_lookthrough_available, effective_independent_bets, high_correlation_pairs[], clusters[], ...}` |
+| `crowd` | object | `{available, cross_source_confirmed[], retail_only[], divergent[], classified_state_counts{}, insufficient_data_count, social_sentiment_status, any_classified_buy_state, production_eligible, definitions{}}` |
+| `hit_rate` | object | neutral-band evaluation (see below) |
+| `investor_summary` | object | `{posture_paragraph, main_opportunity, main_risk, what_changed[]}` |
+| `coherence_status` | string | `ok` \| `warning` \| `degraded` |
+
+`reconciliation.fields[*]` = `{value, source, status, note}` — the authoritative source per
+reconciled field (posture, dominant_theme, top_opportunity, best_portfolio_fit, top_decisions,
+risk_posture, available_cash, recommended_deployment, concentration, leverage,
+effective_independent_bets, model_confidence, data_quality, sandbox_vs_actionable).
+
+`funding` = `{available, status, portfolio_value, available_cash, cash_reserve_pct (reused 5%
+policy — not invented), cash_reserve_amount, max_deployable, deployable_from_cash,
+deployable_from_incoming, gross_recommended_sized, funded_capital, unfunded_capital,
+funded_count, blocked_count, capital_decision_count, below_safety_floor, funded_actions[],
+blocked_actions[]}`. When `cash_deployment_plan.json` is absent: `{available:false, reason,
+status:"degraded"}`.
+
+`actions[*]` adds memo-layer fields to each protected decision (the `decision` field itself is
+unchanged): `presentation_state` (BUY_NOW/STARTER/ADD/ADD_ON_PULLBACK/WATCH/HOLD/TRIM/
+BLOCKED_BY_CASH/BLOCKED_BY_CONCENTRATION/BLOCKED_BY_RISK/RESEARCH_ONLY/INSUFFICIENT_DATA),
+`priority_breakdown` (read-only contributions + `basis` ∈ computed/default_fallback/adjusted),
+`priority_basis`, `entry_move_pct`, `entry_extended`, `entry_context`, `requested_capital`,
+`funded_capital`, `funding_source`, `blocking_reason`, `primary_thesis`, `primary_risk`,
+`eligibility`, `priority_is_tied`, `priority_tie_group_size`.
+
+`hit_rate` = `{available, method:"neutral_band", neutral_band_pct (reuses the ±1% flat
+convention from `outcome_evaluator._label_return`), return_scale, horizon, price_source,
+resolved_count, correct, incorrect, neutral, directional_accuracy_pct, unresolved_count,
+missing_price_count, raw_calibration_hit_rate, note, followup}`. Sub-band noise moves are
+classified **neutral** (excluded from correct/incorrect); the producer win-rate is unchanged.
+
+Contract notes:
+- Additive only. Existing artifacts/consumers are untouched; the memo renders this when
+  attached and degrades silently when absent.
+- Every nested section degrades to an honest `{available: false, reason}` rather than
+  fabricating values. The top-level `run_memo_coherence` never raises (returns
+  `{status:"error", coherence_status:"degraded"}` on unhandled failure).
+- The `.md` sibling (`memo_coherence.md`) is the operator-facing diagnostics appendix.
+
+---
+
 ## Memo Email Delivery Artifacts
 
 Produced by `portfolio_automation/memo_email_sender.py`.

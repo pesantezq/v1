@@ -2192,6 +2192,190 @@ def _build_simulation_review_section_md(data: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+# ---------------------------------------------------------------------------
+# Memo-coherence investor core (reconciliation layer consumer)
+# ---------------------------------------------------------------------------
+
+def _memo_coherence(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return the attached memo_coherence reconciliation dict (or {})."""
+    mc = summary.get("_memo_coherence")
+    return mc if isinstance(mc, dict) else {}
+
+
+def _fmt_amt(value: Any) -> str:
+    try:
+        return f"${float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "$0"
+
+
+def _investor_core_text(mc: dict[str, Any]) -> list[str]:
+    """Investor-facing core block (plain text), sourced from memo_coherence."""
+    if not mc:
+        return []
+    inv = mc.get("investor_summary") or {}
+    fund = mc.get("funding") or {}
+    rec = mc.get("reconciliation") or {}
+    out: list[str] = []
+
+    para = inv.get("posture_paragraph")
+    if para:
+        out += [_LINE, "  TODAY'S POSTURE", _LINE, f"  {para}", ""]
+
+    unresolved = rec.get("unresolved_issues") or []
+    if unresolved:
+        out += [_LINE, "  ! DECISION COHERENCE WARNING", _LINE]
+        for issue in unresolved[:3]:
+            out.append(f"  - {issue.get('message')}")
+        out.append("")
+
+    out += [_LINE, "  FUNDED ACTIONS TODAY", _LINE]
+    if fund.get("available"):
+        out.append(
+            f"  Deployable {_fmt_amt(fund.get('max_deployable'))} "
+            f"(cash {_fmt_amt(fund.get('deployable_from_cash'))} + incoming "
+            f"{_fmt_amt(fund.get('deployable_from_incoming'))}); cash on hand "
+            f"{_fmt_amt(fund.get('available_cash'))}"
+            + (" [below 5% reserve]" if fund.get("below_safety_floor") else "")
+        )
+    funded = mc.get("funded_actions") or []
+    if funded:
+        for act in funded[:5]:
+            out.append(
+                f"  - {act.get('presentation_state')} {act.get('symbol')} — "
+                f"{_fmt_amt(act.get('funded_capital'))} ({act.get('funding_source')})"
+            )
+            if act.get("primary_risk"):
+                out.append(f"      risk: {act.get('primary_risk')}")
+    else:
+        out.append("  No funded entries today.")
+    out.append("")
+
+    deferred = mc.get("deferred_actions") or []
+    if deferred:
+        out += [_LINE, "  DEFERRED / BLOCKED OPPORTUNITIES", _LINE]
+        for act in deferred[:6]:
+            reason = act.get("blocking_reason") or act.get("presentation_state")
+            out.append(f"  - {act.get('symbol')} — {act.get('presentation_state')} ({reason})")
+        out.append("")
+
+    main_opp = inv.get("main_opportunity")
+    main_risk = inv.get("main_risk")
+    if main_opp or main_risk:
+        out += [_LINE, "  MAIN OPPORTUNITY / MAIN RISK", _LINE]
+        if main_opp:
+            out.append(f"  Opportunity: {main_opp}")
+        if main_risk:
+            out.append(f"  Risk: {main_risk}")
+        out.append("")
+
+    overlap = mc.get("overlap") or {}
+    clusters = [c for c in (overlap.get("clusters") or []) if c.get("multiple_proposed_same_thesis")]
+    if clusters:
+        out += [_LINE, "  CORRELATED EXPOSURE CLUSTERS", _LINE]
+        for cluster in clusters[:3]:
+            out.append(f"  - {', '.join(cluster.get('members') or [])} ({cluster.get('basis')})")
+        out.append("")
+    return out
+
+
+def _investor_core_md(mc: dict[str, Any]) -> list[str]:
+    """Investor-facing core block (Markdown), sourced from memo_coherence."""
+    if not mc:
+        return []
+    inv = mc.get("investor_summary") or {}
+    fund = mc.get("funding") or {}
+    rec = mc.get("reconciliation") or {}
+    out: list[str] = []
+
+    para = inv.get("posture_paragraph")
+    if para:
+        out += ["## Today's Posture", "", f"> {para}", ""]
+
+    unresolved = rec.get("unresolved_issues") or []
+    if unresolved:
+        out += ["## ⚠ Decision Coherence Warning", ""]
+        for issue in unresolved[:3]:
+            out.append(f"- {issue.get('message')}")
+        out.append("")
+
+    out += ["## Funded Actions Today", ""]
+    if fund.get("available"):
+        out.append(
+            f"- Deployable **{_fmt_amt(fund.get('max_deployable'))}** "
+            f"(cash {_fmt_amt(fund.get('deployable_from_cash'))} + incoming "
+            f"{_fmt_amt(fund.get('deployable_from_incoming'))}); cash on hand "
+            f"{_fmt_amt(fund.get('available_cash'))}"
+            + (" _(below 5% reserve)_" if fund.get("below_safety_floor") else "")
+        )
+    funded = mc.get("funded_actions") or []
+    if funded:
+        for act in funded[:5]:
+            out.append(
+                f"- **{act.get('presentation_state')}** `{act.get('symbol')}` — "
+                f"{_fmt_amt(act.get('funded_capital'))} ({act.get('funding_source')})"
+            )
+            if act.get("primary_risk"):
+                out.append(f"  - risk: {act.get('primary_risk')}")
+    else:
+        out.append("- _No funded entries today._")
+    out.append("")
+
+    deferred = mc.get("deferred_actions") or []
+    if deferred:
+        out += ["## Deferred / Blocked Opportunities", ""]
+        for act in deferred[:6]:
+            reason = act.get("blocking_reason") or act.get("presentation_state")
+            out.append(f"- `{act.get('symbol')}` — **{act.get('presentation_state')}** ({reason})")
+        out.append("")
+
+    main_opp = inv.get("main_opportunity")
+    main_risk = inv.get("main_risk")
+    if main_opp or main_risk:
+        out += ["## Main Opportunity / Main Risk", ""]
+        if main_opp:
+            out.append(f"- **Opportunity:** {main_opp}")
+        if main_risk:
+            out.append(f"- **Risk:** {main_risk}")
+        out.append("")
+
+    overlap = mc.get("overlap") or {}
+    clusters = [c for c in (overlap.get("clusters") or []) if c.get("multiple_proposed_same_thesis")]
+    if clusters:
+        out += ["## Correlated Exposure Clusters", ""]
+        for cluster in clusters[:3]:
+            out.append(f"- {', '.join(cluster.get('members') or [])} ({cluster.get('basis')})")
+        out.append("")
+    return out
+
+
+def _coherence_appendix_text(mc: dict[str, Any]) -> list[str]:
+    """Operator-appendix coherence diagnostics (plain text)."""
+    if not mc:
+        return []
+    hr = mc.get("hit_rate") or {}
+    crowd = mc.get("crowd") or {}
+    out: list[str] = []
+    if hr.get("available"):
+        out.append(
+            f"  Decision quality (neutral-band ±{hr.get('neutral_band_pct')}%): "
+            f"{hr.get('directional_accuracy_pct')}% directional "
+            f"(correct {hr.get('correct')} / incorrect {hr.get('incorrect')} / "
+            f"neutral {hr.get('neutral')}); raw calibration "
+            f"{hr.get('raw_calibration_hit_rate')}."
+        )
+    if crowd.get("available"):
+        out.append(
+            f"  Crowd (sandbox, production-gated): cross-source confirmed "
+            f"{len(crowd.get('cross_source_confirmed') or [])}, divergent "
+            f"{len(crowd.get('divergent') or [])}, insufficient_data "
+            f"{crowd.get('insufficient_data_count')}; social_sentiment "
+            f"{crowd.get('social_sentiment_status')}. (Attention overlap is not a "
+            f"classified buy state.)"
+        )
+    return out
+
+
 def build_daily_memo(
     summary: dict[str, Any],
     *,
@@ -2251,6 +2435,15 @@ def build_daily_memo(
     except Exception as exc:
         logger.warning("daily_memo: verdict line failed — %s", exc)
 
+    # Investor-facing core (reconciled posture + funded/deferred actions),
+    # rendered before analyst context. Non-blocking; absent when coherence
+    # data is not attached.
+    try:
+        for line in _investor_core_text(_memo_coherence(summary)):
+            a(line)
+    except Exception as exc:
+        logger.warning("daily_memo: investor core (txt) failed — %s", exc)
+
     a(_LINE)
     a("  TOP INSIGHT")
     a(_LINE)
@@ -2304,6 +2497,23 @@ def build_daily_memo(
     for item in change_items[:3]:
         a(f"  - {item}")
     a("")
+
+    # ------------------------------------------------------------------
+    # OPERATOR / SYSTEM APPENDIX — technical diagnostics below this line are
+    # not required to understand the day's decision.
+    # ------------------------------------------------------------------
+    a(_SEP)
+    a("  OPERATOR / SYSTEM APPENDIX")
+    a("  (technical diagnostics — not required for the daily decision)")
+    a(_SEP)
+    a("")
+    try:
+        for line in _coherence_appendix_text(_memo_coherence(summary)):
+            a(line)
+        if _memo_coherence(summary):
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: coherence appendix (txt) failed — %s", exc)
 
     # Portfolio pulse + advisor stack + risk delta — read-only artifact loaders.
     try:
@@ -2460,6 +2670,13 @@ def build_daily_memo_md(
     except Exception as exc:
         logger.warning("daily_memo: verdict line (md) failed — %s", exc)
 
+    # Investor-facing core (Markdown), before analyst context.
+    try:
+        for line in _investor_core_md(_memo_coherence(summary)):
+            a(line)
+    except Exception as exc:
+        logger.warning("daily_memo: investor core (md) failed — %s", exc)
+
     a("## Top Insight")
     a("")
     a(f"> {_build_memo_top_insight(tt, to, top_rows)}")
@@ -2503,6 +2720,20 @@ def build_daily_memo_md(
     for item in change_items[:3]:
         a(f"- {item}")
     a("")
+
+    # OPERATOR / SYSTEM APPENDIX (Markdown) — diagnostics below.
+    a("---")
+    a("## Operator / System Appendix")
+    a("_Technical diagnostics — not required for the daily decision._")
+    a("")
+    try:
+        appendix = _coherence_appendix_text(_memo_coherence(summary))
+        for line in appendix:
+            a(f"- {line.strip()}")
+        if appendix:
+            a("")
+    except Exception as exc:
+        logger.warning("daily_memo: coherence appendix (md) failed — %s", exc)
 
     # Portfolio pulse + advisor stack + risk delta — Markdown variant.
     try:
@@ -2622,6 +2853,16 @@ def generate_daily_memo(
     if decision_plan:
         summary = dict(summary)
         summary["_decision_plan"] = decision_plan
+
+    # Memo-coherence reconciliation layer (non-blocking). Reads already-produced
+    # artifacts, reconciles verdict/theme/opportunity/fit/cash/actions, splits
+    # funded vs unfunded, and attaches the result for the investor core block.
+    try:
+        from portfolio_automation.memo_coherence import run_memo_coherence
+        summary = dict(summary)
+        summary["_memo_coherence"] = run_memo_coherence(root_path, write_files=write_files)
+    except Exception as exc:
+        logger.warning("daily_memo: memo_coherence reconciliation failed (non-fatal) — %s", exc)
 
     discovery_data: "dict[str, Any] | None" = None
     try:

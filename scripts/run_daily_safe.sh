@@ -318,6 +318,13 @@ run_aux_stage "Unified Crowd Intelligence Bus" \
 run_aux_stage "Social Sentiment Pipeline" \
     python -m portfolio_automation.social_sentiment.run_sentiment_pipeline --root "${REPO_ROOT}" --run-mode discovery
 
+# Stage 9e — Memo decision-coherence reconciliation (observe-only, advisory).
+# Reads the decision/portfolio/risk/crowd artifacts and writes memo_coherence.json
+# (funded vs unfunded, reconciled posture, contradictions). Runs before Stage 10 so
+# the memo's investor core can consume it. Non-blocking; never feeds decision_plan.
+run_aux_stage "Memo coherence reconciliation" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.memo_coherence import run_memo_coherence; r = run_memo_coherence('.'); print('status:', r.get('coherence_status'), 'funded:', (r.get('funding') or {}).get('funded_count'), 'deferred:', (r.get('funding') or {}).get('blocked_count'), 'unresolved:', (r.get('reconciliation') or {}).get('unresolved_count'))"
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"

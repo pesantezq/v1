@@ -211,7 +211,9 @@ python -m py_compile \
     portfolio_automation/portfolio_sim/run_strategy_lab.py \
     portfolio_automation/portfolio_sim/research_library.py \
     portfolio_automation/portfolio_sim/strategy_lab_health.py \
-    portfolio_automation/simulation_charts.py
+    portfolio_automation/simulation_charts.py \
+    portfolio_automation/memo_coherence.py \
+    tools/validate_daily_memo_coherence.py
 pass "Targeted py_compile check passed"
 
 section "Wrapper Syntax Check"
@@ -237,6 +239,7 @@ modules = [
     'portfolio_automation.portfolio_sim.run_portfolio_projection',
     'portfolio_automation.portfolio_sim.run_strategy_lab',
     'portfolio_automation.simulation_charts',
+    'portfolio_automation.memo_coherence',
 ]
 for m in modules:
     importlib.import_module(m)
