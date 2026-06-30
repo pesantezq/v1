@@ -147,6 +147,22 @@ _PROBES: tuple[Probe, ...] = (
         approval_required=False,
     ),
     Probe(
+        probe_id="quant.daily_memo_coherence",
+        display_name="Daily memo decision coherence",
+        source_view="memo",
+        source_artifact="outputs/latest/memo_coherence.json",
+        severity="warning",
+        description=(
+            "Daily memo reconciliation: unresolved contradictions between verdict, "
+            "funded vs unfunded actions, theme/opportunity/fit, overlap, or crowd "
+            "definitions. Observe-only; degraded inputs surface honestly."
+        ),
+        recommended_skill_id="diagnose_pipeline_status",
+        allowed_actions=("diagnose",),
+        risk_level="low",
+        approval_required=False,
+    ),
+    Probe(
         probe_id="schwab.broker_health",
         display_name="Schwab broker health (read-only)",
         source_view="system",

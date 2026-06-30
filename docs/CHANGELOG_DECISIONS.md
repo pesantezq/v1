@@ -69,6 +69,73 @@ Explicitly note:
 
 ---
 
+## Daily Memo Decision-Coherence Reconciliation Layer
+
+### Date
+
+`2026-06-30`
+
+### Area
+
+- output_contract
+- evaluation
+- architecture
+
+### Files / Functions
+
+- New: `portfolio_automation/memo_coherence.py` (`run_memo_coherence`, `build_memo_coherence`,
+  pure section builders), `tools/validate_daily_memo_coherence.py`, `tests/test_memo_coherence.py`,
+  `docs/MEMO_COHERENCE.md`, `docs/DAILY_MEMO_DECISION_COHERENCE_PLAN.md`.
+- Modified: `watchlist_scanner/daily_memo.py` (investor-core block + operator appendix,
+  consumes `_memo_coherence`), `operator_control/probe_registry.py`
+  (`quant.daily_memo_coherence`), `scripts/run_daily_safe.sh` (Stage 9e),
+  `scripts/preflight.sh` (compile + import), `.claude/commands/daily-tool-analysis.md`
+  (Step 1 read 2b + body line 6j), `docs/OUTPUT_ARTIFACT_CONTRACTS.md`.
+
+### Decision
+
+Added an advisory, observe-only reconciliation layer that reads the already-produced
+decision/portfolio/risk/correlation/crowd/calibration artifacts and emits
+`outputs/latest/memo_coherence.json`. It splits funded vs unfunded recommendations (reusing
+the existing 5% cash reserve + deployable budget), derives a memo-layer `presentation_state`
+vocabulary, surfaces priority breakdown + default-fallback detection + a deterministic
+tie-break, re-evaluates hit-rate with an economically-meaningful ±1% neutral band, groups
+correlated/overlapping proposals into thesis clusters, separates crowd "confirmed attention"
+from classified states, runs coherence guards, and restructures the memo into an
+investor-facing core followed by an operator/system appendix.
+
+### Why
+
+The memo could state a cautious verdict while every action increased risk, present
+gross recommendations exceeding available cash without labeling them unfunded, show 19
+identical `0.55` priorities, score sub-0.1% noise moves as hit/miss, omit economic
+(ETF/sector/correlation) overlap, and report "confirmed" crowd tickers alongside
+"insufficient data" — with telemetry drowning the decision.
+
+### Invariants Preserved
+
+- No change to `decision_engine.py`, `compute_priority`, conviction/allocation logic, or the
+  protected score semantics (`signal_score`/`confidence_score`/`effective_score`/
+  `conviction_score`/`final_rank_score`/`recommendation_score`/`priority_score`).
+- No change to `performance_feedback.py` stored win-rate (neutral band applied only at the
+  memo evaluation layer; historical compatibility preserved).
+- Advisory only; `observe_only`/`no_trade` hardcoded; production remains human-gated; crowd
+  outputs stay sandbox/production-gated. No broker/exec/trade logic; no paid deps.
+
+### Downstream Impact
+
+- New artifact `outputs/latest/memo_coherence.json` (+ `.md`); memo `.txt`/`.md` gain investor
+  core + operator appendix sections (existing headers preserved). New probe + validator + skill
+  hook. Tests: `tests/test_memo_coherence.py` (44). No GUI surface change required.
+
+### Artifact Health Severity
+
+- New artifact is **optional** (`optional_missing` when absent → memo degrades silently;
+  Stage 9e is non-blocking). `missing_artifact_count` unaffected (additive). Memo wording
+  changed (new investor-core + appendix sections). Owner step: `run_daily_safe.sh` Stage 9e.
+
+---
+
 ## Data-Quality Severity Buckets + Calibration Trend Card
 
 ### Date
