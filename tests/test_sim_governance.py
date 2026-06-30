@@ -382,3 +382,46 @@ def test_proposal_type_workflow_routing():
     assert S.workflow_for_proposal_type(S.PROPOSAL_WATCHLIST_ADD) == S.WORKFLOW_WATCHLIST
     assert S.workflow_for_proposal_type(S.PROPOSAL_ADVISORY_CONTEXT) == S.WORKFLOW_ADVISORY
     assert S.workflow_for_proposal_type(S.PROPOSAL_CROWD_CONTEXT) == S.WORKFLOW_ADVISORY
+
+
+# ===========================================================================
+# Phase 3 — daily sim bound to the immutable Phase 2 input snapshot
+# (every experiment shares ONE frozen input identity; production untouched)
+# ===========================================================================
+
+import portfolio_automation.daily_input_snapshot as _DS
+
+
+def test_lane_binds_to_frozen_input_snapshot(tmp_path, base_dir):
+    # Phase 2 snapshot present at base_dir/sandbox/daily_input_snapshot.json
+    _DS.write_input_snapshot(tmp_path, {"snapshot_hash": "HASH123", "run_id": "2026-06-16_daily_official", "inputs": []})
+    res = LANE.run_simulation_lane(str(tmp_path), NOW, baseline=_baseline(),
+                                   experiments=None, base_dir=base_dir, write_files=False)
+    assert res["input_snapshot_hash"] == "HASH123"
+    assert res["input_snapshot_run_id"] == "2026-06-16_daily_official"
+
+
+def test_lane_snapshot_binding_absent_is_safe(tmp_path, base_dir):
+    res = LANE.run_simulation_lane(str(tmp_path), NOW, baseline=_baseline(),
+                                   experiments=[], base_dir=base_dir, write_files=False)
+    assert res["input_snapshot_hash"] is None
+    assert res["input_snapshot_run_id"] is None
+
+
+def test_bundle_propagates_snapshot_binding(tmp_path, base_dir):
+    _DS.write_input_snapshot(tmp_path, {"snapshot_hash": "HASHXYZ", "run_id": "RID", "inputs": []})
+    lane = LANE.run_simulation_lane(str(tmp_path), NOW, baseline=_baseline(),
+                                    experiments=None, base_dir=base_dir, write_files=False)
+    bundle = BUN.build_daily_simulation_bundle(lane, now=NOW, base_dir=base_dir)
+    assert bundle["input_snapshot_hash"] == "HASHXYZ"
+
+
+def test_lane_stays_sandbox_only_and_production_safe(tmp_path, base_dir):
+    # active-but-isolated: lane_active True, but never writes outside SANDBOX
+    res = LANE.run_simulation_lane(str(tmp_path), NOW, baseline=_baseline(),
+                                   experiments=None, base_dir=base_dir, write_files=True)
+    assert res["lane_active"] is True and res["production_safe"] is True
+    # no production namespaces were written by the lane
+    for ns in ("latest", "policy", "portfolio"):
+        d = tmp_path / "outputs" / ns
+        assert not (d.exists() and any(d.iterdir())), f"lane wrote into production ns {ns}"

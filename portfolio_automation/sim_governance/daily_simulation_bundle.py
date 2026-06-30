@@ -106,6 +106,9 @@ def build_daily_simulation_bundle(
         "schema": "daily_simulation_bundle.v1",
         "lane": "simulation",
         "lane_active": True,
+        # Phase 3: the frozen Phase 2 input snapshot this bundle's sims shared.
+        "input_snapshot_hash": lane_result.get("input_snapshot_hash"),
+        "input_snapshot_run_id": lane_result.get("input_snapshot_run_id"),
         "candidate_count": len(candidates),
         "ready_count": sum(1 for c in candidates if c.get("ready_for_production_review")),
         # ── experiment results, split by workflow/category ──────────────────

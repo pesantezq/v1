@@ -51,6 +51,21 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _input_snapshot_binding(base_dir: str) -> dict:
+    """Phase 3: bind this lane run to the Phase 2 immutable input snapshot.
+
+    Every experiment in a single ``run_simulation_lane`` call operates on the
+    same baseline, so recording the frozen ``snapshot_hash`` makes it provable
+    that production and all shadow strategies evaluated identical inputs (Iron
+    rule 4). Degrades to ``None`` when no snapshot exists.
+    """
+    snap = _read_json(Path(base_dir) / "sandbox" / "daily_input_snapshot.json")
+    if isinstance(snap, dict):
+        return {"input_snapshot_hash": snap.get("snapshot_hash"),
+                "input_snapshot_run_id": snap.get("run_id")}
+    return {"input_snapshot_hash": None, "input_snapshot_run_id": None}
+
+
 def _load_unified_crowd_context(root: Path) -> dict:
     """Per-symbol crowd context for the sim experiments, sourced from the unified
     crowd bus. Maps the unified row onto the {velocity, state, confidence,
@@ -443,6 +458,7 @@ def run_simulation_lane(
                            getattr(exp, "__name__", exp), exc)
 
     views = materialize_simulated_views(bl, candidates)
+    snapshot_binding = _input_snapshot_binding(base_dir)
 
     result = {
         "generated_at": now,
@@ -450,6 +466,9 @@ def run_simulation_lane(
         "lane_active": True,            # this lane is allowed to change sim outputs
         "observe_only": False,          # active by design (sandbox-scoped only)
         "production_safe": True,        # never writes outside SANDBOX
+        # Phase 3: the frozen Phase 2 input snapshot every experiment shared.
+        "input_snapshot_hash": snapshot_binding["input_snapshot_hash"],
+        "input_snapshot_run_id": snapshot_binding["input_snapshot_run_id"],
         "candidate_count": len(candidates),
         "ready_count": sum(1 for c in candidates if c.ready_for_production_review),
         "advisory_candidate_count": sum(1 for c in candidates if c.workflow == S.WORKFLOW_ADVISORY),
