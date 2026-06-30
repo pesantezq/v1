@@ -258,6 +258,14 @@ run_aux_stage "Daily input snapshot" \
 run_aux_stage "Decision-time context capture" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.decision_context_capture import run_decision_context_capture; r = run_decision_context_capture('.'); print('run_id:', r.get('run_id'), 'captured:', r.get('captured'), 'snapshot:', (r.get('snapshot_hash') or '')[:12])"
 
+# Stage 7i — Quant feedback attribution (Phase 5): join the decision-time
+# context log (7h) with matured outcomes and attribute performance by regime /
+# crowd-state / strategy / action using the standardized taxonomy + honest
+# denominators + sample sufficiency. Evidence only (never changes confidence/
+# weights/production). Insufficient evidence is reported distinctly.
+run_aux_stage "Quant feedback attribution" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.quant_feedback import run_quant_feedback; r = run_quant_feedback('.'); print('evidence:', r.get('evidence_status'), 'ctx:', r.get('n_context_records'), 'resolved:', r.get('n_resolved_outcomes'), 'fallback_rate:', r.get('fallback_rate'))"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
