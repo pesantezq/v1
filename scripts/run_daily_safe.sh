@@ -249,6 +249,15 @@ run_aux_stage "Quant-watch probe ledger" \
 run_aux_stage "Daily input snapshot" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.daily_input_snapshot import run_daily_input_snapshot; s = run_daily_input_snapshot('.'); print('run_id:', s.get('run_id'), 'hash:', (s.get('snapshot_hash') or '')[:12], 'valid:', s.get('valid_count'), 'stale:', s.get('stale_count'), 'missing:', s.get('missing_count'), 'future_rejected:', s.get('future_rejected_count'))"
 
+# Stage 7h — Decision-time context capture (Phase 4): record each production
+# decision's IMMUTABLE at-decision context (regime/crowd/factor/confidence/
+# data-quality + horizons + the frozen snapshot hash) to an append-only log, so
+# later outcome maturation attributes results to the conditions that produced
+# them. Observe-only; never mutates the protected stored win-rate. Runs after
+# the snapshot (7g) so it binds to the frozen input identity.
+run_aux_stage "Decision-time context capture" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.decision_context_capture import run_decision_context_capture; r = run_decision_context_capture('.'); print('run_id:', r.get('run_id'), 'captured:', r.get('captured'), 'snapshot:', (r.get('snapshot_hash') or '')[:12])"
+
 # Stage 8 — News intelligence refresh (re-run now that the decision plan
 # and watchlist have landed; cached calls cost no budget so this is cheap
 # and broadens the captured universe).
