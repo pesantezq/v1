@@ -82,6 +82,58 @@ class TestMemoEmailConfig:
         cfg = load_memo_email_config(env={"MEMO_EMAIL_ENABLED": "1"})
         assert cfg.enabled is True
 
+    # --- generic SMTP/EMAIL_* fallback (reuses system-wide mail config) -------
+
+    def test_generic_fallback_resolves_transport_and_recipients(self):
+        env = {
+            "MEMO_EMAIL_ENABLED": "1",
+            "SMTP_SERVER": "smtp.example.com",
+            "SMTP_PORT": "465",
+            "EMAIL_USER": "ops@example.com",
+            "EMAIL_PASS": "secret",
+            "EMAIL_TO": "me@example.com",
+        }
+        cfg = load_memo_email_config(env=env)
+        assert cfg.enabled is True
+        assert cfg.smtp_host == "smtp.example.com"
+        assert cfg.smtp_port == 465
+        assert cfg.username == "ops@example.com"
+        assert cfg.password == "secret"
+        assert cfg.from_addr == "ops@example.com"  # defaults to authenticated user
+        assert cfg.to_addrs == ["me@example.com"]
+        assert cfg.has_smtp_config() and cfg.has_valid_recipients()
+
+    def test_dedicated_overrides_win_over_generic(self):
+        env = {
+            "SMTP_SERVER": "generic.example.com",
+            "EMAIL_USER": "generic@example.com",
+            "EMAIL_TO": "generic-to@example.com",
+            "MEMO_EMAIL_SMTP_HOST": "memo.example.com",
+            "MEMO_EMAIL_USERNAME": "memo@example.com",
+            "MEMO_EMAIL_FROM": "from@example.com",
+            "MEMO_EMAIL_TO": "memo-to@example.com",
+        }
+        cfg = load_memo_email_config(env=env)
+        assert cfg.smtp_host == "memo.example.com"
+        assert cfg.username == "memo@example.com"
+        assert cfg.from_addr == "from@example.com"
+        assert cfg.to_addrs == ["memo-to@example.com"]
+
+    def test_generic_config_alone_does_not_auto_enable(self):
+        # The presence of generic mail config must NOT silently enable memo email.
+        env = {
+            "SMTP_SERVER": "smtp.example.com",
+            "EMAIL_USER": "ops@example.com",
+            "EMAIL_PASS": "secret",
+            "EMAIL_TO": "me@example.com",
+        }
+        cfg = load_memo_email_config(env=env)
+        assert cfg.enabled is False  # opt-in still required
+        assert cfg.dry_run is True
+        # but transport/recipients are resolved so a later opt-in "just works"
+        assert cfg.smtp_host == "smtp.example.com"
+        assert cfg.to_addrs == ["me@example.com"]
+
     def test_dry_run_false(self):
         cfg = load_memo_email_config(env={"MEMO_EMAIL_DRY_RUN": "0"})
         assert cfg.dry_run is False

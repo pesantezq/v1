@@ -265,6 +265,53 @@ dashboard, and risk/correlation views did not reflect the live Schwab balance.
 
 ---
 
+## Memo Email — generic SMTP/EMAIL_* fallback
+
+### Date
+
+`2026-06-30`
+
+### Area
+
+- architecture
+- output_contract
+
+### Files / Functions
+
+- `portfolio_automation/memo_email_sender.py::load_memo_email_config` (+ new
+  `_env_str_fallback` helper); `tests/test_memo_email_sender.py` (+3 tests).
+
+### Decision
+
+`load_memo_email_config` now falls back to the system-wide generic mail
+variables (`SMTP_SERVER`, `SMTP_PORT`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_TO`)
+— the same ones the Schwab re-auth notifier and `tools/notify_status.py`
+already use — when the dedicated `MEMO_EMAIL_*` overrides are unset. `from`
+defaults to `EMAIL_USER`. Dedicated `MEMO_EMAIL_*` values always take
+precedence, so existing configs are unchanged.
+
+### Why
+
+The memo mailer read a `MEMO_EMAIL_*`-only namespace that operators had not
+populated, so daily memo email silently dry-ran even though working SMTP
+credentials existed under the generic names. The fallback lets memo email
+reuse the existing configuration with a single opt-in flag.
+
+### Invariants Preserved
+
+- `enabled` is STILL gated on `MEMO_EMAIL_ENABLED` only — the presence of
+  generic mail config never auto-enables memo email; sending stays a deliberate
+  opt-in. `dry_run` still defaults to `True`. No new credentials introduced;
+  passwords are still never logged or written to artifacts.
+
+### Downstream Impact
+
+- With `MEMO_EMAIL_ENABLED=1` (and `MEMO_EMAIL_DRY_RUN=0`) the daily Stage 10
+  memo email now sends using the existing generic SMTP config. No artifact
+  schema change; `memo_delivery_status.json` unchanged.
+
+---
+
 ## Data-Quality Severity Buckets + Calibration Trend Card
 
 ### Date
