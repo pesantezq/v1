@@ -1577,3 +1577,111 @@ artifacts:
     consumer_status: consumed
     notes: Fama-French factor attribution (alpha + betas + R2) per tactic. Offline factor cache; degrades to factor_data_unavailable if data/factors absent.
 
+  # ── Simulation / Quant / Governance loop (SQG program, shipped 2026-07-01) ──
+  # The 14-phase sim + quant-feedback + research-integrity + governance program.
+  # All observe-only / sandbox / production-gated; NONE feed decision_plan.json.
+  # decision_engine.py is unchanged. Cadence per docs/SQG_CADENCE_INTEGRATION.md.
+  run_manifest.json:
+    path: outputs/policy/run_manifest.json
+    label: run manifest (lineage)
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: run_manifest
+    consumers: [daily_run_status]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 1 run identity/lineage — run_id, source_commit, config_hash, begin/complete lifecycle. Written atomically at Stage 00 (begin) + Stage 14 (complete). Surfaced in the daily_run_status run_manifest block.
+
+  daily_input_snapshot.json:
+    path: outputs/sandbox/daily_input_snapshot.json
+    label: daily input snapshot (frozen)
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: daily_input_snapshot
+    consumers: [daily_run_status, simulation_lane]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 2 immutable point-in-time input freeze (refs+hashes, per-input freshness/quality, snapshot_hash). Stage 7g. The Phase 3 sim lane binds to it so all experiments share one frozen input identity. Surfaced in the daily_run_status input_snapshot block.
+
+  decision_context_log.jsonl:
+    path: outputs/policy/decision_context_log.jsonl
+    label: decision-time context log
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: daily
+    producer: decision_context_capture
+    consumers: [quant_feedback]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 4 append-only capture of each production decision's at-decision context (regime, crowd, snapshot_hash, source_refs). Stage 7h. Joined to matured 1/3/7d outcomes by quant_feedback.
+
+  quant_feedback.json:
+    path: outputs/latest/quant_feedback.json
+    label: quant feedback attribution
+    lens: quant_learning
+    role: probe
+    required: false
+    cadence: daily
+    producer: quant_feedback
+    consumers: [daily_run_status]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 5 join of decision-time context to matured outcomes → per-regime/per-crowd-state attribution, fallback_rate, evidence_status. Stage 7i. Monthly retrospective consumer added in the SQG cadence follow-up.
+
+  semantic_liveness_status.json:
+    path: outputs/latest/semantic_liveness_status.json
+    label: semantic liveness monitor
+    lens: meta_governance
+    role: probe
+    required: false
+    cadence: daily
+    producer: semantic_liveness
+    consumers: [daily_run_status]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 6 meta-monitor for degenerate distributions (cardinality collapse / class disappearance) across regime + decision fields. Stage 13b. overall_status + finding_count.
+
+  scenario_risk.json:
+    path: outputs/latest/scenario_risk.json
+    label: scenario risk (stress)
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: daily
+    producer: scenario_risk
+    consumers: [daily_run_status]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Phase 11 deterministic stress illustrations (pre/post shock, marginal contribution, worst_case_scenario) over the risk_delta positions. Stage 7b2. Observe-only.
+
+  experiment_registry.json:
+    path: outputs/sandbox/experiment_registry.json
+    label: experiment registry
+    lens: quant_learning
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: experiment_registry
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Phase 8 research experiment ledger (hypothesis, controls, status, retained failures). Written on experiment registration; reviewed weekly by run_weekly_safe. Absent until the first experiment registers (on_demand → never stale). Monthly-retrospective consumer added in the SQG cadence follow-up.
+
+  strategy_mandates.json:
+    path: outputs/sandbox/strategy_mandates.json
+    label: strategy mandates
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: strategy_mandate
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Phase 9 structured strategy mandates (objective, universe, control-off variant) + coverage_complete gate. Built weekly by run_weekly_safe. Monthly/strategy-lab consumer added in the SQG cadence follow-up.
+

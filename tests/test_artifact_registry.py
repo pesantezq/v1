@@ -538,3 +538,138 @@ def test_next_stage_dispatch_lines_present_in_daily_skill():
     # every artifact the registry says daily-tool-analysis consumes must be named
     for art in _NEXT_STAGE_DAILY_CONSUMED:
         assert art in text, f"daily skill does not reference consumed artifact {art}"
+
+
+# ---------------------------------------------------------------------------
+# SQG program (simulation / quant-feedback / governance loop) registry coverage
+# (added 2026-07-01 — register the 8 SQG producer artifacts; proposal_evidence
+#  ships as pure helpers with no standalone artifact so it is intentionally not
+#  registered. Cadence per docs/SQG_CADENCE_INTEGRATION.md.)
+# ---------------------------------------------------------------------------
+
+# key -> (lens, role, cadence, consumer_status)
+_SQG_ARTIFACTS = {
+    "run_manifest.json":              ("meta_governance", "telemetry", "daily",     "consumed"),
+    "daily_input_snapshot.json":      ("meta_governance", "telemetry", "daily",     "consumed"),
+    "decision_context_log.jsonl":     ("quant_learning",  "telemetry", "daily",     "consumed"),
+    "quant_feedback.json":            ("quant_learning",  "probe",     "daily",     "consumed"),
+    "semantic_liveness_status.json":  ("meta_governance", "probe",     "daily",     "consumed"),
+    "scenario_risk.json":             ("risk_action",     "advisor",   "daily",     "consumed"),
+    "experiment_registry.json":       ("quant_learning",  "telemetry", "on_demand", "diagnostic_only"),
+    "strategy_mandates.json":         ("quant_learning",  "advisor",   "weekly",    "diagnostic_only"),
+}
+
+# The 6 SQG artifacts whose real, current consumer is the daily_run_status module
+# (it reads/surfaces each — see portfolio_automation/daily_run_status.py). The two
+# weekly/on_demand ledgers (experiment_registry, strategy_mandates) have no analysis
+# consumer yet -> diagnostic_only until the monthly/yearly wiring follow-up.
+_SQG_DAILY_RUN_STATUS_CONSUMED = {
+    "run_manifest.json", "daily_input_snapshot.json", "quant_feedback.json",
+    "semantic_liveness_status.json", "scenario_risk.json",
+}
+
+
+def test_sqg_artifacts_registered_and_schema_valid():
+    reg = ar.load_registry()
+    arts = reg["artifacts"]
+    for key, (lens, role, cadence, cs) in _SQG_ARTIFACTS.items():
+        assert key in arts, f"SQG artifact not registered: {key}"
+        row = arts[key]
+        assert row["lens"] == lens, f"{key}: lens {row['lens']!r} != {lens!r}"
+        assert row["role"] == role, f"{key}: role {row['role']!r} != {role!r}"
+        assert row["cadence"] == cadence, f"{key}: cadence {row['cadence']!r} != {cadence!r}"
+        assert row["consumer_status"] == cs, f"{key}: consumer_status {row['consumer_status']!r} != {cs!r}"
+        # observe-only additive artifacts: never required, absence never escalates
+        assert row["required"] is False, f"{key}: must not be required"
+        assert row["severity_if_missing"] == "info", f"{key}: severity must be info"
+        assert ar._row_schema_ok(row), f"schema invalid row: {key}"
+    # whole shipped registry still schema-clean after the additions
+    assert ar.schema_errors(reg) == []
+
+
+def test_proposal_evidence_not_registered_as_artifact():
+    # proposal_evidence.py is pure helpers (evidence cards embedded in proposals);
+    # it writes no standalone artifact, so registering one would manufacture a
+    # permanently-missing row. Guard against a well-meaning future addition.
+    reg = ar.load_registry()
+    assert "proposal_evidence.json" not in reg["artifacts"]
+
+
+def test_sqg_daily_consumers_actually_read_the_artifact():
+    # Every SQG row that claims daily_run_status as a consumer must be genuinely
+    # referenced by portfolio_automation/daily_run_status.py — no phantom links.
+    reg = ar.load_registry()
+    drs = _Path("portfolio_automation/daily_run_status.py").read_text(encoding="utf-8")
+    for key in _SQG_DAILY_RUN_STATUS_CONSUMED:
+        row = reg["artifacts"][key]
+        assert row["consumer_status"] == "consumed", f"{key} should be consumed"
+        assert "daily_run_status" in row["consumers"], \
+            f"{key} must list daily_run_status as a consumer"
+        # daily_run_status references the artifact by filename or by its stem
+        stem = key.rsplit(".", 1)[0]
+        assert key in drs or stem in drs, \
+            f"daily_run_status.py does not reference consumed artifact {key}"
+
+
+def test_decision_context_log_consumed_by_quant_feedback():
+    reg = ar.load_registry()
+    row = reg["artifacts"]["decision_context_log.jsonl"]
+    assert row["consumers"] == ["quant_feedback"]
+    qf = _Path("portfolio_automation/quant_feedback.py").read_text(encoding="utf-8")
+    assert "decision_context_log" in qf, \
+        "quant_feedback.py must read decision_context_log.jsonl to justify the consumer link"
+
+
+def test_sqg_registration_keeps_registry_green_and_debt_free():
+    # Healthy live corpus: adding the 8 rows must not introduce a required-miss,
+    # must keep 100% classification, and must not create unjustified debt.
+    st = ar.run_artifact_registry(root=".", write_files=False)
+    assert st["overall_status"] == "green"
+    assert st["counts"]["missing_required"] == 0
+    assert st["classified"] == st["counts"]["total"]
+    assert st["debt_target_met"] is True
+
+
+def test_sqg_missing_on_demand_ledger_does_not_escalate(tmp_path):
+    # Degraded fixture: an on_demand SQG ledger (experiment_registry) is absent.
+    # It must be reported missing but, at severity=info, must NOT escalate the
+    # overall status past green — the steady state before the first experiment.
+    reg = {"artifacts": {
+        "experiment_registry.json": {
+            "path": "outputs/sandbox/experiment_registry.json",
+            "lens": "quant_learning", "role": "telemetry", "required": False,
+            "cadence": "on_demand", "producer": "experiment_registry",
+            "consumers": [], "severity_if_missing": "info",
+            "consumer_status": "diagnostic_only",
+        },
+    }}
+    st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert "experiment_registry.json" in st["missing"]
+    assert st["counts"]["missing_required"] == 0
+    assert st["overall_status"] == "green"           # info-missing never escalates
+    assert st["justified_no_consumer"] == 1           # diagnostic_only is justified
+    assert st["unjustified_debt"] == []
+
+
+def test_sqg_daily_artifact_goes_stale_when_pipeline_stops(tmp_path):
+    # Degraded fixture: a daily SQG artifact exists but the cron stopped refreshing
+    # it. Past the 30h daily window it must flag stale (so the wiring probe / daily
+    # check can surface a silently-stopped Stage). At severity=info it stays green.
+    root = tmp_path
+    p = root / "outputs" / "latest" / "quant_feedback.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"evidence_status": "ok"}', encoding="utf-8")
+    old = os.stat(p).st_mtime - 40 * 3600  # 40h ago > 30h daily window
+    os.utime(p, (old, old))
+    reg = {"artifacts": {
+        "quant_feedback.json": {
+            "path": "outputs/latest/quant_feedback.json",
+            "lens": "quant_learning", "role": "probe", "required": False,
+            "cadence": "daily", "producer": "quant_feedback",
+            "consumers": ["daily_run_status"], "severity_if_missing": "info",
+            "consumer_status": "consumed",
+        },
+    }}
+    st = ar.validate_registry(reg, root, ar.datetime.now(ar.timezone.utc))
+    assert any(s["artifact"] == "quant_feedback.json" for s in st["stale"])
+    assert st["overall_status"] == "green"
