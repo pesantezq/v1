@@ -699,10 +699,30 @@ def test_status_label_filter_near_cap():
 
 
 def test_status_label_filter_fallback_title_case():
-    """Unknown labels are title-cased with _ replaced by spaces."""
+    """Unknown single-token / snake_case labels are title-cased (_ → space)."""
     from gui_v2.app import _status_label
 
     assert _status_label("some_custom_status") == "Some Custom Status"
+    assert _status_label("running") == "Running"
+
+
+def test_status_label_preserves_already_humanized_phrases():
+    """A label that already contains a space is human text — returned unchanged,
+    not title-cased (fixes 'No findings' → 'No Findings' badge regression)."""
+    from gui_v2.app import _status_label
+
+    # already-humanized SQG / card labels must survive verbatim
+    assert _status_label("No findings") == "No findings"
+    assert _status_label("1 finding") == "1 finding"
+    assert _status_label("3 tracked") == "3 tracked"
+    assert _status_label("High fallback") == "High fallback"
+    assert _status_label("Complete with warnings") == "Complete with warnings"
+    assert _status_label("No experiments yet") == "No experiments yet"
+    assert _status_label("Insufficient history") == "Insufficient history"
+    # a lowercase multi-word phrase is also left alone (title-casing it is wrong)
+    assert _status_label("No structural risk actions") == "No structural risk actions"
+    # leading/trailing whitespace is trimmed
+    assert _status_label("  No findings  ") == "No findings"
 
 
 def test_system_route_badge_uses_status_label(monkeypatch, tmp_path):

@@ -173,17 +173,30 @@ _STATUS_LABEL_MAP: dict[str, str] = {
 def _status_label(value: str | None) -> str:
     """Humanize a raw snake_case status enum to operator-readable text.
 
-    Known enums are mapped explicitly; unknown/empty values fall back to a
-    title-cased form with underscores replaced by spaces. Merges the
-    memo-readability (D-M1) and persona-cockpit (M3) label sets.
+    Resolution order:
+      1. Known enums are mapped explicitly (``_STATUS_LABEL_MAP``).
+      2. A value that already contains a space is treated as an
+         already-humanized label and returned unchanged (only trimmed) —
+         title-casing it would corrupt phrases like ``No findings`` ->
+         ``No Findings``, ``3 tracked`` -> ``3 Tracked``, or
+         ``No structural risk actions`` -> ``No Structural Risk Actions``.
+      3. Remaining single-token / snake_case values fall back to a title-cased
+         form with underscores replaced by spaces (e.g. ``near_cap`` ->
+         ``Near Cap``, ``running`` -> ``Running``).
+
+    Merges the memo-readability (D-M1) and persona-cockpit (M3) label sets.
     """
     if not value:
         return ""
     mapped = _STATUS_LABEL_MAP.get(str(value).strip().lower())
     if mapped is not None:
         return mapped
-    # Fallback: title-case, replace underscores
-    return str(value).replace("_", " ").title()
+    text = str(value).strip()
+    if " " in text:
+        # already a human phrase — preserve its casing, do not title-case
+        return text
+    # single token / snake_case enum → humanize
+    return text.replace("_", " ").title()
 
 
 templates.env.filters["status_label"] = _status_label
