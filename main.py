@@ -212,6 +212,47 @@ def _decision_explainer_root_from_output_dir(output_dir: Path) -> Path:
     return Path(".")
 
 
+def _decision_plan_lineage(output_dir: Path) -> tuple[Optional[str], dict[str, Any]]:
+    """Build the (run_id, lineage) pair to stamp onto decision_plan.json.
+
+    Reads the run manifest written by run_daily_safe Stage 00 and returns the
+    canonical Phase-1 lineage block (contracts.lineage). If the manifest is
+    absent/corrupt, returns a stable-shaped degraded block (quality='degraded')
+    so downstream consumers can rely on the key shape unconditionally. Pure
+    metadata; never raises.
+    """
+    root = _decision_explainer_root_from_output_dir(output_dir)
+    try:
+        from portfolio_automation.run_manifest import read_manifest
+        from portfolio_automation.next_stage.contracts import lineage as _lineage
+        manifest = read_manifest(root)
+        if manifest:
+            run_id = manifest.get("run_id") or "unknown"
+            return run_id, _lineage(
+                run_id=run_id,
+                data_as_of=manifest.get("data_as_of")
+                or manifest.get("started_at") or "unknown",
+                producer="decision_engine",
+                source_commit=manifest.get("source_commit") or "unknown",
+                config_hash=manifest.get("config_hash") or "unknown",
+                upstream_refs=["run_manifest.json"],
+            )
+        # No manifest → stable-shaped degraded block.
+        return None, _lineage(
+            run_id="unknown", data_as_of="unknown", producer="decision_engine",
+            source_commit="unknown", config_hash="unknown",
+            upstream_refs=["run_manifest.json"], quality="degraded", freshness="stale",
+        )
+    except Exception:
+        # Absolute fallback: keep the shape, never block the write.
+        return None, {
+            "run_id": "unknown", "data_as_of": "unknown",
+            "producer": "decision_engine", "source_commit": "unknown",
+            "config_hash": "unknown", "upstream_refs": ["run_manifest.json"],
+            "quality": "degraded", "freshness": "stale",
+        }
+
+
 def _write_decision_engine_outputs(
     output_dir: Path,
     result: dict[str, Any],
@@ -235,6 +276,12 @@ def _write_decision_engine_outputs(
         # re-deriving it. Existing consumers ignore unknown keys, so this is
         # backward-compatible per CLAUDE.md output-contract rules.
         _dp_portfolio_ctx = result.get('decision_plan_portfolio_context') or {}
+        # Additive lineage stamp (SQG Phase 1): make the source-of-truth artifact
+        # traceable to its run manifest. Pure output-payload metadata — does NOT
+        # touch decision_engine.py, scoring, or any *_score semantics. Degrades to
+        # a stable-shaped 'unknown'/'degraded' block if the manifest is absent
+        # (e.g. a manual run that never called begin_run). Never fatal.
+        _dp_run_id, _dp_lineage = _decision_plan_lineage(output_dir)
         _dp_json_path = output_dir / 'decision_plan.json'
         _dp_json_path.write_text(
             _json.dumps(
@@ -242,6 +289,8 @@ def _write_decision_engine_outputs(
                     'generated_at': datetime.now().isoformat(),
                     'run_mode': run_mode,
                     'observe_only': True,
+                    'run_id': _dp_run_id,
+                    'lineage': _dp_lineage,
                     'total_decisions': len(_dp_list),
                     'portfolio_context': _dp_portfolio_ctx,
                     'decisions': _dp_list,
