@@ -665,3 +665,116 @@ def test_calibration_trend_no_trade_verbs(tmp_path):
     card = _trend_card(collect_quant_view(tmp_path))
     blob = f"{card['label']} {card['summary']}"
     assert not _TRADE_VERBS.search(blob), f"trade verb in trend card: {blob!r}"
+
+
+# ---------------------------------------------------------------------------
+# Simulation / Quant / Governance loop (SQG program) cards — added 2026-07-01.
+# Observe-only surfacing of run_manifest, quant_feedback, semantic_liveness,
+# scenario_risk, experiment_registry, strategy_mandates on the Quant cockpit.
+# ---------------------------------------------------------------------------
+
+_SQG_CARD_TITLES = {
+    "Quant Feedback (Attribution)", "Semantic Liveness", "Scenario Risk (Stress)",
+    "Experiment Registry", "Strategy Mandates", "Run Lineage",
+}
+
+
+def _make_sqg_artifacts(tmp_path: Path, *, fallback_rate: float = 0.10,
+                        coverage_complete: bool = True, run_status: str = "complete") -> None:
+    latest = tmp_path / "outputs" / "latest"
+    sandbox = tmp_path / "outputs" / "sandbox"
+    policy = tmp_path / "outputs" / "policy"
+    for d in (latest, sandbox, policy):
+        d.mkdir(parents=True, exist_ok=True)
+    _write(latest, "quant_feedback.json", {
+        "generated_at": "2026-07-01T00:00:00", "observe_only": True,
+        "by_regime": {"neutral": {"n": 40}}, "n_context_records": 94,
+        "n_resolved_outcomes": 40, "fallback_rate": fallback_rate,
+        "evidence_status": "ok"})
+    _write(latest, "semantic_liveness_status.json", {
+        "generated_at": "2026-07-01T00:00:00", "observe_only": True,
+        "overall_status": "green", "finding_count": 0, "findings": []})
+    _write(latest, "scenario_risk.json", {
+        "generated_at": "2026-07-01T00:00:00", "observe_only": True,
+        "degraded": False, "n_positions": 7,
+        "worst_case_scenario": {"name": "liquidity_shock"}, "scenarios": []})
+    _write(sandbox, "experiment_registry.json", [
+        {"experiment_id": "exp1", "status": "running"},
+        {"experiment_id": "exp2", "status": "rejected"}])
+    _write(sandbox, "strategy_mandates.json", {
+        "generated_at": "2026-07-01T00:00:00", "observe_only": True,
+        "mandates": {"a": {}, "b": {}}, "unmandated": ([] if coverage_complete else ["c"]),
+        "coverage_complete": coverage_complete})
+    _write(policy, "run_manifest.json", {
+        "run_id": "2026-07-01_daily_official", "status": run_status,
+        "source_commit": "abcdef1234", "started_at": "2026-07-01T00:00:00",
+        "completed_at": "2026-07-01T00:05:00"})
+
+
+def _sqg_cards(view: dict) -> dict:
+    return {c["title"]: c for c in view["cards"] if c["title"] in _SQG_CARD_TITLES}
+
+
+def test_sqg_cards_present_when_artifacts_present(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    cards = _sqg_cards(collect_quant_view(tmp_path))
+    assert set(cards) == _SQG_CARD_TITLES, f"missing: {_SQG_CARD_TITLES - set(cards)}"
+    # healthy fixture: none should be red; each carries its source artifact
+    for c in cards.values():
+        assert c["status"] in ("ok", "info", "warning", "unknown")
+        assert c["source_artifacts"], f"{c['title']} missing source_artifacts"
+    assert cards["Semantic Liveness"]["status"] == "ok"
+    assert cards["Experiment Registry"]["status"] == "info"
+    assert "2 experiment" in cards["Experiment Registry"]["summary"]
+
+
+def test_sqg_cards_degrade_gracefully_when_absent(tmp_path):
+    # Degraded fixture: no SQG artifacts on disk. All 6 cards still emit (no
+    # crash), with an inert/insufficient label — never red.
+    from gui_v2.data.dash_quant import collect_quant_view
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    cards = _sqg_cards(collect_quant_view(tmp_path))
+    assert set(cards) == _SQG_CARD_TITLES
+    for c in cards.values():
+        assert c["status"] != "red"
+        assert c["label"] in ("Insufficient history", "Observe only")
+
+
+def test_sqg_high_fallback_flags_warning(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, fallback_rate=0.70)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Quant Feedback (Attribution)"]
+    assert c["status"] == "warning"
+    assert c["label"] == "High fallback"
+
+
+def test_sqg_strategy_mandate_coverage_gap_flags_warning(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, coverage_complete=False)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Strategy Mandates"]
+    assert c["status"] == "warning"
+    assert c["label"] == "Coverage gap"
+    assert "unmandated" in c["summary"]
+
+
+def test_sqg_incomplete_run_flags_warning(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, run_status="running")
+    c = _sqg_cards(collect_quant_view(tmp_path))["Run Lineage"]
+    assert c["status"] == "warning"
+
+
+def test_sqg_cards_no_trade_verbs(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    for c in _sqg_cards(collect_quant_view(tmp_path)).values():
+        blob = f"{c['label']} {c['summary']}"
+        assert not _TRADE_VERBS.search(blob), f"trade verb in SQG card: {blob!r}"
+
+
+def test_sqg_group_present_in_quant_template():
+    text = Path("gui_v2/templates/dashboard/quant.html").read_text(encoding="utf-8")
+    assert "Simulation / Quant / Governance loop" in text
+    for title in _SQG_CARD_TITLES:
+        assert title in text, f"quant.html group missing SQG card title {title}"
