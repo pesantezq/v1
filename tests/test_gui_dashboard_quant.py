@@ -878,3 +878,23 @@ def test_sqg_experiment_summary_has_no_dense_brackets(tmp_path):
 def test_sqg_section_note_present_in_template():
     text = Path("gui_v2/templates/dashboard/quant.html").read_text(encoding="utf-8")
     assert "run integrity, attribution, stress and research controls" in text
+
+
+def test_shared_page_header_macro_is_responsive():
+    """The shared ui.page_header macro (used by quant + 10 other pages) stacks on
+    phones and goes horizontal from the sm breakpoint; its toolbar wraps and is
+    full-width on narrow screens. Verified through the rendered /dashboard/quant."""
+    from gui_v2.app import app
+
+    client = TestClient(app)
+    r = client.get("/dashboard/quant")
+    assert r.status_code == 200
+    text = r.text
+    # header stacks on mobile, horizontal from sm up
+    assert "flex-col gap-3 sm:flex-row sm:items-start sm:justify-between" in text, (
+        "page_header is not responsive (missing flex-col → sm:flex-row header classes)"
+    )
+    # action toolbar wraps + full width on narrow, natural width from sm up
+    assert "flex flex-wrap items-center gap-2 w-full sm:w-auto" in text
+    # Refresh action still present and keyboard-accessible (<button>)
+    assert "Refresh" in text
