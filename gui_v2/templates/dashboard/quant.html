@@ -35,8 +35,12 @@
       ("Confidence & Pattern Efficacy", ["Confidence Calibration", "Calibration Trend", "Pattern Efficacy (Weekly)", "Pattern Efficacy (Monthly)", "Pattern Efficacy (Yearly)"]),
       ("Proposals & Attribution", ["Retune Impact", "Gate / Retune Suggestions", "Alpha Attribution"]),
       ("Watch & Sizing", ["Quant Watch", "Kelly Sizing (Advisory)"]),
-      ("Simulation / Quant / Governance loop", ["Quant Feedback (Attribution)", "Semantic Liveness", "Scenario Risk (Stress)", "Experiment Registry", "Strategy Mandates", "Run Lineage"])
+      ("Simulation / Quant / Governance loop", ["Run Lineage", "Semantic Liveness", "Quant Feedback (Attribution)", "Scenario Risk (Stress)", "Strategy Mandates", "Experiment Registry"])
   ] %}
+  {# Optional per-section subtitles (keyed by group title). #}
+  {% set _group_notes = {
+      "Simulation / Quant / Governance loop": "run integrity, attribution, stress and research controls"
+  } %}
   {% set ns = namespace(shown=[]) %}
 
   {% if cards %}
@@ -44,7 +48,7 @@
   {% set _grp = cards | selectattr("title", "in", _members) | list %}
   {% if _grp %}
   <section aria-label="{{ _title }}">
-    {{ ui.section_header(_title, "", "") }}
+    {{ ui.section_header(_title, _group_notes.get(_title, ""), "") }}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {% for c in _grp %}{{ ui.status_card(c) }}{% set ns.shown = ns.shown + [c.title] %}{% endfor %}
     </div>

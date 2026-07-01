@@ -67,7 +67,11 @@
 {# The work-order queue table (recent orders for this view). #}
 {% macro _queue(work_orders) -%}
 {% if work_orders %}
-<div class="overflow-x-auto rounded-xl border border-zinc-800">
+{# Standard responsive-table wrapper (ui.responsive_table → overflow-x-auto on
+   mobile) inside the rounded border container. Replaces the old hand-written
+   overflow-x-auto div so every queue table is scroll-contained the same way. #}
+<div class="rounded-xl border border-zinc-800">
+  {% call ui.responsive_table() %}
   <table class="w-full text-sm border-collapse">
     <thead>
       <tr class="bg-zinc-900/80 text-zinc-400 text-xs uppercase tracking-wide text-left">
@@ -92,6 +96,7 @@
       {% endfor %}
     </tbody>
   </table>
+  {% endcall %}
 </div>
 {% else %}
 {{ ui.empty_state("No work orders yet", "Use the actions above to create a diagnostic or proposal work order. Orders are observe-only and reviewed before any action.") }}

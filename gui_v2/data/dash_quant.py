@@ -185,157 +185,196 @@ def _efficacy_label_and_status(
     return f"{lookback_days}d window", "info"
 
 
+def _humanize_token(text: Any) -> str:
+    """snake_case / identifier -> 'Sentence case' (upper first char, rest intact).
+
+    e.g. ``liquidity_shock`` -> ``Liquidity shock``. Preserves interior casing
+    (does not lowercase acronyms the way ``.title()`` would).
+    """
+    s = str(text or "").replace("_", " ").strip()
+    return (s[:1].upper() + s[1:]) if s else s
+
+
 def _sqg_loop_cards(root: Path) -> list[dict[str, Any]]:
     """Observe-only cards for the Simulation/Quant/Governance loop artifacts.
 
     All six are observe-only / sandbox / production-gated — NONE feed
-    decision_plan.json. Cards degrade gracefully when an artifact is absent
-    (the expected inert state for the on_demand ledgers). No trade language.
+    decision_plan.json. The page-level banner already establishes the
+    observe/proposal-only framing, so each card badge carries its *actual*
+    state (Complete / No findings / Healthy / ...) rather than repeating
+    "Observe only". Cards degrade gracefully when an artifact is absent.
+    No trade/execution language anywhere.
+
+    Emitted in operational reading order (this list order is what the template
+    renders, via selectattr): did the run complete → is the system coherent →
+    is attribution usable → what does the stress view show → is strategy
+    documentation complete → what research is registered.
     """
     latest = root / "outputs" / "latest"
     sandbox = root / "outputs" / "sandbox"
     policy = root / "outputs" / "policy"
     out: list[dict[str, Any]] = []
 
-    # Quant Feedback attribution (Phase 5) — fallback_rate is the maturity gauge.
-    qf = _read_json(latest / "quant_feedback.json")
-    if qf:
-        fb = qf.get("fallback_rate")
-        n_res = qf.get("n_resolved_outcomes") or 0
-        n_ctx = qf.get("n_context_records") or 0
-        ev = qf.get("evidence_status") or "unknown"
-        high_fallback = isinstance(fb, (int, float)) and fb >= 0.50
-        parts = [f"{n_res} resolved / {n_ctx} context records"]
-        if isinstance(fb, (int, float)):
-            parts.append(f"fallback {fb:.0%}")
-        parts.append(f"evidence {ev}")
+    # 1. Run Lineage manifest (Phase 1) — did the run complete?
+    rm = _read_json(policy / "run_manifest.json")
+    if rm:
+        rid = rm.get("run_id") or "unknown"
+        rstatus = (rm.get("status") or "unknown").lower()
+        commit = (rm.get("source_commit") or "")[:8]
+        # complete → healthy; complete_with_warnings/running/failed → warning
+        # (failed stays warning, not red: this observe-only cockpit never raises a
+        # production-critical red for a run-status signal). missing → neutral.
+        _run_map = {
+            "complete": ("ok", "Complete"),
+            "complete_with_warnings": ("warning", "Complete with warnings"),
+            "running": ("warning", "Running"),
+            "failed": ("warning", "Failed"),
+        }
+        c_status, label = _run_map.get(rstatus, ("unknown", "Unknown"))
+        summary = f"Run {rid}" + (f" at commit {commit}" if commit else "")
         out.append(card(
-            "Quant Feedback (Attribution)",
-            status="warning" if high_fallback else "info",
-            label="High fallback" if high_fallback else "Observe only",
-            summary="; ".join(parts),
-            source_artifacts=["quant_feedback.json"],
-            updated_at=qf.get("generated_at"),
-        ))
+            "Run Lineage", status=c_status, label=label, summary=summary,
+            source_artifacts=["run_manifest.json"],
+            updated_at=rm.get("completed_at") or rm.get("started_at")))
     else:
         out.append(card(
-            "Quant Feedback (Attribution)", status="unknown",
-            label="Insufficient history",
-            summary="quant_feedback.json absent — run daily pipeline (Stage 7i)",
-            source_artifacts=["quant_feedback.json"]))
+            "Run Lineage", status="unknown", label="Unknown",
+            summary="No run manifest yet — produced by the daily pipeline.",
+            source_artifacts=["run_manifest.json"]))
 
-    # Semantic Liveness meta-monitor (Phase 6).
+    # 2. Semantic Liveness meta-monitor (Phase 6) — is the system coherent?
+    #    AMBER-max by design: an unexpected red is defensively downgraded to a
+    #    warning here (the underlying status is preserved in the summary) so this
+    #    observe-only meta-monitor never claims a production-critical red.
     sl = _read_json(latest / "semantic_liveness_status.json")
     if sl:
         ov = (sl.get("overall_status") or "unknown").lower()
-        fc = sl.get("finding_count") or 0
+        fc = int(sl.get("finding_count") or 0)
         c_status = {"ok": "ok", "green": "ok", "amber": "warning",
-                    "warning": "warning", "red": "red"}.get(ov, "info")
+                    "warning": "warning", "red": "warning"}.get(ov, "unknown")
+        label = "No findings" if fc == 0 else ("1 finding" if fc == 1 else f"{fc} findings")
+        if ov == "red":
+            summary = ("Distribution monitor reported red — shown as a warning "
+                       "(observe-only meta-monitor is AMBER-max).")
+        else:
+            summary = f"Distribution monitor reported {ov}."
         out.append(card(
-            "Semantic Liveness",
-            status=c_status, label="Observe only",
-            summary=f"{fc} degeneracy finding(s) (status {ov})",
+            "Semantic Liveness", status=c_status, label=label, summary=summary,
             source_artifacts=["semantic_liveness_status.json"],
             updated_at=sl.get("generated_at")))
     else:
         out.append(card(
-            "Semantic Liveness", status="unknown", label="Insufficient history",
-            summary="semantic_liveness_status.json absent — run daily pipeline (Stage 13b)",
+            "Semantic Liveness", status="unknown", label="Unknown",
+            summary="No liveness report yet — produced by the daily pipeline.",
             source_artifacts=["semantic_liveness_status.json"]))
 
-    # Scenario Risk stress illustrations (Phase 11).
+    # 3. Quant Feedback attribution (Phase 5) — is attribution evidence usable?
+    qf = _read_json(latest / "quant_feedback.json")
+    if qf:
+        fb = qf.get("fallback_rate")
+        n_res = int(qf.get("n_resolved_outcomes") or 0)
+        n_ctx = int(qf.get("n_context_records") or 0)
+        has_fb = isinstance(fb, (int, float))
+        if n_res == 0:
+            c_status, label = "unknown", "Insufficient history"
+            summary = f"{n_ctx} decisions captured; none resolved to outcomes yet."
+        elif has_fb and fb >= 0.50:
+            c_status, label = "warning", "High fallback"
+            summary = (f"{fb:.0%} of {n_res} resolved outcomes could not be joined "
+                       f"to decision context ({n_ctx} captured).")
+        else:
+            c_status, label = "ok", "Healthy"
+            summary = f"{n_res} resolved outcomes joined to context ({n_ctx} captured)"
+            summary += (f"; fallback {fb:.0%}." if has_fb else ".")
+        out.append(card(
+            "Quant Feedback (Attribution)", status=c_status, label=label,
+            summary=summary, source_artifacts=["quant_feedback.json"],
+            updated_at=qf.get("generated_at")))
+    else:
+        out.append(card(
+            "Quant Feedback (Attribution)", status="unknown",
+            label="Insufficient history",
+            summary="No attribution report yet — produced by the daily pipeline.",
+            source_artifacts=["quant_feedback.json"]))
+
+    # 4. Scenario Risk stress illustrations (Phase 11) — deterministic stress view.
     scn = _read_json(latest / "scenario_risk.json")
     if scn:
-        n_pos = scn.get("n_positions") or 0
+        n_pos = int(scn.get("n_positions") or 0)
         degraded = bool(scn.get("degraded"))
         wc = scn.get("worst_case_scenario")
-        if isinstance(wc, dict):
-            wc_label = wc.get("name") or wc.get("scenario") or wc.get("label")
+        wc_label = (wc.get("name") or wc.get("scenario") or wc.get("label")
+                    ) if isinstance(wc, dict) else wc
+        if degraded:
+            c_status, label = "warning", "Degraded"
+        elif n_pos == 0:
+            c_status, label = "unknown", "Insufficient history"
         else:
-            wc_label = wc
-        parts = [f"{n_pos} position(s)"]
+            c_status, label = "info", "Available"
+        summary = f"{n_pos} position(s) stress-tested"
         if wc_label:
-            parts.append(f"worst case: {wc_label}")
+            summary += f"; worst case {_humanize_token(wc_label)}"
+        summary += " — deterministic illustration, not a forecast."
         out.append(card(
-            "Scenario Risk (Stress)",
-            status="warning" if degraded else "info",
-            label="Degraded" if degraded else "Observe only",
-            summary="; ".join(parts) + " — deterministic stress illustration, not a forecast",
-            source_artifacts=["scenario_risk.json"],
+            "Scenario Risk (Stress)", status=c_status, label=label,
+            summary=summary, source_artifacts=["scenario_risk.json"],
             updated_at=scn.get("generated_at")))
     else:
         out.append(card(
             "Scenario Risk (Stress)", status="unknown", label="Insufficient history",
-            summary="scenario_risk.json absent — run daily pipeline (Stage 7b2)",
+            summary="No scenario report yet — produced by the daily pipeline.",
             source_artifacts=["scenario_risk.json"]))
 
-    # Experiment Registry research ledger (Phase 8) — accepts list or {registry:[...]}.
-    er_raw = _read_json(sandbox / "experiment_registry.json")
-    if er_raw is not None:
-        rows = er_raw if isinstance(er_raw, list) else (er_raw.get("registry") or er_raw.get("experiments") or [])
-        by_status: dict[str, int] = {}
-        retained = 0
-        for e in rows if isinstance(rows, list) else []:
-            if not isinstance(e, dict):
-                continue
-            st = str(e.get("status") or "unknown")
-            by_status[st] = by_status.get(st, 0) + 1
-            if st in ("retained_failure", "failed_retained", "rejected"):
-                retained += 1
-        breakdown = ", ".join(f"{k}:{v}" for k, v in sorted(by_status.items())) or "none"
-        out.append(card(
-            "Experiment Registry",
-            status="info", label="Observe only",
-            summary=f"{len(rows)} experiment(s) [{breakdown}]; {retained} retained failure(s)",
-            source_artifacts=["experiment_registry.json"],
-            updated_at=er_raw.get("generated_at") if isinstance(er_raw, dict) else None))
-    else:
-        out.append(card(
-            "Experiment Registry", status="info", label="Observe only",
-            summary="experiment_registry.json absent — no research experiments registered yet",
-            source_artifacts=["experiment_registry.json"]))
-
-    # Strategy Mandates coverage (Phase 9) — Strategy Documentation Requirement.
+    # 5. Strategy Mandates coverage (Phase 9) — is strategy documentation complete?
     sm = _read_json(sandbox / "strategy_mandates.json")
     if sm:
         cc = bool(sm.get("coverage_complete"))
         unmandated = sm.get("unmandated") or []
         n_mandates = len(sm.get("mandates") or {})
-        summary = f"{n_mandates} mandate(s); coverage_complete={cc}"
-        if unmandated:
-            summary += f"; unmandated: {', '.join(str(u) for u in unmandated)}"
+        if cc:
+            c_status, label = "ok", "Complete"
+            summary = f"All {n_mandates} strategies carry a documented mandate."
+        else:
+            c_status, label = "warning", "Coverage gap"
+            names = ", ".join(_humanize_token(u) for u in unmandated)
+            summary = (f"{n_mandates} strategies; {len(unmandated)} without a mandate"
+                       + (f": {names}." if names else "."))
         out.append(card(
-            "Strategy Mandates",
-            status="info" if cc else "warning",
-            label="Observe only" if cc else "Coverage gap",
-            summary=summary,
+            "Strategy Mandates", status=c_status, label=label, summary=summary,
             source_artifacts=["strategy_mandates.json"],
             updated_at=sm.get("generated_at")))
     else:
         out.append(card(
             "Strategy Mandates", status="unknown", label="Insufficient history",
-            summary="strategy_mandates.json absent — run weekly pipeline",
+            summary="No mandates yet — produced by the weekly pipeline.",
             source_artifacts=["strategy_mandates.json"]))
 
-    # Run Lineage manifest (Phase 1) — incomplete run is a heads-up.
-    rm = _read_json(policy / "run_manifest.json")
-    if rm:
-        rid = rm.get("run_id") or "?"
-        rstatus = (rm.get("status") or "unknown").lower()
-        commit = (rm.get("source_commit") or "")[:8]
-        complete = rstatus == "complete"
+    # 6. Experiment Registry research ledger (Phase 8) — accepts list or {registry:[...]}.
+    er_raw = _read_json(sandbox / "experiment_registry.json")
+    rows: list = []
+    if isinstance(er_raw, list):
+        rows = er_raw
+    elif isinstance(er_raw, dict):
+        rows = er_raw.get("registry") or er_raw.get("experiments") or []
+    if rows:
+        by_status: dict[str, int] = {}
+        for e in rows:
+            if isinstance(e, dict):
+                st = str(e.get("status") or "unknown")
+                by_status[st] = by_status.get(st, 0) + 1
+        # natural-language breakdown, no dense bracketed dump
+        phrase = ", ".join(f"{v} {_humanize_token(k).lower()}"
+                           for k, v in sorted(by_status.items()))
+        summary = f"{len(rows)} experiment(s) registered" + (f" ({phrase})." if phrase else ".")
         out.append(card(
-            "Run Lineage",
-            status="info" if complete else "warning",
-            label="Observe only" if complete else f"Run {rstatus}",
-            summary=f"run {rid}; status {rstatus}; commit {commit}",
-            source_artifacts=["run_manifest.json"],
-            updated_at=rm.get("completed_at") or rm.get("started_at")))
+            "Experiment Registry", status="info", label=f"{len(rows)} tracked",
+            summary=summary, source_artifacts=["experiment_registry.json"],
+            updated_at=er_raw.get("generated_at") if isinstance(er_raw, dict) else None))
     else:
         out.append(card(
-            "Run Lineage", status="unknown", label="Insufficient history",
-            summary="run_manifest.json absent — run daily pipeline (Stage 00/14)",
-            source_artifacts=["run_manifest.json"]))
+            "Experiment Registry", status="info", label="No experiments yet",
+            summary="No research experiments registered yet.",
+            source_artifacts=["experiment_registry.json"]))
 
     return out
 

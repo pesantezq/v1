@@ -1,8 +1,16 @@
 # Issue: memo page emits a wide `<table>` (mobile-first contract regression)
 
-**Status:** OPEN — tracked (was an informal known exception; promoted to a bounded issue 2026-07-01)
+**Status:** RESOLVED 2026-07-01 (branch `fix/gui-responsive-quant-polish`) — the
+root cause was the **stale absolute test contract**, not an unsafe table. The
+operator work-order table was already scroll-contained (`overflow-x-auto`
+ancestor), so it is a legitimate responsive table; the test wrongly rejected all
+tables. Fixed by (a) standardizing the operator queue on the `ui.responsive_table()`
+macro and (b) replacing `test_memo_route_no_wide_table` with a semantic
+`test_memo_route_tables_are_responsive` that allows tables inside an
+`overflow-x-auto` ancestor and only fails uncontained wide tables (stdlib
+`HTMLParser` helper — no new dependency). See Resolution below.
 **Severity:** low (UX/mobile-layout; no decision, scoring, or data impact)
-**Failing test:** `tests/test_gui_dashboard_memo.py::test_memo_route_no_wide_table`
+**Original failing test:** `tests/test_gui_dashboard_memo.py::test_memo_route_no_wide_table` (removed)
 **Surfaces:** `/dashboard/memo`
 
 ## Symptom
@@ -55,9 +63,30 @@ substantially," so the informal exception should not persist.
   passes.
 - No change to `dash_memo.py` data, memo content, or any decision/score artifact.
 
+## Resolution (2026-07-01, `fix/gui-responsive-quant-polish`)
+
+Root cause confirmed: **stale absolute test contract**. The production table was
+already inside `overflow-x-auto` (a legitimate responsive/contained table); the
+old assertion `"<table" not in r.text` rejected *all* tables including safe ones.
+This was never a real mobile-layout defect.
+
+Changes:
+- `gui_v2/templates/components/operator_panel.html` — `_queue` now wraps its table
+  in `{% call ui.responsive_table() %}` (inside the rounded-border container),
+  standardizing on the shared macro instead of a hand-written `overflow-x-auto` div.
+  All queue columns, report links, badges, empty state, and POST actions preserved.
+- `tests/test_gui_dashboard_memo.py` — `test_memo_route_no_wide_table` replaced with
+  `test_memo_route_tables_are_responsive` (semantic: every `<table>` must have an
+  ancestor whose class contains `overflow-x-auto`), plus positive/negative helper
+  unit tests. Uses a small stdlib `HTMLParser` — no BeautifulSoup / new dependency.
+  Module docstring updated to say the memo permits only responsive/contained tables.
+- `test_memo_route_has_stacked_sections` kept.
+
+Decision/scoring/artifact behavior untouched; operator queue not removed.
+
 ## Notes
 
 - Not caused by the SQG program work (2026-07-01) — proven pre-existing by
   stashing the SQG changes and reproducing the failure.
-- Until fixed, `preflight.sh` remains green (its FMP-focused suite does not
-  include this GUI test), so this does not block the daily pipeline.
+- `preflight.sh` remained green throughout (its FMP-focused suite does not
+  include this GUI test), so this never blocked the daily pipeline.

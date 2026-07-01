@@ -680,7 +680,8 @@ _SQG_CARD_TITLES = {
 
 
 def _make_sqg_artifacts(tmp_path: Path, *, fallback_rate: float = 0.10,
-                        coverage_complete: bool = True, run_status: str = "complete") -> None:
+                        coverage_complete: bool = True, run_status: str = "complete",
+                        semantic_status: str = "green", finding_count: int = 0) -> None:
     latest = tmp_path / "outputs" / "latest"
     sandbox = tmp_path / "outputs" / "sandbox"
     policy = tmp_path / "outputs" / "policy"
@@ -693,7 +694,8 @@ def _make_sqg_artifacts(tmp_path: Path, *, fallback_rate: float = 0.10,
         "evidence_status": "ok"})
     _write(latest, "semantic_liveness_status.json", {
         "generated_at": "2026-07-01T00:00:00", "observe_only": True,
-        "overall_status": "green", "finding_count": 0, "findings": []})
+        "overall_status": semantic_status, "finding_count": finding_count,
+        "findings": [{"i": i} for i in range(finding_count)]})
     _write(latest, "scenario_risk.json", {
         "generated_at": "2026-07-01T00:00:00", "observe_only": True,
         "degraded": False, "n_positions": 7,
@@ -738,7 +740,8 @@ def test_sqg_cards_degrade_gracefully_when_absent(tmp_path):
     assert set(cards) == _SQG_CARD_TITLES
     for c in cards.values():
         assert c["status"] != "red"
-        assert c["label"] in ("Insufficient history", "Observe only")
+        # absent artifacts degrade to a neutral/insufficient state label
+        assert c["label"] in ("Unknown", "Insufficient history", "No experiments yet")
 
 
 def test_sqg_high_fallback_flags_warning(tmp_path):
@@ -755,7 +758,7 @@ def test_sqg_strategy_mandate_coverage_gap_flags_warning(tmp_path):
     c = _sqg_cards(collect_quant_view(tmp_path))["Strategy Mandates"]
     assert c["status"] == "warning"
     assert c["label"] == "Coverage gap"
-    assert "unmandated" in c["summary"]
+    assert "without a mandate" in c["summary"]
 
 
 def test_sqg_incomplete_run_flags_warning(tmp_path):
@@ -778,3 +781,100 @@ def test_sqg_group_present_in_quant_template():
     assert "Simulation / Quant / Governance loop" in text
     for title in _SQG_CARD_TITLES:
         assert title in text, f"quant.html group missing SQG card title {title}"
+
+
+# --- polish pass (2026-07-01, fix/gui-responsive-quant-polish) --------------
+
+_SQG_OPERATIONAL_ORDER = [
+    "Run Lineage", "Semantic Liveness", "Quant Feedback (Attribution)",
+    "Scenario Risk (Stress)", "Strategy Mandates", "Experiment Registry",
+]
+
+
+def test_sqg_cards_in_operational_order(tmp_path):
+    """SQG cards are emitted in the operational reading order."""
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    order = [c["title"] for c in collect_quant_view(tmp_path)["cards"]
+             if c["title"] in _SQG_CARD_TITLES]
+    assert order == _SQG_OPERATIONAL_ORDER, f"unexpected SQG order: {order}"
+
+
+def test_sqg_healthy_cards_avoid_observe_only_label(tmp_path):
+    """Healthy cards carry a meaningful state label, not a repeated 'Observe only'."""
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    labels = {c["title"]: c["label"] for c in _sqg_cards(collect_quant_view(tmp_path)).values()}
+    for title, label in labels.items():
+        assert label != "Observe only", f"{title} still uses the generic 'Observe only' label"
+    assert labels["Run Lineage"] == "Complete"
+    assert labels["Semantic Liveness"] == "No findings"
+    assert labels["Quant Feedback (Attribution)"] == "Healthy"
+    assert labels["Scenario Risk (Stress)"] == "Available"
+    assert labels["Strategy Mandates"] == "Complete"
+
+
+def test_sqg_complete_with_warnings_shown_as_completed_warning(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, run_status="complete_with_warnings")
+    c = _sqg_cards(collect_quant_view(tmp_path))["Run Lineage"]
+    assert c["status"] == "warning"
+    assert c["label"] == "Complete with warnings"  # clearly identified as completed
+
+
+def test_sqg_semantic_red_degrades_to_warning(tmp_path):
+    """AMBER-max: an unexpected semantic red must not surface as a red card."""
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, semantic_status="red", finding_count=2)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Semantic Liveness"]
+    assert c["status"] == "warning", "semantic red must degrade to warning"
+    assert c["status"] != "red"
+    assert "red" in c["summary"].lower()  # underlying status preserved
+
+
+def test_sqg_zero_findings_label(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, semantic_status="green", finding_count=0)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Semantic Liveness"]
+    assert c["label"] == "No findings"
+    assert c["status"] == "ok"
+
+
+def test_sqg_scenario_identifier_humanized(tmp_path):
+    """snake_case scenario ids are humanized (liquidity_shock -> Liquidity shock)."""
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Scenario Risk (Stress)"]
+    assert "Liquidity shock" in c["summary"]
+    assert "liquidity_shock" not in c["summary"]
+
+
+def test_sqg_mandate_complete_uses_natural_wording(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path, coverage_complete=True)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Strategy Mandates"]
+    assert c["label"] == "Complete"
+    assert "coverage_complete" not in c["summary"]  # no raw field dump
+    assert "documented mandate" in c["summary"]
+
+
+def test_sqg_empty_registry_label(tmp_path):
+    """Absent experiment registry produces 'No experiments yet'."""
+    from gui_v2.data.dash_quant import collect_quant_view
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Experiment Registry"]
+    assert c["label"] == "No experiments yet"
+
+
+def test_sqg_experiment_summary_has_no_dense_brackets(tmp_path):
+    from gui_v2.data.dash_quant import collect_quant_view
+    _make_sqg_artifacts(tmp_path)
+    c = _sqg_cards(collect_quant_view(tmp_path))["Experiment Registry"]
+    # natural-language breakdown, not "[running:1, rejected:1]"
+    assert "[" not in c["summary"] and ":" not in c["summary"]
+    assert "2 experiment" in c["summary"]
+
+
+def test_sqg_section_note_present_in_template():
+    text = Path("gui_v2/templates/dashboard/quant.html").read_text(encoding="utf-8")
+    assert "run integrity, attribution, stress and research controls" in text

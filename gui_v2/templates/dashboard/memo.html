@@ -13,29 +13,33 @@
   {# --------------------------------------------------------------- #}
   {# Header + sticky mini-toolbar (copy link / print / refresh).      #}
   {# --------------------------------------------------------------- #}
-  <header class="flex items-start justify-between gap-4">
+  {# Responsive header: title stacks above the toolbar on phones, sits inline
+     from the sm breakpoint up. Action buttons wrap and go full-width / evenly
+     sized on very narrow screens (flex-1) but stay compact on desktop
+     (sm:flex-none). All three actions (copy / print / refresh) are preserved. #}
+  <header class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
     <div class="min-w-0">
       <h1 class="text-2xl font-semibold tracking-tight">Daily Memo</h1>
       <p class="text-sm text-zinc-400 mt-0.5">
         {% if memo_date %}{{ memo_date }} &mdash; {% endif %}advisory investment report, read-only
       </p>
     </div>
-    <div class="flex items-center gap-2 flex-shrink-0 print:hidden">
+    <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:flex-shrink-0 print:hidden">
       <button type="button" id="memo-copy-btn" title="Copy memo URL"
               onclick="(function(){try{navigator.clipboard.writeText(window.location.href).then(function(){var b=document.getElementById('memo-copy-btn');var o=b.getAttribute('data-label');b.querySelector('span').textContent='Copied';setTimeout(function(){b.querySelector('span').textContent=o;},1500);})}catch(e){}})();"
               data-label="Copy link"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
+              class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 11-5.656-5.656l1.5-1.5m6.656-2.828a4 4 0 00-5.656 0l-3 3"/></svg>
         <span>Copy link</span>
       </button>
       <button type="button" title="Print / save as PDF" onclick="window.print()"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
+              class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-zinc-800 text-zinc-300 border border-zinc-700 hover:bg-zinc-700">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
         Print
       </button>
       <button hx-get="/dashboard/memo" hx-target="#dashboard-memo-content"
               hx-select="#dashboard-memo-content" hx-swap="outerHTML"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
+              class="inline-flex flex-1 sm:flex-none justify-center items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
         Refresh
       </button>
@@ -124,11 +128,26 @@
   {# Operator actions — memo-support work orders (create-only).        #}
   {# Diagnose formatting or regenerate memo from existing artifacts;   #}
   {# never sends email.                                                #}
+  {#                                                                   #}
+  {# Presentation: collapsed <details> disclosure so the investment    #}
+  {# memo stays the dominant content on load. Hidden entirely when     #}
+  {# printing. The operator_panel macro itself is UNCHANGED — all its  #}
+  {# POST actions + safety text are preserved; only this memo-page      #}
+  {# wrapper is memo-specific.                                          #}
   {# --------------------------------------------------------------- #}
   {% if operator_probes is defined %}
-  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
-                       operator_post_url, heading="Operator Actions",
-                       dispatch_url=operator_dispatch_url) }}
+  <details class="group print:hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <summary class="flex items-center gap-2 cursor-pointer select-none list-none px-4 py-3 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Operator tools
+      <span class="text-xs font-normal text-zinc-500">diagnostics &amp; work orders — observe-only, no execution</span>
+    </summary>
+    <div class="px-4 pb-4 pt-1">
+      {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                           operator_post_url, heading="Operator Actions",
+                           dispatch_url=operator_dispatch_url) }}
+    </div>
+  </details>
   {% endif %}
 
 </div>

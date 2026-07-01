@@ -12,7 +12,11 @@ Tests
 - no raw 16-hex fingerprint hash in rendered mobile memo HTML
 - no forbidden action labels in rendered HTML
 - no forbidden action labels in template file
-- mobile-first layout: no wide table; sections are stacked divs
+- responsive tables: the memo permits only responsive/contained tables — every
+  rendered <table> must live inside an ancestor whose class contains
+  `overflow-x-auto` (uncontained wide tables are rejected). Sections stay stacked.
+- responsive header: memo header carries the mobile stacked / sm-horizontal classes
+- operator tools live inside a collapsed <details> disclosure hidden from print
 - empty state: "No memo" message visible when memo absent
 """
 from __future__ import annotations
@@ -340,16 +344,136 @@ def test_memo_route_no_forbidden_labels():
     assert offenders == [], f"Forbidden labels in /dashboard/memo: {offenders}"
 
 
-def test_memo_route_no_wide_table():
-    """Mobile-first: memo HTML must not contain a <table> element (no wide tables)."""
+# ---------------------------------------------------------------------------
+# Responsive-table contract (replaces the stale absolute no-<table> assertion).
+#
+# A <table> is acceptable iff it is scroll-contained: some ANCESTOR element
+# carries a class containing `overflow-x-auto` (the ui.responsive_table() macro).
+# Only an *uncontained* wide table fails. Uses a stdlib HTMLParser — no new
+# dependency (per the task: do not add BeautifulSoup).
+# ---------------------------------------------------------------------------
+
+from html.parser import HTMLParser as _HTMLParser  # noqa: E402  (stdlib, grouped w/ helper)
+
+# HTML void elements never have children, so they must not be pushed onto the
+# ancestor stack (there is no matching end tag to pop them).
+_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+})
+
+
+class _ResponsiveTableParser(_HTMLParser):
+    """Count <table>s and how many lack an `overflow-x-auto` ancestor."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._stack: list[tuple[str, bool]] = []  # (tag, ancestor_has_overflow)
+        self.tables_total = 0
+        self.tables_uncontained = 0
+
+    @staticmethod
+    def _has_overflow(attrs) -> bool:
+        cls = dict(attrs).get("class") or ""
+        return "overflow-x-auto" in cls
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self.tables_total += 1
+            if not any(flag for _, flag in self._stack):
+                self.tables_uncontained += 1
+        if tag not in _VOID_TAGS:
+            # propagate "an ancestor has overflow" down the open stack
+            ancestor_overflow = self._has_overflow(attrs) or any(
+                flag for _, flag in self._stack
+            )
+            self._stack.append((tag, ancestor_overflow))
+
+    def handle_startendtag(self, tag, attrs):
+        # self-closing (e.g. SVG <path/>) — never pushed.
+        if tag == "table":
+            self.tables_total += 1
+            if not any(flag for _, flag in self._stack):
+                self.tables_uncontained += 1
+
+    def handle_endtag(self, tag):
+        for i in range(len(self._stack) - 1, -1, -1):
+            if self._stack[i][0] == tag:
+                del self._stack[i:]
+                break
+
+
+def _scan_tables(html: str) -> _ResponsiveTableParser:
+    p = _ResponsiveTableParser()
+    p.feed(html)
+    return p
+
+
+def test_responsive_table_helper_passes_contained_table():
+    """A <table> inside an overflow-x-auto ancestor is accepted."""
+    html = '<div class="rounded-xl overflow-x-auto"><table><tr><td>x</td></tr></table></div>'
+    p = _scan_tables(html)
+    assert p.tables_total == 1
+    assert p.tables_uncontained == 0
+
+
+def test_responsive_table_helper_flags_uncontained_table():
+    """A <table> with no responsive ancestor is flagged by the helper."""
+    html = '<div class="p-4"><table><tr><td>x</td></tr></table></div>'
+    p = _scan_tables(html)
+    assert p.tables_total == 1
+    assert p.tables_uncontained == 1
+
+
+def test_memo_route_tables_are_responsive():
+    """Every <table> on the memo page must be inside an overflow-x-auto ancestor.
+
+    Tables are allowed (the operator work-order queue is a legitimate responsive
+    table); only uncontained wide tables are rejected.
+    """
     from gui_v2.app import app
 
     client = TestClient(app)
     r = client.get("/dashboard/memo")
     assert r.status_code == 200
-    assert "<table" not in r.text.lower(), (
-        "Wide <table> element found in memo page — sections should be stacked divs/sections"
+    p = _scan_tables(r.text)
+    assert p.tables_uncontained == 0, (
+        f"{p.tables_uncontained} of {p.tables_total} table(s) on /dashboard/memo "
+        "are not inside an overflow-x-auto container"
     )
+
+
+def test_memo_route_header_is_responsive():
+    """The memo header stacks on phones and goes horizontal from the sm breakpoint."""
+    from gui_v2.app import app
+
+    client = TestClient(app)
+    r = client.get("/dashboard/memo")
+    assert r.status_code == 200
+    text = r.text
+    assert "flex-col" in text and "sm:flex-row" in text, (
+        "memo header missing responsive stacked/horizontal classes"
+    )
+    # action buttons wrap and are full-width on narrow screens
+    assert "flex-wrap" in text
+    assert "flex-1 sm:flex-none" in text
+
+
+def test_memo_route_operator_tools_are_disclosed_and_print_hidden():
+    """Operator tools live inside a <details> disclosure hidden when printing."""
+    from gui_v2.app import app
+
+    client = TestClient(app)
+    r = client.get("/dashboard/memo")
+    assert r.status_code == 200
+    text = r.text
+    # the disclosure exists, is labeled, and the whole area is print-hidden
+    assert "Operator tools" in text
+    assert re.search(r"<details[^>]*print:hidden", text), (
+        "operator-tools <details> should carry print:hidden"
+    )
+    # copy/print/refresh toolbar preserved
+    assert "Copy link" in text and "Print" in text and "Refresh" in text
 
 
 def test_memo_route_has_stacked_sections():
