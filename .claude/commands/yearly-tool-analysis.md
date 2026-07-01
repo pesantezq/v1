@@ -32,6 +32,10 @@ Working dir: `/opt/stockbot`.
 11. `outputs/backtest/poc_simulation_results.json` → Pattern-Loop backtest (Steps 0–3): evaluated count, per-regime efficacy, calibration slope, generated_at freshness
 12. `outputs/policy/signal_weight_proposals.json` → Pattern-Loop tuning proposals (Step 4): how many bounded weight deltas were proposed vs gated as insufficient/no-edge
 13. `outputs/operator_control/work_orders.jsonl` + `outputs/operator_control/audit_log.jsonl` (lifetime) → operator-control retrospective: total work orders, completed vs failed, lifetime `worker_protected_path_violation` count, and autonomous-vs-scaffold usage split (added 2026-06-09; observe-only operator-control plane)
+14. SQG program artifacts (added 2026-07-01; simulation/quant-feedback/governance loop — **observe-only / sandbox / production-gated; never feed `decision_plan.json`**; quant + process lens). The year-end read is about *research integrity and attribution maturity*, not a daily health signal:
+    - `outputs/latest/quant_feedback.json` → the lifetime per-regime / per-crowd-state attribution + `fallback_rate` (Phase 5). Feeds `regime_x_tag_matrix` / attribution-analyst with a *decision-context-conditioned* view of which regimes the live decisions actually won in — complements the signal_outcomes tag×regime cross-tab.
+    - `outputs/sandbox/experiment_registry.json` → the year's research-experiment yield: total registered, promoted vs rejected, and `retained_failure_count`. The **research-integrity** headline — were hypotheses tested, and were failures kept (not silently dropped)?
+    - `outputs/sandbox/strategy_mandates.json` → `coverage_complete` + `unmandated[]`: did every strategy carry a documented mandate all year (Strategy Documentation Requirement)?
 
 ---
 
@@ -48,6 +52,8 @@ Working dir: `/opt/stockbot`.
 - **`regime_x_tag_matrix`** — from pattern_efficacy_yearly.partitioned_by_fingerprint_regime: which (tag, regime) cells outperform; surface top 10 + bottom 10
 - **`gauge_era_efficacy`** — each gauge fingerprint's lifetime hit-rate, mean-return, sample count, duration in days
 - **`current_gauge_efficacy_vs_best`** — how does the live gauge compare to the best historical gauge?
+- **`quant_feedback_attribution_maturity`** — from `quant_feedback.json`: lifetime `fallback_rate` (did the at-decision-context join mature over the year?) + the per-regime buckets to cross-check against `regime_x_tag_matrix` (do decision-context-conditioned wins agree with the raw signal_outcomes tag×regime cells?).
+- **`research_experiment_yield`** — from `experiment_registry.json`: experiments registered this year, promoted / rejected / retained-failure split; from `strategy_mandates.json`: `coverage_complete` + `unmandated[]`. The year's research-integrity + mandate-coverage headline.
 - **`backtest_loop_health`** — run `backtesting.backtest_health.assess_backtest_health(run_score_gate=True)` over `outputs/backtest/` + `outputs/policy/signal_weight_proposals.json`; it returns GREEN/AMBER/RED with flags. **content_liveness:** a present-but-recent `poc_simulation_results.json` with `evaluated == 0` is the `looks_fresh_but_empty` silent-zero (RED), distinct from a missing artifact (`results_missing`); all-`unknown` per-regime buckets are `degenerate_regimes` (RED). **Step 5 safety:** `run_score_gate=True` runs the protected-score value-regression gate (`score_invariance_gate`) on a temp registry copy; a `score_coupling_regression` flag (RED) means a registry `default_weight` delta now moves a protected score — a hard block on any live Step 5 apply, route to re-review. (Today the registry weight is decoupled from scoring, so the gate is GREEN; the flag exists to catch a future coupling.)
 
 ### Process analyst lens
@@ -103,6 +109,7 @@ truth so the operator can make annual planning decisions.
 - Lifetime tag × regime cross-tab analysis
 - Identify the top 5 (tag, regime) cells worth amplifying in next year's parameters
 - Identify the bottom 5 cells worth pruning from the taxonomy
+- Cross-check the raw signal_outcomes tag×regime cells against the SQG `quant_feedback.json` per-regime buckets (decision-context-conditioned): where they disagree, the at-decision-context join or the `fallback_rate` explains the gap. Note lifetime `fallback_rate` maturity.
 
 `portfolio-learning-loop-health` ALWAYS:
 - Audit log consistency check (does current config match log?)
@@ -143,7 +150,7 @@ Sections (each 50-150 words):
 
 1. **Year in numbers** — cron uptime, total runs, total cost, portfolio value change, feature velocity
 2. **Developer lens** — silent failures caught + recovered, dependency drift events, test coverage trajectory
-3. **Quant lens** — top 5 winning tags lifetime, top 3 winning (tag × regime) cells, best gauge era, current gauge percentile
+3. **Quant lens** — top 5 winning tags lifetime, top 3 winning (tag × regime) cells, best gauge era, current gauge percentile; SQG attribution maturity (lifetime `fallback_rate` trend) + research yield (experiments registered/promoted/retained-failure, mandate coverage_complete)
 4. **Process analyst lens** — audit log consistency, rollback clusters with root cause, operator interventions, operator-control plane usage (worker runs completed/failed, lifetime quarantines, autonomous-vs-scaffold split)
 5. **Market expert lens** — memo accuracy, discovery yield funnel, sector performance table, regime call accuracy
 6. **Tag taxonomy proposals** — which tags to add (high evidence of unmodelled signals), which to retire (insufficient_sample for >12 months), which to merge

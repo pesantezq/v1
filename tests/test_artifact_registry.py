@@ -555,14 +555,20 @@ _SQG_ARTIFACTS = {
     "quant_feedback.json":            ("quant_learning",  "probe",     "daily",     "consumed"),
     "semantic_liveness_status.json":  ("meta_governance", "probe",     "daily",     "consumed"),
     "scenario_risk.json":             ("risk_action",     "advisor",   "daily",     "consumed"),
-    "experiment_registry.json":       ("quant_learning",  "telemetry", "on_demand", "diagnostic_only"),
-    "strategy_mandates.json":         ("quant_learning",  "advisor",   "weekly",    "diagnostic_only"),
+    "experiment_registry.json":       ("quant_learning",  "telemetry", "on_demand", "consumed"),
+    "strategy_mandates.json":         ("quant_learning",  "advisor",   "weekly",    "consumed"),
 }
 
-# The 6 SQG artifacts whose real, current consumer is the daily_run_status module
-# (it reads/surfaces each — see portfolio_automation/daily_run_status.py). The two
-# weekly/on_demand ledgers (experiment_registry, strategy_mandates) have no analysis
-# consumer yet -> diagnostic_only until the monthly/yearly wiring follow-up.
+# SQG artifacts whose consumer is a cadence-analysis skill (.claude/commands/*.md).
+# Each listed skill file must actually reference the artifact (no phantom wiring).
+_SQG_SKILL_CONSUMED = {
+    "quant_feedback.json":       ["monthly-tool-analysis", "yearly-tool-analysis"],
+    "experiment_registry.json":  ["monthly-tool-analysis", "yearly-tool-analysis"],
+    "strategy_mandates.json":    ["monthly-tool-analysis", "yearly-tool-analysis"],
+}
+
+# The SQG artifacts whose real, current consumer is the daily_run_status module
+# (it reads/surfaces each — see portfolio_automation/daily_run_status.py).
 _SQG_DAILY_RUN_STATUS_CONSUMED = {
     "run_manifest.json", "daily_input_snapshot.json", "quant_feedback.json",
     "semantic_liveness_status.json", "scenario_risk.json",
@@ -609,6 +615,22 @@ def test_sqg_daily_consumers_actually_read_the_artifact():
         stem = key.rsplit(".", 1)[0]
         assert key in drs or stem in drs, \
             f"daily_run_status.py does not reference consumed artifact {key}"
+
+
+def test_sqg_skill_consumers_reference_the_artifact():
+    # The monthly/yearly analysis skills that the registry lists as consumers of
+    # the SQG research artifacts must actually name each artifact (Analysis+Health
+    # Coverage Requirement — every artifact needs a real consumer at its cadence).
+    reg = ar.load_registry()
+    for key, skills in _SQG_SKILL_CONSUMED.items():
+        row = reg["artifacts"][key]
+        assert row["consumer_status"] == "consumed", f"{key} should be consumed"
+        for skill in skills:
+            assert skill in row["consumers"], f"{key} must list {skill} as a consumer"
+            md = _Path(f".claude/commands/{skill}.md")
+            assert md.exists(), f"skill file missing: {md}"
+            assert key in md.read_text(encoding="utf-8"), \
+                f"{skill}.md does not reference consumed artifact {key}"
 
 
 def test_decision_context_log_consumed_by_quant_feedback():

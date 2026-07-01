@@ -1628,10 +1628,10 @@ artifacts:
     required: false
     cadence: daily
     producer: quant_feedback
-    consumers: [daily_run_status]
+    consumers: [daily_run_status, monthly-tool-analysis, yearly-tool-analysis]
     severity_if_missing: info
     consumer_status: consumed
-    notes: Phase 5 join of decision-time context to matured outcomes → per-regime/per-crowd-state attribution, fallback_rate, evidence_status. Stage 7i. Monthly retrospective consumer added in the SQG cadence follow-up.
+    notes: Phase 5 join of decision-time context to matured outcomes → per-regime/per-crowd-state attribution, fallback_rate, evidence_status. Stage 7i. Surfaced daily by daily_run_status; the monthly/yearly retrospectives read the fallback_rate + per-regime attribution trend.
 
   semantic_liveness_status.json:
     path: outputs/latest/semantic_liveness_status.json
@@ -1667,10 +1667,10 @@ artifacts:
     required: false
     cadence: on_demand
     producer: experiment_registry
-    consumers: []
+    consumers: [monthly-tool-analysis, yearly-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: Phase 8 research experiment ledger (hypothesis, controls, status, retained failures). Written on experiment registration; reviewed weekly by run_weekly_safe. Absent until the first experiment registers (on_demand → never stale). Monthly-retrospective consumer added in the SQG cadence follow-up.
+    consumer_status: consumed
+    notes: Phase 8 research experiment ledger (hypothesis, controls, status, retained failures). Written on experiment registration; reviewed weekly by run_weekly_safe. Absent until the first experiment registers (on_demand → never stale). Monthly/yearly retrospectives read the by-status rollup + retained-failure count for research integrity.
 
   strategy_mandates.json:
     path: outputs/sandbox/strategy_mandates.json
@@ -1680,8 +1680,8 @@ artifacts:
     required: false
     cadence: weekly
     producer: strategy_mandate
-    consumers: []
+    consumers: [monthly-tool-analysis, yearly-tool-analysis]
     severity_if_missing: info
-    consumer_status: diagnostic_only
-    notes: Phase 9 structured strategy mandates (objective, universe, control-off variant) + coverage_complete gate. Built weekly by run_weekly_safe. Monthly/strategy-lab consumer added in the SQG cadence follow-up.
+    consumer_status: consumed
+    notes: Phase 9 structured strategy mandates (objective, universe, control-off variant) + coverage_complete gate. Built weekly by run_weekly_safe. Monthly/yearly retrospectives read coverage_complete + unmandated[] (Strategy Documentation Requirement).
 

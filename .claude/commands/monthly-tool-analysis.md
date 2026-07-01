@@ -43,6 +43,10 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 20. Research-Backed Strategy Lab (added 2026-06-12; weekly; **observe-only, sandbox-only, quant lens**). Run the deterministic assessor and fold its verdict in:
     `.venv/bin/python -c "import json; from portfolio_automation.portfolio_sim.strategy_lab_health import assess_strategy_lab_health; print(json.dumps(assess_strategy_lab_health(root='.')))"`
     Reads `outputs/sandbox/{strategy_leaderboard, research_strategy_catalog, walk_forward_results, factor_exposure_report}.json`. RED = `looks_fresh_but_empty` (lab ran but every tactic degraded — check archive coverage). AMBER = disabled/insufficient/stale/undocumented_tactics/`still_works_oos=false` surfaced/factor_data_unavailable. GREEN = ran, populated, documented, no failing-OOS tactic. The dedicated `/strategy-lab-analysis` skill is the on-demand equivalent. Never RED-blocks the decision core (research lane, never feeds `decision_plan`).
+21. SQG program artifacts (added 2026-07-01; the simulation/quant-feedback/governance loop — **observe-only / sandbox / production-gated; never feed `decision_plan.json`**; quant + process lens). The daily lane already surfaces these day-to-day via `daily_run_status`; the monthly retrospective reads them for the 30-day trend the daily heartbeat can't compute. Read (degrade gracefully on any miss):
+    - `outputs/latest/quant_feedback.json` → `evidence_status`, `fallback_rate`, `n_context_records`, `n_resolved_outcomes`, and the per-regime / per-crowd-state attribution buckets (Phase 5). This is the marquee quant-feedback surface: over 30 days, is the decision-time context join maturing (fallback_rate trending **down**, resolved-outcome count trending **up**), and which regime/crowd buckets carry the hit-rate? A persistently high `fallback_rate` (≥0.50) means at-decision context is not being captured/joined — surface it and dispatch `portfolio-learning-loop-health`.
+    - `outputs/sandbox/experiment_registry.json` → research experiment ledger (Phase 8): `len(registry)` and the by-`status` rollup (running / promoted / rejected / retained-failure). Research-integrity trend — are experiments being registered and *retained when they fail* (not silently dropped)? `absent`/empty is the expected pre-first-experiment state (report, don't alert).
+    - `outputs/sandbox/strategy_mandates.json` → `coverage_complete` + `unmandated` (Phase 9). Mandate-coverage trend for the strategy lab; `coverage_complete == false` with a non-empty `unmandated[]` is an AMBER doc-coverage gap (mirrors the Strategy Documentation Requirement) — list the unmandated strategies.
 
 ---
 
@@ -60,6 +64,9 @@ Runs at 09:30 UTC on the 1st of each month. Working dir: `/opt/stockbot`.
 - **`new_winners_this_month`** = winning tags that were neutral/insufficient last month
 - **`fingerprint_stability`** = days since current gauge fingerprint first_seen_at
 - **`oos_window_maturity`** = from `poc_simulation_results.json.oos_window`: `calendar_days_observed`/`full_window_days` (315), `folds_possible`, `full_window_eta`. The Pattern-Loop walk-forward cannot emit out-of-sample evidence until the window matures (first folds ~2027-01, full window ~2027-03). **While `folds_possible == false`, `signal_weight_proposals.json.summary.proposed_count == 0` is EXPECTED and healthy** — report it as "accruing", never as a failure.
+- **`quant_feedback_fallback_rate`** = `quant_feedback.json.fallback_rate` (0..1) — share of matured outcomes that could NOT be joined to at-decision context (Phase 5). Trend it vs last month: a maturing loop drives this **down**. `≥ 0.50` for a full month is a stuck at-decision-capture join → AMBER + dispatch `portfolio-learning-loop-health`.
+- **`experiment_ledger_yield`** = from `experiment_registry.json`: total experiments + by-status counts; `retained_failure_count` (failures kept, not dropped) is the research-integrity signal.
+- **`mandate_coverage_complete`** = `strategy_mandates.json.coverage_complete`; `unmandated` list length (Phase 9 mandate-coverage gap).
 
 ### Process analyst lens
 - **`drift_cap_utilization`** = for each parameter in monthly_drift, current_drift / 0.25 expressed as %
@@ -97,6 +104,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - `memo_top_decision_hit_rate ∈ [0.45, 0.55]` (coin-flip range)
 - `operator_quarantine_count_30d ≥ 1` (the autonomous worker hit a protected path this month — contained/quarantined, never merged, but review the report at `/dashboard/operator/report/<id>` to confirm the guard fired correctly) OR `operator_decision_queue_age_max > 30d` (an operator approval has been pending a month — clear or cancel it). Operator-control is observe-only and **never** escalates monthly to RED on its own.
 - `apply_rate_per_week == 0` (loop dormant — may be expected on quiet months)
+- `quant_feedback_fallback_rate ≥ 0.50` for the month (at-decision context isn't being captured/joined — quant-feedback attribution is running blind) OR `mandate_coverage_complete == false` with a non-empty `unmandated[]` (strategy-lab mandate-coverage gap). Both observe-only; **never** escalate monthly to RED (SQG lane never feeds `decision_plan.json`).
 
 **RED** (operator must act):
 - `rollback_ratio ≥ 0.20`
@@ -114,6 +122,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
 - `rollback_ratio ≥ 0.10`
 - any `drift_cap_utilization ≥ 60%`
 - `pending_confirmation_age_max > 14d`
+- `quant_feedback_fallback_rate ≥ 0.50` for the month (Phase 5 at-decision-context join stuck — attribution can't see decision context; pass the fallback_rate + `n_context_records`/`n_resolved_outcomes` so the agent can trace the decision_context_log → quant_feedback chain)
 
 `portfolio-attribution-analyst` IF any of:
 - `fingerprint_stability` indicates fingerprint changed within last 30d (new gauge era)
@@ -163,6 +172,7 @@ Different thresholds than daily — monthly drift is normal; what matters is dir
    `"Tags this month: {N} winners, {M} losers, {K} insufficient. {P} new winners promoted. Fingerprint age {D} days."`
    `"Pattern-Loop OOS window: {calendar_days_observed}/315 cal days, folds_possible={bool}, first full window ~{full_window_eta}. Proposals: {proposed_count} (0 expected until window matures)."`
    `"Feedback proposers — calibration: inverted={bool} (apply_gate={apply_gate}); tagging: {untagged_pct} untagged, families missing registry id: {families_missing_registry_id}."`
+   `"SQG quant-feedback: fallback_rate {quant_feedback_fallback_rate} ({n_resolved_outcomes} resolved / {n_context_records} ctx), evidence {evidence_status}. Experiments: {N} ({retained_failure_count} retained failures). Mandate coverage complete={mandate_coverage_complete}{, unmandated: <list> if not}."`
 3. **Process analyst lens** (always):
    `"Drift cap max {Z}% on {param}. Pending confirmations: {count} oldest {age}d. Burn pace ${P}/mo vs $20 cap."`
    `"Operator-control: {operator_worker_throughput_30d} worker runs/30d, {operator_quarantine_count_30d} quarantined, decision queue oldest {operator_decision_queue_age_max}d (observe-only; inert if all-zero)."`
