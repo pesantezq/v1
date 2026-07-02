@@ -610,11 +610,13 @@
     },
     "ai_review": {
       "enabled": true,
+      "llm_enabled": true,
       "daily_cost_cap_usd": 0.5,
       "provider": "openai",
       "model": "gpt-4o-mini",
       "max_calls_per_day": 1,
-      "note": "ONE consolidated advisory+watchlist review per day. If estimated cost > daily_cost_cap_usd the call is skipped and a deferred-review artifact is written."
+      "note": "ONE consolidated advisory+watchlist review per day. If estimated cost > daily_cost_cap_usd the call is skipped and a deferred-review artifact is written.",
+      "llm_enabled_note": "Operator-approved 2026-07-02: use a real OpenAI-backed reviewer (review_method=llm) instead of the free heuristic fallback. Gated on OPENAI_API_KEY presence; kill-switch env STOCKBOT_SIM_GOV_LLM_DISABLED=1. Degrades to heuristic on any API failure. Est ~$0.002/day << daily_cost_cap_usd."
     },
     "production_application": {
       "apply_watchlist_overlay": true,

@@ -45,6 +45,7 @@ _DEFAULTS = {
     "simulation_lane": {"enabled": True},
     "ai_review": {
         "enabled": True,
+        "llm_enabled": False,
         "daily_cost_cap_usd": 0.50,
         "provider": "openai",
         "model": "gpt-4o-mini",
@@ -190,15 +191,20 @@ def run_daily_governance(
     review: dict = {"status": "skipped", "verdicts": []}
     if ai_cfg.get("enabled", True) and packet:
         try:
+            # An explicitly injected reviewer always wins (tests / manual runs);
+            # otherwise build the gated LLM reviewer from config (None → free
+            # heuristic fallback inside run_daily_ai_review).
+            effective_reviewer = reviewer or daily_ai_review.build_configured_reviewer(ai_cfg)
             review = daily_ai_review.run_daily_ai_review(
                 packet, now, base_dir=base_dir,
                 daily_cost_cap_usd=float(ai_cfg.get("daily_cost_cap_usd", 0.50)),
                 provider=ai_cfg.get("provider", "openai"),
                 model=ai_cfg.get("model", "gpt-4o-mini"),
-                reviewer=reviewer, write_files=write_files,
+                reviewer=effective_reviewer, write_files=write_files,
             )
             status["stages"]["ai_review"] = {
                 "ok": True, "status": review.get("status"),
+                "review_method": review.get("review_method"),
                 "estimated_cost_usd": review.get("estimated_cost_usd"),
                 "ready": (review.get("counts", {}) or {}).get("ready_for_production_review", 0),
             }

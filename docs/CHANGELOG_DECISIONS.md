@@ -69,6 +69,67 @@ Explicitly note:
 
 ---
 
+## LLM reviewer wired into the daily sim-governance review
+
+### Date
+
+`2026-07-02`
+
+### Area
+
+`architecture` / `output_contract`
+
+### Files / Functions
+
+- `portfolio_automation/sim_governance/daily_ai_review.py`: new `make_openai_reviewer`
+  (LLM-backed `Reviewer` factory), `build_configured_reviewer` (config/kill-switch/key
+  gate), `_call_llm` (adapter indirection), `_parse_verdict_json` + `_salvage_objects`
+  (tolerant JSON parse), `_coerce_decision`, `_verdict_from_model`.
+- `portfolio_automation/sim_governance/daily_governance_run.py`: Step 5 now builds the
+  gated reviewer via `build_configured_reviewer(ai_cfg)` when none is injected; adds
+  `llm_enabled: False` default; surfaces `review_method` in the status stage.
+- `config.json → sim_governance.ai_review.llm_enabled = true`.
+
+### Decision
+
+The daily consolidated promotion review previously always ran the deterministic
+`heuristic_reviewer` in production (the `reviewer=` seam was never injected at the cron
+entrypoint), so `review_method` was `heuristic_fallback` and verdicts carried no model
+judgment. It now runs a real OpenAI-backed reviewer (`review_method: "llm"`), gated on
+`llm_enabled` + resolvable `OPENAI_API_KEY` + the `STOCKBOT_SIM_GOV_LLM_DISABLED`
+kill-switch. On any API failure / unparseable output it degrades to the heuristic
+per-candidate (tagged `[llm-fallback:heuristic]` / `[llm-omitted:heuristic]`), and the
+parser salvages complete verdicts from a truncated array. Operator-approved via
+`/daily-system-improvement`; est spend ≈ $0.002/day, far under the $0.50/day cap.
+
+### Why
+
+Wire real model judgment into `ready_for_production_review` recommendations without
+raising cost above the existing cap. Closes the approved system-improvement idea
+`si-observability-wire-the-llm-reviewer-into-the-daily-sim-gover`.
+
+### Invariants Preserved
+
+- The AI still only **recommends** readiness; `required_human_review` is forced `True`
+  and `schemas.is_human_approver` still rejects any AI approver. Production overlays
+  remain human-gated + default-OFF. `decision_engine.py` and all six protected scores
+  untouched. Simulation/sandbox scoping unchanged.
+
+### Downstream Impact
+
+- Artifact `outputs/promotion_review/daily_ai_review_result.json` now reports
+  `review_method: "llm"` in production (was `heuristic_fallback`). `daily-tool-analysis`
+  §6n already reads `sim_gov_ai_status`; no schema break (existing field, new value).
+- Tests: new `tests/test_daily_ai_review_llm.py` (14). Full suite 8289 pass (9
+  pre-existing failures unrelated to this change).
+
+### Artifact Health Severity
+
+No severity change: no artifacts added/removed; `missing_artifact_count` unchanged;
+`daily_ai_review_result.json` (owned by sim-governance Stage 10e) keeps its schema.
+
+---
+
 ## Monthly Capital Envelope for the Daily Memo
 
 ### Date
@@ -2102,3 +2163,60 @@ restarted (new GUI views live). Full VPS suite: **7041 passed**, 3 known-pre-exi
 ### Tests
 
 Targeted: 140 (`test_next_stage_e2e` + 11 phase suites + `test_artifact_registry`, 33).
+
+---
+
+## 2026-06 Monthly Tool Analysis — AMBER (documentation + gauge-doc sync)
+
+### Date
+
+`2026-07-01`
+
+### Area
+
+- evaluation
+- allocation  # doc value refresh only; no runtime cap change
+
+### Files / Functions
+
+- `docs/monthly_reports/2026-06.md` — the rolling-30d monthly report (2026-06-01 → 2026-07-01),
+  written by the monthly-tool-analysis run.
+- `.agent/project_state.yaml` — `last_monthly_analysis` refreshed to the June run (May nested under
+  `prior`); new `june_2026_shipped` block recording the month's delivered scope + month-end health.
+- `.agent/phase_status.yaml` — `observe_and_iterate.last_monthly_analysis` refreshed.
+- `docs/ALLOCATION_POLICY.md` — refreshed cap values to match source after the 2026-06-26/27
+  targeted partial revert (`sector_cap 0.35→0.25`, `max_position_cap 0.15→0.12`).
+
+### Decision
+
+Logged the 2026-06 monthly analysis: **verdict AMBER**. Month-end health snapshot — cron 31/30,
+spend ~$0.00/mo, drift-cap utilization 0%, 0 rollbacks, 0 quarantines, sector rotation 0.943,
+decision mix rebalanced to BUY 43% / WAIT 37% (from 73% WAIT). A new gauge era `5687885c`
+(first 2026-06-27) **tightened concentration caps** (position `0.15→0.12`, sector `0.35→0.25`,
+max_sector_alloc `0.10→0.06`); early current-era hit-rate 0.64 (n=75) — significantly better than
+the degraded mid-eras (p≤0.01) but tape-confounded, so OBSERVE (no gauge action). Fixed the
+`ALLOCATION_POLICY.md` sector_cap doc drift (doc `0.35` → source `0.25`) surfaced by the
+doc-auditor as a clean factual edit.
+
+### Why
+
+The monthly analysis is the cadence-appropriate consumer of the month's resolved-outcome and
+health artifacts. The doc drift is downstream of the 2026-06-26/27 cap revert: the policy doc
+still cited the pre-revert `0.35 / 0.15` values while the source (`allocation_engine.DEFAULT_CONFIG`,
+`cash_deployment_plan._MAX_POSITION_PCT`, `allocation_preview` defaults) already read `0.25 / 0.12`.
+
+### Invariants Preserved
+
+Observe-only. This entry records an analysis run and a documentation refresh — **no runtime cap,
+scoring, ranking, allocation, or decision behavior changed**. No source cap value was modified;
+`allocation_engine.py` remains the source of truth. `next_official_step` stays `observe_and_iterate`
+(roadmap-control = GPT). No output schema changed.
+
+### Downstream Impact
+
+- Docs/state only: `.agent/project_state.yaml`, `.agent/phase_status.yaml`,
+  `docs/ALLOCATION_POLICY.md`, this changelog. No artifacts or tests changed.
+- Open doc follow-ups (doc-auditor coverage_gap): `opportunity_decisions.py` and
+  `strategy_selection.py` remain undocumented (`docs/opportunity_decisions.md`,
+  `docs/strategy_selection.md` pending). The `memo_top_decision_hit_rate` proxy is flagged for
+  retirement (self-invalid join artifact; memos reviewed GREEN).

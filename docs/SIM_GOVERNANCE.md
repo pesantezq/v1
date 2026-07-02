@@ -48,6 +48,25 @@ of `scripts/run_daily_safe.sh` (non-blocking).
   proposal. The AI can never approve production (`schemas.is_human_approver` rejects
   any AI-reviewer marker as an approver).
 
+### Reviewer: LLM vs heuristic (`review_method`)
+
+The reviewer is pluggable via `run_daily_governance(reviewer=…)`. When no reviewer is
+injected, the entrypoint builds one from config (`daily_ai_review.build_configured_reviewer`):
+
+- **`ai_review.llm_enabled: true`** (operator-approved 2026-07-02) + an `OPENAI_API_KEY`
+  is resolvable + the kill-switch is off → a real OpenAI-backed reviewer runs and the
+  result carries `review_method: "llm"`. Estimated spend ≈ $0.002/day, far under the cap.
+- Otherwise (flag off / no key / kill-switch set) → the free deterministic
+  `heuristic_reviewer`, `review_method: "heuristic_fallback"`.
+- **Graceful degrade:** on any API failure or unparseable output the LLM reviewer falls
+  back to the heuristic per-candidate so the run never loses verdicts; those verdicts are
+  tagged `[llm-fallback:heuristic]` (whole-run failure) or `[llm-omitted:heuristic]` (a
+  candidate the model skipped). The JSON parser also salvages complete verdict objects
+  from a truncated array. Either way the AI still only *recommends* — human approval is
+  unchanged.
+- **Kill-switch:** `STOCKBOT_SIM_GOV_LLM_DISABLED=1` forces the heuristic even when
+  `llm_enabled` is true.
+
 ## Human approval & production application
 
 - Approvals are recorded to `outputs/promotion_approvals/approved_proposals.json`.
@@ -70,7 +89,7 @@ of `scripts/run_daily_safe.sh` (non-blocking).
 {
   "enabled": true,
   "simulation_lane": {"enabled": true},
-  "ai_review": {"enabled": true, "daily_cost_cap_usd": 0.5,
+  "ai_review": {"enabled": true, "llm_enabled": true, "daily_cost_cap_usd": 0.5,
                 "provider": "openai", "model": "gpt-4o-mini", "max_calls_per_day": 1},
   "production_application": {"apply_watchlist_overlay": false,
                             "apply_advisory_overlay": false}
