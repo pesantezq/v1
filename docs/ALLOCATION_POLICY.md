@@ -1,6 +1,9 @@
 # Allocation Policy
 
-Last verified against `watchlist_scanner/conviction.py`, `watchlist_scanner/portfolio_construction.py`, `allocation_engine.py`, `portfolio_decision_engine.py`, `decision_engine.py`, `portfolio_automation/cash_deployment_plan.py`, `watchlist_scanner/allocation_preview.py`, and `config.json:growth_mode`. Last updated 2026-05-20 (tactical gauge retune + structural cap widening, operator-approved 2026-05-18).
+Last verified against `watchlist_scanner/conviction.py`, `watchlist_scanner/portfolio_construction.py`, `allocation_engine.py`, `portfolio_decision_engine.py`, `decision_engine.py`, `portfolio_automation/cash_deployment_plan.py`, `watchlist_scanner/allocation_preview.py`, and `config.json:growth_mode`. Last updated 2026-07-01 (refreshed cap values after the 2026-06-26/27 targeted
+partial revert: `sector_cap 0.35→0.25`, `max_position_cap 0.15→0.12`; gauge era
+`5687885c`). Prior: 2026-05-20 (tactical gauge retune + structural cap widening,
+operator-approved 2026-05-18).
 
 ## Scope
 
@@ -75,7 +78,8 @@ The portfolio_construction warning threshold for "top sector exceeds N%" now
 references the structural cap in `config.json:growth_mode.concentration_cap`
 rather than a hardcoded `0.40`. The daily memo's Portfolio Pulse section reads
 the suggested-deployment cap reference from `allocation_engine.DEFAULT_CONFIG.sector_cap`
-(currently `0.35`).
+(currently `0.25`, after the 2026-06-26/27 targeted partial revert that tightened
+`sector_cap 0.35→0.25` and `max_position_cap 0.15→0.12`).
 
 ### Degraded mode behavior
 
@@ -120,19 +124,21 @@ When regime is `risk_off`, `significant_dip`, or `severe_dip`:
 
 ### Caps
 
-- `max_position_cap = 0.15`
+- `max_position_cap = 0.12`
 - `sector_cap = 0.25`
 - `cash_reserve_pct = 0.05`
 - `min_position_pct = 0.01`
 
-Pre-retune baseline: `max_position_cap = 0.08`, `sector_cap = 0.20`. The widened
-values are also mirrored in three downstream surfaces so the sizing ceiling is
+Pre-retune baseline (2026-05-18 widen): `max_position_cap = 0.08`, `sector_cap = 0.20`.
+The 2026-05-18 retune widened these to `0.15 / 0.35`; the 2026-06-26/27 targeted
+partial revert then tightened them to the current `0.12 / 0.25` to cap sector
+overload (Energy) — see the header note in `allocation_engine.py`. The current
+values are mirrored in the downstream sizing surfaces so the ceiling is
 consistent across the system:
 
-- `decision_engine._ABSOLUTE_MAX_ALLOCATION_PCT = 0.15`
-- `portfolio_automation/cash_deployment_plan._MAX_POSITION_PCT = 0.15`
-- `watchlist_scanner/allocation_preview._DEFAULT_MAX_TICKER_PCT = 0.15`
-- `watchlist_scanner/allocation_preview._DEFAULT_MAX_SECTOR_PCT = 0.35`
+- `portfolio_automation/cash_deployment_plan._MAX_POSITION_PCT = 0.12`
+- `watchlist_scanner/allocation_preview._DEFAULT_MAX_TICKER_PCT = 0.12`
+- `watchlist_scanner/allocation_preview._DEFAULT_MAX_SECTOR_PCT = 0.25`
 
 Weak-fundamentals cap:
 
