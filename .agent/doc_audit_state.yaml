@@ -1,4 +1,4 @@
 apply_enabled: true
-fixes_last_run: 1
-last_audited_sha: 9da140c32d67456ac7abb4b22dca8df1f53e1782
-last_run_at: '2026-06-29T07:00:02.376629+00:00'
+fixes_last_run: 0
+last_audited_sha: 9bd418262e40369e3552c1ac4aafa0045f829ac3
+last_run_at: '2026-07-06T07:00:02.328256+00:00'
