@@ -74,6 +74,7 @@ def generate_proposals(
     """
     verdicts = review_result.get("verdicts", []) or []
     proposals: list[S.PromotionProposal] = []
+    skipped_observe_only = 0
 
     for v in verdicts:
         if v.get("decision") != S.DECISION_READY:
@@ -85,6 +86,14 @@ def generate_proposals(
         ptype = cand.get("proposal_type")
         if not S.is_valid_proposal_type(ptype):
             logger.warning("promotion_proposals: skipping unknown proposal_type %r", ptype)
+            continue
+        if ptype == S.PROPOSAL_CROWD_CONTEXT:
+            # crowd_context is an observe-only, self-refreshing advisory annotation
+            # (materialized live into the SANDBOX advisory view from the unified
+            # crowd bus each run). It NEVER enters the human-gated production queue,
+            # regardless of the reviewer's verdict — this prevents a fast-flipping
+            # daily signal from accumulating a permanent-approval backlog.
+            skipped_observe_only += 1
             continue
         symbol = cand.get("symbol")
         pid = S.make_proposal_id(cid, now)
@@ -116,8 +125,10 @@ def generate_proposals(
         "generated_at": now,
         "schema": "pending_proposals.v1",
         "pending_count": len(proposals),
+        "skipped_observe_only": skipped_observe_only,
         "note": ("Every proposal defaults to approval_status=pending and has NO effect "
-                 "on production until a human approves it. AI cannot self-approve."),
+                 "on production until a human approves it. AI cannot self-approve. "
+                 "Observe-only annotations (e.g. crowd_context) are skipped, not gated."),
         "proposals": [p.to_dict() for p in proposals],
     }
 

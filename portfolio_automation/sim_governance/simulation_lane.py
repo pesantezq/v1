@@ -38,6 +38,11 @@ Experiment = Callable[[dict], list[S.SimulationCandidate]]
 
 _SANDBOX_SUBDIR = "sim_governance"
 
+# Correct provenance for crowd-derived experiments: the unified crowd bus, not
+# the absent legacy ``outputs/sandbox/crowd_radar`` path. This is the artifact
+# ``_load_unified_crowd_context`` -> ``read_unified_crowd`` actually reads.
+_UNIFIED_CROWD_EVIDENCE = "outputs/latest/unified_crowd_intelligence.json"
+
 
 # ---------------------------------------------------------------------------
 # Baseline loading (graceful; production is the "before")
@@ -321,7 +326,7 @@ def experiment_watchlist_rerank(baseline: dict) -> list[S.SimulationCandidate]:
             symbol=sym,
             what_changed=f"Re-rank {sym} {cur} -> {new_rank}",
             why_changed=f"Crowd-velocity z-score {vel:.2f} supports a higher rank",
-            source_evidence=["outputs/sandbox/crowd_radar"],
+            source_evidence=[_UNIFIED_CROWD_EVIDENCE],
             production_baseline=cur,
             simulated_value=new_rank,
             risk_impact="low",
@@ -334,7 +339,17 @@ def experiment_watchlist_rerank(baseline: dict) -> list[S.SimulationCandidate]:
 
 
 def experiment_advisory_crowd_context(baseline: dict) -> list[S.SimulationCandidate]:
-    """Attach a crowd-context overlay to advisory picks (observe-style context)."""
+    """Attach a crowd-context annotation to advisory picks (observe-only context).
+
+    crowd_state is a fast-refreshing daily signal (it flips
+    confirmed_attention / divergent_attention / insufficient_data day to day), so
+    it is treated as a LIVE, self-refreshing observe-only annotation: the candidate
+    is materialized straight into the SANDBOX advisory view each run
+    (``materialize_simulated_views``), and it is NEVER routed into the human-gated
+    production promotion queue. ``ready_for_production_review`` is therefore always
+    False, and ``promotion_proposals.generate_proposals`` additionally skips this
+    type at the gate. The annotation never feeds decision_engine / decision_plan.
+    """
     crowd = baseline.get("crowd", {}) or {}
     cands: list[S.SimulationCandidate] = []
     for pick in baseline.get("advisory", []) or []:
@@ -348,15 +363,17 @@ def experiment_advisory_crowd_context(baseline: dict) -> list[S.SimulationCandid
             workflow=S.WORKFLOW_ADVISORY,
             proposal_type=S.PROPOSAL_CROWD_CONTEXT,
             symbol=sym,
-            what_changed=f"Attach crowd context '{ctx.get('state')}' to {sym} advisory line",
-            why_changed="Crowd-radar state adds public-knowledge context to the advisory pick",
-            source_evidence=["outputs/sandbox/crowd_radar"],
+            what_changed=f"Annotate {sym} advisory line with live crowd context '{ctx.get('state')}'",
+            why_changed=("Crowd state adds public-knowledge context to the advisory pick; "
+                         "self-refreshing observe-only annotation (not a gated production change)"),
+            source_evidence=[_UNIFIED_CROWD_EVIDENCE],
             production_baseline={"symbol": sym, "crowd_context": None},
             simulated_value={"symbol": sym, "crowd_context": ctx.get("state")},
             risk_impact="low",
             confidence=float(ctx.get("confidence", 0.5)),
             data_quality="ok",
-            ready_for_production_review=bool(ctx.get("confirmed")),
+            # Observe-only annotation — never enters the human-gated promotion queue.
+            ready_for_production_review=False,
             proposed_production_change={"op": "context", "symbol": sym,
                                         "crowd_context": ctx.get("state")},
         ))

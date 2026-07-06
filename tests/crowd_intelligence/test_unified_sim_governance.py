@@ -56,7 +56,12 @@ def test_advisory_crowd_experiment_fires_with_unified():
     cands = SL.experiment_advisory_crowd_context(baseline)
     assert len(cands) == 1
     assert cands[0].symbol == "AAPL"
-    assert cands[0].ready_for_production_review is True  # confirmed
+    # crowd_context is an observe-only, self-refreshing annotation — it never
+    # enters the human-gated promotion queue, so it is never marked ready even
+    # when the crowd state is confirmed.
+    assert cands[0].ready_for_production_review is False
+    # provenance points at the real unified crowd bus, not the absent legacy path
+    assert cands[0].source_evidence == ["outputs/latest/unified_crowd_intelligence.json"]
 
 
 def test_watchlist_rerank_uses_confirmation_velocity():

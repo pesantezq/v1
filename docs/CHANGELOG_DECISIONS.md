@@ -69,6 +69,65 @@ Explicitly note:
 
 ---
 
+## Crowd-context is a live observe-only annotation, not a human-gated proposal
+
+### Date
+
+`2026-07-06`
+
+### Area
+
+`architecture` / `output_contract`
+
+### Files / Functions
+
+- `portfolio_automation/sim_governance/simulation_lane.py`: `experiment_advisory_crowd_context`
+  now emits `ready_for_production_review=False` and cites the real unified-crowd artifact;
+  `experiment_watchlist_rerank` provenance likewise repaired; new `_UNIFIED_CROWD_EVIDENCE`
+  constant.
+- `portfolio_automation/sim_governance/promotion_proposals.py`: `generate_proposals` skips
+  `crowd_context_change` at the gate (regardless of reviewer verdict) and reports the new
+  `skipped_observe_only` count in `pending_proposals.json`.
+
+### Decision
+
+Advisory `crowd_context` is treated as a live, self-refreshing observe-only annotation
+(materialized into the SANDBOX advisory view from the unified crowd bus each run) instead
+of minting one human-gated `crowd_context_change` proposal per symbol per day. The absent
+`outputs/sandbox/crowd_radar` provenance is corrected to
+`outputs/latest/unified_crowd_intelligence.json`.
+
+### Why
+
+`crowd_state` flips day to day; a permanent per-symbol approval gate made each read stale
+by the next day and accumulated a recurring pending backlog. Crowd context is pure display
+context and never affects production behavior, so it does not belong behind the human gate.
+
+### Invariants Preserved
+
+- `decision_engine.py` and all six protected scores untouched; crowd_context never feeds
+  `decision_plan.json`.
+- The two-lane human gate is unchanged for every behavior-affecting proposal type
+  (watchlist add/remove/rank/tag, `advisory_context_change`, flock overlays).
+- `apply_approved_advisory` still honors a legacy approved `crowd_context_change` overlay
+  (backward compatible); the lane simply stops minting new ones.
+
+### Downstream Impact
+
+- `pending_proposals.json` gains a `skipped_observe_only` field and no longer accumulates
+  `crowd_context_change` entries (daily-tool-analysis `sim_gov_pending` / line 6n now
+  reflects only genuinely-gated proposals).
+- Tests: `tests/test_sim_governance.py` (+5 new, 1 reframed),
+  `tests/crowd_intelligence/test_unified_sim_governance.py` (1 updated).
+
+### Artifact Health Severity
+
+No change to `critical_missing` / `defaulting` / `optional_missing`. `pending_proposals.json`
+remains an existing consumed artifact; its `pending_count` semantics tighten (fewer false
+backlog entries).
+
+---
+
 ## LLM reviewer wired into the daily sim-governance review
 
 ### Date

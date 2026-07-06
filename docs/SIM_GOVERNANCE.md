@@ -83,6 +83,36 @@ injected, the entrypoint builds one from config (`daily_ai_review.build_configur
   When off they are strict no-ops. Flipping them on is the final, explicit
   production-boundary step (wired in `watchlist_scanner/__main__.py` and `main.py`).
 
+## Observe-only crowd-context annotation (not human-gated)
+
+`crowd_state` is a **fast-refreshing daily signal** (it flips
+`confirmed_attention` / `divergent_attention` / `insufficient_data` day to day).
+Routing it through a permanent, one-proposal-per-symbol-per-day human-approval gate
+made today's read stale tomorrow and accumulated a recurring pending backlog. Because
+crowd context is a **pure observe-only display annotation** — it never feeds
+`decision_engine` / `decision_plan.json` and never changes an allocation — it does not
+belong behind the production gate.
+
+Therefore `crowd_context_change` is handled as a **live, self-refreshing annotation**,
+not a promotable proposal:
+
+- `experiment_advisory_crowd_context` (`simulation_lane.py`) sources it from the
+  unified crowd bus (`outputs/latest/unified_crowd_intelligence.json`) and emits the
+  candidate with `ready_for_production_review=False`.
+- `materialize_simulated_views` writes the annotation straight into the SANDBOX
+  advisory view (`outputs/sandbox/sim_governance/simulated_advisory.json`) every run,
+  so the annotation always matches the current unified bus with **no approval step**.
+- `promotion_proposals.generate_proposals` **skips** `crowd_context_change` at the
+  gate regardless of the reviewer's verdict (the AI review packet still sees every
+  candidate, so this is the hard guarantee), and reports the count as
+  `pending_proposals.json → skipped_observe_only`.
+
+The human gate is **unchanged for every behavior-affecting proposal type** (watchlist
+add/remove/rank/tag, `advisory_context_change`, flock overlays, …); only the
+observe-only crowd annotation is exempt. `apply_approved_advisory` still recognizes a
+legacy approved `crowd_context_change` overlay for backward compatibility, but the
+sim lane no longer mints new ones.
+
 ## Config (`config.json → sim_governance`)
 
 ```json

@@ -307,10 +307,32 @@ def test_production_overlay_disabled_is_noop(base_dir):
     assert out["overlay_enabled"] is False
 
 
+def _advisory_context_ready(base_dir: str):
+    """A genuinely human-gated advisory candidate (advisory_context_change) marked
+    READY. Used to exercise the approve->overlay path now that crowd_context is an
+    observe-only annotation that never enters the promotion queue."""
+    cid = "adv-ctx-AAPL"
+    cand = {
+        "candidate_id": cid,
+        "workflow": S.WORKFLOW_ADVISORY,
+        "proposal_type": S.PROPOSAL_ADVISORY_CONTEXT,
+        "symbol": "AAPL",
+        "source_evidence": ["outputs/latest/decision_plan.json"],
+        "risk_impact": "low",
+        "confidence": 0.7,
+        "data_quality": "ok",
+        "proposed_production_change": {"op": "context", "symbol": "AAPL", "context": "rising"},
+    }
+    review = {"verdicts": [
+        S.ReviewVerdict(cid, S.WORKFLOW_ADVISORY, S.DECISION_READY, reason="ready").to_dict()
+    ]}
+    return {cid: cand}, review
+
+
 def test_production_advisory_only_changes_after_approval(base_dir):
-    cbi, review = _ready_review(base_dir)
+    cbi, review = _advisory_context_ready(base_dir)
     pend = PP.generate_proposals(cbi, review, NOW, base_dir=base_dir)
-    ctx = next(p for p in pend["proposals"] if p["proposal_type"] == S.PROPOSAL_CROWD_CONTEXT)
+    ctx = next(p for p in pend["proposals"] if p["proposal_type"] == S.PROPOSAL_ADVISORY_CONTEXT)
     baseline_adv = [{"symbol": "AAPL", "decision": "HOLD"}]
 
     APP.apply_approved_proposals(NOW, base_dir=base_dir)
@@ -425,3 +447,76 @@ def test_lane_stays_sandbox_only_and_production_safe(tmp_path, base_dir):
     for ns in ("latest", "policy", "portfolio"):
         d = tmp_path / "outputs" / ns
         assert not (d.exists() and any(d.iterdir())), f"lane wrote into production ns {ns}"
+
+
+# ===========================================================================
+# Crowd-context auto-refresh (observe-only annotation, never human-gated)
+# ===========================================================================
+
+_UNIFIED_CROWD_EVIDENCE = "outputs/latest/unified_crowd_intelligence.json"
+
+
+def test_crowd_context_never_becomes_pending_proposal(base_dir):
+    """crowd_context is an observe-only annotation: even when the reviewer marks
+    every candidate READY, no crowd_context_change proposal is minted, so the
+    advisory backlog cannot accumulate."""
+    cbi, review = _ready_review(base_dir)
+    # sanity: a crowd_context candidate DID exist and WAS marked ready by the reviewer
+    assert any(c["proposal_type"] == S.PROPOSAL_CROWD_CONTEXT for c in cbi.values())
+    pend = PP.generate_proposals(cbi, review, NOW, base_dir=base_dir)
+    ptypes = {p["proposal_type"] for p in pend["proposals"]}
+    assert S.PROPOSAL_CROWD_CONTEXT not in ptypes
+    assert pend.get("skipped_observe_only", 0) >= 1
+
+
+def test_genuinely_gated_advisory_still_promotes(base_dir):
+    """No regression to the human gate: a genuinely-gated advisory type still
+    becomes a pending proposal when the reviewer marks it READY."""
+    cbi, review = _advisory_context_ready(base_dir)
+    pend = PP.generate_proposals(cbi, review, NOW, base_dir=base_dir)
+    ptypes = {p["proposal_type"] for p in pend["proposals"]}
+    assert S.PROPOSAL_ADVISORY_CONTEXT in ptypes
+    assert all(p["approval_status"] == S.APPROVAL_PENDING for p in pend["proposals"])
+
+
+def test_watchlist_promotions_unaffected_by_crowd_skip(base_dir):
+    """The crowd-context skip must not suppress watchlist promotions (the gate
+    still works for behavior-affecting changes)."""
+    cbi, review = _ready_review(base_dir)
+    pend = PP.generate_proposals(cbi, review, NOW, base_dir=base_dir)
+    ptypes = {p["proposal_type"] for p in pend["proposals"]}
+    assert S.PROPOSAL_WATCHLIST_ADD in ptypes
+
+
+def test_crowd_context_source_evidence_points_at_unified_bus(base_dir):
+    """Provenance repair: crowd_context and watchlist_rerank cite the real unified
+    crowd artifact, not the absent outputs/sandbox/crowd_radar."""
+    res = _run_lane(base_dir)
+    for c in res["candidates"]:
+        if c["proposal_type"] in (S.PROPOSAL_CROWD_CONTEXT, S.PROPOSAL_WATCHLIST_RANK):
+            assert _UNIFIED_CROWD_EVIDENCE in c["source_evidence"]
+            assert "outputs/sandbox/crowd_radar" not in c["source_evidence"]
+
+
+def test_advisory_crowd_context_self_refreshes_from_unified_bus(base_dir):
+    """The SANDBOX advisory view annotates crowd_context live from the unified bus
+    each run — a changed crowd_state is reflected on the next run with NO approval
+    step."""
+    bl1 = _baseline()
+    bl1["crowd"] = {"AAPL": {"state": "rising", "velocity": 1.6, "confidence": 0.9, "confirmed": True}}
+    res1 = _run_lane(base_dir, baseline=bl1)
+    aapl1 = next(p for p in res1["simulated_advisory"] if p["symbol"] == "AAPL")
+    assert aapl1.get("crowd_context") == "rising"
+
+    bl2 = _baseline()
+    bl2["crowd"] = {"AAPL": {"state": "confirmed_attention", "velocity": 1.6,
+                             "confidence": 0.95, "confirmed": True}}
+    res2 = _run_lane(base_dir, baseline=bl2)
+    aapl2 = next(p for p in res2["simulated_advisory"] if p["symbol"] == "AAPL")
+    assert aapl2.get("crowd_context") == "confirmed_attention"
+
+
+def test_crowd_context_never_feeds_decision_plan(base_dir, tmp_path):
+    """Observe-only invariant: running the lane writes no production decision_plan."""
+    _run_lane(base_dir)
+    assert not (tmp_path / "outputs" / "latest" / "decision_plan.json").exists()
