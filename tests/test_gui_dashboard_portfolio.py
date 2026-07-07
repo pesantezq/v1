@@ -935,3 +935,54 @@ def test_portfolio_capital_first_hierarchy(monkeypatch, tmp_path):
     # compact chip replaced the verbose banner block (detail moves to the chip tooltip)
     assert "OBSERVE ONLY · No execution" in t
     assert "StockBot is running in" not in t  # old always-visible banner sentence gone
+
+
+def _decision_plan_with(symbols_actions):
+    return {
+        "generated_at": "2026-07-08T09:00:00+00:00", "run_mode": "real",
+        "observe_only": True, "portfolio_context": {"total_portfolio_value": 10480.0, "cash": 3151.0},
+        "decisions": [
+            {"symbol": s, "decision": a, "priority": 0.7, "confidence": 0.8,
+             "rationale": f"{s} thesis", "source": "market"}
+            for s, a in symbols_actions
+        ],
+    }
+
+
+def test_pr2_compact_queue_groups_and_sticky_rail(monkeypatch, tmp_path):
+    """PR2: advisory picks render as a grouped compact queue (funded / deferred)
+    with a sticky context rail (weekly capital, risk, crowd, concentration)."""
+    from gui_v2 import app as app_module
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    latest.joinpath("decision_plan.json").write_text(json.dumps(
+        _decision_plan_with([("QQQ", "BUY"), ("GLD", "BUY"), ("VFH", "BUY")])))
+    latest.joinpath("cash_deployment_plan.json").write_text(json.dumps(_post_feature_cash_plan()))
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    t = TestClient(app_module.app).get("/dashboard/portfolio").text
+    # grouped compact queue (desktop) + mobile-card fallback both present in DOM
+    assert "hidden xl:block" in t and "xl:hidden" in t
+    assert "Funded this week" in t          # QQQ funded
+    assert "Deferred by weekly pacing" in t  # GLD
+    assert "Deferred by monthly budget" in t  # VFH
+    # sticky context rail
+    assert "xl:sticky" in t
+    for rail in ("Weekly Capital", "Risk Focus", "Crowd Agreement", "Concentration"):
+        assert rail in t, f"rail card '{rail}' missing"
+
+
+def test_pr2_week_group_annotation(tmp_path):
+    """collect_portfolio_view annotates each advisory pick with its week_group."""
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    latest.joinpath("decision_plan.json").write_text(json.dumps(
+        _decision_plan_with([("QQQ", "BUY"), ("GLD", "BUY"), ("VFH", "BUY")])))
+    latest.joinpath("cash_deployment_plan.json").write_text(json.dumps(_post_feature_cash_plan()))
+    v = collect_portfolio_view(tmp_path)
+    groups = {p["ticker"]: p["week_group"] for p in v["vm"]["advisory_picks"]}
+    assert groups.get("QQQ") == "funded"
+    assert groups.get("GLD") == "deferred_weekly"
+    assert groups.get("VFH") == "deferred_monthly"

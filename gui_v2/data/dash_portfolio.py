@@ -489,6 +489,24 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     for d in decisions:
         d["pick"] = _picks_by_sym.get(str(d.get("ticker") or "").upper())
 
+    # PR2: annotate each advisory pick with its weekly-deployment group + funded
+    # amount, so the compact queue can group funded / deferred-weekly /
+    # deferred-monthly / other. Pure display join on ticker; no decision change.
+    _funded_amt = {f.get("symbol"): f.get("amount")
+                   for f in (wd.get("funded") or [])} if wd.get("available") else {}
+    _deferred_weekly = set(wd.get("deferred_weekly") or [])
+    _deferred_monthly = set(wd.get("deferred_monthly") or [])
+    for p in vm.get("advisory_picks", []):
+        sym = p.get("ticker")
+        if sym in _funded_amt:
+            p["week_group"], p["week_amount"] = "funded", _funded_amt.get(sym)
+        elif sym in _deferred_weekly:
+            p["week_group"], p["week_amount"] = "deferred_weekly", 0.0
+        elif sym in _deferred_monthly:
+            p["week_group"], p["week_amount"] = "deferred_monthly", 0.0
+        else:
+            p["week_group"], p["week_amount"] = "other", None
+
     return {
         "cards": cards,
         "persona": "portfolio",

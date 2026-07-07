@@ -180,106 +180,147 @@
   </section>
   {% endif %}
 
-  {# Advisory picks (left) + Crowd Overlay (right) — stacks on mobile. #}
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-  <section id="advisory-decisions" aria-label="Advisory decision queue" class="lg:col-span-2">
-    <div class="flex items-center gap-3 mb-3 flex-wrap">
-      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Picks with Context</h2>
-      {% if vm %}<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ vm.advisory_count }} active ideas</span>{% endif %}
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
-      <span class="inline-flex items-center gap-1 text-[11px] text-amber-300/80">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-        Advisory only &mdash; no execution
-      </span>
+  {# Advisory queue header (applies to the whole queue). #}
+  <div id="advisory-decisions" class="flex items-center gap-3 flex-wrap">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Picks with Context</h2>
+    {% if vm %}<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{{ vm.advisory_count }} active ideas</span>{% endif %}
+    <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-sky-500/15 text-sky-300 border border-sky-500/30">decision_plan.json</span>
+    <span class="inline-flex items-center gap-1 text-[11px] text-amber-300/80">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+      Advisory only &mdash; no execution
+    </span>
+  </div>
+  {% if crowd_context_status and (crowd_context_status.banner or crowd_context_status.social_disabled) %}
+  <div class="rounded-xl bg-zinc-800/40 border border-zinc-800 px-4 py-2 text-[11px] text-zinc-500">
+    {{ crowd_context_status.banner or "Crowd context shown per pick (context only, never a trade signal). Direct FMP social sentiment is unavailable on the current Starter plan." }}
+  </div>
+  {% endif %}
+
+  {# ---- compact grouped queue helpers ---- #}
+  {% set _picks = (vm.advisory_picks if vm else []) or [] %}
+  {% set _funded = _picks | selectattr("week_group", "equalto", "funded") | list %}
+  {% set _dw     = _picks | selectattr("week_group", "equalto", "deferred_weekly") | list %}
+  {% set _dm     = _picks | selectattr("week_group", "equalto", "deferred_monthly") | list %}
+  {% set _ot     = _picks | selectattr("week_group", "equalto", "other") | list %}
+  {% macro _conv(c) %}{% if c == 'High' %}text-emerald-300{% elif c == 'Medium' %}text-amber-300{% else %}text-zinc-400{% endif %}{% endmacro %}
+  {% macro _qrow(p) %}
+  <details class="border-b border-zinc-800 last:border-b-0 group/row">
+    <summary class="grid grid-cols-[3.5rem_4.5rem_5rem_4.5rem_1fr_1.25rem] items-center gap-x-3 px-3 py-2 cursor-pointer hover:bg-zinc-800/40 text-sm">
+      <span class="font-mono font-semibold text-zinc-100">{{ p.ticker }}</span>
+      <span>{{ ui.action_chip(p.action) }}</span>
+      <span class="font-mono tabular-nums text-right {{ 'text-emerald-300' if (p.week_amount and p.week_amount > 0) else 'text-zinc-600' }}">{% if p.week_amount and p.week_amount > 0 %}${{ "{:,.0f}".format(p.week_amount) }}{% else %}—{% endif %}</span>
+      <span class="text-xs {{ _conv(p.conviction) }}">{{ p.conviction }}</span>
+      <span class="text-xs text-zinc-500 truncate">{% if p.crowd_disagrees %}<span class="text-rose-300">crowd disagrees</span> · {% endif %}{{ p.thesis }}</span>
+      <svg class="w-3.5 h-3.5 text-zinc-600 justify-self-end transition group-open/row:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+    </summary>
+    <div class="px-3 pb-3 pt-1 bg-zinc-950/30 text-xs text-zinc-400 space-y-1.5">
+      <p class="text-zinc-300 leading-snug">{{ p.thesis }}</p>
+      <div><span class="text-zinc-600">Portfolio · </span>{{ p.portfolio_row }}</div>
+      <div><span class="text-zinc-600">Crowd · </span>{{ p.crowd_row }} <span class="text-zinc-600">({{ p.crowd_agreement }})</span></div>
+      <div><span class="text-zinc-600">Catalyst / Risk · </span>{{ p.catalyst_row }}</div>
+      {% if p.unified_explanation %}<div><span class="text-zinc-600">Crowd state · </span>{{ p.unified_explanation }}</div>{% endif %}
+      <div class="text-zinc-600 pt-1">Confidence {{ p.confidence_pct }}% · source <span class="font-mono">decision_plan.json</span></div>
     </div>
+  </details>
+  {% endmacro %}
+  {% macro _qhead() %}
+  <div class="grid grid-cols-[3.5rem_4.5rem_5rem_4.5rem_1fr_1.25rem] gap-x-3 px-3 py-1.5 text-[10px] uppercase tracking-wide text-zinc-600 font-mono border-b border-zinc-800">
+    <span>Sym</span><span>Action</span><span class="text-right">This wk</span><span>Conv.</span><span>Thesis</span><span></span>
+  </div>
+  {% endmacro %}
+  {% macro _qgroup(title, rows, dot, is_open) %}
+  {% if rows %}
+  <details class="rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden" {% if is_open %}open{% endif %}>
+    <summary class="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-zinc-800/30">
+      <span class="w-1.5 h-1.5 rounded-full {{ dot }}"></span>
+      <span class="text-sm font-semibold text-zinc-200">{{ title }}</span>
+      <span class="text-xs text-zinc-500">{{ rows | length }}</span>
+      {% set _tot = rows | selectattr('week_amount') | sum(attribute='week_amount') %}
+      {% if _tot and _tot > 0 %}<span class="ml-auto text-xs font-mono text-emerald-300 tabular-nums">${{ "{:,.0f}".format(_tot) }} this week</span>{% endif %}
+    </summary>
+    <div>{{ _qhead() }}{% for p in rows %}{{ _qrow(p) }}{% endfor %}</div>
+  </details>
+  {% endif %}
+  {% endmacro %}
 
-    {# Crowd-intelligence context banner (observe-only). #}
-    {% if crowd_context_status %}
-      {% if crowd_context_status.banner %}
-      <div class="rounded-xl bg-zinc-800/50 border border-zinc-700 px-4 py-2 text-xs text-zinc-400 mb-3">
-        {{ crowd_context_status.banner }}
+  {# 8/4 split: compact queue (desktop table + mobile cards) + sticky rail. #}
+  <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+    <section id="advisory-queue" aria-label="Advisory decision queue" class="xl:col-span-8 space-y-4">
+      {% if _picks %}
+      {# Desktop — compact ranked table grouped by weekly-deployment status. #}
+      <div class="hidden xl:block space-y-3">
+        {{ _qgroup("Funded this week", _funded, "bg-emerald-400", true) }}
+        {{ _qgroup("Deferred by weekly pacing", _dw, "bg-amber-400", false) }}
+        {{ _qgroup("Deferred by monthly budget", _dm, "bg-zinc-500", false) }}
+        {{ _qgroup("Hold / Watch", _ot, "bg-sky-400", false) }}
       </div>
-      {% elif crowd_context_status.social_disabled %}
-      <div class="rounded-xl bg-zinc-800/40 border border-zinc-800 px-4 py-2 text-[11px] text-zinc-500 mb-3">
-        Crowd context shown per pick below (context only, never a trade signal).
-        Direct FMP social sentiment is unavailable on the current Starter plan.
+      {# Mobile — keep the richer decision cards. #}
+      <div class="xl:hidden space-y-5">
+        {% set _order = ["BUY", "SELL", "SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT", "HOLD", "WAIT"] %}
+        {% for act in _order %}
+        {% set _group = decisions | selectattr("action", "equalto", act) | list %}
+        {% if _group %}
+        <div class="space-y-2.5">
+          <div class="flex items-center gap-2">{{ ui.action_chip(act) }}<span class="text-xs text-zinc-500">{{ _group | length }}</span></div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">{% for d in _group %}{% include "components/decision_card.html" %}{% endfor %}</div>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      {{ ui.empty_state("No advisory decisions available",
+                        "decision_plan.json is absent or empty — run the daily pipeline.") }}
+      {% endif %}
+    </section>
+
+    {# Sticky context rail — stays visible while scrolling the queue. #}
+    <aside aria-label="Decision context" class="xl:col-span-4 xl:sticky xl:top-20 space-y-3">
+      {% if weekly_deployment and weekly_deployment.available %}
+      {% set _wd = weekly_deployment %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono mb-1.5">Weekly Capital</div>
+        <div class="flex items-baseline gap-2">
+          <span class="text-lg font-semibold font-mono text-emerald-300 tabular-nums">{% if _wd.weekly_remaining is not none %}${{ "{:,.0f}".format(_wd.weekly_remaining) }}{% else %}${{ "{:,.0f}".format(_wd.net_investable or 0) }}{% endif %}</span>
+          <span class="text-[11px] text-zinc-500">{{ 'remaining this week' if _wd.weekly_remaining is not none else 'deployable / cycle' }}</span>
+        </div>
+        <div class="text-[11px] text-zinc-500 mt-0.5">cycle ${{ "{:,.0f}".format(_wd.net_investable or 0) }} · reserve ${{ "{:,.0f}".format(_wd.reserve or 0) }} protected</div>
       </div>
       {% endif %}
-    {% endif %}
-
-    {% if decisions %}
-    {% set _order = ["BUY", "SELL", "SCALE", "SCALE_IN", "SCALE_OUT", "REBALANCE_ALERT", "HOLD", "WAIT"] %}
-    <div class="space-y-5">
-      {# Known action groups, in priority order #}
-      {% for act in _order %}
-      {% set _group = decisions | selectattr("action", "equalto", act) | list %}
-      {% if _group %}
-      <div class="space-y-2.5">
-        <div class="flex items-center gap-2">
-          {{ ui.action_chip(act) }}
-          <span class="text-xs text-zinc-500">{{ _group | length }} {{ "position" if _group | length == 1 else "positions" }}</span>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {% for d in _group %}{% include "components/decision_card.html" %}{% endfor %}
-        </div>
+      {% if risk_card %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="flex items-center justify-between gap-2"><span class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">Risk Focus</span>{{ ui.status_badge(risk_card.severity, risk_card.label or risk_card.status) }}</div>
+        <p class="text-xs text-zinc-400 mt-1.5 line-clamp-3">{{ risk_card.summary }}</p>
       </div>
       {% endif %}
-      {% endfor %}
-      {# Any actions not in the known order (defensive — keeps nothing hidden) #}
-      {% set _other = decisions | rejectattr("action", "in", _order) | list %}
-      {% if _other %}
-      <div class="space-y-2.5">
-        <div class="flex items-center gap-2"><span class="text-xs uppercase tracking-wide text-zinc-500">Other</span></div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {% for d in _other %}{% include "components/decision_card.html" %}{% endfor %}
-        </div>
-      </div>
-      {% endif %}
-    </div>
-    {% else %}
-    {{ ui.empty_state("No advisory decisions available",
-                      "decision_plan.json is absent or empty — run the daily pipeline.") }}
-    {% endif %}
-  </section>
-
-  {# Crowd Overlay — supporting context across the shown picks (right on desktop,
-     below on mobile). Research context only; never drives a decision. #}
-  {% if vm and vm.crowd_overlay %}
-  {% set ov = vm.crowd_overlay %}
-  <aside aria-label="Crowd Overlay" class="lg:col-span-1 space-y-3">
-    {{ ui.section_header("Crowd Overlay", "research context only", "") }}
-    <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 space-y-3 text-sm">
-      <div>
-        <div class="text-zinc-400 text-xs uppercase tracking-wide">Active Crowd Sources (Governed)</div>
-        <div class="text-zinc-100 font-semibold">{{ ov.active_sources }} categories</div>
-        {% if ov.active_source_names %}<div class="text-[11px] text-zinc-500">{{ ov.active_source_names|join(" · ") }}</div>{% endif %}
-      </div>
-      <div>
-        <div class="text-zinc-400 text-xs uppercase tracking-wide">Crowd Coverage</div>
-        <div class="w-full bg-zinc-800 rounded-full h-2 mt-1"><div class="bg-emerald-500/70 h-2 rounded-full" style="width: {{ ov.coverage_pct }}%"></div></div>
-        <div class="text-[11px] text-zinc-500 mt-0.5">{{ ov.coverage_pct }}% of shown picks have crowd data</div>
-      </div>
-      <div>
-        <div class="text-zinc-400 text-xs uppercase tracking-wide">Crowd Agreement</div>
-        <div class="flex gap-2 mt-1 text-[11px] flex-wrap">
+      {% if vm and vm.crowd_overlay %}
+      {% set ov = vm.crowd_overlay %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono mb-1.5">Crowd Agreement</div>
+        <div class="flex gap-1.5 text-[11px] flex-wrap">
           <span class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">Agree {{ ov.agree }}</span>
-          <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">Inconclusive {{ ov.inconclusive }}</span>
+          <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">Inconcl {{ ov.inconclusive }}</span>
           <span class="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30">Disagree {{ ov.disagree }}</span>
         </div>
+        <div class="text-[11px] text-zinc-500 mt-1.5">{{ ov.coverage_pct }}% coverage · {{ ov.active_sources }} sources</div>
+        <a href="/dashboard/crowd-radar" class="text-[11px] text-sky-300 hover:text-sky-200 mt-1 inline-block">View Crowd Details &rarr;</a>
       </div>
-      <div>
-        <div class="text-zinc-400 text-xs uppercase tracking-wide">Conviction Legend</div>
-        <ul class="text-[11px] text-zinc-400 mt-1 space-y-0.5">
-          {% for l in ov.legend %}<li><span class="font-mono text-zinc-300">{{ l.band }} ({{ l.range }})</span> — {{ l.desc }}</li>{% endfor %}
-        </ul>
+      {% endif %}
+      {% set _drift = (vm.summary_cards if vm else []) | selectattr("key", "equalto", "drift") | list | first %}
+      {% if _drift %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono mb-1">Concentration</div>
+        <div class="text-sm font-mono text-zinc-100">{{ _drift.value }}</div>
+        <div class="text-[11px] text-zinc-500 mt-0.5">{{ _drift.sub }}</div>
       </div>
-      <div class="pt-2 border-t border-zinc-800 text-[11px] text-zinc-500">
-        Crowd data is governance-filtered and used as research context only.
-        <a href="/dashboard/crowd-radar" class="text-sky-300 hover:text-sky-200 block mt-1">View Crowd Details &rarr;</a>
+      {% endif %}
+      {% if memo_card %}
+      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
+        <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono mb-1">Memo</div>
+        <p class="text-xs text-zinc-400 line-clamp-3">{{ memo_card.summary }}</p>
+        <a href="/dashboard/memo" class="text-[11px] text-sky-300 hover:text-sky-200 mt-1 inline-block">Read full memo &rarr;</a>
       </div>
-    </div>
-  </aside>
-  {% endif %}
+      {% endif %}
+    </aside>
   </div>
 
   {# Simulation Context — compact research-only preview; full charts in Strategy Lab. #}
