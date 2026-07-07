@@ -109,3 +109,33 @@ def test_dashboard_today_renders_and_has_observe_only_banner():
     r = c.get("/dashboard/today")
     assert r.status_code == 200
     assert "Observe-only" in r.text
+
+
+def test_htmx_is_vendored_locally_not_from_cdn():
+    """htmx must be served from same-origin /static, not the unpkg CDN, so the
+    dashboard's auto-refresh does not depend on an external host (2026-07-07)."""
+    from fastapi.testclient import TestClient
+    from gui_v2.app import app
+
+    c = TestClient(app)
+    html = c.get("/dashboard/today").text
+    assert "/static/htmx.min.js" in html
+    assert "unpkg.com" not in html
+    # the static asset itself is served
+    r = c.get("/static/htmx.min.js")
+    assert r.status_code == 200
+    assert b"htmx" in r.content
+
+
+def test_stale_class_filter_flags_age():
+    """The timestamp staleness filter colors old artifacts amber/rose and leaves
+    fresh/unknown/unparseable muted (never alarms on missing data)."""
+    from datetime import datetime, timezone, timedelta
+    from gui_v2.app import _time_stale_class
+
+    now = datetime.now(timezone.utc)
+    assert _time_stale_class(now.isoformat()) == "text-zinc-500"          # fresh
+    assert _time_stale_class((now - timedelta(hours=30)).isoformat()) == "text-amber-400"
+    assert _time_stale_class((now - timedelta(days=3)).isoformat()) == "text-rose-400"
+    assert _time_stale_class(None) == "text-zinc-500"                     # unknown
+    assert _time_stale_class("not-a-date") == "text-zinc-500"             # unparseable

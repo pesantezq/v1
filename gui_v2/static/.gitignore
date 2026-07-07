@@ -1,0 +1,4 @@
+# Build-time only — not committed. The compiled app.css (once built + visually
+# verified) and the vendored htmx.min.js ARE committed.
+.tailwindcss
+app.src.css

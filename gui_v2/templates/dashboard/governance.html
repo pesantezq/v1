@@ -60,7 +60,7 @@
                          "pending_proposals.json") }}
     {% if pending_proposals %}
     {% call ui.responsive_table() %}
-      <table class="min-w-full text-sm">
+      <div class="overflow-x-auto"><table class="min-w-full text-sm">
         <thead><tr class="text-left text-zinc-400">
           <th class="py-1 pr-4">Proposal</th><th class="py-1 pr-4">Type</th>
           <th class="py-1 pr-4">Symbol</th><th class="py-1 pr-4">Risk</th>
@@ -92,7 +92,7 @@
           </tr>
         {% endfor %}
         </tbody>
-      </table>
+      </table></div>
     {% endcall %}
     {% else %}
       {{ ui.all_clear("No pending proposals", "Nothing is awaiting human approval right now.") }}

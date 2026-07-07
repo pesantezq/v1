@@ -69,6 +69,77 @@ Explicitly note:
 
 ---
 
+## GUI: surface capital-deployment plan + rendering-honesty fixes
+
+### Date
+
+`2026-07-07`
+
+### Area
+
+`output_contract` / `architecture`
+
+### Files / Functions
+
+- `gui_v2/data/shared.py`: new `weekly_deployment_view` (display projection of the
+  monthly envelope + weekly pacing; null-guards pre-feature artifacts).
+- `gui_v2/data/dash_portfolio.py`: enriched "Capital / Allocation" card (envelope +
+  weekly tranche + glide breakdown; degraded→warning honesty) + `weekly_deployment`
+  on the view.
+- `gui_v2/templates/dashboard/portfolio.html`: new "Weekly Deployment" section
+  (per-name funded amounts + `DEFERRED_BY_WEEKLY_PACING`/`_MONTHLY_BUDGET` split).
+- `gui_v2/data/dash_today.py`: "Deployable capital" card (deployable-this-week glance).
+- `gui_v2/data/portfolio_presenter.py`: `amber`→`yellow` severity token (below-floor
+  cash + >50% concentration hero cards were rendering neutral gray).
+- `gui_v2/templates/components/_ui.html`: `amber` alias in `_sev_classes`/`sev_dot`
+  (defensive); `timestamp` macro colors by age via new `stale_class` filter.
+- `gui_v2/app.py`: `stale_class` staleness filter; `/static` mount.
+- `gui_v2/static/htmx.min.js` (vendored) + `gui_v2/templates/base.html`: htmx served
+  same-origin, not from unpkg CDN.
+- `gui_v2/templates/dashboard/{crowd_radar,governance}.html`: tables wrapped in
+  `overflow-x-auto` (mobile horizontal-overflow fix).
+- `scripts/build_dashboard_css.sh`: turnkey standalone-Tailwind build to replace the
+  Play CDN (operator-run + visually verified; not swapped blind).
+
+### Decision
+
+The dashboard now consumes the `cash_deployment_plan.json` monthly envelope +
+weekly-pacing fields (previously read only `total_deployed_amount`), so the operator
+sees the deployable-this-cycle budget, this week's tranche, per-name buy amounts, and
+the weekly-vs-monthly deferral split — matching the memo. Also fixed an `amber`
+severity token that silently rendered warnings as neutral gray, added timestamp-age
+coloring for stale-data honesty, vendored htmx locally, and fixed mobile table overflow.
+
+### Why
+
+The 2026-07-07 glide/weekly-pacing feature emitted rich envelope data that no GUI check
+consumed (violating the "every artifact needs a consumer" corollary), and the capital
+card showed raw cash that contradicted the deployable budget. Render-reviewer surfaced
+the amber-token bug and the stale-honesty gap.
+
+### Invariants Preserved
+
+GUI remains an artifact **consumer** — no decision/scoring recompute, no writes to
+`decision_plan.json`. Observe-only banner + no trade-execution verbs preserved. Tailwind
+CDN left active (documented local-build follow-up) to avoid a blind, unverifiable
+production stylesheet swap. All reads null-guard the pre-feature artifact shape.
+
+### Downstream Impact
+
+- GUI surfaces: `/dashboard/portfolio` (Capital card + Weekly Deployment section),
+  `/dashboard/today` (Deployable capital card), all cards (staleness coloring).
+- New asset route `/static/*` (htmx). No artifact/schema change.
+- Tests: `tests/test_gui_dashboard_portfolio.py` (+9), `tests/test_gui_dashboard_shell.py`
+  (+2). 317 passed across the GUI surface.
+
+### Artifact Health Severity
+
+No change to `critical_missing`/`defaulting`/`optional_missing`;
+`missing_artifact_count` unchanged. GUI card severity is now honest for below-floor
+cash / concentration / degraded capital plan (previously under-reported as gray/info).
+
+---
+
 ## Glide-in excess cash + weekly deployment pacing
 
 ### Date

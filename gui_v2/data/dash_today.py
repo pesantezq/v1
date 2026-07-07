@@ -1,7 +1,7 @@
 """Today cockpit: answers system-healthy? decision-core OK? review needed? what changed? memo?"""
 from __future__ import annotations
 from pathlib import Path
-from gui_v2.data.shared import card, _read_json
+from gui_v2.data.shared import card, _read_json, weekly_deployment_view
 
 
 def collect_today_view(root: Path) -> dict:
@@ -9,6 +9,7 @@ def collect_today_view(root: Path) -> dict:
     drs = _read_json(latest / "daily_run_status.json") or {}
     dp = _read_json(latest / "decision_plan.json")
     risk = _read_json(latest / "risk_delta.json") or {}
+    cash = _read_json(latest / "cash_deployment_plan.json") or {}
     cards = []
 
     # System health card
@@ -54,6 +55,35 @@ def collect_today_view(root: Path) -> dict:
         label=risk_overall,
         summary="see Portfolio view",
         source_artifacts=["risk_delta.json"],
+    ))
+
+    # Capital card — the one deployable-this-week figure at a glance (feature
+    # 2026-07-07). Observe-only; reads the envelope, never recomputes.
+    wd = weekly_deployment_view(cash)
+    if wd.get("available"):
+        weekly = wd.get("weekly_remaining")
+        cadence = wd.get("deploy_cadence")
+        if cadence and cadence != "monthly" and weekly is not None:
+            cap_label = f"${weekly:,.2f} this week"
+            cap_summary = (
+                f"of ${wd.get('weekly_tranche') or 0:,.2f} tranche · "
+                f"cycle ${wd.get('net_investable') or 0:,.2f} net-investable"
+            )
+        else:
+            cap_label = f"${wd.get('net_investable') or 0:,.2f} this cycle"
+            cap_summary = f"reserve ${wd.get('reserve') or 0:,.2f} protected"
+        cap_status = "warning" if wd.get("history_status") == "unavailable" else "info"
+    else:
+        cap_label = "unavailable"
+        cap_summary = "no monthly capital envelope in current plan"
+        cap_status = "unknown"
+    cards.append(card(
+        "Deployable capital",
+        status=cap_status,
+        label=cap_label,
+        summary=cap_summary,
+        source_artifacts=["cash_deployment_plan.json"],
+        updated_at=cash.get("generated_at") if cash else None,
     ))
 
     return {"cards": cards, "persona": "today", "observe_only": True}

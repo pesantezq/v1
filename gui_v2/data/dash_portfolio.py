@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from gui_v2.data.shared import card, _read_json
+from gui_v2.data.shared import card, _read_json, weekly_deployment_view
 from gui_v2.data.portfolio import collect_portfolio_view as _portfolio_data
 from gui_v2.data.risk_impact import collect_risk_impact_view as _risk_data
 from gui_v2.data.dash_schwab_holdings import schwab_holdings
@@ -346,8 +346,10 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         cash_summary_obj.get("cash_available") if isinstance(cash_summary_obj, dict) else None
     )
     degraded = cash.get("degraded_mode") or False
-    cash_label = "degraded" if degraded else ("available" if cash else "unavailable")
-    cash_deployed = cash.get("total_deployed_amount") or 0
+
+    # Monthly envelope + weekly pacing — the authoritative "deployable this cycle"
+    # figure (feature 2026-07-07). Falls back to raw cash for pre-feature artifacts.
+    wd = weekly_deployment_view(cash)
 
     tax_harvest_count = tax.get("harvestable_count") or 0
     tax_loss_dollars = tax.get("total_harvestable_loss_dollars") or 0
@@ -355,19 +357,50 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
     is_taxable = tax.get("is_taxable_account")
 
     cap_parts: list[str] = []
-    if cash:
-        cap_parts.append(
-            f"Cash available: ${float(cash_avail):,.2f}" if cash_avail is not None
-            else f"Deployed: ${cash_deployed:,.0f}"
-        )
+    if wd.get("available"):
+        ni = wd.get("net_investable")
+        base = wd.get("contribution_base")
+        glide = wd.get("glide_slice")
+        if ni is not None:
+            breakdown = ""
+            if base is not None and glide is not None:
+                breakdown = f" (${base:,.2f} contribution + ${glide:,.2f} glide)"
+            cap_parts.append(f"Deployable this cycle: ${ni:,.2f}{breakdown}")
+        # Weekly tranche line (a live residual — omit under monthly cadence).
+        if wd.get("deploy_cadence") not in (None, "monthly") and wd.get("weekly_remaining") is not None:
+            cap_parts.append(
+                f"This week: ${wd['weekly_remaining']:,.2f} of "
+                f"${(wd.get('weekly_tranche') or 0):,.2f} tranche remaining"
+            )
+        if wd.get("reserve") is not None:
+            cap_parts.append(f"reserve ${wd['reserve']:,.2f} protected")
+    elif cash and cash_avail is not None:
+        # Pre-feature / envelope-unavailable: honest raw cash fallback.
+        cap_parts.append(f"Cash available: ${float(cash_avail):,.2f}")
+
     if tax:
         cap_parts.append(tax_summary_line)
     if is_taxable is False:
         cap_parts.append("Non-taxable account")
 
+    # Degraded-state honesty: a suspended/degraded plan or an unconfirmable cycle
+    # is a warning, not neutral info.
+    env_unavailable = (not wd.get("available")) and bool(cash) and (
+        (cash.get("monthly_capital_envelope") or {}).get("monthly_history_status") == "unavailable"
+    )
+    if degraded or wd.get("history_status") == "unavailable" or env_unavailable:
+        cash_status = "warning"
+        cash_label = "degraded"
+    elif cash or tax:
+        cash_status = "info"
+        cash_label = "available"
+    else:
+        cash_status = "unknown"
+        cash_label = "unavailable"
+
     cards.append(card(
         "Capital / Allocation",
-        status="info" if (cash or tax) else "unknown",
+        status=cash_status,
         label=cash_label,
         summary="; ".join(cap_parts) or "Capital data unavailable",
         source_artifacts=["cash_deployment_plan.json", "tax_harvest_advisor.json"],
@@ -471,6 +504,8 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         # Holdings from real snapshot keys (H1 fix — not from legacy portfolio.py)
         "holdings": holdings,
         "allocation": portfolio_data.get("allocation") or {},
+        # This week's capital deployment (envelope + weekly pacing; observe-only).
+        "weekly_deployment": wd,
         "watchlist": portfolio_data.get("watchlist") or [],
         "recent_signals": portfolio_data.get("recent_signals") or [],
         # Raw dp for context flags

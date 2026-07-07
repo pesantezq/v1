@@ -768,3 +768,146 @@ def test_rejected_save_leaves_no_backup_or_audit(tmp_path, monkeypatch):
         )
     finally:
         monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
+
+
+# ---------------------------------------------------------------------------
+# Weekly deployment / glide surfacing (feature 2026-07-07)
+# ---------------------------------------------------------------------------
+
+def _post_feature_cash_plan(*, cadence="weekly", degraded=False, history="ok"):
+    """A cash_deployment_plan.json with the monthly_capital_envelope + weekly_pacing
+    the 2026-07-07 feature emits."""
+    return {
+        "observe_only": True, "no_trade": True, "generated_at": "2026-07-08T09:03:00+00:00",
+        "degraded_mode": degraded,
+        "cash_summary": {"portfolio_value": 10480.0, "cash_available": 3151.0,
+                         "current_cash_pct": 0.30, "target_cash_pct": 0.05,
+                         "total_deployable_amount": 2627.0, "below_safety_floor": False},
+        "deployment_rows": [
+            {"symbol": "QQQ", "suggested_amount": 104.8, "status": "FUNDED_STANDARD",
+             "pct_of_net_investable": 7.4},
+            {"symbol": "GLD", "suggested_amount": 0.0, "status": "DEFERRED_BY_WEEKLY_PACING"},
+            {"symbol": "VFH", "suggested_amount": 0.0, "status": "DEFERRED_BY_MONTHLY_BUDGET"},
+        ],
+        "total_deployed_amount": 104.8,
+        "monthly_capital_envelope": {
+            "status": "ok",
+            "monthly_contribution_net_investable": 1406.75,
+            "monthly_contribution_net_investable_base": 1000.0,
+            "glide_slice": 406.75,
+            "cash_reserve_target_amount": 524.0,
+            "monthly_history_status": history,
+            "monthly_utilization_pct": 7.4,
+            "weekly_pacing": {"deploy_cadence": cadence, "weekly_tranche": 351.69,
+                              "weekly_remaining": 351.69, "deployed_this_week": 0.0},
+        },
+    }
+
+
+def test_weekly_deployment_view_post_feature():
+    from gui_v2.data.shared import weekly_deployment_view
+    v = weekly_deployment_view(_post_feature_cash_plan())
+    assert v["available"] is True
+    assert v["net_investable"] == 1406.75
+    assert v["glide_slice"] == 406.75
+    assert v["weekly_remaining"] == 351.69
+    assert v["funded"] == [{"symbol": "QQQ", "amount": 104.8,
+                            "pct_of_net_investable": 7.4, "status": "FUNDED_STANDARD"}]
+    assert v["deferred_weekly"] == ["GLD"]
+    assert v["deferred_monthly"] == ["VFH"]
+
+
+def test_weekly_deployment_view_pre_feature_null_guards():
+    """An envelope emitted before the feature (no glide/weekly_pacing) must not crash;
+    glide/weekly fields degrade to None."""
+    from gui_v2.data.shared import weekly_deployment_view
+    old = {"monthly_capital_envelope": {"status": "ok",
+                                        "monthly_contribution_net_investable": 1000.0}}
+    v = weekly_deployment_view(old)
+    assert v["available"] is True
+    assert v["net_investable"] == 1000.0
+    assert v["glide_slice"] is None
+    assert v["weekly_tranche"] is None
+
+
+def test_weekly_deployment_view_missing():
+    from gui_v2.data.shared import weekly_deployment_view
+    assert weekly_deployment_view(None)["available"] is False
+    assert weekly_deployment_view({})["available"] is False
+    assert weekly_deployment_view(
+        {"monthly_capital_envelope": {"status": "INSUFFICIENT_CAPITAL_DATA"}}
+    )["available"] is False
+
+
+def test_capital_card_surfaces_envelope_and_weekly(tmp_path):
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "cash_deployment_plan.json").write_text(
+        json.dumps(_post_feature_cash_plan()))
+    v = collect_portfolio_view(tmp_path)
+    cap = next(c for c in v["cards"] if c["title"] == "Capital / Allocation")
+    assert "Deployable this cycle: $1,406.75" in cap["summary"]
+    assert "contribution" in cap["summary"] and "glide" in cap["summary"]
+    assert "This week: $351.69" in cap["summary"]
+    assert cap["status"] == "info"
+    # weekly_deployment also exposed on the view for the template
+    assert v["weekly_deployment"]["available"] is True
+
+
+def test_capital_card_degraded_is_warning(tmp_path):
+    from gui_v2.data.dash_portfolio import collect_portfolio_view
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "cash_deployment_plan.json").write_text(
+        json.dumps(_post_feature_cash_plan(degraded=True)))
+    v = collect_portfolio_view(tmp_path)
+    cap = next(c for c in v["cards"] if c["title"] == "Capital / Allocation")
+    assert cap["status"] == "warning"  # degraded no longer renders as neutral info
+
+
+def test_portfolio_page_renders_weekly_deployment_section(monkeypatch, tmp_path):
+    from gui_v2 import app as app_module
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "cash_deployment_plan.json").write_text(
+        json.dumps(_post_feature_cash_plan()))
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    r = TestClient(app_module.app).get("/dashboard/portfolio")
+    assert r.status_code == 200
+    t = r.text
+    assert "Weekly Deployment" in t
+    assert "$104.80" in t            # per-name funded amount
+    assert "Deferred by weekly pacing" in t
+    assert "GLD" in t
+
+
+def test_today_page_renders_deployable_capital_card(monkeypatch, tmp_path):
+    from gui_v2 import app as app_module
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "cash_deployment_plan.json").write_text(
+        json.dumps(_post_feature_cash_plan()))
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    r = TestClient(app_module.app).get("/dashboard/today")
+    assert r.status_code == 200
+    t = r.text
+    assert "Deployable capital" in t
+    assert "$351.69 this week" in t
+
+
+def test_below_floor_and_concentration_render_amber_not_gray():
+    """Regression: severity 'amber'/'yellow' warning must render the amber token
+    classes, not fall through to neutral gray (render-reviewer 2026-07-07)."""
+    from gui_v2.data.portfolio_presenter import build_summary_cards
+    cards = build_summary_cards(
+        portfolio_value=10000.0,
+        cash_summary={"cash_available": 100.0, "current_cash_pct": 0.01,
+                      "target_cash_pct": 0.05, "below_safety_floor": True},
+        risk_delta={"concentration": {"top_position": {"symbol": "QQQ", "weight": 0.6},
+                                      "positions": [1, 2]}},
+        holdings=[{"sector": "Tech"}],
+    )
+    by_key = {c["key"]: c for c in cards}
+    # Both warning cards must use a token the _sev_classes macro actually colors.
+    assert by_key["cash"]["severity"] in ("yellow", "amber")
+    assert by_key["drift"]["severity"] in ("yellow", "amber")

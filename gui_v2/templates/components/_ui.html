@@ -17,7 +17,7 @@
 {# --- severity → tailwind class tokens (single source of truth) --------- #}
 {% macro _sev_classes(severity) -%}
 {%- if severity == "green" -%}bg-emerald-500/15 text-emerald-300 border-emerald-500/30
-{%- elif severity == "yellow" -%}bg-amber-500/15 text-amber-300 border-amber-500/30
+{%- elif severity == "yellow" or severity == "amber" -%}bg-amber-500/15 text-amber-300 border-amber-500/30
 {%- elif severity == "red" -%}bg-rose-500/15 text-rose-300 border-rose-500/30
 {%- elif severity == "blue" -%}bg-sky-500/15 text-sky-300 border-sky-500/30
 {%- else -%}bg-zinc-800 text-zinc-400 border-zinc-700
@@ -28,7 +28,7 @@
 {% macro sev_dot(severity) -%}
 <span class="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0
   {%- if severity == 'green' %} bg-emerald-400
-  {%- elif severity == 'yellow' %} bg-amber-400
+  {%- elif severity == 'yellow' or severity == 'amber' %} bg-amber-400
   {%- elif severity == 'red' %} bg-rose-400
   {%- elif severity == 'blue' %} bg-sky-400
   {%- else %} bg-zinc-500{% endif %}"></span>
@@ -86,7 +86,7 @@
 
 {# Human timestamp — friendly label with the raw ISO available on hover. #}
 {% macro timestamp(updated_at) -%}
-{% if updated_at %}<span class="inline-flex items-center gap-1 text-xs text-zinc-500" title="{{ updated_at }}">
+{% if updated_at %}<span class="inline-flex items-center gap-1 text-xs {{ updated_at | stale_class }}" title="{{ updated_at }}">
   <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 7v5l3 2"/></svg>
   {{ updated_at | human_time }}
 </span>{% endif %}

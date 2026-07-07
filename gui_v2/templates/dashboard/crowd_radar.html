@@ -45,7 +45,7 @@
     {{ ui.section_header("Source Health", "all active sources are free, no paid data", "crowd_source_health.json") }}
     {% if source_health_rows %}
     {% call ui.responsive_table() %}
-    <table class="min-w-full text-sm border-separate border-spacing-0">
+    <div class="overflow-x-auto"><table class="min-w-full text-sm border-separate border-spacing-0">
       <thead>
         <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
           <th class="py-2 pr-4 font-medium">Source</th>
@@ -66,7 +66,7 @@
         </tr>
         {% endfor %}
       </tbody>
-    </table>
+    </table></div>
     {% endcall %}
     {% else %}
     {{ ui.empty_state("No source health reported",
@@ -97,7 +97,7 @@
 
   {% macro sentiment_table(rows) %}
   {% call ui.responsive_table() %}
-  <table class="min-w-full text-sm border-separate border-spacing-0">
+  <div class="overflow-x-auto"><table class="min-w-full text-sm border-separate border-spacing-0">
     <thead>
       <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
         <th class="py-2 pr-3 font-medium">Ticker</th>
@@ -111,7 +111,7 @@
     <tbody>
       {% for a in rows %}{{ sentiment_row(a) }}{% endfor %}
     </tbody>
-  </table>
+  </table></div>
   {% endcall %}
   {% endmacro %}
 
@@ -173,7 +173,7 @@
     </div>
     {% endif %}
     {% call ui.responsive_table() %}
-    <table class="min-w-full text-sm border-separate border-spacing-0">
+    <div class="overflow-x-auto"><table class="min-w-full text-sm border-separate border-spacing-0">
       <thead>
         <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
           <th class="py-2 pr-4 font-medium">#</th>
@@ -198,7 +198,7 @@
         </tr>
         {% endfor %}
       </tbody>
-    </table>
+    </table></div>
     {% endcall %}
   </section>
   {% endif %}
@@ -270,7 +270,7 @@
       <div class="mb-4">
         <div class="text-xs uppercase tracking-wide text-zinc-400 mb-2">{{ sec.label }}</div>
         {% call ui.responsive_table() %}
-        <table class="min-w-full text-sm border-separate border-spacing-0">
+        <div class="overflow-x-auto"><table class="min-w-full text-sm border-separate border-spacing-0">
           <thead>
             <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
               <th class="py-2 pr-4 font-medium">Group / Theme</th>
@@ -299,7 +299,7 @@
             </tr>
             {% endfor %}
           </tbody>
-        </table>
+        </table></div>
         {% endcall %}
       </div>
       {% endfor %}
@@ -353,7 +353,7 @@
         <div class="text-xs uppercase tracking-wide text-zinc-400 mb-1">{{ label }}</div>
         <div class="text-[11px] text-zinc-600 mb-2">{{ note }}</div>
         {% call ui.responsive_table() %}
-        <table class="min-w-full text-sm border-separate border-spacing-0">
+        <div class="overflow-x-auto"><table class="min-w-full text-sm border-separate border-spacing-0">
           <thead>
             <tr class="text-left text-xs uppercase tracking-wide text-zinc-500">
               <th class="py-2 pr-4 font-medium">Ticker</th>
@@ -378,7 +378,7 @@
             </tr>
             {% endfor %}
           </tbody>
-        </table>
+        </table></div>
         {% endcall %}
       </div>
       {% endif %}

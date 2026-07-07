@@ -263,6 +263,71 @@
   </section>
 
   {# --------------------------------------------------------------- #}
+  {# Weekly Deployment — envelope + weekly pacing (observe only)       #}
+  {# Per-name buy amounts for cash deployable THIS week + deferral split #}
+  {# --------------------------------------------------------------- #}
+  {% set wd = weekly_deployment %}
+  {% if wd and wd.available %}
+  <section aria-label="Weekly capital deployment">
+    {{ ui.section_header("Weekly Deployment", "envelope + weekly pacing — observe only", "") }}
+    <div class="bg-zinc-900 rounded-xl border border-zinc-800 p-4 space-y-3">
+      {# Cycle + weekly summary line #}
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+        {% if wd.net_investable is not none %}
+        <span class="text-zinc-300">
+          Cycle: <span class="font-mono text-zinc-100">${{ "{:,.2f}".format(wd.net_investable) }}</span>
+          {% if wd.contribution_base is not none and wd.glide_slice is not none %}
+          <span class="text-zinc-500 text-xs">(${{ "{:,.2f}".format(wd.contribution_base) }} contribution + ${{ "{:,.2f}".format(wd.glide_slice) }} glide)</span>
+          {% endif %}
+        </span>
+        {% endif %}
+        {% if wd.deploy_cadence and wd.deploy_cadence != "monthly" and wd.weekly_remaining is not none %}
+        <span class="text-zinc-300">
+          This week ({{ wd.deploy_cadence }}):
+          <span class="font-mono text-emerald-300">${{ "{:,.2f}".format(wd.weekly_remaining) }}</span>
+          <span class="text-zinc-500 text-xs">remaining of ${{ "{:,.2f}".format(wd.weekly_tranche or 0) }} tranche</span>
+        </span>
+        {% endif %}
+        {% if wd.reserve is not none %}
+        <span class="text-zinc-500 text-xs">reserve ${{ "{:,.2f}".format(wd.reserve) }} protected</span>
+        {% endif %}
+      </div>
+
+      {# Funded per-name amounts #}
+      {% if wd.funded %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-zinc-500">
+            <tr><th class="text-left px-2 py-1">symbol</th><th class="text-right px-2 py-1">funded</th><th class="text-right px-2 py-1">% net-inv.</th><th class="text-left px-2 py-1">status</th></tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for f in wd.funded %}
+            <tr>
+              <td class="px-2 py-1 text-zinc-200">{{ f.symbol }}</td>
+              <td class="px-2 py-1 text-right text-emerald-300">{% if f.amount is not none %}${{ "{:,.2f}".format(f.amount) }}{% endif %}</td>
+              <td class="px-2 py-1 text-right text-zinc-400">{% if f.pct_of_net_investable is not none %}{{ f.pct_of_net_investable }}%{% endif %}</td>
+              <td class="px-2 py-1 text-zinc-400">{{ f.status | status_label }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-sm text-zinc-500">No names funded this week.</p>
+      {% endif %}
+
+      {# Deferral split — why a BUY got $0 this week vs this cycle #}
+      {% if wd.deferred_weekly %}
+      <p class="text-xs text-zinc-400"><span class="text-amber-300">Deferred by weekly pacing</span> (cycle budget remains): <span class="font-mono">{{ wd.deferred_weekly | join(", ") }}</span></p>
+      {% endif %}
+      {% if wd.deferred_monthly %}
+      <p class="text-xs text-zinc-400"><span class="text-zinc-300">Deferred by monthly budget</span> (cycle spent): <span class="font-mono">{{ wd.deferred_monthly | join(", ") }}</span></p>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
   {# Holdings — desktop table (hidden md:block) + mobile cards (md:hidden) #}
   {# --------------------------------------------------------------- #}
   <section aria-label="Holdings">

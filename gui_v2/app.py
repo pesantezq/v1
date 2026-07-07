@@ -18,9 +18,16 @@ from fastapi.templating import Jinja2Templates
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="StockBot Dashboard v2")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Self-hosted front-end assets (htmx vendored locally so the dashboard's
+# auto-refresh does not depend on an external CDN being reachable).
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.on_event("startup")
@@ -237,6 +244,36 @@ def _human_time(value: str | None) -> str:
 
 
 templates.env.filters["human_time"] = _human_time
+
+
+def _time_stale_class(value: str | None, stale_h: float = 26.0, very_stale_h: float = 50.0) -> str:
+    """Tailwind text-color for a timestamp based on its age (staleness honesty).
+
+    Fresh / unknown / unparseable → muted grey (never alarm on missing data).
+    Older than one daily cycle (~26h) → amber; older than ~2 days → rose. This
+    makes a stale card visually distinct from a just-refreshed one so an operator
+    glancing at the dashboard does not trust old data as current.
+    """
+    if not value:
+        return "text-zinc-500"
+    from datetime import datetime, timezone
+
+    raw = str(value).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return "text-zinc-500"  # unparseable → don't alarm
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+    if age_h >= very_stale_h:
+        return "text-rose-400"
+    if age_h >= stale_h:
+        return "text-amber-400"
+    return "text-zinc-500"
+
+
+templates.env.filters["stale_class"] = _time_stale_class
 
 
 def _overall_severity_for_nav() -> str:

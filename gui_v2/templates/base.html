@@ -13,8 +13,13 @@
       } catch (e) {}
     })();
   </script>
+  {# Tailwind: the Play CDN is a runtime JIT compiler (not ideal for prod). To
+     move to a compiled, self-hosted stylesheet, run scripts/build_dashboard_css.sh
+     (standalone Tailwind CLI — no node), visually verify, then replace the CDN
+     <script> below with: <link rel="stylesheet" href="/static/app.css"> #}
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+  {# htmx vendored locally (no external CDN dependency for auto-refresh). #}
+  <script src="/static/htmx.min.js" defer></script>
   <style>
     :root { color-scheme: dark; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
