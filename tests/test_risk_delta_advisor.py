@@ -235,6 +235,24 @@ class TestRenderRiskDeltaMd(unittest.TestCase):
         md = render_risk_delta_md(payload)
         self.assertIn("Observe-only", md)
 
+    def test_headroom_rendered_in_pp_not_percent(self):
+        # headroom is a percentage-point delta; the canonical convention (and the
+        # daily memo) label it `pp`, not `%`. QQQ at 55% under a 60% cap -> +5.0pp
+        # concentration headroom; unleveraged -> +25.0pp leverage headroom.
+        payload = build_risk_delta(
+            holdings=[{"symbol": "QQQ", "shares": 1.0, "target_weight": 0.55}],
+            portfolio_value=10_000.0,
+            concentration_cap=0.60,
+            leverage_cap=0.25,
+            sigma_annual=0.15,
+        )
+        md = render_risk_delta_md(payload)
+        self.assertIn("headroom +5.0pp", md)   # concentration top position
+        self.assertIn("headroom +25.0pp", md)  # leverage
+        # the same headroom values must NOT be labeled with a percent sign
+        self.assertNotIn("headroom +5.0%", md)
+        self.assertNotIn("headroom +25.0%", md)
+
 
 class TestRunRiskDeltaAdvisor(unittest.TestCase):
     """Integration test: feed a temp repo, ensure the advisor writes valid artifacts."""

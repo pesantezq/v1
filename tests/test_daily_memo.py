@@ -38,7 +38,38 @@ from watchlist_scanner.daily_memo import (
     _advisor_stack_items,
     _build_top_insight,
     _build_memo_top_insight,
+    _investor_core_md,
+    _investor_core_text,
 )
+
+
+class TestDeferredOverflowIndicator:
+    """The Deferred/Blocked section caps the visible list at 6 entries. When more
+    than 6 are deferred it must disclose the remainder with an '...and N more'
+    line so the operator is not silently shown 6 of N (memo-reviewer 2026-07-07)."""
+
+    def _mc(self, n):
+        return {"deferred_actions": [
+            {"symbol": f"SYM{i}", "presentation_state": "DEFERRED_BY_MONTHLY_BUDGET",
+             "blocking_reason": "DEFERRED_BY_MONTHLY_BUDGET"}
+            for i in range(n)
+        ]}
+
+    def test_md_shows_overflow_when_more_than_six(self):
+        out = "\n".join(_investor_core_md(self._mc(22)))
+        assert "...and 16 more" in out
+
+    def test_md_no_overflow_when_six_or_fewer(self):
+        out = "\n".join(_investor_core_md(self._mc(6)))
+        assert "more" not in out.split("Deferred / Blocked", 1)[-1]
+
+    def test_text_shows_overflow_when_more_than_six(self):
+        out = "\n".join(_investor_core_text(self._mc(22)))
+        assert "...and 16 more" in out
+
+    def test_text_no_overflow_when_six_or_fewer(self):
+        out = "\n".join(_investor_core_text(self._mc(6)))
+        assert "...and" not in out
 
 
 class TestTopInsightPersistenceLabel:

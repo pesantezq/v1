@@ -2346,6 +2346,8 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
             reason = act.get("blocking_reason")
             suffix = f" ({reason})" if reason and reason != state else ""
             out.append(f"  - {act.get('symbol')} — {state}{suffix}")
+        if len(deferred) > 6:
+            out.append(f"  ...and {len(deferred) - 6} more")
         out.append("")
 
     # Capital held back — distinguishes reserve restoration from retained capital.
@@ -2477,6 +2479,8 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
             reason = act.get("blocking_reason")
             suffix = f" ({reason})" if reason and reason != state else ""
             out.append(f"- `{act.get('symbol')}` — **{state}**{suffix}")
+        if len(deferred) > 6:
+            out.append(f"- ...and {len(deferred) - 6} more")
         out.append("")
 
     if env.get("status") == "ok":

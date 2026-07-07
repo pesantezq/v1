@@ -387,7 +387,7 @@ def render_risk_delta_md(payload: dict[str, Any]) -> str:
         if top:
             a(
                 f"- **Top position:** `{top.get('symbol')}` at {top.get('weight', 0):.1%}"
-                f" — headroom {top.get('headroom', 0):+.1%} {_render_status_tag(top.get('status', 'ok'))}"
+                f" — headroom {top.get('headroom', 0) * 100:+.1f}pp {_render_status_tag(top.get('status', 'ok'))}"
             )
         top3 = conc.get("top_3_total")
         if top3 is not None:
@@ -398,7 +398,7 @@ def render_risk_delta_md(payload: dict[str, Any]) -> str:
             for p in positions:
                 a(
                     f"  - `{p.get('symbol')}`: {p.get('weight', 0):.1%}"
-                    f" (headroom {p.get('headroom', 0):+.1%}) — {_render_status_tag(p.get('status', 'ok'))}"
+                    f" (headroom {p.get('headroom', 0) * 100:+.1f}pp) — {_render_status_tag(p.get('status', 'ok'))}"
                 )
         a("")
     else:
@@ -412,7 +412,7 @@ def render_risk_delta_md(payload: dict[str, Any]) -> str:
         a(f"## Leverage vs {cap_pct:.0%} cap")
         a(
             f"- **Total leveraged exposure:** {lev.get('total_exposure', 0):.1%}"
-            f" — headroom {lev.get('headroom', 0):+.1%} {_render_status_tag(lev.get('status', 'ok'))}"
+            f" — headroom {lev.get('headroom', 0) * 100:+.1f}pp {_render_status_tag(lev.get('status', 'ok'))}"
         )
         lp = lev.get("leveraged_positions") or []
         if lp:
