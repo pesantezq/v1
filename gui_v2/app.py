@@ -30,6 +30,22 @@ if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+def _static_version(filename: str) -> str:
+    """Cache-busting token for a /static asset — the file's mtime.
+
+    Appended as ``?v=<token>`` so a rebuilt stylesheet/script is fetched by the
+    browser without a hard refresh. Changes exactly when the file changes; falls
+    back to "0" when the asset is missing (never raises during render).
+    """
+    try:
+        return str(int((STATIC_DIR / filename).stat().st_mtime))
+    except OSError:
+        return "0"
+
+
+templates.env.globals["static_v"] = _static_version
+
+
 @app.on_event("startup")
 def _stamp_running_sha() -> None:
     """Record the git SHA this dashboard process is serving (for deploy status)."""

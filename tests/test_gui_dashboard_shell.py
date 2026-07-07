@@ -156,3 +156,15 @@ def test_tailwind_is_self_hosted_not_cdn():
     assert "text/css" in r.headers.get("content-type", "")
     # purged build still contains the typography plugin output (rendered memo)
     assert ".prose" in r.text
+
+
+def test_static_assets_have_cache_buster():
+    """CSS/JS links carry a ?v=<mtime> cache-buster so a rebuilt asset is fetched
+    without a hard refresh (2026-07-07)."""
+    import re
+    from fastapi.testclient import TestClient
+    from gui_v2.app import app
+
+    html = TestClient(app).get("/dashboard/today").text
+    assert re.search(r"/static/app\.css\?v=\d+", html), "app.css missing ?v= cache-buster"
+    assert re.search(r"/static/htmx\.min\.js\?v=\d+", html), "htmx missing ?v= cache-buster"

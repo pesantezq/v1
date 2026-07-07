@@ -16,9 +16,9 @@
   {# Tailwind: compiled, self-hosted, purged stylesheet (no runtime JIT, no
      external CDN). Rebuild after adding new utility classes with:
        bash scripts/build_dashboard_css.sh   (standalone Tailwind CLI — no node) #}
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ static_v('app.css') }}">
   {# htmx vendored locally (no external CDN dependency for auto-refresh). #}
-  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/htmx.min.js?v={{ static_v('htmx.min.js') }}" defer></script>
   <style>
     :root { color-scheme: dark; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
