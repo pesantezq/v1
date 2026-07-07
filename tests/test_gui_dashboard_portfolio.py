@@ -911,3 +911,27 @@ def test_below_floor_and_concentration_render_amber_not_gray():
     # Both warning cards must use a token the _sev_classes macro actually colors.
     assert by_key["cash"]["severity"] in ("yellow", "amber")
     assert by_key["drift"]["severity"] in ("yellow", "amber")
+
+
+def test_portfolio_capital_first_hierarchy(monkeypatch, tmp_path):
+    """PR1: Weekly Deployment (the capital plan) must appear before the advisory
+    queue and before Simulation Context; the verbose banner is replaced by a chip."""
+    from gui_v2 import app as app_module
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "portfolio").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "cash_deployment_plan.json").write_text(
+        json.dumps(_post_feature_cash_plan()))
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    t = TestClient(app_module.app).get("/dashboard/portfolio").text
+    i_wd = t.find("Weekly Deployment")
+    i_adv = t.find("Advisory Picks with Context")
+    i_sim = t.find("Simulation Context")
+    assert 0 < i_wd < i_adv, "Weekly Deployment must precede the advisory queue"
+    assert 0 < i_wd < i_sim, "Weekly Deployment must precede Simulation Context"
+    # 5-metric strip present
+    for label in ("Deployable / cycle", "Available this week", "Remaining this week",
+                  "Reserve protected"):
+        assert label in t, f"metric '{label}' missing from strip"
+    # compact chip replaced the verbose banner block (detail moves to the chip tooltip)
+    assert "OBSERVE ONLY · No execution" in t
+    assert "StockBot is running in" not in t  # old always-visible banner sentence gone

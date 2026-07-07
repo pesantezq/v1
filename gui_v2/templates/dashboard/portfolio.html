@@ -14,10 +14,13 @@
   {{ ui.page_header("Portfolio", "Observe-only portfolio intelligence and advisory context.",
                     "/dashboard/portfolio", "dashboard-portfolio-content") }}
 
-  {# Observe-only mode banner — research/decision-support only, no execution. #}
-  <div class="flex items-center gap-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-4 py-2.5 text-sm">
-    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Observe-only</span>
-    <span class="text-emerald-200/90">StockBot is running in <span class="font-semibold">OBSERVE-ONLY</span> mode. No trades are placed — all insights are for research and decision support.</span>
+  {# Observe-only is already shown in the global banner + footer; keep only a
+     compact chip here, full wording behind the tooltip (de-duplicated 2026-07-07). #}
+  <div>
+    <span title="StockBot runs in OBSERVE-ONLY mode. No trades are placed — all insights are for research and decision support; official actions come from decision_plan.json."
+          class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/12 text-emerald-300 border border-emerald-500/30 cursor-help">
+      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>OBSERVE ONLY · No execution
+    </span>
   </div>
 
   {# Summary cards row — value / cash / drift / diversification. #}
@@ -66,6 +69,93 @@
         {% endif %}
         {{ ui.timestamp(insight_card.updated_at) }}
       </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Weekly Deployment — capital-first (moved to top, PR1 2026-07-07): #}
+  {# how much can I deploy this week, and where is it going?           #}
+  {# --------------------------------------------------------------- #}
+  {% set wd = weekly_deployment %}
+  {% if wd and wd.available %}
+  <section aria-label="Weekly capital deployment">
+    <div class="flex items-center gap-3 mb-3 flex-wrap">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Weekly Deployment</h2>
+      <span class="text-xs text-zinc-600 font-mono">envelope + weekly pacing — observe only</span>
+      {% if wd.weeks_remaining %}<span class="ml-auto text-xs text-zinc-500 font-mono">{{ wd.weeks_remaining }} week(s) left in cycle</span>{% endif %}
+    </div>
+    <div class="bg-zinc-900 rounded-xl border border-zinc-800 p-4 space-y-4">
+      {# 5-metric capital strip — the headline answer #}
+      <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2.5">
+        <div class="rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2.5">
+          <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">Deployable / cycle</div>
+          <div class="text-xl font-semibold font-mono text-zinc-100 tabular-nums">{% if wd.net_investable is not none %}${{ "{:,.0f}".format(wd.net_investable) }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2.5">
+          <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">Available this week</div>
+          <div class="text-xl font-semibold font-mono text-zinc-100 tabular-nums">{% if wd.weekly_tranche is not none %}${{ "{:,.0f}".format(wd.weekly_tranche) }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2.5">
+          <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">Deployed this week</div>
+          <div class="text-xl font-semibold font-mono text-zinc-100 tabular-nums">{% if wd.deployed_this_week is not none %}${{ "{:,.0f}".format(wd.deployed_this_week) }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="rounded-lg bg-emerald-500/5 border border-emerald-500/25 px-3 py-2.5">
+          <div class="text-[10px] uppercase tracking-wide text-emerald-400/70 font-mono">Remaining this week</div>
+          <div class="text-xl font-semibold font-mono text-emerald-300 tabular-nums">{% if wd.weekly_remaining is not none %}${{ "{:,.0f}".format(wd.weekly_remaining) }}{% else %}—{% endif %}</div>
+        </div>
+        <div class="rounded-lg bg-zinc-950/40 border border-zinc-800 px-3 py-2.5">
+          <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">Reserve protected</div>
+          <div class="text-xl font-semibold font-mono text-sky-300 tabular-nums">{% if wd.reserve is not none %}${{ "{:,.0f}".format(wd.reserve) }}{% else %}—{% endif %}</div>
+        </div>
+      </div>
+
+      {# contribution/glide breakdown + utilization bar #}
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+        {% if wd.contribution_base is not none and wd.glide_slice is not none %}
+        <span class="text-zinc-500 font-mono">${{ "{:,.0f}".format(wd.contribution_base) }} contribution + ${{ "{:,.0f}".format(wd.glide_slice) }} glide-in</span>
+        {% endif %}
+        {% if wd.utilization_pct is not none %}
+        <span class="flex items-center gap-2 text-zinc-500">
+          <span class="font-mono">Cycle utilization</span>
+          <span class="inline-block w-28 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+            <span class="block h-full bg-emerald-500/70" style="width: {{ [wd.utilization_pct, 100]|min }}%"></span>
+          </span>
+          <span class="font-mono text-zinc-300 tabular-nums">{{ "%.0f"|format(wd.utilization_pct) }}%</span>
+        </span>
+        {% endif %}
+      </div>
+
+      {# Funded per-name amounts #}
+      {% if wd.funded %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="text-zinc-500">
+            <tr><th class="text-left px-2 py-1">symbol</th><th class="text-right px-2 py-1">funded</th><th class="text-right px-2 py-1">% net-inv.</th><th class="text-left px-2 py-1">status</th></tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for f in wd.funded %}
+            <tr>
+              <td class="px-2 py-1 text-zinc-200">{{ f.symbol }}</td>
+              <td class="px-2 py-1 text-right text-emerald-300">{% if f.amount is not none %}${{ "{:,.2f}".format(f.amount) }}{% endif %}</td>
+              <td class="px-2 py-1 text-right text-zinc-400">{% if f.pct_of_net_investable is not none %}{{ f.pct_of_net_investable }}%{% endif %}</td>
+              <td class="px-2 py-1 text-zinc-400">{{ f.status | status_label }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-sm text-zinc-500">No names funded this week.</p>
+      {% endif %}
+
+      {# Deferral split — why a BUY got $0 this week vs this cycle #}
+      {% if wd.deferred_weekly %}
+      <p class="text-xs text-zinc-400"><span class="text-amber-300">Deferred by weekly pacing</span> (cycle budget remains): <span class="font-mono">{{ wd.deferred_weekly | join(", ") }}</span></p>
+      {% endif %}
+      {% if wd.deferred_monthly %}
+      <p class="text-xs text-zinc-400"><span class="text-zinc-300">Deferred by monthly budget</span> (cycle spent): <span class="font-mono">{{ wd.deferred_monthly | join(", ") }}</span></p>
+      {% endif %}
     </div>
   </section>
   {% endif %}
@@ -195,8 +285,12 @@
   {# Simulation Context — compact research-only preview; full charts in Strategy Lab. #}
   {% if simulation_context %}
   {% set simc = simulation_context %}
-  <section aria-label="Simulation Context">
-    {{ ui.section_header("Simulation Context", "research context only — sandbox", "simulation_charts.json") }}
+  <details aria-label="Simulation Context">
+    <summary class="cursor-pointer flex items-center gap-3 mb-2 flex-wrap">
+      <span class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Simulation Context</span>
+      <span class="text-xs text-zinc-600 font-mono">research context only — sandbox</span>
+      {% if simc.available %}<span class="text-xs text-zinc-500 ml-auto">Balanced: {{ simc.best_balanced.strategy or "—" }} · Growth: {{ simc.best_growth.strategy or "—" }} — expand</span>{% else %}<span class="text-xs text-zinc-500 ml-auto">not available — expand</span>{% endif %}
+    </summary>
     {% if simc.available %}
     <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 space-y-2 text-sm">
       {% if simc.stale %}
@@ -231,7 +325,7 @@
       <a href="/dashboard/strategy-lab" class="text-sky-300 hover:text-sky-200 block mt-1">Open Strategy Lab &rarr;</a>
     </div>
     {% endif %}
-  </section>
+  </details>
   {% endif %}
 
   {# --------------------------------------------------------------- #}
@@ -262,70 +356,7 @@
     </div>
   </section>
 
-  {# --------------------------------------------------------------- #}
-  {# Weekly Deployment — envelope + weekly pacing (observe only)       #}
-  {# Per-name buy amounts for cash deployable THIS week + deferral split #}
-  {# --------------------------------------------------------------- #}
-  {% set wd = weekly_deployment %}
-  {% if wd and wd.available %}
-  <section aria-label="Weekly capital deployment">
-    {{ ui.section_header("Weekly Deployment", "envelope + weekly pacing — observe only", "") }}
-    <div class="bg-zinc-900 rounded-xl border border-zinc-800 p-4 space-y-3">
-      {# Cycle + weekly summary line #}
-      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-        {% if wd.net_investable is not none %}
-        <span class="text-zinc-300">
-          Cycle: <span class="font-mono text-zinc-100">${{ "{:,.2f}".format(wd.net_investable) }}</span>
-          {% if wd.contribution_base is not none and wd.glide_slice is not none %}
-          <span class="text-zinc-500 text-xs">(${{ "{:,.2f}".format(wd.contribution_base) }} contribution + ${{ "{:,.2f}".format(wd.glide_slice) }} glide)</span>
-          {% endif %}
-        </span>
-        {% endif %}
-        {% if wd.deploy_cadence and wd.deploy_cadence != "monthly" and wd.weekly_remaining is not none %}
-        <span class="text-zinc-300">
-          This week ({{ wd.deploy_cadence }}):
-          <span class="font-mono text-emerald-300">${{ "{:,.2f}".format(wd.weekly_remaining) }}</span>
-          <span class="text-zinc-500 text-xs">remaining of ${{ "{:,.2f}".format(wd.weekly_tranche or 0) }} tranche</span>
-        </span>
-        {% endif %}
-        {% if wd.reserve is not none %}
-        <span class="text-zinc-500 text-xs">reserve ${{ "{:,.2f}".format(wd.reserve) }} protected</span>
-        {% endif %}
-      </div>
-
-      {# Funded per-name amounts #}
-      {% if wd.funded %}
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs font-mono">
-          <thead class="text-zinc-500">
-            <tr><th class="text-left px-2 py-1">symbol</th><th class="text-right px-2 py-1">funded</th><th class="text-right px-2 py-1">% net-inv.</th><th class="text-left px-2 py-1">status</th></tr>
-          </thead>
-          <tbody class="divide-y divide-zinc-800">
-            {% for f in wd.funded %}
-            <tr>
-              <td class="px-2 py-1 text-zinc-200">{{ f.symbol }}</td>
-              <td class="px-2 py-1 text-right text-emerald-300">{% if f.amount is not none %}${{ "{:,.2f}".format(f.amount) }}{% endif %}</td>
-              <td class="px-2 py-1 text-right text-zinc-400">{% if f.pct_of_net_investable is not none %}{{ f.pct_of_net_investable }}%{% endif %}</td>
-              <td class="px-2 py-1 text-zinc-400">{{ f.status | status_label }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p class="text-sm text-zinc-500">No names funded this week.</p>
-      {% endif %}
-
-      {# Deferral split — why a BUY got $0 this week vs this cycle #}
-      {% if wd.deferred_weekly %}
-      <p class="text-xs text-zinc-400"><span class="text-amber-300">Deferred by weekly pacing</span> (cycle budget remains): <span class="font-mono">{{ wd.deferred_weekly | join(", ") }}</span></p>
-      {% endif %}
-      {% if wd.deferred_monthly %}
-      <p class="text-xs text-zinc-400"><span class="text-zinc-300">Deferred by monthly budget</span> (cycle spent): <span class="font-mono">{{ wd.deferred_monthly | join(", ") }}</span></p>
-      {% endif %}
-    </div>
-  </section>
-  {% endif %}
+  {# Weekly Deployment relocated to the top (directly after PM Brief) — PR1 2026-07-07 #}
 
   {# --------------------------------------------------------------- #}
   {# Holdings — desktop table (hidden md:block) + mobile cards (md:hidden) #}

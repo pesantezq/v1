@@ -56,7 +56,7 @@
   {% set _path = request.url.path if request else "" %}
   {% include "components/mobile_status_bar.html" %}
   <header class="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur border-b border-zinc-800">
-    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="max-w-[1600px] w-full mx-auto px-4 sm:px-6 2xl:px-8 py-3 flex items-center justify-between">
       <div class="flex items-center gap-6">
         <span class="font-semibold tracking-tight flex items-center gap-2">
           <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>StockBot
@@ -113,10 +113,10 @@
       });
     })();
   </script>
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-8">
+  <main class="max-w-[1600px] w-full mx-auto px-4 sm:px-6 2xl:px-8 py-6 sm:py-8 space-y-8">
     {% block content %}{% endblock %}
   </main>
-  <footer class="max-w-7xl mx-auto px-6 py-6 text-xs text-zinc-500 mb-16 md:mb-0">
+  <footer class="max-w-[1600px] w-full mx-auto px-4 sm:px-6 2xl:px-8 py-6 text-xs text-zinc-500 mb-16 md:mb-0">
     Advisory only &mdash; no trades executed.
   </footer>
   {# Mobile bottom-nav (fixed, hidden on md+ via md:hidden inside the component) #}

@@ -68,6 +68,7 @@ def weekly_deployment_view(cash: dict | None) -> dict:
         "utilization_pct": _num(env.get("monthly_utilization_pct")),
         "history_status": env.get("monthly_history_status"),
         "deploy_cadence": pacing.get("deploy_cadence"),
+        "weeks_remaining": _num(pacing.get("weeks_remaining_in_cycle")),
         "weekly_tranche": _num(pacing.get("weekly_tranche")),
         "weekly_remaining": _num(pacing.get("weekly_remaining")),
         "deployed_this_week": _num(pacing.get("deployed_this_week")),
