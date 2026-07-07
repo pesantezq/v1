@@ -98,8 +98,10 @@ Explicitly note:
   same-origin, not from unpkg CDN.
 - `gui_v2/templates/dashboard/{crowd_radar,governance}.html`: tables wrapped in
   `overflow-x-auto` (mobile horizontal-overflow fix).
-- `scripts/build_dashboard_css.sh`: turnkey standalone-Tailwind build to replace the
-  Play CDN (operator-run + visually verified; not swapped blind).
+- `scripts/build_dashboard_css.sh` + `gui_v2/static/app.css`: compiled, purged,
+  self-hosted Tailwind stylesheet (standalone CLI, no node) replacing the Play CDN;
+  `base.html` now links `/static/app.css`. Verified by 100% utility-class coverage
+  (385 tokens, 0 missing) + typography plugin for the `prose` memo block.
 
 ### Decision
 
@@ -120,9 +122,10 @@ the amber-token bug and the stale-honesty gap.
 ### Invariants Preserved
 
 GUI remains an artifact **consumer** — no decision/scoring recompute, no writes to
-`decision_plan.json`. Observe-only banner + no trade-execution verbs preserved. Tailwind
-CDN left active (documented local-build follow-up) to avoid a blind, unverifiable
-production stylesheet swap. All reads null-guard the pre-feature artifact shape.
+`decision_plan.json`. Observe-only banner + no trade-execution verbs preserved. The
+Tailwind Play CDN is replaced by a compiled self-hosted stylesheet, verified by full
+utility-class coverage rather than a blind swap. All reads null-guard the pre-feature
+artifact shape.
 
 ### Downstream Impact
 

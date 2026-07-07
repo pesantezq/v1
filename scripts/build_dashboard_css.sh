@@ -33,10 +33,16 @@ OUT="${STATIC_DIR}/app.css"
 mkdir -p "${STATIC_DIR}"
 
 # 1. Fetch the standalone CLI once (pinned major; ~100MB — build-time only).
+#    Pick the asset for this host's architecture.
+case "$(uname -m)" in
+  x86_64|amd64)  ASSET="tailwindcss-linux-x64" ;;
+  aarch64|arm64) ASSET="tailwindcss-linux-arm64" ;;
+  *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+esac
 if [[ ! -x "${BIN}" ]]; then
-  echo "Downloading standalone Tailwind CLI..."
+  echo "Downloading standalone Tailwind CLI (${ASSET})..."
   curl -sSL -o "${BIN}" \
-    https://github.com/tailwindlabs/tailwindcss/releases/latest/download/tailwindcss-linux-x64
+    "https://github.com/tailwindlabs/tailwindcss/releases/latest/download/${ASSET}"
   chmod +x "${BIN}"
 fi
 
@@ -46,6 +52,7 @@ fi
 #    severity tokens in case any are composed outside a scannable literal.
 cat > "${IN}" <<'CSS'
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";   /* `prose` classes (rendered memo markdown) */
 @source "../templates/**/*.html";
 @source "../*.py";
 @source "../data/*.py";

@@ -139,3 +139,20 @@ def test_stale_class_filter_flags_age():
     assert _time_stale_class((now - timedelta(days=3)).isoformat()) == "text-rose-400"
     assert _time_stale_class(None) == "text-zinc-500"                     # unknown
     assert _time_stale_class("not-a-date") == "text-zinc-500"             # unparseable
+
+
+def test_tailwind_is_self_hosted_not_cdn():
+    """The dashboard must load a compiled, self-hosted stylesheet — not the
+    Tailwind Play CDN (runtime JIT / external dependency) (2026-07-07)."""
+    from fastapi.testclient import TestClient
+    from gui_v2.app import app
+
+    c = TestClient(app)
+    html = c.get("/dashboard/today").text
+    assert "cdn.tailwindcss.com" not in html
+    assert "/static/app.css" in html
+    r = c.get("/static/app.css")
+    assert r.status_code == 200
+    assert "text/css" in r.headers.get("content-type", "")
+    # purged build still contains the typography plugin output (rendered memo)
+    assert ".prose" in r.text

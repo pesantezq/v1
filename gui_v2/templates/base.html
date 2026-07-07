@@ -13,11 +13,10 @@
       } catch (e) {}
     })();
   </script>
-  {# Tailwind: the Play CDN is a runtime JIT compiler (not ideal for prod). To
-     move to a compiled, self-hosted stylesheet, run scripts/build_dashboard_css.sh
-     (standalone Tailwind CLI — no node), visually verify, then replace the CDN
-     <script> below with: <link rel="stylesheet" href="/static/app.css"> #}
-  <script src="https://cdn.tailwindcss.com"></script>
+  {# Tailwind: compiled, self-hosted, purged stylesheet (no runtime JIT, no
+     external CDN). Rebuild after adding new utility classes with:
+       bash scripts/build_dashboard_css.sh   (standalone Tailwind CLI — no node) #}
+  <link rel="stylesheet" href="/static/app.css">
   {# htmx vendored locally (no external CDN dependency for auto-refresh). #}
   <script src="/static/htmx.min.js" defer></script>
   <style>
