@@ -72,6 +72,8 @@
     "target_cash_weight": 0.05,
     "monthly_contribution": 1000,
     "has_regular_contributions": true,
+    "excess_cash_glide_fraction": 0.25,
+    "deploy_cadence": "weekly",
     "is_taxable_account": true,
     "broker_aware": {
       "enabled": true

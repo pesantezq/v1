@@ -72,6 +72,47 @@ class TestDeferredOverflowIndicator:
         assert "...and" not in out
 
 
+class TestWeeklyDeploymentBlock:
+    """The Weekly Deployment block (spec 2026-07-07) surfaces the paced weekly
+    tranche + glide breakdown ahead of Funded Actions. It labels the weekly figure
+    'remaining this week' (a live residual), not a fixed tranche."""
+
+    def _mc(self, cadence="weekly"):
+        env = {
+            "status": "ok",
+            "cash_reserve_target_amount": 524.0,
+            "glide_slice": 406.75,
+            "monthly_contribution_net_investable_base": 1_000.0,
+            "monthly_contribution_net_investable": 1_406.75,
+            "weekly_pacing": {
+                "deploy_cadence": cadence,
+                "weekly_tranche": 351.69,
+                "deployed_this_week": 0.0,
+                "weekly_remaining": 351.69,
+                "note": None,
+            },
+        }
+        return {"funding": {"available": True, "monthly_envelope": env},
+                "funded_actions": [], "deferred_actions": []}
+
+    def test_md_renders_weekly_block(self):
+        out = "\n".join(_investor_core_md(self._mc()))
+        assert "Weekly Deployment" in out
+        assert "remaining this week" in out
+        assert "glide" in out
+
+    def test_text_renders_weekly_block(self):
+        out = "\n".join(_investor_core_text(self._mc()))
+        assert "WEEKLY DEPLOYMENT" in out
+        assert "remaining this week" in out
+
+    def test_monthly_cadence_hides_weekly_line_keeps_cycle(self):
+        out = "\n".join(_investor_core_md(self._mc(cadence="monthly")))
+        # Cycle net-investable always shown; the per-week line is suppressed.
+        assert "Cycle net-investable" in out
+        assert "remaining this week" not in out
+
+
 class TestTopInsightPersistenceLabel:
     """The Top Insight persistence label must have a zero/low floor — a theme
     with persistence 0.0 must NOT render as 'moderate persistence' (the prior

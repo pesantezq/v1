@@ -1,7 +1,7 @@
 # Design — Glide-in Excess Cash + Weekly Deployment Pacing
 
 **Date:** 2026-07-07
-**Status:** Approved (design), pending spec review → implementation plan
+**Status:** Reviewed 2026-07-07 (spec review complete; contribution model resolved — see §A) → ready for implementation plan
 **Author:** Claude Code (operator-directed)
 **Scope:** Advisory capital-sizing only. Observe-only. No execution, no broker writes,
 `decision_engine.py` and the six protected scores untouched.
@@ -60,14 +60,28 @@ glide_slice       = round(idle_excess * glide_fraction, 2)        # 0.25 -> ~$40
 cycle_net_investable = max(0, M - reserve_shortfall) + glide_slice  # e.g. $1,407
 ```
 
+**Naming convention:** in the formulas above, `glide_fraction` is shorthand for the single
+canonical config key `excess_cash_glide_fraction` (§D); there is no separately-named field.
+
 Rationale for subtracting `M` when computing `idle_excess`: the monthly contribution is
-already part of `cash_on_hand`; subtracting it prevents double-counting so the added
-slice is genuinely *excess* dry powder. At `glide_fraction = 0.25` the idle pile draws
-down over ~4 cycles. `glide_fraction = 0` reproduces today's contribution-only behavior
-exactly (back-compat guarantee).
+**deposited into Schwab** (operator-confirmed 2026-07-07), so it is already part of the
+live `cash_on_hand` that `resolve_capital_basis` reads from `totals.cash`. Subtracting it
+prevents double-counting so the added slice is genuinely *excess* dry powder. At
+`excess_cash_glide_fraction = 0.25` the idle pile draws down over ~4 cycles.
+`excess_cash_glide_fraction = 0` reproduces today's contribution-only *budget* — but exact
+legacy *behavior* also requires `deploy_cadence = "monthly"` (see Back-compat note in §D).
+
+**Reconcile the legacy sibling (required, not optional).** `compute_available_cash` in the
+same module models the contribution as additive
+(`total_deployable_pct = excess_cash_pct + incoming_pct`) — i.e. as money *not yet* in
+cash, the opposite convention. Under the confirmed deposited model that double-counts `M`.
+Its `cash_summary` block is still emitted in the plan, so if left unaligned its deployable
+figure will disagree with the envelope. Implementation MUST align `compute_available_cash`
+to the deposited model (contribution already inside `cash_available`, not added on top) and
+cover the change with a test.
 
 New envelope fields (additive; existing fields preserved):
-- `deployable_cash`, `idle_excess`, `excess_glide_fraction`, `glide_slice`
+- `deployable_cash`, `idle_excess`, `excess_cash_glide_fraction`, `glide_slice`
 - `monthly_contribution_net_investable_base` = `max(0, M - reserve_shortfall)` (contribution-only, for transparency/back-compat)
 - `monthly_contribution_net_investable` = `cycle_net_investable` (now includes glide) — the value downstream sizing consumes
 
@@ -84,6 +98,16 @@ weekly_tranche           = round((cycle_net_investable - deployed_this_cycle) / 
 weekly_remaining         = max(0, weekly_tranche - deployed_this_week)
 ```
 
+- `deployed_this_cycle` and `deployed_this_week` are both computed **inclusive of today's**
+  funding (`deployed_before_today + capital_funded_today`, filtered by cycle / ISO week),
+  so a same-day re-run is idempotent via the ledger's last-wins read.
+- `weekly_tranche` is a **live residual, not a fixed weekly allowance**: because
+  `deployed_this_cycle` already includes the current week's spend, an intra-week partial
+  deploy recomputes the tranche slightly downward within that week (it re-levels at the
+  start of the next ISO week and still totals `cycle_net_investable` across the cycle). This
+  is deliberately conservative — it never over-deploys — but the memo MUST label the figure
+  as "remaining this week", not a static "$X tranche", so the operator doesn't read the
+  drift as a bug.
 - `deployed_this_week` is **derived** by filtering the existing append-only cycle ledger to
   the current ISO week — **no new state file**.
 - Sizing funds ranked names up to `weekly_remaining`; a name that fits the cycle budget but
@@ -95,7 +119,10 @@ weekly_remaining         = max(0, weekly_tranche - deployed_this_week)
 `config.portfolio.deploy_cadence`:
 - `weekly` (default): budget = `weekly_tranche`.
 - `monthly`: whole `cycle_net_investable` available any day (glide, no weekly sub-cap).
-- `daily`: `weekly_tranche` further divided by trading days remaining in the week.
+- `daily`: `weekly_tranche` further divided by the **weekday (Mon–Fri) days remaining** in
+  the current ISO week, counted with the stdlib `calendar`/`date` — no market-holiday
+  calendar dependency (a holiday simply leaves that day's slice undeployed and self-corrects
+  into the remaining days, like a skipped week).
 
 ### C. Memo rendering (`watchlist_scanner/daily_memo.py`)
 
@@ -106,7 +133,7 @@ ahead of Funded Actions:
 
 ```
 ## Weekly Deployment
-- This week: $350 tranche · $0 deployed · $350 available
+- This week: $350 target · $0 deployed · $350 remaining this week
 - Cycle: $1,407 net-investable ($1,000 contribution + $407 glide) · reserve $524 protected
 ```
 
@@ -120,8 +147,11 @@ The Deferred/Blocked section distinguishes the two statuses and keeps the
 - `deploy_cadence`: `"weekly"`
 
 Ships enabled (prod-ready observe-only advisory). Absent keys default to the above.
-`excess_cash_glide_fraction = 0` = exact legacy behavior. All artifacts retain
-`observe_only: true` / `no_trade: true`.
+**Back-compat:** exact legacy behavior requires BOTH `excess_cash_glide_fraction = 0` (no
+glide) AND `deploy_cadence = "monthly"` (no weekly sub-cap). With the shipped default
+`deploy_cadence = "weekly"`, a zero glide still paces the $1,000 contribution across the
+cycle's ISO weeks — that is a rendering/pacing change, not a change to the total cycle
+budget. All artifacts retain `observe_only: true` / `no_trade: true`.
 
 ### E. Tests + monitoring
 
@@ -129,6 +159,8 @@ Unit tests (`tests/test_cash_deployment_plan.py` or the existing envelope test m
 - glide math: `idle_excess`, `glide_slice`, `cycle_net_investable` on a known PV/cash/M/r tuple
 - `glide_fraction = 0` reproduces contribution-only `net_investable` (back-compat)
 - reserve protection: `reserve_shortfall > 0` reduces the base before glide is added
+- `compute_available_cash` reconciliation: contribution treated as already-in-cash (no
+  double-count) so its `total_deployable_amount` agrees with the envelope's `deployable_cash`
 - weekly tranche math + `weekly_remaining` decrement as `deployed_this_week` grows
 - deferral-status split: cycle-exhausted → `DEFERRED_BY_MONTHLY_BUDGET`; week-exhausted but
   cycle-available → `DEFERRED_BY_WEEKLY_PACING`
@@ -144,7 +176,9 @@ Monitoring (Analysis + Health Coverage Requirement — daily cadence):
 
 - `portfolio_automation/cash_deployment_plan.py` — `compute_monthly_envelope`,
   `run_cash_deployment_plan` (inline net_investable), `allocate_within_envelope`,
-  `rank_deployable_decisions` (weekly-remaining plumb-through), new `DEFERRED_BY_WEEKLY_PACING`.
+  `rank_deployable_decisions` (weekly-remaining plumb-through), new `DEFERRED_BY_WEEKLY_PACING`,
+  and `compute_available_cash` (align its additive `excess + incoming` model to the confirmed
+  deposited-contribution model so its `cash_summary` deployable figure matches the envelope).
 - `watchlist_scanner/daily_memo.py` — `_investor_core_text` / `_investor_core_md`
   (Weekly Deployment block), deferral-status labels.
 - `portfolio_automation/memo_coherence.py` — funding block surfaces weekly tranche.
@@ -157,7 +191,8 @@ Monitoring (Analysis + Health Coverage Requirement — daily cadence):
 ## Risks
 
 - **Behavioral change to the advisory capital plan** (deploys more than $1,000/cycle). Mitigated:
-  advisory-only, reserve always protected, `glide_fraction` tunable, `0` = legacy behavior.
+  advisory-only, reserve always protected, `excess_cash_glide_fraction` tunable, and
+  `excess_cash_glide_fraction = 0` + `deploy_cadence = "monthly"` = exact legacy behavior.
 - Weekly-tranche derivation depends on the cycle ledger being complete; if
   `monthly_history_status == "unavailable"`, fall back to cycle-level budget (no weekly sub-cap)
   and note it — never over-deploy on missing history.
@@ -165,5 +200,7 @@ Monitoring (Analysis + Health Coverage Requirement — daily cadence):
 
 ## Backward compatibility
 
-Additive fields only; existing consumers unaffected. `glide_fraction = 0` +
-`deploy_cadence = "monthly"` = current behavior. New deferral status is additive.
+Additive fields only; existing consumers unaffected. `excess_cash_glide_fraction = 0` +
+`deploy_cadence = "monthly"` = current behavior. New deferral status is additive. The one
+non-additive change is aligning `compute_available_cash` to the deposited-contribution
+model (§A) — covered by a dedicated test so its `cash_summary` output stays consistent.

@@ -69,6 +69,75 @@ Explicitly note:
 
 ---
 
+## Glide-in excess cash + weekly deployment pacing
+
+### Date
+
+`2026-07-07`
+
+### Area
+
+`allocation` / `output_contract`
+
+### Files / Functions
+
+- `portfolio_automation/cash_deployment_plan.py`: `compute_monthly_envelope`
+  (glide math + new fields), new `compute_weekly_pacing` + ISO-week helpers
+  (`iso_weeks_remaining_in_cycle`, `deployed_in_iso_week`,
+  `weekday_days_remaining_in_week`), `allocate_within_envelope` (paced budget +
+  `cycle_remaining` param + `DEFERRED_BY_WEEKLY_PACING`), `run_cash_deployment_plan`
+  (config keys + wiring), `compute_available_cash` (deposited-contribution model),
+  `_render_markdown` (Weekly Deployment block).
+- `watchlist_scanner/daily_memo.py`: `_weekly_deployment_rows`, Weekly Deployment
+  block in `_investor_core_text` / `_investor_core_md`.
+- `config.json`: `portfolio.excess_cash_glide_fraction` (0.25),
+  `portfolio.deploy_cadence` ("weekly").
+- `.claude/commands/daily-tool-analysis.md`: 6j funding heartbeat surfaces weekly
+  tranche + glide + week-paced deferral count.
+
+### Decision
+
+Each cycle's deployable budget is now the monthly contribution PLUS a capped,
+config-tunable slice of idle excess cash (`glide_slice = idle_excess ×
+excess_cash_glide_fraction`), paced across the cycle's ISO weeks. The memo now shows
+per-stock buy amounts for cash available this week instead of deferring everything
+once the $1,000 contribution is notionally spent. A new precise status
+`DEFERRED_BY_WEEKLY_PACING` distinguishes week-paced deferral from cycle exhaustion.
+
+### Why
+
+With ~$3,151 cash on hand (~$2,627 above the 5% reserve) the contribution-only
+budget never drew down the idle pile, so the memo rendered every opportunity
+`DEFERRED_BY_MONTHLY_BUDGET` with no dollar amounts. Operator-directed; reviewed spec
+`docs/superpowers/specs/2026-07-07-cash-deployment-glide-weekly-pacing-design.md`.
+
+### Invariants Preserved
+
+`decision_engine.py`, the six protected scores, and opportunity **ranking** are
+untouched — only per-name capital *sizing* changed. Advisory/observe-only, no
+execution, reserve floor always protected. `excess_cash_glide_fraction=0` +
+`deploy_cadence="monthly"` reproduces exact legacy behavior. All artifacts retain
+`observe_only:true` / `no_trade:true`. Additive envelope fields only.
+
+### Downstream Impact
+
+- Artifacts: `outputs/latest/cash_deployment_plan.json` (new envelope fields +
+  `weekly_pacing`), `cash_deployment_plan.md`, `daily_memo.{md,txt}`,
+  `memo_coherence.json` (passthrough).
+- Behavioral: `compute_available_cash.total_deployable_amount` now = excess above
+  target (contribution no longer double-added). Two existing unit tests updated.
+- Tests: `tests/test_cash_deployment_plan.py` (+~17), `tests/test_daily_memo.py`
+  (+3 Weekly Deployment). 394 passed across affected surfaces.
+
+### Artifact Health Severity
+
+No change to `critical_missing` / `defaulting` / `optional_missing`;
+`missing_artifact_count` unchanged. Daily-tool-analysis 6j wording extended
+(report-don't-alert on stuck glide / all-week-paced). Producer step owner unchanged
+(`run_cash_deployment_plan` in `main.py`).
+
+---
+
 ## Crowd-context is a live observe-only annotation, not a human-gated proposal
 
 ### Date

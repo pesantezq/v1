@@ -1056,7 +1056,13 @@ all v1 fields (`cash_summary`, `deployment_rows`, `total_deployed_amount`, `rema
 | `cash_reserve_target_pct` | canonical `config.portfolio.target_cash_weight` (NOT redefined) |
 | `cash_reserve_target_amount` | `round(reserve_pct × portfolio_value, 2)` |
 | `cash_reserve_shortfall` | `max(0, reserve_target − cash_on_hand)` |
-| `monthly_contribution_net_investable` | `max(0, gross − shortfall)` |
+| `deployable_cash` | `max(0, cash_on_hand − reserve_target)` — all touchable excess above the reserve floor (glide-in, spec 2026-07-07) |
+| `idle_excess` | `max(0, deployable_cash − gross)` — dry powder beyond this month's contribution. Subtracting the contribution avoids double-counting it (it is **deposited**, already inside `cash_on_hand`) |
+| `excess_cash_glide_fraction` | `config.portfolio.excess_cash_glide_fraction` (default 0.25), clamped to [0,1] — fraction of `idle_excess` deployed this cycle |
+| `glide_slice` | `round(idle_excess × excess_cash_glide_fraction, 2)` |
+| `monthly_contribution_net_investable_base` | `max(0, gross − shortfall)` — contribution-only budget (back-compat/transparency) |
+| `monthly_contribution_net_investable` | `net_investable_base + glide_slice` — the cycle deployable budget downstream sizing consumes. `excess_cash_glide_fraction=0` ⇒ equals the base (legacy) |
+| `weekly_pacing` | `{deploy_cadence, budget_today, cycle_remaining, weeks_remaining_in_cycle, weekly_tranche, deployed_this_week, weekly_remaining, daily_budget, note}` — today's paced budget. `deploy_cadence` (`config.portfolio.deploy_cadence`, default `weekly`): `weekly` sub-caps at `weekly_tranche = cycle_remaining / ISO-weeks-remaining`; `monthly` = whole cycle any day; `daily` = weekly_remaining ÷ weekday-days-left. `weekly_remaining` is a **live residual** (drifts down intra-week, re-levels next ISO week). `null` fields when `monthly_history_status=unavailable` (pacing disabled → full cycle budget). Derived from the ledger — no new state file |
 | `monthly_capital_deployed_before_today` | from the deployment ledger (None if history unavailable) |
 | `capital_funded_today` | sum of funded `deployment_rows` |
 | `monthly_capital_deployed_total` | `before + today` |
@@ -1075,15 +1081,18 @@ Idempotent via last-wins-per-date read; `deployed_before_today` sums cycle dates
 today. Never silently assumes zero (see `monthly_history_status`).
 
 `deployment_rows[*]` (v2 additions): `status` (FUNDED_STARTER/FUNDED_STANDARD/
-DEFERRED_BY_MONTHLY_BUDGET/DEFERRED_BY_THEME_CAP/BLOCKED_BY_CASH), `tranche_type`,
+DEFERRED_BY_MONTHLY_BUDGET/DEFERRED_BY_WEEKLY_PACING/DEFERRED_BY_THEME_CAP/BLOCKED_BY_CASH),
+`tranche_type`,
 `pct_of_portfolio`, `pct_of_net_investable`, `session_move_pct`, `entry_extended`,
 `held_for_pullback`, `sector`. Legacy `suggested_amount`/`suggested_pct`/`skipped_reason` kept.
 
 Sizing bands (config `daily_memo_capital`, with documented fallbacks): `starter_position_pct`
 (0.005), `standard_position_pct` (0.01), `max_new_position_pct_per_cycle` (0.015),
-`theme_cap_pct_of_net_investable` (0.40). Allocation runs within `monthly_capital_remaining`
-(not the full net every day). Extended entries (session move ≥ 8%) fund a starter tranche and
-record the remainder as `held_for_pullback`.
+`theme_cap_pct_of_net_investable` (0.40). Allocation runs within today's **paced** budget
+(`weekly_pacing.budget_today`), not the full cycle net every day. A name that fits the cycle
+budget but exceeds this week's tranche is `DEFERRED_BY_WEEKLY_PACING` (distinct from
+`DEFERRED_BY_MONTHLY_BUDGET`, which means the whole cycle budget is spent). Extended entries
+(session move ≥ 8%) fund a starter tranche and record the remainder as `held_for_pullback`.
 
 `concentration`: `{available, theme_cap_pct_of_net_investable, theme_cap_amount,
 total_funded_today, classification_coverage, themes[]}` or `{available:false,

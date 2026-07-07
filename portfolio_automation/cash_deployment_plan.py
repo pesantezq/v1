@@ -46,6 +46,13 @@ _MAX_POSITION_PCT = 0.12          # mirrors allocation_engine max_position_cap (
 _SAFETY_FLOOR_PCT = 0.05          # never deploy below this cash level
 _DEFAULT_TARGET_CASH = 0.05       # fallback when config.target_cash_weight missing
 
+# Glide-in excess cash + weekly deployment pacing (spec 2026-07-07).
+# Deploy the monthly contribution PLUS a capped slice of idle excess cash each
+# cycle, paced weekly. glide_fraction=0 + cadence="monthly" reproduces legacy.
+_DEFAULT_EXCESS_CASH_GLIDE_FRACTION = 0.25   # fraction of idle excess deployed per cycle
+_DEFAULT_DEPLOY_CADENCE = "weekly"           # weekly | monthly | daily
+_VALID_DEPLOY_CADENCES = frozenset({"weekly", "monthly", "daily"})
+
 # --- Monthly capital envelope: position-sizing bands (config-overridable) ---
 # Canonical reserve is portfolio.target_cash_weight (NOT redefined here).
 # These bands live under config.daily_memo_capital.*; values below are fallbacks.
@@ -63,6 +70,7 @@ _LEDGER_FILENAME = "monthly_deployment_ledger.jsonl"
 STATUS_FUNDED_STARTER = "FUNDED_STARTER"
 STATUS_FUNDED_STANDARD = "FUNDED_STANDARD"
 STATUS_DEFERRED_BY_MONTHLY_BUDGET = "DEFERRED_BY_MONTHLY_BUDGET"
+STATUS_DEFERRED_BY_WEEKLY_PACING = "DEFERRED_BY_WEEKLY_PACING"
 STATUS_DEFERRED_BY_THEME_CAP = "DEFERRED_BY_THEME_CAP"
 STATUS_DEFERRED_BY_POSITION_CAP = "DEFERRED_BY_POSITION_CAP"
 STATUS_HELD_FOR_PULLBACK = "HELD_FOR_PULLBACK"
@@ -131,10 +139,15 @@ def compute_available_cash(
     Components:
       current_cash_pct  = cash / portfolio_value
       excess_cash_pct   = max(0, current_cash_pct - target_cash_pct)
-      incoming_pct      = monthly_contribution / portfolio_value
-      total_deployable_pct = max(0, excess + incoming - safety_floor_buffer)
-                              when current_cash_pct already > safety_floor
+      total_deployable_pct = excess_cash_pct        (0 when below the safety floor)
       total_deployable_amount = total_deployable_pct * portfolio_value
+
+    Deposited-contribution model (operator-confirmed 2026-07-07): the monthly
+    contribution is transferred into the brokerage, so it is already part of
+    ``cash_available`` and must NOT be added on top of the excess (doing so
+    double-counts it). ``incoming_pct`` is retained for display only. This keeps
+    ``total_deployable_amount`` consistent with the monthly envelope's
+    ``deployable_cash`` (both = cash above the reserve target).
 
     If portfolio_value <= 0 the plan reports zero deployable; safe for new
     accounts with no holdings yet.
@@ -154,16 +167,18 @@ def compute_available_cash(
 
     current_cash_pct = cash_available / portfolio_value
     excess_cash_pct = max(0.0, current_cash_pct - target_cash_pct)
+    # Deposited-contribution model: the contribution is already inside
+    # cash_available, so it is NOT added on top of the excess. Retained for
+    # display/transparency only (see docstring).
     incoming_pct = monthly_contribution / portfolio_value if monthly_contribution > 0 else 0.0
 
-    # Cash that would push us below safety floor cannot be deployed.
     below_safety_floor = current_cash_pct < safety_floor_pct
     if below_safety_floor:
-        # Recurring contribution is still available net of the floor refill
-        refill_needed = max(0.0, safety_floor_pct - current_cash_pct)
-        total_deployable_pct = max(0.0, incoming_pct - refill_needed)
+        # Below the reserve floor: all cash (contribution included) is needed to
+        # restore the floor, so nothing is deployable this cycle.
+        total_deployable_pct = 0.0
     else:
-        total_deployable_pct = excess_cash_pct + incoming_pct
+        total_deployable_pct = excess_cash_pct
 
     return {
         "portfolio_value": round(portfolio_value, 2),
@@ -201,6 +216,148 @@ def contribution_cycle(as_of: date) -> tuple[str, str, str]:
         else start.replace(month=start.month + 1)
     end = nxt - timedelta(days=1)
     return start.strftime("%Y-%m"), start.isoformat(), end.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Weekly deployment pacing helpers (ISO-week based; no market-calendar dep)
+# ---------------------------------------------------------------------------
+
+def _iso_week_key(d: date) -> tuple[int, int]:
+    """(iso_year, iso_week) — stable weekly bucket that survives year boundaries."""
+    iso = d.isocalendar()
+    return (iso[0], iso[1])
+
+
+def iso_weeks_remaining_in_cycle(today: date, cycle_end: date) -> int:
+    """Distinct ISO weeks spanning today..cycle_end inclusive (always >= 1).
+
+    Bounded by the ~31-day cycle, so the day-walk is cheap. Guards a past
+    cycle_end (returns 1) so the weekly tranche never divides by zero.
+    """
+    if cycle_end < today:
+        return 1
+    weeks: set[tuple[int, int]] = set()
+    d = today
+    while d <= cycle_end:
+        weeks.add(_iso_week_key(d))
+        d += timedelta(days=1)
+    return max(1, len(weeks))
+
+
+def deployed_in_iso_week(
+    rows: list[dict[str, Any]], cycle_id: str, today: date
+) -> float:
+    """Capital funded on prior dates within *today*'s ISO week (excludes today).
+
+    Derived from the existing append-only cycle ledger (last-wins per date) — no
+    new state file. 'Before today' is the correct basis for sizing today's
+    tranche, since today's own funding is appended after this read.
+    """
+    wk = _iso_week_key(today)
+    today_iso = today.isoformat()
+    total = 0.0
+    for d_iso, amt in _cycle_deployed_by_date(rows, cycle_id).items():
+        if d_iso >= today_iso:
+            continue
+        try:
+            dd = date.fromisoformat(d_iso)
+        except ValueError:
+            continue
+        if _iso_week_key(dd) == wk:
+            total += amt
+    return round(total, 2)
+
+
+def weekday_days_remaining_in_week(today: date) -> int:
+    """Weekday (Mon–Fri) days from today through Sunday, inclusive (always >= 1).
+
+    Used by the `daily` cadence to spread the week's remaining budget over the
+    trading days left, with no market-holiday calendar dependency (a holiday
+    simply leaves that day's slice undeployed and self-corrects into later days).
+    """
+    count = 0
+    for offset in range(0, 7 - today.isoweekday() + 1):
+        if (today + timedelta(days=offset)).isoweekday() <= 5:
+            count += 1
+    return max(1, count)
+
+
+def compute_weekly_pacing(
+    *,
+    cycle_net_investable: float,
+    deployed_before_today: float | None,
+    deployed_this_week_before_today: float,
+    weeks_remaining_in_cycle: int,
+    weekday_days_remaining: int,
+    deploy_cadence: str,
+    monthly_history_status: str,
+) -> dict[str, Any]:
+    """Resolve today's paced budget + the reporting block for the memo.
+
+    Returns a dict with the effective ``budget_today`` (the cap passed to the
+    allocator), the cycle-level remaining (for deferral-reason classification),
+    and the display fields (weekly_tranche, weekly_remaining, ...).
+
+    Semantics (see spec §B): the weekly tranche is a *live residual*, not a fixed
+    allowance — because it is recomputed from the undeployed cycle budget each
+    run it drifts down within a week and re-levels at the next ISO week, still
+    totalling ``cycle_net_investable`` across the cycle. Never over-deploys.
+    """
+    cadence = deploy_cadence if deploy_cadence in _VALID_DEPLOY_CADENCES else _DEFAULT_DEPLOY_CADENCE
+
+    # History unavailable → cannot trust the ledger; fall back to the full cycle
+    # budget with no weekly sub-cap (never over-deploy on missing history).
+    if monthly_history_status == "unavailable":
+        return {
+            "deploy_cadence": cadence,
+            "budget_today": None,          # allocator uses full net_investable
+            "cycle_remaining": None,
+            "weeks_remaining_in_cycle": weeks_remaining_in_cycle,
+            "weekly_tranche": None,
+            "deployed_this_week": None,
+            "weekly_remaining": None,
+            "daily_budget": None,
+            "note": "monthly_history_status unavailable — weekly pacing disabled this run",
+        }
+
+    before = deployed_before_today or 0.0
+    cycle_remaining = round(max(0.0, cycle_net_investable - before), 2)
+
+    if cadence == "monthly":
+        # Whole cycle budget available any day; no weekly sub-cap.
+        return {
+            "deploy_cadence": cadence,
+            "budget_today": cycle_remaining,
+            "cycle_remaining": cycle_remaining,
+            "weeks_remaining_in_cycle": weeks_remaining_in_cycle,
+            "weekly_tranche": cycle_remaining,
+            "deployed_this_week": deployed_this_week_before_today,
+            "weekly_remaining": cycle_remaining,
+            "daily_budget": None,
+            "note": None,
+        }
+
+    weekly_tranche = round(cycle_remaining / max(1, weeks_remaining_in_cycle), 2)
+    weekly_remaining = round(max(0.0, weekly_tranche - deployed_this_week_before_today), 2)
+
+    if cadence == "daily":
+        daily_budget = round(weekly_remaining / max(1, weekday_days_remaining), 2)
+        budget_today = daily_budget
+    else:  # weekly
+        daily_budget = None
+        budget_today = weekly_remaining
+
+    return {
+        "deploy_cadence": cadence,
+        "budget_today": budget_today,
+        "cycle_remaining": cycle_remaining,
+        "weeks_remaining_in_cycle": weeks_remaining_in_cycle,
+        "weekly_tranche": weekly_tranche,
+        "deployed_this_week": deployed_this_week_before_today,
+        "weekly_remaining": weekly_remaining,
+        "daily_budget": daily_budget,
+        "note": None,
+    }
 
 
 _SESSION_MOVE_RE = re.compile(r"momentum:\s*([+-]?\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
@@ -312,17 +469,27 @@ def compute_monthly_envelope(
     cycle_start: str,
     cycle_end: str,
     monthly_history_status: str,
+    excess_cash_glide_fraction: float = 0.0,
+    weekly_pacing: dict[str, Any] | None = None,
     portfolio_value_source: str = "decision_plan.portfolio_context",
     contribution_source: str = "config.portfolio.monthly_contribution",
     cash_source: str = "config.portfolio.cash_available",
 ) -> dict[str, Any]:
     """Build the canonical monthly capital envelope. Amount-based (no pct round-trip).
 
-    reserve_target  = reserve_pct * portfolio_value          (denominator = portfolio_value)
+    reserve_target    = reserve_pct * portfolio_value        (denominator = portfolio_value)
     reserve_shortfall = max(0, reserve_target - cash_on_hand)
-    net_investable  = max(0, gross_contribution - reserve_shortfall)
-    deployed_total  = deployed_before_today + capital_funded_today
-    remaining       = max(0, net_investable - deployed_total)
+    contribution_base = max(0, gross_contribution - reserve_shortfall)
+    deployable_cash   = max(0, cash_on_hand - reserve_target)   # all touchable excess
+    idle_excess       = max(0, deployable_cash - gross_contribution)  # dry powder beyond this month
+    glide_slice       = idle_excess * excess_cash_glide_fraction
+    net_investable    = contribution_base + glide_slice        # cycle deployable (glide-in)
+    deployed_total    = deployed_before_today + capital_funded_today
+    remaining         = max(0, net_investable - deployed_total)
+
+    ``excess_cash_glide_fraction=0`` reproduces the contribution-only budget
+    (back-compat). The contribution is deposited (already in cash_on_hand), so
+    subtracting it from deployable_cash prevents double-counting the idle slice.
     """
     ts = datetime.now(timezone.utc).isoformat()
     if portfolio_value is None or portfolio_value <= 0:
@@ -342,7 +509,14 @@ def compute_monthly_envelope(
 
     reserve_target = round(reserve_pct * portfolio_value, 2)
     reserve_shortfall = round(max(0.0, reserve_target - cash_on_hand), 2)
-    net_investable = round(max(0.0, monthly_contribution_gross - reserve_shortfall), 2)
+    contribution_base = round(max(0.0, monthly_contribution_gross - reserve_shortfall), 2)
+
+    # Glide-in a capped slice of idle excess cash beyond this month's contribution.
+    glide_frac = max(0.0, min(1.0, excess_cash_glide_fraction))
+    deployable_cash = round(max(0.0, cash_on_hand - reserve_target), 2)
+    idle_excess = round(max(0.0, deployable_cash - monthly_contribution_gross), 2)
+    glide_slice = round(idle_excess * glide_frac, 2)
+    net_investable = round(contribution_base + glide_slice, 2)
 
     before = deployed_before_today if deployed_before_today is not None else 0.0
     deployed_total = round(before + (capital_funded_today or 0.0), 2)
@@ -367,6 +541,11 @@ def compute_monthly_envelope(
         "cash_reserve_target_pct": round(reserve_pct, 4),
         "cash_reserve_target_amount": reserve_target,
         "cash_reserve_shortfall": reserve_shortfall,
+        "deployable_cash": deployable_cash,
+        "idle_excess": idle_excess,
+        "excess_cash_glide_fraction": round(glide_frac, 4),
+        "glide_slice": glide_slice,
+        "monthly_contribution_net_investable_base": contribution_base,
         "monthly_contribution_net_investable": net_investable,
         "monthly_capital_deployed_before_today": deployed_before_today,
         "capital_funded_today": round(capital_funded_today or 0.0, 2),
@@ -379,6 +558,7 @@ def compute_monthly_envelope(
         "contribution_cycle_start": cycle_start,
         "contribution_cycle_end": cycle_end,
         "monthly_history_status": monthly_history_status,
+        "weekly_pacing": weekly_pacing,
         "rollover_behavior": "no_rollover: undeployed net-investable is not carried forward; "
                              "it remains cash and contributes to next cycle's excess.",
         "calculation_timestamp": ts,
@@ -502,8 +682,17 @@ def allocate_within_envelope(
     bands: dict[str, float],
     sector_map: dict[str, str] | None = None,
     max_position_pct: float = _MAX_POSITION_PCT,
+    cycle_remaining: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Allocate within the REMAINING monthly envelope (not the full net every day).
+    """Allocate within TODAY's paced budget (weekly tranche, not the full net).
+
+    ``monthly_capital_remaining_before_today`` is the effective budget cap for
+    today (the weekly/daily tranche under paced cadence, or the cycle remaining
+    under monthly cadence). ``cycle_remaining`` is the cycle-level budget left
+    (before today) — when a name can't be funded because the *paced* budget is
+    exhausted but cycle budget remains, it is deferred with the precise
+    ``DEFERRED_BY_WEEKLY_PACING`` status (distinct from a cycle-exhausted
+    ``DEFERRED_BY_MONTHLY_BUDGET``).
 
     Assigns a precise status per row, a tranche type, portfolio-relative sizing,
     and (for extended entries) a starter tranche with the rest held for pullback.
@@ -523,6 +712,15 @@ def allocate_within_envelope(
     budget = (net_investable if monthly_capital_remaining_before_today is None
               else monthly_capital_remaining_before_today)
     theme_funded: dict[str, float] = {}
+    funded_so_far = 0.0
+
+    def _budget_deferral_status() -> str:
+        # Cycle budget still has room but the paced (weekly/daily) budget is
+        # spent → weekly-pacing deferral; otherwise the whole cycle is spent.
+        room_basis = cycle_remaining if cycle_remaining is not None else budget
+        cycle_room_left = (room_basis or 0.0) - funded_so_far
+        return (STATUS_DEFERRED_BY_WEEKLY_PACING if cycle_room_left > 0.005
+                else STATUS_DEFERRED_BY_MONTHLY_BUDGET)
 
     def _row(d, amount, status, tranche, held_pullback=0.0):
         sym = _safe_str(d.get("symbol")).upper()
@@ -552,7 +750,7 @@ def allocate_within_envelope(
             rows.append(_row(d, 0.0, STATUS_BLOCKED_BY_CASH, "none"))
             continue
         if budget <= 0:
-            rows.append(_row(d, 0.0, STATUS_DEFERRED_BY_MONTHLY_BUDGET, "none"))
+            rows.append(_row(d, 0.0, _budget_deferral_status(), "none"))
             continue
 
         session_move = _session_move_pct(d.get("reason") or d.get("decision_reason"))
@@ -577,13 +775,14 @@ def allocate_within_envelope(
 
         amount = round(max(0.0, amount), 2)
         if amount <= 0:
-            rows.append(_row(d, 0.0, STATUS_DEFERRED_BY_MONTHLY_BUDGET, "none"))
+            rows.append(_row(d, 0.0, _budget_deferral_status(), "none"))
             continue
 
         status = STATUS_FUNDED_STARTER if extended or amount < standard_amt - 0.005 else STATUS_FUNDED_STANDARD
         held_pullback = round(max(0.0, standard_amt - amount), 2) if extended else 0.0
         rows.append(_row(d, amount, status, tranche, held_pullback))
         budget -= amount
+        funded_so_far += amount
         if sector:
             theme_funded[sector] = theme_funded.get(sector, 0.0) + amount
 
@@ -735,9 +934,35 @@ def _render_markdown(plan: dict[str, Any]) -> str:
                  f"({(cs.get('current_cash_pct') or 0):.1%})")
     lines.append(f"- Target cash %: {(cs.get('target_cash_pct') or 0):.1%}")
     lines.append(f"- Excess cash %: {(cs.get('excess_cash_pct') or 0):.1%}")
-    lines.append(f"- Incoming 30d %: {(cs.get('incoming_pct') or 0):.1%}")
+    lines.append(f"- Monthly contribution (deposited) %: {(cs.get('incoming_pct') or 0):.1%}")
     lines.append(f"- Deployable: ${(cs.get('total_deployable_amount') or 0):,.2f}")
     lines.append("")
+
+    env = plan.get("monthly_capital_envelope") or {}
+    pacing = env.get("weekly_pacing") or {}
+    if env.get("status") == "ok" and pacing:
+        wk_rem = pacing.get("weekly_remaining")
+        lines.append("## Weekly Deployment")
+        lines.append("")
+        glide = env.get("glide_slice") or 0.0
+        base = env.get("monthly_contribution_net_investable_base") or 0.0
+        net = env.get("monthly_contribution_net_investable") or 0.0
+        if pacing.get("deploy_cadence") != "monthly" and wk_rem is not None:
+            lines.append(
+                f"- This week ({pacing.get('deploy_cadence')}): "
+                f"${(pacing.get('weekly_tranche') or 0):,.2f} target · "
+                f"${(pacing.get('deployed_this_week') or 0):,.2f} deployed · "
+                f"${wk_rem:,.2f} remaining this week"
+            )
+        lines.append(
+            f"- Cycle: ${net:,.2f} net-investable "
+            f"(${base:,.2f} contribution + ${glide:,.2f} glide) · "
+            f"reserve ${(env.get('cash_reserve_target_amount') or 0):,.2f} protected"
+        )
+        if pacing.get("note"):
+            lines.append(f"- {pacing.get('note')}")
+        lines.append("")
+
     if plan.get("notes"):
         lines.append("## Notes")
         for n in plan["notes"]:
@@ -871,6 +1096,12 @@ def run_cash_deployment_plan(
     portfolio_cfg = cfg.get("portfolio") or {}
     monthly_contribution = _safe_float(portfolio_cfg.get("monthly_contribution")) or 0.0
     target_cash_pct = _safe_float(portfolio_cfg.get("target_cash_weight")) or _DEFAULT_TARGET_CASH
+    glide_fraction = portfolio_cfg.get("excess_cash_glide_fraction")
+    glide_fraction = _DEFAULT_EXCESS_CASH_GLIDE_FRACTION if glide_fraction is None \
+        else (_safe_float(glide_fraction) or 0.0)
+    deploy_cadence = _safe_str(portfolio_cfg.get("deploy_cadence")).lower() or _DEFAULT_DEPLOY_CADENCE
+    if deploy_cadence not in _VALID_DEPLOY_CADENCES:
+        deploy_cadence = _DEFAULT_DEPLOY_CADENCE
     bands = capital_config(cfg)
 
     # Prefer the LIVE read-only Schwab balance for the advisory capital view, so
@@ -897,11 +1128,38 @@ def run_cash_deployment_plan(
     before, history_status = resolve_prior_deployment(
         base_dir, cycle_id, cycle_start, today_iso
     )
-    net_investable = round(max(0.0, monthly_contribution
-                               - round(max(0.0, round(target_cash_pct * portfolio_value, 2) - cash_available), 2)), 2) \
-        if portfolio_value and portfolio_value > 0 else 0.0
-    remaining_before_today = (None if history_status == "unavailable"
-                              else round(max(0.0, net_investable - (before or 0.0)), 2))
+    # Cycle net-investable = contribution (net of reserve shortfall) + glide slice
+    # of idle excess cash (spec 2026-07-07). Mirrors compute_monthly_envelope.
+    if portfolio_value and portfolio_value > 0:
+        _reserve_target_amt = round(target_cash_pct * portfolio_value, 2)
+        _reserve_shortfall = round(max(0.0, _reserve_target_amt - cash_available), 2)
+        _contribution_base = round(max(0.0, monthly_contribution - _reserve_shortfall), 2)
+        _deployable_cash = round(max(0.0, cash_available - _reserve_target_amt), 2)
+        _idle_excess = round(max(0.0, _deployable_cash - monthly_contribution), 2)
+        _glide_frac = max(0.0, min(1.0, glide_fraction))
+        net_investable = round(_contribution_base + round(_idle_excess * _glide_frac, 2), 2)
+    else:
+        net_investable = 0.0
+
+    # Weekly deployment pacing — derive today's paced budget from the cycle ledger
+    # (no new state file). budget_today is the cap the allocator sizes against;
+    # cycle_remaining distinguishes weekly-pacing deferral from cycle exhaustion.
+    ledger_rows, _ledger_read_status = read_deployment_ledger(base_dir)
+    try:
+        _cycle_end_date = date.fromisoformat(cycle_end)
+    except ValueError:
+        _cycle_end_date = today
+    pacing = compute_weekly_pacing(
+        cycle_net_investable=net_investable,
+        deployed_before_today=before,
+        deployed_this_week_before_today=deployed_in_iso_week(ledger_rows, cycle_id, today),
+        weeks_remaining_in_cycle=iso_weeks_remaining_in_cycle(today, _cycle_end_date),
+        weekday_days_remaining=weekday_days_remaining_in_week(today),
+        deploy_cadence=deploy_cadence,
+        monthly_history_status=history_status,
+    )
+    budget_today = pacing["budget_today"]      # None when history unavailable → full net
+    cycle_remaining = pacing["cycle_remaining"]
 
     notes: list[str] = []
     deployment_rows: list[dict[str, Any]] = []
@@ -915,9 +1173,10 @@ def run_cash_deployment_plan(
         notes.append("no net-investable capital this cycle (contribution consumed by reserve restoration)")
         ranked = rank_deployable_decisions(decision_plan_payload.get("decisions") or [])
         deployment_rows = allocate_within_envelope(
-            monthly_capital_remaining_before_today=remaining_before_today,
+            monthly_capital_remaining_before_today=budget_today,
             net_investable=net_investable, portfolio_value=portfolio_value,
             ranked_decisions=ranked, bands=bands, sector_map={},
+            cycle_remaining=cycle_remaining,
         )
     else:
         ranked = rank_deployable_decisions(decision_plan_payload.get("decisions") or [])
@@ -926,9 +1185,10 @@ def run_cash_deployment_plan(
         symbols = [_safe_str(d.get("symbol")).upper() for d in ranked]
         sector_map = _sector_map_from_cache(base_dir, symbols)
         deployment_rows = allocate_within_envelope(
-            monthly_capital_remaining_before_today=remaining_before_today,
+            monthly_capital_remaining_before_today=budget_today,
             net_investable=net_investable, portfolio_value=portfolio_value,
             ranked_decisions=ranked, bands=bands, sector_map=sector_map,
+            cycle_remaining=cycle_remaining,
         )
         if history_status == "partial":
             notes.append("monthly deployment ledger initialized mid-cycle — prior deployment may be undercounted")
@@ -958,6 +1218,8 @@ def run_cash_deployment_plan(
         capital_funded_today=capital_funded_today,
         cycle_id=cycle_id, cycle_start=cycle_start, cycle_end=cycle_end,
         monthly_history_status=history_status,
+        excess_cash_glide_fraction=glide_fraction,
+        weekly_pacing=pacing,
         portfolio_value_source=pv_source,
         cash_source=cash_source,
     )

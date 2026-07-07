@@ -2258,6 +2258,41 @@ def _monthly_plan_rows(env: dict[str, Any]) -> list[tuple[str, str]]:
     return rows
 
 
+def _weekly_deployment_rows(env: dict[str, Any]) -> list[tuple[str, str]]:
+    """(label, value) pairs for the Weekly Deployment block, sourced from the
+    monthly envelope's weekly_pacing section. Empty when pacing is unavailable.
+
+    The weekly figure is labeled "remaining this week" (not a fixed tranche)
+    because it is a live residual that drifts down as the week is deployed and
+    re-levels at the next ISO week (spec 2026-07-07 §B).
+    """
+    if not env or env.get("status") != "ok":
+        return []
+    pacing = env.get("weekly_pacing") or {}
+    if not pacing:
+        return []
+    rows: list[tuple[str, str]] = []
+    cadence = pacing.get("deploy_cadence")
+    wk_rem = pacing.get("weekly_remaining")
+    if cadence and cadence != "monthly" and wk_rem is not None:
+        rows.append((
+            f"This week ({cadence})",
+            f"{_fmt_amt(pacing.get('weekly_tranche'))} target · "
+            f"{_fmt_amt(pacing.get('deployed_this_week'))} deployed · "
+            f"{_fmt_amt(wk_rem)} remaining this week",
+        ))
+    rows.append((
+        "Cycle net-investable",
+        f"{_fmt_amt(env.get('monthly_contribution_net_investable'))} "
+        f"({_fmt_amt(env.get('monthly_contribution_net_investable_base'))} contribution "
+        f"+ {_fmt_amt(env.get('glide_slice'))} glide)",
+    ))
+    rows.append(("Reserve protected", _fmt_amt(env.get("cash_reserve_target_amount"))))
+    if pacing.get("note"):
+        rows.append(("Note", str(pacing.get("note"))))
+    return rows
+
+
 def _funded_action_line_text(act: dict[str, Any]) -> list[str]:
     """Detailed funded-action lines (text)."""
     state = act.get("status") or act.get("presentation_state")
@@ -2327,6 +2362,13 @@ def _investor_core_text(mc: dict[str, Any]) -> list[str]:
             f"{_fmt_amt(fund.get('available_cash'))}"
             + (" [below 5% reserve]" if fund.get("below_safety_floor") else "")
         )
+        out.append("")
+
+    wk_rows = _weekly_deployment_rows(env)
+    if wk_rows:
+        out += [_LINE, "  WEEKLY DEPLOYMENT", _LINE]
+        for label, value in wk_rows:
+            out.append(f"  {label}: {value}")
         out.append("")
 
     out += [_LINE, "  FUNDED ACTIONS TODAY", _LINE]
@@ -2446,6 +2488,13 @@ def _investor_core_md(mc: dict[str, Any]) -> list[str]:
             f"{_fmt_amt(fund.get('available_cash'))}"
             + (" _(below 5% reserve)_" if fund.get("below_safety_floor") else "")
         )
+        out.append("")
+
+    wk_rows = _weekly_deployment_rows(env)
+    if wk_rows:
+        out += ["## Weekly Deployment", ""]
+        for label, value in wk_rows:
+            out.append(f"- {label}: **{value}**")
         out.append("")
 
     out += ["## Funded Actions Today", ""]
