@@ -166,5 +166,27 @@ def test_static_assets_have_cache_buster():
     from gui_v2.app import app
 
     html = TestClient(app).get("/dashboard/today").text
-    assert re.search(r"/static/app\.css\?v=\d+", html), "app.css missing ?v= cache-buster"
-    assert re.search(r"/static/htmx\.min\.js\?v=\d+", html), "htmx missing ?v= cache-buster"
+    assert re.search(r"/static/app\.css\?v=[0-9a-f]+", html), "app.css missing ?v= cache-buster"
+    assert re.search(r"/static/htmx\.min\.js\?v=[0-9a-f]+", html), "htmx missing ?v= cache-buster"
+
+
+def test_pr4_all_dashboard_tables_have_overflow_guard():
+    """Regression guard (PR4): every <table> in a live dashboard template must sit
+    inside an overflow-x-auto wrapper or the responsive_table macro, so no table can
+    reintroduce body-level horizontal overflow on mobile."""
+    import pathlib
+    unguarded = []
+    for f in pathlib.Path("gui_v2/templates/dashboard").glob("*.html"):
+        s = f.read_text()
+        tables = s.count("<table")
+        guards = s.count("overflow-x-auto") + s.count("responsive_table(")
+        if tables > guards:
+            unguarded.append(f"{f.name}: {tables} tables, {guards} guards")
+    assert not unguarded, f"tables without overflow guard: {unguarded}"
+
+
+def test_pr4_wide_shell_and_no_fixed_7xl():
+    """PR4: the shell uses the wide max-w-[1600px] canvas, not the old max-w-7xl."""
+    base = __import__("pathlib").Path("gui_v2/templates/base.html").read_text()
+    assert "max-w-[1600px]" in base
+    assert "max-w-7xl" not in base  # old narrow cap fully removed

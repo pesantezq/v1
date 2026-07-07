@@ -31,16 +31,24 @@ if STATIC_DIR.is_dir():
 
 
 def _static_version(filename: str) -> str:
-    """Cache-busting token for a /static asset — the file's mtime.
+    """Cache-busting token for a /static asset — a short hash of the file mtime.
 
     Appended as ``?v=<token>`` so a rebuilt stylesheet/script is fetched by the
     browser without a hard refresh. Changes exactly when the file changes; falls
     back to "0" when the asset is missing (never raises during render).
+
+    A hex hash (not the raw epoch) is used deliberately: it guarantees the token
+    is never a bare 8+ digit run, so it can't trip content-safety scans that flag
+    long digit sequences (e.g. account-number masking).
     """
+    import hashlib
     try:
-        return str(int((STATIC_DIR / filename).stat().st_mtime))
+        mtime = int((STATIC_DIR / filename).stat().st_mtime)
     except OSError:
         return "0"
+    token = hashlib.md5(str(mtime).encode()).hexdigest()[:8]
+    # Guarantee at least one letter so the token can never be 8 consecutive digits.
+    return token if any(c.isalpha() for c in token) else token + "a"
 
 
 templates.env.globals["static_v"] = _static_version
