@@ -10,7 +10,7 @@
      hx-swap="outerHTML"
      class="space-y-7">
 
-  {{ ui.page_header("Strategy &amp; Tax", "Tax scorecard · harvest advisor · strategy comparison — observe-only",
+  {{ ui.page_header("Strategy & Tax", "Tax scorecard · harvest advisor · strategy comparison — observe-only",
                     "/dashboard/strategy-tax", "dashboard-strategy-tax-content") }}
 
   <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
@@ -198,7 +198,7 @@
 
   {# ── Empty state ───────────────────────────────────────────────────── #}
   {% if not available %}
-  {{ ui.empty_state("Strategy &amp; Tax not yet produced",
+  {{ ui.empty_state("Strategy & Tax not yet produced",
                     "Run the strategy/tax hardening pipeline stages to generate
                      tax_harvest_advisor.json, strategy_tax_scorecard.json, and
                      strategy_comparison.json. The panel degrades safely when artifacts are absent.") }}

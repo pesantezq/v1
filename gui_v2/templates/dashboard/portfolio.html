@@ -239,7 +239,7 @@
   {# These are NOT advisory actions; badges show status, never verbs. #}
   {# --------------------------------------------------------------- #}
   <section aria-label="Portfolio evidence panels">
-    {{ ui.section_header("Risk, Capital &amp; Opportunities", "evidence — observe only", "") }}
+    {{ ui.section_header("Risk, Capital & Opportunities", "evidence — observe only", "") }}
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {% for c in [risk_card, capital_card, watch_card] %}
         {% if c %}{{ ui.status_card(c) }}{% endif %}
