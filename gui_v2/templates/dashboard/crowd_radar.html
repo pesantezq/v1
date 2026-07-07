@@ -40,8 +40,26 @@
   </div>
   {% endif %}
 
+  {# Crowd-trust verdict — one-sentence read of whether the data is corroborated. #}
+  <p class="text-sm text-zinc-400 -mt-4">
+    {% if active_source_count and active_source_count >= 3 %}
+      Multiple sources active — text sentiment is corroborated and shown as research context (no decision impact).
+    {% else %}
+      Text sentiment is live, but source breadth is limited — shown as sandbox research context with
+      <span class="text-zinc-300">no effect on decision_plan.json</span>.
+    {% endif %}
+  </p>
+
+  {# Tabbed workspace — one dataset at a time instead of one long scroll (PR3). #}
+  <nav aria-label="Crowd sections" role="tablist" class="flex gap-1 flex-wrap border-b border-zinc-800">
+    {% for tid, tlabel in [("overview","Overview"),("sentiment","Sentiment"),("velocity","Velocity"),("flocks","Flocks"),("sources","Sources")] %}
+    <button type="button" data-crowd-tab="{{ tid }}" role="tab"
+      class="crowd-tab px-3.5 py-2 text-sm font-mono text-zinc-400 border-b-2 border-transparent -mb-px hover:text-emerald-300 transition">{{ tlabel }}</button>
+    {% endfor %}
+  </nav>
+
   {# 3. Source Health — readable table (Source / Type / Status / Reason / Action). #}
-  <section aria-label="Crowd source health">
+  <section data-crowd-panel="sources" class="crowd-panel" aria-label="Crowd source health">
     {{ ui.section_header("Source Health", "all active sources are free, no paid data", "crowd_source_health.json") }}
     {% if source_health_rows %}
     {% call ui.responsive_table() %}
@@ -56,7 +74,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for s in source_health_rows %}
+        {% for s in source_health_rows if s.badge != 'gray' %}
         <tr class="border-t border-zinc-800 align-top">
           <td class="py-3 pr-4 font-mono text-zinc-100 whitespace-nowrap">{{ s.source }}</td>
           <td class="py-3 pr-4 text-zinc-500 whitespace-nowrap text-xs">{{ s.source_type | default("") }}</td>
@@ -68,6 +86,26 @@
       </tbody>
     </table></div>
     {% endcall %}
+    {# Inactive sources (disabled / manual / unavailable) collapsed under a disclosure. #}
+    {% set _inactive_sources = source_health_rows | selectattr('badge', 'equalto', 'gray') | list %}
+    {% if _inactive_sources %}
+    <details class="mt-2">
+      <summary class="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300 py-1">Other sources ({{ _inactive_sources | length }}) — disabled · manual-only · unavailable</summary>
+      <div class="overflow-x-auto mt-2"><table class="min-w-full text-sm border-separate border-spacing-0">
+        <tbody>
+        {% for s in _inactive_sources %}
+        <tr class="border-t border-zinc-800 align-top">
+          <td class="py-2 pr-4 font-mono text-zinc-400 whitespace-nowrap">{{ s.source }}</td>
+          <td class="py-2 pr-4 text-zinc-600 whitespace-nowrap text-xs">{{ s.source_type | default("") }}</td>
+          <td class="py-2 pr-4 whitespace-nowrap">{{ ui.badge(s.badge, s.status | status_label) }}</td>
+          <td class="py-2 pr-4 text-zinc-500">{{ s.reason }}</td>
+          <td class="py-2 text-zinc-600">{{ s.action or "—" }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+    </details>
+    {% endif %}
     {% else %}
     {{ ui.empty_state("No source health reported",
                       "The multi-source connector lane has not run yet, or crowd_source_health.json is absent.") }}
@@ -115,7 +153,7 @@
   {% endcall %}
   {% endmacro %}
 
-  <section aria-label="Social sentiment pipeline">
+  <section data-crowd-panel="sentiment" class="crowd-panel" aria-label="Social sentiment pipeline">
     {{ ui.section_header("Social Sentiment Pipeline",
                          "text sentiment from Bluesky · Mastodon · Lemmy via FinBERT",
                          "social_sentiment_status.json") }}
@@ -135,18 +173,27 @@
       {{ ss.tickers_scored }} tickers scored · portfolio coverage {{ ss.portfolio_tickers_with_text }}/{{ ss.portfolio_tickers_total }} with live text
     </p>
 
-    {# ── Portfolio Holdings Sentiment ── #}
+    {% if ss.discovery_adj %}
+    <label class="inline-flex items-center gap-2 text-xs text-zinc-400 mb-3 cursor-pointer select-none">
+      <input type="checkbox" onchange="var d=document.getElementById('crowd-discovery-block'); if(d){ d.style.display = this.checked ? 'none' : ''; }">
+      Held positions only
+    </label>
+    {% endif %}
+
+    {# ── Portfolio Holdings Sentiment (held first) ── #}
     {% if ss.portfolio_adj %}
     <div class="text-xs font-semibold uppercase tracking-wide text-indigo-400 mb-1">Portfolio Holdings Sentiment</div>
     <p class="text-xs text-zinc-500 mb-2">Adjustments for held positions. Zero-adj rows scored but no text found for that ticker.</p>
     {{ sentiment_table(ss.portfolio_adj) }}
     {% endif %}
 
-    {# ── Top Discovery Signals ── #}
+    {# ── Top Discovery Signals (toggle-hidden by 'Held positions only') ── #}
     {% if ss.discovery_adj %}
-    <div class="text-xs font-semibold uppercase tracking-wide text-sky-400 mt-5 mb-1">Top Discovery Signals</div>
-    <p class="text-xs text-zinc-500 mb-2">Highest-magnitude adjustments for non-portfolio tickers — research only, no effect on held positions.</p>
-    {{ sentiment_table(ss.discovery_adj) }}
+    <div id="crowd-discovery-block">
+      <div class="text-xs font-semibold uppercase tracking-wide text-sky-400 mt-5 mb-1">Top Discovery Signals</div>
+      <p class="text-xs text-zinc-500 mb-2">Highest-magnitude adjustments for non-portfolio tickers — research only, no effect on held positions.</p>
+      {{ sentiment_table(ss.discovery_adj) }}
+    </div>
     {% endif %}
 
     {% if not ss.portfolio_adj and not ss.discovery_adj %}
@@ -164,7 +211,7 @@
 
   {# 4. Mention Velocity — ranked, horizontally scrollable on mobile. #}
   {% if velocity_rows %}
-  <section aria-label="Mention velocity">
+  <section data-crowd-panel="velocity" class="crowd-panel" aria-label="Mention velocity">
     {{ ui.section_header("Mention Velocity", "ranked by velocity · research priority only",
                          "crowd_multi_source_velocity.json") }}
     {% if velocity_low_conf %}
@@ -205,7 +252,7 @@
 
   {# 5. Research Confidence — the three trust cards (status / backtest / compliance). #}
   {% if cards %}
-  <section aria-label="Research confidence">
+  <section data-crowd-panel="overview" class="crowd-panel" aria-label="Research confidence">
     {{ ui.section_header("Research Confidence", "is the displayed data trustworthy?", "") }}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
@@ -214,7 +261,7 @@
   {% endif %}
 
   {# 6. Advisory output — the crowd-state classifications, or an honest why-not. #}
-  <section aria-label="Advisory output">
+  <section data-crowd-panel="overview" class="crowd-panel" aria-label="Advisory output">
     {{ ui.section_header("Advisory Output", "observe-only", "crowd_knowledge_state.json") }}
     {% if advisory.produced %}
       {% for sec in sections %}
@@ -262,7 +309,7 @@
   </section>
 
   {# 7. Flock Intelligence — simulation-only crowd flocking/dispersion across groups. #}
-  <section aria-label="Flock Intelligence">
+  <section data-crowd-panel="flocks" class="crowd-panel" aria-label="Flock Intelligence">
     {{ ui.section_header("Flock Intelligence", "research context only — simulation sandbox",
                          "flock_intelligence.json") }}
     {% if flock and flock.has_data %}
@@ -311,7 +358,7 @@
   </section>
 
   {# Unified Crowd Intelligence — joins ApeWisdom (retail attention) with FMP (market/context attention). #}
-  <section aria-label="Unified crowd intelligence">
+  <section data-crowd-panel="flocks" class="crowd-panel" aria-label="Unified crowd intelligence">
     {{ ui.section_header("Unified Crowd Intelligence",
                          "ApeWisdom retail attention joined with FMP market/context attention",
                          "sandbox") }}
@@ -389,6 +436,32 @@
                         "No unified_crowd_intelligence_status.json artifact found, or neither the retail (ApeWisdom) nor the market/context (FMP) lane produced joinable data this run.") }}
     {% endif %}
   </section>
+
+  {# Tab controller — show one panel group at a time. Re-runs on htmx swap
+     (defaults to Overview). Pure client-side; no backend/decision change. #}
+  <script>
+  (function () {
+    var root = document.getElementById('dashboard-crowd-radar-content');
+    if (!root) return;
+    var tabs = root.querySelectorAll('.crowd-tab');
+    var panels = root.querySelectorAll('.crowd-panel');
+    function show(id) {
+      panels.forEach(function (p) {
+        p.style.display = (p.getAttribute('data-crowd-panel') === id) ? '' : 'none';
+      });
+      tabs.forEach(function (t) {
+        var on = t.getAttribute('data-crowd-tab') === id;
+        t.classList.toggle('text-emerald-300', on);
+        t.classList.toggle('border-emerald-400', on);
+        t.classList.toggle('text-zinc-400', !on);
+      });
+    }
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () { show(t.getAttribute('data-crowd-tab')); });
+    });
+    show('overview');
+  })();
+  </script>
 
 </div>
 {% endblock %}

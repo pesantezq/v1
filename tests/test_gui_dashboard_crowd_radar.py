@@ -203,3 +203,20 @@ def test_social_sentiment_block_with_data(tmp_path):
     # Sorted by abs(adjustment) desc: NVDA (0.03) > GME (0.02)
     assert ss["top_adjustments"][0]["ticker"] == "NVDA"
     assert ss["top_adjustments"][0]["adjustment"] == 0.03
+
+
+def test_pr3_tabbed_workspace_structure(monkeypatch, tmp_path):
+    """PR3: crowd radar is a tabbed workspace with a trust verdict + controller;
+    sections are tagged into panels."""
+    from gui_v2 import app as app_module
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    t = TestClient(app_module.app).get("/dashboard/crowd-radar").text
+    # tab bar with all five tabs
+    for tid in ("overview", "sentiment", "velocity", "flocks", "sources"):
+        assert f'data-crowd-tab="{tid}"' in t, f"tab '{tid}' missing"
+    # sections tagged as panels + client-side controller present
+    assert 'data-crowd-panel=' in t
+    assert "show('overview')" in t          # default tab
+    # one-sentence trust verdict (either branch)
+    assert ("no effect on decision_plan.json" in t) or ("corroborated" in t)
