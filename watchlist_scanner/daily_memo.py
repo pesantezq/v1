@@ -1983,17 +1983,25 @@ def _advisor_stack_items(root: Path) -> list[str]:
             )
             if prior_fp is not None and prior_delta is not None and cur_n >= 10:
                 word = "NOT validated" if is_trap else "validated"
-                # H2: Advisor Stack shows ONLY the incremental stale-baseline
-                # breakdown — the prior-gauge delta and mean-return live in the
-                # Verdict (Today's Verdict) so they are not duplicated here.
-                # H3: use human label, not raw hex hash.
-                stale_clause = (
-                    f"{cur_str} vs stale baseline {pre_str} ({delta_pp:+.1f}pp)"
-                    if delta_pp is not None else f"current {cur_str}"
+                # Advisor Stack LEADS with the prior-gauge delta — the
+                # decision-relevant "did the retune beat the gauge it actually
+                # replaced?" comparison — and relegates the stale-baseline
+                # breakdown to a parenthetical. This mirrors the Verdict's
+                # memo_verdict_prior_gauge_lead framing so the two sections
+                # agree and neither headlines the favorable stale-baseline +Δ
+                # under a "prior gauge" label (memo-reviewer 2026-07-08).
+                # H3: human label, not raw hex hash.
+                lead = (
+                    f"current-fp {prior_delta:+.1f}pp BELOW the prior gauge it replaced"
+                    if prior_delta < 0
+                    else f"current-fp {prior_delta:+.1f}pp vs the prior gauge it replaced"
+                )
+                stale_paren = (
+                    f" ({cur_str} vs stale baseline {pre_str}, {delta_pp:+.1f}pp)"
+                    if delta_pp is not None else f" ({cur_str})"
                 )
                 items.append(
-                    f"Retune impact: {word} vs the prior gauge it replaced "
-                    f"(n={cur_n}); {stale_clause}"
+                    f"Retune impact: {word} — {lead}{stale_paren} at n={cur_n}"
                 )
             else:
                 # First gauge era (no prior to regress against) or n<10: keep
@@ -2241,7 +2249,11 @@ def _monthly_plan_rows(env: dict[str, Any]) -> list[tuple[str, str]]:
     remaining = env.get("monthly_capital_remaining")
     before = env.get("monthly_capital_deployed_before_today")
     rows = [
-        ("Portfolio value", amt("portfolio_value")),
+        # Labeled "(funding snapshot)" to disambiguate from the live
+        # Portfolio Growth / Risk Delta total, which is snapshotted post-deploy.
+        # The two differ by ~today's funded capital (pre- vs post-deploy seam);
+        # both are correct in their own source (memo-reviewer 2026-07-08).
+        ("Portfolio value (funding snapshot)", amt("portfolio_value")),
         ("Gross monthly contribution", amt("monthly_contribution_gross")),
         (f"Cash reserve target ({env.get('cash_reserve_target_pct', 0) * 100:.1f}%)",
          amt("cash_reserve_target_amount")),

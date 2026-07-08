@@ -113,6 +113,22 @@ class TestWeeklyDeploymentBlock:
         assert "remaining this week" not in out
 
 
+class TestPortfolioValueDisambiguation:
+    """The Monthly Capital Plan portfolio total is a pre-deploy funding snapshot;
+    the Portfolio Growth / Risk Delta total is the live post-deploy value. They
+    differ by ~today's funded capital. The memo must not present two unlabeled
+    portfolio totals — the funding-snapshot figure carries a distinguishing
+    label (memo-reviewer 2026-07-08)."""
+
+    def test_monthly_plan_labels_portfolio_value_as_funding_snapshot(self):
+        from watchlist_scanner.daily_memo import _monthly_plan_rows
+        rows = _monthly_plan_rows({"status": "ok", "portfolio_value": 10286.88})
+        labels = [lbl for lbl, _ in rows]
+        assert any("funding snapshot" in lbl for lbl in labels), labels
+        # the bare, ambiguous "Portfolio value" label must not appear alone
+        assert "Portfolio value" not in labels, labels
+
+
 class TestTopInsightPersistenceLabel:
     """The Top Insight persistence label must have a zero/low floor — a theme
     with persistence 0.0 must NOT render as 'moderate persistence' (the prior

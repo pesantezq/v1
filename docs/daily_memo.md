@@ -111,7 +111,13 @@ Current section budget:
 - `Advisor Stack`
   Pattern recognition + Kelly + vol regime status, plus an `FMP budget`
   line from `fmp_budget_status.json` and a `Retune impact 1d hit-rate` line
-  from the `outcome_attribution` block in `retune_impact.json`.
+  from the `outcome_attribution` block in `retune_impact.json`. The retune
+  line LEADS with the prior-gauge delta ("current-fp ±X.Xpp vs the prior gauge
+  it replaced") and relegates the stale-baseline delta to a parenthetical —
+  the same `memo_verdict_prior_gauge_lead` framing as Today's Verdict, so the
+  two sections agree and neither headlines the favorable stale-baseline +Δ
+  under a "prior gauge" label. A regression vs the prior gauge (or a negative
+  realised mean return) flips the wording to "NOT validated" / "BELOW".
 - `Top Movers`
   Collapses to a single line when fewer than 4 movers exist.
 - `Decision Hit Rate`
