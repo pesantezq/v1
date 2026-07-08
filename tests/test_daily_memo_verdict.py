@@ -14,7 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from watchlist_scanner.daily_memo import _advisor_stack_items, _build_verdict
+from watchlist_scanner.daily_memo import (
+    _advisor_stack_items,
+    _build_verdict,
+    _prior_peak,
+)
 
 
 def _decisions(*specs):
@@ -821,6 +825,116 @@ class TestAdvisorStackFmpBudgetLine(unittest.TestCase):
             fmp = [i for i in items if "FMP budget" in i]
             self.assertEqual(len(fmp), 1, f"expected one FMP line, got {items}")
             self.assertIn("100/250", fmp[0])
+
+
+class TestPriorPeakRecovery(unittest.TestCase):
+    """Peak-relative caveat (2026-07-08): a large +Δ vs the directly-replaced
+    gauge can be a RECOVERY toward an older, stronger gauge era rather than a
+    new high. `_prior_peak` detects this so the verdict + advisor-stack can
+    append "not a new high", keeping `_prior_gauge` (the directly-replaced
+    baseline, shared with quant_watch_probes) unchanged."""
+
+    # Mirrors the live 2026-07-08 shape: current recovered to ~the f60e0b9d peak
+    # after two weak eras; the directly-replaced gauge was weak (big +Δ).
+    def _by_fp_recovery(self):
+        return {
+            "CURRENT": {"hit_rate_1d": 0.6955, "resolved_1d": 289,
+                        "mean_return_1d": 1.23, "last_signal_time": "2026-07-08T09:00:00"},
+            "REPLACED": {"hit_rate_1d": 0.4737, "resolved_1d": 399,
+                         "mean_return_1d": -0.37, "last_signal_time": "2026-06-27T09:00:00"},
+            "OLDPEAK": {"hit_rate_1d": 0.6894, "resolved_1d": 264,
+                        "mean_return_1d": 1.88, "last_signal_time": "2026-05-29T09:00:00"},
+            "pre_tracker_unknown": {"hit_rate_1d": 0.4062, "resolved_1d": 352,
+                                    "last_signal_time": "2026-05-19T01:22:36"},
+        }
+
+    def test_prior_peak_flags_recovery_to_older_peak(self):
+        by = self._by_fp_recovery()
+        peak_hr, is_recovery = _prior_peak(
+            by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.6955)
+        self.assertAlmostEqual(peak_hr, 0.6894)
+        self.assertTrue(is_recovery)
+
+    def test_prior_peak_no_recovery_when_genuine_new_high(self):
+        by = self._by_fp_recovery()
+        by["CURRENT"]["hit_rate_1d"] = 0.75  # clearly above the 0.6894 peak
+        peak_hr, is_recovery = _prior_peak(
+            by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.75)
+        self.assertAlmostEqual(peak_hr, 0.6894)
+        self.assertFalse(is_recovery)
+
+    def test_prior_peak_ignores_undersampled_peak(self):
+        by = self._by_fp_recovery()
+        by["OLDPEAK"]["resolved_1d"] = 12  # below MIN_RESOLVED_1D (30)
+        # only REPLACED remains adequate; it IS the directly-replaced gauge,
+        # so there is no distinct older peak → not a recovery.
+        peak_hr, is_recovery = _prior_peak(
+            by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.6955)
+        self.assertAlmostEqual(peak_hr, 0.4737)
+        self.assertFalse(is_recovery)
+
+    def test_prior_peak_no_recovery_when_peak_is_directly_replaced(self):
+        # If the strongest adequate peer is the gauge just replaced, prior_delta
+        # already tells the whole story — no separate recovery caveat.
+        by = self._by_fp_recovery()
+        by["OLDPEAK"]["hit_rate_1d"] = 0.40  # older era now weaker than replaced
+        peak_hr, is_recovery = _prior_peak(
+            by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.6955)
+        self.assertAlmostEqual(peak_hr, 0.4737)
+        self.assertFalse(is_recovery)
+
+    def _write_recovery(self, root, by):
+        import json
+        (root / "outputs" / "latest").mkdir(parents=True)
+        (root / "outputs" / "latest" / "retune_impact.json").write_text(json.dumps({
+            "current_fingerprint": "CURRENT",
+            "outcome_attribution": {
+                "available": True,
+                "pre_tracker_label": "pre_tracker_unknown",
+                "by_fingerprint": by,
+            },
+        }))
+
+    def test_verdict_appends_recovery_caveat(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_recovery(root, self._by_fp_recovery())
+            verdict = _build_verdict(
+                TestBuildVerdict()._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            self.assertIn("validated", verdict)
+            self.assertIn("not a new high", verdict)
+            self.assertIn("68.9%", verdict)  # peak hit-rate, human %, no hash
+
+    def test_advisor_stack_appends_recovery_caveat(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_recovery(root, self._by_fp_recovery())
+            items = _advisor_stack_items(root)
+            line = [i for i in items if "Retune" in i][0]
+            self.assertIn("validated", line)
+            self.assertIn("not a new high", line)
+            self.assertIn("68.9%", line)
+
+    def test_no_recovery_caveat_when_new_high(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            by = self._by_fp_recovery()
+            by["CURRENT"]["hit_rate_1d"] = 0.75
+            self._write_recovery(root, by)
+            verdict = _build_verdict(
+                TestBuildVerdict()._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            items = _advisor_stack_items(root)
+            line = [i for i in items if "Retune" in i][0]
+            self.assertNotIn("not a new high", verdict)
+            self.assertNotIn("not a new high", line)
 
 
 if __name__ == "__main__":

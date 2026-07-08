@@ -118,6 +118,15 @@ Current section budget:
   two sections agree and neither headlines the favorable stale-baseline +Δ
   under a "prior gauge" label. A regression vs the prior gauge (or a negative
   realised mean return) flips the wording to "NOT validated" / "BELOW".
+  Peak-relative caveat: when a large +Δ vs the directly-replaced gauge is
+  actually a *recovery* toward an older, stronger gauge era (the current
+  hit-rate does not clearly exceed the best adequately-sampled prior era,
+  within 2pp), both the Verdict and Advisor-Stack append "recovery … not a new
+  high (≈ prior peak X%)". The directly-replaced baseline is deliberately kept
+  as the retune-validation comparison — it is shared verbatim with
+  `quant_watch_probes._select_prior_gauge`, so the memo and the concern-tracker
+  never disagree on "did the retune beat what it replaced"; the caveat adds the
+  historical-peak context without changing that baseline.
 - `Top Movers`
   Collapses to a single line when fewer than 4 movers exist.
 - `Decision Hit Rate`

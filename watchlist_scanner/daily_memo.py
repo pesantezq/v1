@@ -744,6 +744,52 @@ def _retune_prior_gauge_delta(
     return prior_fp, prior_delta, is_trap
 
 
+def _prior_peak(
+    by_fp: dict[str, Any],
+    current_fp_id: str | None,
+    pre_label: str,
+    prior_fp: str | None,
+    cur_hr: float | None,
+    min_resolved: int = 30,
+    margin_pp: float = 2.0,
+) -> tuple[float | None, bool]:
+    """
+    Return ``(peak_hit_rate_1d, is_recovery)`` for the best prior gauge era.
+
+    ``peak`` is the highest ``hit_rate_1d`` by_fingerprint entry — excluding the
+    current fp and the stale pre_tracker baseline — with an adequate resolved
+    sample (``resolved_1d >= min_resolved``, matching the quant-watch
+    ``MIN_RESOLVED_1D`` so an undersampled fluke can't be crowned the peak).
+
+    ``is_recovery`` is True when that peak is a *different, older* era than the
+    gauge just replaced (``peak_fp != prior_fp``) AND the current gauge does not
+    clearly exceed it (``cur_hr - peak_hr <= margin_pp``). That is the
+    favorable-baseline nuance the review flagged: a large +Δ vs the
+    directly-replaced (weak) gauge is a RECOVERY toward a prior peak, not a new
+    high. The directly-replaced baseline itself is left unchanged so the memo
+    stays in lockstep with ``quant_watch_probes._select_prior_gauge``.
+    """
+    best_fp: str | None = None
+    best_hr: float | None = None
+    for fp, v in (by_fp or {}).items():
+        if fp == current_fp_id or fp == pre_label or not isinstance(v, dict):
+            continue
+        if (v.get("resolved_1d") or 0) < min_resolved:
+            continue
+        hr = v.get("hit_rate_1d")
+        if hr is None:
+            continue
+        if best_hr is None or hr > best_hr:
+            best_fp, best_hr = fp, hr
+    is_recovery = bool(
+        best_hr is not None
+        and cur_hr is not None
+        and best_fp != prior_fp
+        and (cur_hr - best_hr) * 100 <= margin_pp
+    )
+    return best_hr, is_recovery
+
+
 def _build_verdict(
     summary: dict[str, Any],
     decision_rows: list[dict[str, Any]],
@@ -834,6 +880,18 @@ def _build_verdict(
                             by_fp, current_fp_id, pre_label, cur
                         )
                         cur_mr = cur.get("mean_return_1d")
+                        # Peak-relative caveat: a big +Δ vs the (weak)
+                        # directly-replaced gauge can be a recovery toward an
+                        # older, stronger era — not a new high. Only meaningful
+                        # for a genuinely validated line (not a trap).
+                        peak_hr, is_recovery = _prior_peak(
+                            by_fp, current_fp_id, pre_label, prior_fp, cur_hr
+                        )
+                        recovery_clause = (
+                            f" Recovery, not a new high (≈ prior peak {peak_hr * 100:.1f}%)."
+                            if is_recovery and not is_trap and peak_hr is not None
+                            else ""
+                        )
                         if cur_n >= 30 and cur_hr is not None and pre_hr is not None:
                             delta_pp = (cur_hr - pre_hr) * 100
                             # Report when the stale-baseline delta is itself
@@ -876,6 +934,7 @@ def _build_verdict(
                                             )
                                         milestone = (
                                             f" Retune {word} — {delta_phrase} at n={cur_n}."
+                                            f"{recovery_clause if prior_delta >= 0 else ''}"
                                         )
                                     elif is_trap:
                                         # No prior gauge to compare, but mean-return is negative.
@@ -2000,8 +2059,20 @@ def _advisor_stack_items(root: Path) -> list[str]:
                     f" ({cur_str} vs stale baseline {pre_str}, {delta_pp:+.1f}pp)"
                     if delta_pp is not None else f" ({cur_str})"
                 )
+                # Peak-relative caveat, shared with the Verdict via _prior_peak:
+                # a big +Δ vs the directly-replaced gauge can be a recovery to an
+                # older, stronger era rather than a new high. Only on a validated,
+                # positive-delta line.
+                peak_hr, is_recovery = _prior_peak(
+                    by_fp, current_fp, pre_label, prior_fp, cur_hr
+                )
+                recovery_clause = (
+                    f" — recovery to prior peak {peak_hr * 100:.1f}%, not a new high"
+                    if is_recovery and not is_trap and prior_delta >= 0 and peak_hr is not None
+                    else ""
+                )
                 items.append(
-                    f"Retune impact: {word} — {lead}{stale_paren} at n={cur_n}"
+                    f"Retune impact: {word} — {lead}{stale_paren} at n={cur_n}{recovery_clause}"
                 )
             else:
                 # First gauge era (no prior to regress against) or n<10: keep
