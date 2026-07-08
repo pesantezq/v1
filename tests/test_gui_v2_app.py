@@ -26,10 +26,12 @@ def test_root_renders_base_html():
     client = TestClient(app)
     response = client.get("/")
     body = response.text
-    # Tailwind CDN present
-    assert "cdn.tailwindcss.com" in body
-    # HTMX CDN present
-    assert "htmx.org" in body
+    # Tailwind is self-hosted (compiled app.css), not the Play CDN — the CDN was
+    # dropped in 963b95cb. Mirrors test_tailwind_is_self_hosted_not_cdn.
+    assert "cdn.tailwindcss.com" not in body
+    assert "/static/app.css" in body
+    # HTMX is vendored locally, not from unpkg/CDN — dropped in f5484fc0.
+    assert "htmx.org" not in body
     # Dark theme baseline
     assert "bg-zinc-950" in body
     # App name in title
