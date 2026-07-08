@@ -45,18 +45,11 @@
       {% if c.updated_at %}
       <p class="text-xs text-zinc-500 font-mono">{{ c.updated_at }}</p>
       {% endif %}
-      {% if c.source_artifacts %}
-        {% with source_artifacts=c.source_artifacts %}
-          {% include "components/evidence_drawer.html" %}
-        {% endwith %}
-      {% endif %}
+      {{ ui.evidence(c.source_artifacts) }}
     </div>
     {% else %}
     <div class="col-span-3">
-      {% with heading="Schwab not configured",
-              body="broker_sync_status.json absent — Schwab integration is optional." %}
-        {% include "components/empty_state.html" %}
-      {% endwith %}
+      {{ ui.empty_state("Schwab not configured", "broker_sync_status.json absent — Schwab integration is optional.", icon=False) }}
     </div>
     {% endfor %}
   </section>
@@ -138,10 +131,7 @@
     </div>
 
     {% else %}
-    {% with heading="No mismatches",
-            body="Holdings are in sync, or reconciliation data is not yet available." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
+    {{ ui.empty_state("No mismatches", "Holdings are in sync, or reconciliation data is not yet available.", icon=False) }}
     {% endif %}
   </section>
 
@@ -240,10 +230,7 @@
     </div>
 
     {% else %}
-    {% with heading="No Schwab holdings data",
-            body="schwab_positions.json absent or empty — run a Schwab sync to populate." %}
-      {% include "components/empty_state.html" %}
-    {% endwith %}
+    {{ ui.empty_state("No Schwab holdings data", "schwab_positions.json absent or empty — run a Schwab sync to populate.", icon=False) }}
     {% endif %}
   </section>
 

@@ -48,11 +48,7 @@
       {% if c.summary %}
       <p class="text-sm text-zinc-300">{{ c.summary }}</p>
       {% endif %}
-      {% if c.source_artifacts %}
-        {% with source_artifacts=c.source_artifacts %}
-          {% include "components/evidence_drawer.html" %}
-        {% endwith %}
-      {% endif %}
+      {{ ui.evidence(c.source_artifacts) }}
     </div>
     {% endfor %}
   </section>
