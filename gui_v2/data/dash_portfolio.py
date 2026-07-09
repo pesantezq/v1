@@ -507,9 +507,26 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         else:
             p["week_group"], p["week_amount"] = "other", None
 
+    # Decision-triage breakdown for the advisory-queue header (verb-free counts;
+    # the action verbs stay on the decision cards). Pure consumer of
+    # decision_triage.json.
+    _triage = _read_json(latest / "decision_triage.json") or {}
+    triage_summary = None
+    if _triage.get("available"):
+        _bc = _triage.get("bucket_counts") or {}
+        triage_summary = {
+            "total": int(_triage.get("total_decisions") or 0),
+            "critical": int(_bc.get("critical_action") or 0),
+            "action": int(_bc.get("action_candidate") or 0),
+            "monitor": int(_bc.get("monitor") or 0),
+            "ignore": int(_bc.get("ignore_for_now") or 0),
+        }
+
     return {
         "cards": cards,
         "persona": "portfolio",
+        # Decision-triage counts for the advisory-queue header (verb-free).
+        "triage_summary": triage_summary,
         # Decision rows for the decision_card component (decision-core only)
         "decisions": decisions,
         # Crowd-intelligence context status (observe-only; banner for missing/stale)

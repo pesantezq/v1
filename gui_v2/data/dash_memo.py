@@ -154,6 +154,38 @@ def _parse_memo(raw: str) -> dict[str, list[str]]:
 # Public collector
 # ---------------------------------------------------------------------------
 
+def _coherence_view(latest: Path) -> dict[str, Any] | None:
+    """Shape memo_coherence.json into a compact, render-ready panel dict.
+
+    Pure consumer: reads the structured backbone the memo producer already wrote
+    (funding math, reconciliation, investor summary, coherence verdict). No
+    recompute — the numbers are surfaced verbatim from the artifact.
+    """
+    mc = _read_json(latest / "memo_coherence.json")
+    if not mc:
+        return None
+    inv = mc.get("investor_summary") or {}
+    fund = mc.get("funding") or {}
+    recon = mc.get("reconciliation") or {}
+    _sev = {"ok": "green", "warning": "yellow", "degraded": "yellow",
+            "red": "red", "error": "red", "fail": "red"}
+    status = str(mc.get("coherence_status") or "unknown").lower()
+    return {
+        "status": mc.get("coherence_status") or "unknown",
+        "severity": _sev.get(status, "gray"),
+        "posture": inv.get("posture_paragraph") or "",
+        "main_opportunity": inv.get("main_opportunity") or "",
+        "main_risk": inv.get("main_risk") or "",
+        "what_changed": inv.get("what_changed") or [],
+        "portfolio_value": fund.get("portfolio_value"),
+        "available_cash": fund.get("available_cash"),
+        "cash_reserve_amount": fund.get("cash_reserve_amount"),
+        "unresolved_issue_count": len(recon.get("unresolved_issues") or []),
+        "issue_count": recon.get("issue_count"),
+        "generated_at": mc.get("generated_at"),
+    }
+
+
 def collect_memo_view(root: Path) -> dict[str, Any]:
     """
     Persona collector for /dashboard/memo.
@@ -171,6 +203,7 @@ def collect_memo_view(root: Path) -> dict[str, Any]:
     """
     root = Path(root)
     memo_path = root / "outputs" / "latest" / "daily_memo.md"
+    coherence = _coherence_view(memo_path.parent)
 
     # ---------- empty state ----------
     if not memo_path.exists():
@@ -182,6 +215,7 @@ def collect_memo_view(root: Path) -> dict[str, Any]:
             "observe_only": True,
             "empty": True,
             "empty_message": "No memo yet — run the daily pipeline.",
+            "coherence": coherence,
         }
 
     raw = ""
@@ -199,6 +233,7 @@ def collect_memo_view(root: Path) -> dict[str, Any]:
             "observe_only": True,
             "empty": True,
             "empty_message": "No memo yet — run the daily pipeline.",
+            "coherence": coherence,
         }
 
     # ---------- extract date from first line ----------
@@ -236,4 +271,5 @@ def collect_memo_view(root: Path) -> dict[str, Any]:
         "observe_only": True,
         "empty": False,
         "empty_message": "",
+        "coherence": coherence,
     }

@@ -86,4 +86,31 @@ def collect_today_view(root: Path) -> dict:
         updated_at=cash.get("generated_at") if cash else None,
     ))
 
+    # Decision triage — verb-free workload summary at a glance. Action verbs
+    # (SCALE/BUY/...) stay on the Portfolio advisory decision queue per the
+    # observe-only contract; this card surfaces only the bucket counts.
+    triage = _read_json(latest / "decision_triage.json")
+    if triage and triage.get("available"):
+        bc = triage.get("bucket_counts") or {}
+        crit = int(bc.get("critical_action") or 0)
+        act = int(bc.get("action_candidate") or 0)
+        if crit > 0:
+            t_status = "red"
+        elif act > 0:
+            t_status = "warning"
+        else:
+            t_status = "ok"
+        total = triage.get("total_decisions") or 0
+        cards.append(card(
+            "Decision triage",
+            status=t_status,
+            label=f"{total} decisions",
+            summary=triage.get("summary_line") or (
+                f"{crit} critical, {act} action candidate(s), "
+                f"{int(bc.get('monitor') or 0)} monitor, "
+                f"{int(bc.get('ignore_for_now') or 0)} ignore"),
+            source_artifacts=["decision_triage.json"],
+            updated_at=triage.get("generated_at"),
+        ))
+
     return {"cards": cards, "persona": "today", "observe_only": True}

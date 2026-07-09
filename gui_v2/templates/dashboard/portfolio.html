@@ -185,6 +185,17 @@
       Advisory only &mdash; no execution
     </span>
   </div>
+  {% if triage_summary %}
+  <div class="flex items-center gap-2 flex-wrap text-[11px]" aria-label="Decision triage breakdown">
+    <span class="text-zinc-500 uppercase tracking-wide">Triage</span>
+    <span class="font-mono text-zinc-400">{{ triage_summary.total }} decisions</span>
+    {% if triage_summary.critical %}{{ ui.badge("red", triage_summary.critical ~ " critical") }}{% endif %}
+    {% if triage_summary.action %}{{ ui.badge("yellow", triage_summary.action ~ " action candidate" ~ ("s" if triage_summary.action != 1 else "")) }}{% endif %}
+    {{ ui.badge("blue", triage_summary.monitor ~ " monitor") }}
+    {{ ui.badge("gray", triage_summary.ignore ~ " ignore") }}
+    <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium font-mono bg-zinc-800/80 text-zinc-500 border border-zinc-700">decision_triage.json</span>
+  </div>
+  {% endif %}
   {% if crowd_context_status and (crowd_context_status.banner or crowd_context_status.social_disabled) %}
   <div class="rounded-xl bg-zinc-800/40 border border-zinc-800 px-4 py-2 text-[11px] text-zinc-500">
     {{ crowd_context_status.banner or "Crowd context shown per pick (context only, never a trade signal). Direct FMP social sentiment is unavailable on the current Starter plan." }}
