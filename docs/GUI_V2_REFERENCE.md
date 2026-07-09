@@ -206,6 +206,19 @@ greyed the strategy-lab "Best Balance" card (fixed by the `sev_rail` consolidati
 
 ## 9. Recent changes
 
+### Backlog completion (2026-07-09)
+
+Closes the three items deferred from the 4-phase program:
+
+| Change | Area | Status |
+|---|---|---|
+| Per-decision triage badges (Critical/Action/Monitor/Ignore) | portfolio · `dash_portfolio` | shipped |
+| News Intelligence section — `news_intelligence.json` packets | portfolio · `dash_portfolio` | shipped |
+| Pipeline Wiring + Discovery Pulse cards (Discovery & Wiring group) | system · `dash_system` | shipped |
+
+All pure consumers, observe-only, verb-free surfaces. Spec:
+`docs/superpowers/specs/2026-07-09-gui-backlog-completion.md`.
+
 ### Phase 4 — cross-cutting a11y / mobile / perf (2026-07-09)
 
 | Change | Area | Status |
