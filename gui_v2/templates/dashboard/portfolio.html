@@ -225,6 +225,7 @@
       <div><span class="text-zinc-600">Crowd · </span>{{ p.crowd_row }} <span class="text-zinc-600">({{ p.crowd_agreement }})</span></div>
       <div><span class="text-zinc-600">Catalyst / Risk · </span>{{ p.catalyst_row }}</div>
       {% if p.unified_explanation %}<div><span class="text-zinc-600">Crowd state · </span>{{ p.unified_explanation }}</div>{% endif %}
+      {% if p.triage_label %}<div><span class="text-zinc-600">Triage · </span>{{ ui.badge(p.triage_sev, p.triage_label) }}</div>{% endif %}
       <div class="text-zinc-600 pt-1">Confidence {{ p.confidence_pct }}% · source <span class="font-mono">decision_plan.json</span></div>
     </div>
   </details>

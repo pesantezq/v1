@@ -522,6 +522,38 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
             "ignore": int(_bc.get("ignore_for_now") or 0),
         }
 
+        # Per-decision annotation: map each triaged decision (by symbol) to its
+        # bucket, then tag the decision cards + advisory picks so each pick shows
+        # which triage bucket it fell into. Verb-free labels + severity tokens.
+        _BUCKET_LABEL = {"critical_action": "Critical", "action_candidate": "Action candidate",
+                         "monitor": "Monitor", "ignore_for_now": "Ignore"}
+        _BUCKET_SEV = {"critical_action": "red", "action_candidate": "yellow",
+                       "monitor": "blue", "ignore_for_now": "gray"}
+        _triage_by_symbol: dict[str, dict[str, Any]] = {}
+        for _rows in (_triage.get("buckets") or {}).values():
+            if not isinstance(_rows, list):
+                continue
+            for _r in _rows:
+                if isinstance(_r, dict) and _r.get("symbol"):
+                    _bucket = _r.get("triage_bucket")
+                    _triage_by_symbol.setdefault(str(_r["symbol"]).upper(), {
+                        "triage_bucket": _bucket,
+                        "triage_label": _BUCKET_LABEL.get(_bucket, _bucket),
+                        "triage_sev": _BUCKET_SEV.get(_bucket, "gray"),
+                    })
+
+        def _annotate(items):
+            for _it in items or []:
+                if not isinstance(_it, dict):
+                    continue
+                _t = _triage_by_symbol.get(str(_it.get("ticker") or "").upper())
+                if _t:
+                    _it.update(_t)
+
+        _annotate(decisions)
+        if isinstance(vm, dict):
+            _annotate(vm.get("advisory_picks"))
+
     return {
         "cards": cards,
         "persona": "portfolio",

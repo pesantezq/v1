@@ -9,7 +9,10 @@
 <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-2 hover:border-zinc-700 transition">
   <div class="flex items-center justify-between gap-2">
     <span class="font-mono font-semibold text-base text-zinc-100">{{ d.ticker }}</span>
-    {{ ui.action_chip(d.action) }}
+    <span class="flex items-center gap-1.5 flex-wrap justify-end">
+      {% if d.triage_label %}{{ ui.badge(d.triage_sev, d.triage_label) }}{% endif %}
+      {{ ui.action_chip(d.action) }}
+    </span>
   </div>
   <div class="flex items-center gap-3 text-[11px] text-zinc-500 flex-wrap">
     {% if d.urgency %}
