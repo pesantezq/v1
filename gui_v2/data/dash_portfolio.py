@@ -140,6 +140,53 @@ def _build_portfolio_vm(decisions, crowd_by_symbol, crowd_status, holdings, rd, 
 # Public collector
 # ---------------------------------------------------------------------------
 
+_NEWS_SENT_SEV = {"positive": "green", "negative": "red"}
+
+
+def _news_intelligence_view(ni: dict | None, cap: int = 12) -> dict[str, Any] | None:
+    """Shape news_intelligence.json into a compact, observe-only research panel.
+
+    Per-entity evidence packets sorted flag-relevant-first (risk/catalyst) then by
+    article count, capped at `cap` with an honest shown/total. Pure consumer — no
+    recommendation; sentiment is a hint token, not a signal.
+    """
+    if not ni:
+        return None
+    shaped: list[dict[str, Any]] = []
+    for p in ni.get("evidence_packets") or []:
+        if not isinstance(p, dict):
+            continue
+        risk = [f for f in (p.get("risk_flags") or []) if f]
+        catalyst = [f for f in (p.get("catalyst_flags") or []) if f]
+        shaped.append({
+            "entity": p.get("entity_key") or "",
+            "entity_type": p.get("entity_type") or "",
+            "article_count": int(p.get("article_count") or 0),
+            "source_count": int(p.get("source_count") or 0),
+            "latest": p.get("latest_published_at"),
+            "sentiment": p.get("sentiment_hint") or "",
+            "sentiment_sev": _NEWS_SENT_SEV.get(str(p.get("sentiment_hint") or "").lower(), "gray"),
+            "themes": [t for t in (p.get("themes") or []) if t][:4],
+            "risk_flags": risk[:4],
+            "catalyst_flags": catalyst[:4],
+            "summary_bullets": [b for b in (p.get("summary_bullets") or []) if b][:3],
+            "lane": p.get("evidence_lane") or "",
+            "_flagged": bool(risk or catalyst),
+        })
+    shaped.sort(key=lambda s: (not s["_flagged"], -s["article_count"]))
+    total = len(shaped)
+    return {
+        "available": True,
+        "entity_count": int(ni.get("evidence_packet_count") or total),
+        "official_count": int(ni.get("official_monitoring_count") or 0),
+        "sandbox_count": int(ni.get("sandbox_count") or 0),
+        "article_count": int(ni.get("article_count_deduped") or 0),
+        "packets": shaped[:cap],
+        "shown": min(cap, total),
+        "total": total,
+    }
+
+
 def collect_portfolio_view(root: Path) -> dict[str, Any]:
     """
     Persona collector for /dashboard/portfolio.
@@ -554,11 +601,16 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
         if isinstance(vm, dict):
             _annotate(vm.get("advisory_picks"))
 
+    news_intelligence = _news_intelligence_view(
+        _read_json(latest / "news_intelligence.json"))
+
     return {
         "cards": cards,
         "persona": "portfolio",
         # Decision-triage counts for the advisory-queue header (verb-free).
         "triage_summary": triage_summary,
+        # Per-entity news evidence packets (observe-only research context).
+        "news_intelligence": news_intelligence,
         # Decision rows for the decision_card component (decision-core only)
         "decisions": decisions,
         # Crowd-intelligence context status (observe-only; banner for missing/stale)

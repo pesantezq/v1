@@ -596,6 +596,39 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
+  {# News Intelligence — per-entity news evidence packets. Observe-only #}
+  {# research context; sentiment is a hint, never a signal.            #}
+  {# --------------------------------------------------------------- #}
+  {% if news_intelligence and news_intelligence.available and news_intelligence.packets %}
+  {% set ni = news_intelligence %}
+  <section aria-label="News intelligence" class="space-y-3">
+    {{ ui.section_header("News Intelligence", ni.entity_count ~ " entities · " ~ ni.official_count ~ " official / " ~ ni.sandbox_count ~ " sandbox · " ~ ni.article_count ~ " articles — observe only", "news_intelligence.json") }}
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {% for p in ni.packets %}
+      <details class="rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden">
+        <summary class="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-zinc-800/30 flex-wrap">
+          <span class="font-mono font-semibold text-zinc-100">{{ p.entity }}</span>
+          {% if p.sentiment %}{{ ui.badge(p.sentiment_sev, p.sentiment) }}{% endif %}
+          {% if p.risk_flags %}{{ ui.badge("red", (p.risk_flags | length) ~ " risk") }}{% endif %}
+          {% if p.catalyst_flags %}{{ ui.badge("green", (p.catalyst_flags | length) ~ " catalyst") }}{% endif %}
+          <span class="ml-auto text-xs text-zinc-500 font-mono">{{ p.article_count }} art · {{ p.source_count }} src</span>
+        </summary>
+        <div class="px-4 pb-3 pt-1 text-xs text-zinc-400 space-y-1.5">
+          {% if p.themes %}<div class="flex flex-wrap gap-1">{% for t in p.themes %}<span class="px-1.5 py-0.5 rounded bg-zinc-800/70 text-zinc-400 text-[11px]">{{ t | status_label }}</span>{% endfor %}</div>{% endif %}
+          {% if p.risk_flags %}<div><span class="text-rose-300/80">Risk:</span> {{ p.risk_flags | join(", ") }}</div>{% endif %}
+          {% if p.catalyst_flags %}<div><span class="text-emerald-300/80">Catalyst:</span> {{ p.catalyst_flags | join(", ") }}</div>{% endif %}
+          {% if p.summary_bullets %}<ul class="list-disc list-inside space-y-0.5 text-zinc-400">{% for b in p.summary_bullets %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+          <div class="text-zinc-600 pt-1">{{ p.lane | status_label }} · latest {{ p.latest }} · source <span class="font-mono">news_intelligence.json</span></div>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% if ni.total > ni.shown %}<p class="text-[11px] text-zinc-600">Showing {{ ni.shown }} of {{ ni.total }} entities (flagged + most-covered first).</p>{% endif %}
+    <p class="text-[10px] text-zinc-600 italic">News Intelligence is observe-only research context — not a buy/sell recommendation.</p>
+  </section>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
   {# Operator actions — review-only work orders (create-only).         #}
   {# No Buy/Sell/Trade/Execute controls; advisory decisions stay       #}
   {# read-only and are sourced from decision_plan.json only.           #}
