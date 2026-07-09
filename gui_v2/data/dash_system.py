@@ -25,6 +25,7 @@ from gui_v2.data.shared import card, _read_json
 
 _STATUS_MAP: dict[str, str] = {
     "ok": "ok",
+    "green": "ok",
     "healthy": "ok",
     "success": "ok",
     "ok_with_warnings": "warning",
@@ -586,6 +587,71 @@ def _card_analysis_status(root: Path) -> dict:
 # Public collector
 # ---------------------------------------------------------------------------
 
+def _card_pipeline_wiring(latest: Path) -> dict | None:
+    """Producer→consumer wiring audit (dev/ops lens). Absent → omitted."""
+    pw = _read_json(latest / "pipeline_wiring_status.json")
+    if not pw:
+        return None
+    s = pw.get("summary") or {}
+    total = s.get("total_audited") or 0
+    healthy = s.get("healthy") or 0
+    unwired = s.get("unwired") or 0
+    idle = s.get("event_log_idle") or 0
+    not_aud = s.get("not_audited") or 0
+    overall = pw.get("overall_status") or "unknown"
+    return card(
+        "Pipeline Wiring",
+        status=_map_status(overall),
+        label=overall,
+        summary=(f"{healthy}/{total} healthy · {unwired} unwired · "
+                 f"{idle} event-log idle · {not_aud} not audited"),
+        source_artifacts=["pipeline_wiring_status.json"],
+        updated_at=pw.get("generated_at"),
+    )
+
+
+def _card_discovery_pulse(latest: Path) -> dict | None:
+    """Universe-discovery funnel: budget caps/usage + tier counts. Absent → omitted.
+
+    Covers theme_signals / watch_candidates via the pulse's tier_a counts (listed
+    as source artifacts). Observe-only telemetry.
+    """
+    dp = _read_json(latest / "discovery_pulse_status.json")
+    if not dp:
+        return None
+    caps = dp.get("caps") or {}
+    usage = dp.get("usage") or {}
+    tier_a = dp.get("tier_a") or {}
+    if dp.get("skipped"):
+        status = "warning"
+        summary = f"pulse skipped — {dp.get('skip_reason') or 'no reason given'}"
+    else:
+        status = "ok"
+        parts: list[str] = []
+        themes_n = tier_a.get("themes_count")
+        watch_n = tier_a.get("watch_candidates_count")
+        fmp_used, fmp_max = usage.get("fmp_calls_month"), caps.get("fmp_calls_max")
+        oa_used, oa_max = usage.get("openai_cost_usd_month"), caps.get("openai_cost_usd_max")
+        if themes_n is not None:
+            parts.append(f"{themes_n} themes")
+        if watch_n is not None:
+            parts.append(f"{watch_n} watch candidates")
+        if fmp_used is not None and fmp_max is not None:
+            parts.append(f"FMP {fmp_used}/{fmp_max}")
+        if oa_used is not None and oa_max is not None:
+            parts.append(f"OpenAI ${oa_used:.0f}/${oa_max:.0f}")
+        summary = " · ".join(parts) or "discovery pulse active"
+    return card(
+        "Discovery Pulse",
+        status=status,
+        label=dp.get("month") or "observe only",
+        summary=summary,
+        source_artifacts=["discovery_pulse_status.json", "theme_signals.json",
+                          "watch_candidates.json"],
+        updated_at=dp.get("generated_at"),
+    )
+
+
 def collect_system_view(root: Path) -> dict[str, Any]:
     """
     Persona collector for /dashboard/system.
@@ -639,6 +705,15 @@ def collect_system_view(root: Path) -> dict[str, Any]:
 
     # 12. Analysis loop status (daily/monthly/yearly)
     cards.append(_card_analysis_status(root))
+
+    # Dev/ops surfaces — appended only when their artifact exists (absent = omit,
+    # not a red/empty card, since these are optional telemetry).
+    _wiring = _card_pipeline_wiring(latest)
+    if _wiring:
+        cards.append(_wiring)
+    _pulse = _card_discovery_pulse(latest)
+    if _pulse:
+        cards.append(_pulse)
 
     return {
         "cards": cards,
