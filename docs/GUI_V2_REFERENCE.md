@@ -206,6 +206,22 @@ greyed the strategy-lab "Best Balance" card (fixed by the `sev_rail` consolidati
 
 ## 9. Recent changes
 
+### Phase 2 — close data-surfacing gaps (2026-07-09)
+
+Quant-lens cluster — surface shipped-but-unrendered data via Phase-1 primitives:
+
+| Change | Area | Status |
+|---|---|---|
+| Active Quant Concerns — one card per `quant_watch_status.active[]` probe (was a count only) | quant · `dash_quant` | shipped |
+| Regime / Crowd / Strategy Breakdown — `quant_feedback` by_regime/by_crowd_state/by_strategy tables | quant · `dash_quant` | shipped |
+| Retune Impact card — current-gauge 1d hit-rate / mean-return evidence (verdict still deferred to the memo) | quant · `dash_quant` | shipped |
+
+Scale note: `hit_rate` is a fraction (×100 → %); `retune_impact.mean_return_1d`
+and `quant_feedback.mean_return` are **already** percent-valued (rendered as-is —
+do not ×100). Deferred to Phase 3 (per-tab): `decision_triage`, full
+`memo_coherence` surface, `news_intelligence`. Spec:
+`docs/superpowers/specs/2026-07-09-gui-phase2-data-surfacing.md`.
+
 ### Phase 1 — design-system foundation (2026-07-08 / 09)
 
 | Change | Area | Status |

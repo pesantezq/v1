@@ -383,6 +383,70 @@ def _sqg_loop_cards(root: Path) -> list[dict[str, Any]]:
 # Public collector
 # ---------------------------------------------------------------------------
 
+def _current_fp_metrics(oa: dict | None) -> dict[str, Any] | None:
+    """Current gauge = the fingerprint with the most recent last_signal_time.
+
+    Returns its short id + 1d attribution. NOTE the mixed scales in the source:
+    hit_rate_1d is a fraction (0.66); mean_return_1d is already a percent (0.998).
+    We surface the raw evidence only — the vs-prior-gauge comparison verdict is
+    owned by the memo producer and is deliberately NOT recomputed here.
+    """
+    if not isinstance(oa, dict) or not oa.get("available"):
+        return None
+    by_fp = oa.get("by_fingerprint")
+    if not isinstance(by_fp, dict) or not by_fp:
+        return None
+    fp_id, m = max(
+        by_fp.items(),
+        key=lambda kv: (kv[1] or {}).get("last_signal_time") or "" if isinstance(kv[1], dict) else "",
+    )
+    if not isinstance(m, dict):
+        return None
+    return {
+        "fp": str(fp_id)[:8],
+        "hit_rate_1d": m.get("hit_rate_1d"),
+        "mean_return_1d": m.get("mean_return_1d"),
+        "resolved_1d": m.get("resolved_1d"),
+    }
+
+
+def _quant_feedback_breakdowns(qf: dict | None) -> list[dict[str, Any]]:
+    """Shape quant_feedback.json's per-dimension dicts into render-ready tables.
+
+    Surfaces by_regime / by_crowd_state / by_strategy so the operator sees
+    regime-conditional performance, not just the top-line fallback rate. Rows are
+    sorted by sample count (the concentration that matters most first). hit_rate /
+    mean_return stay None until outcomes resolve — the template renders "—".
+    """
+    if not qf:
+        return []
+    out: list[dict[str, Any]] = []
+    for key, dim_label in (
+        ("by_regime", "By Regime"),
+        ("by_crowd_state", "By Crowd State"),
+        ("by_strategy", "By Strategy"),
+    ):
+        buckets = qf.get(key)
+        if not isinstance(buckets, dict) or not buckets:
+            continue
+        rows: list[dict[str, Any]] = []
+        for bucket, m in buckets.items():
+            if not isinstance(m, dict):
+                continue
+            rows.append({
+                "bucket": bucket,
+                "n_samples": int(m.get("n_samples") or 0),
+                "unresolved": int(m.get("unresolved") or 0),
+                "hit_rate": m.get("hit_rate"),
+                "mean_return": m.get("mean_return"),
+                "sample_sufficient": bool(m.get("sample_sufficient")),
+            })
+        rows.sort(key=lambda r: r["n_samples"], reverse=True)
+        if rows:
+            out.append({"dimension": dim_label, "rows": rows})
+    return out
+
+
 def collect_quant_view(root: Path) -> dict[str, Any]:
     """
     Persona collector for /dashboard/quant.
@@ -532,6 +596,17 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
             total_sigs = oa.get("total_signals") or 0
             parts.append(f"{fp_count} fingerprints, {total_sigs} total signals")
 
+            cur = _current_fp_metrics(oa)
+            if cur and cur.get("hit_rate_1d") is not None:
+                hr = cur["hit_rate_1d"]
+                mr = cur.get("mean_return_1d")
+                n_res = cur.get("resolved_1d") or 0
+                seg = f"current gauge {cur['fp']}: {hr:.1%} 1d hit-rate at n={n_res}"
+                if isinstance(mr, (int, float)):
+                    seg += f", mean {mr:+.2f}%"  # mean_return_1d is already a percent
+                parts.append(seg)
+                parts.append("see the daily memo for the vs-prior-gauge verdict")
+
         cards.append(card(
             "Retune Impact",
             status=c_status,
@@ -653,6 +728,7 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
     # 8. Quant Watch Status (optional — may be absent)
     # ------------------------------------------------------------------
     qwatch = _read_json(latest / "quant_watch_status.json")
+    quant_watch_active: list[dict[str, Any]] = []
 
     if qwatch is not None:
         overall_status = qwatch.get("overall_status") or "unknown"
@@ -669,6 +745,29 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
             source_artifacts=["quant_watch_status.json"],
             updated_at=qwatch.get("generated_at"),
         ))
+
+        # Surface each active concern as its own card so the operator sees WHAT
+        # the ledger is tracking, not just how many. (Phase 2 data-surfacing.)
+        for probe in qwatch.get("active") or []:
+            if not isinstance(probe, dict):
+                continue
+            probe_id = str(probe.get("id") or "")
+            # id is "<detector>:<slug>"; the slug is the human-readable part.
+            slug = probe_id.split(":", 1)[1] if ":" in probe_id else probe_id
+            title = _humanize_token(slug) or "Concern"
+            detector = probe.get("detector") or ""
+            age_days = probe.get("age_days")
+            label_bits = [b for b in (detector, f"{age_days}d" if age_days is not None else "") if b]
+            observed_at = (probe.get("last_observation") or {}).get("at") if isinstance(
+                probe.get("last_observation"), dict) else None
+            quant_watch_active.append(card(
+                title,
+                status=_qw_map.get(str(probe.get("severity") or "").lower(), "warning"),
+                label=" · ".join(label_bits) or "Observe only",
+                summary=str(probe.get("concern") or ""),
+                source_artifacts=["quant_watch_status.json"],
+                updated_at=observed_at or qwatch.get("generated_at"),
+            ))
     else:
         cards.append(card(
             "Quant Watch",
@@ -742,5 +841,8 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
         "cards": cards,
         "persona": "quant",
         "efficacy_rows": efficacy_rows,
+        "quant_watch_active": quant_watch_active,
+        "quant_feedback_breakdowns": _quant_feedback_breakdowns(
+            _read_json(latest / "quant_feedback.json")),
         "observe_only": True,
     }
