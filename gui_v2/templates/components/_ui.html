@@ -24,6 +24,19 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# severity → solid left-rail color (single source of truth). The rail is the
+   heavier `/70` bar used by status cards and PM-brief heroes — distinct from the
+   translucent `/15` badge fill in `_sev_classes`. Accepts both severity
+   vocabularies in use across loaders: yellow≡amber and blue≡sky. #}
+{% macro sev_rail(severity) -%}
+{%- if severity == 'green' -%}bg-emerald-500/70
+{%- elif severity == 'yellow' or severity == 'amber' -%}bg-amber-500/70
+{%- elif severity == 'red' -%}bg-rose-500/70
+{%- elif severity == 'blue' or severity == 'sky' -%}bg-sky-500/60
+{%- else -%}bg-zinc-700
+{%- endif -%}
+{%- endmacro %}
+
 {# A small severity dot — used in heroes and section headers. #}
 {% macro sev_dot(severity) -%}
 <span class="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0
@@ -115,12 +128,7 @@
    `emphasis` optionally promotes a card visually (primary cards). #}
 {% macro status_card(c, emphasis=False) -%}
 <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 {{ 'ring-1 ring-zinc-700/60' if emphasis else '' }} px-4 py-4 space-y-2 hover:border-zinc-700 transition">
-  <span class="absolute left-0 top-0 bottom-0 w-1
-    {%- if c.severity == 'green' %} bg-emerald-500/70
-    {%- elif c.severity == 'yellow' %} bg-amber-500/70
-    {%- elif c.severity == 'red' %} bg-rose-500/70
-    {%- elif c.severity == 'blue' %} bg-sky-500/60
-    {%- else %} bg-zinc-700{% endif %}"></span>
+  <span class="absolute left-0 top-0 bottom-0 w-1 {{ sev_rail(c.severity) }}"></span>
   <div class="flex items-start justify-between gap-2 pl-1.5">
     <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">{{ c.title }}</span>
     {{ status_badge(c.severity, c.label or c.status) }}

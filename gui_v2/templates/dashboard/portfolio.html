@@ -46,12 +46,7 @@
   {% if insight_card %}
   <section aria-label="Portfolio manager brief"
            class="relative overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900 to-zinc-900/40 px-5 py-5">
-    <span class="absolute left-0 top-0 bottom-0 w-1.5
-      {%- if insight_card.severity == 'green' %} bg-emerald-500/70
-      {%- elif insight_card.severity == 'yellow' %} bg-amber-500/70
-      {%- elif insight_card.severity == 'red' %} bg-rose-500/70
-      {%- elif insight_card.severity == 'blue' %} bg-sky-500/60
-      {%- else %} bg-zinc-700{% endif %}"></span>
+    <span class="absolute left-0 top-0 bottom-0 w-1.5 {{ ui.sev_rail(insight_card.severity) }}"></span>
     <div class="pl-2 space-y-2">
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">PM Brief</span>
