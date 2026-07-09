@@ -24,6 +24,19 @@
     body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
     .font-mono { font-family: ui-monospace, "Menlo", "Consolas", monospace; }
 
+    /* Cross-cutting keyboard-focus visibility (Phase 4 a11y): every natively
+       focusable element gets a visible ring for keyboard nav, so tabs with
+       hand-rolled buttons/links inherit a focus indicator without per-template
+       edits. :focus-visible keeps it keyboard-only (no ring on mouse click).
+       Elements with a bespoke Tailwind focus-visible: ring still paint theirs. */
+    a:focus-visible, button:focus-visible, summary:focus-visible,
+    [tabindex]:focus-visible, input:focus-visible, select:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid rgb(52 211 153 / 0.75);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
     /* Light theme — bounded CSS override on top of the existing Tailwind
        utility classes. Default state is dark; setting
        <html data-theme="light"> flips the surface tokens via overrides. */

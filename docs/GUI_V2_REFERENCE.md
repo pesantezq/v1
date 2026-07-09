@@ -206,6 +206,33 @@ greyed the strategy-lab "Best Balance" card (fixed by the `sev_rail` consolidati
 
 ## 9. Recent changes
 
+### Phase 4 — cross-cutting a11y / mobile / perf (2026-07-09)
+
+| Change | Area | Status |
+|---|---|---|
+| Global `:focus-visible` outline for all interactive elements | `base.html` | shipped |
+| Memo funding-grid per-cell null guard | memo | shipped |
+
+Verification: poll cost unchanged (Today 60s / others 120s); no fixed-width
+mobile-overflow elements; new sections use responsive grids + per-table
+`overflow-x-auto`. Completes the 4-phase GUI program. Spec:
+`docs/superpowers/specs/2026-07-09-gui-phase4-a11y-mobile-perf.md`.
+
+### Phase 3 — per-tab deep-dives (2026-07-09)
+
+Complete operator-workflow data on the three highest-value tabs:
+
+| Change | Area | Status |
+|---|---|---|
+| Decision triage card (bucket counts, verb-free) | today · `dash_today` | shipped |
+| Triage breakdown on the advisory-queue header | portfolio · `dash_portfolio` | shipped |
+| Memo Coherence panel — `memo_coherence.json` (funding, investor summary, reconciliation verdict) | memo · `dash_memo` | shipped |
+
+Verb rule preserved: triage surfaces are counts only; action verbs stay on the
+Portfolio decision cards. Deferred: `news_intelligence`, per-decision triage
+badges, discovery/wiring (System-tab). Spec:
+`docs/superpowers/specs/2026-07-09-gui-phase3-per-tab-deep-dives.md`.
+
 ### Phase 2 — close data-surfacing gaps (2026-07-09)
 
 Quant-lens cluster — surface shipped-but-unrendered data via Phase-1 primitives:
