@@ -618,7 +618,7 @@
           {% if p.risk_flags %}<div><span class="text-rose-300/80">Risk:</span> {{ p.risk_flags | join(", ") }}</div>{% endif %}
           {% if p.catalyst_flags %}<div><span class="text-emerald-300/80">Catalyst:</span> {{ p.catalyst_flags | join(", ") }}</div>{% endif %}
           {% if p.summary_bullets %}<ul class="list-disc list-inside space-y-0.5 text-zinc-400">{% for b in p.summary_bullets %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
-          <div class="text-zinc-600 pt-1">{{ p.lane | status_label }} · latest {{ p.latest }} · source <span class="font-mono">news_intelligence.json</span></div>
+          <div class="text-zinc-600 pt-1">{{ p.lane | status_label }} · latest {{ p.latest or "—" }} · source <span class="font-mono">news_intelligence.json</span></div>
         </div>
       </details>
       {% endfor %}
