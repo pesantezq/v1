@@ -129,18 +129,29 @@ producer. Missing/aged artifacts degrade honestly rather than showing a fabricat
 - `base.html` — observe-only banner, sticky persona nav, theme toggle, mobile
   bottom-nav, footer, asset links.
 - `components/_ui.html` — the macro library: `hero_stat`, `status_card`,
-  `status_badge`/`badge`, `sev_dot`, `section_header`, `page_header`, `timestamp`,
-  `empty_state`, evidence disclosure, `decision_chip`/`decision_card`.
-- `components/` — `metric_card`, `decision_card`, `severity_badge`, `evidence_drawer`,
-  `operator_panel`, `portfolio_edit_form`, `mobile_status_bar`, `bottom_nav`,
-  `source_artifact_label`, `validation_errors`, `_charts`.
+  `status_badge`/`badge`, `sev_dot`, `sev_rail`, `section_header`, `page_header`,
+  `timestamp`, `evidence`, `empty_state`, `all_clear`, `action_chip`,
+  `responsive_table`.
+- `components/` — `decision_card`, `operator_panel`, `portfolio_edit_form`,
+  `mobile_status_bar`, `bottom_nav`, `validation_errors`, `_charts`.
+  (The Phase-1 consolidation deleted the orphaned `metric_card`, `severity_badge`,
+  `evidence_drawer`, and `source_artifact_label` components — callers now use the
+  `_ui` macros directly.)
 
 **Severity system (semantic, ≠ accent).** One token vocabulary drives every badge,
-dot, and rail, via the single-source `_sev_classes` macro:
-`green` (ok) · `yellow`/`amber` (warning) · `red` · `blue` (info) · `gray` (unknown).
-`amber` is aliased to `yellow` (a token that fell through to gray was silently hiding
-warnings until fixed 2026-07-07). Timestamps color by age: fresh = muted, >26h = amber,
->50h = rose.
+dot, and rail, through **two** single-source macros — never inline ladders:
+- `_sev_classes` → the translucent `/15` badge/hero fill (`status_badge`, `badge`,
+  `hero_stat`).
+- `sev_rail` → the solid `/70` left-rail bar (`status_card` plus the portfolio and
+  strategy-lab hero rails).
+
+Vocabulary: `green` (ok) · `yellow`/`amber` (warning) · `red` · `blue`/`sky` (info) ·
+`gray` (unknown). Both macros accept the aliases (`amber`≡`yellow`, `sky`≡`blue`) so a
+loader emitting either spelling renders correctly. Two drift bugs traced to hand-copied
+ladders that lacked a branch: `amber` fell through to gray and hid below-floor /
+concentration warnings (fixed 2026-07-07), and a `blue` rail fell through to gray and
+greyed the strategy-lab "Best Balance" card (fixed by the `sev_rail` consolidation
+2026-07-08). Timestamps color by age: fresh = muted, >26h = amber, >50h = rose.
 
 **Styling pipeline:**
 - **Tailwind** — compiled &amp; purged to `static/app.css` by
@@ -156,6 +167,9 @@ warnings until fixed 2026-07-07). Timestamps color by age: fresh = muted, >26h =
   without a hard refresh.
 - **Mobile** — responsive grids, fixed bottom-nav under `md`, and every wide table
   wrapped in `overflow-x-auto` so the body never scrolls sideways.
+- **Keyboard a11y** — interactive macros carry a `focus-visible:` ring (emerald on the
+  `page_header` Refresh button, subtle zinc on the evidence `<summary>`) so keyboard-only
+  operators can see focus; the ring is suppressed for mouse clicks.
 
 ## 7. Behaviors
 
@@ -190,7 +204,23 @@ warnings until fixed 2026-07-07). Timestamps color by age: fresh = muted, >26h =
 6. **Gated mutation, no execution.** POST actions are same-origin, env-gated, and touch
    sandbox/watchlist/config only. No broker or order primitive exists in this layer.
 
-## 9. Recent changes (2026-07-07)
+## 9. Recent changes
+
+### Phase 1 — design-system foundation (2026-07-08 / 09)
+
+| Change | Area | Status |
+|---|---|---|
+| Delete 6 unrouted legacy templates + 2 orphan components | templates | shipped |
+| Collapse evidence / empty-state duplication onto `_ui` macros | `portfolio_config` · `portfolio_sync` | shipped |
+| Extract `sev_rail` macro; retire 3 hand-copied rail ladders (fixes strategy-lab "Best Balance" gray rail) | `_ui` · portfolio · strategy_lab | shipped |
+| Keyboard `focus-visible` rings on Refresh button + evidence summary | `_ui` macros | shipped |
+
+Table-wrapper consolidation onto `ui.responsive_table()` was **deferred**: the existing
+wrappers carry border/visibility chrome the macro does not reproduce, and every candidate
+swap would alter mobile layout without a pixel-preserving path (the overflow-guard test is
+already green).
+
+### 2026-07-07
 
 | Change | Area | Status |
 |---|---|---|
