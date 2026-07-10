@@ -2138,6 +2138,14 @@ def _pattern_confirmed_candidates(
     most recent top100_daily candidates. compact lines = top_n; extended lines
     = up to extended_n (for the long-form text variant).
 
+    Note: the winning-tag verdict is read from ``pattern_efficacy.by_tag``, which
+    pools outcomes across every gauge era (fingerprint-agnostic). A tag a retired
+    gauge treated as a winner therefore keeps reading 'winner' even after the
+    current gauge cooled on it. This surfacing is deliberately a *lifetime* pattern
+    signal, so the pooled view is intentional — the section header carries the
+    ``pooled across gauge eras`` caveat (see ``_pattern_confirmed_section``) so the
+    operator reads it as historical efficacy, not a current-regime claim.
+
     Returns ([], []) on any missing input — never raises.
     """
     try:
@@ -2200,6 +2208,38 @@ def _pattern_confirmed_candidates(
     except Exception as exc:
         logger.warning("daily_memo: pattern_confirmed lookup failed — %s", exc)
         return ([], [])
+
+
+# Cross-gauge pooling caveat: pattern_efficacy.by_tag pools tag outcomes across
+# every gauge era, so a "winning" tag may reflect a retired gauge. Label the
+# operator-facing section as pooled/all-era rather than a current-regime claim.
+_PATTERN_CONFIRMED_POOLED_CAVEAT = (
+    "tag efficacy pooled across gauge eras — historical, not current-regime"
+)
+
+
+def _pattern_confirmed_section(rows: list[str], *, markdown: bool) -> list[str]:
+    """Render the 'pattern-confirmed candidates' section (header + pooled caveat +
+    body) for either the Markdown (`markdown=True`) or plain-text memo. Returns []
+    when there are no rows. Pure — no I/O. The header caveat is the minimal,
+    display-only guard for this consumer: it uses the pooled by_tag view by design
+    (lifetime tag efficacy), so it is labelled rather than vetoed."""
+    if not rows:
+        return []
+    out: list[str] = []
+    if markdown:
+        out.append("## Watch list — pattern-confirmed candidates (advisory)")
+        out.append(f"_{_PATTERN_CONFIRMED_POOLED_CAVEAT}._")
+        out.extend(f"- {line}" for line in rows)
+    else:
+        out.append(_LINE)
+        out.append("  WATCH LIST — PATTERN-CONFIRMED CANDIDATES (advisory)")
+        out.append(f"  ({_PATTERN_CONFIRMED_POOLED_CAVEAT})")
+        out.append(_LINE)
+        # strip backticks for plain-text rendering
+        out.extend(f"  - {line.replace('`', '')}" for line in rows)
+    out.append("")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2859,14 +2899,8 @@ def build_daily_memo(
         _, extended = _pattern_confirmed_candidates(
             pulse_root, cadence="monthly", top_n=5, extended_n=5
         )
-        if extended:
-            a(_LINE)
-            a("  WATCH LIST — PATTERN-CONFIRMED CANDIDATES (advisory)")
-            a(_LINE)
-            for line in extended:
-                # strip backticks for plain-text rendering
-                a(f"  - {line.replace('`', '')}")
-            a("")
+        for line in _pattern_confirmed_section(extended, markdown=False):
+            a(line)
     except Exception as exc:
         logger.warning("daily_memo: pulse/advisor/risk sections failed — %s", exc)
 
@@ -3073,11 +3107,8 @@ def build_daily_memo_md(
         compact, _ = _pattern_confirmed_candidates(
             pulse_root, cadence="monthly", top_n=5, extended_n=5
         )
-        if compact:
-            a("## Watch list — pattern-confirmed candidates (advisory)")
-            for line in compact:
-                a(f"- {line}")
-            a("")
+        for line in _pattern_confirmed_section(compact, markdown=True):
+            a(line)
     except Exception as exc:
         logger.warning("daily_memo: pulse/advisor/risk sections (md) failed — %s", exc)
 

@@ -369,6 +369,27 @@ remains the trigger; the live-gauge slice is a **veto used only when the two
 genuinely disagree**, so true single-gauge drags (verdict `confirms`/`unknown`) still
 fire and stay. Backward compatible: `retune=None` ⇒ `unknown` ⇒ prior behaviour.
 
+## 12b. Sibling `by_tag` consumer audit (added 2026-07-10)
+
+After the D3 fix, every other consumer of the pooled `pattern_efficacy_*.by_tag`
+was audited for the same "pooled metric = current truth" assumption. Findings:
+
+| Consumer | Uses pooled `by_tag`? | Current-scope claim off it? | Verdict / action |
+|---|---|---|---|
+| `portfolio_automation/quant_watch_probes.py` (`detect/_eval_sector_drag`) | yes (`sector:*`) | yes — AMBER sector-drag probe | **already guarded** (§12a, commit `50da3c88`) |
+| `portfolio_automation/retune_suggestions.py` (`_propose_weight_changes`, `_propose_promotion_gate`) | yes, but only `source:*` / `multi_source_confluence` / `promoted_to_extended` / `high_theme_confidence` tags — **never `sector:*`** | no sector claim; source/theme efficacy is a deliberately lifetime signal, and `retune_impact.sector_composition` has no per-fp source-tag slice to cross-check | **safe — no change** (guardrailed n≥200 + 2-run + inert auto-apply; not a sector-scope claim) |
+| `portfolio_automation/pattern_learning.py` (`render_pattern_efficacy_md`) | yes (producer of the pooled artifact) | it **is** the pooled/all-era view by design (lifetime efficacy report, already disclaimed) | **safe — no change** (legitimate pooled owner; spec says do not refactor these) |
+| `watchlist_scanner/daily_memo.py` (`_pattern_confirmed_candidates`) | yes (winning tags incl. `sector:*`) | soft — surfaces watch candidates carrying historically-winning tags | **labelled** — display-only pooled/all-era caveat on the section header (`_pattern_confirmed_section`); no veto (it wants the lifetime view, and a stale-favorable tag does not make a watch candidate wrong) |
+| `gui_v2/data/dash_quant.py` (`_efficacy_label_and_status`) | yes (winner/loser tally incl. `sector:*`) | yes — drives a current-scope card status (Improving / Weak / Mixed) | **guarded** — `_current_fp_sector_sign` drops a `sector:*` tag from the tally when the current fp's own slice contradicts the pooled verdict at n≥20 (symmetric: stale loser not counted weak, stale winner not counted improving); `retune=None` ⇒ prior behaviour |
+
+The guard/label reuse the §12a pattern (cross-check the current fingerprint's
+`retune_impact.json → outcome_attribution.by_fingerprint[current_fp].sector_composition`
+via a `_norm_sector` label-normalizer). `dash_quant` keeps a local copy of the two
+helpers rather than importing from `quant_watch_probes.py` to avoid a GUI→core
+dependency. `_current_fp_sector_sign` returns `positive`/`negative`/`unknown` (the
+direction-aware form the winner+loser tally needs), whereas the probe's
+`_current_fp_sector_verdict` returns the loser-oriented `contradicts`/`confirms`/`unknown`.
+
 ## 13. Out of scope / follow-ups
 - Promote the module to a non-blocking pipeline producer stage (cron-hardened).
 - Additional detectors: horizon-decay (1d→7d collapse), persistent-loser-tag across K runs, concentration-drift.

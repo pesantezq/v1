@@ -15,6 +15,7 @@ actions — those are NOT sourced here.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from gui_v2.data.shared import card, _read_json
 # ---------------------------------------------------------------------------
 
 _THIN_SAMPLE_N = 30           # below this → "Thin sample"
+_SECTOR_XCHECK_MIN_N = 20     # min current-fp resolved_1d to trust the cross-check
 _INSUFFICIENT_HISTORY_N = 10  # below this → "Insufficient history"
 _CALIBRATION_GAP_CAUTION = 0.15  # above this gap → flag as caution
 _CALIBRATION_TREND_EPS = 0.02     # |latest-earliest gap| within this → "Stable"
@@ -138,16 +140,57 @@ def _calibration_trend_card(calib: dict, history: list[tuple[str, float]]) -> di
     )
 
 
+def _norm_sector(name: str) -> str:
+    """Canonicalize a sector label for cross-artifact matching. pattern_efficacy's
+    by_tag uses underscores ('Communication_Services', 'ETF_Index') while
+    retune_impact's sector_composition uses spaces/slashes ('Communication Services',
+    'ETF/Index'). Strip to lowercase alphanumerics so the two line up. Mirrors
+    ``quant_watch_probes._norm_sector`` (kept local to avoid a GUI→core import)."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _current_fp_sector_sign(
+    retune: dict | None, sector: str, min_n: int = _SECTOR_XCHECK_MIN_N
+) -> str:
+    """Sign of the CURRENT fingerprint's own ``mean_return_1d`` for ``sector``,
+    read from ``retune_impact.json → outcome_attribution.by_fingerprint[current_fp]
+    .sector_composition``. ``by_tag`` pools outcomes across gauge eras, so a pooled
+    'loser'/'winner' verdict can be a stale cross-era artifact — a retired gauge's
+    drag/boost reads forever. Returns 'positive' / 'negative' (live gauge sign at
+    adequate n) / 'unknown' (thin or absent slice)."""
+    by_fp = ((retune or {}).get("outcome_attribution") or {}).get("by_fingerprint") or {}
+    cur_fp = (retune or {}).get("current_fingerprint")
+    comp = ((by_fp.get(cur_fp) or {}).get("sector_composition")) or {}
+    target = _norm_sector(sector)
+    row = next((r for name, r in comp.items()
+                if _norm_sector(name) == target and isinstance(r, dict)), None)
+    if not isinstance(row, dict):
+        return "unknown"
+    mean_ret = row.get("mean_return_1d")
+    if (row.get("resolved_1d") or 0) < min_n or mean_ret is None:
+        return "unknown"
+    return "positive" if mean_ret >= 0 else "negative"
+
+
 def _efficacy_label_and_status(
     snapshots_consumed: int,
     rows_matched: int,
     by_tag: dict | None,
     lookback_days: int,
+    retune: dict | None = None,
 ) -> tuple[str, str]:
     """
     Derive a card label and status for a pattern_efficacy artifact.
 
     Returns (label, card_status).
+
+    Cross-gauge pooling guard: ``by_tag`` pools sector outcomes across every gauge
+    era, so a sector a retired gauge dragged reads 'loser' (and one it boosted reads
+    'winner') indefinitely. When ``retune`` is supplied and the CURRENT fingerprint's
+    own sector slice contradicts the pooled verdict at adequate n, that sector tag is
+    dropped from the winner/loser tally rather than let a stale cross-era verdict
+    drive a *current-scope* card status. Non-sector tags, confirming slices, and thin
+    slices are unchanged (backward compatible; ``retune=None`` ⇒ prior behaviour).
     """
     # Thin-sample check first
     n_check = _n_label(snapshots_consumed)
@@ -163,13 +206,22 @@ def _efficacy_label_and_status(
 
     improving = 0
     weak = 0
-    for tag_data in by_tag.values():
+    for tag, tag_data in by_tag.items():
         if not isinstance(tag_data, dict):
             continue
         significance = (tag_data.get("significance") or "").lower()
-        if significance in ("winner", "improving"):
+        is_improving = significance in ("winner", "improving")
+        is_weak = significance in ("loser", "weak")
+        if isinstance(tag, str) and tag.startswith("sector:"):
+            sign = _current_fp_sector_sign(retune, tag.split("sector:", 1)[1])
+            # Veto used ONLY on genuine disagreement between pooled + live gauge.
+            if is_weak and sign == "positive":
+                continue
+            if is_improving and sign == "negative":
+                continue
+        if is_improving:
             improving += 1
-        elif significance in ("loser", "weak"):
+        elif is_weak:
             weak += 1
 
     total_tags = len(by_tag)
@@ -522,6 +574,11 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
     # ------------------------------------------------------------------
     # 2–4. Pattern Efficacy (weekly / monthly / yearly)
     # ------------------------------------------------------------------
+    # Loaded once here (reused by the Retune Impact card below) so the pattern-
+    # efficacy cards can cross-check each pooled sector verdict against the current
+    # fingerprint's own sector slice.
+    retune = _read_json(latest / "retune_impact.json") or {}
+
     efficacy_rows: list[dict[str, Any]] = []
     for period, fname in (
         ("weekly", "pattern_efficacy_weekly.json"),
@@ -540,6 +597,7 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
                 rows_matched=rows_matched,
                 by_tag=by_tag,
                 lookback_days=lookback,
+                retune=retune,
             )
             parts = [f"{snapshots} snapshots, {rows_matched} matched outcomes"]
             if lookback:
@@ -572,10 +630,8 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
             ))
 
     # ------------------------------------------------------------------
-    # 5. Retune Impact
+    # 5. Retune Impact  (retune loaded once above, near the efficacy cards)
     # ------------------------------------------------------------------
-    retune = _read_json(latest / "retune_impact.json") or {}
-
     if retune:
         history_size = retune.get("history_size") or 0
         changes_count = retune.get("changes_count") or 0
