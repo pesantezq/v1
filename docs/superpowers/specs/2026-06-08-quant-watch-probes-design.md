@@ -341,6 +341,34 @@ Run targeted first (`pytest -q tests/test_quant_watch_probes.py`), then full sui
 | Double RED (probe + daily) | Shared threshold by construction; probe defers response to daily |
 | Production pipeline risk | v1 is skill-driven only; no `run_daily_safe.sh`/preflight changes |
 
+## 12a. D3 cross-gauge pooling guard (added 2026-07-10)
+
+`detect_sector_drag` fires off `pattern_efficacy_monthly.by_tag["sector:*"]`, whose
+sector outcomes are **pooled across every gauge era**. A sector a retired gauge
+handled badly therefore reads `significance == "loser"` indefinitely, even after the
+current gauge started treating it as a winner — a stale, self-perpetuating AMBER.
+(Observed 2026-07-10: `Communication_Services` was pooled `loser` at −12.28pp/n=62
+while on the current fingerprint alone it was the *best* sector — 84.6% hit /
++1.97% mean / n=26.)
+
+Fix: cross-check the pooled verdict against the **current fingerprint's own**
+`retune_impact.json → outcome_attribution.by_fingerprint[current_fp].sector_composition`:
+
+- `_current_fp_sector_verdict(retune, sector)` → `contradicts` (live gauge
+  `mean_return_1d >= 0` at `resolved_1d >= SECTOR_XCHECK_MIN_N=20`) / `confirms`
+  (live gauge also negative) / `unknown` (thin or absent slice). `_norm_sector`
+  reconciles the label mismatch between the two artifacts (`Communication_Services`
+  vs `Communication Services`, `ETF_Index` vs `ETF/Index`).
+- `detect_sector_drag` **suppresses** registration when the current fp contradicts.
+- `_eval_sector_drag` **auto-resolves** an existing probe with resolution
+  `current_fp_contradicts` under the same condition.
+
+Both sides are required: without the detector suppression, a probe resolved by the
+evaluator would immediately re-register the next run (flip-flop). The pooled signal
+remains the trigger; the live-gauge slice is a **veto used only when the two
+genuinely disagree**, so true single-gauge drags (verdict `confirms`/`unknown`) still
+fire and stay. Backward compatible: `retune=None` ⇒ `unknown` ⇒ prior behaviour.
+
 ## 13. Out of scope / follow-ups
 - Promote the module to a non-blocking pipeline producer stage (cron-hardened).
 - Additional detectors: horizon-decay (1d→7d collapse), persistent-loser-tag across K runs, concentration-drift.

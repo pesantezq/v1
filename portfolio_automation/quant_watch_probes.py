@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ PRIOR_GAUGE_FIRE_PP = -10.0    # fire D1 when current-fp <= prior gauge by this 
 PRIOR_GAUGE_RESOLVE_PP = -2.0  # resolve D1 when delta recovers to >= this pp
 PRETRACKER_RED_GATE_PP = 10.0  # daily RED gate (|delta vs pre_tracker| >= this)
 SECTOR_MIN_N = 30              # min n_samples for a sector:* loser to fire D3
+SECTOR_XCHECK_MIN_N = 20       # min current-fp resolved_1d for the sector cross-check to veto
 MAX_PROBE_AGE_DAYS = 60        # TTL: stale probe auto-expires
 MAX_OBSERVATIONS = 14          # cap per-probe observation trail
 MAX_ARCHIVE = 200              # cap archive length (FIFO roll-off)
@@ -278,7 +280,41 @@ def _eval_neg_return(probe: dict, retune: dict, efficacy: dict | None, current_f
 
 # ── Task 6: D3 — sector_drag ─────────────────────────────────────────────────
 
-def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str) -> list[dict]:
+def _norm_sector(name: str) -> str:
+    """Canonicalize a sector label for cross-artifact matching. pattern_efficacy's
+    by_tag uses underscores ('Communication_Services', 'ETF_Index') while
+    retune_impact's sector_composition uses spaces/slashes ('Communication Services',
+    'ETF/Index'). Strip to lowercase alphanumerics so the two line up."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _current_fp_sector_verdict(retune: dict | None, sector: str,
+                               min_n: int = SECTOR_XCHECK_MIN_N) -> str:
+    """Cross-check a pooled `sector:* loser` against the CURRENT fingerprint's own
+    sector_composition. by_tag pools outcomes across gauge eras, so a sector a
+    retired gauge dragged can read 'loser' forever while the live gauge treats it
+    as a winner (the cross-gauge pooling artifact behind the stale
+    Communication_Services probe, 2026-07-10). Returns:
+      'contradicts' — live gauge shows the sector mean_return_1d >= 0 at adequate n
+                      (the pooled loser does not hold on the current gauge);
+      'confirms'    — live gauge also shows the sector negative-mean;
+      'unknown'     — no adequate current-fp evidence (absent / thin sample)."""
+    by_fp = ((retune or {}).get("outcome_attribution") or {}).get("by_fingerprint") or {}
+    cur_fp = (retune or {}).get("current_fingerprint")
+    comp = ((by_fp.get(cur_fp) or {}).get("sector_composition")) or {}
+    target = _norm_sector(sector)
+    row = next((r for name, r in comp.items()
+                if _norm_sector(name) == target and isinstance(r, dict)), None)
+    if not isinstance(row, dict):
+        return "unknown"
+    mean_ret = row.get("mean_return_1d")
+    if (row.get("resolved_1d") or 0) < min_n or mean_ret is None:
+        return "unknown"
+    return "contradicts" if mean_ret >= 0 else "confirms"
+
+
+def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str,
+                       retune: dict | None = None) -> list[dict]:
     by_tag = (efficacy or {}).get("by_tag") or {}
     probes: list[dict] = []
     for tag, row in by_tag.items():
@@ -287,6 +323,10 @@ def detect_sector_drag(efficacy: dict, now_iso: str, created_run: str) -> list[d
         if row.get("significance") != "loser" or (row.get("n_samples") or 0) < SECTOR_MIN_N:
             continue
         sector = tag.split("sector:", 1)[1]
+        # Cross-gauge pooling guard: skip when the CURRENT fingerprint's own
+        # sector slice contradicts the pooled loser verdict (live gauge is fine).
+        if _current_fp_sector_verdict(retune, sector) == "contradicts":
+            continue
         probes.append({
             "id": f"{DETECTOR_SECTOR_DRAG}:{sector}",
             "detector": DETECTOR_SECTOR_DRAG,
@@ -317,6 +357,14 @@ def _eval_sector_drag(probe: dict, retune: dict, efficacy: dict | None, current_
     if row.get("significance") != "loser":
         return _resolved(probe, "recovered",
                          f"sector no longer loser (now {row.get('significance')})", now_iso)
+    # Cross-gauge pooling guard: the pooled by_tag still says loser, but if the
+    # CURRENT fingerprint's own sector slice contradicts it (live gauge positive-
+    # mean at adequate n), the pooled verdict is a stale cross-era artifact — retire.
+    if _current_fp_sector_verdict(retune, sector) == "contradicts":
+        return _resolved(probe, "current_fp_contradicts",
+                         f"pooled by_tag still 'loser' but current-fp {sector} "
+                         f"mean_return_1d >= 0 at n>={SECTOR_XCHECK_MIN_N} "
+                         f"(cross-gauge pooling artifact)", now_iso)
     if _age_days(probe.get("created_at"), now_iso) >= MAX_PROBE_AGE_DAYS:
         return _resolved(probe, "ttl_expired", f"age >= {MAX_PROBE_AGE_DAYS}d", now_iso)
     return _active(probe, f"still loser ({row.get('vs_baseline_pp')}pp)", now_iso,
@@ -342,7 +390,7 @@ def detect(retune, efficacy, ledger, now_iso, created_run) -> list[dict]:
     p2 = detect_negative_mean_return_persistence(retune, now_iso, created_run)
     if p2:
         found.append(p2)
-    found.extend(detect_sector_drag(efficacy, now_iso, created_run))
+    found.extend(detect_sector_drag(efficacy, now_iso, created_run, retune=retune))
     return [p for p in found if p["id"] not in active_ids]
 
 

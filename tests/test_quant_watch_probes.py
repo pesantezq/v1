@@ -250,6 +250,71 @@ def test_d3_eval_stays_active_when_still_loser():
     assert t["status"] == "active"
 
 
+# ── D3 sector_drag — current-fp cross-check (cross-gauge pooling guard) ──────
+
+def _retune_sector_fixture(sector="Communication Services", mean_ret=1.97,
+                           resolved_1d=26, current_fp="5687885c"):
+    """retune_impact-shaped fixture carrying a current-fp sector_composition.
+    by_tag (pattern_efficacy) pools across gauge eras; this is the per-fingerprint
+    live-gauge slice used to veto a stale pooled 'loser'."""
+    return {
+        "current_fingerprint": current_fp,
+        "outcome_attribution": {"by_fingerprint": {current_fp: {"sector_composition": {
+            sector: {"resolved_1d": resolved_1d, "hit_rate_1d": 0.85,
+                     "mean_return_1d": mean_ret},
+        }}}},
+    }
+
+
+def test_sector_verdict_normalizes_names_and_flags_contradiction():
+    # by_tag uses 'Communication_Services'; sector_composition uses 'Communication Services'
+    r = _retune_sector_fixture()
+    assert qwp._current_fp_sector_verdict(r, "Communication_Services") == "contradicts"
+
+
+def test_sector_verdict_confirms_when_live_gauge_also_negative():
+    r = _retune_sector_fixture(mean_ret=-0.5)
+    assert qwp._current_fp_sector_verdict(r, "Communication_Services") == "confirms"
+
+
+def test_sector_verdict_unknown_on_thin_or_missing_sample():
+    assert qwp._current_fp_sector_verdict(None, "Communication_Services") == "unknown"
+    thin = _retune_sector_fixture(resolved_1d=5)
+    assert qwp._current_fp_sector_verdict(thin, "Communication_Services") == "unknown"
+    absent = _retune_sector_fixture(sector="Energy")
+    assert qwp._current_fp_sector_verdict(absent, "Communication_Services") == "unknown"
+
+
+def test_d3_suppressed_when_current_fp_contradicts_pooled_loser():
+    # pooled by_tag says Communication_Services is a loser, but the live gauge shows
+    # it positive-mean at adequate n → do NOT register (cross-gauge pooling artifact).
+    eff = _efficacy_fixture(sector="sector:Communication_Services", n=62, vs_baseline=-12.28)
+    retune = _retune_sector_fixture()
+    probes = qwp.detect_sector_drag(eff, "2026-07-10T09:00:00+00:00", "r", retune=retune)
+    assert probes == []
+
+
+def test_d3_still_fires_when_current_fp_confirms_or_unknown():
+    eff = _efficacy_fixture(sector="sector:Communication_Services", n=62, vs_baseline=-12.28)
+    # confirms (live gauge also negative) → fire
+    confirms = qwp.detect_sector_drag(
+        eff, "2026-07-10T09:00:00+00:00", "r",
+        retune=_retune_sector_fixture(mean_ret=-0.5))
+    assert len(confirms) == 1
+    # unknown (no retune) → fall back to pooled signal, still fire (backward compatible)
+    unknown = qwp.detect_sector_drag(eff, "2026-07-10T09:00:00+00:00", "r")
+    assert len(unknown) == 1
+
+
+def test_d3_eval_resolves_on_current_fp_contradiction():
+    # existing probe (pooled still loser), but current-fp contradicts → auto-retire.
+    eff = _efficacy_fixture(sector="sector:Communication_Services", n=62, vs_baseline=-12.28)
+    probe = qwp.detect_sector_drag(eff, "2026-07-06T09:00:00+00:00", "r")[0]
+    t = qwp._eval_sector_drag(probe, _retune_sector_fixture(), eff, "5687885c",
+                              "2026-07-10T09:00:00+00:00")
+    assert t["status"] == "resolved" and t["resolution"] == "current_fp_contradicts"
+
+
 def test_d1_eval_does_not_escalate_on_outperformance_vs_pretracker():
     # cur=0.55 vs pre_hr=0.40 → delta_pre +15pp (outperformance); must NOT escalate
     probe = qwp.detect_prior_gauge_underperformance(
