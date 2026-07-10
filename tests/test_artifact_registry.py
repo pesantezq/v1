@@ -695,3 +695,106 @@ def test_sqg_daily_artifact_goes_stale_when_pipeline_stops(tmp_path):
     st = ar.validate_registry(reg, root, ar.datetime.now(ar.timezone.utc))
     assert any(s["artifact"] == "quant_feedback.json" for s in st["stale"])
     assert st["overall_status"] == "green"
+
+
+# ---------------------------------------------------------------------------
+# idle_ok — append-only event logs are idle (info) not stale (warning) on quiet
+# days, while genuine producer breaks are still caught. (2026-07-10)
+# ---------------------------------------------------------------------------
+
+
+def _event_log_row(idle_ok=True, cadence="daily", role="telemetry", sev="warning"):
+    row = {"path": "outputs/policy/evt.jsonl", "label": "evt",
+           "lens": "developer", "role": role, "required": False,
+           "cadence": cadence, "producer": "p", "consumers": [],
+           "severity_if_missing": sev, "consumer_status": "diagnostic_only"}
+    if idle_ok:
+        row["idle_ok"] = True
+    return row
+
+
+def _write_old(p, obj, age_hours):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(obj), encoding="utf-8")
+    old = ar.datetime.now(ar.timezone.utc).timestamp() - age_hours * 3600
+    os.utime(p, (old, old))
+
+
+def test_is_idle_ok_helper_scoping():
+    # opts in only when idle_ok truthy AND role is not source_of_truth
+    assert ar.is_idle_ok(_event_log_row(idle_ok=True)) is True
+    assert ar.is_idle_ok(_event_log_row(idle_ok=False)) is False
+    sot = _event_log_row(idle_ok=True, role="source_of_truth")
+    assert ar.is_idle_ok(sot) is False, "source_of_truth must never be idle_ok"
+
+
+def test_idle_event_log_classified_idle_not_stale(tmp_path):
+    # Criterion 1: an idle append-only event log (stale by mtime) is info/idle,
+    # not stale/warning, and does NOT escalate governance.
+    reg = {"daily_run_status_tracked": [],
+           "artifacts": {"evt.jsonl": _event_log_row(idle_ok=True)}}
+    _write_old(tmp_path / "outputs/policy/evt.jsonl", [{"e": 1}], age_hours=200)
+    st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert st["overall_status"] == "green"           # not escalated
+    assert "evt.jsonl" not in [s["artifact"] for s in st["stale"]]
+    assert "evt.jsonl" in [i["artifact"] for i in st["idle"]]
+    assert st["idle"][0]["idle_ok"] is True
+    assert st["counts"]["idle"] == 1
+    assert st["counts"]["stale"] == 0
+    assert st["counts"]["present"] == 1              # idle counts as present, not a problem
+
+
+def test_non_idle_event_log_still_stale(tmp_path):
+    # A stale row WITHOUT idle_ok (a genuine producer break) still surfaces as stale
+    # and escalates to amber at warning severity — the real-break path is preserved.
+    reg = {"daily_run_status_tracked": [],
+           "artifacts": {"evt.jsonl": _event_log_row(idle_ok=False, sev="warning")}}
+    reg["artifacts"]["evt.jsonl"]["consumers"] = ["daily-tool-analysis"]
+    reg["artifacts"]["evt.jsonl"]["consumer_status"] = "consumed"
+    _write_old(tmp_path / "outputs/policy/evt.jsonl", [{"e": 1}], age_hours=200)
+    st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert "evt.jsonl" in [s["artifact"] for s in st["stale"]]
+    assert st["idle"] == []
+    assert st["overall_status"] == "amber"
+
+
+def test_source_of_truth_staleness_unchanged_even_if_idle_ok(tmp_path):
+    # Criterion 3: source_of_truth staleness behaviour is unchanged — the idle_ok
+    # flag cannot downgrade a stale source_of_truth (critical → red).
+    row = _event_log_row(idle_ok=True, role="source_of_truth", sev="critical")
+    row["path"] = "outputs/latest/sot.json"
+    row["consumers"] = ["daily-tool-analysis"]
+    row["consumer_status"] = "consumed"
+    reg = {"daily_run_status_tracked": [], "artifacts": {"sot.json": row}}
+    _write_old(tmp_path / "outputs/latest/sot.json", {"x": 1}, age_hours=200)
+    st = ar.validate_registry(reg, tmp_path, ar.datetime.now(ar.timezone.utc))
+    assert "sot.json" in [s["artifact"] for s in st["stale"]]
+    assert st["idle"] == []
+    assert st["overall_status"] == "red"
+
+
+def test_status_schema_backward_compatible(tmp_path):
+    # Criterion: additive only — every legacy key still present; idle is a new key.
+    st = ar.run_artifact_registry(root=tmp_path, write_files=False)
+    for key in ("generated_at", "observe_only", "schema_version", "source",
+                "overall_status", "counts", "missing", "stale", "invalid_json",
+                "schema_invalid", "classified", "unjustified_debt",
+                "justified_no_consumer", "by_consumer_status", "debt_target_met",
+                "severity", "by_lens", "operator_message"):
+        assert key in st, f"legacy status key dropped: {key}"
+    assert "idle" in st and isinstance(st["idle"], list)
+    assert "idle" in st["counts"]
+
+
+def test_shipped_event_logs_have_idle_ok():
+    # The daily-cadence append-only event logs that used to false-positive stale
+    # must carry idle_ok; source_of_truth rows must never carry it.
+    reg = ar.load_registry()
+    arts = reg["artifacts"]
+    for key in ("system_improvement_history.jsonl", "user_action_log.jsonl",
+                "decision_context_log.jsonl", "pattern_events.jsonl",
+                "opportunity_events.jsonl", "outcome_events.jsonl"):
+        assert arts[key].get("idle_ok") is True, f"{key} should be idle_ok"
+    for key, row in arts.items():
+        if row.get("role") == "source_of_truth":
+            assert not row.get("idle_ok"), f"source_of_truth {key} must not be idle_ok"

@@ -76,6 +76,25 @@ def is_stale(row: dict, age_hours: float) -> bool:
     return mx is not None and age_hours > mx
 
 
+def is_idle_ok(row: dict) -> bool:
+    """Return True for append-only event-log rows whose staleness is legitimately
+    *idle* (no new event) rather than a broken producer.
+
+    An append-only event log (e.g. ``system_improvement_history.jsonl``,
+    ``user_action_log.jsonl``) only grows when an event occurs, so a quiet day is
+    indistinguishable from a stalled producer by mtime alone. Rows opting in via
+    ``idle_ok: true`` have their staleness reclassified as info/idle instead of a
+    warning.
+
+    Scoped hard: ``source_of_truth`` rows can NEVER be idle_ok — their staleness
+    always remains a warning/critical regardless of the flag. A genuine producer
+    break is still caught elsewhere because the producer's fresh-every-run status
+    artifact (role advisor/probe, NOT idle_ok — e.g. system_improvement_ideas.json)
+    goes stale on the same daily cadence and escalates normally.
+    """
+    return bool(row.get("idle_ok")) and row.get("role") != "source_of_truth"
+
+
 def required_artifacts(registry: dict | None = None) -> list[tuple[str, str, bool]]:
     """Return (rel_path, label, required) triples for the daily_run_status-tracked
     subset, in tracked order — the exact shape of the legacy _EXPECTED_ARTIFACTS."""
@@ -115,6 +134,7 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
         arts = {}
     present = 0
     missing, stale, invalid_json, schema_invalid = [], [], [], []
+    idle: list[dict] = []
     sev_counts: dict[str, int] = {"critical": 0, "warning": 0, "info": 0}
     by_lens: dict[str, dict] = {}
     by_consumer_status: dict[str, int] = {}
@@ -162,8 +182,18 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
             if age_h is not None:
                 is_stale_flag = is_stale(row, age_h)
                 if is_stale_flag:
-                    stale.append({"artifact": key, "cadence": row["cadence"],
-                                  "age_hours": round(age_h, 1)})
+                    entry = {"artifact": key, "cadence": row["cadence"],
+                             "age_hours": round(age_h, 1)}
+                    if is_idle_ok(row):
+                        # Append-only event log with no recent event: reclassify as
+                        # info/idle. Still surfaced (in idle[]) so a genuinely long gap
+                        # stays visible, but it does NOT count as a stale problem and
+                        # does NOT escalate severity. source_of_truth is never idle_ok.
+                        entry["idle_ok"] = True
+                        idle.append(entry)
+                        is_stale_flag = False
+                    else:
+                        stale.append(entry)
             if str(path).endswith(".json"):
                 try:
                     json.loads(path.read_text(encoding="utf-8"))
@@ -197,6 +227,8 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
     if unjustified_debt:
         msg_bits.append(f"{len(unjustified_debt)} unjustified_debt")
     operator_message = "; ".join(msg_bits) or "all artifacts present, fresh, no unjustified debt"
+    if idle:
+        operator_message += f" ({len(idle)} idle event-log(s), informational)"
 
     return {
         "generated_at": now.isoformat(),
@@ -205,12 +237,13 @@ def validate_registry(registry: dict, artifacts_root: str | Path, now: datetime)
         "source": "artifact_registry",
         "overall_status": overall,
         "counts": {"total": len(arts), "present": present, "stale": len(stale),
+                   "idle": len(idle),
                    "invalid_json": len(invalid_json), "missing": len(missing),
                    "missing_required": sum(1 for k in missing
                                            if arts.get(k, {}).get("required")),
                    "unjustified_debt": len(unjustified_debt),
                    "schema_invalid": len(schema_invalid)},
-        "missing": missing, "stale": stale, "invalid_json": invalid_json,
+        "missing": missing, "stale": stale, "idle": idle, "invalid_json": invalid_json,
         "schema_invalid": schema_invalid,
         "classified": classified,
         "unjustified_debt": unjustified_debt,
@@ -276,7 +309,7 @@ def run_artifact_registry(*, root: str | Path = ".", now=None,
         return {"generated_at": ts.isoformat(), "observe_only": True,
                 "schema_version": "1", "source": "artifact_registry",
                 "overall_status": AMBER, "counts": {}, "missing": [], "stale": [],
-                "invalid_json": [], "schema_invalid": [],
+                "idle": [], "invalid_json": [], "schema_invalid": [],
                 "classified": 0, "unjustified_debt": [], "justified_no_consumer": 0,
                 "by_consumer_status": {}, "debt_target_met": False,
                 "severity": {"critical": 0, "warning": 0, "info": 0}, "by_lens": {},

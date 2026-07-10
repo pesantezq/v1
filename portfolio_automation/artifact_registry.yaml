@@ -1116,6 +1116,7 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only event log — no line on a no-event day is idle, not stale
     producer: event_store
     consumers: []
     severity_if_missing: info
@@ -1129,6 +1130,7 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only event log — no line on a no-event day is idle, not stale
     producer: event_store
     consumers: []
     severity_if_missing: info
@@ -1142,6 +1144,7 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only event log — no line on a no-event day is idle, not stale
     producer: event_store
     consumers: []
     severity_if_missing: info
@@ -1155,6 +1158,7 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only event log — no line on a no-action day is idle, not stale
     producer: approval_layer
     consumers: []
     severity_if_missing: info
@@ -1185,6 +1189,9 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only log — no line on a zero-idea day is idle, not stale.
+    # Producer health is still caught: system_improvement_ideas.json (daily advisor,
+    # NOT idle_ok) goes stale if the system_improvement producer stops running.
     producer: system_improvement
     consumers: []
     severity_if_missing: info
@@ -1614,6 +1621,7 @@ artifacts:
     role: telemetry
     required: false
     cadence: daily
+    idle_ok: true  # append-only capture — no line on a no-decision day is idle, not stale
     producer: decision_context_capture
     consumers: [quant_feedback]
     severity_if_missing: info

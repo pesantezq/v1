@@ -53,6 +53,30 @@ System summary, memo, and GUI health messaging should use severity-aware wording
   - `outputs/latest/theme_opportunities.json` when `outputs/latest/theme_signals.json` exists
 - Health messages should say `optional artifact not present` or equivalent.
 
+### `idle` (append-only event logs — `idle_ok`)
+
+- An append-only **event log** only grows when an event occurs (e.g.
+  `system_improvement_history.jsonl` gets no new line on a zero-idea day,
+  `user_action_log.jsonl` none on a no-action day). By mtime alone a legitimately
+  quiet day is indistinguishable from a stalled producer, so the artifact-registry
+  validator used to false-positive these as `stale`.
+- A registry row (`portfolio_automation/artifact_registry.yaml`) may set
+  `idle_ok: true`. When such a row is stale by mtime, the validator
+  (`artifact_registry.py::validate_registry`) reclassifies it into a separate
+  `idle[]` bucket (with `counts.idle`) instead of `stale[]`. Idle entries are
+  **informational** — they never count as a problem and never escalate
+  `overall_status`. They are still surfaced (in `idle[]`) so a genuinely long gap
+  stays visible.
+- **`source_of_truth` rows can never be `idle_ok`** (`is_idle_ok()` hard-guards on
+  role), so decision-core staleness always remains in `stale[]` and still escalates.
+- **A genuine producer break is still caught:** the producer's fresh-every-run
+  status artifact — e.g. `system_improvement_ideas.json` (daily, role `advisor`,
+  NOT `idle_ok`) written on every run regardless of `idea_count` — goes stale on the
+  same daily cadence if the producer stops running, and escalates normally. `idle_ok`
+  only downgrades the append-only *log*, never the producer's own liveness signal.
+- `idle[]` and `counts.idle` are additive fields (2026-07-10); all pre-existing
+  status keys (`stale[]`, `counts.stale`, …) are unchanged and backward compatible.
+
 ### Contract Rule
 
 - `missing_artifact_count` is reserved for `critical_missing` only.

@@ -43,7 +43,7 @@ the fix.
 
 **Read artifacts** (degrade gracefully on any miss):
 
-0. `outputs/latest/artifact_registry_status.json` → overall_status, counts, missing[], stale[], invalid_json[], unjustified_debt[], justified_no_consumer, by_consumer_status, classified, debt_target_met, severity, operator_message (added 2026-06-08; artifact-governance validator — READ FIRST, it gates confidence in everything below). If absent, fall back to daily_run_status as before and note the registry validator did not run.
+0. `outputs/latest/artifact_registry_status.json` → overall_status, counts, missing[], stale[], idle[], invalid_json[], unjustified_debt[], justified_no_consumer, by_consumer_status, classified, debt_target_met, severity, operator_message (added 2026-06-08; artifact-governance validator — READ FIRST, it gates confidence in everything below). If absent, fall back to daily_run_status as before and note the registry validator did not run. `idle[]` (added 2026-07-10) holds append-only event-log rows (`idle_ok: true`, e.g. `system_improvement_history.jsonl`, `user_action_log.jsonl`) whose staleness is legitimate quiet-day idleness, not a broken producer — informational, never escalates. `source_of_truth` rows can never be idle_ok, so a stale decision-core artifact still lands in `stale[]`.
 1. `outputs/latest/daily_run_status.json` → overall_status, stage_summary, required_missing_count, **content_liveness, content_warn_count** (added 2026-05-28)
 2. `outputs/latest/daily_memo.md` (first 50 lines)
 2b. `outputs/latest/memo_coherence.json` → coherence_status, reconciliation.unresolved_count, funding.{funded_count,blocked_count,below_safety_floor,deployable_from_incoming}, ranking.{default_fallback_count,distinct_priorities}, hit_rate.{directional_accuracy_pct,neutral}, crowd.{insufficient_data_count}, freshness.stale_sources (added 2026-06-30; memo decision-coherence reconciliation layer — **observe-only, advisory, never feeds `decision_plan.json`**; market-expert + developer lens). Absent → memo_coherence did not run yet (inert; report don't alert).
@@ -322,7 +322,7 @@ Headline grammar:
 
 **Body, under 250 words**:
 
-0. Artifact governance (always, first): `"Coverage: {present}/{total} present · {missing} missing ({missing_required} required) · {stale} stale · debt {unjustified_debt} (target 0) · classified {classified}/{total} · {overall_status}"` — from artifact_registry_status.json. RED here (critical/source-of-truth missing) forces the daily lead line to RED.
+0. Artifact governance (always, first): `"Coverage: {present}/{total} present · {missing} missing ({missing_required} required) · {stale} stale · {idle} idle · debt {unjustified_debt} (target 0) · classified {classified}/{total} · {overall_status}"` — from artifact_registry_status.json. `idle` (counts.idle) = append-only event logs with no recent event (idle_ok rows) — informational, never a problem, never escalates. RED here (critical/source-of-truth missing) forces the daily lead line to RED.
 1. Attribution snapshot (always): `"Attribution: current-fp n={N} at {H}% / pre-tracker n={N} at {H}% · Δ {sign}{pp}pp · top sector {gauge_top_sector}"`
 2. Risk-delta state (always): `"Risk: {top_symbol} {weight}% (cap {cap}%, +{headroom}pp); leverage {L}%"`
 3. Discovery pulse + AI spend (always, since they're project-wide health signals): `"Pulse: last={pulse_age_hours}h ago, {total_runs_month} runs MTD ({skipped_runs_month} skipped) · AI: ${monthly_cost_total_usd:.2f}/${monthly_cost_limit_usd:.0f} cap ({ai_budget_pct_of_cap}%)"`
