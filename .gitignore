@@ -59,3 +59,6 @@ outputs/sandbox/
 outputs/latest/
 outputs/policy/portfolio_backups/
 outputs/operator_control/
+
+# Cadence-suite scheduling state (VPS-local runtime; run-all-daily auto-chain clock)
+.agent/suite_run_state.json

@@ -61,6 +61,25 @@ monthly 1st), staggered after the production cron. The exact block is presented 
 the operator for approval BEFORE installation — nothing is scheduled without sign-off.
 The suites remain invocable on demand regardless.
 
+## Auto-chain: daily → weekly when due (added 2026-07-10)
+Because the suites are on-demand (no suite crons), `run-all-daily` doubles as the
+weekly scheduler. After its four daily members complete, it checks
+`suite_run_state.is_due("weekly")` (true if ≥7 days since the weekly suite last ran,
+or never) and, if due, auto-invokes `/run-all-weekly` and folds its roll-up into the
+daily report under an `## ⟳ Auto-chained: run-all-weekly` header. Each suite stamps
+its own cadence (`suite_run_state.stamp("<cadence>")`) when it runs, so the weekly
+clock resets whether weekly ran standalone or was auto-chained — it will not
+re-trigger the next day.
+
+- State: `.agent/suite_run_state.json` (`last_{daily,weekly,monthly}_run_at`), managed
+  by the pure helper `portfolio_automation/suite_run_state.py` (load / stamp /
+  days_since / is_due), mirroring `doc_audit_state`. Observe-only.
+- Threshold: 7 days for weekly (`DUE_THRESHOLD_DAYS`). "Never run" counts as due.
+- Scope: only daily→weekly is wired (operator request). Weekly→monthly is an easy
+  follow-on (helper already generic) but intentionally NOT enabled.
+- The daily lead-line status does not absorb the chained weekly's status; the weekly
+  reports its own worst-status inside its folded section.
+
 ## Boundaries / non-goals
 - Observe-only. No member skill is modified. No decision/score/allocation change.
 - No new producers or artifacts (the members write their own artifacts as today).

@@ -33,6 +33,12 @@ complete fully before starting the next. Capture each member's lead line.
 3. **Detailed sections** — each member's full output under a `### <skill>` header, in
    run order.
 
+## Record the run (always, after the members complete)
+Stamp the monthly cadence (observe-only state in `.agent/suite_run_state.json`):
+```bash
+.venv/bin/python -c "from portfolio_automation.suite_run_state import stamp; stamp('monthly')"
+```
+
 ## Boundaries
 Observe-only orchestration. Does not modify the decision plan, scoring, allocation,
 config, or holdings. Members retain their own report-only / guardrailed behaviour.

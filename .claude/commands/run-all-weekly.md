@@ -33,6 +33,14 @@ complete fully before starting the next. Capture each member's lead line.
 3. **Detailed sections** — each member's full output under a `### <skill>` header, in
    run order.
 
+## Record the run (always, after the members complete)
+Stamp the weekly cadence so `run-all-daily`'s due-check resets — this applies
+whether the suite was run standalone OR auto-chained from `run-all-daily`:
+```bash
+.venv/bin/python -c "from portfolio_automation.suite_run_state import stamp; stamp('weekly')"
+```
+This writes `.agent/suite_run_state.json:last_weekly_run_at` (observe-only state).
+
 ## Boundaries
 Observe-only orchestration. Does not modify the decision plan, scoring, allocation,
 config, or holdings. doc-audit's guardrailed doc-drift auto-fix is the sole

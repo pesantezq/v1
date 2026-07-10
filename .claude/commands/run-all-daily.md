@@ -30,6 +30,23 @@ starting the next. Capture each member's lead line.
 `ERROR — <reason>` for that member and CONTINUE to the next. Never abort the suite
 because one member failed.
 
+## Auto-chain the weekly suite when due
+AFTER the four daily members complete (and before emitting the roll-up), check
+whether the weekly suite is due — it is due once ≥ 7 days have elapsed since it
+last ran, or if it has never run:
+```bash
+.venv/bin/python -c "from portfolio_automation.suite_run_state import is_due, days_since; import json; print(json.dumps({'due': is_due('weekly'), 'days_since': days_since('weekly')}))"
+```
+- If `due` is **true**: announce `"Weekly suite due ({days_since}d since last / never) — auto-chaining /run-all-weekly"`, then invoke the `/run-all-weekly` skill and let it complete. It stamps its own run, so the clock resets and it will not re-trigger tomorrow. Fold its roll-up into this run's output (see contract below).
+- If `due` is **false**: note `"Weekly suite not due (~{days_since:.1f}/7d) — skipped"` and do nothing further.
+- Only the **weekly** cadence is auto-chained here (operator request, 2026-07-10). Monthly is NOT auto-chained from daily.
+- Failure tolerance applies: if the due-check or the chained weekly errors, record it and still emit the daily roll-up.
+
+Then stamp today's daily run:
+```bash
+.venv/bin/python -c "from portfolio_automation.suite_run_state import stamp; stamp('daily')"
+```
+
 ## Output contract
 Emit, in this structure:
 
@@ -43,8 +60,13 @@ Emit, in this structure:
    `- pattern-loop-analysis: {its lead line}`
    `- daily-system-improvement: {its one-line summary}`
    (For an errored member: `- <skill>: ERROR — <reason>`.)
+   Append a weekly-chain note line: `- weekly-suite: auto-chained (due {days_since}d)` OR `- weekly-suite: not due (~{days_since:.1f}/7d), skipped`.
 3. **Detailed sections** — each member's full output under a `### <skill>` header, in
    run order, so nothing from the individual skills is lost.
+4. **Auto-chained weekly** (only if it ran): the full `/run-all-weekly` roll-up +
+   detailed sections under a `## ⟳ Auto-chained: run-all-weekly` header, so the daily
+   run's report contains the weekly report inline. The daily lead-line status does NOT
+   absorb the weekly status — report the weekly's own worst-status within its section.
 
 ## Boundaries
 Observe-only orchestration. Does not modify any member skill, the decision plan,
