@@ -174,12 +174,31 @@ def find_coverage_gaps(changed_files: list[str], existing_doc_paths: set[str],
 _PY_REF_RX = re.compile(r"`((?:portfolio_automation|watchlist_scanner|scanner)/[\w/]+\.py)`")
 
 
+def _is_code_fence(line: str) -> bool:
+    """True if the line opens/closes a Markdown fenced code block (``` or ~~~,
+    3+ of the char, optional leading whitespace + optional info string)."""
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
 def find_dead_refs(root: str) -> list[Finding]:
-    """Flag `path/to/file.py` references in docs that no longer exist on disk."""
+    """Flag `path/to/file.py` references in docs that no longer exist on disk.
+
+    Refs inside fenced code blocks (``` / ~~~) are skipped: those are illustrative
+    snippets — e.g. embedded test code in a plan doc — not real references, and
+    scanning them produced recurring false-positive dead-refs (2026-07-10). Inline
+    code spans in prose are still checked, so genuine references remain covered.
+    """
     findings: list[Finding] = []
     for doc_path in sorted(_glob.glob(str(Path(root) / "docs" / "**" / "*.md"), recursive=True)):
         rel_doc = str(Path(doc_path).relative_to(root))
+        in_fence = False
         for lineno, line in _iter_doc_lines(root, rel_doc):
+            if _is_code_fence(line):
+                in_fence = not in_fence  # toggle on the opening and closing fence line
+                continue
+            if in_fence:
+                continue
             for m in _PY_REF_RX.finditer(line):
                 ref = m.group(1)
                 if not (Path(root) / ref).exists():

@@ -194,6 +194,42 @@ def test_find_dead_refs_silent_for_existing_file(tmp_path):
     assert doc_audit.find_dead_refs(str(tmp_path)) == []
 
 
+def test_find_dead_refs_skips_fenced_code_blocks(tmp_path):
+    # Illustrative module refs inside a ``` fenced code block (e.g. a test snippet
+    # in a plan doc) are NOT real references — they must not be flagged dead.
+    _write(tmp_path, "docs/plan.md",
+           "Intro prose.\n\n"
+           "```python\n"
+           "def test_it(tmp_path):\n"
+           "    # See `portfolio_automation/ghost_module.py` for details.\n"
+           "    ref = 'portfolio_automation/ghost_module.py'\n"
+           "```\n\n"
+           "More prose.\n")
+    assert doc_audit.find_dead_refs(str(tmp_path)) == []
+
+
+def test_find_dead_refs_still_flags_prose_ref_after_fence(tmp_path):
+    # A fence must not permanently suppress detection: a real dead ref in prose
+    # AFTER a closed code block is still flagged (fence state resets on close).
+    _write(tmp_path, "docs/plan.md",
+           "```python\n"
+           "x = '`portfolio_automation/ignored_in_fence.py`'\n"
+           "```\n\n"
+           "But `portfolio_automation/ghost_module.py` in prose is dead.\n")
+    findings = doc_audit.find_dead_refs(str(tmp_path))
+    dead = [f.detail for f in findings]
+    assert any("ghost_module.py" in d for d in dead)
+    assert not any("ignored_in_fence.py" in d for d in dead)
+
+
+def test_find_dead_refs_skips_tilde_fences(tmp_path):
+    _write(tmp_path, "docs/plan.md",
+           "~~~\n"
+           "See `portfolio_automation/ghost_module.py` here.\n"
+           "~~~\n")
+    assert doc_audit.find_dead_refs(str(tmp_path)) == []
+
+
 def test_find_cross_doc_inconsistency_flags_disagreement(tmp_path):
     # Inject a synthetic 2-doc anchor (decoupled from the live registry).
     _write(tmp_path, "docs/A.md", "- `widget_cap = 0.10`\n")
