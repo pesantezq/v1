@@ -50,6 +50,14 @@ def test_cadences_are_independent(tmp_path):
     assert srs.is_due("monthly", root=tmp_path, now=NOW) is True
 
 
+def test_monthly_default_threshold_is_30_days(tmp_path):
+    # weekly→monthly cascade relies on the 30-day monthly default.
+    assert srs.DUE_THRESHOLD_DAYS["monthly"] == 30
+    srs.stamp("monthly", root=tmp_path, now=NOW)
+    assert srs.is_due("monthly", root=tmp_path, now=NOW + timedelta(days=29)) is False
+    assert srs.is_due("monthly", root=tmp_path, now=NOW + timedelta(days=30)) is True
+
+
 def test_corrupt_state_file_is_treated_as_never_run(tmp_path):
     p = tmp_path / ".agent" / "suite_run_state.json"
     p.parent.mkdir(parents=True, exist_ok=True)

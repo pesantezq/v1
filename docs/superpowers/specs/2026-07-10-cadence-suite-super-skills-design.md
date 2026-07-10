@@ -75,10 +75,12 @@ re-trigger the next day.
   by the pure helper `portfolio_automation/suite_run_state.py` (load / stamp /
   days_since / is_due), mirroring `doc_audit_state`. Observe-only.
 - Threshold: 7 days for weekly (`DUE_THRESHOLD_DAYS`). "Never run" counts as due.
-- Scope: only daily→weekly is wired (operator request). Weekly→monthly is an easy
-  follow-on (helper already generic) but intentionally NOT enabled.
-- The daily lead-line status does not absorb the chained weekly's status; the weekly
-  reports its own worst-status inside its folded section.
+- Scope: daily→weekly AND weekly→monthly are both wired (2026-07-10). The chain
+  cascades: a fully-lapsed `run-all-daily` runs daily → (weekly due) → run-all-weekly
+  → (monthly due) → run-all-monthly in one pass, catching every tier up. Thresholds:
+  weekly 7d, monthly 30d. Each tier stamps its own cadence so it won't re-fire early.
+- A chained suite's status does not absorb into the parent lead-line; each tier reports
+  its own worst-status inside its folded `## ⟳ Auto-chained: run-all-<cadence>` section.
 
 ## Boundaries / non-goals
 - Observe-only. No member skill is modified. No decision/score/allocation change.
