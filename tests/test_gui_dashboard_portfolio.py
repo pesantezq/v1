@@ -301,8 +301,8 @@ def test_source_of_truth_invariant_in_rendered_html(monkeypatch, tmp_path):
         # 1. Decision queue section must reference decision_plan.json as source
         assert "decision_plan.json" in html, "Decision source artifact label missing"
 
-        # 2. The observe-only banner must be present
-        assert "Observe-only" in html
+        # 2. The global safety banner must be present (accurate two-lane wording)
+        assert "No brokerage trade execution" in html
 
         # 3. Advisory picks section heading must be present (renamed 2026-06-15:
         #    "Advisory Decisions" -> "Advisory Picks with Context"; queue aria-label kept)
@@ -374,7 +374,7 @@ def test_portfolio_route_renders_200():
     client = TestClient(app)
     r = client.get("/dashboard/portfolio")
     assert r.status_code == 200
-    assert "Observe-only" in r.text
+    assert "No brokerage trade execution" in r.text
 
 
 def test_portfolio_route_shows_portfolio_heading():
@@ -933,7 +933,7 @@ def test_portfolio_capital_first_hierarchy(monkeypatch, tmp_path):
                   "Reserve protected"):
         assert label in t, f"metric '{label}' missing from strip"
     # compact chip replaced the verbose banner block (detail moves to the chip tooltip)
-    assert "OBSERVE ONLY · No execution" in t
+    assert "Advisory only — does not place brokerage orders" in t  # page-scope label
     assert "StockBot is running in" not in t  # old always-visible banner sentence gone
 
 

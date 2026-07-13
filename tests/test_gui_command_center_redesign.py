@@ -99,8 +99,9 @@ def test_every_tab_renders_200_with_no_artifacts(route, tmp_path, monkeypatch):
     c = TestClient(app_module.app)
     r = c.get(route)
     assert r.status_code == 200, f"{route} did not render 200 with empty artifacts"
-    # Global safety banner survives the empty state.
-    assert "Observe-only" in r.text
+    # Global safety banner survives the empty state (accurate two-lane wording:
+    # no brokerage execution + human-gated production — no longer "observe-only").
+    assert "No brokerage trade execution" in r.text
 
 
 def test_today_empty_state_message(tmp_path, monkeypatch):

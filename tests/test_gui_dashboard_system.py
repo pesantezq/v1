@@ -601,7 +601,7 @@ def test_system_route_has_observe_only_banner():
     client = TestClient(app)
     r = client.get("/dashboard/system")
     assert r.status_code == 200
-    assert "Observe-only" in r.text
+    assert "No brokerage trade execution" in r.text
 
 
 def test_system_route_has_read_only_notice():

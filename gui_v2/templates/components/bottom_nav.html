@@ -6,9 +6,9 @@
   {% for _href, _label, _icon in [
       ("/dashboard/today", "Today", "M3 12l9-9 9 9M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9"),
       ("/dashboard/portfolio", "Portfolio", "M3 3h18M3 9h18M3 15h18M3 21h18"),
-      ("/dashboard/quant", "Quant", "M7 20l4-16m2 16l4-16M6 9h14M4 15h14"),
-      ("/dashboard/system", "System", "M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"),
-      ("/dashboard/memo", "Memo", "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z")
+      ("/dashboard/governance", "Review", "M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z"),
+      ("/dashboard/strategy-lab", "Research", "M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"),
+      ("/dashboard/system", "System", "M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18")
   ] %}
   {% set _active = _p.startswith(_href) %}
   <a href="{{ _href }}"

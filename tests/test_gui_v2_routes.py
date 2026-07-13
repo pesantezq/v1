@@ -163,7 +163,7 @@ def test_today_renders_observe_only_banner_and_cards(tmp_path, monkeypatch):
     client = TestClient(appmod.app)
     # / redirects → /dashboard/today (follow_redirects=True by default)
     body = client.get("/").text
-    assert "Observe-only" in body
+    assert "No brokerage trade execution" in body
     assert "Decision core" in body
     # HTMX auto-refresh marker
     assert "hx-trigger" in body or "hx-get" in body
@@ -198,8 +198,8 @@ def test_today_renders_decision_center_sections(tmp_path, monkeypatch):
     c = TestClient(appmod.app)
     # / follows redirect to /dashboard/today
     body = c.get("/").text
-    # New today persona renders observe-only banner + decision core card
-    assert "Observe-only" in body
+    # New today persona renders the global safety banner + decision core card
+    assert "No brokerage trade execution" in body
     assert "Decision core" in body
     assert "System health" in body
 

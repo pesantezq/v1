@@ -22,9 +22,13 @@ Tailwind · uvicorn on `:8502` behind a Cloudflare tunnel.
 - **Artifact consumer only** — no scoring, ranking, or recommendation logic runs in
   the GUI. Every number traces to a source artifact, named on the card. The GUI could
   be deleted without changing a single decision.
-- **Observe-only** — a persistent banner (top &amp; bottom). Trade verbs
-  (BUY/SELL/SCALE) render *only* inside decision-core cards; evidence panels state,
-  never instruct. See `docs/gui_observe_only_safety.md`.
+- **Accurate safety invariant** — a persistent banner (top &amp; bottom) reads
+  *"No brokerage trade execution · Production changes are human-gated"* (the surface
+  is two-lane, not globally observe-only); per-page headers add the specific scope
+  (Portfolio "Advisory only", Strategy Lab "Sandbox research", Governance "Human-gated
+  production review", etc.). Trade verbs (BUY/SELL/SCALE) render *only* inside the
+  advisory decision queue; evidence panels state, never instruct. See
+  `docs/gui_observe_only_safety.md`.
 - **Two-lane aware** — surfaces the active simulation/sandbox lane and the human-gated
   production promotion lane (Governance tab) without blurring them.
 - **Operator plane** — create / dispatch / cancel work orders and gated config edits;
@@ -193,8 +197,9 @@ greyed the strategy-lab "Best Balance" card (fixed by the `sev_rail` consolidati
 
 1. **Consumer, never author.** No decision/scoring recompute; no writes to
    `decision_plan.json`.
-2. **Observe-only surface.** Trade verbs appear only in decision-core cards; the banner
-   is hard-coded, top and bottom.
+2. **No execution, human-gated production.** Trade verbs appear only in the advisory
+   decision queue; the global banner ("No brokerage trade execution · Production changes
+   are human-gated") is hard-coded, top and bottom.
 3. **Every figure is sourced.** Cards name their artifact and timestamp; no
    unattributed number on the page.
 4. **Honest degradation.** Missing artifacts show explicit empty states; aged data

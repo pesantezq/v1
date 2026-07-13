@@ -108,7 +108,7 @@ def test_dashboard_today_renders_and_has_observe_only_banner():
     c = TestClient(app)
     r = c.get("/dashboard/today")
     assert r.status_code == 200
-    assert "Observe-only" in r.text
+    assert "No brokerage trade execution" in r.text
 
 
 def test_htmx_is_vendored_locally_not_from_cdn():

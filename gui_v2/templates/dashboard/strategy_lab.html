@@ -11,13 +11,14 @@
      hx-swap="outerHTML"
      class="space-y-7">
 
-  {{ ui.page_header("Strategy Lab", "Opportunity radar · strategy comparison · improvement backlog — advisory, observe-only",
+  {{ ui.page_header("Strategy Lab", "Research sandbox + operational-improvement lanes — advisory, Observe-only",
                     "/dashboard/strategy-lab", "dashboard-strategy-lab-content") }}
 
+  {# ── 1. ONE page-level sandbox warning ───────────────────────────────── #}
   <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
-    Research / sandbox + operational-improvement lanes. Nothing here trades, rebalances,
-    or changes the official decision plan. Approving an item only routes it to review or
-    generates a Claude Code prompt to copy.
+    Research / sandbox + operational-improvement lanes. Observe-only: nothing here trades,
+    rebalances, or changes the official decision plan. Approving an item only routes it to
+    review or generates a Claude Code prompt to copy.
   </div>
 
   {% if cards %}
@@ -26,142 +27,17 @@
   </section>
   {% endif %}
 
-  {# ── Simulation Graphs (visual backtest evidence — sandbox only) ──────── #}
-  {% set sc = simulation_charts %}
-  {% if sc %}
-  <section aria-label="Simulation Graphs" class="space-y-4">
-    {{ ui.section_header("Simulation Graphs", "visual backtest evidence — sandbox only", "simulation_charts.json") }}
-
-    <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
-      Simulation-only. These charts do not create trades, rebalance instructions, or official
-      advisory actions. Official advisory actions come only from <span class="font-mono">decision_plan.json</span>.
-    </div>
-
-    {% if not sc.available %}
-      {{ ui.empty_state("Simulation charts are not available yet",
-                        sc.empty_message or "Run the simulation/backtest pipeline to generate outputs/latest/simulation_charts.json.") }}
-    {% else %}
-      {% if sc.stale_message %}
-      <div class="rounded-lg bg-amber-500/10 border border-amber-500/25 px-3 py-2 text-xs text-amber-200">{{ sc.stale_message }}</div>
-      {% endif %}
-      {% if sc.limited_message %}
-      <div class="rounded-lg bg-zinc-800/60 border border-zinc-700 px-3 py-2 text-xs text-zinc-400">{{ sc.limited_message }}</div>
-      {% endif %}
-
-      {# Summary cards #}
-      {% if sc.summary %}
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {% for s in sc.summary %}
-        <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
-          <span class="absolute left-0 top-0 bottom-0 w-1 {{ ui.sev_rail(s.severity) }}"></span>
-          <div class="text-[11px] uppercase tracking-wide text-zinc-500 pl-1.5">{{ s.title }}</div>
-          <div class="flex items-baseline gap-2 pl-1.5">
-            <span class="text-lg font-semibold text-zinc-100">{{ s.value_label }}</span>
-            {% if s.strategy %}<span class="text-xs text-zinc-400 truncate" title="{{ s.strategy }}">{{ s.strategy }}</span>{% endif %}
-          </div>
-          {% if s.plain_english %}<p class="text-[11px] text-zinc-500 leading-snug pl-1.5">{{ s.plain_english }}</p>{% endif %}
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-
-      {# Chart grid — stacks on mobile, two-up on desktop #}
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {% for key in sc.chart_order %}
-          {% if sc.charts.get(key) %}{{ charts.chart_card(sc.charts[key], sc.source_files) }}{% endif %}
-        {% endfor %}
-      </div>
-
-      {% if sc.generated_at %}
-      <div class="text-[11px] text-zinc-600">Simulation charts generated {{ sc.generated_at | human_time }}.</div>
-      {% endif %}
-    {% endif %}
-  </section>
-  {% endif %}
-
-  {# ── Strategy comparison ─────────────────────────────────────────────── #}
-  {% if strategies %}
-  <section aria-label="Strategy comparison">
-    {{ ui.section_header("Strategy Comparison", "risk-adjusted, after-tax framing", "strategy_comparison.json") }}
-    <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
-      <table class="w-full text-sm border-collapse">
-        <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
-          <th class="py-2.5 px-4">Strategy</th><th class="py-2.5 px-4 text-right">Rank</th>
-          <th class="py-2.5 px-4 text-right">Obj. fit</th><th class="py-2.5 px-4 text-right">Risk</th>
-          <th class="py-2.5 px-4 text-right">Max DD</th><th class="py-2.5 px-4 text-right">Tax eff.</th>
-          <th class="py-2.5 px-4 text-right">Opp. capture</th></tr></thead>
-        <tbody class="divide-y divide-zinc-800">
-          {% for m in strategies %}
-          <tr class="hover:bg-zinc-900/50">
-            <td class="py-2.5 px-4 text-zinc-100">{{ m.name }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_objective_fit) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_risk_level) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.max_drawdown_estimate) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.tax_efficiency) }}{% if m.after_tax_degraded %} <span class="text-amber-400" title="no tax-lot data">*</span>{% endif %}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.opportunity_capture_score) }}</td>
-          </tr>{% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <div class="md:hidden space-y-3">
-      {% for m in strategies %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3">
-        <div class="flex items-center justify-between"><span class="text-zinc-100 font-medium">{{ m.name }}</span>
-          <span class="font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</span></div>
-        <div class="text-xs text-zinc-500 mt-1">risk {{ "%.2f"|format(m.expected_risk_level) }} · taxeff {{ "%.2f"|format(m.tax_efficiency) }} · maxDD {{ "%.2f"|format(m.max_drawdown_estimate) }}</div>
-      </div>{% endfor %}
-    </div>
-    <p class="text-[11px] text-zinc-600 mt-2">* after-tax estimate degraded (no broker cost-basis/tax-lot data).</p>
-  </section>
-  {% endif %}
-
-  {# ── Opportunity radar ───────────────────────────────────────────────── #}
-  {% if radar %}
-  <section aria-label="Opportunity radar">
-    {{ ui.section_header("Opportunity Radar", "sandbox — review only", "opportunity_radar.json") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for o in radar %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
-        <div class="flex items-center justify-between">
-          <span class="font-mono font-semibold text-zinc-100">{{ o.candidate }}</span>
-          {{ ui.badge("blue" if o.final_status in ("QUALIFIED","APPROVED_WATCHLIST_REVIEW") else "gray", o.final_status) }}
-        </div>
-        <div class="text-xs text-zinc-500">{{ o.theme or o.candidate_type }}</div>
-        <div class="text-xs text-zinc-400 font-mono">opp {{ "%.2f"|format(o.opportunity_score or 0) }} · boom {{ "%.2f"|format(o.boom_score or 0) }} · risk {{ "%.2f"|format(o.risk_score or 0) }}</div>
-      </div>{% endfor %}
-    </div>
-  </section>
-  {% endif %}
-
-  {# ── System improvement backlog + queue ──────────────────────────────── #}
-  {% if improvement_ideas %}
-  <section aria-label="System improvement ideas">
-    {{ ui.section_header("System Improvement Backlog", "engineering/ops — not market advice", "system_improvement_ideas.json") }}
-    <div class="space-y-2">
-      {% for i in improvement_ideas %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5">
-        <div class="flex items-center justify-between gap-2 flex-wrap">
-          <span class="text-zinc-200 text-sm">{{ i.title }}</span>
-          {{ ui.badge("blue", i.category) }}
-          <span class="text-xs text-zinc-500 font-mono ml-auto">{{ i.priority }} · {{ "%.2f"|format(i.final_rank_score) }}</span>
-        </div>
-        {% if i.summary %}<p class="text-xs text-zinc-500 mt-1">{{ i.summary }}</p>{% endif %}
-      </div>{% endfor %}
-    </div>
-  </section>
-  {% endif %}
-
-  {# ── Approval queues (review-only; actions execute nothing) ───────────── #}
+  {# ── 2. Needs your review — surfaced first when any queue has items ───── #}
   {% if opportunity_queue or improvement_queue or strategy_review_queue %}
   <section aria-label="Approval queues">
-    {{ ui.section_header("Approval Queues", "artifact-based · approving executes nothing", "") }}
+    {{ ui.section_header("Needs your review",
+        "Approval Queues — artifact-based · approving executes nothing, it only routes to review", "") }}
     {% for grp, items, src in [("Market opportunities", opportunity_queue, "operator_action_queue.json"),
-                               ("System improvements", improvement_queue, "system_improvement_action_queue.json"),
-                               ("Strategy profiles", strategy_review_queue, "strategy_review_queue.json")] %}
+                               ("Strategy profiles", strategy_review_queue, "strategy_review_queue.json"),
+                               ("System improvements", improvement_queue, "system_improvement_action_queue.json")] %}
     {% if items %}
-    <div class="mb-3">
-      <div class="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">{{ grp }} <span class="font-mono normal-case">({{ src }})</span></div>
+    <div class="mb-4">
+      <div class="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">{{ grp }}</div>
       {% if src == "strategy_review_queue.json" %}
       <div class="text-[11px] text-zinc-400 mb-1.5">
         Active sandbox strategy:
@@ -171,14 +47,21 @@
       {% endif %}
       <div class="space-y-2">
         {% for it in items %}
-        <div class="bg-zinc-900 rounded-xl border {{ 'border-emerald-700' if it.operator_selected else 'border-zinc-800' }} px-4 py-2.5 text-sm">
+        <div class="bg-zinc-900 rounded-xl border {{ 'border-emerald-700' if it.operator_selected else 'border-zinc-800' }} px-4 py-3 text-sm space-y-2">
+
+          {# ── headline: candidate + current state ── #}
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <span class="text-zinc-200">{{ it.candidate or it.title or it.name or it.id }}
+            <span class="text-zinc-100 font-medium">{{ it.candidate or it.title or it.name or it.id }}
               {% if it.operator_selected %}<span class="ml-1 text-[10px] font-semibold text-emerald-300 border border-emerald-700 rounded px-1 py-0.5">ACTIVE</span>{% endif %}
             </span>
-            <span class="text-[11px] text-zinc-500">allow: {{ (it.allowed_actions or [])|join(", ") }}</span>
+            {{ ui.badge("blue" if it.operator_selected else "gray",
+                        it.status or it.state or ("selected" if it.operator_selected else "pending review")) }}
           </div>
-          <div class="text-[11px] text-rose-300/70 mt-1">blocked: {{ (it.blocked_actions or [])|join(", ") }}</div>
+
+          {# ── why it is surfaced ── #}
+          <p class="text-xs text-zinc-500">{{ it.reason or it.rationale or it.summary or it.description or "Surfaced for review." }}</p>
+
+          {# ── decision buttons (forms preserved byte-for-byte) ── #}
           {% if src == "strategy_review_queue.json" and it.strategy_id %}
           <form method="post" action="/dashboard/strategy-lab/decide" class="mt-2 flex gap-2">
             <input type="hidden" name="strategy_id" value="{{ it.strategy_id }}">
@@ -199,6 +82,21 @@
             {% endfor %}
           </form>
           {% endif %}
+
+          {# ── raw allowed/blocked actions + IDs tucked away ── #}
+          <details class="group">
+            <summary class="list-none cursor-pointer select-none flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-400 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+              Technical details
+            </summary>
+            <div class="mt-1.5 space-y-0.5 text-[11px] text-zinc-500 pl-1">
+              <div>allow: {{ (it.allowed_actions or [])|join(", ") or "—" }}</div>
+              <div class="text-rose-300/70">blocked: {{ (it.blocked_actions or [])|join(", ") or "—" }}</div>
+              {% if it.strategy_id %}<div class="font-mono">strategy_id: {{ it.strategy_id }}</div>{% endif %}
+              {% if it.id %}<div class="font-mono">id: {{ it.id }}</div>{% endif %}
+              <div class="font-mono text-zinc-600">source: {{ src }}</div>
+            </div>
+          </details>
         </div>{% endfor %}
       </div>
     </div>
@@ -206,227 +104,452 @@
   </section>
   {% endif %}
 
-  {# ── Broker-aware side-panel ──────────────────────────────────────────── #}
-  {% if broker_aware and broker_aware.holdings_source %}
-  <section aria-label="Broker-aware portfolio">
-    {{ ui.section_header("Broker-Aware Portfolio", "read-only side-panel · never feeds decisions", "broker_aware_portfolio.json") }}
-    <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 text-sm text-zinc-300">
-      Source: <span class="font-mono">{{ broker_aware.holdings_source }}</span>
-      {% if broker_aware.degraded_mode %}<span class="text-amber-400">· degraded (no live prices)</span>{% endif %}
-      {% if broker_aware.cash_drag is not none %} · cash drag {{ "%.1f"|format((broker_aware.cash_drag or 0)*100) }}%{% endif %}
-    </div>
-  </section>
-  {% endif %}
-
-  {# ── Portfolio backtest leaderboard (beat-the-S&P-500 objective) ──────── #}
-  {% if backtest and backtest.available %}
-  <section aria-label="Portfolio backtest">
-    {{ ui.section_header("Backtest — Excess vs S&P 500", "sandbox · observe-only · objective: beat SPY", "portfolio_backtest.json") }}
-    <p class="text-[11px] text-zinc-600 mb-2">Headline window: {{ backtest.headline_window }} · ranked by excess return vs SPY.</p>
-    <div class="overflow-x-auto rounded-xl border border-zinc-800">
-      <table class="w-full text-sm border-collapse">
-        <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
-          <th class="py-2.5 px-4">Tactic</th><th class="py-2.5 px-4">Policy</th>
-          <th class="py-2.5 px-4 text-right">Excess vs SPY</th><th class="py-2.5 px-4 text-right">CAGR</th>
-          <th class="py-2.5 px-4 text-right">Max DD</th><th class="py-2.5 px-4 text-right">Sharpe</th>
-          <th class="py-2.5 px-4 text-right">Final $ (DCA)</th></tr></thead>
-        <tbody class="divide-y divide-zinc-800">
-          {% for r in backtest.leaderboard %}
-          <tr class="hover:bg-zinc-900/50">
-            <td class="py-2.5 px-4 text-zinc-100">{{ r.name }}</td>
-            <td class="py-2.5 px-4 text-zinc-400">{{ r.policy }}</td>
-            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (r.excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.2f"|format((r.excess_vs_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%+.2f"|format((r.cagr or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.2f"|format((r.max_drawdown or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(r.sharpe or 0) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">${{ "{:,.0f}".format(r.final_balance_dca or 0) }}</td>
-          </tr>{% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="text-[11px] text-zinc-600 mt-2">Historical simulation, observe-only. Not a trade recommendation or a forecast.</p>
-  </section>
-  {% endif %}
-
-  {# ── Research Strategy Lab — master leaderboard ───────────────────────── #}
-  {% if strategy_lab and strategy_lab.available %}
-  <section aria-label="Research strategy lab">
-    {{ ui.section_header("Research Strategy Lab", "ranked by master score · academic-backed · OOS-validated", "strategy_leaderboard.json") }}
-    <p class="text-[11px] text-zinc-600 mb-2">Objective: beat the S&P 500 (after-cost, risk-adjusted). {{ strategy_lab.tactic_count }} strategies. Observe-only — not a trade recommendation.</p>
-    <div class="overflow-x-auto rounded-xl border border-zinc-800">
-      <table class="w-full text-sm border-collapse">
-        <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
-          <th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">Strategy</th>
-          <th class="py-2.5 px-4 text-right">Score</th><th class="py-2.5 px-4 text-right">Excess vs SPY</th>
-          <th class="py-2.5 px-4 text-right">Beats SPY</th><th class="py-2.5 px-4 text-right">Worst DD</th>
-          <th class="py-2.5 px-4">OOS</th></tr></thead>
-        <tbody class="divide-y divide-zinc-800">
-          {% for r in strategy_lab.rows %}
-          <tr class="hover:bg-zinc-900/50" title="{{ r.academic_basis }}">
-            <td class="py-2.5 px-4 text-zinc-500">{{ loop.index }}</td>
-            <td class="py-2.5 px-4 text-zinc-100">{{ r.name }}{% if r.approximate %} <span class="text-amber-400" title="approximate static stand-in">*</span>{% endif %}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(r.strategy_score or 0) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (r.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((r.mean_excess_vs_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((r.prob_beat_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((r.worst_max_drawdown or 0)*100) }}%</td>
-            <td class="py-2.5 px-4">
-              {% if r.still_works_oos is sameas true %}<span class="text-emerald-400 text-xs">OOS ✓</span>
-              {% elif r.still_works_oos is sameas false %}<span class="text-rose-400 text-xs" title="failed walk-forward out-of-sample">OOS ✗</span>
-              {% else %}<span class="text-zinc-600 text-xs">—</span>{% endif %}
-            </td>
-          </tr>{% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="text-[11px] text-zinc-600 mt-2">* approximate stand-in · OOS ✗ = overfit in walk-forward (ranked down). Hover a row for its academic basis. Sandbox research only.</p>
-  </section>
-  {% endif %}
-
-  {# ── Crowd + Sentiment Comparison ────────────────────────────────────── #}
-  {% set cc = strategy_lab.crowd_comparison if strategy_lab and strategy_lab.available else none %}
-  {% if cc and cc.available %}
-  <section aria-label="Crowd and sentiment comparison">
-    {{ ui.section_header("Crowd + Sentiment Comparison", "identical-input variants · measure incremental signal value", "strategy_leaderboard.json") }}
-    <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
-      Three variants built from the same anchor portfolio and price panel. Differences isolate the
-      value of proxy crowd-state signals and FinBERT sentiment independently.
-      Sandbox only — never feeds <span class="font-mono">decision_plan.json</span>.
-    </div>
-
-    {# Comparison table #}
-    <div class="overflow-x-auto rounded-xl border border-zinc-800 mt-3">
-      <table class="w-full text-sm border-collapse">
-        <thead>
-          <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
-            <th class="py-2.5 px-4">Variant</th>
-            <th class="py-2.5 px-4 text-right">Score</th>
-            <th class="py-2.5 px-4 text-right">Excess vs SPY</th>
-            <th class="py-2.5 px-4 text-right">Beats SPY</th>
-            <th class="py-2.5 px-4 text-right">Worst DD</th>
-            <th class="py-2.5 px-4 text-right">Δ score vs anchor</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-zinc-800">
-          {# Anchor row #}
-          {% if cc.anchor %}
-          {% set a = cc.anchor %}
-          <tr class="bg-zinc-900/30">
-            <td class="py-2.5 px-4">
-              <span class="text-zinc-100 font-medium">{{ a.name }}</span>
-              <span class="ml-2 text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">anchor</span>
-            </td>
-            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(a.strategy_score or 0) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (a.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((a.mean_excess_vs_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((a.prob_beat_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((a.worst_max_drawdown or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right text-zinc-600">—</td>
-          </tr>
-          {% endif %}
-
-          {# Crowd variant rows #}
-          {% for v in cc.variants %}
-          {% set delta = (v.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
-          <tr class="hover:bg-zinc-900/50">
-            <td class="py-2.5 px-4">
-              <span class="text-zinc-100">{{ v.name }}</span>
-              {% if v.approximate %}<span class="text-amber-400 ml-1" title="proxy crowd states from price/volume">*</span>{% endif %}
-            </td>
-            <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(v.strategy_score or 0) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (v.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((v.mean_excess_vs_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((v.prob_beat_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((v.worst_max_drawdown or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-300' if delta >= 0 else 'text-rose-300' }}{% else %}text-zinc-600{% endif %}">
-              {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-
-          {# Sentiment diagnostic row (outside primary leaderboard) #}
-          {% if cc.sentiment_diagnostic %}
-          {% set sd = cc.sentiment_diagnostic %}
-          {% set delta = (sd.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
-          <tr class="hover:bg-zinc-900/50 border-t border-dashed border-zinc-700">
-            <td class="py-2.5 px-4">
-              <span class="text-zinc-400">{{ sd.name }}</span>
-              <span class="ml-2 text-[10px] bg-sky-900/60 text-sky-300 rounded px-1.5 py-0.5">diagnostic</span>
-            </td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.3f"|format(sd.strategy_score or 0) }}</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.1f"|format((sd.mean_excess_vs_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.0f"|format((sd.prob_beat_spy or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.1f"|format((sd.worst_max_drawdown or 0)*100) }}%</td>
-            <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-400' if delta >= 0 else 'text-rose-400' }}{% else %}text-zinc-600{% endif %} text-xs">
-              {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
-            </td>
-          </tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
-
-    {# By-window breakdown for crowd variants #}
-    {% if cc.variants %}
-    <details class="mt-3">
-      <summary class="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 select-none">
-        Per-window breakdown
-      </summary>
-      <div class="mt-2 space-y-3">
-        {% for v in cc.variants %}
-        {% if v.by_window %}
-        <div>
-          <div class="text-xs text-zinc-400 font-medium mb-1.5">{{ v.name }}</div>
-          <div class="overflow-x-auto rounded-lg border border-zinc-800">
-            <table class="w-full text-xs border-collapse">
-              <thead><tr class="bg-zinc-900/60 text-zinc-600 uppercase tracking-wide text-left">
-                <th class="py-1.5 px-3">Window</th>
-                <th class="py-1.5 px-3 text-right">Excess vs SPY</th>
-                <th class="py-1.5 px-3 text-right">CAGR</th>
-                <th class="py-1.5 px-3 text-right">Max DD</th>
-              </tr></thead>
-              <tbody class="divide-y divide-zinc-800/60">
-                {% for w in v.by_window %}
-                <tr>
-                  <td class="py-1.5 px-3 font-mono text-zinc-400">{{ w.window }}</td>
-                  <td class="py-1.5 px-3 text-right font-mono {{ 'text-emerald-300' if (w.excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((w.excess_vs_spy or 0)*100) }}%</td>
-                  <td class="py-1.5 px-3 text-right font-mono text-zinc-300">{{ "%+.1f"|format((w.cagr or 0)*100) }}%</td>
-                  <td class="py-1.5 px-3 text-right font-mono text-zinc-400">{{ "%.1f"|format((w.max_drawdown or 0)*100) }}%</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+  {# ── 3. Opportunity radar — compact candidate summary ────────────────── #}
+  {% if radar %}
+  <section aria-label="Opportunity radar">
+    {{ ui.section_header("Opportunity Radar", "sandbox — review only", "opportunity_radar.json") }}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for o in radar %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="font-mono font-semibold text-zinc-100">{{ o.candidate }}</span>
+          {{ ui.badge("blue" if o.final_status in ("QUALIFIED","APPROVED_WATCHLIST_REVIEW") else "gray", o.final_status) }}
         </div>
+        <div class="text-xs text-zinc-500">{{ o.theme or o.candidate_type }}</div>
+        <div class="text-xs text-zinc-400 font-mono">opp {{ "%.2f"|format(o.opportunity_score or 0) }} · boom {{ "%.2f"|format(o.boom_score or 0) }} · risk {{ "%.2f"|format(o.risk_score or 0) }}</div>
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ── 4. Research summary — top headline findings (full leaderboard below) #}
+  {% if strategy_lab and strategy_lab.available %}
+  <section aria-label="Research summary">
+    {{ ui.section_header("Research summary", "top research strategies by master score — full leaderboard in Details & evidence", "strategy_leaderboard.json") }}
+    <p class="text-[11px] text-zinc-600 mb-2">Objective: beat the S&P 500 (after-cost, risk-adjusted). {{ strategy_lab.tactic_count }} strategies. Observe-only — not a trade recommendation.</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for r in strategy_lab.rows[:3] %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-zinc-100 font-medium truncate" title="{{ r.academic_basis }}">{{ loop.index }}. {{ r.name }}{% if r.approximate %} <span class="text-amber-400" title="approximate static stand-in">*</span>{% endif %}</span>
+          <span class="font-mono text-emerald-300">{{ "%+.3f"|format(r.strategy_score or 0) }}</span>
+        </div>
+        <div class="text-xs font-mono {{ 'text-emerald-300' if (r.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">excess vs SPY {{ "%+.1f"|format((r.mean_excess_vs_spy or 0)*100) }}%</div>
+        <div class="text-xs text-zinc-500">beats SPY {{ "%.1f"|format((r.prob_beat_spy or 0)*100) }}% ·
+          {% if r.still_works_oos is sameas true %}<span class="text-emerald-400">OOS ✓</span>
+          {% elif r.still_works_oos is sameas false %}<span class="text-rose-400" title="failed walk-forward out-of-sample">OOS ✗</span>
+          {% else %}<span class="text-zinc-600">OOS —</span>{% endif %}
+        </div>
+      </div>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ── 5. Details & evidence — collapsed disclosures ───────────────────── #}
+  <section aria-label="Details and evidence" class="space-y-3">
+    {{ ui.section_header("Details & evidence", "expand any panel for the full simulation, comparison, and backlog detail", "") }}
+
+    {# ---- Simulation graphs ---- #}
+    {% set sc = simulation_charts %}
+    {% if sc %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Simulation graphs
+        </span>
+        <span class="text-xs text-zinc-500 text-right">{% if sc.available %}visual backtest evidence — sandbox only{% else %}not available yet{% endif %}</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60 space-y-4">
+        {{ ui.section_header("Simulation Graphs", "visual backtest evidence — sandbox only", "simulation_charts.json") }}
+
+        <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+          Simulation-only. These charts do not create trades, rebalance instructions, or official
+          advisory actions. Official advisory actions come only from <span class="font-mono">decision_plan.json</span>.
+        </div>
+
+        {% if not sc.available %}
+          {{ ui.empty_state("Simulation charts are not available yet",
+                            sc.empty_message or "Run the simulation/backtest pipeline to generate outputs/latest/simulation_charts.json.") }}
+        {% else %}
+          {% if sc.stale_message %}
+          <div class="rounded-lg bg-amber-500/10 border border-amber-500/25 px-3 py-2 text-xs text-amber-200">{{ sc.stale_message }}</div>
+          {% endif %}
+          {% if sc.limited_message %}
+          <div class="rounded-lg bg-zinc-800/60 border border-zinc-700 px-3 py-2 text-xs text-zinc-400">{{ sc.limited_message }}</div>
+          {% endif %}
+
+          {% if sc.summary %}
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {% for s in sc.summary %}
+            <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+              <span class="absolute left-0 top-0 bottom-0 w-1 {{ ui.sev_rail(s.severity) }}"></span>
+              <div class="text-[11px] uppercase tracking-wide text-zinc-500 pl-1.5">{{ s.title }}</div>
+              <div class="flex items-baseline gap-2 pl-1.5">
+                <span class="text-lg font-semibold text-zinc-100">{{ s.value_label }}</span>
+                {% if s.strategy %}<span class="text-xs text-zinc-400 truncate" title="{{ s.strategy }}">{{ s.strategy }}</span>{% endif %}
+              </div>
+              {% if s.plain_english %}<p class="text-[11px] text-zinc-500 leading-snug pl-1.5">{{ s.plain_english }}</p>{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {# Chart grid — stacks on mobile, two-up on desktop #}
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {% for key in sc.chart_order %}
+              {% if sc.charts.get(key) %}{{ charts.chart_card(sc.charts[key], sc.source_files) }}{% endif %}
+            {% endfor %}
+          </div>
+
+          {% if sc.generated_at %}
+          <div class="text-[11px] text-zinc-600">Simulation charts generated {{ sc.generated_at | human_time }}.</div>
+          {% endif %}
         {% endif %}
-        {% endfor %}
       </div>
     </details>
     {% endif %}
 
-    <p class="text-[11px] text-zinc-600 mt-2">
-      * proxy crowd states derived from price/volume (look-ahead-safe) — live crowd states activate once crowd radar accumulates observation history.
-      Diagnostic row is outside the ranked leaderboard and isolates sentiment-only signal (no crowd state logic).
-      Sandbox research only.
-    </p>
-  </section>
-  {% endif %}
-
-  {# ── Forward projection (Monte-Carlo) ─────────────────────────────────── #}
-  {% if projection and projection.available %}
-  <section aria-label="Forward projection">
-    {{ ui.section_header("Forward Projection", "Monte-Carlo · illustration, not a forecast", "portfolio_projection.json") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {% for r in projection.rows %}
-      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
-        <div class="flex items-center justify-between">
-          <span class="text-zinc-100 font-medium">{{ r.name }}</span>
-          <span class="text-xs text-zinc-500">{{ r.horizon_label }}</span>
+    {# ---- Strategy comparison ---- #}
+    {% if strategies %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Strategy comparison
+        </span>
+        <span class="text-xs text-zinc-500 text-right">{{ strategies|length }} strategies · risk-adjusted, after-tax</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Strategy Comparison", "risk-adjusted, after-tax framing", "strategy_comparison.json") }}
+        <div class="hidden md:block overflow-x-auto rounded-xl border border-zinc-800">
+          <table class="w-full text-sm border-collapse">
+            <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+              <th class="py-2.5 px-4">Strategy</th><th class="py-2.5 px-4 text-right">Rank</th>
+              <th class="py-2.5 px-4 text-right">Objective fit</th><th class="py-2.5 px-4 text-right">Risk</th>
+              <th class="py-2.5 px-4 text-right">Max drawdown</th><th class="py-2.5 px-4 text-right">Tax efficiency</th>
+              <th class="py-2.5 px-4 text-right">Opp. capture</th></tr></thead>
+            <tbody class="divide-y divide-zinc-800">
+              {% for m in strategies %}
+              <tr class="hover:bg-zinc-900/50">
+                <td class="py-2.5 px-4 text-zinc-100">{{ m.name }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_objective_fit) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.expected_risk_level) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.max_drawdown_estimate) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.tax_efficiency) }}{% if m.after_tax_degraded %} <span class="text-amber-400" title="no tax-lot data">*</span>{% endif %}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(m.opportunity_capture_score) }}</td>
+              </tr>{% endfor %}
+            </tbody>
+          </table>
         </div>
-        <div class="text-xs text-zinc-400 font-mono">p50 ${{ "{:,.0f}".format(r.p50_balance or 0) }} · p5 ${{ "{:,.0f}".format(r.p5_balance or 0) }} · p95 ${{ "{:,.0f}".format(r.p95_balance or 0) }}</div>
-        <div class="text-xs text-zinc-500">P(reach target) {{ "%.0f"|format((r.prob_reach_target or 0)*100) }}% · p95 maxDD {{ "%.0f"|format((r.max_drawdown_p95 or 0)*100) }}%</div>
-      </div>{% endfor %}
-    </div>
-    <p class="text-[11px] text-zinc-600 mt-2">Probabilistic illustration from historical resampling — past ≠ future; not a forecast or guarantee.</p>
+        <div class="md:hidden space-y-3">
+          {% for m in strategies %}
+          <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3">
+            <div class="flex items-center justify-between"><span class="text-zinc-100 font-medium">{{ m.name }}</span>
+              <span class="font-mono text-emerald-300">{{ "%.3f"|format(m.final_strategy_rank) }}</span></div>
+            <div class="text-xs text-zinc-500 mt-1">risk {{ "%.2f"|format(m.expected_risk_level) }} · tax eff. {{ "%.2f"|format(m.tax_efficiency) }} · max drawdown {{ "%.2f"|format(m.max_drawdown_estimate) }}</div>
+          </div>{% endfor %}
+        </div>
+        <p class="text-[11px] text-zinc-600 mt-2">* after-tax estimate degraded (no broker cost-basis/tax-lot data).</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Portfolio backtest ---- #}
+    {% if backtest and backtest.available %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Portfolio backtest
+        </span>
+        <span class="text-xs text-zinc-500 text-right">excess vs S&P 500 · headline {{ backtest.headline_window }}</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Backtest — Excess vs S&P 500", "sandbox · observe-only · objective: beat SPY", "portfolio_backtest.json") }}
+        <p class="text-[11px] text-zinc-600 mb-2">Headline window: {{ backtest.headline_window }} · ranked by excess return vs SPY.</p>
+        <div class="overflow-x-auto rounded-xl border border-zinc-800">
+          <table class="w-full text-sm border-collapse">
+            <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+              <th class="py-2.5 px-4">Tactic</th><th class="py-2.5 px-4">Policy</th>
+              <th class="py-2.5 px-4 text-right">Excess vs SPY</th><th class="py-2.5 px-4 text-right">CAGR</th>
+              <th class="py-2.5 px-4 text-right">Max drawdown</th><th class="py-2.5 px-4 text-right">Sharpe</th>
+              <th class="py-2.5 px-4 text-right">Final $ (DCA)</th></tr></thead>
+            <tbody class="divide-y divide-zinc-800">
+              {% for r in backtest.leaderboard %}
+              <tr class="hover:bg-zinc-900/50">
+                <td class="py-2.5 px-4 text-zinc-100">{{ r.name }}</td>
+                <td class="py-2.5 px-4 text-zinc-400">{{ r.policy }}</td>
+                <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (r.excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.2f"|format((r.excess_vs_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%+.2f"|format((r.cagr or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.2f"|format((r.max_drawdown or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">${{ "{:,.0f}".format(r.final_balance_dca or 0) }}</td>
+              </tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[11px] text-zinc-600 mt-2">Historical simulation, observe-only. Not a trade recommendation or a forecast.</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Research strategy leaderboard (full) ---- #}
+    {% if strategy_lab and strategy_lab.available %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Research strategy leaderboard
+        </span>
+        <span class="text-xs text-zinc-500 text-right">{{ strategy_lab.tactic_count }} strategies · academic-backed · OOS-validated</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Research Strategy Lab", "ranked by master score · academic-backed · OOS-validated", "strategy_leaderboard.json") }}
+        <p class="text-[11px] text-zinc-600 mb-2">Objective: beat the S&P 500 (after-cost, risk-adjusted). {{ strategy_lab.tactic_count }} strategies. Observe-only — not a trade recommendation.</p>
+        <div class="overflow-x-auto rounded-xl border border-zinc-800">
+          <table class="w-full text-sm border-collapse">
+            <thead><tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+              <th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">Strategy</th>
+              <th class="py-2.5 px-4 text-right">Score</th><th class="py-2.5 px-4 text-right">Excess vs SPY</th>
+              <th class="py-2.5 px-4 text-right">Beats SPY</th><th class="py-2.5 px-4 text-right">Worst drawdown</th>
+              <th class="py-2.5 px-4">OOS</th></tr></thead>
+            <tbody class="divide-y divide-zinc-800">
+              {% for r in strategy_lab.rows %}
+              <tr class="hover:bg-zinc-900/50" title="{{ r.academic_basis }}">
+                <td class="py-2.5 px-4 text-zinc-500">{{ loop.index }}</td>
+                <td class="py-2.5 px-4 text-zinc-100">{{ r.name }}{% if r.approximate %} <span class="text-amber-400" title="approximate static stand-in">*</span>{% endif %}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(r.strategy_score or 0) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (r.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((r.mean_excess_vs_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((r.prob_beat_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((r.worst_max_drawdown or 0)*100) }}%</td>
+                <td class="py-2.5 px-4">
+                  {% if r.still_works_oos is sameas true %}<span class="text-emerald-400 text-xs">OOS ✓</span>
+                  {% elif r.still_works_oos is sameas false %}<span class="text-rose-400 text-xs" title="failed walk-forward out-of-sample">OOS ✗</span>
+                  {% else %}<span class="text-zinc-600 text-xs">—</span>{% endif %}
+                </td>
+              </tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[11px] text-zinc-600 mt-2">* approximate stand-in · OOS ✗ = overfit in walk-forward (ranked down). Hover a row for its academic basis. Sandbox research only.</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Crowd + sentiment comparison ---- #}
+    {% set cc = strategy_lab.crowd_comparison if strategy_lab and strategy_lab.available else none %}
+    {% if cc and cc.available %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Crowd and sentiment comparison
+        </span>
+        <span class="text-xs text-zinc-500 text-right">isolates incremental crowd + sentiment signal value</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Crowd + Sentiment Comparison", "identical-input variants · measure incremental signal value", "strategy_leaderboard.json") }}
+        <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
+          Three variants built from the same anchor portfolio and price panel. Differences isolate the
+          value of proxy crowd-state signals and FinBERT sentiment independently.
+          Sandbox only — never feeds <span class="font-mono">decision_plan.json</span>.
+        </div>
+
+        {# Comparison table #}
+        <div class="overflow-x-auto rounded-xl border border-zinc-800 mt-3">
+          <table class="w-full text-sm border-collapse">
+            <thead>
+              <tr class="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide text-left">
+                <th class="py-2.5 px-4">Variant</th>
+                <th class="py-2.5 px-4 text-right">Score</th>
+                <th class="py-2.5 px-4 text-right">Excess vs SPY</th>
+                <th class="py-2.5 px-4 text-right">Beats SPY</th>
+                <th class="py-2.5 px-4 text-right">Worst drawdown</th>
+                <th class="py-2.5 px-4 text-right">Δ score vs anchor</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+              {# Anchor row #}
+              {% if cc.anchor %}
+              {% set a = cc.anchor %}
+              <tr class="bg-zinc-900/30">
+                <td class="py-2.5 px-4">
+                  <span class="text-zinc-100 font-medium">{{ a.name }}</span>
+                  <span class="ml-2 text-[10px] bg-zinc-700 text-zinc-300 rounded px-1.5 py-0.5">anchor</span>
+                </td>
+                <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(a.strategy_score or 0) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (a.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((a.mean_excess_vs_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((a.prob_beat_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((a.worst_max_drawdown or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right text-zinc-600">—</td>
+              </tr>
+              {% endif %}
+
+              {# Crowd variant rows #}
+              {% for v in cc.variants %}
+              {% set delta = (v.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
+              <tr class="hover:bg-zinc-900/50">
+                <td class="py-2.5 px-4">
+                  <span class="text-zinc-100">{{ v.name }}</span>
+                  {% if v.approximate %}<span class="text-amber-400 ml-1" title="proxy crowd states from price/volume">*</span>{% endif %}
+                </td>
+                <td class="py-2.5 px-4 text-right font-mono text-emerald-300">{{ "%+.3f"|format(v.strategy_score or 0) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono {{ 'text-emerald-300' if (v.mean_excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((v.mean_excess_vs_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-300">{{ "%.0f"|format((v.prob_beat_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%.1f"|format((v.worst_max_drawdown or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-300' if delta >= 0 else 'text-rose-300' }}{% else %}text-zinc-600{% endif %}">
+                  {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+
+              {# Sentiment diagnostic row (outside primary leaderboard) #}
+              {% if cc.sentiment_diagnostic %}
+              {% set sd = cc.sentiment_diagnostic %}
+              {% set delta = (sd.strategy_score or 0) - (cc.anchor.strategy_score or 0) if cc.anchor else none %}
+              <tr class="hover:bg-zinc-900/50 border-t border-dashed border-zinc-700">
+                <td class="py-2.5 px-4">
+                  <span class="text-zinc-400">{{ sd.name }}</span>
+                  <span class="ml-2 text-[10px] bg-sky-900/60 text-sky-300 rounded px-1.5 py-0.5">diagnostic</span>
+                </td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.3f"|format(sd.strategy_score or 0) }}</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-400">{{ "%+.1f"|format((sd.mean_excess_vs_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.0f"|format((sd.prob_beat_spy or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono text-zinc-500">{{ "%.1f"|format((sd.worst_max_drawdown or 0)*100) }}%</td>
+                <td class="py-2.5 px-4 text-right font-mono {% if delta is not none %}{{ 'text-emerald-400' if delta >= 0 else 'text-rose-400' }}{% else %}text-zinc-600{% endif %} text-xs">
+                  {% if delta is not none %}{{ "%+.3f"|format(delta) }}{% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+
+        {# By-window breakdown for crowd variants #}
+        {% if cc.variants %}
+        <details class="mt-3">
+          <summary class="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 select-none">
+            Per-window breakdown
+          </summary>
+          <div class="mt-2 space-y-3">
+            {% for v in cc.variants %}
+            {% if v.by_window %}
+            <div>
+              <div class="text-xs text-zinc-400 font-medium mb-1.5">{{ v.name }}</div>
+              <div class="overflow-x-auto rounded-lg border border-zinc-800">
+                <table class="w-full text-xs border-collapse">
+                  <thead><tr class="bg-zinc-900/60 text-zinc-600 uppercase tracking-wide text-left">
+                    <th class="py-1.5 px-3">Window</th>
+                    <th class="py-1.5 px-3 text-right">Excess vs SPY</th>
+                    <th class="py-1.5 px-3 text-right">CAGR</th>
+                    <th class="py-1.5 px-3 text-right">Max drawdown</th>
+                  </tr></thead>
+                  <tbody class="divide-y divide-zinc-800/60">
+                    {% for w in v.by_window %}
+                    <tr>
+                      <td class="py-1.5 px-3 font-mono text-zinc-400">{{ w.window }}</td>
+                      <td class="py-1.5 px-3 text-right font-mono {{ 'text-emerald-300' if (w.excess_vs_spy or 0) >= 0 else 'text-rose-300' }}">{{ "%+.1f"|format((w.excess_vs_spy or 0)*100) }}%</td>
+                      <td class="py-1.5 px-3 text-right font-mono text-zinc-300">{{ "%+.1f"|format((w.cagr or 0)*100) }}%</td>
+                      <td class="py-1.5 px-3 text-right font-mono text-zinc-400">{{ "%.1f"|format((w.max_drawdown or 0)*100) }}%</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+
+        <p class="text-[11px] text-zinc-600 mt-2">
+          * proxy crowd states derived from price/volume (look-ahead-safe) — live crowd states activate once crowd radar accumulates observation history.
+          Diagnostic row is outside the ranked leaderboard and isolates sentiment-only signal (no crowd state logic).
+          Sandbox research only.
+        </p>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Forward projection (Monte-Carlo) ---- #}
+    {% if projection and projection.available %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Forward projection
+        </span>
+        <span class="text-xs text-zinc-500 text-right">Monte-Carlo · illustration, not a forecast</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Forward Projection", "Monte-Carlo · illustration, not a forecast", "portfolio_projection.json") }}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {% for r in projection.rows %}
+          <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-zinc-100 font-medium">{{ r.name }}</span>
+              <span class="text-xs text-zinc-500">{{ r.horizon_label }}</span>
+            </div>
+            <div class="text-xs text-zinc-400 font-mono">p50 ${{ "{:,.0f}".format(r.p50_balance or 0) }} · p5 ${{ "{:,.0f}".format(r.p5_balance or 0) }} · p95 ${{ "{:,.0f}".format(r.p95_balance or 0) }}</div>
+            <div class="text-xs text-zinc-500">P(reach target) {{ "%.1f"|format((r.prob_reach_target or 0)*100) }}% · p95 max drawdown {{ "%.1f"|format((r.max_drawdown_p95 or 0)*100) }}%</div>
+          </div>{% endfor %}
+        </div>
+        <p class="text-[11px] text-zinc-600 mt-2">Probabilistic illustration from historical resampling — past ≠ future; not a forecast or guarantee.</p>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Broker-aware portfolio ---- #}
+    {% if broker_aware and broker_aware.holdings_source %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Broker-aware portfolio
+        </span>
+        <span class="text-xs text-zinc-500 text-right">read-only · source {{ broker_aware.holdings_source }}</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("Broker-Aware Portfolio", "read-only side-panel · never feeds decisions", "broker_aware_portfolio.json") }}
+        <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 text-sm text-zinc-300">
+          Source: <span class="font-mono">{{ broker_aware.holdings_source }}</span>
+          {% if broker_aware.degraded_mode %}<span class="text-amber-400">· degraded (no live prices)</span>{% endif %}
+          {% if broker_aware.cash_drag is not none %} · cash drag {{ "%.1f"|format((broker_aware.cash_drag or 0)*100) }}%{% endif %}
+        </div>
+      </div>
+    </details>
+    {% endif %}
+
+    {# ---- Full improvement backlog ---- #}
+    {% if improvement_ideas %}
+    <details class="group bg-zinc-900/40 rounded-xl border border-zinc-800">
+      <summary class="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between gap-3 hover:bg-zinc-900/70 rounded-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-500">
+        <span class="flex items-center gap-2 text-sm font-medium text-zinc-200">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 text-zinc-500 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+          Full improvement backlog
+        </span>
+        <span class="text-xs text-zinc-500 text-right">{{ improvement_ideas|length }} ideas · engineering/ops, not market advice</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 border-t border-zinc-800/60">
+        {{ ui.section_header("System Improvement Backlog", "engineering/ops — not market advice", "system_improvement_ideas.json") }}
+        <div class="space-y-2">
+          {% for i in improvement_ideas %}
+          <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2.5">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <span class="text-zinc-200 text-sm">{{ i.title }}</span>
+              {{ ui.badge("blue", i.category) }}
+              <span class="text-xs text-zinc-500 font-mono ml-auto">{{ i.priority }} · {{ "%.2f"|format(i.final_rank_score) }}</span>
+            </div>
+            {% if i.summary %}<p class="text-xs text-zinc-500 mt-1">{{ i.summary }}</p>{% endif %}
+          </div>{% endfor %}
+        </div>
+      </div>
+    </details>
+    {% endif %}
   </section>
-  {% endif %}
 
   {% if not cards %}
   {{ ui.empty_state("Strategy Lab not yet produced",

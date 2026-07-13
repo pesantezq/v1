@@ -11,113 +11,154 @@
      class="space-y-7">
 
   {{ ui.page_header("Governance",
-                    "Simulation lane (active) · Production lane (human-gated) · daily AI review &le; $0.50",
+                    "Human-gated production review — approve or reject one promotion proposal at a time",
                     "/dashboard/governance", "dashboard-governance-content") }}
 
-  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 text-xs text-sky-200">
-    <span class="font-semibold">Two-lane model.</span>
-    The <span class="font-semibold">Simulation / Test lane is ACTIVE</span> &mdash; experiments may change
-    simulation outputs once their tests pass. <span class="font-semibold">Production changes only after a
-    human approves a promotion proposal.</span> AI/product review may recommend readiness but can never
-    approve production by itself.
-  </div>
-
-  {# ── Lane + budget summary cards ─────────────────────────────────────── #}
-  {% if cards %}
-  <section aria-label="Governance summary">
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
-    </div>
-  </section>
-  {% endif %}
-
-  {# ── AI review budget strip ──────────────────────────────────────────── #}
-  <section aria-label="AI review budget">
-    {{ ui.section_header("Daily AI / Product Review", "one consolidated advisory + watchlist call per day",
-                         "daily_ai_review_result.json") }}
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-      {{ ui.hero_stat("Status", ai_review_status or "—",
+  {# One compact status strip — the whole governance state at a glance. Each
+     dimension's detail lives in the sections/disclosures below rather than being
+     repeated across parallel card + metric grids. #}
+  {% set _pending_n = pending_proposals | length %}
+  {% set _overlays_on = production_overlay_live and (production_overlay_live.watchlist or production_overlay_live.advisory) %}
+  <section aria-label="Governance status">
+    <div class="grid gap-3 grid-cols-2 lg:grid-cols-4 text-sm">
+      {{ ui.hero_stat("Simulation lane", ("Active" if simulation_lane_active else "Idle"),
+                      ("green" if simulation_lane_active else "gray"), "sandbox experiments") }}
+      {{ ui.hero_stat("Production overlays", ("On" if _overlays_on else "Off"),
+                      ("green" if _overlays_on else "gray"),
+                      ("watchlist + advisory live" if _overlays_on else "approved proposals not yet live")) }}
+      {{ ui.hero_stat("Pending decisions", _pending_n,
+                      ("yellow" if _pending_n else "green"),
+                      ("await human approval" if _pending_n else "nothing to review")) }}
+      {{ ui.hero_stat("AI review",
+                      "$%.2f / $%.2f"|format(ai_cost_today_usd or 0.0, ai_daily_cap_usd or 0.5),
                       ("yellow" if ai_review_deferred else ("green" if ai_review_status == "reviewed" else "gray")),
-                      ai_review_method or "") }}
-      {{ ui.hero_stat("Spent today", "$%.4f"|format(ai_cost_today_usd or 0.0), "gray",
-                      "method: " ~ (ai_review_method or "—")) }}
-      {{ ui.hero_stat("Daily cap", "$%.2f"|format(ai_daily_cap_usd or 0.5), "blue", "hard cap") }}
-      {{ ui.hero_stat("Remaining", "$%.4f"|format(ai_budget_remaining_usd or 0.0),
-                      ("green" if (ai_budget_remaining_usd or 0) > 0 else "red"),
-                      ("advisory " ~ advisory_candidates_reviewed ~ " + watchlist " ~ watchlist_candidates_reviewed ~ " reviewed")) }}
+                      (ai_review_status or "—")) }}
     </div>
-    {% if ai_review_deferred %}
-    <div class="mt-3 rounded-xl bg-amber-500/10 border border-amber-500/25 px-4 py-2 text-xs text-amber-200">
-      <span class="font-semibold">AI review deferred</span> &mdash; estimated cost exceeded the
-      ${{ "%.2f"|format(ai_daily_cap_usd or 0.5) }}/day cap; a deferred-review artifact was written instead.
-    </div>
-    {% endif %}
+    <p class="mt-2 text-xs text-zinc-500">
+      Simulation lane is active; production changes apply only after a human approves a proposal.
+      <span class="text-zinc-400">AI / product review can recommend readiness but never approves production.</span>
+    </p>
   </section>
 
-  {# ── Pending production proposals (human approval gate) ───────────────── #}
-  <section aria-label="Pending production proposals">
+  {# ── Pending production proposals — decision-first cards ──────────────── #}
+  <section aria-label="Pending production proposals" class="space-y-3">
     {{ ui.section_header("Pending Production Proposals", "await human approval — no production effect yet",
                          "pending_proposals.json") }}
     {% if pending_proposals %}
-    {% call ui.responsive_table() %}
-      <div class="overflow-x-auto"><table class="min-w-full text-sm">
-        <thead><tr class="text-left text-zinc-400">
-          <th class="py-1 pr-4">Proposal</th><th class="py-1 pr-4">Type</th>
-          <th class="py-1 pr-4">Symbol</th><th class="py-1 pr-4">Risk</th>
-          <th class="py-1 pr-4">Rollback</th><th class="py-1 pr-4">Action</th>
-        </tr></thead>
-        <tbody>
-        {% for p in pending_proposals %}
-          <tr class="border-t border-zinc-800">
-            <td class="py-1 pr-4 font-mono text-xs">{{ p.proposal_id }}</td>
-            <td class="py-1 pr-4">{{ p.proposal_type }}</td>
-            <td class="py-1 pr-4">{{ p.proposed_production_change.symbol or "—" }}</td>
-            <td class="py-1 pr-4 text-xs">{{ p.risk_summary }}</td>
-            <td class="py-1 pr-4 text-xs text-zinc-400">{{ p.rollback_plan }}</td>
-            <td class="py-1 pr-4">
-              <form method="post" action="/dashboard/governance/decide" class="flex gap-2">
-                <input type="hidden" name="proposal_id" value="{{ p.proposal_id }}">
-                <button type="submit" name="decision" value="approve"
-                  onclick="return confirm('Approve {{ p.proposal_id }}?')"
-                  class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">
-                  Approve
-                </button>
-                <button type="submit" name="decision" value="reject"
-                  onclick="return confirm('Reject {{ p.proposal_id }}?')"
-                  class="px-2 py-0.5 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">
-                  Reject
-                </button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table></div>
-    {% endcall %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {% for p in pending_proposals %}
+      {% set _sym = p.proposed_production_change.symbol or "—" %}
+      {% set _type = (p.proposal_type or "") | replace("_", " ") | title %}
+      <div class="relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 space-y-2">
+        <span class="absolute left-0 top-0 bottom-0 w-1 bg-amber-500/70"></span>
+        <div class="flex items-start justify-between gap-3 pl-1.5">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-mono text-sm font-semibold text-zinc-100">{{ _sym }}</span>
+              {{ ui.badge("yellow", "Needs decision") }}
+            </div>
+            <p class="text-xs text-zinc-400 mt-0.5">{{ _type }}{% if p.workflow %} &middot; {{ p.workflow }}{% endif %}</p>
+          </div>
+        </div>
+        {% if p.risk_summary %}<p class="text-sm text-zinc-300 leading-snug pl-1.5 line-clamp-2">{{ p.risk_summary }}</p>{% endif %}
+        <div class="pl-1.5">
+          <form method="post" action="/dashboard/governance/decide" class="flex gap-2">
+            <input type="hidden" name="proposal_id" value="{{ p.proposal_id }}">
+            <button type="submit" name="decision" value="approve"
+              onclick="return confirm('Approve {{ _sym }} {{ _type }} ({{ p.proposal_id }})?')"
+              class="px-3 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">Approve</button>
+            <button type="submit" name="decision" value="reject"
+              onclick="return confirm('Reject {{ _sym }} {{ _type }} ({{ p.proposal_id }})?')"
+              class="px-3 py-1 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">Reject</button>
+          </form>
+        </div>
+        <details class="group pl-1.5">
+          <summary class="list-none cursor-pointer select-none flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+            Details
+          </summary>
+          <dl class="mt-2 space-y-1.5 text-xs text-zinc-400">
+            <div><dt class="inline text-zinc-500">Proposal ID:</dt> <dd class="inline font-mono">{{ p.proposal_id }}</dd></div>
+            {% if p.created_at %}<div><dt class="inline text-zinc-500">Created:</dt> <dd class="inline font-mono">{{ p.created_at }}</dd></div>{% endif %}
+            {% if p.proposed_production_change %}<div><dt class="inline text-zinc-500">Proposed change:</dt> <dd class="inline font-mono">{{ p.proposed_production_change }}</dd></div>{% endif %}
+            {% if p.risk_summary %}<div><dt class="text-zinc-500">Risk summary:</dt><dd class="mt-0.5 text-zinc-300">{{ p.risk_summary }}</dd></div>{% endif %}
+            {% if p.rollback_plan %}<div><dt class="text-zinc-500">Rollback plan:</dt><dd class="mt-0.5 text-zinc-300">{{ p.rollback_plan }}</dd></div>{% endif %}
+            {% if p.evidence_refs %}<div><dt class="inline text-zinc-500">Evidence:</dt> <dd class="inline font-mono">{{ p.evidence_refs | join(", ") }}</dd></div>{% endif %}
+            {% if p.simulation_result_refs %}<div><dt class="inline text-zinc-500">Simulation:</dt> <dd class="inline font-mono">{{ p.simulation_result_refs | join(", ") }}</dd></div>{% endif %}
+          </dl>
+        </details>
+      </div>
+      {% endfor %}
+    </div>
     {% else %}
       {{ ui.all_clear("No pending proposals", "Nothing is awaiting human approval right now.") }}
     {% endif %}
   </section>
 
-  {# ── Approved / applied / rejected ───────────────────────────────────── #}
-  <section aria-label="Approved and rejected proposals">
+  {# ── Production decision summary + details ────────────────────────────── #}
+  <section aria-label="Production decisions" class="space-y-3">
     {{ ui.section_header("Production Decisions", "approved → applied · rejected", "approved_proposals.json") }}
     <div class="grid gap-3 sm:grid-cols-3 text-sm">
       {{ ui.hero_stat(labels.approved, approved_proposal_ids|length, "green", applied_count ~ " applied to production") }}
       {{ ui.hero_stat(labels.applied, applied_count, "green", "via approved overlays") }}
       {{ ui.hero_stat("Rejected", rejected_proposal_ids|length, "gray", "ignored by production") }}
     </div>
-    {% if production_overlay_live and (production_overlay_live.watchlist or production_overlay_live.advisory) %}
-    <div class="mt-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-4 py-2 text-xs text-emerald-200">
+
+    {# AI review details — raw precision + counts, secondary. #}
+    <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+      <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-2.5 text-sm text-zinc-300 hover:text-zinc-100">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        AI review details
+      </summary>
+      <dl class="px-4 pb-3 pt-1 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        <div><dt class="text-zinc-500">Spent today</dt><dd class="font-mono text-zinc-200">${{ "%.4f"|format(ai_cost_today_usd or 0.0) }}</dd></div>
+        <div><dt class="text-zinc-500">Daily cap</dt><dd class="font-mono text-zinc-200">${{ "%.2f"|format(ai_daily_cap_usd or 0.5) }}</dd></div>
+        <div><dt class="text-zinc-500">Remaining</dt><dd class="font-mono text-zinc-200">${{ "%.4f"|format(ai_budget_remaining_usd or 0.0) }}</dd></div>
+        <div><dt class="text-zinc-500">Method</dt><dd class="text-zinc-200">{{ ai_review_method or "—" }}</dd></div>
+        <div class="col-span-2 sm:col-span-4"><dt class="text-zinc-500">Reviewed</dt><dd class="text-zinc-200">advisory {{ advisory_candidates_reviewed }} + watchlist {{ watchlist_candidates_reviewed }}</dd></div>
+      </dl>
+      {% if ai_review_deferred %}
+      <p class="px-4 pb-3 text-xs text-amber-200">AI review deferred — estimated cost exceeded the ${{ "%.2f"|format(ai_daily_cap_usd or 0.5) }}/day cap; a deferred-review artifact was written instead.</p>
+      {% endif %}
+    </details>
+
+    {% if _overlays_on %}
+    <div class="rounded-xl bg-emerald-500/10 border border-emerald-500/25 px-4 py-2 text-xs text-emerald-200">
       <span class="font-semibold">Live production overlays ON</span>
       &mdash; watchlist: {{ production_overlay_live.watchlist }}, advisory: {{ production_overlay_live.advisory }}.
     </div>
     {% else %}
-    <div class="mt-3 rounded-xl bg-zinc-500/10 border border-zinc-700/40 px-4 py-2 text-xs text-zinc-400">
+    <div class="rounded-xl bg-zinc-500/10 border border-zinc-700/40 px-4 py-2 text-xs text-zinc-400">
       Production overlays are <span class="font-semibold">OFF</span> (default). Approved proposals are
       materialized into overlay artifacts; flipping the config flags is the final step to let the live
       watchlist/advisory loaders consume them.
     </div>
+    {% endif %}
+
+    {# Recent production decisions — read-only history from existing approval records. #}
+    {% if approval_records %}
+    <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+      <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-2.5 text-sm text-zinc-300 hover:text-zinc-100">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        Recent production decisions
+        <span class="text-xs font-normal text-zinc-500">&middot; read-only history</span>
+      </summary>
+      {% call ui.responsive_table() %}
+      <table class="min-w-full text-xs mt-1">
+        <thead><tr class="text-left text-zinc-500"><th class="py-1 pr-4">Proposal</th><th class="py-1 pr-4">Decision</th><th class="py-1 pr-4">Approver</th><th class="py-1 pr-4">When</th></tr></thead>
+        <tbody>
+        {% for r in approval_records[-12:] | reverse %}
+          <tr class="border-t border-zinc-800">
+            <td class="py-1 pr-4 font-mono">{{ r.proposal_id }}</td>
+            <td class="py-1 pr-4">{% if r.decision == "approve" %}{{ ui.badge("green", "approved") }}{% else %}{{ ui.badge("gray", r.decision) }}{% endif %}</td>
+            <td class="py-1 pr-4">{{ r.approver }}</td>
+            <td class="py-1 pr-4 font-mono text-zinc-400" title="{{ r.timestamp }}">{{ r.timestamp }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </details>
     {% endif %}
   </section>
 

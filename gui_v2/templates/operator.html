@@ -1,98 +1,207 @@
 {% extends "base.html" %}
 {% import "components/_ui.html" as ui %}
+{% block title %}Operator &mdash; StockBot{% endblock %}
+
+{# Compact work-order row — status + age primary; raw IDs / probe / skill demoted
+   into a per-row detail. Cancel form preserved verbatim (gated + confirmed +
+   audited): POST /dashboard/operator/cancel, work_order_id + required reason. #}
+{% macro wo_row(o, edit_enabled) -%}
+<div class="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 space-y-2">
+  <div class="flex items-center justify-between gap-3 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
+      {{ ui.badge(o.status, o.status) }}
+      {% if o.stale %}{{ ui.badge("amber", "stale") }}{% endif %}
+      <span class="text-xs text-zinc-400">{{ (o.age_hours ~ "h") if o.age_hours is not none else "age —" }}</span>
+    </div>
+    <a class="text-xs text-zinc-400 hover:text-emerald-400 underline" href="/dashboard/operator/report/{{ o.work_order_id }}">Report</a>
+  </div>
+  {% if o.cancellable and edit_enabled %}
+  <form method="post" action="/dashboard/operator/cancel" class="flex items-center gap-2 flex-wrap"
+        onsubmit="return confirm('Cancel {{ o.work_order_id }}? This is a terminal, audited action.');">
+    <input type="hidden" name="work_order_id" value="{{ o.work_order_id }}">
+    <input type="text" name="reason" required maxlength="280" placeholder="reason (required)"
+           class="flex-1 min-w-[8rem] bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs">
+    <button type="submit" class="text-rose-400 hover:text-rose-300 underline text-xs">Cancel</button>
+  </form>
+  {% endif %}
+  <details class="group">
+    <summary class="list-none cursor-pointer select-none flex items-center gap-1 text-[11px] text-zinc-600 hover:text-zinc-400">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Details
+    </summary>
+    <dl class="mt-1.5 space-y-1 text-[11px] text-zinc-400">
+      <div><dt class="inline text-zinc-500">Work order:</dt> <dd class="inline font-mono">{{ o.work_order_id }}</dd></div>
+      <div><dt class="inline text-zinc-500">Probe / skill:</dt> <dd class="inline font-mono">{{ o.probe_id or "—" }} / {{ o.skill_id or "—" }}</dd></div>
+    </dl>
+  </details>
+</div>
+{%- endmacro %}
+
 {% block content %}
-<h1 class="text-xl font-semibold mb-4">Operator Worker</h1>
+<div id="dashboard-operator-content" class="space-y-6">
 
-<div class="mb-4 rounded-md border px-3 py-2 text-sm
-  {{ 'border-emerald-700 text-emerald-300' if view.readiness.autonomous_enabled else 'border-zinc-700 text-zinc-400' }}">
-  Autonomous execution:
+  {{ ui.page_header("Operator Worker",
+                    "Human-triggered bounded operations — create, review, and cancel work orders",
+                    "/dashboard/operator", "dashboard-operator-content") }}
+
+  {# Flash — cancel/dispatch results redirect back here with ?msg=&level=. #}
+  {% if request.query_params.get("msg") %}
+  <div class="rounded-xl border px-4 py-2.5 text-sm
+    {{ 'border-rose-500/40 text-rose-300 bg-rose-500/10' if request.query_params.get('level')=='error'
+       else 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10' }}">
+    {{ request.query_params.get("msg") }}
+  </div>
+  {% endif %}
+
+  {# Top summary — the four operator headline metrics. #}
+  {% set _ready_sev = "green" if (view.readiness.overall_ready and view.readiness.overall_ready.split("/")[0] == view.readiness.overall_ready.split("/")[-1]) else "yellow" %}
+  <section aria-label="Operator summary" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {{ ui.hero_stat("Worker readiness", view.readiness.overall_ready ~ " gates", _ready_sev, "gates ready") }}
+    {{ ui.hero_stat("Autonomous mode", ("Enabled" if view.readiness.autonomous_enabled else "Disabled"),
+                    ("yellow" if view.readiness.autonomous_enabled else "gray"),
+                    ("auto-dispatch, isolated" if view.readiness.autonomous_enabled else "scaffold-only")) }}
+    {{ ui.hero_stat("Open / failed", view.counts.open ~ " / " ~ view.counts.failed,
+                    ("red" if view.counts.failed else ("blue" if view.counts.open else "green")),
+                    view.counts.stale ~ " stale") }}
+    {{ ui.hero_stat("Cost today", "$%.2f"|format(view.cost.today_usd or 0.0),
+                    ("amber" if (view.cost.cap_pct is not none and view.cost.cap_pct >= 80) else "green"),
+                    ("of $%.2f cap"|format(view.cost.cap_usd) if view.cost.cap_configured else "cap unconfigured")) }}
+  </section>
+
   {% if view.readiness.autonomous_enabled %}
-    <span class="font-semibold">ENABLED</span> — the worker may auto-dispatch in an isolated rootless container; never merges/pushes. Kill-switch: <code class="text-xs">touch config/operator_worker.DISABLED</code>
-  {% else %}
-    <span class="font-semibold">disabled</span> — scaffold-only (no autonomous execution)
+  <div class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-200">
+    <span class="font-semibold">Autonomous execution ENABLED</span> &mdash; the worker may auto-dispatch in an
+    isolated rootless container; it never merges or pushes. Kill-switch:
+    <code class="font-mono">touch config/operator_worker.DISABLED</code>.
+  </div>
   {% endif %}
-</div>
 
-{% if request.query_params.get("msg") %}
-<div class="mb-4 rounded-md border px-3 py-2 text-sm
-  {{ 'border-red-700 text-red-300' if request.query_params.get('level')=='error'
-     else 'border-emerald-700 text-emerald-300' }}">
-  {{ request.query_params.get("msg") }}
-</div>
-{% endif %}
-
-{{ ui.section_header("Readiness", view.readiness.overall_ready ~ " gates ready", "") }}
-<table class="w-full text-sm mb-6">
-  <thead><tr><th class="text-left">Gate</th><th>Status</th><th>Source</th><th class="text-left">Detail</th></tr></thead>
-  <tbody>
-  {% for name, g in view.readiness.gates.items() %}
-    <tr>
-      <td>{{ name }}</td>
-      <td>{{ ui.badge(g.status, g.status) }}</td>
-      <td>{{ g.source }}</td>
-      <td>{{ g.reason }}
-        {% if g.source == "declared" and g.declared_at %}
-          <span class="text-zinc-500">— declared by {{ g.declared_by }} @ {{ g.declared_at }};
-          evidence: {{ g.evidence|join(", ") }}</span>
-        {% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-
-{{ ui.section_header("Cost", "telemetry (not a gate)", "") }}
-<p class="text-sm mb-6">
-  {% if view.cost.cap_configured %}
-    Today ${{ "%.2f"|format(view.cost.today_usd) }} / ${{ "%.2f"|format(view.cost.cap_usd) }} daily cap
-    {% if view.cost.cap_pct is not none %}<span class="{{ 'text-amber-400' if view.cost.cap_pct >= 80 else 'text-zinc-400' }}">({{ view.cost.cap_pct }}% used)</span>{% endif %}
-  {% else %}
-    cap <span class="text-amber-400">unconfigured ⚠</span>
-  {% endif %}
-  · lifetime ${{ "%.2f"|format(view.cost.lifetime_usd) }}</p>
-
-{{ ui.section_header("Work Orders", view.counts.open ~ " open · " ~ view.counts.failed ~ " failed · " ~ view.counts.cancelled ~ " cancelled · " ~ view.counts.stale ~ " stale", "") }}
-<table class="w-full text-sm mb-6">
-  <thead><tr><th class="text-left">ID</th><th>Status</th><th>Age (h)</th><th>Probe/Skill</th><th></th></tr></thead>
-  <tbody>
+  {# 1. Work needing attention — failed / stale / awaiting-approval first. #}
+  {% set attn = namespace(items=[]) %}
+  {% set active = namespace(items=[]) %}
   {% for o in view.orders %}
-    <tr>
-      <td><a class="underline" href="/dashboard/operator/report/{{ o.work_order_id }}">{{ o.work_order_id }}</a></td>
-      <td>{{ ui.badge(o.status, o.status) }}{% if o.stale %} <span class="text-amber-400">stale</span>{% endif %}</td>
-      <td>{{ o.age_hours if o.age_hours is not none else "—" }}</td>
-      <td class="text-zinc-400">{{ o.probe_id or "—" }} / {{ o.skill_id or "—" }}</td>
-      <td>
-      {% if o.cancellable and edit_enabled %}
-        <form method="post" action="/dashboard/operator/cancel"
-              onsubmit="return confirm('Cancel {{ o.work_order_id }}? This is a terminal, audited action.');">
-          <input type="hidden" name="work_order_id" value="{{ o.work_order_id }}">
-          <input type="text" name="reason" required maxlength="280" placeholder="reason (required)"
-                 class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs">
-          <button type="submit" class="text-red-400 underline text-xs">Cancel</button>
-        </form>
-      {% endif %}
-      </td>
-    </tr>
+    {% if o.status in ["failed", "rejected", "error"] or o.stale or o.status == "awaiting_approval" %}
+      {% set attn.items = attn.items + [o] %}
+    {% else %}
+      {% set active.items = active.items + [o] %}
+    {% endif %}
   {% endfor %}
-  </tbody>
-</table>
 
-{{ ui.section_header("Quarantine Inventory", view.quarantine|length ~ " worktree(s)", "") }}
-<table class="w-full text-sm">
-  <thead><tr><th class="text-left">Worktree</th><th>Branch</th><th>Ancestor?</th><th>Unique commits</th><th>Patch-equiv*</th><th>In main?</th><th></th></tr></thead>
-  <tbody>
-  {% for e in view.quarantine %}
-    <tr>
-      <td class="text-zinc-400">{{ e.worktree }}</td>
-      <td>{{ e.branch }}</td>
-      <td>{{ "yes" if e.is_ancestor_of_main else "no" }}</td>
-      <td>{{ e.unique_commits }}</td>
-      <td>{{ "yes" if e.patch_equivalent_in_main else ("?" if e.patch_equivalent_in_main is none else "no") }}</td>
-      <td>{{ ui.badge("green" if e.already_in_main else "amber", "in main" if e.already_in_main else "review") }}</td>
-      <td><a class="underline text-xs" href="/dashboard/operator/quarantine/{{ e.work_order_id }}/diff">view diff</a></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-<p class="text-xs text-zinc-500 mt-2">* patch-equivalence is heuristic, not guaranteed.</p>
+  <section aria-label="Work needing attention" class="space-y-3">
+    {{ ui.section_header("Work needing attention",
+                         view.counts.failed ~ " failed · " ~ view.counts.stale ~ " stale", "") }}
+    {% if attn.items %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {% for st in ["failed", "rejected", "error", "awaiting_approval"] %}
+        {% for o in attn.items if o.status == st %}{{ wo_row(o, edit_enabled) }}{% endfor %}
+      {% endfor %}
+      {# stale items whose status wasn't already emitted above #}
+      {% for o in attn.items if o.stale and o.status not in ["failed", "rejected", "error", "awaiting_approval"] %}{{ wo_row(o, edit_enabled) }}{% endfor %}
+    </div>
+    {% else %}
+    {{ ui.all_clear("Nothing needs attention", "No failed, stale, or awaiting-approval work orders.") }}
+    {% endif %}
+  </section>
+
+  {# 2. Active & recent work orders — running before completed/cancelled. #}
+  <section aria-label="Active and recent work orders" class="space-y-3">
+    {{ ui.section_header("Active & recent work orders", view.counts.open ~ " open", "") }}
+    {% if active.items %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      {% for st in ["running", "claimed", "queued", "approved", "completed", "cancelled"] %}
+        {% for o in active.items if o.status == st %}{{ wo_row(o, edit_enabled) }}{% endfor %}
+      {% endfor %}
+      {# any status not in the explicit order still renders #}
+      {% for o in active.items if o.status not in ["running", "claimed", "queued", "approved", "completed", "cancelled"] %}{{ wo_row(o, edit_enabled) }}{% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty_state("No active or recent work orders", "Work orders created from the System tab appear here.") }}
+    {% endif %}
+  </section>
+
+  {# 3. Readiness details — gate-by-gate; evidence/declarer demoted to detail. #}
+  <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-3 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Readiness details
+      <span class="text-xs font-normal text-zinc-500">· {{ view.readiness.overall_ready }} gates ready</span>
+    </summary>
+    <div class="px-4 pb-4 pt-1">
+      {% call ui.responsive_table() %}
+      <table class="min-w-full text-sm">
+        <thead><tr class="text-left text-zinc-400"><th class="py-1 pr-4">Gate</th><th class="py-1 pr-4">Status</th><th class="py-1 pr-4">Source</th><th class="py-1 pr-4">Detail</th></tr></thead>
+        <tbody>
+        {% for name, g in view.readiness.gates.items() %}
+          <tr class="border-t border-zinc-800">
+            <td class="py-1 pr-4">{{ name }}</td>
+            <td class="py-1 pr-4">{{ ui.badge(g.status, g.status) }}</td>
+            <td class="py-1 pr-4 text-zinc-400">{{ g.source }}</td>
+            <td class="py-1 pr-4 text-xs text-zinc-400">{{ g.reason }}
+              {% if g.source == "declared" and g.declared_at %}
+              <details class="group inline-block align-top">
+                <summary class="list-none cursor-pointer text-[11px] text-zinc-600 hover:text-zinc-400">provenance</summary>
+                <span class="block mt-1 text-zinc-500">declared by {{ g.declared_by }} @ {{ g.declared_at }}; evidence: {{ g.evidence|join(", ") }}</span>
+              </details>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+    </div>
+  </details>
+
+  {# 4. Quarantine inventory — branch/patch-equivalence demoted to detail. #}
+  <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-3 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Quarantine inventory
+      <span class="text-xs font-normal text-zinc-500">· {{ view.quarantine|length }} worktree(s)</span>
+    </summary>
+    <div class="px-4 pb-3 pt-1">
+      {% if view.quarantine %}
+      <div class="space-y-2">
+        {% for e in view.quarantine %}
+        <div class="rounded-lg border border-zinc-800 px-3 py-2 text-xs space-y-1">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            {{ ui.badge("green" if e.already_in_main else "amber", "in main" if e.already_in_main else "review") }}
+            <a class="text-zinc-400 hover:text-emerald-400 underline" href="/dashboard/operator/quarantine/{{ e.work_order_id }}/diff">view diff</a>
+          </div>
+          <dl class="text-[11px] text-zinc-500 space-y-0.5">
+            <div><dt class="inline text-zinc-600">Worktree:</dt> <dd class="inline font-mono">{{ e.worktree }}</dd></div>
+            <div><dt class="inline text-zinc-600">Branch:</dt> <dd class="inline font-mono">{{ e.branch }}</dd></div>
+            <div><dt class="inline text-zinc-600">Ancestor of main:</dt> <dd class="inline">{{ "yes" if e.is_ancestor_of_main else "no" }}</dd> ·
+                 <dt class="inline text-zinc-600">unique commits:</dt> <dd class="inline">{{ e.unique_commits }}</dd> ·
+                 <dt class="inline text-zinc-600">patch-equiv*:</dt> <dd class="inline">{{ "yes" if e.patch_equivalent_in_main else ("?" if e.patch_equivalent_in_main is none else "no") }}</dd></div>
+          </dl>
+        </div>
+        {% endfor %}
+      </div>
+      <p class="text-[11px] text-zinc-600 mt-2">* patch-equivalence is heuristic, not guaranteed.</p>
+      {% else %}
+      {{ ui.all_clear("No quarantined worktrees", "Protected-path edits would be isolated here for review.") }}
+      {% endif %}
+    </div>
+  </details>
+
+  {# 5. Cost details — telemetry, not a gate. #}
+  <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-3 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      Cost details
+      <span class="text-xs font-normal text-zinc-500">· telemetry, not a gate</span>
+    </summary>
+    <div class="px-4 pb-4 pt-1 text-sm text-zinc-300">
+      {% if view.cost.cap_configured %}
+      Today ${{ "%.2f"|format(view.cost.today_usd) }} / ${{ "%.2f"|format(view.cost.cap_usd) }} daily cap
+      {% if view.cost.cap_pct is not none %}<span class="{{ 'text-amber-400' if view.cost.cap_pct >= 80 else 'text-zinc-400' }}">({{ view.cost.cap_pct }}% used)</span>{% endif %}
+      {% else %}
+      Daily cap <span class="text-amber-400">unconfigured ⚠</span>
+      {% endif %}
+      <span class="text-zinc-500">· lifetime ${{ "%.2f"|format(view.cost.lifetime_usd) }}</span>
+    </div>
+  </details>
+
+</div>
 {% endblock %}

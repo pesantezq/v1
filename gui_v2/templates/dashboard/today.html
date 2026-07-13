@@ -59,23 +59,34 @@
     {% endif %}
 
     {# --------------------------------------------------------------- #}
-    {# Primary cards — System Health / Decision Core / Risk Summary     #}
+    {# Partition the run's cards: warning/failure (rank >= 3) surface in  #}
+    {# "Needs attention"; everything else drops into the collapsed        #}
+    {# "Run details" below. Each card renders exactly once — the hero      #}
+    {# already carries the primary answers, so no card is repeated at full #}
+    {# emphasis directly under it.                                          #}
     {# --------------------------------------------------------------- #}
-    {% if cards %}
-    <section aria-label="Primary status cards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {% for c in cards %}
-        {{ ui.status_card(c, emphasis=True) }}
-      {% endfor %}
+    {% set att = namespace(items=[]) %}
+    {% set rest = namespace(items=[]) %}
+    {% for c in cards %}
+      {% if _rank.get(c.severity, 0) >= 3 %}{% set att.items = att.items + [c] %}
+      {% else %}{% set rest.items = rest.items + [c] %}{% endif %}
+    {% endfor %}
+
+    {% if att.items %}
+    <section aria-label="Needs attention" class="space-y-3">
+      {{ ui.section_header("Needs attention", "checks flagged warning or failure this run", "") }}
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for sev in ["red", "yellow"] %}
+          {% for c in att.items if c.severity == sev %}
+            {{ ui.status_card(c, emphasis=True) }}
+          {% endfor %}
+        {% endfor %}
+      </div>
     </section>
-    {% else %}
-    {{ ui.empty_state("No status data available",
-                      "Run the daily pipeline to generate today's status cards.") }}
     {% endif %}
 
-    {# --------------------------------------------------------------- #}
-    {# What changed since last run — shown only when the loader supplies #}
-    {# a `changes` list (additive-ready; absent today → omitted).        #}
-    {# --------------------------------------------------------------- #}
+    {# What changed since last run — shown only when the loader supplies a
+       `changes` list (additive-ready; absent today → omitted). #}
     {% if changes %}
     <section aria-label="What changed since last run">
       {{ ui.section_header("What changed since last run", "vs. previous run", "") }}
@@ -87,6 +98,32 @@
         {% endfor %}
       </ul>
     </section>
+    {% endif %}
+
+    {# --------------------------------------------------------------- #}
+    {# Run details — the remaining (healthy / informational) checks,     #}
+    {# secondary and collapsed. Keeps every card's detail one click away #}
+    {# without competing with the hero + attention layers.               #}
+    {# --------------------------------------------------------------- #}
+    {% if cards %}
+    <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+      <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-3 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        Run details
+        <span class="text-xs font-normal text-zinc-500">· {{ cards | length }} checks</span>
+      </summary>
+      <div class="px-4 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for c in rest.items %}
+          {{ ui.status_card(c) }}
+        {% endfor %}
+        {% if not rest.items %}
+        <p class="text-xs text-zinc-500 sm:col-span-2 lg:col-span-3">All checks are flagged above.</p>
+        {% endif %}
+      </div>
+    </details>
+    {% else %}
+    {{ ui.empty_state("No status data available",
+                      "Run the daily pipeline to generate today's status cards.") }}
     {% endif %}
 
   </div>

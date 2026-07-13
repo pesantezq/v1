@@ -11,79 +11,15 @@
      hx-swap="outerHTML"
      class="space-y-7">
 
-  {{ ui.page_header("System", "Operator runbook — pipeline health & infrastructure",
+  {{ ui.page_header("System", "Health and infrastructure — pipeline status, budgets, deployment",
                     "/dashboard/system", "dashboard-system-content") }}
 
-  {# Read-only notice — no repair / rerun controls in this view. #}
-  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2.5 flex items-center gap-2.5 text-xs text-sky-200">
-    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-    Read-only system health view. All data is observe-only — no repair or rerun controls here.
-  </div>
-
-  {# --------------------------------------------------------------- #}
-  {# Auto-update banner — shown when the served code is behind main.   #}
-  {# Detection is automatic; the apply is a manual intervention.       #}
-  {# --------------------------------------------------------------- #}
-  {% if deploy_status and deploy_status.state in ("update_available", "divergent") %}
-  <section aria-label="Dashboard update" class="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 space-y-2">
-    <div class="flex items-start gap-2.5 text-sm text-amber-200">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-      <div>
-        {% if deploy_status.state == "update_available" %}
-        <strong>Dashboard update available</strong> — serving
-        <span class="font-mono">{{ deploy_status.running_short }}</span>,
-        latest <span class="font-mono">{{ deploy_status.latest_short }}</span>
-        ({{ deploy_status.commits_behind }} commit(s) behind). A restart is required to serve the new code.
-        {% else %}
-        <strong>Served code is divergent</strong> from origin/main
-        (<span class="font-mono">{{ deploy_status.running_short }}</span>) — not a fast-forward; resolve manually.
-        {% endif %}
-      </div>
-    </div>
-
-    {% if deploy_status.state == "update_available" %}
-    {# Mode B (always): the exact manual command + record-intent button. #}
-    <div class="text-[11px] text-amber-200/80 space-y-1">
-      <div>Manual update (copy-paste):</div>
-      <pre class="overflow-x-auto rounded-md bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-300 whitespace-pre-wrap">cd /opt/stockbot &amp;&amp; git fetch origin &amp;&amp; git merge --ff-only origin/main &amp;&amp; sudo systemctl restart stockbot-dashboard.service</pre>
-    </div>
-    <div class="flex flex-wrap items-center gap-2 pt-1">
-      <form method="post" action="/dashboard/operator/request-update" class="inline">
-        <button type="submit" title="Record that an update was requested (logs intent; executes nothing)"
-                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20 transition active:scale-95">
-          Mark update requested
-        </button>
-      </form>
-      {% if deploy_apply_enabled %}
-      <form method="post" action="/dashboard/operator/apply-update" class="inline"
-            onsubmit="return confirm('Fast-forward to origin/main and restart the dashboard now? The page will briefly drop while it restarts.');">
-        <button type="submit" title="Fast-forward + restart the dashboard service (gated)"
-                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20 transition active:scale-95">
-          Apply update &amp; restart <span class="opacity-60">· auto</span>
-        </button>
-      </form>
-      {% else %}
-      <span class="text-[11px] text-zinc-500">One-click apply is off (set <span class="font-mono">GUI_V2_DEPLOY_APPLY=1</span> to enable).</span>
-      {% endif %}
-    </div>
-    {% endif %}
-  </section>
-  {% endif %}
-
-  {# Deployment status card — always shown (green when up to date). #}
-  {% if deploy_card %}
-  <section aria-label="Deployment">
-    {{ ui.section_header("Deployment", "served code vs origin/main", "") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{{ ui.status_card(deploy_card) }}</div>
-  </section>
-  {% endif %}
-
-  {# Named card lookups. #}
+  {# Named card lookups (used by the metrics strip + grouped sections). #}
   {% set _by = {} %}
   {% for c in cards %}{% set _ = _by.__setitem__(c.title, c) %}{% endfor %}
 
   {# --------------------------------------------------------------- #}
-  {# Operator status bar — the four numbers an operator checks first. #}
+  {# Four operator headline metrics — shown FIRST.                    #}
   {# --------------------------------------------------------------- #}
   {% if cards %}
   <section aria-label="Operator status bar" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -95,7 +31,7 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
-  {# Failure Queue — loud on failure, compact all-clear when healthy.  #}
+  {# Failure Queue — immediately after the metrics.                    #}
   {# --------------------------------------------------------------- #}
   <section aria-label="Failure queue">
     {{ ui.section_header("Failure Queue", "", "daily_run_status.json") }}
@@ -143,8 +79,74 @@
     {% endif %}
   </section>
 
+  {# Scope notice — corrected: this page IS read-only telemetry EXCEPT the
+     gated deploy-update controls and the operator work-order panel below. #}
+  <div class="rounded-xl bg-sky-500/10 border border-sky-500/25 px-4 py-2 flex items-center gap-2.5 text-xs text-sky-200">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+    Read-only health telemetry. The only actions here are the gated dashboard-update controls (shown when an update is available) and the operator work-order panel below.
+  </div>
+
   {# --------------------------------------------------------------- #}
-  {# Grouped operator sections — organized like a runbook.            #}
+  {# Deployment — prominent update warning + gated apply when behind;  #}
+  {# a compact success row when the served code is current.            #}
+  {# --------------------------------------------------------------- #}
+  {% if deploy_status and deploy_status.state in ("update_available", "divergent") %}
+  <section aria-label="Dashboard update" class="rounded-xl bg-amber-500/10 border border-amber-500/30 px-4 py-3 space-y-2">
+    <div class="text-[11px] uppercase tracking-wide text-amber-300/70">Deployment</div>
+    <div class="flex items-start gap-2.5 text-sm text-amber-200">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        {% if deploy_status.state == "update_available" %}
+        <strong>Dashboard update available</strong> — serving
+        <span class="font-mono">{{ deploy_status.running_short }}</span>,
+        latest <span class="font-mono">{{ deploy_status.latest_short }}</span>
+        ({{ deploy_status.commits_behind }} commit(s) behind). A restart is required to serve the new code.
+        {% else %}
+        <strong>Served code is divergent</strong> from origin/main
+        (<span class="font-mono">{{ deploy_status.running_short }}</span>) — not a fast-forward; resolve manually.
+        {% endif %}
+      </div>
+    </div>
+
+    {% if deploy_status.state == "update_available" %}
+    {# Mode B (always): the exact manual command + record-intent button. #}
+    <div class="text-[11px] text-amber-200/80 space-y-1">
+      <div>Manual update (copy-paste):</div>
+      <pre class="overflow-x-auto rounded-md bg-zinc-900 border border-zinc-800 px-3 py-2 text-zinc-300 whitespace-pre-wrap">cd /opt/stockbot &amp;&amp; git fetch origin &amp;&amp; git merge --ff-only origin/main &amp;&amp; sudo systemctl restart stockbot-dashboard.service</pre>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 pt-1">
+      <form method="post" action="/dashboard/operator/request-update" class="inline">
+        <button type="submit" title="Record that an update was requested (logs intent; executes nothing)"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-sky-500/10 text-sky-300 border-sky-500/30 hover:bg-sky-500/20 transition active:scale-95">
+          Mark update requested
+        </button>
+      </form>
+      {% if deploy_apply_enabled %}
+      <form method="post" action="/dashboard/operator/apply-update" class="inline"
+            onsubmit="return confirm('Fast-forward to origin/main and restart the dashboard now? The page will briefly drop while it restarts.');">
+        <button type="submit" title="Fast-forward + restart the dashboard service (gated)"
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20 transition active:scale-95">
+          Apply update &amp; restart <span class="opacity-60">· auto</span>
+        </button>
+      </form>
+      {% else %}
+      <span class="text-[11px] text-zinc-500">One-click apply is off (set <span class="font-mono">GUI_V2_DEPLOY_APPLY=1</span> to enable).</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+  {% elif deploy_card %}
+  {# Compact success row — served code is current. #}
+  <div class="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm">
+    <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 {{ ui.sev_rail(deploy_card.severity) }}"></span>
+    <span class="font-medium text-zinc-300">Deployment</span>
+    <span class="text-zinc-500">{{ (deploy_card.label or "up to date") | status_label }}{% if deploy_card.summary %} &middot; {{ deploy_card.summary }}{% endif %}</span>
+  </div>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
+  {# Grouped diagnostics — groups with a warning/failure render first  #}
+  {# (expanded); all-healthy groups collapse into disclosures below.   #}
   {# --------------------------------------------------------------- #}
   {% set _groups = [
       ("Run Health", ["Daily Run Status", "Pipeline Run Status", "Analysis Loop Status"]),
@@ -157,15 +159,37 @@
   {% set ns = namespace(shown=[]) %}
 
   {% if cards %}
+  {# Pass 1 — groups containing at least one warning/failure card (expanded). #}
   {% for _title, _members in _groups %}
   {% set _grp = cards | selectattr("title", "in", _members) | list %}
-  {% if _grp %}
+  {% set _attn = _grp | selectattr("severity", "in", ["red", "yellow"]) | list %}
+  {% if _grp and _attn %}
   <section aria-label="{{ _title }}">
-    {{ ui.section_header(_title, "", "") }}
+    {{ ui.section_header(_title, "needs attention", "") }}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {% for c in _grp %}{{ ui.status_card(c) }}{% set ns.shown = ns.shown + [c.title] %}{% endfor %}
+      {% for sev in ["red", "yellow", "blue", "green", "gray"] %}
+        {% for c in _grp if c.severity == sev %}{{ ui.status_card(c) }}{% set ns.shown = ns.shown + [c.title] %}{% endfor %}
+      {% endfor %}
     </div>
   </section>
+  {% endif %}
+  {% endfor %}
+
+  {# Pass 2 — all-healthy groups, collapsed by default. #}
+  {% for _title, _members in _groups %}
+  {% set _grp = cards | selectattr("title", "in", _members) | list %}
+  {% set _attn = _grp | selectattr("severity", "in", ["red", "yellow"]) | list %}
+  {% if _grp and not _attn %}
+  <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <summary class="list-none cursor-pointer select-none flex items-center gap-2 px-4 py-3 text-sm font-semibold uppercase tracking-wide text-zinc-300 hover:text-zinc-100">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      {{ _title }}
+      <span class="text-[11px] font-normal normal-case text-emerald-400/70">all healthy</span>
+    </summary>
+    <div class="px-4 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {% for c in _grp %}{{ ui.status_card(c) }}{% set ns.shown = ns.shown + [c.title] %}{% endfor %}
+    </div>
+  </details>
   {% endif %}
   {% endfor %}
 
@@ -184,8 +208,7 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
-  {# Worker Runner (Phase 2) — read-only status. CLI-driven; no        #}
-  {# controls here. Severity reflects failed/running/claimed orders.   #}
+  {# Worker Runner (Phase 2) — read-only status.                       #}
   {# --------------------------------------------------------------- #}
   {% if operator_runner %}
   <section aria-label="Worker runner">
@@ -195,12 +218,30 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
-  {# Operator actions — create diagnostic/repair work orders.          #}
-  {# Create-only: no execution, no shell, no broker/trade controls.    #}
+  {# Operator actions — the canonical home is /dashboard/operator.     #}
+  {# A compact summary + link leads; the full create/dispatch panel is  #}
+  {# kept here (secondary, collapsed) so no capability is lost.         #}
   {# --------------------------------------------------------------- #}
   {% if operator_probes is defined %}
-  {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
-                       operator_post_url, dispatch_url=operator_dispatch_url) }}
+  <section aria-label="Operator summary">
+    <div class="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm">
+      <span class="text-zinc-300">Operator work orders</span>
+      <span class="flex items-center gap-2 text-xs text-zinc-400">
+        {% if operator_summary and operator_summary.total %}{{ ui.badge("blue", operator_summary.total ~ " total") }}{% else %}{{ ui.badge("green", "none") }}{% endif %}
+        <a href="/dashboard/operator" class="text-emerald-400 hover:text-emerald-300 underline">Open Operator →</a>
+      </span>
+    </div>
+    <details class="group mt-3">
+      <summary class="list-none cursor-pointer select-none flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-200">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        Operator actions &amp; work-order queue
+      </summary>
+      <div class="mt-3">
+        {{ op.operator_panel(operator_probes, operator_work_orders, operator_summary,
+                             operator_post_url, dispatch_url=operator_dispatch_url) }}
+      </div>
+    </details>
+  </section>
   {% endif %}
 
   {# --------------------------------------------------------------- #}

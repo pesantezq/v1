@@ -19,7 +19,7 @@
   <div>
     <span title="StockBot runs in OBSERVE-ONLY mode. No trades are placed — all insights are for research and decision support; official actions come from decision_plan.json."
           class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold font-mono bg-emerald-500/12 text-emerald-300 border border-emerald-500/30 cursor-help">
-      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>OBSERVE ONLY · No execution
+      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>Advisory only — does not place brokerage orders
     </span>
   </div>
 
@@ -160,21 +160,6 @@
   {# Grouped by action. decision_plan.json is the sole source of      #}
   {# advisory action language; all verb badges live inside here.      #}
   {# --------------------------------------------------------------- #}
-  {# Why These Picks — the reasoning stack (portfolio / quant / crowd-support / risk). #}
-  {% if vm and vm.why_these_picks %}
-  <section aria-label="Why these picks">
-    {{ ui.section_header("Why These Picks", "the reasoning stack behind each advisory pick", "") }}
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-      {% for b in vm.why_these_picks %}
-      <div class="rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3">
-        <div class="text-sm font-medium text-zinc-200">{{ b.title }}</div>
-        <p class="text-xs text-zinc-400 mt-1 leading-snug">{{ b.body }}</p>
-      </div>
-      {% endfor %}
-    </div>
-  </section>
-  {% endif %}
-
   {# Advisory queue header (applies to the whole queue). #}
   <div id="advisory-decisions" class="flex items-center gap-3 flex-wrap">
     <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Advisory Picks with Context</h2>
@@ -185,6 +170,20 @@
       Advisory only &mdash; no execution
     </span>
   </div>
+  {# Why these picks — compact reasoning stack, sits with the queue (moved 2026-07-13). #}
+  {% if vm and vm.why_these_picks %}
+  <details class="rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden">
+    <summary class="cursor-pointer px-4 py-2.5 text-sm font-medium text-zinc-200 hover:bg-zinc-800/30">Why these picks</summary>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 px-4 pb-4 pt-1">
+      {% for b in vm.why_these_picks %}
+      <div class="rounded-lg bg-zinc-950/40 border border-zinc-800 px-4 py-3">
+        <div class="text-sm font-medium text-zinc-200">{{ b.title }}</div>
+        <p class="text-xs text-zinc-400 mt-1 leading-snug">{{ b.body }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
   {% if triage_summary %}
   <div class="flex items-center gap-2 flex-wrap text-[11px]" aria-label="Decision triage breakdown">
     <span class="text-zinc-500 uppercase tracking-wide">Triage</span>
@@ -305,7 +304,7 @@
         <div class="text-[10px] uppercase tracking-wide text-zinc-500 font-mono mb-1.5">Crowd Agreement</div>
         <div class="flex gap-1.5 text-[11px] flex-wrap">
           <span class="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">Agree {{ ov.agree }}</span>
-          <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">Inconcl {{ ov.inconclusive }}</span>
+          <span class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">Unclear {{ ov.inconclusive }}</span>
           <span class="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30">Disagree {{ ov.disagree }}</span>
         </div>
         <div class="text-[11px] text-zinc-500 mt-1.5">{{ ov.coverage_pct }}% coverage · {{ ov.active_sources }} sources</div>
@@ -329,6 +328,15 @@
       {% endif %}
     </aside>
   </div>
+
+  {# --------------------------------------------------------------- #}
+  {# Portfolio details and evidence — everything below the working    #}
+  {# queue collapsed into one disclosure (IA condensation 2026-07-13).#}
+  {# Operator actions stay OUTSIDE this disclosure at the bottom.      #}
+  {# --------------------------------------------------------------- #}
+  <details class="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+    <summary class="cursor-pointer px-4 py-3 text-sm font-semibold uppercase tracking-wide text-zinc-300 hover:bg-zinc-800/30">Portfolio details and evidence</summary>
+    <div class="px-4 pb-4 pt-2 space-y-7">
 
   {# Simulation Context — compact research-only preview; full charts in Strategy Lab. #}
   {% if simulation_context %}
@@ -381,26 +389,13 @@
   {# These are NOT advisory actions; badges show status, never verbs. #}
   {# --------------------------------------------------------------- #}
   <section aria-label="Portfolio evidence panels">
-    {{ ui.section_header("Risk, Capital & Opportunities", "evidence — observe only", "") }}
+    {{ ui.section_header("Risk, Capital & Opportunities", "secondary evidence — observe only (risk & capital summarized in the context rail above)", "") }}
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      {% for c in [risk_card, capital_card, watch_card] %}
+      {# Risk & capital are already surfaced in the sticky context rail; keep only
+         the watchlist / opportunities card here as secondary evidence (de-duped 2026-07-13). #}
+      {% for c in [watch_card] %}
         {% if c %}{{ ui.status_card(c) }}{% endif %}
       {% endfor %}
-      {# Memo summary preview links out to the full report #}
-      {% if memo_card %}
-      <div class="relative overflow-hidden bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-4 space-y-2 hover:border-zinc-700 transition">
-        <span class="absolute left-0 top-0 bottom-0 w-1 bg-sky-500/60"></span>
-        <div class="flex items-start justify-between gap-2 pl-1.5">
-          <span class="text-xs uppercase tracking-wide text-zinc-400 font-medium">{{ memo_card.title }}</span>
-          {{ ui.status_badge(memo_card.severity, memo_card.label or memo_card.status) }}
-        </div>
-        {% if memo_card.summary %}<p class="text-sm text-zinc-300 leading-snug pl-1.5 line-clamp-3">{{ memo_card.summary }}</p>{% endif %}
-        <a href="/dashboard/memo" class="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 pl-1.5">
-          Read full memo
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-        </a>
-      </div>
-      {% endif %}
     </div>
   </section>
 
@@ -627,6 +622,9 @@
     <p class="text-[10px] text-zinc-600 italic">News Intelligence is observe-only research context — not a buy/sell recommendation.</p>
   </section>
   {% endif %}
+
+    </div>
+  </details>
 
   {# --------------------------------------------------------------- #}
   {# Operator actions — review-only work orders (create-only).         #}
