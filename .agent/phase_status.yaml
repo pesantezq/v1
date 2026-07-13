@@ -1,8 +1,9 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-06-01 (inaugural monthly-tool-analysis run logged — AMBER;
+# Last updated: 2026-07-01 (2026-06 monthly-tool-analysis run logged — AMBER;
 # next step unchanged = observe_and_iterate. See observe_and_iterate block below,
-# .agent/project_state.yaml:last_monthly_analysis, docs/monthly_reports/2026-05.md.)
+# .agent/project_state.yaml:last_monthly_analysis + june_2026_shipped,
+# docs/monthly_reports/2026-06.md. Prior: 2026-06-01 inaugural monthly run.)
 
 # ---------------------------------------------------------------------------
 # Observe-and-iterate phase status (current)
@@ -12,12 +13,22 @@ observe_and_iterate:
   status: active
   next_official_step_unchanged: true
   last_monthly_analysis:
-    date: 2026-06-01
+    date: 2026-07-01
     verdict: AMBER
-    inaugural: true
-    report: docs/monthly_reports/2026-05.md
-    open_defects: [theme_engine_ai_usage_unmetered, fmp_scanner_fallback]
-    self_healing: [learning_loop_outcome_maturation_gap]  # ~2026-06-05
+    window: 2026-06-01..2026-07-01
+    report: docs/monthly_reports/2026-06.md
+    month_end_health: {cron: 31/30, spend: ~$0.00/mo, drift: 0%, rollbacks: 0, quarantines: 0, gauge_era: 5687885c, current_era_hit: 0.64}
+    findings:
+      - high_theme_confidence -28.7pp real regression (loop gated it out of auto-apply)
+      - memo_top_decision_hit_rate 0.444 debunked as join artifact (memos GREEN); retire the proxy
+    doc_coverage_gap: [opportunity_decisions.py, strategy_selection.py]  # undocumented; ALLOCATION_POLICY.md sector_cap drift fixed 2026-07-01
+    prior:
+      date: 2026-06-01
+      verdict: AMBER
+      inaugural: true
+      report: docs/monthly_reports/2026-05.md
+      open_defects: [theme_engine_ai_usage_unmetered, fmp_scanner_fallback]
+      self_healing: [learning_loop_outcome_maturation_gap]  # ~2026-06-05
 
 # ---------------------------------------------------------------------------
 # Phase 0 — Infrastructure & Data Governance
@@ -357,7 +368,7 @@ post_phase_0:
     tests: 59 passed
 
   gui_operator_cockpit_redesign:
-    status: in_progress
+    status: superseded_by_gui_v2  # 2026-07-13: Streamlit cockpit (gui/app.py) retired per docs/STREAMLIT_RETIREMENT.md; GUI moved to gui_v2 (4-phase program complete 2026-07-09). The follow_up_slices below are obsolete and are NOT to be built.
     priority: medium
     description: >
       UI/UX layer overhaul of the Streamlit Operator Cockpit (gui/app.py).

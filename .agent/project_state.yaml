@@ -1,9 +1,10 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-06-01 (inaugural monthly-tool-analysis run logged: AMBER;
+# Last updated: 2026-07-01 (2026-06 monthly-tool-analysis run logged: AMBER;
 # next_official_step unchanged = observe_and_iterate; see last_monthly_analysis
-# block below and docs/roadmap.md Known Issues for the two surfaced defects.
+# block below, docs/monthly_reports/2026-06.md, and june_2026_shipped for the
+# month's shipped features. Prior header: 2026-06-01 inaugural monthly run.
 # Prior milestone 2026-05-20: observe-and-iterate phase opened: gauge retune +
 # structural cap widen + 6 new observability modules + 17-stage wrapper +
 # GUI v2 risk-impact tab; ml_advisor enabled; resolver fixes shipped)
@@ -18,7 +19,7 @@ ai_role: context_explanation_validation_orchestration_only
 # ---------------------------------------------------------------------------
 
 current_phase: post_phase_0_governance
-current_step: gui_operator_cockpit_redesign
+current_step: observe_and_iterate  # 2026-07-13: was gui_operator_cockpit_redesign (Streamlit gui/app.py) — superseded by gui_v2 (retired per docs/STREAMLIT_RETIREMENT.md; gui_v2 4-phase program complete 2026-07-09). Aligns current_step with next_official_step + project_status.
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -155,40 +156,106 @@ last_doc_audit_system_shipped:
     or unfixed drift). Tests: 21 + 3 = 24. next_official_step unchanged = observe_and_iterate.
 
 last_monthly_analysis:
-  date: 2026-06-01
+  date: 2026-07-01
   cadence: monthly
-  window: 2026-05-02..2026-06-01  # rolling 30d
+  window: 2026-06-01..2026-07-01  # rolling 30d
   verdict: AMBER
-  inaugural: true  # first monthly-tool-analysis run; no prior-month baseline
-  report: docs/monthly_reports/2026-05.md
+  report: docs/monthly_reports/2026-06.md
+  prior_baseline: 2026-05  # AMBER
   next_official_step_unchanged: true  # remains observe_and_iterate
   observed_metrics:
-    cron_health: 32/30 days archived with decision_plan
+    cron_health: 31/30 days archived with decision_plan
+    apply_rate_per_week: 0  # audit log absent; monthly_drift {}; benign dormancy
+    rollback_count: 0  # 0/0 applies
+    quarantine_count: 0  # no worker_protected_path_violation in 30d
+    pulse_skip_rate: 0%  # 0 of 104 runs (last month 6.7% cleared)
+    drift_cap_utilization: 0%  # monthly_drift {}
+    spend_per_month: ~$0.00  # OpenAI $0.0; ai_budget monthly $0.0004 vs $20 cap
+    universe_hit_rate_1d: 0.5087  # n=804, mean 1d -0.15% (coin-flip)
+    current_era_hit_rate_1d: 0.64  # n=75, gauge era 5687885c, mean 1d +1.67%
+    decision_mix: BUY 43% / WAIT 37%  # rebalanced from last month's 73% WAIT
+    sector_rotation_score: 0.943  # normalized entropy, 8 sectors
+    regime: neutral 100%  # known live neutral-collapse; classifier healthy in sim
+    tagging_untagged_pct: 0.6222  # 62% untagged (AMBER instrumentation item)
+  gauge_era_current:
+    fingerprint: 5687885c
+    first_signal: 2026-06-27
+    change: tightened concentration caps (position 0.15->0.12, sector 0.35->0.25, max_sector_alloc 0.10->0.06)
+    early_read: current-era hit 0.64 (n=75), significantly better than degraded mid-eras (p<=0.01) but tape-confounded
+    action: OBSERVE at 3d/7d checkpoints (~07-05, n~100 ~07-11); no gauge action; next retune target = Energy+Financial_Services sector drag, NOT a caps revert
+  findings:
+    - high_theme_confidence real -28.7pp regression (winner->strong_loser, n=167); loop correctly gated out of auto-apply
+    - memo_top_decision_hit_rate 0.444 proxy DEBUNKED as a join artifact by memo-reviewer + attribution-analyst; memos reviewed GREEN/accurate; retire the exact-date join metric
+    - doc_audit coverage_gap: opportunity_decisions.py + strategy_selection.py undocumented; ALLOCATION_POLICY.md sector_cap drift (fixed 2026-07-01)
+  prior:
+    date: 2026-06-01
+    window: 2026-05-02..2026-06-01
+    verdict: AMBER
+    inaugural: true
+    report: docs/monthly_reports/2026-05.md
+    observed_metrics:
+      cron_health: 32/30 days archived with decision_plan
+      drift_cap_utilization: 0%
+      pulse_skip_rate: 6.7%  # 1 of 15 runs
+      universe_hit_rate_1d: 0.524  # n=594
+      universe_hit_rate_3d: 0.585  # n=528
+      decision_mix: WAIT 73.4% / actionable 9.7%  # within band
+      regime: neutral 100%  # no diversity, not whipsaw
+    gauge_eras:
+      prior_f60e0b9d:
+        status: 05-18 retune confirmed broad-based win
+        hit_rate_1d_delta: +28.8pp  # 40.6% -> 69.4%
+        mean_return_1d: sign-flipped (-0.31% -> +1.92%)
+        sectors: all 4 improved, none hurt (weakest Comm Services +0.27pp return)
+      current_d95e3096:
+        first_signal: 2026-05-29
+        evaluable: false  # 0 of 110 resolved
+        n100_expected: ~2026-06-04/05
+        action: HOLD + collect; re-run attribution 2026-06-02
+    discovery:
+      first_live_extended_watchlist_promotions: [XOM, CVX]  # Energy Transition, 2026-05-31
+      theme_engine_live: true  # real OpenAI call confirmed
+    open_defects_surfaced:  # tracked in docs/roadmap.md Known Issues
+      - theme_engine_ai_usage_unmetered  # discovery openai_cost/fmp telemetry false-zero; true spend in ai_budget_summary.json
+      - fmp_scanner_fallback  # tier_b.evidence_count=0, fmp_succeeded:false
+    self_healing:
+      - learning_loop_outcome_maturation_gap  # forward-only snapshot join in pattern_learning.py; self-heals ~2026-06-05
+
+# ---------------------------------------------------------------------------
+# June 2026 shipped features (informational; observed at 2026-06 monthly run).
+# Recorded for factual state. next_official_step remains observe_and_iterate
+# (roadmap-control = GPT). Most shipped on feature branches (pushed, not all
+# merged) per session MEMORY; this block tracks the month's delivered scope.
+# ---------------------------------------------------------------------------
+
+june_2026_shipped:
+  month_end_health_snapshot:
+    verdict: AMBER
+    cron_health: 31/30
+    spend_per_month: ~$0.00
     drift_cap_utilization: 0%
-    pulse_skip_rate: 6.7%  # 1 of 15 runs
-    universe_hit_rate_1d: 0.524  # n=594
-    universe_hit_rate_3d: 0.585  # n=528
-    decision_mix: WAIT 73.4% / actionable 9.7%  # within band
-    regime: neutral 100%  # no diversity, not whipsaw
-  gauge_eras:
-    prior_f60e0b9d:
-      status: 05-18 retune confirmed broad-based win
-      hit_rate_1d_delta: +28.8pp  # 40.6% -> 69.4%
-      mean_return_1d: sign-flipped (-0.31% -> +1.92%)
-      sectors: all 4 improved, none hurt (weakest Comm Services +0.27pp return)
-    current_d95e3096:
-      first_signal: 2026-05-29
-      evaluable: false  # 0 of 110 resolved
-      n100_expected: ~2026-06-04/05
-      action: HOLD + collect; re-run attribution 2026-06-02
-  discovery:
-    first_live_extended_watchlist_promotions: [XOM, CVX]  # Energy Transition, 2026-05-31
-    theme_engine_live: true  # real OpenAI call confirmed
-  open_defects_surfaced:  # tracked in docs/roadmap.md Known Issues
-    - theme_engine_ai_usage_unmetered  # discovery openai_cost/fmp telemetry false-zero; true spend in ai_budget_summary.json
-    - fmp_scanner_fallback  # tier_b.evidence_count=0, fmp_succeeded:false
-  self_healing:
-    - learning_loop_outcome_maturation_gap  # forward-only snapshot join in pattern_learning.py; self-heals ~2026-06-05
+    rollbacks: 0
+    quarantines: 0
+    gauge_era_current: 5687885c  # first 2026-06-27, concentration caps tightened
+    current_era_hit_rate_1d: 0.64
+  features:
+    - schwab_cash_source_of_truth  # resolve_decision_cash: broker-fresh cash wins + reconcile ledger; risk_delta+correlation now broker-overlaid; decision_engine untouched
+    - monthly_capital_envelope  # cash_deployment_plan v2 monthly envelope + append-only cycle ledger; precise statuses replace blanket BLOCKED_BY_CASH
+    - daily_memo_coherence_layer  # memo_coherence.py reconciliation; funded/unfunded; investor-core + operator-appendix memo split; presentation_state additive
+    - sim_governance_two_lane  # active-sim + human-gated-production promotion lane (sim_governance/), approved-only overlays, Stage 10e, GUI /governance
+    - crowd_radar_sentiment_integration  # 4 free social connectors + FinBERT; sentiment tilt (bounded +/-0.05) in CrowdTactic; sandbox/observe-only
+    - flock_intelligence  # sim-only crowd flocking 6-state classifier; human-gated promotion
+    - strategy_lab_and_catalog  # Strategy Lab approve/reject/defer -> active-strategy (SANDBOX only); /strategy-catalog coverage_complete gate
+    - operator_worker_phases_2_3_4  # enforced cost cap + rollback/quarantine + autonomous worker (autonomous OFF until preconditions); create-only work-order plane
+  gauge_change:
+    date: 2026-06-27
+    fingerprint: 5687885c
+    what: concentration caps tightened (position 0.15->0.12, sector 0.35->0.25, max_sector_alloc 0.10->0.06)
+    doc_sync: docs/ALLOCATION_POLICY.md refreshed 2026-07-01
+  doc_follow_ups:  # doc-auditor coverage_gap, surfaced 2026-06 monthly run
+    - opportunity_decisions.py -> docs/opportunity_decisions.md (undocumented; pending)
+    - strategy_selection.py -> docs/strategy_selection.md (undocumented; pending)
+    - allocation_policy_sector_cap_drift: fixed  # ALLOCATION_POLICY.md 0.35->0.25 (2026-07-01)
 
 # ---------------------------------------------------------------------------
 # Queued after gauge fingerprint f60e0b9d51bec808 reaches n=100 resolved 1d
