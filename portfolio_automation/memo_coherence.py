@@ -1127,6 +1127,24 @@ def build_memo_coherence(sources: dict[str, Any], *, now: Optional[datetime] = N
     }
 
 
+def format_calibration_hit_rate(value: Any) -> str:
+    """Render ``raw_calibration_hit_rate`` (a 0-1 decimal fraction) as a
+    fixed-precision percent for operator-facing prose.
+
+    Kept next to the field's definition (see ``build_memo_coherence`` ->
+    ``raw_calibration_hit_rate``) so the unit convention lives with the data.
+    Matches the percent scale of the sibling ``directional_accuracy_pct`` it is
+    "shown for comparison" against. Returns ``"n/a"`` when unavailable so the
+    memo never prints ``None`` or a full-precision float.
+    """
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def render_memo_coherence_md(result: dict[str, Any]) -> str:
     """Operator-facing markdown appendix of the coherence diagnostics."""
     rec = result.get("reconciliation", {})
@@ -1155,7 +1173,7 @@ def render_memo_coherence_md(result: dict[str, Any]) -> str:
             "## Hit-rate (neutral-band)",
             f"- Directional accuracy: {hr.get('directional_accuracy_pct')}% "
             f"(correct {hr.get('correct')} / incorrect {hr.get('incorrect')} / neutral {hr.get('neutral')})",
-            f"- Neutral band ±{hr.get('neutral_band_pct')}% · raw calibration {hr.get('raw_calibration_hit_rate')}",
+            f"- Neutral band ±{hr.get('neutral_band_pct')}% · raw calibration {format_calibration_hit_rate(hr.get('raw_calibration_hit_rate'))}",
         ]
     lines += ["", "_Advisory only — no trades executed. Production behavior remains human-gated._"]
     return "\n".join(lines)

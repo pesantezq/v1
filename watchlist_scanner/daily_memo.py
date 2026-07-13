@@ -2705,6 +2705,8 @@ def _coherence_appendix_text(mc: dict[str, Any]) -> list[str]:
     """Operator-appendix coherence diagnostics (plain text)."""
     if not mc:
         return []
+    from portfolio_automation.memo_coherence import format_calibration_hit_rate
+
     hr = mc.get("hit_rate") or {}
     crowd = mc.get("crowd") or {}
     out: list[str] = []
@@ -2714,7 +2716,7 @@ def _coherence_appendix_text(mc: dict[str, Any]) -> list[str]:
             f"{hr.get('directional_accuracy_pct')}% directional "
             f"(correct {hr.get('correct')} / incorrect {hr.get('incorrect')} / "
             f"neutral {hr.get('neutral')}); raw calibration "
-            f"{hr.get('raw_calibration_hit_rate')}."
+            f"{format_calibration_hit_rate(hr.get('raw_calibration_hit_rate'))}."
         )
     if crowd.get("available"):
         out.append(

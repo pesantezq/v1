@@ -32,7 +32,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from portfolio_automation.memo_coherence import run_memo_coherence  # noqa: E402
+from portfolio_automation.memo_coherence import (  # noqa: E402
+    format_calibration_hit_rate,
+    run_memo_coherence,
+)
 
 
 def _fmt_money(v) -> str:
@@ -99,7 +102,7 @@ def main(argv: list[str]) -> int:
               f"(correct {hr.get('correct')} / incorrect {hr.get('incorrect')} / "
               f"neutral {hr.get('neutral')})")
         print(f"  Neutral band    : +/-{hr.get('neutral_band_pct')}%  "
-              f"(raw calibration {hr.get('raw_calibration_hit_rate')})")
+              f"(raw calibration {format_calibration_hit_rate(hr.get('raw_calibration_hit_rate'))})")
     else:
         print("  no resolved outcomes")
     print("-" * 64)
