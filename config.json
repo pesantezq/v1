@@ -643,6 +643,12 @@
         "timezone": "America/New_York"
       },
       "note": "Bounded GPT auto-approval — SIMULATION ONLY. Ships INERT. It may auto-apply bounded changes to a SEPARATE simulation watchlist DB (never the production DB read by the scanner) and, when strategy_enabled+cap>0, the sandbox active strategy. It can NEVER promote to production, feed the decision engine, or impersonate human approval. live_watchlist_enabled is present for explicitness and is unsupported (must stay false). Kill-switch: config/auto_approval.DISABLED file or STOCKBOT_AUTO_APPROVAL_DISABLED=1. See docs/SIM_GOVERNANCE.md + the CLAUDE.md sanctioned exception (2026-07-14)."
+    },
+    "approval_packet": {
+      "enabled": false,
+      "deep_link_base": "https://dashboard.portfolio-ops-center.com",
+      "stale_pending_days": 3,
+      "note": "One-shot operator approval packet. Read-only builder + GUI approve route reusing the human-gated promotion_approvals path. Ships GATED. Disabled => no Step 8, approve route responds disabled, email unchanged. No new production-mutation path."
     }
   }
 }

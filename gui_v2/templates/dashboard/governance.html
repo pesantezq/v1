@@ -95,6 +95,74 @@
     {% endif %}
   </section>
 
+  {# ── Approval Packet — one consolidated packet: sim-veto items (handled by
+     the existing "Auto-applied in simulation" section below) plus production
+     candidates pending human approval, actionable per-item or in bulk here. ── #}
+  {% if approval_packet and approval_packet.available %}
+  <section aria-label="Approval packet" class="space-y-3" id="approval-packet">
+    {{ ui.section_header("Approval Packet",
+                         "One consolidated packet — veto simulation items above and/or approve production candidates below",
+                         "operator_approval_packet.json") }}
+    <h3 class="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+      Production candidates pending approval ({{ approval_packet.counts.tier_production_pending or 0 }})
+    </h3>
+    {% if approval_packet.tier_production %}
+    {% for p in approval_packet.tier_production %}
+    <form id="pkt-item-{{ loop.index }}" method="post" action="/dashboard/governance/approve">
+      <input type="hidden" name="proposal_id" value="{{ p.proposal_id }}">
+    </form>
+    {% endfor %}
+    <form id="pkt-bulk" method="post" action="/dashboard/governance/approve">
+      {% call ui.responsive_table() %}
+      <table class="min-w-full text-xs">
+        <thead>
+          <tr class="text-left text-zinc-500">
+            <th class="py-1 pr-4">Exclude</th>
+            <th class="py-1 pr-4">Proposal</th>
+            <th class="py-1 pr-4">Workflow</th>
+            <th class="py-1 pr-4">Symbol</th>
+            <th class="py-1 pr-4">Status</th>
+            <th class="py-1 pr-4">Per-item</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for p in approval_packet.tier_production %}
+          <tr class="border-t border-zinc-800">
+            <td class="py-1 pr-4"><input type="checkbox" name="excluded_ids" value="{{ p.proposal_id }}" form="pkt-bulk"></td>
+            <td class="py-1 pr-4 font-mono">{{ p.proposal_id }}</td>
+            <td class="py-1 pr-4">{{ p.workflow or "—" }}</td>
+            <td class="py-1 pr-4 font-mono">{{ p.symbol or "—" }}</td>
+            <td class="py-1 pr-4">{{ ui.badge("yellow", p.status or "pending") }}</td>
+            <td class="py-1 pr-4">
+              <div class="flex gap-2">
+                <button type="submit" form="pkt-item-{{ loop.index }}" name="action" value="approve"
+                  onclick="return confirm('Approve this production candidate?');"
+                  class="px-2 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">Approve</button>
+                <button type="submit" form="pkt-item-{{ loop.index }}" name="action" value="reject"
+                  onclick="return confirm('Reject this production candidate?');"
+                  class="px-2 py-1 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">Reject</button>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endcall %}
+      <div class="flex gap-2 mt-3">
+        <button type="submit" name="action" value="approve_all"
+          onclick="return confirm('Approve ALL pending production candidates (except excluded)?');"
+          class="px-3 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">Approve all (except excluded)</button>
+        <button type="submit" name="action" value="reject_all"
+          onclick="return confirm('Reject ALL pending production candidates (except excluded)?');"
+          class="px-3 py-1 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">Reject all (except excluded)</button>
+      </div>
+    </form>
+    {% else %}
+      {{ ui.all_clear("No production candidates pending", "The consolidated approval packet has nothing awaiting production approval.") }}
+    {% endif %}
+  </section>
+  {% endif %}
+
   {# ── Auto-applied in simulation — bounded GPT channel, human-vetoable ─── #}
   <section aria-label="Auto-applied in simulation" class="space-y-3">
     {{ ui.section_header("Auto-applied in simulation · veto available",

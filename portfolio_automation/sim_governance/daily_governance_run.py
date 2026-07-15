@@ -28,6 +28,7 @@ from typing import Callable
 from portfolio_automation.data_governance import OutputNamespace, safe_write_json
 from portfolio_automation.sim_governance import (
     ai_review_packet,
+    approval_packet,
     daily_ai_review,
     daily_simulation_bundle,
     production_application,
@@ -261,6 +262,27 @@ def run_daily_governance(
     except Exception as exc:
         logger.warning("daily_governance: application failed: %s", exc)
         status["stages"]["production_application"] = {"ok": False, "error": str(exc)}
+
+    # ── Step 8: one-shot operator approval packet (gated; non-blocking) ─────
+    # Read-only consolidation of tier-a (sim veto) + tier-b (pending production)
+    # into ONE artifact the email + GUI read. Introduces NO new mutation path.
+    try:
+        ap_cfg = cfg.get("approval_packet", {}) or {}
+        if ap_cfg.get("enabled"):
+            aa_cfg = cfg.get("auto_approval", {}) or {}
+            packet = approval_packet.build_operator_packet(
+                base_dir, now,
+                deep_link_base=ap_cfg.get("deep_link_base", ""),
+                veto_window_hours=int(aa_cfg.get("veto_window_hours", 48)))
+            if write_files:
+                approval_packet.write_operator_packet(packet, base_dir=base_dir)
+            status["stages"]["approval_packet"] = {"ok": True,
+                                                   "counts": packet.get("counts", {})}
+        else:
+            status["stages"]["approval_packet"] = {"ok": True, "status": "disabled"}
+    except Exception as exc:
+        logger.warning("daily_governance: approval_packet stage failed: %s", exc)
+        status["stages"]["approval_packet"] = {"ok": False, "error": str(exc)}
 
     # ── roll-up counts for the GUI / daily check ────────────────────────────
     try:

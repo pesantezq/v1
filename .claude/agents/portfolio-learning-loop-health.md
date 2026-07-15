@@ -213,6 +213,52 @@ awaiting operator resolution, or the breaker engaged without a current productio
 This agent is read-only: it VERIFIES the sanctioned simulation channel and reports; it never
 reverts a legitimate simulation event and never approves/vetoes anything.
 
+### Layer 8 — Operator approval queue
+
+Oversight of the one-shot operator approval packet (`portfolio_automation/sim_governance/
+approval_packet.py`, ships GATED via `sim_governance.approval_packet.enabled=false`). It
+consolidates BOTH governance tiers — tier-sim (auto-approved simulation items still within
+their veto window) and tier-production (promotion candidates pending human approval) — into
+one artifact both the evening digest email and the GUI approval page read. It never mutates
+governance state; production approval only ever happens via the existing human-gated
+`promotion_approvals.record_approval`.
+
+```bash
+cat /opt/stockbot/outputs/promotion_review/operator_approval_packet.json 2>/dev/null
+.venv/bin/python -c "
+import json, datetime
+from portfolio_automation.sim_governance import approval_packet as ap
+now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+print(json.dumps(ap.assess_packet_health('outputs', now), indent=1))
+"
+```
+
+Healthy / inert: packet absent (feature not yet activated, `approval_packet.enabled=false`)
+or `assess_packet_health` returns `GREEN` — report, don't alert.
+
+VERIFY (do NOT revert) every `tier_production` entry whose `status` string contains
+`approved`/`rejected`: cross-check its `proposal_id` against
+`promotion_approvals.approved_proposal_ids(base_dir)` /
+`promotion_approvals.rejected_proposal_ids(base_dir)`. A packet entry correctly reflecting a
+genuine human approval or veto is the control WORKING — never revert it, only confirm the
+record exists and matches.
+
+Red flags (RED): `assess_packet_health` returns `RED` with a `packet_gate_drift:<id>` reason
+— the packet claims a decided item but no matching `promotion_approvals` record exists (either
+a stale/desynced packet or, worse, a decision path bypassing the human gate — escalate
+immediately and trace which write happened without going through `record_approval`).
+
+Amber flags: `assess_packet_health` returns `AMBER` — either `packet_missing_or_unreadable`
+while the feature is activated (builder/writer broke; check pipeline Step 8 logs), or one or
+more `stale_pending:<id>:<age>d` reasons (a tier-production candidate has sat in the queue
+past `stale_pending_days`, default 3, without an operator decision — surface the specific
+`proposal_id`/age so the operator can act via the GUI `/governance` approve route or
+`promotion_approvals.record_approval` directly).
+
+This agent is read-only for this layer too: it VERIFIES packet contents against the
+`promotion_approvals` ledger and reports queue aging; it never approves/vetoes/rewrites the
+packet and never reverts a legitimate approval or veto the packet correctly reflects.
+
 ## Report Structure
 
 ```
@@ -230,6 +276,8 @@ reverts a legitimate simulation event and never approves/vetoes anything.
 | 4. Audit log activity | ok / stuck / hot | N applies in last 7d, M rollbacks |
 | 5. Drift state | ok / approaching_cap / paused | apply_enabled=bool, max_drift=X% of cap |
 | 6. Memo integration | ok / silent / errored | N pattern-confirmed entries in memo |
+| 7. Auto-approval (sim) oversight | ok / verify / breach | counters, breaker state |
+| 8. Operator approval queue | ok / stale_pending / gate_drift | tier_production_pending=N, reasons |
 
 **Most concerning signal (if any):** <single sentence>
 

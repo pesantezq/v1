@@ -132,3 +132,31 @@ def test_local_time_send_gate_dst_safe():
                               timezone="America/New_York") is True   # EDT: UTC-4 -> 18:00 local
     assert GD.should_send_now("2026-07-14T20:00:00Z", send_hour_local=18,
                               timezone="America/New_York") is False  # 16:00 local
+
+
+# --------------------------------------------------------------------------
+# Approval-page deep link
+# --------------------------------------------------------------------------
+
+def test_digest_includes_approval_deep_link():
+    from portfolio_automation.sim_governance import governance_digest as gd
+    digest = gd.build_governance_digest(
+        summary={"active_items": [], "active_item_count": 0, "counters": {}},
+        events=[], now="2026-07-15T00:00:00+00:00",
+        pending_proposals=[],
+        approval_page_url="https://dash.example/dashboard/governance",
+    )
+    assert digest["approval_page_url"] == "https://dash.example/dashboard/governance"
+    text = gd._render_text(digest["json"])
+    assert "https://dash.example/dashboard/governance" in text
+    html = gd._render_html(digest["json"])
+    assert "https://dash.example/dashboard/governance" in html
+
+
+def test_digest_omits_link_when_unset():
+    from portfolio_automation.sim_governance import governance_digest as gd
+    digest = gd.build_governance_digest(
+        summary={"active_items": [], "active_item_count": 0, "counters": {}},
+        events=[], now="2026-07-15T00:00:00+00:00", pending_proposals=[])
+    assert digest.get("approval_page_url") in (None, "")
+    assert "Review & approve" not in gd._render_text(digest["json"])
