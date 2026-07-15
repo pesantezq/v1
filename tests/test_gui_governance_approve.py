@@ -67,3 +67,99 @@ def test_governance_page_renders_packet_panel(appmod, monkeypatch, tmp_path):
     assert "Approval Packet" in r.text
     assert "/dashboard/governance/approve" in r.text
     assert "p1" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Route-level gating spine for POST /dashboard/governance/approve.
+#
+# These exercise page_governance_approve itself (not just the
+# _apply_approval_action helper) so the operator-edit gate, the same-origin
+# CSRF guard, and actor-provenance (auth user, never a form-supplied
+# ``approver``) are proven at the route boundary, per the code review gap.
+# ---------------------------------------------------------------------------
+
+
+def _patch_no_disk_side_effects(appmod, monkeypatch, tmp_path):
+    """Redirect REPO_ROOT so the route's audit_log.record_event writes land
+    under tmp_path instead of the real repo tree."""
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+
+
+def test_route_approve_blocked_when_operator_edit_disabled(appmod, monkeypatch, tmp_path):
+    from starlette.testclient import TestClient
+
+    # Auth stays configured (set by the appmod fixture); only the edit flag
+    # is withdrawn, mirroring an authenticated read-only viewer.
+    monkeypatch.delenv("GUI_V2_OPERATOR_EDIT", raising=False)
+    _patch_no_disk_side_effects(appmod, monkeypatch, tmp_path)
+
+    calls = []
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: calls.append(kw) or {"ok": True, "reason": "ok"})
+
+    client = TestClient(appmod.app)
+    r = client.post(
+        "/dashboard/governance/approve",
+        data={"action": "approve", "proposal_id": "p1"},
+        auth=("op", "pw"),
+        headers={"origin": "http://testserver",
+                 "referer": "http://testserver/dashboard/governance"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "disabled" in r.headers["location"].lower()
+    assert calls == []
+
+
+def test_route_approve_rejected_when_cross_origin(appmod, monkeypatch, tmp_path):
+    from starlette.testclient import TestClient
+
+    # appmod fixture already sets GUI_V2_OPERATOR_EDIT=1.
+    _patch_no_disk_side_effects(appmod, monkeypatch, tmp_path)
+
+    calls = []
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: calls.append(kw) or {"ok": True, "reason": "ok"})
+    monkeypatch.setattr(appmod, "_pending_ids", lambda base_dir: {"p1"})
+    monkeypatch.setattr(appmod, "_decided_ids", lambda base_dir: set())
+
+    client = TestClient(appmod.app)
+    r = client.post(
+        "/dashboard/governance/approve",
+        data={"action": "approve", "proposal_id": "p1"},
+        auth=("op", "pw"),
+        headers={"origin": "http://evil.example"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "cross-origin" in r.headers["location"].lower()
+    assert calls == []
+
+
+def test_route_approve_same_origin_records_with_session_actor(appmod, monkeypatch, tmp_path):
+    from starlette.testclient import TestClient
+
+    # appmod fixture already sets GUI_V2_OPERATOR_EDIT=1.
+    _patch_no_disk_side_effects(appmod, monkeypatch, tmp_path)
+
+    calls = []
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: calls.append(kw) or {"ok": True, "reason": "ok"})
+    monkeypatch.setattr(appmod, "_pending_ids", lambda base_dir: {"p1"})
+    monkeypatch.setattr(appmod, "_decided_ids", lambda base_dir: set())
+
+    client = TestClient(appmod.app)
+    r = client.post(
+        "/dashboard/governance/approve",
+        # A form-supplied ``approver`` must never override the session actor.
+        data={"action": "approve", "proposal_id": "p1", "approver": "attacker"},
+        auth=("op", "pw"),
+        headers={"origin": "http://testserver",
+                 "referer": "http://testserver/dashboard/governance"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert len(calls) == 1
+    assert calls[0]["proposal_id"] == "p1"
+    assert calls[0]["decision"] == "approve"
+    assert calls[0]["approver"] == "op"
