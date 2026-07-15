@@ -107,8 +107,12 @@
       Production candidates pending approval ({{ approval_packet.counts.tier_production_pending or 0 }})
     </h3>
     {% if approval_packet.tier_production %}
-    <form method="post" action="/dashboard/governance/approve">
-      <input type="hidden" name="proposal_id" value="">
+    {% for p in approval_packet.tier_production %}
+    <form id="pkt-item-{{ loop.index }}" method="post" action="/dashboard/governance/approve">
+      <input type="hidden" name="proposal_id" value="{{ p.proposal_id }}">
+    </form>
+    {% endfor %}
+    <form id="pkt-bulk" method="post" action="/dashboard/governance/approve">
       {% call ui.responsive_table() %}
       <table class="min-w-full text-xs">
         <thead>
@@ -124,18 +128,18 @@
         <tbody>
         {% for p in approval_packet.tier_production %}
           <tr class="border-t border-zinc-800">
-            <td class="py-1 pr-4"><input type="checkbox" name="excluded_ids" value="{{ p.proposal_id }}"></td>
+            <td class="py-1 pr-4"><input type="checkbox" name="excluded_ids" value="{{ p.proposal_id }}" form="pkt-bulk"></td>
             <td class="py-1 pr-4 font-mono">{{ p.proposal_id }}</td>
             <td class="py-1 pr-4">{{ p.workflow or "—" }}</td>
             <td class="py-1 pr-4 font-mono">{{ p.symbol or "—" }}</td>
             <td class="py-1 pr-4">{{ ui.badge("yellow", p.status or "pending") }}</td>
             <td class="py-1 pr-4">
               <div class="flex gap-2">
-                <button type="submit" name="action" value="approve"
-                  onclick="this.form.proposal_id.value='{{ p.proposal_id }}'; return confirm('Approve {{ p.symbol or p.proposal_id }} ({{ p.proposal_id }})?');"
+                <button type="submit" form="pkt-item-{{ loop.index }}" name="action" value="approve"
+                  onclick="return confirm('Approve this production candidate?');"
                   class="px-2 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white">Approve</button>
-                <button type="submit" name="action" value="reject"
-                  onclick="this.form.proposal_id.value='{{ p.proposal_id }}'; return confirm('Reject {{ p.symbol or p.proposal_id }} ({{ p.proposal_id }})?');"
+                <button type="submit" form="pkt-item-{{ loop.index }}" name="action" value="reject"
+                  onclick="return confirm('Reject this production candidate?');"
                   class="px-2 py-1 rounded text-xs font-semibold bg-zinc-600 hover:bg-zinc-500 text-white">Reject</button>
               </div>
             </td>
