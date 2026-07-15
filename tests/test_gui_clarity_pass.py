@@ -105,9 +105,15 @@ def test_governance_pending_proposal_renders_decision_card(monkeypatch):
     body = TestClient(app_module.app).get("/dashboard/governance").text
     assert "Needs decision" in body
     assert "CHAT" in body
-    # confirmation must carry symbol + humanized type, not just the raw id
+    # The confirm() guard is present but STATIC — dynamic identifiers (symbol,
+    # proposal_id) must stay in the surrounding autoescaped HTML (asserted via
+    # "CHAT" above and the hidden proposal_id input), never inside the JS
+    # confirm() string, per the harden/governance-inline-js-xss fix: a value
+    # interpolated into onclick="...confirm('...')" is JS-string context, which
+    # Jinja autoescape does not protect (see tests/test_template_inline_js_safety.py).
     m = re.search(r"confirm\('Approve ([^']*)'\)", body)
-    assert m and "CHAT" in m.group(1) and "prop_test1" in m.group(1)
+    assert m and m.group(1) == "this production candidate?"
+    assert 'value="prop_test1"' in body
 
 
 # 7. No AUTOMATIC/AI-driven approval control exists anywhere in the templates.

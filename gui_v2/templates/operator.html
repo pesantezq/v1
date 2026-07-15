@@ -17,7 +17,7 @@
   </div>
   {% if o.cancellable and edit_enabled %}
   <form method="post" action="/dashboard/operator/cancel" class="flex items-center gap-2 flex-wrap"
-        onsubmit="return confirm('Cancel {{ o.work_order_id }}? This is a terminal, audited action.');">
+        onsubmit="return confirm('Cancel this work order? This is a terminal, audited action.');">
     <input type="hidden" name="work_order_id" value="{{ o.work_order_id }}">
     <input type="text" name="reason" required maxlength="280" placeholder="reason (required)"
            class="flex-1 min-w-[8rem] bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs">
