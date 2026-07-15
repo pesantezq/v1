@@ -186,6 +186,33 @@ Healthy: section present with 1-5 entries.
 
 Degraded: section missing means either (a) no winning tags reached n≥30 yet (acceptable in week 1), (b) no top100 candidate carries a winning tag (unusual), (c) memo render path broke.
 
+### Layer 7 — GPT simulation auto-approval oversight
+
+Oversight of the sanctioned SIMULATION auto-approval mutator (`auto_approval.py`, ships
+inert). Read the append-only ledger + derived summary:
+
+```bash
+tail -n 40 /opt/stockbot/outputs/policy/auto_approval_events.jsonl 2>/dev/null
+cat /opt/stockbot/outputs/policy/auto_approval_audit.json 2>/dev/null
+```
+
+Healthy / inert: files absent, or `counters` all zero and `circuit_breaker.engaged == false`
+(the default steady state — report, don't alert).
+
+VERIFY (do NOT revert) each `applied` event: it MUST carry `approval_channel=="auto_approval"`,
+`is_human_approved==false`, `target_lane=="simulation"`, `production_mutation==false`,
+`feeds_decision_engine==false`. A `human_veto` followed by a `rollback` is the control working
+— confirm the rollback status is `rolled_back` (not `rollback_failed`).
+
+Red flags (RED): any `failure` with `rollback_status==rollback_failed`; an `applied` event
+missing any authority-channel field above (authority breach); a duplicate application for one
+`idempotency_key`; `circuit_breaker.engaged` with reason `ledger_corrupt`/`unaudited_mutation`/
+`state_ledger_inconsistent`. Amber: `active_item_count > 0` (in veto window), a `rollback_conflict`
+awaiting operator resolution, or the breaker engaged without a current production violation.
+
+This agent is read-only: it VERIFIES the sanctioned simulation channel and reports; it never
+reverts a legitimate simulation event and never approves/vetoes anything.
+
 ## Report Structure
 
 ```

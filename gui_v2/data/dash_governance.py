@@ -26,6 +26,8 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
     appr_dir = root / "outputs" / "promotion_approvals"
     sim_dir = root / "outputs" / "simulation"
 
+    policy_dir = root / "outputs" / "policy"
+
     status = _read_json(review_dir / "daily_governance_status.json") or {}
     bundle = _read_json(sim_dir / "daily_simulation_bundle.json") or {}
     review = _read_json(review_dir / "daily_ai_review_result.json") or {}
@@ -97,6 +99,45 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
         updated_at=pending.get("generated_at"),
     ))
 
+    # ── Auto-approval (SIMULATION) — bounded GPT channel, human-vetoable ──────
+    aa_summary = _read_json(policy_dir / "auto_approval_audit.json") or {}
+    aa_active = aa_summary.get("active_items", []) or []
+    aa_cb = aa_summary.get("circuit_breaker", {}) or {}
+    auto_applied_items: list[dict] = []
+    try:
+        from portfolio_automation.sim_governance import auto_approval as _aa
+        aa_events = _aa.load_events(base_dir=str(root / "outputs"))
+        applied_by_id = {e.get("event_id"): e for e in aa_events
+                         if e.get("kind") == _aa.EVENT_APPLIED}
+        for it in aa_active:
+            ev = applied_by_id.get(it.get("event_id"), {})
+            auto_applied_items.append({
+                **it,
+                "gpt_reasoning": ev.get("gpt_reasoning"),
+                "confidence": ev.get("confidence", it.get("confidence")),
+                "gate_summary": [g.get("gate_name") for g in (ev.get("gate_trace") or [])
+                                 if isinstance(g, dict) and g.get("passed")],
+                "target_lane": "simulation",
+                "feeds_decision_engine": False,
+                "status_label": "Auto-applied in simulation · veto available",
+            })
+    except Exception:
+        auto_applied_items = []
+
+    if aa_summary or auto_applied_items:
+        cb_on = bool(aa_cb.get("engaged"))
+        cards.append(card(
+            "Auto-approval (simulation)",
+            status="warning" if (auto_applied_items or cb_on) else "ok",
+            label=(f"circuit breaker: {aa_cb.get('reason')}" if cb_on
+                   else f"{len(auto_applied_items)} awaiting veto"),
+            summary="Bounded GPT auto-approvals in the SIMULATION lane only — never "
+                    "production, never the decision engine. Vetoable per event.",
+            source_artifacts=["outputs/policy/auto_approval_audit.json",
+                              "outputs/policy/auto_approval_events.jsonl"],
+            updated_at=aa_summary.get("generated_at"),
+        ))
+
     return {
         "persona": "governance",
         "observe_only": False,   # this lane is gated, not observe-only
@@ -120,6 +161,9 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
         "rejected_proposal_ids": sorted(rejected_ids),
         "applied_count": applied_count,
         "approval_records": approval_recs,
+        # auto-approval (simulation) channel
+        "auto_applied_items": auto_applied_items,
+        "auto_approval_circuit_breaker": aa_cb,
         "labels": {
             "sim_active": LABEL_SIM_ACTIVE,
             "pending": LABEL_PENDING,

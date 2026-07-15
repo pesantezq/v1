@@ -188,3 +188,85 @@ def record_strategy_decision(
         "prev_active": prev_active,
         "supersedes": supersedes,
     }
+
+
+# ---------------------------------------------------------------------------
+# Bounded GPT auto-approval channel — SIMULATION ONLY (NOT human, NOT production).
+#
+# This is deliberately a SEPARATE function from record_strategy_decision so the
+# auto-approval channel never travels a human-approval code path. The written
+# selection carries approval_channel="auto_approval" + is_human_approved=False, so it
+# is structurally distinguishable from a human selection and can never impersonate one.
+# ---------------------------------------------------------------------------
+
+
+def record_auto_strategy_anchor(
+    strategy_id: str,
+    *,
+    valid_strategy_ids: Iterable[str],
+    now: str,
+    strategy_name: str | None = None,
+    base_dir: Path | str = "outputs",
+    write_files: bool = True,
+) -> dict[str, Any]:
+    """Anchor the active SIMULATION strategy via the auto-approval channel.
+
+    Returns ``{ok, reason, active_strategy_id, prev_active, before_state, after_state}``.
+    ``before_state`` is the exact prior selection (or None) for compare-and-swap rollback.
+    """
+    valid = set(valid_strategy_ids or [])
+    if strategy_id not in valid:
+        return {"ok": False,
+                "reason": f"strategy_id {strategy_id!r} is not a valid simulation strategy"}
+
+    prev = load_active_selection(base_dir)
+    before_state = prev or None
+    prev_active = prev.get("active_strategy_id")
+
+    after_state = {
+        "observe_only": True,
+        "no_trade": True,
+        "active_strategy_id": strategy_id,
+        "name": strategy_name or strategy_id,
+        "approval_channel": "auto_approval",
+        "is_human_approved": False,
+        "approved_by": "auto_approval",
+        "approved_at": now,
+        "status": "auto_anchored_simulation",
+        "supersedes": prev_active if prev_active != strategy_id else None,
+    }
+
+    if write_files:
+        _append_decision(base_dir, {
+            "ts": now, "strategy_id": strategy_id, "decision": "auto_anchor",
+            "approval_channel": "auto_approval", "is_human_approved": False,
+            "prev_active": prev_active,
+        })
+        safe_write_json(OutputNamespace.POLICY, _SELECTION_FILE, after_state, base_dir=base_dir)
+
+    return {"ok": True, "reason": "ok", "active_strategy_id": strategy_id,
+            "prev_active": prev_active, "before_state": before_state,
+            "after_state": after_state}
+
+
+def restore_active_selection(
+    prior: dict | None,
+    *,
+    base_dir: Path | str = "outputs",
+    now: str | None = None,
+    write_files: bool = True,
+) -> None:
+    """Rewrite the active-selection file to an exact prior state (or clear it if there
+    was none). Used by the event-aware rollback AFTER its compare-and-swap check."""
+    if not write_files:
+        return
+    if prior:
+        safe_write_json(OutputNamespace.POLICY, _SELECTION_FILE, prior, base_dir=base_dir)
+    else:
+        safe_write_json(
+            OutputNamespace.POLICY, _SELECTION_FILE,
+            {"observe_only": True, "no_trade": True, "active_strategy_id": None,
+             "name": None, "status": "cleared", "approved_at": now or _now_iso(),
+             "supersedes": None},
+            base_dir=base_dir,
+        )
