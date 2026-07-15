@@ -45,7 +45,8 @@ def _within_window(applied_at: str, now: str, hours: int) -> bool:
 def build_governance_digest(*, summary: dict, events: list[dict], now: str,
                             veto_window_hours: int = 48,
                             pending_proposals: list[dict] | None = None,
-                            gui_base_url: str = "") -> dict:
+                            gui_base_url: str = "",
+                            approval_page_url: str | None = None) -> dict:
     """Build the evening digest from the ledger + summary. Pure — no I/O."""
     events = events or []
     summary = summary or {}
@@ -94,16 +95,20 @@ def build_governance_digest(*, summary: dict, events: list[dict], now: str,
         "authority_rejections": authority_rejections,
         "deterministic_rejections": deterministic_rejections,
         "pending_human_proposals": pending_proposals or [],
+        "approval_page_url": approval_page_url or "",
         "circuit_breaker": summary.get("circuit_breaker") or {"engaged": False, "reason": None},
         "counters": summary.get("counters", {}),
     }
     return {"json": payload, "html": _render_html(payload), "text": _render_text(payload),
-            "subject_date": (now or "")[:10]}
+            "subject_date": (now or "")[:10], "approval_page_url": payload["approval_page_url"]}
 
 
 def _render_text(p: dict) -> str:
     lines = [f"Governance Digest — {p.get('generated_at', '')[:10]}",
              "(Simulation-lane auto-approval. Production remains human-gated.)", ""]
+    if p.get("approval_page_url"):
+        lines.append(f"Review & approve today's packet → {p['approval_page_url']}")
+        lines.append("")
     aa = p["auto_applied"]
     if not aa and not p["human_vetoes"] and not p["rollbacks"] and not p["rollback_conflicts"]:
         lines.append("No auto-approval activity in this period.")
@@ -131,6 +136,9 @@ def _esc(v: Any) -> str:
 def _render_html(p: dict) -> str:
     parts = [f"<h2>Governance Digest — {_esc(p.get('generated_at', '')[:10])}</h2>",
              "<p><em>Simulation-lane auto-approval. Production remains human-gated.</em></p>"]
+    if p.get("approval_page_url"):
+        url = _esc(p["approval_page_url"])
+        parts.append(f'<p><a href="{url}">Review &amp; approve today\'s packet →</a></p>')
     aa = p["auto_applied"]
     if not aa and not p["human_vetoes"] and not p["rollbacks"] and not p["rollback_conflicts"]:
         parts.append("<p>No auto-approval activity in this period.</p>")
@@ -274,12 +282,16 @@ def send_governance_digest(digest: dict, *, now: str, base_dir: str = "outputs",
     return _record(base_dir, {**attempt, "status": "sent"}, write_files)
 
 
-def _load_auto_approval_config(root: str) -> dict:
+def _load_sim_governance_config(root: str) -> dict:
     try:
         cfg = json.loads((Path(root) / "config.json").read_text(encoding="utf-8"))
-        return ((cfg.get("sim_governance") or {}).get("auto_approval") or {})
+        return (cfg.get("sim_governance") or {})
     except Exception:
         return {}
+
+
+def _load_auto_approval_config(root: str) -> dict:
+    return (_load_sim_governance_config(root) or {}).get("auto_approval") or {}
 
 
 def run_evening_digest(root: str = ".", now: str | None = None, *, env: dict | None = None,
@@ -300,10 +312,16 @@ def run_evening_digest(root: str = ".", now: str | None = None, *, env: dict | N
             return {"status": "skipped", "reason": "digest_disabled_in_config", "ts": now}
         events = AA.load_events(base_dir=base_dir)
         summary = AA.build_summary(base_dir=base_dir, now=now)
+        ap_cfg = _load_sim_governance_config(root).get("approval_packet") or {}
+        approval_url = ""
+        base = ap_cfg.get("deep_link_base", "")
+        if base:
+            approval_url = f"{base.rstrip('/')}/dashboard/governance"
         digest = build_governance_digest(
             summary=summary, events=events, now=now,
             veto_window_hours=int(aa_cfg.get("veto_window_hours", 48)),
-            gui_base_url=env.get("GOVERNANCE_GUI_BASE_URL", ""))
+            gui_base_url=env.get("GOVERNANCE_GUI_BASE_URL", ""),
+            approval_page_url=approval_url)
         return send_governance_digest(digest, now=now, base_dir=base_dir, env=env,
                                       transport=transport, write_files=write_files)
     except Exception as exc:
