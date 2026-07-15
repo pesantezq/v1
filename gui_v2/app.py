@@ -706,7 +706,15 @@ def page_dash_governance(
     except Exception:
         ctx = {"persona": "governance", "observe_only": False, "cards": [],
                "pending_proposals": [], "has_data": False}
-    return _render(request, "dashboard/governance.html", **ctx)
+
+    try:
+        from gui_v2.data.dash_approval_packet import load_packet_context
+        approval_packet_ctx = load_packet_context(str(REPO_ROOT / "outputs"))
+    except Exception:
+        approval_packet_ctx = {"available": False, "tier_sim": [],
+                               "tier_production": [], "counts": {}}
+
+    return _render(request, "dashboard/governance.html", approval_packet=approval_packet_ctx, **ctx)
 
 
 @app.post("/dashboard/governance/decide")
