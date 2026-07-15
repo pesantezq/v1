@@ -55,6 +55,9 @@ _DEFAULTS = {
         "apply_watchlist_overlay": False,
         "apply_advisory_overlay": False,
     },
+    "auto_approval": {
+        "enabled": False,
+    },
 }
 
 
@@ -67,7 +70,7 @@ def load_sim_governance_config(root: Path) -> dict:
         block = {}
     merged = {**_DEFAULTS, **block}
     # shallow-merge nested dicts
-    for k in ("simulation_lane", "ai_review", "production_application"):
+    for k in ("simulation_lane", "ai_review", "production_application", "auto_approval"):
         merged[k] = {**_DEFAULTS[k], **(block.get(k, {}) or {})}
     return merged
 
@@ -213,6 +216,29 @@ def run_daily_governance(
             status["stages"]["ai_review"] = {"ok": False, "error": str(exc)}
     else:
         status["stages"]["ai_review"] = {"ok": True, "status": "disabled"}
+
+    # ── Step 5b: bounded GPT auto-approval (SIMULATION only; inert unless enabled) ──
+    # Runs immediately after the GPT review, reusing the in-memory `review` + `lane`.
+    # Applies bounded changes ONLY to a SEPARATE simulation watchlist DB (never the
+    # production DB) and never promotes to production. Fully audited; non-blocking.
+    try:
+        from portfolio_automation.sim_governance import auto_approval as _aa
+        aa_status = _aa.run_stage(
+            root=str(root), now=now, sim_gov_config=cfg,
+            review_result=review,
+            candidates_by_id={c["candidate_id"]: c for c in lane.get("candidates", [])},
+            base_dir=base_dir, write_files=write_files)
+        status["stages"]["auto_approval"] = {
+            "ok": bool(aa_status.get("ok", True)),
+            "enabled": aa_status.get("enabled"),
+            "disabled_reason": aa_status.get("disabled_reason"),
+            "applied": aa_status.get("applied_count", 0),
+            "gpt_vetoed": aa_status.get("gpt_vetoed_count", 0),
+            "rejected": aa_status.get("rejected_count", 0),
+        }
+    except Exception as exc:
+        logger.warning("daily_governance: auto_approval stage failed: %s", exc)
+        status["stages"]["auto_approval"] = {"ok": False, "error": str(exc)}
 
     # ── Step 6: pending proposals for READY candidates ──────────────────────
     try:

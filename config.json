@@ -624,6 +624,25 @@
       "apply_watchlist_overlay": true,
       "apply_advisory_overlay": true,
       "note": "Master switches for the live production overlays. The full pending->approve->apply mechanism is built, tested, and writes approved overlay artifacts. Flipping these two flags to true is the final human production-boundary step that lets the live watchlist/advisory loaders consume approved overlays."
+    },
+    "auto_approval": {
+      "enabled": false,
+      "watchlist_enabled": false,
+      "strategy_enabled": false,
+      "live_watchlist_enabled": false,
+      "watchlist_daily_cap": 2,
+      "strategy_daily_cap": 0,
+      "min_confidence": 0.85,
+      "veto_window_hours": 48,
+      "max_active_awaiting_veto": 5,
+      "sim_watchlist_db_path": "data/sim_governance_watchlist.db",
+      "sim_max_symbols": 5,
+      "evening_digest": {
+        "enabled": false,
+        "send_hour_local": 18,
+        "timezone": "America/New_York"
+      },
+      "note": "Bounded GPT auto-approval — SIMULATION ONLY. Ships INERT. It may auto-apply bounded changes to a SEPARATE simulation watchlist DB (never the production DB read by the scanner) and, when strategy_enabled+cap>0, the sandbox active strategy. It can NEVER promote to production, feed the decision engine, or impersonate human approval. live_watchlist_enabled is present for explicitness and is unsupported (must stay false). Kill-switch: config/auto_approval.DISABLED file or STOCKBOT_AUTO_APPROVAL_DISABLED=1. See docs/SIM_GOVERNANCE.md + the CLAUDE.md sanctioned exception (2026-07-14)."
     }
   }
 }

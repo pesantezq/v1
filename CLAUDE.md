@@ -38,6 +38,32 @@ This repo is an advisory-only portfolio automation system. It produces analysis,
   treat an auto-apply event as a thing to VERIFY, not as an observe-only violation to revert.
 - See `docs/PATTERN_LOOP_AUTO_APPLY.md` for gates, rollback, and the activation runbook.
 
+### Sanctioned exception — GPT simulation auto-approval (operator-approved 2026-07-14)
+- `portfolio_automation/sim_governance/auto_approval.py` may auto-apply bounded changes
+  ONLY to authorized **simulation** state: a SEPARATE simulation watchlist DB
+  (`data/sim_governance_watchlist.db`, never the production DB read by the scanner) and,
+  when explicitly enabled, the sandbox active strategy. A GPT approver is layered on
+  deterministic gates (veto / approve-the-pre-bounded change only — never widens a bound).
+- **Authority invariant (enforced in code, tests, health, docs):** auto-approval can NEVER
+  authorize production promotion, feed the production decision engine, or impersonate human
+  approval. Every candidate must satisfy `target_lane=="simulation"`, `production_mutation==false`,
+  `feeds_decision_engine==false`, `is_human_approved==false`; failing candidates stay pending-human.
+  `ready_for_production_review` is NEVER auto-promotion permission. `schemas.is_human_approver`
+  is UNCHANGED and still rejects the `auto_approval` marker — this is NOT "GPT production
+  auto-approval"; production stays human-gated.
+- It ships INERT (`sim_governance.auto_approval.enabled=false`, all sub-flags false,
+  `strategy_daily_cap=0`). Kill-switch: `config/auto_approval.DISABLED` file or
+  `STOCKBOT_AUTO_APPROVAL_DISABLED=1`. Fail-closed; a circuit breaker halts further applies
+  on any safety anomaly (failed rollback, corrupt ledger, invariant breach).
+- Reversible: every apply captures before/after state; a human veto rolls back via
+  compare-and-swap (never overwriting newer work → `rollback_conflict`). Append-only ledger
+  `outputs/policy/auto_approval_events.jsonl` + derived summary `outputs/policy/auto_approval_audit.json`.
+  Surfaced by daily-tool-analysis (RED on `rollback_failed`/authority breach; AMBER on active
+  awaiting-veto / a successful rollback / conflict) and `portfolio-learning-loop-health`.
+  A successful veto+rollback is the control WORKING — health agents VERIFY these events, they
+  do not revert them.
+- See `docs/SIM_GOVERNANCE.md` (Auto-approval section) for gates, rollback, and the activation runbook.
+
 ## Working Style
 - Trace the exact source-to-artifact path before editing.
 - Name exact files and functions before changing behavior.

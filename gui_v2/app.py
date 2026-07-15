@@ -748,6 +748,74 @@ async def page_governance_decide(
     return RedirectResponse("/dashboard/governance", status_code=303)
 
 
+@app.post("/dashboard/governance/veto")
+async def page_governance_veto(
+    request: Request, _a: str | None = Depends(_require_auth_dep)
+):
+    """
+    POST /dashboard/governance/veto — human veto of a specific auto-applied SIMULATION
+    event, with event-aware compare-and-swap rollback.
+
+    Strict operator pattern: actor from auth (never the form), GUI_V2_OPERATOR_EDIT gate,
+    same-origin CSRF guard, event-id targeted (never a symbol-only blind demotion),
+    optional bounded reason, idempotent, audited on every branch. This only affects the
+    SIMULATION lane — production is untouched.
+    """
+    import datetime
+    from operator_control import audit_log
+    from portfolio_automation.sim_governance import auto_approval as _aa
+
+    actor: str = _a if _a else "dashboard-manual"
+    actor_source: str = "dashboard_auth" if _a else "dashboard_open_mode"
+
+    form = await request.form()
+    event_id = str(form.get("event_id", "")).strip()
+    reason = (str(form.get("reason", "")).strip() or None)
+    if reason:
+        reason = reason[:280]
+
+    if not event_id:
+        raise HTTPException(status_code=400, detail="event_id required")
+
+    def _redirect(msg: str, level: str) -> RedirectResponse:
+        return RedirectResponse(
+            url=f"/dashboard/governance?msg={quote(msg)}&level={level}", status_code=303)
+
+    # --- authorization gate ---
+    if not _operator_edit_enabled():
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_veto_rejected", actor=actor,
+            details={"why": "edit_disabled", "event_id": event_id, "actor_source": actor_source})
+        return _redirect("Veto disabled (set GUI_V2_OPERATOR_EDIT=1).", "error")
+
+    # --- CSRF-equivalent: same-origin ---
+    if not _same_origin(request):
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_veto_rejected", actor=actor,
+            details={"why": "cross-origin rejected", "event_id": event_id,
+                     "actor_source": actor_source},
+            safety_result="rejected: cross-origin")
+        return _redirect("Rejected: cross-origin request.", "error")
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        result = _aa.veto_from_gui(str(REPO_ROOT), event_id, operator=actor,
+                                   reason=reason, now=now)
+    except Exception as exc:  # never leak a stack trace to the operator
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_veto_error", actor=actor,
+            details={"event_id": event_id, "error": str(exc)})
+        return _redirect("Veto failed (see logs).", "error")
+
+    status = result.get("status")
+    audit_log.record_event(
+        REPO_ROOT, event_type="governance_veto", actor=actor,
+        details={"event_id": event_id, "result_status": status, "reason": reason,
+                 "actor_source": actor_source})
+    level = "success" if status in ("rolled_back", "already_vetoed") else "error"
+    return _redirect(f"Veto {status} for {event_id}.", level)
+
+
 @app.get("/dashboard/strategy-tax", response_class=HTMLResponse)
 def page_dash_strategy_tax(
     request: Request, _a: str | None = Depends(_require_auth)

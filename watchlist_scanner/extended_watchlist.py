@@ -459,6 +459,87 @@ class ExtendedWatchlist:
             conn.close()
         logger.info("ExtendedWatchlist: dropped %s — budget pressure", symbol)
 
+    # ── Auto-approval (simulation) primitives ──────────────────────────────────
+    #
+    # These serve the bounded GPT auto-approval channel, which operates ONLY against
+    # a SEPARATE simulation DB (never the production DB read by the scanner). They are
+    # deliberately distinct from `promote_operator_approved` (the human path) so the
+    # auto-approval channel can never travel a human-approval code path.
+
+    _COLUMNS = (
+        "symbol", "is_active", "promoted_at", "expires_at", "last_reinforced",
+        "theme_name", "theme_names", "theme_confidence", "mention_count",
+        "scan_count", "alert_count", "outcome", "drop_reason",
+    )
+
+    def get_symbol(self, symbol: str) -> dict[str, Any] | None:
+        """Return the full row for *symbol* (active OR inactive), or None if absent.
+
+        Used to capture the exact before/after state for compare-and-swap rollback.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM extended_watchlist WHERE symbol=?", (symbol.upper(),)
+            ).fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def promote_auto_approved(
+        self, symbol: str, confidence: float = 0.9,
+        theme: str = "auto_approval_sim",
+    ) -> dict[str, Any]:
+        """Promote a symbol via the SIMULATION auto-approval channel (NOT human).
+
+        Skips (never duplicates) an already-active symbol; otherwise inserts/reactivates.
+        Returns ``{status: promoted|skipped, reason, symbol}``.
+        """
+        sym = (symbol or "").upper()
+        if not sym:
+            return {"status": "skipped", "reason": "empty_symbol", "symbol": sym}
+        row = self.get_symbol(sym)
+        if row and row["is_active"] == 1:
+            return {"status": "skipped", "reason": "already_active", "symbol": sym}
+        self._promote(sym, theme, [theme], confidence)
+        return {"status": "promoted", "reason": "auto_approved_sim", "symbol": sym}
+
+    def demote_vetoed(self, symbol: str) -> dict[str, Any]:
+        """Deactivate a symbol because an auto-approval was vetoed (reversible marker)."""
+        sym = (symbol or "").upper()
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE extended_watchlist SET is_active=0, drop_reason='vetoed' WHERE symbol=?",
+                (sym,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"status": "demoted", "symbol": sym, "drop_reason": "vetoed"}
+
+    def restore_state(self, symbol: str, before_state: dict | None) -> None:
+        """Restore a symbol to an exact prior row state (or delete it if there was none).
+
+        This is the low-level primitive the event-aware rollback uses AFTER its
+        compare-and-swap check confirms the current state still matches the applied one.
+        """
+        sym = (symbol or "").upper()
+        conn = self._connect()
+        try:
+            if before_state is None:
+                conn.execute("DELETE FROM extended_watchlist WHERE symbol=?", (sym,))
+            else:
+                placeholders = ", ".join("?" for _ in self._COLUMNS)
+                conn.execute(
+                    f"INSERT OR REPLACE INTO extended_watchlist "
+                    f"({', '.join(self._COLUMNS)}) VALUES ({placeholders})",
+                    tuple(before_state.get(c) for c in self._COLUMNS),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     # ── Days-in-watchlist helper ───────────────────────────────────────────────
 
     @staticmethod

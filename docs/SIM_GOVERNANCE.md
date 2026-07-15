@@ -189,3 +189,104 @@ classifier), `test_flock_producer.py` (producer + fallbacks + namespace
 isolation), `test_flock_sim_governance.py` (active behavior, packet inclusion,
 single AI call + cap, pending-only proposals, production gating), and
 `test_flock_gui.py` (Crowd section, Portfolio per-pick context, fallbacks).
+
+---
+
+## Bounded GPT auto-approval (SIMULATION only) — shipped 2026-07-14
+
+Module: `portfolio_automation/sim_governance/auto_approval.py`
+(+ `governance_digest.py`). The **third** sanctioned mutating path. Ships **INERT**.
+
+### What it does
+
+Consumes the daily AI review's `ready_for_production_review` verdicts and, for
+watchlist-eligible candidates, runs deterministic safety gates → a GPT approver
+(approve-in-bounds / veto only) → and, if every gate clears, **auto-applies the change
+to the SIMULATION lane**: a separate watchlist DB (`data/sim_governance_watchlist.db`)
+that the production scanner never reads. It accelerates simulation experimentation; it
+does **not** touch production. Strategy auto-anchoring exists but ships disabled
+(`strategy_daily_cap=0`).
+
+### Authority invariant (non-negotiable)
+
+> Auto-approval may accelerate bounded simulation/advisory changes. It can never authorize
+> production promotion, production decision-engine input, or impersonate human approval.
+> Human approval remains required before any production effect.
+
+Every candidate must satisfy `target_lane=="simulation"`, `production_mutation==false`,
+`feeds_decision_engine==false`, `is_human_approved==false`. Failing candidates never mutate
+state and remain pending-human proposals. `schemas.is_human_approver` is unchanged and rejects
+the `auto_approval` marker — the channel is structurally non-human.
+
+### Gates, GPT approver, cost posture
+
+Universal + component (watchlist/strategy) gates return structured traces
+`{gate_name, passed, reason, observed_value, required_value}`. The GPT approver runs
+**only after all deterministic gates pass** (no model call when nothing is eligible → the
+single-daily-review cost posture is preserved). Any malformed/empty/timeout/exception GPT
+result fails closed to a veto.
+
+### Audit, idempotency, circuit breaker
+
+- Append-only ledger `outputs/policy/auto_approval_events.jsonl` (authoritative) + derived
+  summary `outputs/policy/auto_approval_audit.json`. **Audit-before-mutate**: the durable
+  event is written before the mutation; if the audit write fails, no mutation happens.
+- Idempotency key = `sha256(source_verdict_id | candidate_type | target_id |
+  source_artifact_hash | policy_version)`. A prior successful apply for the key → skip.
+- Circuit breaker halts further applies after a failed rollback, corrupt ledger,
+  state/audit inconsistency, duplicate application, or invariant/production-boundary breach.
+
+### Veto + compare-and-swap rollback
+
+`record_veto(event_id, operator_identity, reason)` rolls back a specific event by restoring
+its captured `before_state` **only if** the current state still equals the `after_state` it
+applied. If state changed since (human or another run), it records a `rollback_conflict`,
+preserves the current state, and surfaces it for operator resolution (health AMBER). Watchlist
+and strategy both use event-aware CAS rollback, never a blind symbol-only demotion.
+
+### Config, kill-switches, wiring
+
+`config.json → sim_governance.auto_approval` (all inert by default): `enabled`,
+`watchlist_enabled`, `strategy_enabled`, `live_watchlist_enabled` (unsupported; must stay false),
+`watchlist_daily_cap=2`, `strategy_daily_cap=0`, `min_confidence=0.85`, `veto_window_hours=48`,
+`max_active_awaiting_veto=5`, `sim_watchlist_db_path`, `evening_digest`.
+Kill-switch precedence (any disables): env `STOCKBOT_AUTO_APPROVAL_DISABLED` → file
+`config/auto_approval.DISABLED` → global `enabled` → component flag → component env kill.
+Invalid config / unreadable kill file → fail closed. Wired as Step 5b inside
+`daily_governance_run.run_daily_governance` (Stage 10e), immediately after the GPT review;
+inert and side-effect-free when disabled.
+
+### Evening governance digest
+
+`governance_digest.py` builds a `{json, html, text}` digest (auto-applied sim items with GPT
+reasoning + gates + confidence, within-veto-window items, vetoes, rollbacks, conflicts,
+failures, authority rejections, pending-human, circuit/kill state). Items are always
+simulation-qualified — "Auto-applied in simulation · veto available", never a bare "approved".
+`send_governance_digest` reuses `memo_email_sender`'s SMTP core, gated on the DISTINCT
+`GOVERNANCE_DIGEST_ENABLED` opt-in, local-time scheduled (default 18:00 America/New_York,
+DST-safe). Disabled → skip; enabled-without-creds or send failure → recorded delivery failure,
+health AMBER, credentials never logged; email failure never blocks/undoes a valid auto-approval.
+
+### GUI
+
+`/dashboard/governance` shows an "Auto-applied in simulation · veto available" card list; each
+has a POST `/dashboard/governance/veto` form (auth actor, `GUI_V2_OPERATOR_EDIT` gate,
+same-origin CSRF, event-id targeted, optional reason, `confirm()`, audited on every branch).
+
+### Health
+
+daily-tool-analysis + `portfolio-learning-loop-health` read both artifacts. RED: rollback
+failed, production mutation / decision-engine feed / human-approved marking detected, unaudited
+mutation, corrupt/inconsistent ledger, one-active-strategy breach, duplicate application,
+authority-gate bypass, breaker-failed-to-engage, rollback overwrote newer state. AMBER: active
+items in veto window, a successful veto/rollback this period, rollback conflict awaiting operator,
+digest enabled+failed, pending-human fallback on unavailable GPT, breaker engaged w/o violation,
+nearing caps. A successful veto+rollback is the control working — VERIFY, don't revert.
+
+### Activation runbook (final human step)
+
+1. `config.json`: set `sim_governance.auto_approval.enabled=true` + `watchlist_enabled=true`.
+2. (optional, later) `strategy_enabled=true` + `strategy_daily_cap>0`.
+3. (optional) `evening_digest.enabled=true` AND env `GOVERNANCE_DIGEST_ENABLED=1`; wire an
+   18:00-local cron to `governance_digest.run_evening_digest`.
+4. Kill instantly with `config/auto_approval.DISABLED` or `STOCKBOT_AUTO_APPROVAL_DISABLED=1`.
