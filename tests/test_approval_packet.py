@@ -71,3 +71,29 @@ def test_write_packet_creates_artifacts(tmp_path):
     ap.write_operator_packet(packet, base_dir=base)
     assert (Path(base) / "promotion_review" / "operator_approval_packet.json").exists()
     assert (Path(base) / "promotion_review" / "operator_approval_packet.md").exists()
+
+
+def test_assess_health_green_when_empty(tmp_path, monkeypatch):
+    base = str(tmp_path / "outputs")
+    monkeypatch.setattr(ap.auto_approval, "build_summary",
+                        lambda *, base_dir, now: {"active_items": []})
+    ap.write_operator_packet(
+        ap.build_operator_packet(base, "2026-07-15T00:00:00+00:00"), base_dir=base)
+    h = ap.assess_packet_health(base, "2026-07-15T00:00:00+00:00")
+    assert h["status"] == "GREEN"
+
+
+def test_assess_health_amber_on_stale_pending(tmp_path, monkeypatch):
+    base = str(tmp_path / "outputs")
+    monkeypatch.setattr(ap.auto_approval, "build_summary",
+                        lambda *, base_dir, now: {"active_items": []})
+    _seed_pending(base, [
+        {"proposal_id": "p1", "approval_status": "pending",
+         "created_at": "2026-07-01T00:00:00+00:00",
+         "proposed_production_change": {"symbol": "CVX"}, "workflow": "watchlist"},
+    ])
+    ap.write_operator_packet(
+        ap.build_operator_packet(base, "2026-07-15T00:00:00+00:00"), base_dir=base)
+    h = ap.assess_packet_health(base, "2026-07-15T00:00:00+00:00", stale_pending_days=3)
+    assert h["status"] == "AMBER"
+    assert any("stale_pending" in r for r in h["reasons"])

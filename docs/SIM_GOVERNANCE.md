@@ -290,3 +290,96 @@ nearing caps. A successful veto+rollback is the control working — VERIFY, don'
 3. (optional) `evening_digest.enabled=true` AND env `GOVERNANCE_DIGEST_ENABLED=1`; wire an
    18:00-local cron to `governance_digest.run_evening_digest`.
 4. Kill instantly with `config/auto_approval.DISABLED` or `STOCKBOT_AUTO_APPROVAL_DISABLED=1`.
+
+## Operator Approval Packet — shipped 2026-07-15
+
+Module: `portfolio_automation/sim_governance/approval_packet.py`. Read-only artifact
+consolidator, not a fourth mutating path — it never authors an approval, veto, or overlay; it
+only assembles what already exists into one place an operator can act on quickly.
+
+### What it does
+
+Consolidates **both** governance tiers into ONE artifact that the evening digest email and the
+GUI approval page both read:
+
+- **tier-sim** — simulation items the GPT auto-approval channel (above) already auto-applied
+  and that are still inside their veto window (source: `auto_approval.build_summary
+  active_items`). Each entry is always labeled "auto-applied in simulation · veto available" —
+  never a bare "approved".
+- **tier-production** — production-promotion candidates still `approval_status=="pending"`
+  human review (source: `promotion_proposals.load_pending_proposals`).
+
+Wired as **Step 8** of `daily_governance_run.run_daily_governance` (Stage 10e), immediately
+after Step 7 (`production_application.apply_approved_proposals`). Both build and write are
+wrapped in `try/except` (non-blocking; a failure degrades to `{"ok": False, "error": ...}` in
+`status.stages.approval_packet` and never aborts the rest of the daily governance run).
+
+Writes (only when `approval_packet.enabled=true`):
+- `outputs/promotion_review/operator_approval_packet.json`
+- `outputs/promotion_review/operator_approval_packet.md`
+
+### Email-notifies / act-in-GUI flow
+
+The evening digest (`governance_digest.run_evening_digest`) reads
+`sim_governance.approval_packet.deep_link_base` and, when set, includes an
+`approval_page_url` (`{deep_link_base}/dashboard/governance`) in the emailed digest so the
+operator can jump straight from the notification to the GUI. The GUI itself
+(`gui_v2/data/dash_approval_packet.load_packet_context`) reads the same JSON artifact to render
+both tiers on `/dashboard/governance` (`gui_v2/templates/dashboard/governance.html`).
+
+### Reuse of the human-gated approval path — no new mutation surface
+
+The packet is display-only. Acting on a tier-production item still goes through the existing,
+unchanged human-gated route: `POST /dashboard/governance/decide` → `promotion_approvals.
+record_approval(proposal_id, decision, approver, now, ...)` → the SAME schema validation
+(`schemas.is_human_approver` still rejects the `auto_approval` marker) and the SAME audit trail
+(`outputs/promotion_approvals/approved_proposals.json` / `rejected_proposals.json`) as every
+other promotion decision in this file. The packet builder itself has zero write access to
+governance state — `build_operator_packet` / `write_operator_packet` only read and render.
+
+### Config (`config.json → sim_governance.approval_packet`)
+
+```json
+"approval_packet": {
+  "enabled": false,
+  "deep_link_base": "https://dashboard.portfolio-ops-center.com",
+  "stale_pending_days": 3,
+  "note": "..."
+}
+```
+
+Ships **GATED** (`enabled=false`). Disabled ⇒ Step 8 writes nothing (`status: "disabled"`),
+the GUI approve route is unaffected (it still reads `pending_proposals.json` directly for its
+own rendering — the packet is an additional consolidated view, not a dependency), and the
+evening email is unchanged (no `approval_page_url`). `stale_pending_days` (default 3) is the
+health-assessor's staleness threshold, below.
+
+### Health
+
+`assess_packet_health(base_dir, now, *, stale_pending_days=3) -> {"status", "reasons",
+"counts"}` — never raises. **GREEN**: packet clean, no tier-production candidate older than
+`stale_pending_days`. **AMBER**: a tier-production candidate has been pending longer than
+`stale_pending_days` (`stale_pending:<proposal_id>:<age>d` — operator decision-queue aging), or
+the packet is missing/unreadable while activated (`packet_missing_or_unreadable`). **RED**: the
+packet marks an item decided (`approved`/`rejected` in its rendered `status`) but no matching
+record exists in `promotion_approvals.approved_proposal_ids`/`rejected_proposal_ids`
+(`packet_gate_drift:<proposal_id>` — a contract breach: either a desynced packet or a decision
+path that bypassed `record_approval`; escalate).
+
+`daily-tool-analysis` reads the artifact + `assess_packet_health` (artifacts-read item 27, body
+line 6q) and dispatches `portfolio-learning-loop-health` (Layer 8 — "Operator approval queue")
+on AMBER/RED. That layer VERIFIES packet entries against the `promotion_approvals` ledger — it
+never reverts a legitimate approval or veto the packet correctly reflects, only confirms the
+record exists and flags genuine drift.
+
+### Activation runbook (final human step)
+
+1. `config.json`: set `sim_governance.approval_packet.enabled=true`.
+2. Set `sim_governance.approval_packet.deep_link_base` to the operator's dashboard base URL
+   (e.g. `https://dashboard.portfolio-ops-center.com`) so the GUI approve link resolves.
+3. For the emailed link specifically (optional, on top of the above): the evening digest must
+   also be on — `sim_governance.auto_approval.evening_digest.enabled=true` AND env
+   `GOVERNANCE_DIGEST_ENABLED=1` — otherwise the packet still builds and the GUI page still
+   works, there is just no emailed link to it.
+4. No dedicated kill-switch beyond `enabled=false` — the module has no mutation path to halt;
+   flipping `enabled=false` simply stops Step 8 from writing the artifact.

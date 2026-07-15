@@ -138,3 +138,56 @@ def write_operator_packet(packet: dict, *, base_dir: str) -> dict:
     except Exception as exc:
         logger.warning("approval_packet: write failed: %s", exc)
     return packet
+
+
+def assess_packet_health(base_dir: str, now: str, *, stale_pending_days: int = 3) -> dict:
+    """GREEN/AMBER/RED for the daily health tier. Never raises.
+
+    AMBER: a tier-b candidate has been pending longer than stale_pending_days
+           (operator decision-queue aging), or content-liveness looks off.
+    RED:   the packet marks an item decided but no valid approval record exists.
+    """
+    import datetime as _dt
+    import json as _json
+    from pathlib import Path as _Path
+
+    reasons: list[str] = []
+    status = "GREEN"
+    path = _Path(base_dir) / "promotion_review" / "operator_approval_packet.json"
+    try:
+        packet = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "AMBER", "reasons": ["packet_missing_or_unreadable"], "counts": {}}
+
+    counts = packet.get("counts", {})
+    now_dt = None
+    try:
+        now_dt = _dt.datetime.fromisoformat(now)
+    except Exception:
+        pass
+
+    for p in packet.get("tier_production", []):
+        created = p.get("created_at")
+        if not (now_dt and created):
+            continue
+        try:
+            age_days = (now_dt - _dt.datetime.fromisoformat(created)).days
+        except Exception:
+            continue
+        if age_days > stale_pending_days:
+            status = "AMBER"
+            reasons.append(f"stale_pending:{p.get('proposal_id')}:{age_days}d")
+
+    # RED integrity: packet claims a decided item with no valid approval record.
+    try:
+        from portfolio_automation.sim_governance import promotion_approvals as _pa
+        decided = _pa.approved_proposal_ids(base_dir) | _pa.rejected_proposal_ids(base_dir)
+        for p in packet.get("tier_production", []):
+            st = (p.get("status") or "").lower()
+            if ("approved" in st or "rejected" in st) and p.get("proposal_id") not in decided:
+                status = "RED"
+                reasons.append(f"packet_gate_drift:{p.get('proposal_id')}")
+    except Exception:
+        pass
+
+    return {"status": status, "reasons": reasons, "counts": counts}
