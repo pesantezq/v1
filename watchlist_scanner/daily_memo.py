@@ -1029,7 +1029,16 @@ def _build_top_insight(tt: dict[str, Any], to: dict[str, Any]) -> str:
     """One-sentence summary of the most important signal today."""
     theme_name  = str(tt.get("name") or "")
     ticker      = str(to.get("ticker") or "")
-    conviction  = _label(to.get("conviction_band") or "")
+    # Band values like "high_conviction"/"weak_conviction" already contain the
+    # word "conviction"; bands like "normal"/"starter" do not. Build the phrase
+    # so we never render a doubled "… conviction conviction".
+    conviction_raw = str(to.get("conviction_band") or "").replace("_", " ").strip().lower()
+    if conviction_raw.endswith("conviction"):
+        conviction_phrase = conviction_raw
+    elif conviction_raw:
+        conviction_phrase = f"{conviction_raw} conviction"
+    else:
+        conviction_phrase = "notable conviction"
     fit_label   = str(to.get("portfolio_fit_label") or "").replace("_", " ")
     persistence = _flt(tt.get("persistence"))
 
@@ -1045,7 +1054,7 @@ def _build_top_insight(tt: dict[str, Any], to: dict[str, Any]) -> str:
         fit_note = f" and {fit_label} portfolio fit" if fit_label and fit_label not in ("—", "neutral") else ""
         return (
             f"{theme_name} is the dominant theme {persistence_clause}; "
-            f"{ticker} leads opportunities with {conviction.lower() or 'notable'} conviction{fit_note}."
+            f"{ticker} leads opportunities with {conviction_phrase}{fit_note}."
         )
     if theme_name:
         return f"{theme_name} is the dominant market theme this session."

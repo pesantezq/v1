@@ -162,6 +162,42 @@ class TestTopInsightPersistenceLabel:
         assert "Defense" in s and "NOC" in s
 
 
+class TestTopInsightConvictionPhrase:
+    """The Top Insight conviction clause must never render a doubled
+    "conviction conviction". Band values like "high_conviction"/"weak_conviction"
+    already contain the word; "normal"/"starter" do not."""
+
+    def _tt(self):
+        return {"name": "Defense", "persistence": 0.6}
+
+    def _to(self, band):
+        return {"ticker": "NOC", "conviction_band": band, "portfolio_fit_label": "strong"}
+
+    def test_high_conviction_band_not_doubled(self):
+        s = _build_top_insight(self._tt(), self._to("high_conviction"))
+        assert "conviction conviction" not in s
+        assert "high conviction" in s
+
+    def test_weak_conviction_band_not_doubled(self):
+        s = _build_top_insight(self._tt(), self._to("weak_conviction"))
+        assert "conviction conviction" not in s
+        assert "weak conviction" in s
+
+    def test_normal_band_gets_conviction_suffix(self):
+        s = _build_top_insight(self._tt(), self._to("normal"))
+        assert "normal conviction" in s
+        assert "conviction conviction" not in s
+
+    def test_starter_band_gets_conviction_suffix(self):
+        s = _build_top_insight(self._tt(), self._to("starter"))
+        assert "starter conviction" in s
+
+    def test_empty_band_falls_back_to_notable(self):
+        s = _build_top_insight(self._tt(), self._to(""))
+        assert "notable conviction" in s
+        assert "conviction conviction" not in s
+
+
 class TestTopInsightThemeMembership:
     """The memo Top Insight must only claim the lead opportunity is "inside the
     {theme}" when that ticker is actually a member of top_theme.tickers. A
