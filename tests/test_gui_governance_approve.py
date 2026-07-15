@@ -50,3 +50,20 @@ def test_apply_skips_already_decided(appmod, monkeypatch):
         actor="op", now="n", base_dir="b")
     assert res["applied"] == []
     assert res["skipped"] == ["p1"]
+
+
+def test_governance_page_renders_packet_panel(appmod, monkeypatch, tmp_path):
+    from starlette.testclient import TestClient
+    # Point the reader at a seeded packet.
+    import gui_v2.data.dash_approval_packet as dap
+    monkeypatch.setattr(dap, "load_packet_context", lambda outputs_dir: {
+        "available": True, "tier_sim": [], "counts": {"tier_production_pending": 1},
+        "tier_production": [{"proposal_id": "p1", "workflow": "watchlist",
+                             "symbol": "CVX", "status": "pending human review"}],
+        "approval_page_url": "/dashboard/governance"})
+    client = TestClient(appmod.app)
+    r = client.get("/dashboard/governance", auth=("op", "pw"))
+    assert r.status_code == 200
+    assert "Approval Packet" in r.text
+    assert "/dashboard/governance/approve" in r.text
+    assert "p1" in r.text

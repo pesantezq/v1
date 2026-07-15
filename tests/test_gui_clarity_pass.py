@@ -110,13 +110,24 @@ def test_governance_pending_proposal_renders_decision_card(monkeypatch):
     assert m and "CHAT" in m.group(1) and "prop_test1" in m.group(1)
 
 
-# 7. No bulk / automatic approval control exists anywhere in the templates.
+# 7. No AUTOMATIC/AI-driven approval control exists anywhere in the templates.
+#    (Superseded 2026-07-15 by docs/superpowers/plans/2026-07-15-operator-approval-packet.md,
+#    whose stated goal is production candidates "approvable per-item or in bulk": the
+#    Approval Packet panel on governance.html — Task 6 of that plan — deliberately adds a
+#    human-clicked, per-item-exclusion, confirm()-gated, audited "Approve all (except
+#    excluded)" bulk control for tier-b production candidates, reusing the same human-gated
+#    promotion_approvals.record_approval as every other approval path. That is a reviewed,
+#    intentional bulk *human* action, not automatic approval, so it is now allowed in
+#    governance.html specifically. The invariant this test still enforces — no autonomous /
+#    AI self-approval anywhere — is unchanged.)
 def test_no_bulk_approval_control():
     for p in TPL.rglob("*.html"):
         low = p.read_text().lower()
+        assert "auto-approve" not in low, f"auto-approve in {p}"
+        if p.name == "governance.html":
+            continue  # sanctioned human-gated bulk control — see comment above
         assert "approve all" not in low, f"bulk approval in {p}"
         assert "approve_all" not in low, f"bulk approval in {p}"
-        assert "auto-approve" not in low, f"auto-approve in {p}"
 
 
 # 8. Today does not render the old duplicate primary-card grid; it triages instead.
