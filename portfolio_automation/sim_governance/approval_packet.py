@@ -159,6 +159,9 @@ def assess_packet_health(base_dir: str, now: str, *, stale_pending_days: int = 3
     except Exception:
         return {"status": "AMBER", "reasons": ["packet_missing_or_unreadable"], "counts": {}}
 
+    if not isinstance(packet, dict):
+        return {"status": "AMBER", "reasons": ["packet_missing_or_unreadable"], "counts": {}}
+
     counts = packet.get("counts", {})
     now_dt = None
     try:

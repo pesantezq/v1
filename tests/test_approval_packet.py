@@ -97,3 +97,15 @@ def test_assess_health_amber_on_stale_pending(tmp_path, monkeypatch):
     h = ap.assess_packet_health(base, "2026-07-15T00:00:00+00:00", stale_pending_days=3)
     assert h["status"] == "AMBER"
     assert any("stale_pending" in r for r in h["reasons"])
+
+
+def test_assess_health_non_dict_packet_is_degraded(tmp_path):
+    import json as _json
+    from pathlib import Path as _Path
+    base = str(tmp_path / "outputs")
+    d = _Path(base) / "promotion_review"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "operator_approval_packet.json").write_text(_json.dumps([1, 2, 3]), encoding="utf-8")
+    h = ap.assess_packet_health(base, "2026-07-15T00:00:00+00:00")
+    assert h["status"] == "AMBER"
+    assert "packet_missing_or_unreadable" in h["reasons"]
