@@ -824,6 +824,111 @@ async def page_governance_veto(
     return _redirect(f"Veto {status} for {event_id}.", level)
 
 
+def _promotion_approvals_record(**kw):
+    from portfolio_automation.sim_governance import promotion_approvals
+    return promotion_approvals.record_approval(
+        kw["proposal_id"], kw["decision"], kw["approver"], kw["now"],
+        base_dir=kw["base_dir"])
+
+
+def _pending_ids(base_dir):
+    from portfolio_automation.sim_governance import promotion_proposals
+    return {p.get("proposal_id") for p in promotion_proposals.load_pending_proposals(base_dir)
+            if p.get("approval_status") == "pending"}
+
+
+def _decided_ids(base_dir):
+    from portfolio_automation.sim_governance import promotion_approvals
+    return (promotion_approvals.approved_proposal_ids(base_dir)
+            | promotion_approvals.rejected_proposal_ids(base_dir))
+
+
+def _apply_approval_action(*, action, proposal_id, excluded_ids, actor, now, base_dir):
+    """Apply a per-item or bulk approve/reject. Each item goes through the
+    human-gated promotion_approvals.record_approval. Returns a summary dict."""
+    decision = "approve" if action in ("approve", "approve_all") else "reject"
+    if action in ("approve", "reject"):
+        targets = {proposal_id} if proposal_id else set()
+    else:  # approve_all / reject_all
+        targets = _pending_ids(base_dir) - (excluded_ids or set())
+    decided = _decided_ids(base_dir)
+    applied, skipped, failed = [], [], []
+    for pid in sorted(t for t in targets if t):
+        if pid in decided:
+            skipped.append(pid)
+            continue
+        r = _promotion_approvals_record(proposal_id=pid, decision=decision,
+                                        approver=actor, now=now, base_dir=base_dir)
+        (applied if r.get("ok") else failed).append(pid)
+    return {"decision": decision, "applied": applied, "skipped": skipped, "failed": failed}
+
+
+@app.post("/dashboard/governance/approve")
+async def page_governance_approve(
+    request: Request, _a: str | None = Depends(_require_auth_dep)
+):
+    """
+    POST /dashboard/governance/approve — human approve/reject of pending PRODUCTION
+    proposals, per-item or in bulk. Every item flows through the existing
+    human-gated promotion_approvals.record_approval; this route adds NO new
+    production-mutation path. Strict operator pattern: actor from auth (never the
+    form), operator-edit gate, same-origin CSRF guard, audited on every branch.
+    """
+    import datetime
+    from operator_control import audit_log
+
+    actor: str = _a if _a else "dashboard-manual"
+    actor_source: str = "dashboard_auth" if _a else "dashboard_open_mode"
+
+    form = await request.form()
+    action = str(form.get("action", "")).strip()
+    proposal_id = (str(form.get("proposal_id", "")).strip() or None)
+    excluded_ids = {x.strip() for x in form.getlist("excluded_ids") if x.strip()}
+
+    def _redirect(msg: str, level: str) -> RedirectResponse:
+        return RedirectResponse(
+            url=f"/dashboard/governance?msg={quote(msg)}&level={level}", status_code=303)
+
+    if action not in ("approve", "reject", "approve_all", "reject_all"):
+        raise HTTPException(status_code=400, detail="invalid action")
+
+    if not _operator_edit_enabled():
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_approve_rejected", actor=actor,
+            details={"why": "edit_disabled", "action": action, "actor_source": actor_source})
+        return _redirect("Approval disabled (set GUI_V2_OPERATOR_EDIT=1).", "error")
+
+    if not _same_origin(request):
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_approve_rejected", actor=actor,
+            details={"why": "cross-origin rejected", "action": action,
+                     "actor_source": actor_source},
+            safety_result="rejected: cross-origin")
+        return _redirect("Rejected: cross-origin request.", "error")
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    base_dir = str(REPO_ROOT / "outputs")
+    try:
+        res = _apply_approval_action(
+            action=action, proposal_id=proposal_id, excluded_ids=excluded_ids,
+            actor=actor, now=now, base_dir=base_dir)
+    except Exception as exc:
+        audit_log.record_event(
+            REPO_ROOT, event_type="governance_approve_error", actor=actor,
+            details={"action": action, "error": str(exc)})
+        return _redirect("Approval failed (see logs).", "error")
+
+    audit_log.record_event(
+        REPO_ROOT, event_type="governance_approve", actor=actor,
+        details={"action": action, "decision": res["decision"],
+                 "applied": res["applied"], "skipped": res["skipped"],
+                 "failed": res["failed"], "actor_source": actor_source})
+    level = "success" if not res["failed"] else "error"
+    return _redirect(
+        f"{res['decision']}: {len(res['applied'])} applied, "
+        f"{len(res['skipped'])} skipped, {len(res['failed'])} failed.", level)
+
+
 @app.get("/dashboard/strategy-tax", response_class=HTMLResponse)
 def page_dash_strategy_tax(
     request: Request, _a: str | None = Depends(_require_auth)

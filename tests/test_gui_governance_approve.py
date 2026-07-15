@@ -1,0 +1,52 @@
+import importlib
+
+import pytest
+
+
+@pytest.fixture
+def appmod(monkeypatch):
+    monkeypatch.setenv("GUI_V2_AUTH_USER", "op")
+    monkeypatch.setenv("GUI_V2_AUTH_PASS", "pw")
+    monkeypatch.setenv("GUI_V2_OPERATOR_EDIT", "1")
+    import gui_v2.app as app
+    importlib.reload(app)
+    return app
+
+
+def test_apply_per_item_approve(appmod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: calls.append(kw) or {"ok": True, "reason": "ok"})
+    monkeypatch.setattr(appmod, "_pending_ids", lambda base_dir: {"p1", "p2"})
+    monkeypatch.setattr(appmod, "_decided_ids", lambda base_dir: set())
+    res = appmod._apply_approval_action(
+        action="approve", proposal_id="p1", excluded_ids=set(),
+        actor="op", now="n", base_dir="b")
+    assert res["applied"] == ["p1"]
+    assert calls[0]["decision"] == "approve"
+    assert calls[0]["approver"] == "op"
+
+
+def test_apply_bulk_approve_with_exclusion(appmod, monkeypatch):
+    calls = []
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: calls.append(kw["proposal_id"]) or {"ok": True, "reason": "ok"})
+    monkeypatch.setattr(appmod, "_pending_ids", lambda base_dir: {"p1", "p2", "p3"})
+    monkeypatch.setattr(appmod, "_decided_ids", lambda base_dir: set())
+    res = appmod._apply_approval_action(
+        action="approve_all", proposal_id=None, excluded_ids={"p2"},
+        actor="op", now="n", base_dir="b")
+    assert set(res["applied"]) == {"p1", "p3"}
+    assert "p2" not in calls
+
+
+def test_apply_skips_already_decided(appmod, monkeypatch):
+    monkeypatch.setattr(appmod, "_promotion_approvals_record",
+                        lambda **kw: {"ok": True, "reason": "ok"})
+    monkeypatch.setattr(appmod, "_pending_ids", lambda base_dir: {"p1"})
+    monkeypatch.setattr(appmod, "_decided_ids", lambda base_dir: {"p1"})
+    res = appmod._apply_approval_action(
+        action="approve", proposal_id="p1", excluded_ids=set(),
+        actor="op", now="n", base_dir="b")
+    assert res["applied"] == []
+    assert res["skipped"] == ["p1"]
