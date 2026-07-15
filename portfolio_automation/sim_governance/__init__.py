@@ -42,6 +42,7 @@ __all__ = [
     "simulation_lane",
     "daily_simulation_bundle",
     "ai_review_packet",
+    "approval_packet",
     "daily_ai_review",
     "promotion_proposals",
     "promotion_approvals",
