@@ -1302,6 +1302,25 @@ fixes to surface, not roadmap steps.
   is not silently catching the FMP failure (recurring `fmp_succeeded:false`).
 - **Severity:** medium (universe coverage degraded to fallback).
 
+### KI-3 — quant_feedback reads a non-existent outcomes path (SQG Phase 5 running blind) — RESOLVED 2026-07-18
+
+- **Surfaced:** 2026-07-18 monthly-tool-analysis (AMBER — this run's **top action
+  item**), `portfolio-learning-loop-health`.
+- **Symptom:** SQG Phase 5 quant-feedback had resolved **0/907 outcomes for 18
+  consecutive days** — it was running blind.
+- **Root cause:** `quant_feedback.py:104` read
+  `outputs/performance/decision_outcomes.jsonl`, which **does not exist**. The
+  canonical file (500 rows, 490 resolved + numeric) lives at
+  `outputs/policy/decision_outcomes.jsonl`, where **every other consumer** reads it.
+- **Resolution:** one-line path fix (`outputs/performance/` → `outputs/policy/`),
+  paired with two regression tests (`_outcome_map` reads the policy path;
+  `build_quant_feedback` joins a resolved policy outcome). Committed
+  `cb7b2eae` (2026-07-18). Against live data, quant-feedback now resolves **82
+  symbol-joined outcomes** and `evidence_status` flips `insufficient` → `ok`.
+  `outputs/latest/quant_feedback.json` refreshes on the next daily cron.
+- **Severity:** was a RED-worthy observability bug (quant-feedback loop blind);
+  no decision-quality or spend impact — it does not feed `decision_plan.json`.
+
 ### Self-healing (tracked, not a defect)
 
 - **Learning-loop outcome-maturation gap.** `pattern_learning.py:_match_outcome`
