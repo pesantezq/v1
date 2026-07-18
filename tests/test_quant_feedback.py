@@ -9,6 +9,8 @@ TDD: written before portfolio_automation/quant_feedback.py existed.
 """
 from __future__ import annotations
 
+import json
+
 import portfolio_automation.quant_feedback as qf
 
 
@@ -70,3 +72,40 @@ def test_build_quant_feedback_degrades_without_outcomes(tmp_path):
     assert res["evidence_status"] in ("insufficient", "ok")
     assert "by_regime" in res and "by_crowd_state" in res and "by_strategy" in res
     assert res["fallback_rate"] is not None
+
+
+def test_outcome_map_reads_canonical_policy_path(tmp_path):
+    # Regression: matured outcomes live in the canonical outputs/policy path
+    # (that is where decision_outcome_tracker writes them and every other
+    # consumer reads them). quant_feedback must read the same file, NOT
+    # outputs/performance/, or it resolves 0 outcomes and runs blind.
+    policy = tmp_path / "outputs" / "policy"
+    policy.mkdir(parents=True)
+    (policy / "decision_outcomes.jsonl").write_text(
+        "\n".join([
+            # return_pct is a DECIMAL FRACTION -> 0.03 becomes 3.0 percent
+            json.dumps({"symbol": "AAPL", "resolved": True, "return_pct": 0.03}),
+            json.dumps({"symbol": "MSFT", "resolved": False, "return_pct": None}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    out = qf._outcome_map(tmp_path)
+    assert out.get("AAPL") == 3.0
+    assert out.get("MSFT") is None
+
+
+def test_build_quant_feedback_joins_policy_outcomes(tmp_path):
+    # End-to-end: a resolved outcome in the canonical policy path must join to
+    # the decision context and count toward n_resolved_outcomes.
+    policy = tmp_path / "outputs" / "policy"
+    policy.mkdir(parents=True)
+    (policy / "decision_context_log.jsonl").write_text(
+        json.dumps(_ctx("AAPL", "BUY", "bull", "confirmed")) + "\n",
+        encoding="utf-8",
+    )
+    (policy / "decision_outcomes.jsonl").write_text(
+        json.dumps({"symbol": "AAPL", "resolved": True, "return_pct": 0.03}) + "\n",
+        encoding="utf-8",
+    )
+    res = qf.build_quant_feedback(tmp_path, now="2026-07-18T09:00:00+00:00")
+    assert res["n_resolved_outcomes"] >= 1

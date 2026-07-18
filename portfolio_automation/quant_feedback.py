@@ -101,7 +101,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _outcome_map(root: Path) -> dict[str, float | None]:
     """Best-effort symbol -> 1d resolution return (percent) from matured rows."""
-    rows = _read_jsonl(root / "outputs" / "performance" / "decision_outcomes.jsonl")
+    rows = _read_jsonl(root / "outputs" / "policy" / "decision_outcomes.jsonl")
     out: dict[str, float | None] = {}
     for r in rows:
         sym = str(r.get("symbol") or "").upper()
