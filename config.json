@@ -628,17 +628,17 @@
     "auto_approval": {
       "enabled": true,
       "watchlist_enabled": true,
-      "strategy_enabled": false,
+      "strategy_enabled": true,
       "live_watchlist_enabled": false,
       "watchlist_daily_cap": 2,
-      "strategy_daily_cap": 0,
+      "strategy_daily_cap": 1,
       "min_confidence": 0.85,
       "veto_window_hours": 48,
       "max_active_awaiting_veto": 5,
       "sim_watchlist_db_path": "data/sim_governance_watchlist.db",
       "sim_max_symbols": 5,
       "evening_digest": {
-        "enabled": false,
+        "enabled": true,
         "send_hour_local": 18,
         "timezone": "America/New_York"
       },

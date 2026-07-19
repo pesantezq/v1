@@ -552,8 +552,15 @@ def _top_decision_rows(summary: dict[str, Any], limit: int = 5) -> list[dict[str
         if bool(row.get("suppressed")):
             continue
         rows.append(row)
-    rows.sort(key=lambda r: _flt(r.get("priority")), reverse=True)
-    return rows[:limit]
+    # Use the canonical deterministic tie-break (priority desc -> entry_move_pct
+    # desc -> confidence desc -> symbol asc) shared with memo_coherence so this
+    # Top Decisions section and the decision_plan/coherence ranking never name
+    # different top-N sets when priorities are tied (memo-reviewer 2026-07-19:
+    # an 18-way priority=0.55 plateau made the priority-only stable sort here
+    # surface PANW where the plan ranked CSCO).
+    from portfolio_automation.memo_coherence import apply_tie_break
+
+    return apply_tie_break(rows)[:limit]
 
 
 def _action_decision_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:

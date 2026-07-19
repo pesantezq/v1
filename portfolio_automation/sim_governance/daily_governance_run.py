@@ -31,6 +31,7 @@ from portfolio_automation.sim_governance import (
     approval_packet,
     daily_ai_review,
     daily_simulation_bundle,
+    governance_digest,
     production_application,
     promotion_approvals,
     promotion_proposals,
@@ -283,6 +284,29 @@ def run_daily_governance(
     except Exception as exc:
         logger.warning("daily_governance: approval_packet stage failed: %s", exc)
         status["stages"]["approval_packet"] = {"ok": False, "error": str(exc)}
+
+    # ── Step 9: evening approval-digest email (gated; non-blocking) ─────────
+    # Emails the operator a link to the human-gated approval page so production
+    # proposals can be approved in one tap from email. This step sends NOTHING
+    # that approves on its own — the link lands on /dashboard/governance, where
+    # the human-gated promotion_approvals.record_approval path runs. Double-gated:
+    # config auto_approval.evening_digest.enabled (checked here) AND the
+    # GOVERNANCE_DIGEST_ENABLED env opt-in + SMTP config (checked inside send).
+    try:
+        dcfg = (cfg.get("auto_approval", {}) or {}).get("evening_digest", {}) or {}
+        if dcfg.get("enabled"):
+            result = governance_digest.run_evening_digest(
+                str(root), now=now, write_files=write_files)
+            status["stages"]["governance_digest"] = {
+                "ok": result.get("status") != "error",
+                "status": result.get("status"),
+                "reason": result.get("reason"),
+            }
+        else:
+            status["stages"]["governance_digest"] = {"ok": True, "status": "disabled"}
+    except Exception as exc:
+        logger.warning("daily_governance: governance_digest stage failed: %s", exc)
+        status["stages"]["governance_digest"] = {"ok": False, "error": str(exc)}
 
     # ── roll-up counts for the GUI / daily check ────────────────────────────
     try:
