@@ -1,4 +1,5 @@
 import copy
+import json
 
 from portfolio_automation import memo_datasets as md
 
@@ -71,3 +72,31 @@ def test_render_domain_brief_populated_and_empty():
     s = _sources(); s["institutional_intelligence"] = {"records": []}
     d2 = md.build_memo_datasets(s)
     assert md.render_domain_brief(d2, "institutional") == []
+
+
+def _seed_latest(tmp_path):
+    latest = tmp_path / "outputs" / "latest"; latest.mkdir(parents=True)
+    (latest / "daily_capital_plan.json").write_text(json.dumps(
+        {"available": True, "capital_summary": {"funded_capital":
+        {"amount": 104.0, "state": "confirmed"}, "funded_count": 2, "deferred_count": 20},
+         "bottom_line": "Deploy $104."}))
+    (latest / "risk_delta.json").write_text(json.dumps(
+        {"overall_status": "ok", "leverage": {"total_exposure": 0.145}}))
+    return tmp_path
+
+
+def test_run_writes_artifact_and_briefs(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True)
+    assert res["feeds_decision_engine"] is False
+    art = json.loads((root / "outputs" / "latest" / "memo_datasets.json").read_text())
+    assert set(art["domains"]) == set(md.DOMAINS)
+    assert (root / "outputs" / "latest" / "memo" / "portfolio_brief.md").exists()
+    # governance: decision_plan.json is never written by this producer
+    assert not (root / "outputs" / "latest" / "decision_plan.json").exists()
+
+
+def test_run_never_raises_on_garbage(tmp_path):
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    res = md.run_memo_datasets(str(tmp_path), write=False)
+    assert res["feeds_decision_engine"] is False   # honest empty, no crash

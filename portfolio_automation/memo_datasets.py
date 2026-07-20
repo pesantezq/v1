@@ -5,7 +5,9 @@ writes decision_plan.json. Source of truth for per-domain briefs + GUI sub-tabs.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "1"
@@ -186,3 +188,71 @@ def render_domain_brief(dataset: dict, domain: str, *, markdown: bool = True) ->
                if markdown else "  Observe-only — no funded-action override.")
     out.append("")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Loader / runner
+# ---------------------------------------------------------------------------
+
+# artifact stem -> outputs/latest filename. Pure reassembly only — this
+# producer never writes decision_plan.json; decision_plan is a READ-only
+# source it reassembles alongside the others.
+_SOURCE_FILES = {
+    "daily_capital_plan": "daily_capital_plan.json",
+    "system_decision_summary": "system_decision_summary.json",
+    "decision_plan": "decision_plan.json",
+    "risk_delta": "risk_delta.json",
+    "correlation_risk_advisor": "correlation_risk_advisor.json",
+    "unified_crowd_status": "unified_crowd_intelligence_status.json",
+    "watch_candidates": "watch_candidates.json",
+    "institutional_intelligence": "institutional_intelligence.json",
+    "daily_run_status": "daily_run_status.json",
+}
+
+
+def _load_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def run_memo_datasets(root: str = ".", *, write: bool = True,
+                      config: dict | None = None) -> dict:
+    """Load the source artifacts from ``outputs/latest/`` (+ the
+    ``config/base.json:memo_datasets`` block), build the memo dataset, and
+    (when *write*) persist ``outputs/latest/memo_datasets.json`` plus one
+    Markdown brief per domain under ``outputs/latest/memo/``.
+
+    Observe-only: never raises (returns a ``status:"error"`` dataset on
+    failure) and never writes ``decision_plan.json`` — that artifact is only
+    ever read here, never produced.
+    """
+    try:
+        root_path = Path(root)
+        if config is None:
+            base = _load_json(root_path / "config" / "base.json") or {}
+            config = base.get("memo_datasets") or {}
+        domains = config.get("domains") or DOMAINS
+        write_briefs = config.get("write_briefs", True)
+        latest = root_path / "outputs" / "latest"
+        sources = {k: _load_json(latest / fn) for k, fn in _SOURCE_FILES.items()}
+        dataset = build_memo_datasets(sources, domains=domains)
+        if write:
+            from portfolio_automation.data_governance import (
+                OutputNamespace, safe_write_json, safe_write_text,
+            )
+            base_dir = root_path / "outputs"
+            safe_write_json(OutputNamespace.LATEST, "memo_datasets.json", dataset,
+                            base_dir=base_dir)
+            if write_briefs:
+                for d in dataset["domains"]:
+                    lines = render_domain_brief(dataset, d, markdown=True)
+                    if lines:
+                        safe_write_text(OutputNamespace.LATEST, f"memo/{d}_brief.md",
+                                        "\n".join(lines), base_dir=base_dir)
+        return dataset
+    except Exception as exc:  # noqa: BLE001 - observe-only producer, never raises
+        return {"schema_version": SCHEMA_VERSION, "source": "memo_datasets",
+                "observe_only": True, "feeds_decision_engine": False,
+                "status": "error", "error": str(exc), "domains": {}}
