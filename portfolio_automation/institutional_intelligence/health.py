@@ -135,3 +135,46 @@ def detect_all_same_state(states: list[str], *, min_sample: int = 30,
     if len(states) < min_sample:
         return False
     return len(set(states)) <= max_distinct
+
+
+# --- live-activation readiness (Phase 18) --------------------------------
+
+def assess_activation_readiness(
+    *,
+    config: dict[str, Any] | None,
+    user_agent_present: bool,
+    enabled_verified_manager_count: int,
+    kill_switch_available: bool = True,
+) -> dict[str, Any]:
+    """Assess whether it is SAFE to enable live SEC ingestion. Read-only — this
+    NEVER enables anything; it returns a checklist + an overall ``ready`` bool.
+
+    Preconditions (all must pass to be ready):
+      * SEC_EDGAR_USER_AGENT present (descriptive contact; sourced from env)
+      * >= 1 manager both enabled AND cik_verified
+      * a conservative rate limit configured (<= 10 req/s, SEC courtesy)
+      * feeds_decision_engine stays false; production_gated stays true
+      * a kill switch is available
+    """
+    cfg = config or {}
+    rps = int(cfg.get("sec_requests_per_second", 5) or 0)
+    checks = {
+        "user_agent_configured": bool(user_agent_present),
+        "at_least_one_verified_enabled_manager": enabled_verified_manager_count >= 1,
+        "rate_limit_conservative": 0 < rps <= 10,
+        "feeds_decision_engine_false": cfg.get("feeds_decision_engine", False) is False,
+        "production_gated_true": cfg.get("production_gated", True) is True,
+        "kill_switch_available": bool(kill_switch_available),
+    }
+    ready = all(checks.values())
+    blocking = [k for k, v in checks.items() if not v]
+    return {
+        "ready": ready,
+        "checks": checks,
+        "blocking": blocking,
+        # A safety reminder always attached — enabling is an operator action.
+        "note": ("All checks pass — set live_sec_ingestion_enabled=true to "
+                 "activate." if ready else
+                 f"NOT ready — resolve: {', '.join(blocking)}."),
+        "observe_only": True,
+    }
