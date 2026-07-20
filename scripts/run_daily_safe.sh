@@ -246,6 +246,15 @@ run_aux_stage "Resolution-due probe" \
 run_aux_stage "Quant-watch probe ledger" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.quant_watch_probes import run_quant_watch; r = run_quant_watch(root='.', created_run='run_daily_safe'); print('overall:', r.get('overall_status'), 'active:', r.get('active_count'), 'registered:', len(r.get('registered_today') or []), 'escalated:', len(r.get('escalated_today') or []))"
 
+# Stage 7f2 — Institutional Intelligence (SEC 13F): observe-only institutional-
+# positioning consensus. Runs BEFORE the daily input snapshot (Stage 7g) so its
+# artifact is frozen into the immutable snapshot and available to decision-time
+# context capture (7h) + quant-feedback (7i). Non-blocking; ships inert (no
+# enabled managers) until live SEC ingestion + verified CIKs. Never feeds the
+# decision plan; never mutates production.
+run_aux_stage "Institutional Intelligence (13F)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.institutional_intelligence.context_loader import run_institutional_intelligence; r = run_institutional_intelligence('.'); print('status:', r.get('status'), 'symbols:', len(r.get('records') or []), 'feeds_decision_engine:', r.get('artifact', {}).get('feeds_decision_engine'))"
+
 # Stage 7g — Daily input snapshot (Phase 2): freeze ONE point-in-time view of
 # every decision-time input (references + content hashes, not copies) so the
 # production decision and every daily simulation evaluate the SAME data and no
