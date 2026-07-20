@@ -967,7 +967,10 @@ def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
     ctx = _with_operator(_dash_memo(REPO_ROOT), "memo")
-    ctx["memo_datasets"] = collect_memo_datasets_view(REPO_ROOT)
+    try:
+        ctx["memo_datasets"] = collect_memo_datasets_view(REPO_ROOT)
+    except Exception:
+        ctx["memo_datasets"] = {"has_datasets": False, "domains": []}
     return _render(request, "dashboard/memo.html", **ctx)
 
 

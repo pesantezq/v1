@@ -30,11 +30,15 @@ def collect_memo_datasets_view(root: Path) -> dict[str, Any]:
         }
     """
     art = _read_json(Path(root) / "outputs" / "latest" / "memo_datasets.json")
-    if not art or not art.get("domains"):
+    if not isinstance(art, dict):
+        return {"has_datasets": False, "domains": [], "feeds_decision_engine": False}
+
+    raw_domains = art.get("domains")
+    if not isinstance(raw_domains, dict) or not raw_domains:
         return {"has_datasets": False, "domains": [], "feeds_decision_engine": False}
 
     domains: list[dict[str, Any]] = []
-    for key, dom in art["domains"].items():
+    for key, dom in raw_domains.items():
         if not isinstance(dom, dict):
             continue
         domains.append({

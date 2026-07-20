@@ -16,6 +16,26 @@ def test_view_absent_is_null_tolerant(tmp_path):
     assert v["has_datasets"] is False and v["domains"] == []
 
 
+def test_view_corrupt_top_level_list_is_null_tolerant(tmp_path):
+    """A top-level JSON list (not a dict) must degrade to the empty shape,
+    not raise AttributeError from art.get("domains")."""
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "memo_datasets.json").write_text(json.dumps([]))
+    v = collect_memo_datasets_view(tmp_path)
+    assert v == {"has_datasets": False, "domains": [], "feeds_decision_engine": False}
+
+
+def test_view_corrupt_domains_not_dict_is_null_tolerant(tmp_path):
+    """A dict artifact whose "domains" value isn't a dict must degrade to the
+    empty shape, not raise AttributeError from .items()."""
+    latest = tmp_path / "outputs" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "memo_datasets.json").write_text(json.dumps({"domains": "notadict"}))
+    v = collect_memo_datasets_view(tmp_path)
+    assert v == {"has_datasets": False, "domains": [], "feeds_decision_engine": False}
+
+
 def test_view_shapes_domains(tmp_path):
     latest = tmp_path / "outputs" / "latest"
     latest.mkdir(parents=True)
