@@ -280,5 +280,27 @@
     "max_deferred_displayed": 5,
     "expand_technical_details": true,
     "main_section_funded_only": true
+  },
+  "institutional_intelligence": {
+    "enabled": true,
+    "live_sec_ingestion_enabled": false,
+    "simulation_active": true,
+    "production_gated": true,
+    "feeds_decision_engine": false,
+    "manager_registry_path": "config/institutional_managers.yaml",
+    "max_managers": 25,
+    "sec_requests_per_second": 5,
+    "max_new_filings_per_run": 20,
+    "stale_after_days": 140,
+    "minimum_consensus_confidence": 0.55,
+    "minimum_effective_managers": 1.5,
+    "strategy": {
+      "enabled": true,
+      "max_total_sleeve": 0.10,
+      "max_new_position": 0.02,
+      "max_existing_position_tilt": 0.02,
+      "max_distribution_trim": 0.02,
+      "crowding_penalty_enabled": true
+    }
   }
 }
