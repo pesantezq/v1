@@ -598,6 +598,19 @@ artifacts:
     severity_if_missing: info
     consumer_status: diagnostic_only
 
+  memo_datasets.json:
+    path: outputs/latest/memo_datasets.json
+    label: memo domain datasets
+    lens: decision_core
+    role: narrative
+    required: false
+    cadence: daily
+    producer: memo_datasets
+    consumers: [gui_operator_data, daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Observe-only per-domain reassembly (portfolio/crowd_watchlist/institutional/risk/system) of the memo-producer artifacts. Source of truth for per-domain briefs + GUI sub-tabs. Stage 10c. feeds_decision_engine=false.
+
   data_quality_report.json:
     path: outputs/latest/data_quality_report.json
     label: data quality report

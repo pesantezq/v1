@@ -389,6 +389,12 @@ run_aux_stage "Today's Capital Plan view" \
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
 
+# Stage 10c — Memo datasets (observe-only): reassemble the memo-producer
+# artifacts into per-domain datasets + briefs for the GUI sub-tabs. Runs after
+# Stage 10 so the memo artifacts are fresh. Non-blocking; feeds_decision_engine=false.
+run_aux_stage "Memo datasets" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.memo_datasets import run_memo_datasets; r = run_memo_datasets('.'); print('domains:', list((r.get('domains') or {}).keys()), 'feeds_decision_engine:', r.get('feeds_decision_engine'))"
+
 # Stage 10b — Next-stage research/strategy lane (Phases 1-15). Standalone
 # observe-only orchestrator: system-improvement → universe scan + radar →
 # shadow tracking → market-opportunity prompts → strategy comparison →
