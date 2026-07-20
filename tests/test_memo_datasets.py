@@ -61,3 +61,13 @@ def test_deterministic():
 def test_domains_filter():
     d = md.build_memo_datasets(_sources(), domains=["risk"])
     assert list(d["domains"]) == ["risk"]
+
+
+def test_render_domain_brief_populated_and_empty():
+    d = md.build_memo_datasets(_sources())
+    lines = md.render_domain_brief(d, "portfolio", markdown=True)
+    assert lines and any("Portfolio & Capital" in l for l in lines)
+    # unavailable domain -> no brief
+    s = _sources(); s["institutional_intelligence"] = {"records": []}
+    d2 = md.build_memo_datasets(s)
+    assert md.render_domain_brief(d2, "institutional") == []

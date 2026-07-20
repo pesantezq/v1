@@ -167,3 +167,22 @@ def build_memo_datasets(sources: dict[str, Any], *, domains: list[str] | None = 
         "observe_only": True, "no_trade": True, "feeds_decision_engine": False,
         "generated_at": generated_at or _now_iso(), "domains": out_domains,
     }
+
+
+def render_domain_brief(dataset: dict, domain: str, *, markdown: bool = True) -> list[str]:
+    dom = (dataset.get("domains") or {}).get(domain)
+    if not dom or dom.get("status") == "unavailable":
+        return []
+    out: list[str] = []
+    head = dom.get("headline", domain)
+    out.append(f"## {head}" if markdown else head.upper())
+    for sec in dom.get("sections", []):
+        out.append(f"### {sec['title']}" if markdown else f"  {sec['title']}")
+        for line in sec.get("lines", []):
+            out.append(f"- {line}" if markdown else f"    {line}")
+    for w in dom.get("warnings", []):
+        out.append(f"> {w}" if markdown else f"  note: {w}")
+    out.append("_Observe-only — reassembled from source artifacts; no funded-action override._"
+               if markdown else "  Observe-only — no funded-action override.")
+    out.append("")
+    return out
