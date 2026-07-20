@@ -29,6 +29,14 @@ _DIMENSIONS = {
     "by_crowd_state": "crowd_state_at_decision",
     "by_strategy": "strategy_id",
     "by_action": "action",
+    # Institutional Intelligence (13F) attribution — additive. Records lacking a
+    # dimension route to the "unknown" bucket; protected win-rate semantics
+    # (is_counted denominator) are untouched.
+    "by_institutional_state": "institutional_state_at_decision",
+    "by_institutional_freshness_band": "institutional_freshness_band_at_decision",
+    "by_institutional_strategy_fit": "institutional_strategy_fit_at_decision",
+    "by_institutional_crowding_band": "institutional_crowding_band_at_decision",
+    "by_institutional_manager_archetype": "institutional_manager_archetype_at_decision",
 }
 
 __all__ = ["attribute_outcomes", "build_quant_feedback", "run_quant_feedback"]

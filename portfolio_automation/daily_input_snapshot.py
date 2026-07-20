@@ -66,6 +66,11 @@ INPUT_SOURCES: list[InputSource] = [
     InputSource("active_overlays", "outputs/promotion_approvals/production_application_state.json", "overlays", "sim_governance", stale_after_hours=8760.0),
     InputSource("prod_config", "config.json", "config", "config_file", stale_after_hours=8760.0),
     InputSource("strategy_config", "outputs/sandbox/strategy_profiles.json", "strategy", "strategy_profiles", stale_after_hours=720.0),
+    # Institutional Intelligence (13F) — observe-only context frozen into the
+    # snapshot as a reference + hash so the decision-time institutional state is
+    # auditable. Quarterly cadence: tolerate a wide staleness window.
+    InputSource("institutional_intelligence", "outputs/latest/institutional_intelligence.json", "crowd", "institutional_intelligence", stale_after_hours=2160.0),
+    InputSource("institutional_consensus", "outputs/latest/institutional_consensus.json", "crowd", "institutional_intelligence", stale_after_hours=2160.0),
 ]
 
 
