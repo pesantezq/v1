@@ -254,6 +254,27 @@ REGISTRY: tuple[Artifact, ...] = (
                     "(not by main.py).",
     ),
     Artifact(
+        name="daily_capital_plan",
+        namespace=OutputNamespace.LATEST,
+        relative_path="daily_capital_plan.json",
+        format=FORMAT_JSON,
+        writer_module="portfolio_automation.capital_plan_view",
+        writer_function="run_capital_plan_view",
+        consumers=("watchlist_scanner.daily_memo",),
+        schema_version=1,
+        append_only=False,
+        # Produced by the run_daily_safe.sh aux stage (Stage 9e2), not by
+        # main.py — legitimately absent on the main.py-only production cron.
+        optional=True,
+        observe_only_required=True,
+        documented_in="docs/OUTPUT_ARTIFACT_CONTRACTS.md",
+        description="Read-only 'Today's Capital Plan' view model: normalized "
+                    "funding split (cash/reserve/incoming/deployable), funded "
+                    "and deferred actions with investor-facing labels, sell "
+                    "dependencies, and reconciliation status. Audit copy of the "
+                    "decision-ready memo block; the memo renders the same view.",
+    ),
+    Artifact(
         name="decision_plan",
         namespace=OutputNamespace.LATEST,
         relative_path="decision_plan.json",

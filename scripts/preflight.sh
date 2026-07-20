@@ -214,6 +214,7 @@ python -m py_compile \
     portfolio_automation/portfolio_sim/strategy_lab_health.py \
     portfolio_automation/simulation_charts.py \
     portfolio_automation/memo_coherence.py \
+    portfolio_automation/capital_plan_view.py \
     tools/validate_daily_memo_coherence.py
 pass "Targeted py_compile check passed"
 
@@ -241,6 +242,7 @@ modules = [
     'portfolio_automation.portfolio_sim.run_strategy_lab',
     'portfolio_automation.simulation_charts',
     'portfolio_automation.memo_coherence',
+    'portfolio_automation.capital_plan_view',
 ]
 for m in modules:
     importlib.import_module(m)
