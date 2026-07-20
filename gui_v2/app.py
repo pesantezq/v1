@@ -326,6 +326,7 @@ from gui_v2.data.dash_portfolio import collect_portfolio_view as _dash_portfolio
 from gui_v2.data.dash_quant import collect_quant_view as _dash_quant
 from gui_v2.data.dash_system import collect_system_view as _dash_system
 from gui_v2.data.dash_memo import collect_memo_view as _dash_memo
+from gui_v2.data.dash_memo_datasets import collect_memo_datasets_view
 from gui_v2.data.dash_portfolio_sync import collect_portfolio_sync_view as _dash_portfolio_sync
 from gui_v2.data.dash_portfolio_config import collect_portfolio_config_view as _dash_portfolio_config
 from gui_v2.data.operator_control import operator_control_context, today_operator_summary
@@ -965,10 +966,9 @@ def page_dash_strategy_tax(
 def page_dash_memo(
     request: Request, _a: str | None = Depends(_require_auth)
 ) -> HTMLResponse:
-    return _render(
-        request, "dashboard/memo.html",
-        **_with_operator(_dash_memo(REPO_ROOT), "memo"),
-    )
+    ctx = _with_operator(_dash_memo(REPO_ROOT), "memo")
+    ctx["memo_datasets"] = collect_memo_datasets_view(REPO_ROOT)
+    return _render(request, "dashboard/memo.html", **ctx)
 
 
 @app.get("/dashboard/portfolio-sync", response_class=HTMLResponse)

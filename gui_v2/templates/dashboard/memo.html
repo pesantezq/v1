@@ -174,6 +174,92 @@
   {% endif %}
 
   {# --------------------------------------------------------------- #}
+  {# Domain sub-tabs — reassembled per-domain briefs from                #}
+  {# outputs/latest/memo_datasets.json (Tasks 1-3). Pure reassembly of    #}
+  {# existing memo-producer artifacts; observe-only; never feeds the     #}
+  {# decision engine. Additive: the memo sections above are unchanged.   #}
+  {# --------------------------------------------------------------- #}
+  {% if memo_datasets and memo_datasets.has_datasets %}
+  <section id="memo-datasets-section" aria-label="Memo datasets" class="space-y-3 print:hidden">
+    <div class="flex items-center gap-2 flex-wrap">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-300">Domain Briefs</h2>
+      <span class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700">observe-only &middot; feeds_decision_engine=false</span>
+      {{ ui.timestamp(memo_datasets.generated_at) }}
+    </div>
+
+    <nav aria-label="Domain tabs" role="tablist" class="flex flex-wrap gap-2">
+      {% for domain in memo_datasets.domains %}
+      <button type="button" data-domain-tab="{{ domain.key }}" role="tab"
+              class="memo-domain-tab text-xs px-3 py-1.5 rounded-full border flex items-center gap-1.5 bg-zinc-800/70 text-zinc-400 border-zinc-700 hover:text-zinc-200">
+        {{ ui.sev_dot("green" if domain.status == "ok" else ("gray" if domain.status == "unavailable" else "red")) }}
+        {{ domain.headline }}
+      </button>
+      {% endfor %}
+    </nav>
+
+    {% for domain in memo_datasets.domains %}
+    <div data-domain-panel="{{ domain.key }}" class="memo-domain-panel bg-zinc-900 rounded-xl border border-zinc-800 px-5 py-4 space-y-3">
+      <div class="flex items-center gap-2 flex-wrap">
+        <h3 class="text-base font-semibold text-zinc-100">{{ domain.headline }}</h3>
+        {{ ui.badge("green" if domain.status == "ok" else ("gray" if domain.status == "unavailable" else "red"), domain.status) }}
+      </div>
+
+      {% if domain.warnings %}
+      <ul class="text-xs text-amber-300 space-y-0.5">
+        {% for w in domain.warnings %}<li>&#9888; {{ w }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if domain.sections %}
+      <div class="space-y-2.5">
+        {% for section in domain.sections %}
+        <div>
+          <div class="text-xs font-semibold text-zinc-400">{{ section.title }}</div>
+          <div class="space-y-1 mt-0.5">
+            {% for line in section.lines %}
+            <div class="flex gap-2 text-sm text-zinc-300 leading-relaxed"><span class="text-emerald-500/60 mt-0.5">&bull;</span><span>{{ line }}</span></div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-xs text-zinc-600">No data for this domain today.</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+
+  {# Tab controller — show one domain panel at a time. Re-runs on htmx swap
+     (defaults to the first domain). Pure client-side; no backend/decision
+     change. Mirrors the crowd_radar.html tab-controller convention. #}
+  <script>
+  (function () {
+    var root = document.getElementById('memo-datasets-section');
+    if (!root) return;
+    var tabs = root.querySelectorAll('.memo-domain-tab');
+    var panels = root.querySelectorAll('.memo-domain-panel');
+    function show(id) {
+      panels.forEach(function (p) {
+        p.style.display = (p.getAttribute('data-domain-panel') === id) ? '' : 'none';
+      });
+      tabs.forEach(function (t) {
+        var on = t.getAttribute('data-domain-tab') === id;
+        t.classList.toggle('bg-zinc-700', on);
+        t.classList.toggle('text-zinc-100', on);
+        t.classList.toggle('border-zinc-600', on);
+        t.classList.toggle('text-zinc-400', !on);
+      });
+    }
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () { show(t.getAttribute('data-domain-tab')); });
+    });
+    if (tabs.length) { show(tabs[0].getAttribute('data-domain-tab')); }
+  })();
+  </script>
+  {% endif %}
+
+  {# --------------------------------------------------------------- #}
   {# Operator actions — memo-support work orders (create-only).        #}
   {# Diagnose formatting or regenerate memo from existing artifacts;   #}
   {# never sends email.                                                #}
