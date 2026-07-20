@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block content %}
+<div hx-get="/dashboard/institutional" hx-trigger="every 300s" hx-select="#inst-root" hx-target="#inst-root" hx-swap="outerHTML">
+<div id="inst-root">
+
+  {{ ui.page_header("Institutional Intelligence",
+                    "SEC 13F institutional-manager positioning — observe-only research. Never feeds the decision plan.",
+                    "/dashboard/institutional", "inst-root") }}
+
+  <div class="rounded-md border border-amber-800/50 bg-amber-950/30 px-4 py-3 my-3 text-sm text-amber-200">
+    <strong>Read this first.</strong>
+    <ul class="list-disc ml-5 mt-1 space-y-0.5">
+      {% for lim in limitations %}<li>{{ lim }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  {% if not has_data %}
+    <div class="text-zinc-400 text-sm my-4">No institutional (13F) data yet — the layer ships inert until live SEC ingestion is enabled and manager CIKs are verified.</div>
+  {% endif %}
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-3 my-3">
+    {% for c in cards %}{{ ui.status_card(c) }}{% endfor %}
+  </div>
+
+  {% if consensus_rows %}
+  <h2 class="text-lg font-semibold mt-5 mb-2">Consensus</h2>
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="text-zinc-400"><tr>
+        <th class="text-left py-1 pr-4">Symbol</th><th class="text-left pr-4">State</th>
+        <th class="text-right pr-4">Score</th><th class="text-right pr-4">Confidence</th>
+        <th class="text-right pr-4">Eff. independent mgrs</th><th class="text-right pr-4">Crowding</th>
+        <th class="text-right pr-4">Filing age (days)</th>
+      </tr></thead>
+      <tbody>
+      {% for r in consensus_rows %}
+        <tr class="border-t border-zinc-800">
+          <td class="py-1 pr-4 font-medium">{{ r.symbol }}</td>
+          <td class="pr-4">{{ r.state }}</td>
+          <td class="text-right pr-4">{{ '%.3f'|format(r.score) if r.score is not none else '—' }}</td>
+          <td class="text-right pr-4">{{ '%.2f'|format(r.confidence) if r.confidence is not none else '—' }}</td>
+          <td class="text-right pr-4">{{ '%.1f'|format(r.effective_independent) if r.effective_independent is not none else '—' }}</td>
+          <td class="text-right pr-4">{{ '%.2f'|format(r.crowding) if r.crowding is not none else '—' }}</td>
+          <td class="text-right pr-4">{{ r.filing_age_days if r.filing_age_days is not none else '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <p class="text-xs text-zinc-500 mt-4">Data as of {{ data_as_of or 'n/a' }}. Observe-only · feeds_decision_engine=false · production human-gated.</p>
+
+</div>
+</div>
+{% endblock %}

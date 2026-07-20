@@ -2343,6 +2343,21 @@ def _capital_plan_view(summary: dict[str, Any]) -> dict[str, Any]:
     return cp if isinstance(cp, dict) else {}
 
 
+def _institutional_lines(summary: dict[str, Any], *, markdown: bool) -> list[str]:
+    """Compact institutional (13F) context block — [] unless material."""
+    art = summary.get("_institutional_artifact")
+    if not isinstance(art, dict) or not art:
+        return []
+    try:
+        from portfolio_automation.institutional_intelligence.institutional_memo import (
+            render_institutional_memo_lines,
+        )
+        return render_institutional_memo_lines(art, markdown=markdown)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("daily_memo: institutional memo render failed — %s", exc)
+        return []
+
+
 def _capital_plan_lines(summary: dict[str, Any], *, markdown: bool) -> list[str]:
     """Render the decision-ready capital-plan sections, or [] when unavailable.
 
@@ -2889,6 +2904,10 @@ def build_daily_memo(
             a(f"  Total recommended capital: {_fmt_money(capital_total)}")
         a("")
 
+    # Institutional (13F) context — compact, only when material.
+    for line in _institutional_lines(summary, markdown=False):
+        a(line)
+
     a(_LINE)
     a("  RISK FOCUS")
     a(_LINE)
@@ -3113,6 +3132,10 @@ def build_daily_memo_md(
             a(f"- Total recommended capital: {_fmt_money(capital_total)}")
         a("")
 
+    # Institutional (13F) context — compact, only when material.
+    for line in _institutional_lines(summary, markdown=True):
+        a(line)
+
     a("## Risk Focus")
     for item in risk_items[:3]:
         a(f"- {item}")
@@ -3275,6 +3298,15 @@ def generate_daily_memo(
         )
     except Exception as exc:
         logger.warning("daily_memo: capital_plan_view failed (non-fatal) — %s", exc)
+
+    # Institutional (13F) context artifact (observe-only; compact memo section
+    # rendered only when material). Non-blocking.
+    try:
+        summary = dict(summary)
+        summary["_institutional_artifact"] = _safe_load(
+            root_path / "outputs" / "latest" / "institutional_intelligence.json") or {}
+    except Exception as exc:
+        logger.warning("daily_memo: institutional artifact load failed (non-fatal) — %s", exc)
 
     discovery_data: "dict[str, Any] | None" = None
     try:
