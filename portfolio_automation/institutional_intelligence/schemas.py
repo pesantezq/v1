@@ -23,6 +23,29 @@ from dataclasses import dataclass, field
 from datetime import date
 
 # ---------------------------------------------------------------------------
+# Filing + holding vocabularies (Phase 3)
+# ---------------------------------------------------------------------------
+
+# 13F filing form types. HR = holdings report (has an information table);
+# NT = notice (holdings reported by another manager — NO information table).
+FORM_13F_HR = "13F-HR"
+FORM_13F_HR_A = "13F-HR/A"
+FORM_13F_NT = "13F-NT"
+FORM_13F_NT_A = "13F-NT/A"
+
+HOLDINGS_FORMS: frozenset[str] = frozenset({FORM_13F_HR, FORM_13F_HR_A})
+NOTICE_FORMS: frozenset[str] = frozenset({FORM_13F_NT, FORM_13F_NT_A})
+ALL_13F_FORMS: frozenset[str] = HOLDINGS_FORMS | NOTICE_FORMS
+AMENDMENT_FORMS: frozenset[str] = frozenset({FORM_13F_HR_A, FORM_13F_NT_A})
+
+# Put/call marker taxonomy as reported in the information table (raw, not
+# interpreted as directional — interpretation lives in Phase 6).
+PUT_CALL_NONE = "none"      # ordinary shares / principal
+PUT_CALL_PUT = "put"
+PUT_CALL_CALL = "call"
+PUT_CALL_VALUES: frozenset[str] = frozenset({PUT_CALL_NONE, PUT_CALL_PUT, PUT_CALL_CALL})
+
+# ---------------------------------------------------------------------------
 # Controlled vocabularies (extend deliberately; validation rejects unknowns)
 # ---------------------------------------------------------------------------
 
@@ -105,6 +128,68 @@ class ManagerRecord:
         if self.effective_to is not None and as_of > self.effective_to:
             return False
         return True
+
+
+@dataclass(frozen=True)
+class FilingRef:
+    """A discovered 13F filing reference (pre-parse).
+
+    ``filed_at`` (public availability) is the point-in-time signal timestamp —
+    NEVER ``report_period`` (quarter-end). ``accession`` is the stable identity.
+    """
+
+    cik: str
+    accession: str
+    form_type: str
+    filed_at: date
+    report_period: date | None
+    primary_doc: str | None = None
+    is_amendment: bool = False
+    amendment_number: int | None = None
+
+    @property
+    def is_holdings(self) -> bool:
+        """True only for holdings reports (13F-HR/A) — NOT notices (13F-NT)."""
+        return self.form_type in HOLDINGS_FORMS
+
+    @property
+    def is_notice(self) -> bool:
+        return self.form_type in NOTICE_FORMS
+
+
+@dataclass(frozen=True)
+class ParsedHolding:
+    """One parsed information-table row. Raw reported fields only — no
+    interpretation, no derived conviction, no ticker guessing."""
+
+    issuer_name: str
+    class_title: str
+    cusip: str
+    value: float | None            # reported USD value (as filed; units handled by parser)
+    shares_or_principal: float | None
+    share_principal_type: str | None   # "SH" | "PRN"
+    put_call: str = PUT_CALL_NONE
+    figi: str | None = None
+    investment_discretion: str | None = None
+    voting_sole: float | None = None
+    voting_shared: float | None = None
+    voting_none: float | None = None
+    other_managers: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ParsedFiling:
+    """The result of parsing one filing's information table."""
+
+    accession: str
+    form_type: str
+    holdings: tuple[ParsedHolding, ...]
+    parse_warnings: tuple[str, ...] = field(default_factory=tuple)
+    is_notice: bool = False
+
+    @property
+    def holdings_count(self) -> int:
+        return len(self.holdings)
 
 
 def _require(cond: bool, msg: str) -> None:
