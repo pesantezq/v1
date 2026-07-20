@@ -692,6 +692,22 @@ def page_dash_crowd_radar(
     return _render(request, "dashboard/crowd_radar.html", **ctx)
 
 
+@app.get("/dashboard/institutional", response_class=HTMLResponse)
+def page_dash_institutional(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    # Institutional Intelligence (SEC 13F): observe-only research context.
+    # Delayed/incomplete disclosures; never feeds the decision plan.
+    try:
+        from gui_v2.data.dash_institutional import collect_institutional_view
+        ctx = collect_institutional_view(REPO_ROOT)
+    except Exception:
+        ctx = {"persona": "institutional", "observe_only": True,
+               "feeds_decision_engine": False, "cards": [], "consensus_rows": [],
+               "manager_rows": [], "limitations": [], "has_data": False}
+    return _render(request, "dashboard/institutional.html", **ctx)
+
+
 @app.get("/dashboard/governance", response_class=HTMLResponse)
 def page_dash_governance(
     request: Request, _a: str | None = Depends(_require_auth)

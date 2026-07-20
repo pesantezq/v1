@@ -69,6 +69,56 @@ Explicitly note:
 
 ---
 
+---
+
+## Institutional Intelligence (SEC 13F) subsystem + crowd-lane semantic rename
+
+### Date
+`2026-07-20`
+
+### Area
+architecture
+
+### Files / Functions
+New package portfolio_automation/institutional_intelligence/ (registry, governed
+SEC client, discovery, parser, PIT store, security identity, position changes,
+options interpretation, scoring, crowding, consensus, evidence alignment,
+backtest, sim candidates, memo, health, context_loader orchestrator) +
+portfolio_automation/portfolio_sim/institutional_tilt.py. Additive edits to
+daily_input_snapshot.py, quant_feedback.py, decision_context_capture.py,
+daily_memo.py, gui_v2 (route/template/nav/loader). Crowd-lane rename in
+crowd_intelligence/unified_{schema,bus,writer}.py. New config block; new
+artifacts registered in artifact_registry.yaml; Stage 7f2 in run_daily_safe.sh.
+
+### Decision
+Added an observe-only SEC 13F institutional-positioning subsystem and renamed
+the misleading unified-crowd state institutional_context_only ->
+market_context_only (compat alias, schema v2).
+
+### Why
+The FMP "institutional" crowd lane was never 13F positioning. The new subsystem
+provides genuine institutional-manager signals with point-in-time safety,
+options ambiguity, independence-adjusted consensus, and bounded sandbox
+strategies — all gated.
+
+### Invariants Preserved
+No decision_engine / six-protected-score change; decision_plan.json never
+written; feeds_decision_engine=false everywhere; production human-gated; no new
+production mutation path. Crowd rename is backward-compatible (alias + both
+status keys + state_counts mirror).
+
+### Downstream Impact
+New artifacts institutional_intelligence{,_status,_consensus}.json (registered,
+consumed by memo + snapshot + GUI). unified_crowd schema 1->2. quant_feedback +
+decision context gain additive institutional dimensions. GUI adds an
+Institutional workspace. All 18 build phases test-covered.
+
+### Artifact Health Severity
+Institutional artifacts optional/info (produced by aux Stage 7f2); absence is
+optional_missing, never critical. Health assessor AMBER-max; RED only on a
+contract breach (feeds_decision_engine=true / look-ahead / options-directional /
+production mutation / namespace breach).
+
 ## Daily memo: decision-ready "Today's Capital Plan" (replaces Top Decisions / Capital Actions + investor core)
 
 ### Date

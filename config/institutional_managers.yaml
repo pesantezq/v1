@@ -1,0 +1,174 @@
+# Institutional Intelligence — manager registry
+#
+# Version-controlled, point-in-time-versionable metadata for the bounded set of
+# institutional managers whose SEC Form 13F disclosures the subsystem tracks.
+#
+# HONESTY / SAFETY NOTES:
+#   * This registry ships INERT. Every manager is `enabled: false` with
+#     `cik_verified: false`. A manager may only be enabled AFTER an operator
+#     verifies its CIK against EDGAR (https://www.sec.gov/cgi-bin/browse-edgar).
+#     Validation refuses `enabled: true` unless `cik_verified: true`.
+#   * The `cik` values below are PLACEHOLDERS (0000000xxx) — they are NOT real
+#     CIKs and must be replaced with verified values before enabling. The one
+#     exception is `situational_awareness`, whose CIK was supplied in the spec
+#     but is still marked unverified until an operator confirms it.
+#   * `cloneability` and `manager_quality_prior` are documented SUBJECTIVE
+#     PRIORS (inputs to scoring), not claimed facts. Rationale is recorded per
+#     manager. Managers are included to span distinct ARCHETYPES, never because
+#     a name is famous.
+#   * Do not infer net direction from reported options without contextual
+#     evidence (see the options-interpretation taxonomy).
+
+schema_version: 1
+
+managers:
+  situational_awareness:
+    display_name: Situational Awareness LP
+    cik: "0002045724"           # from spec; operator must verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: thematic_ai_infrastructure
+    expected_horizon: medium_long
+    concentration_style: concentrated
+    turnover_class: moderate
+    cloneability: 0.65
+    manager_quality_prior: 0.70
+    options_complexity: high
+    market_maker: false
+    specialization:
+      - ai_compute
+      - semiconductors
+      - memory
+      - datacenters
+      - power_infrastructure
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Concentrated thematic AI-infrastructure archetype. High options
+      complexity means reported puts/calls may form sector-beta hedges around
+      concentrated longs — never inferred as directional. Cloneability prior
+      moderate-high because the equity longs are large and identifiable.
+    notes:
+      - Do not infer net direction from reported options without contextual evidence.
+
+  disciplined_value:
+    display_name: Disciplined Value Partners
+    cik: "0000000002"           # PLACEHOLDER — verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: value
+    expected_horizon: long
+    concentration_style: moderate
+    turnover_class: low
+    cloneability: 0.75
+    manager_quality_prior: 0.60
+    options_complexity: low
+    market_maker: false
+    specialization:
+      - deep_value
+      - financials
+      - industrials
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Long-horizon, low-turnover value archetype. High cloneability prior:
+      positions are ordinary equity longs held for multiple quarters, so a
+      delayed disclosure remains informative. Quality prior kept moderate
+      pending measured out-of-sample evidence.
+
+  quality_compounders:
+    display_name: Quality Compounders Fund
+    cik: "0000000003"           # PLACEHOLDER — verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: quality_compounder
+    expected_horizon: long
+    concentration_style: concentrated
+    turnover_class: low
+    cloneability: 0.80
+    manager_quality_prior: 0.65
+    options_complexity: low
+    market_maker: false
+    specialization:
+      - consumer_staples
+      - software
+      - healthcare
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Concentrated, low-turnover quality-compounder archetype. Highest
+      cloneability prior because holdings are durable and slow-changing;
+      quarter-old disclosures still reflect current intent.
+
+  engaged_activist:
+    display_name: Engaged Activist Capital
+    cik: "0000000004"           # PLACEHOLDER — verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: activist
+    expected_horizon: medium_long
+    concentration_style: concentrated
+    turnover_class: moderate
+    cloneability: 0.55
+    manager_quality_prior: 0.55
+    options_complexity: medium
+    market_maker: false
+    specialization:
+      - industrials
+      - consumer_discretionary
+      - special_situations
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Activist archetype. Moderate cloneability: activist theses can move fast
+      and a delayed 13F may lag the campaign, so freshness must be weighted
+      heavily downstream.
+
+  macro_multistrategy:
+    display_name: Macro Multi-Strategy Advisors
+    cik: "0000000005"           # PLACEHOLDER — verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: macro_multistrategy
+    expected_horizon: short
+    concentration_style: diversified
+    turnover_class: high
+    cloneability: 0.20
+    manager_quality_prior: 0.55
+    options_complexity: high
+    market_maker: false
+    specialization:
+      - macro
+      - rates
+      - broad_equity
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Included ONLY as an explicitly LOW-cloneability control. High turnover +
+      diversified + high options complexity means a 13F snapshot cannot be
+      reconstructed into net exposure; downstream scoring should heavily
+      discount it. Demonstrates the "do not blindly clone" principle.
+
+  semiconductor_specialist:
+    display_name: Semiconductor Specialist Advisors
+    cik: "0000000006"           # PLACEHOLDER — verify before enabling
+    enabled: false
+    cik_verified: false
+    strategy_archetype: sector_specialist
+    expected_horizon: medium
+    concentration_style: concentrated
+    turnover_class: moderate
+    cloneability: 0.70
+    manager_quality_prior: 0.60
+    options_complexity: medium
+    market_maker: false
+    specialization:
+      - semiconductors
+      - semiconductor_equipment
+      - ai_compute
+    effective_from: "2025-01-01"
+    effective_to: null
+    rationale: >-
+      Sector-specialist archetype relevant to the application's tech/AI
+      universe. Strategy-fit scoring can reward alignment between a held
+      security's sector/theme and this manager's specialization tags.

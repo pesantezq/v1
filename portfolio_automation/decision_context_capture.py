@@ -111,6 +111,27 @@ def counted_hit_rate(labels: list[str]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _band_from_age(age_days) -> str | None:
+    if age_days is None:
+        return None
+    a = float(age_days)
+    return "fresh" if a <= 30 else "recent" if a <= 90 else "stale"
+
+
+def _fit_band(confidence) -> str | None:
+    if confidence is None:
+        return None
+    c = float(confidence)
+    return "high" if c >= 0.7 else "medium" if c >= 0.55 else "low"
+
+
+def _crowding_band(score) -> str | None:
+    if score is None:
+        return None
+    s = float(score)
+    return "high" if s >= 0.6 else "medium" if s >= 0.3 else "low"
+
+
 def capture_decision_context(
     decision_plan: dict[str, Any],
     *,
@@ -123,6 +144,7 @@ def capture_decision_context(
     snapshot_hash: str | None = None,
     strategy_id: str = "production",
     source_refs: list[str] | None = None,
+    institutional: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build immutable at-decision context records (no I/O)."""
     crowd = crowd or {}
@@ -150,6 +172,13 @@ def capture_decision_context(
             "factor_state_at_decision": factor_state,
             "confidence_at_decision": row.get("confidence"),
             "data_quality_state": data_quality,
+            # Institutional Intelligence (13F) decision-time context (additive;
+            # observe-only; None when no institutional signal for the symbol).
+            "institutional_state_at_decision": (institutional or {}).get(sym, {}).get("state"),
+            "institutional_freshness_band_at_decision": (institutional or {}).get(sym, {}).get("freshness_band"),
+            "institutional_strategy_fit_at_decision": (institutional or {}).get(sym, {}).get("strategy_fit_band"),
+            "institutional_crowding_band_at_decision": (institutional or {}).get(sym, {}).get("crowding_band"),
+            "institutional_manager_archetype_at_decision": (institutional or {}).get(sym, {}).get("dominant_archetype"),
             "snapshot_hash": snapshot_hash,
             "source_refs": list(source_refs or ["outputs/latest/decision_plan.json"]),
             # outcome fields filled later by maturation — never overwrite context
@@ -227,10 +256,23 @@ def run_decision_context_capture(root: Path | str = ".", now: str | None = None)
         if isinstance(rec, dict) and rec.get("symbol"):
             crowd[str(rec["symbol"]).upper()] = rec.get("crowd_state") or rec.get("state")
 
+    # Institutional (13F) decision-time context — observe-only, additive.
+    inst_doc = _read_json(root / "outputs" / "latest" / "institutional_intelligence.json") or {}
+    institutional: dict[str, Any] = {}
+    for rec in (inst_doc.get("records") or []):
+        if isinstance(rec, dict) and rec.get("symbol"):
+            institutional[str(rec["symbol"]).upper()] = {
+                "state": rec.get("consensus_state"),
+                "freshness_band": _band_from_age(rec.get("filing_age_days")),
+                "strategy_fit_band": _fit_band(rec.get("consensus_confidence")),
+                "crowding_band": _crowding_band(rec.get("crowding_score")),
+                "dominant_archetype": rec.get("dominant_archetype"),
+            }
+
     records = capture_decision_context(
         plan, run_id=run_id, now=now, regime=regime, crowd=crowd,
         factor_state=None, data_quality="ok",
-        snapshot_hash=snap.get("snapshot_hash"))
+        snapshot_hash=snap.get("snapshot_hash"), institutional=institutional)
     try:
         write_decision_context(root, records)
     except Exception:

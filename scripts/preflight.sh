@@ -215,6 +215,8 @@ python -m py_compile \
     portfolio_automation/simulation_charts.py \
     portfolio_automation/memo_coherence.py \
     portfolio_automation/capital_plan_view.py \
+    portfolio_automation/institutional_intelligence/context_loader.py \
+    portfolio_automation/institutional_intelligence/health.py \
     tools/validate_daily_memo_coherence.py
 pass "Targeted py_compile check passed"
 
@@ -243,6 +245,7 @@ modules = [
     'portfolio_automation.simulation_charts',
     'portfolio_automation.memo_coherence',
     'portfolio_automation.capital_plan_view',
+    'portfolio_automation.institutional_intelligence.context_loader',
 ]
 for m in modules:
     importlib.import_module(m)

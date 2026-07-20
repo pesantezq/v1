@@ -28,7 +28,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
-SCHEMA_VERSION = "1"
+# v2 (2026-07-20): crowd_state "institutional_context_only" renamed to
+# "market_context_only" (it was never 13F positioning). Backward-compatible —
+# STATE_INSTITUTIONAL_ONLY alias retained and unified_writer still emits the
+# old top_institutional_context_only status key alongside the new one.
+SCHEMA_VERSION = "2"
 SOURCE_LABEL = "unified_crowd_intelligence"
 
 # --- normalization scales (documented rationale) --------------------------------
@@ -71,7 +75,14 @@ STATE_INSUFFICIENT_DATA = "insufficient_data"
 STATE_CONFIRMED_ATTENTION = "confirmed_attention"
 STATE_DIVERGENT_ATTENTION = "divergent_attention"
 STATE_RETAIL_ONLY = "retail_only_attention"
-STATE_INSTITUTIONAL_ONLY = "institutional_context_only"
+# Preferred name (2026-07-20, schema v2): this state means FMP market context
+# (analyst/news/insider/congress) is present while retail attention is quiet.
+# It is NOT institutional 13F positioning — that real signal now lives in the
+# separate institutional_intelligence subsystem. The old name was misleading.
+STATE_MARKET_CONTEXT_ONLY = "market_context_only"
+# Deprecated compatibility alias — kept so code/tests referencing the constant
+# keep working. Resolves to the SAME value as STATE_MARKET_CONTEXT_ONLY.
+STATE_INSTITUTIONAL_ONLY = STATE_MARKET_CONTEXT_ONLY
 STATE_BROAD_SUPPORT = "broad_context_support"
 STATE_CAUTION_LOW_BREADTH = "caution_low_breadth"
 
@@ -79,7 +90,7 @@ CROWD_STATES = (
     STATE_CONFIRMED_ATTENTION,
     STATE_DIVERGENT_ATTENTION,
     STATE_RETAIL_ONLY,
-    STATE_INSTITUTIONAL_ONLY,
+    STATE_MARKET_CONTEXT_ONLY,
     STATE_BROAD_SUPPORT,
     STATE_CAUTION_LOW_BREADTH,
     STATE_INSUFFICIENT_DATA,
