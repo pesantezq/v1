@@ -40,6 +40,7 @@ from portfolio_automation.crowd_intelligence.unified_schema import (
     STATE_CONFIRMED_ATTENTION,
     STATE_DIVERGENT_ATTENTION,
     STATE_INSTITUTIONAL_ONLY,
+    STATE_MARKET_CONTEXT_ONLY,
     STATE_INSUFFICIENT_DATA,
     STATE_RETAIL_ONLY,
     TAU_HI,
@@ -137,7 +138,7 @@ def _classify(
     if r >= TAU_MID and f < TAU_MID:
         return STATE_RETAIL_ONLY
     if f >= TAU_MID and r < TAU_MID:
-        return STATE_INSTITUTIONAL_ONLY
+        return STATE_MARKET_CONTEXT_ONLY
     if breadth_fmp >= BREADTH_MULTI and r > 0.0:
         return STATE_BROAD_SUPPORT
     if breadth_total <= 1 and (r > 0.0 or f > 0.0):
@@ -149,7 +150,7 @@ _STATE_EXPLANATION = {
     STATE_CONFIRMED_ATTENTION: "Confirmed attention: retail velocity aligns with FMP attention/news context.",
     STATE_DIVERGENT_ATTENTION: "Divergent attention: one source is elevated while the other does not confirm.",
     STATE_RETAIL_ONLY: "Retail-only attention: ApeWisdom mentions rising, but FMP context is limited.",
-    STATE_INSTITUTIONAL_ONLY: "Institutional context only: FMP analyst/news/insider/congress context exists, but retail attention is quiet.",
+    STATE_MARKET_CONTEXT_ONLY: "Market context only: FMP analyst/news/insider/congress context exists, but retail attention is quiet. NOT institutional 13F positioning.",
     STATE_BROAD_SUPPORT: "Broad context support: multiple FMP categories active with some retail attention.",
     STATE_CAUTION_LOW_BREADTH: "Caution low breadth: signal concentrated in a single source.",
     STATE_INSUFFICIENT_DATA: "Insufficient data: no usable crowd signal on either lane.",

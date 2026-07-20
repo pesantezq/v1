@@ -391,8 +391,8 @@
          "Retail attention without confirming market/context signal."),
         ("Top Divergent Attention", "warning", unified_crowd.top_divergent,
          "Retail and FMP attention disagree."),
-        ("Top Institutional Context Only", "info", unified_crowd.top_institutional,
-         "FMP market/context attention without retail interest.")
+        ("Top Market Context Only", "info", unified_crowd.top_market_context,
+         "FMP market/analyst/news context without retail interest — NOT institutional 13F positioning.")
       ] %}
       {% for label, status, rows, note in _lists %}
       {% if rows %}

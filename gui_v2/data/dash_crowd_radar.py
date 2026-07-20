@@ -156,7 +156,10 @@ def _collect_unified_crowd(root: Path) -> dict[str, Any]:
             "top_confirmed": _top("top_confirmed_attention"),
             "top_retail_only": _top("top_retail_only_attention"),
             "top_divergent": _top("top_divergent_attention"),
-            "top_institutional": _top("top_institutional_context_only"),
+            # Prefer the renamed key (schema v2); fall back to the deprecated
+            # alias for older artifacts. This is FMP market context, NOT 13F.
+            "top_market_context": _top("top_market_context_only")
+            or _top("top_institutional_context_only"),
         }
     except Exception:
         return {"has_data": False}

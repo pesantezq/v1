@@ -28,6 +28,7 @@ from portfolio_automation.crowd_intelligence.unified_schema import (
     STATE_CONFIRMED_ATTENTION,
     STATE_DIVERGENT_ATTENTION,
     STATE_INSTITUTIONAL_ONLY,
+    STATE_MARKET_CONTEXT_ONLY,
     STATE_RETAIL_ONLY,
     UnifiedCrowdRow,
 )
@@ -75,6 +76,12 @@ def build_status(
     state_counts: dict[str, int] = {}
     for r in rows:
         state_counts[r.crowd_state] = state_counts.get(r.crowd_state, 0) + 1
+    # Backward-compat mirror (schema v2 rename): expose the count under the old
+    # key too so any consumer indexing state_counts["institutional_context_only"]
+    # keeps working. Same count, not additive — do not sum both keys.
+    if STATE_MARKET_CONTEXT_ONLY in state_counts:
+        state_counts.setdefault("institutional_context_only",
+                                state_counts[STATE_MARKET_CONTEXT_ONLY])
     confs = [r.crowd_confidence for r in rows]
     conf_avg = round(sum(confs) / len(confs), 4) if confs else 0.0
     breadth_max = max((r.source_breadth_total for r in rows), default=0)
@@ -110,6 +117,10 @@ def build_status(
         "top_confirmed_attention": _top(rows, STATE_CONFIRMED_ATTENTION),
         "top_retail_only_attention": _top(rows, STATE_RETAIL_ONLY),
         "top_divergent_attention": _top(rows, STATE_DIVERGENT_ATTENTION),
+        "top_market_context_only": _top(rows, STATE_MARKET_CONTEXT_ONLY),
+        # Deprecated compat alias key (same data) — kept so existing consumers
+        # (memo_coherence, daily_simulation_bundle, dash_crowd_radar, GUI) that
+        # read top_institutional_context_only keep working. Prefer the new key.
         "top_institutional_context_only": _top(rows, STATE_INSTITUTIONAL_ONLY),
         "warnings": list(warnings or []),
     }

@@ -100,7 +100,7 @@ def test_unified_crowd_shaped_for_display(tmp_path):
     assert "social_sentiment" in uc["disabled_categories"]
     assert uc["social_sentiment_status"] == "PLAN_LOCKED"
     # Four top-lists, each shaped with display keys.
-    for key in ("top_confirmed", "top_retail_only", "top_divergent", "top_institutional"):
+    for key in ("top_confirmed", "top_retail_only", "top_divergent", "top_market_context"):
         assert uc[key], f"{key} should be populated"
         row = uc[key][0]
         for col in ("ticker", "retail_attention_score", "fmp_attention_score",
