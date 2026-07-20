@@ -153,7 +153,7 @@ _BUILDERS = {
 
 def build_memo_datasets(sources: dict[str, Any], *, domains: list[str] | None = None,
                         generated_at: str | None = None) -> dict:
-    domains = domains or DOMAINS
+    domains = DOMAINS if domains is None else domains
     out_domains = {}
     for d in domains:
         builder = _BUILDERS.get(d)
@@ -233,7 +233,12 @@ def run_memo_datasets(root: str = ".", *, write: bool = True,
         if config is None:
             base = _load_json(root_path / "config" / "base.json") or {}
             config = base.get("memo_datasets") or {}
-        domains = config.get("domains") or DOMAINS
+        if config.get("enabled", True) is False:
+            dataset = build_memo_datasets({}, domains=[])
+            dataset["status"] = "disabled"
+            return dataset
+        configured_domains = config.get("domains")
+        domains = DOMAINS if configured_domains is None else configured_domains
         write_briefs = config.get("write_briefs", True)
         latest = root_path / "outputs" / "latest"
         sources = {k: _load_json(latest / fn) for k, fn in _SOURCE_FILES.items()}

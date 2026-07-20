@@ -100,3 +100,30 @@ def test_run_never_raises_on_garbage(tmp_path):
     (tmp_path / "outputs" / "latest").mkdir(parents=True)
     res = md.run_memo_datasets(str(tmp_path), write=False)
     assert res["feeds_decision_engine"] is False   # honest empty, no crash
+
+
+def test_run_disabled_writes_nothing(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"enabled": False})
+    assert res["status"] == "disabled"
+    assert res["feeds_decision_engine"] is False
+    assert res["observe_only"] is True
+    assert res["domains"] == {}
+    assert not (root / "outputs" / "latest" / "memo_datasets.json").exists()
+    assert not (root / "outputs" / "latest" / "memo").exists()
+
+
+def test_run_explicit_empty_domains_yields_zero_domains(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"domains": []})
+    assert res["domains"] == {}
+    # confirm artifact was still written (enabled defaults True), just empty domains
+    art = json.loads((root / "outputs" / "latest" / "memo_datasets.json").read_text())
+    assert art["domains"] == {}
+
+
+def test_run_absent_enabled_key_runs_normally(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"write_briefs": True})
+    assert set(res["domains"]) == set(md.DOMAINS)
+    assert (root / "outputs" / "latest" / "memo_datasets.json").exists()
