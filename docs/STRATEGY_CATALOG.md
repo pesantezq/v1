@@ -35,10 +35,10 @@ Tactics documented: 16 · coverage complete: True
 - Latest: excess vs SPY 0.192419, CAGR 0.669443, maxDD -0.160046 (YTD 2026)
 
 ## Boom Bucket (`shadow_boom_bucket`)
-- Universe: CHAT, GLD, META, NASA, NVDA, QLD, QQQ, XLB, XLRE
+- Universe: CHAT, GLD, NASA, QLD, QQQ, XLE, XLF, XLRE, XLV
 - Rationale: Core + a capped speculative sleeve (≤15%/≤5% per idea).
 - Explanation: Boom Bucket: weight vector [('NASA', 0.34456554344565543), ('QLD', 0.1837816218378162), ('QQQ', 0.13788621137886212), ('GLD', 0.0918908109189081), ('CHAT', 0.0918908109189081)].
-- Latest: excess vs SPY 0.133838, CAGR 0.517888, maxDD -0.146278 (YTD 2026)
+- Latest: excess vs SPY 0.141387, CAGR 0.537004, maxDD -0.120265 (YTD 2026)
 
 ## Aggressive Growth (`profile_aggressive_growth`)
 - Objective: Maximize upside and capital appreciation
