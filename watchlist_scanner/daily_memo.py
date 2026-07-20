@@ -2337,6 +2337,34 @@ def _memo_coherence(summary: dict[str, Any]) -> dict[str, Any]:
     return mc if isinstance(mc, dict) else {}
 
 
+def _capital_plan_view(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return the attached Today's Capital Plan view model (or {})."""
+    cp = summary.get("_capital_plan_view")
+    return cp if isinstance(cp, dict) else {}
+
+
+def _capital_plan_lines(summary: dict[str, Any], *, markdown: bool) -> list[str]:
+    """Render the decision-ready capital-plan sections, or [] when unavailable.
+
+    Falls back to an empty list (caller keeps a minimal legacy line) if the
+    view model could not be built, so the memo never breaks on this block.
+    """
+    view = _capital_plan_view(summary)
+    # Only render the decision-ready block when funding data is actually
+    # available; otherwise return [] so the caller falls back to the legacy
+    # decision list rather than printing an "unavailable capital plan" block.
+    if not view or not view.get("available"):
+        return []
+    try:
+        from portfolio_automation.capital_plan_view import render_capital_plan_md
+        return render_capital_plan_md(
+            view, markdown=markdown, rule=None if markdown else _LINE,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("daily_memo: capital plan render failed — %s", exc)
+        return []
+
+
 def _fmt_amt(value: Any) -> str:
     try:
         return f"${float(value):,.0f}"
@@ -2805,14 +2833,11 @@ def build_daily_memo(
     except Exception as exc:
         logger.warning("daily_memo: verdict line failed — %s", exc)
 
-    # Investor-facing core (reconciled posture + funded/deferred actions),
-    # rendered before analyst context. Non-blocking; absent when coherence
-    # data is not attached.
-    try:
-        for line in _investor_core_text(_memo_coherence(summary)):
-            a(line)
-    except Exception as exc:
-        logger.warning("daily_memo: investor core (txt) failed — %s", exc)
+    # NOTE: the older "investor core" block (posture / monthly / weekly /
+    # funded / deferred) was removed here (2026-07-20) in favor of the single
+    # decision-ready "Today's Capital Plan" block rendered below, which is its
+    # superset. _investor_core_text remains defined for its unit tests and the
+    # coherence appendix but is no longer rendered in the memo body.
 
     a(_LINE)
     a("  TOP INSIGHT")
@@ -2820,39 +2845,49 @@ def build_daily_memo(
     a(f"  {_build_memo_top_insight(tt, to, top_rows)}")
     a("")
 
-    a(_LINE)
-    a("  TOP DECISIONS")
-    a(_LINE)
-    if top_rows:
-        for idx, row in enumerate(top_rows, 1):
-            decision = str(row.get("decision") or "-")
-            symbol = str(row.get("symbol") or "-")
-            priority = _flt(row.get("priority"))
-            source = str(row.get("source") or "-")
-            urgency = str(row.get("urgency") or "-")
-            a(f"  {idx}. {decision} {symbol} | pri {priority:.3f} | {source} | {urgency}")
-            reason = _decision_reason(row)
-            flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
-            if flags:
-                a(f"     {reason} Risk: {', '.join(flags)}.")
-            else:
-                a(f"     {reason}")
+    # Today's Capital Plan — decision-ready replacement for the legacy
+    # "Top Decisions" + "Capital Actions" blocks. Reads the normalized,
+    # read-only view model (funding split + cash envelope + sell detail).
+    cp_lines = _capital_plan_lines(summary, markdown=False)
+    if cp_lines:
+        for cp_line in cp_lines:
+            a(cp_line)
     else:
-        a("  Decision plan unavailable.")
-    a("")
+        # Fallback (view model unavailable): keep a minimal legacy summary so
+        # the memo still names the top decisions rather than going silent.
+        a(_LINE)
+        a("  TOP DECISIONS")
+        a(_LINE)
+        if top_rows:
+            for idx, row in enumerate(top_rows, 1):
+                decision = str(row.get("decision") or "-")
+                symbol = str(row.get("symbol") or "-")
+                priority = _flt(row.get("priority"))
+                source = str(row.get("source") or "-")
+                urgency = str(row.get("urgency") or "-")
+                a(f"  {idx}. {decision} {symbol} | pri {priority:.3f} | {source} | {urgency}")
+                reason = _decision_reason(row)
+                flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
+                if flags:
+                    a(f"     {reason} Risk: {', '.join(flags)}.")
+                else:
+                    a(f"     {reason}")
+        else:
+            a("  Decision plan unavailable.")
+        a("")
 
-    a(_LINE)
-    a("  CAPITAL ACTIONS")
-    a(_LINE)
-    a(
-        "  "
-        f"SELL={capital_counts.get('SELL', 0)}, "
-        f"SCALE={capital_counts.get('SCALE', 0)}, "
-        f"BUY={capital_counts.get('BUY', 0)}"
-    )
-    if capital_total is not None:
-        a(f"  Total recommended capital: {_fmt_money(capital_total)}")
-    a("")
+        a(_LINE)
+        a("  CAPITAL ACTIONS")
+        a(_LINE)
+        a(
+            "  "
+            f"SELL={capital_counts.get('SELL', 0)}, "
+            f"SCALE={capital_counts.get('SCALE', 0)}, "
+            f"BUY={capital_counts.get('BUY', 0)}"
+        )
+        if capital_total is not None:
+            a(f"  Total recommended capital: {_fmt_money(capital_total)}")
+        a("")
 
     a(_LINE)
     a("  RISK FOCUS")
@@ -3034,46 +3069,49 @@ def build_daily_memo_md(
     except Exception as exc:
         logger.warning("daily_memo: verdict line (md) failed — %s", exc)
 
-    # Investor-facing core (Markdown), before analyst context.
-    try:
-        for line in _investor_core_md(_memo_coherence(summary)):
-            a(line)
-    except Exception as exc:
-        logger.warning("daily_memo: investor core (md) failed — %s", exc)
+    # Investor-core block removed (2026-07-20) — superseded by the single
+    # decision-ready "Today's Capital Plan" Markdown block rendered below.
 
     a("## Top Insight")
     a("")
     a(f"> {_build_memo_top_insight(tt, to, top_rows)}")
     a("")
 
-    a("## Top Decisions")
-    if top_rows:
-        for row in top_rows:
-            decision = str(row.get("decision") or "-")
-            symbol = str(row.get("symbol") or "-")
-            priority = _flt(row.get("priority"))
-            source = str(row.get("source") or "-")
-            urgency = str(row.get("urgency") or "-")
-            a(f"- **{decision}** `{symbol}` | priority `{priority:.3f}` | source `{source}` | urgency `{urgency}`")
-            reason = _decision_reason(row)
-            flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
-            if flags:
-                a(f"  - {reason} Risk: {', '.join(flags)}.")
-            else:
-                a(f"  - {reason}")
+    # Today's Capital Plan — decision-ready replacement for the legacy
+    # "Top Decisions" + "Capital Actions" Markdown blocks.
+    cp_lines = _capital_plan_lines(summary, markdown=True)
+    if cp_lines:
+        for cp_line in cp_lines:
+            a(cp_line)
     else:
-        a("_Decision plan unavailable._")
-    a("")
+        a("## Top Decisions")
+        if top_rows:
+            for row in top_rows:
+                decision = str(row.get("decision") or "-")
+                symbol = str(row.get("symbol") or "-")
+                priority = _flt(row.get("priority"))
+                source = str(row.get("source") or "-")
+                urgency = str(row.get("urgency") or "-")
+                a(f"- **{decision}** `{symbol}` | priority `{priority:.3f}` | source `{source}` | urgency `{urgency}`")
+                reason = _decision_reason(row)
+                flags = [str(flag) for flag in (row.get("risk_flags") or []) if str(flag)]
+                if flags:
+                    a(f"  - {reason} Risk: {', '.join(flags)}.")
+                else:
+                    a(f"  - {reason}")
+        else:
+            a("_Decision plan unavailable._")
+        a("")
 
-    a("## Capital Actions")
-    a(
-        f"- SELL: {capital_counts.get('SELL', 0)} | "
-        f"SCALE: {capital_counts.get('SCALE', 0)} | "
-        f"BUY: {capital_counts.get('BUY', 0)}"
-    )
-    if capital_total is not None:
-        a(f"- Total recommended capital: {_fmt_money(capital_total)}")
-    a("")
+        a("## Capital Actions")
+        a(
+            f"- SELL: {capital_counts.get('SELL', 0)} | "
+            f"SCALE: {capital_counts.get('SCALE', 0)} | "
+            f"BUY: {capital_counts.get('BUY', 0)}"
+        )
+        if capital_total is not None:
+            a(f"- Total recommended capital: {_fmt_money(capital_total)}")
+        a("")
 
     a("## Risk Focus")
     for item in risk_items[:3]:
@@ -3224,6 +3262,19 @@ def generate_daily_memo(
         summary["_memo_coherence"] = run_memo_coherence(root_path, write_files=write_files)
     except Exception as exc:
         logger.warning("daily_memo: memo_coherence reconciliation failed (non-fatal) — %s", exc)
+
+    # Today's Capital Plan view model (non-blocking). Read-only normalization of
+    # the coherence funding split + cash envelope + decision-plan sell/gross into
+    # the decision-ready sections that replace the legacy Top Decisions / Capital
+    # Actions blocks. Rendering only; never mutates decisions or scores.
+    try:
+        from portfolio_automation.capital_plan_view import run_capital_plan_view
+        summary = dict(summary)
+        summary["_capital_plan_view"] = run_capital_plan_view(
+            root_path, write=False, coherence=summary.get("_memo_coherence"),
+        )
+    except Exception as exc:
+        logger.warning("daily_memo: capital_plan_view failed (non-fatal) — %s", exc)
 
     discovery_data: "dict[str, Any] | None" = None
     try:

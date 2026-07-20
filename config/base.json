@@ -275,5 +275,10 @@
     "ttl_days": 7,
     "max_symbols": 3,
     "db_path": "data/portfolio.db"
+  },
+  "capital_plan": {
+    "max_deferred_displayed": 5,
+    "expand_technical_details": true,
+    "main_section_funded_only": true
   }
 }

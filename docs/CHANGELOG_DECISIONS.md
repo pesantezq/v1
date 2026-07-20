@@ -69,6 +69,66 @@ Explicitly note:
 
 ---
 
+## Daily memo: decision-ready "Today's Capital Plan" (replaces Top Decisions / Capital Actions + investor core)
+
+### Date
+`2026-07-20`
+
+### Area
+output_contract
+
+### Files / Functions
+- New `portfolio_automation/capital_plan_view.py` — `build_capital_plan_view`,
+  `render_capital_plan_md`, `run_capital_plan_view`, `investor_label`, `entry_setup`.
+- `watchlist_scanner/daily_memo.py` — replaced the legacy "Top Decisions" +
+  "Capital Actions" render blocks (plain-text and Markdown) with the capital-plan
+  block; removed the "investor core" block calls (`_investor_core_text` /
+  `_investor_core_md`) from the memo body (functions retained for their unit tests).
+- `config/base.json` — new `capital_plan` config block.
+- `scripts/run_daily_safe.sh` — new Stage 9e2 ("Today's Capital Plan view").
+- `scripts/preflight.sh` — added module to compile + smoke-import lists.
+- `portfolio_automation/artifacts_registry.py` — registered `daily_capital_plan`.
+- New artifact `outputs/latest/daily_capital_plan.json`.
+
+### Decision
+The memo now renders one decision-ready capital narrative (Today's Capital Plan →
+What To Do Today → Funded Market Opportunities → Deferred Recommendations → Sell
+and Funding Dependencies → Bottom Line) with explicit money states, investor-facing
+action labels, plain-language entry setups, deterministic ranking explanations,
+grouped deferrals, sell-dependency honesty, and reconciliation warnings. The older
+investor-core block was removed as redundant (operator decision).
+
+### Why
+The legacy sections were not decision-ready: undifferentiated priority, an
+unexplained `SELL: 1`, and a "$3,827 total recommended capital" figure that read
+as a spend-today instruction. An operator could not tell what was funded, how much
+to allocate, or why. Two overlapping capital sections (legacy + investor core) also
+made the memo more confusing, not less.
+
+### Invariants Preserved
+No change to decision_engine, scoring, action enums, target allocations, approved
+capital, production/simulation state, or human-approval gates. The view model
+recomputes no money (normalizes `memo_coherence` output); sale proceeds are never
+counted as deployable. Read-only / observe-only; the machine-readable `decision`
+enum is unchanged (only memo labels are translated). When funding data is
+unavailable the memo falls back to the legacy Top Decisions / Capital Actions block.
+
+### Downstream Impact
+- New artifact `outputs/latest/daily_capital_plan.json` (registered; consumer
+  `watchlist_scanner.daily_memo`; reviewed by `portfolio-memo-reviewer`).
+- `daily_memo.txt` / `.md` capital sections restructured; investor-core headers
+  (MONTHLY CAPITAL PLAN / WEEKLY DEPLOYMENT / FUNDED ACTIONS TODAY / DEFERRED-BLOCKED
+  / CONCENTRATION CHECK / MAIN OPPORTUNITY-RISK) no longer appear in the memo body.
+- Tests: new `tests/test_capital_plan_view.py` (22 cases); existing memo/coherence
+  suites updated for the new fallback trigger. `_investor_core_*` unit tests retained.
+
+### Artifact Health Severity
+`daily_capital_plan` is `optional` (produced by the aux stage, not main.py), so its
+absence is `optional_missing`, not `critical_missing`. `missing_artifact_count`
+unchanged for the main.py production cron. Memo wording changed (capital sections).
+
+---
+
 ## GUI: surface capital-deployment plan + rendering-honesty fixes
 
 ### Date

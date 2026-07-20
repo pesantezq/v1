@@ -290,6 +290,36 @@ Expected row fields:
 - `allocation_capped`
 - `allocation_cap_reason`
 
+### `outputs/latest/daily_capital_plan.json`
+
+Read-only "Today's Capital Plan" view model (audit copy of the decision-ready
+memo block). Producer: `portfolio_automation/capital_plan_view.py`
+(`run_capital_plan_view`). Consumer: `watchlist_scanner/daily_memo.py`. Observe-only.
+See `docs/DAILY_CAPITAL_PLAN.md`.
+
+Required top-level fields:
+
+- `schema_version`
+- `source` (`"capital_plan_view"`)
+- `observe_only` (always `true`)
+- `no_trade` (always `true`)
+- `available`
+- `capital_summary`
+- `funded_actions`
+- `deferred_actions`
+- `sell_actions`
+- `funding_warnings`
+- `reconciliation_status` (`ok` | `partial` | `mismatch` | `degraded`)
+- `bottom_line`
+
+`capital_summary` monetary fields are each `{amount, state, note}` where
+`state ∈ {confirmed, missing, not_calculated, not_applicable, blocked}` — a
+value is never a silent `$0`. Keys: `cash_on_hand`, `incoming_contributions`,
+`required_reserve`, `deployable_from_cash`, `deployable_from_incoming`,
+`deployable_capital`, `gross_recommended_capital`,
+`unconstrained_recommendation_total`, `funded_capital`, `deferred_capital`,
+plus `funded_count` / `deferred_count`.
+
 ### `outputs/policy/policy_recommendation.json`
 
 Required top-level fields:

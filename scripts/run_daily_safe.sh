@@ -368,6 +368,14 @@ run_aux_stage "Social Sentiment Pipeline" \
 run_aux_stage "Memo coherence reconciliation" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.memo_coherence import run_memo_coherence; r = run_memo_coherence('.'); print('status:', r.get('coherence_status'), 'funded:', (r.get('funding') or {}).get('funded_count'), 'deferred:', (r.get('funding') or {}).get('blocked_count'), 'unresolved:', (r.get('reconciliation') or {}).get('unresolved_count'))"
 
+# Stage 9e2 — Today's Capital Plan view model (observe-only, read-only).
+# Normalizes the coherence funding split + cash envelope + decision-plan sell
+# detail into outputs/latest/daily_capital_plan.json (the audit copy of the
+# decision-ready memo block). The memo (Stage 10) renders the same view; this
+# stage persists it. Runs after coherence, before the memo.
+run_aux_stage "Today's Capital Plan view" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.capital_plan_view import run_capital_plan_view; v = run_capital_plan_view('.'); cs = v.get('capital_summary') or {}; print('available:', v.get('available'), 'funded:', cs.get('funded_count'), 'deferred:', cs.get('deferred_count'), 'recon:', v.get('reconciliation_status'), 'warnings:', len(v.get('funding_warnings') or []))"
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
