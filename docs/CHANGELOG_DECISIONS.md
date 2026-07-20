@@ -71,6 +71,84 @@ Explicitly note:
 
 ---
 
+## Memo datasets — per-domain reassembly producer + wiring (Task 5)
+
+### Date
+
+`2026-07-20`
+
+### Area
+
+output_contract
+
+### Files / Functions
+
+- New producer (Tasks 1-4, already shipped): `portfolio_automation/memo_datasets.py`
+  (`build_memo_datasets`, `render_domain_brief`, `run_memo_datasets`,
+  `collect_memo_datasets_view`) — writes `outputs/latest/memo_datasets.json` +
+  per-domain briefs under `outputs/latest/memo/`.
+- This entry (Task 5, wiring): `config/base.json` (`memo_datasets` block) ·
+  `scripts/run_daily_safe.sh` (new Stage 10c, immediately after Stage 10 "Daily memo") ·
+  `portfolio_automation/artifact_registry.yaml` (`memo_datasets.json` entry) ·
+  `scripts/preflight.sh` (py_compile + import-smoke lists) ·
+  `.claude/commands/daily-tool-analysis.md` (read-only heartbeat item 28 / body line 6r) ·
+  `docs/OUTPUT_ARTIFACT_CONTRACTS.md` (new artifact contract section).
+
+### Decision
+
+Wired the already-tested `memo_datasets` producer into the daily pipeline as Stage 10c, added
+its config gate, registered its artifact in the artifact registry, added it to preflight's
+compile/import checks, and added a single read-only consumer heartbeat line to
+`daily-tool-analysis`. `watchlist_scanner/daily_memo.py` (the combined `daily_memo.md` producer)
+was **not modified** — `memo_datasets` is a pure downstream reassembly of the same memo-adjacent
+artifacts, not a replacement or a new computation.
+
+### Why
+
+Per the Analysis + Health Coverage Requirement, a new producer must ship with an
+analysis-and-health consumer and an artifact-registry entry before it is considered complete;
+per the Output Namespace Rules, its artifact belongs in `OutputNamespace.LATEST`. This closes
+out Task 5 of the memo-datasets-separation plan.
+
+### Invariants Preserved
+
+Observe-only: `observe_only=true` and `feeds_decision_engine=false` are hardcoded in the
+producer's output (unchanged from Tasks 1-4) and never made conditional. The new Stage 10c call
+is wrapped the same way as every other `run_aux_stage` call (non-blocking; a failure here cannot
+abort the daily run). `outputs/latest/decision_plan.json` is never read or written by this
+module — verified by mtime/`git status` comparison before and after a live run. No
+`signal_score`/`confidence_score`/`effective_score`/`conviction_score`/`final_rank_score`/
+`recommendation_score` semantics touched; `decision_engine.py` untouched. The new heartbeat line
+in `daily-tool-analysis` is read-only and explicitly never dispatches or mutates anything.
+
+### Downstream Impact
+
+- New artifact: `outputs/latest/memo_datasets.json` + `outputs/latest/memo/*.md` briefs
+  (produced daily by Stage 10c once `memo_datasets.enabled=true`).
+- New registry row `memo_datasets.json` (role `narrative`, lens `decision_core`, cadence
+  `daily`, `required: false`, consumers `[gui_operator_data, daily-tool-analysis]`).
+- `daily-tool-analysis` gains one new always-on body line (`6r. Memo-datasets: …`) and one new
+  content-liveness warn condition (fresh artifact, all domains `unavailable` while sources
+  exist) — folds into the existing `content_warn_count` line; never escalates to RED.
+- Tests: `tests/test_memo_datasets.py`, `tests/test_memo_datasets_gui.py`,
+  `tests/test_daily_memo.py`, `tests/gui_v2/`, `tests/test_artifacts_registry.py` — all pass
+  post-wiring (see Task 5 report for the full command + output).
+
+### Artifact Health Severity
+
+- `optional_missing` — the new artifact is `required: false`; its absence (pre-activation, or
+  `memo_datasets.enabled=false`) is the expected inert steady state and does not raise
+  `missing_artifact_count` toward a RED/AMBER threshold.
+- No existing artifact's severity classification changed.
+- GUI/memo/system-summary wording: unchanged for `daily_memo.md`; the GUI sub-tabs (Task 4,
+  already shipped) are the only new consumer-facing surface, and this task did not touch them.
+- Producer step: `portfolio_automation/memo_datasets.py:run_memo_datasets`, owned by
+  `run_daily_safe.sh` Stage 10c.
+
+---
+
+---
+
 ## Institutional Intelligence (SEC 13F) subsystem + crowd-lane semantic rename
 
 ### Date

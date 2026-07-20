@@ -721,6 +721,40 @@ Required top-level fields:
 - `by_regime`
 - `observability`
 
+### `outputs/latest/memo_datasets.json` (+ per-domain briefs under `outputs/latest/memo/`)
+
+Producer: `portfolio_automation/memo_datasets.py` (`run_memo_datasets('.')`). Written by
+`run_daily_safe.sh` **Stage 10c**, immediately after Stage 10 (Daily memo) so the memo-producer
+artifacts it reassembles are fresh. Consumers: `gui_operator_data` (GUI sub-tabs), `daily-tool-analysis`
+(read-only heartbeat only — no dispatch/mutation).
+
+Purely a **reassembly** layer: it performs no new computation and recomputes no decision — it
+regroups the outputs already produced by other memo-adjacent producers (`system_decision_summary.json`,
+`unified_crowd_intelligence_status.json`, institutional intelligence, `risk_delta.json`,
+`daily_run_status.json`, etc.) into five fixed per-domain datasets and, when
+`config.memo_datasets.write_briefs=true`, a Markdown brief per domain under `outputs/latest/memo/`.
+
+Required top-level fields:
+
+- `generated_at`
+- `observe_only` — hardcoded `true`
+- `no_trade` — hardcoded `true`
+- `feeds_decision_engine` — hardcoded `false`
+- `domains` — dict keyed by the five fixed domain names: `portfolio`, `crowd_watchlist`,
+  `institutional`, `risk`, `system`
+
+Each `domains.<name>` entry:
+
+- `headline` — display name
+- `status` — `ok` (at least one section resolved) | `unavailable` (no source data) | `error`
+- `sections` — list of `{title, lines, severity}` rendered sections
+- `source_artifacts` — list of the `outputs/latest/*.json` filenames the domain drew from
+- `warnings` — list of strings (empty when clean)
+
+Never writes `outputs/latest/decision_plan.json` and is never read by `decision_engine.py` or
+any scoring/recommendation path — this is an artifact-consumer layer only, same tier as the GUI
+and memo renderers. Config gate: `config/base.json:memo_datasets.{enabled, domains, write_briefs}`.
+
 ## What Must Never Change Without A Coordinated Migration
 
 - `watchlist_signals.json` being a dict with `results` and `alerts`

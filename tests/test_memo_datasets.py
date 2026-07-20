@@ -1,0 +1,129 @@
+import copy
+import json
+
+from portfolio_automation import memo_datasets as md
+
+
+def _sources():
+    return {
+        "daily_capital_plan": {"available": True, "capital_summary": {
+            "funded_capital": {"amount": 104.0, "state": "confirmed"},
+            "funded_count": 2, "deferred_count": 20},
+            "bottom_line": "You have $104 to deploy today."},
+        "system_decision_summary": {"top_theme": {"label": "Energy Transition"},
+            "top_opportunity": {"ticker": "MSFT"}},
+        "decision_plan": {"decisions": [{"decision": "BUY"}, {"decision": "SELL"}]},
+        "risk_delta": {"overall_status": "ok", "concentration": {"top_position":
+            {"symbol": "QQQ", "weight": 0.42, "cap": 0.6}}, "leverage": {"total_exposure": 0.145}},
+        "correlation_risk_advisor": {"effective_independent_bets": 1.23},
+        "unified_crowd_status": {"overall_status": "ok", "state_counts":
+            {"market_context_only": 27}, "top_confirmed_attention": [{"ticker": "AAPL"}]},
+        "watch_candidates": {"candidates": [{"symbol": "XOM"}]},
+        "institutional_intelligence": {"records": [{"symbol": "BE",
+            "consensus_state": "moderate_accumulation", "filing_age_days": 24}]},
+        "daily_run_status": {"overall_status": "ok", "content_warn_count": 0},
+    }
+
+
+def test_build_produces_all_five_domains():
+    d = md.build_memo_datasets(_sources())
+    assert set(d["domains"]) == set(md.DOMAINS)
+    assert d["feeds_decision_engine"] is False and d["observe_only"] is True
+    port = d["domains"]["portfolio"]
+    assert port["status"] == "ok" and port["sections"]
+    assert any("104" in ln for s in port["sections"] for ln in s["lines"])
+
+
+def test_missing_source_degrades_only_that_domain():
+    s = _sources(); del s["risk_delta"]; del s["correlation_risk_advisor"]
+    d = md.build_memo_datasets(s)
+    assert d["domains"]["risk"]["status"] == "unavailable"
+    assert d["domains"]["portfolio"]["status"] == "ok"        # others intact
+
+
+def test_institutional_inert_is_unavailable_not_error():
+    s = _sources(); s["institutional_intelligence"] = {"records": []}
+    inst = md.build_memo_datasets(s)["domains"]["institutional"]
+    assert inst["status"] == "unavailable" and inst["warnings"]
+
+
+def test_no_mutation_of_inputs():
+    s = _sources(); before = copy.deepcopy(s)
+    md.build_memo_datasets(s)
+    assert s == before
+
+
+def test_deterministic():
+    s = _sources()
+    a = md.build_memo_datasets(s, generated_at="t"); b = md.build_memo_datasets(s, generated_at="t")
+    assert a == b
+
+
+def test_domains_filter():
+    d = md.build_memo_datasets(_sources(), domains=["risk"])
+    assert list(d["domains"]) == ["risk"]
+
+
+def test_render_domain_brief_populated_and_empty():
+    d = md.build_memo_datasets(_sources())
+    lines = md.render_domain_brief(d, "portfolio", markdown=True)
+    assert lines and any("Portfolio & Capital" in l for l in lines)
+    # unavailable domain -> no brief
+    s = _sources(); s["institutional_intelligence"] = {"records": []}
+    d2 = md.build_memo_datasets(s)
+    assert md.render_domain_brief(d2, "institutional") == []
+
+
+def _seed_latest(tmp_path):
+    latest = tmp_path / "outputs" / "latest"; latest.mkdir(parents=True)
+    (latest / "daily_capital_plan.json").write_text(json.dumps(
+        {"available": True, "capital_summary": {"funded_capital":
+        {"amount": 104.0, "state": "confirmed"}, "funded_count": 2, "deferred_count": 20},
+         "bottom_line": "Deploy $104."}))
+    (latest / "risk_delta.json").write_text(json.dumps(
+        {"overall_status": "ok", "leverage": {"total_exposure": 0.145}}))
+    return tmp_path
+
+
+def test_run_writes_artifact_and_briefs(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True)
+    assert res["feeds_decision_engine"] is False
+    art = json.loads((root / "outputs" / "latest" / "memo_datasets.json").read_text())
+    assert set(art["domains"]) == set(md.DOMAINS)
+    assert (root / "outputs" / "latest" / "memo" / "portfolio_brief.md").exists()
+    # governance: decision_plan.json is never written by this producer
+    assert not (root / "outputs" / "latest" / "decision_plan.json").exists()
+
+
+def test_run_never_raises_on_garbage(tmp_path):
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    res = md.run_memo_datasets(str(tmp_path), write=False)
+    assert res["feeds_decision_engine"] is False   # honest empty, no crash
+
+
+def test_run_disabled_writes_nothing(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"enabled": False})
+    assert res["status"] == "disabled"
+    assert res["feeds_decision_engine"] is False
+    assert res["observe_only"] is True
+    assert res["domains"] == {}
+    assert not (root / "outputs" / "latest" / "memo_datasets.json").exists()
+    assert not (root / "outputs" / "latest" / "memo").exists()
+
+
+def test_run_explicit_empty_domains_yields_zero_domains(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"domains": []})
+    assert res["domains"] == {}
+    # confirm artifact was still written (enabled defaults True), just empty domains
+    art = json.loads((root / "outputs" / "latest" / "memo_datasets.json").read_text())
+    assert art["domains"] == {}
+
+
+def test_run_absent_enabled_key_runs_normally(tmp_path):
+    root = _seed_latest(tmp_path)
+    res = md.run_memo_datasets(str(root), write=True, config={"write_briefs": True})
+    assert set(res["domains"]) == set(md.DOMAINS)
+    assert (root / "outputs" / "latest" / "memo_datasets.json").exists()

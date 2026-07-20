@@ -302,5 +302,10 @@
       "max_distribution_trim": 0.02,
       "crowding_penalty_enabled": true
     }
+  },
+  "memo_datasets": {
+    "enabled": true,
+    "domains": ["portfolio", "crowd_watchlist", "institutional", "risk", "system"],
+    "write_briefs": true
   }
 }
