@@ -54,6 +54,12 @@ class OutputNamespace(str, Enum):
     SIMULATION          = "simulation"
     PROMOTION_REVIEW    = "promotion_review"
     PROMOTION_APPROVALS = "promotion_approvals"
+    # ── Weekly ETF bundle watchlist (added 2026-07-25) ─────────────────────
+    # Standalone, observe-only weekly subsystem. Fully isolated from the daily
+    # decision/memo/watchlist namespaces: analysis, frozen predictions, matured
+    # outcomes, scorecard/calibration, and health for the curated ETF baskets.
+    # Never feeds decision_plan.json or the production decision engine.
+    WEEKLY_ETF_BUNDLES  = "weekly_etf_bundles"
 
 
 class DataGovernanceError(Exception):
@@ -86,6 +92,7 @@ _NAMESPACE_SUBDIR: dict[OutputNamespace, str] = {
     OutputNamespace.SIMULATION:          "simulation",
     OutputNamespace.PROMOTION_REVIEW:    "promotion_review",
     OutputNamespace.PROMOTION_APPROVALS: "promotion_approvals",
+    OutputNamespace.WEEKLY_ETF_BUNDLES:  "weekly_etf_bundles",
 }
 
 # Namespaces that include user_id as a path segment
@@ -371,5 +378,12 @@ def get_policies(base_dir: Path | str = "outputs") -> dict[OutputNamespace, Outp
             namespace=OutputNamespace.PROMOTION_APPROVALS,
             root=base / "promotion_approvals",
             description="Human approvals + production-application audit trail and snapshots",
+        ),
+        OutputNamespace.WEEKLY_ETF_BUNDLES: OutputPathPolicy(
+            namespace=OutputNamespace.WEEKLY_ETF_BUNDLES,
+            root=base / "weekly_etf_bundles",
+            description="Standalone observe-only weekly ETF bundle watchlist: "
+                        "analysis, frozen predictions, matured outcomes, scorecard, "
+                        "calibration, and health — never feeds the decision engine",
         ),
     }

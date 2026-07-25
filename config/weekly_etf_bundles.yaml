@@ -1,0 +1,113 @@
+# Weekly ETF Bundle Watchlist — curated basket configuration.
+#
+# HUMAN-OWNED. This file is the ONLY source of bundle membership. Neither the
+# weekly analysis nor Strat Lab may modify it automatically — challengers tune
+# SCORING parameters, never membership. Edit by hand; every prediction records
+# the content hash of this file so a ranking can always be traced to the exact
+# configuration that produced it.
+#
+# Observe-only: this subsystem produces analysis + an informational email only.
+# It never creates trades, allocations, approvals, or decision-engine input.
+
+schema_version: 1
+
+defaults:
+  benchmark: SPY
+  weighting_method: equal          # equal | custom (custom requires weights summing to 1.0)
+  minimum_history_days: 200        # below this an ETF is flagged insufficient_history
+  minimum_bundle_coverage: 0.80    # below this a bundle is degraded (send still allowed with warning)
+
+bundles:
+  - id: ai_infrastructure
+    name: AI Infrastructure
+    description: Semiconductors, cloud infrastructure, networking, and AI software.
+    benchmark: QQQ
+    enabled: true
+    display_order: 10
+    members:
+      - symbol: SMH
+        role: Semiconductors
+      - symbol: IGV
+        role: Software
+      - symbol: CLOU
+        role: Cloud infrastructure
+      - symbol: SRVR
+        role: Data centers
+
+  - id: defense_and_aerospace
+    name: Defense & Aerospace
+    description: Aerospace and defense primes and broad defense exposure.
+    benchmark: SPY
+    enabled: true
+    display_order: 20
+    members:
+      - symbol: ITA
+        role: Large-cap aerospace and defense
+      - symbol: XAR
+        role: Equal-weight aerospace and defense
+      - symbol: PPA
+        role: Broad defense exposure
+
+  - id: energy_complex
+    name: Energy Complex
+    description: Integrated energy, exploration & production, oil services, and midstream.
+    benchmark: XLE
+    enabled: true
+    display_order: 30
+    members:
+      - symbol: XLE
+        role: Integrated / large-cap energy
+      - symbol: XOP
+        role: Exploration & production
+      - symbol: OIH
+        role: Oil services
+      - symbol: AMLP
+        role: Midstream / MLPs
+
+  - id: healthcare_innovation
+    name: Healthcare Innovation
+    description: Broad healthcare, biotech, and medical devices.
+    benchmark: XLV
+    enabled: true
+    display_order: 40
+    members:
+      - symbol: XLV
+        role: Broad healthcare
+      - symbol: IBB
+        role: Biotech (large-cap)
+      - symbol: XBI
+        role: Biotech (equal-weight)
+      - symbol: IHI
+        role: Medical devices
+
+  - id: financials
+    name: Financials
+    description: Diversified financials, regional banks, and capital markets.
+    benchmark: XLF
+    enabled: true
+    display_order: 50
+    members:
+      - symbol: XLF
+        role: Diversified financials
+      - symbol: KRE
+        role: Regional banks
+      - symbol: KBE
+        role: Broad banks
+      - symbol: IAI
+        role: Broker-dealers / capital markets
+
+  - id: broad_market_core
+    name: Broad Market Core
+    description: Large-cap, tech-heavy, small-cap, and blue-chip core benchmarks.
+    benchmark: SPY
+    enabled: true
+    display_order: 60
+    members:
+      - symbol: SPY
+        role: S&P 500 core
+      - symbol: QQQ
+        role: Nasdaq-100 / large-cap growth
+      - symbol: IWM
+        role: Small-cap (Russell 2000)
+      - symbol: DIA
+        role: Blue-chip (Dow 30)
