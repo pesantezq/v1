@@ -71,6 +71,10 @@ def build_predictions(
             if met.get("available"):
                 price_by_symbol[m["symbol"]] = met.get("price")
 
+    ctx = analysis_payload.get("market_context", {}) or {}
+    market_regime = ctx.get("market_regime", "unknown")
+    volatility_regime = ctx.get("volatility_regime", "unknown")
+
     records: list[dict[str, Any]] = []
     for r in analysis_payload.get("ranking_global", []):
         sym = r["symbol"]
@@ -88,6 +92,8 @@ def build_predictions(
             "rank_in_bundle": r.get("rank_in_bundle"),
             "rank_global": r.get("rank_global"),
             "expected_direction": r.get("expected_direction"),
+            "market_regime": market_regime,
+            "volatility_regime": volatility_regime,
             "price_at_prediction": price_by_symbol.get(sym),
             "score_components": r.get("components", {}),
             "strategy_id": analysis_payload.get("strategy_id", _pkg.STRATEGY_ID),

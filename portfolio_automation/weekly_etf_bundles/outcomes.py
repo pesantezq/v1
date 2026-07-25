@@ -125,6 +125,9 @@ def mature_prediction(
         "rank_global": prediction.get("rank_global"),
         "strategy_variant": prediction.get("strategy_variant"),
         "config_version": prediction.get("config_version"),
+        "market_regime": prediction.get("market_regime", "unknown"),
+        "volatility_regime": prediction.get("volatility_regime", "unknown"),
+        "score_components": prediction.get("score_components", {}),
         "observe_only": True,
     }
 

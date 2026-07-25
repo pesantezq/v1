@@ -189,7 +189,8 @@ def compute_etf_metrics(
 
     # Data coverage over the trailing year vs an idealized ~252 trading days.
     trailing_year_count = len(trailing_year)
-    data_coverage = min(1.0, trailing_year_count / _TDAYS_52W) if trailing_year_count else 0.0
+    # None (not 0.0) when there is no trailing-year window — never coerce missing to zero.
+    data_coverage = round(min(1.0, trailing_year_count / _TDAYS_52W), 4) if trailing_year_count else None
 
     return {
         "symbol": symbol,
@@ -200,7 +201,7 @@ def compute_etf_metrics(
         "price": round(price, 4),
         "history_days": history_days,
         "insufficient_history": insufficient_history,
-        "data_coverage": round(data_coverage, 4),
+        "data_coverage": data_coverage,
         "data_freshness_days": freshness_days,
         "return_1w": etf_ret["1w"],
         "return_4w": etf_ret["4w"],
@@ -223,6 +224,47 @@ def compute_etf_metrics(
         "max_drawdown": max_dd,
         "volatility_adjusted_return": vol_adj_return,
         "warnings": warnings,
+    }
+
+
+def compute_market_context(panel: Any, as_of: str, benchmark: str = "SPY") -> dict[str, Any]:
+    """Lightweight, self-contained market + volatility regime as of `as_of`,
+    derived only from the benchmark's own point-in-time price action (no heavy
+    decision-engine inputs). Reuses vol_regime_advisor for the σ→label mapping."""
+    from portfolio_automation.vol_regime_advisor import classify_regime, realized_vol_annualised
+
+    series = _series_upto(panel, benchmark, as_of)
+    if len(series) < 20:
+        return {"benchmark": benchmark, "market_regime": "unknown",
+                "volatility_regime": "unknown", "available": False}
+
+    closes = [c for _, c in series]
+    # daily log returns over the trailing vol window
+    tail = closes[-(_VOL_WINDOW_TDAYS + 1):]
+    log_rets = [math.log(tail[i] / tail[i - 1]) for i in range(1, len(tail))
+                if tail[i - 1] > 0 and tail[i] > 0]
+    sigma = realized_vol_annualised(log_rets)
+    vol_regime = classify_regime(sigma)["regime"]
+
+    price = closes[-1]
+    sma200 = _sma(series, 200)
+    ret_12w = _window_return(panel, benchmark, as_of, 12)
+    if sma200 is None or ret_12w is None:
+        market_regime = "neutral"
+    elif price > sma200 and ret_12w > 0:
+        market_regime = "risk_on"
+    elif price < sma200 and ret_12w < 0:
+        market_regime = "risk_off"
+    else:
+        market_regime = "neutral"
+
+    return {
+        "benchmark": benchmark,
+        "market_regime": market_regime,
+        "volatility_regime": vol_regime,
+        "benchmark_return_12w": ret_12w,
+        "realized_volatility": sigma,
+        "available": True,
     }
 
 
@@ -269,18 +311,20 @@ def build_weekly_analysis(
                 "bundles": [], "ranking_global": [], "coverage": 0.0,
                 "bundle_count": 0, "etf_count": 0}
 
-    # Per-ETF metrics + scores, deduped across bundles (compute once per symbol).
-    metrics_cache: dict[str, dict[str, Any]] = {}
-    score_cache: dict[str, dict[str, Any]] = {}
+    # Per-ETF metrics + scores. The cache key is (symbol, benchmark) because
+    # excess/relative-strength metrics are benchmark-relative — a symbol used in
+    # two bundles with different benchmarks must NOT collapse to one cache entry.
+    metrics_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    score_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def metrics_for(symbol: str, benchmark: str) -> dict[str, Any]:
-        key = symbol.upper()
+    def metrics_for(symbol: str, benchmark: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        key = (symbol.upper(), benchmark.upper())
         if key not in metrics_cache:
             metrics_cache[key] = compute_etf_metrics(
-                panel, key, benchmark, market_data_date, minimum_history_days=min_hist
+                panel, key[0], key[1], market_data_date, minimum_history_days=min_hist
             )
             score_cache[key] = score_etf(metrics_cache[key], params)
-        return metrics_cache[key]
+        return metrics_cache[key], score_cache[key]
 
     bundles_out: list[dict[str, Any]] = []
     all_scored: list[dict[str, Any]] = []
@@ -289,12 +333,9 @@ def build_weekly_analysis(
         member_metrics: dict[str, dict[str, Any]] = {}
         member_scores: dict[str, dict[str, Any]] = {}
         members_payload: list[dict[str, Any]] = []
-        # Ensure benchmark metrics exist even if not a member.
-        metrics_for(bundle.benchmark, bundle.benchmark)
         member_map = {m.symbol: m for m in bundle.members}
         for sym in bundle.symbols:
-            m = metrics_for(sym, bundle.benchmark)
-            s = score_cache[sym]
+            m, s = metrics_for(sym, bundle.benchmark)
             member_metrics[sym] = m
             member_scores[sym] = s
             members_payload.append({
@@ -342,10 +383,13 @@ def build_weekly_analysis(
     scored_count = len(all_scored)
     coverage = round(scored_count / etf_count, 4) if etf_count else 0.0
 
-    # Bubble up any degraded-symbol warnings.
-    stale_symbols = sorted(k for k, m in metrics_cache.items()
-                           if any(w.startswith("stale_price") for w in m.get("warnings", [])))
-    failed_symbols = sorted(k for k, m in metrics_cache.items() if not m.get("available"))
+    # Bubble up any degraded-symbol warnings (dedupe by symbol across benchmarks).
+    stale_symbols = sorted({k[0] for k, m in metrics_cache.items()
+                            if any(w.startswith("stale_price") for w in m.get("warnings", []))})
+    failed_symbols = sorted({k[0] for k, m in metrics_cache.items() if not m.get("available")})
+
+    default_bm = str(config.defaults.get("benchmark", "SPY"))
+    market_context = compute_market_context(panel, market_data_date, benchmark=default_bm)
 
     return {
         **base,
@@ -353,6 +397,7 @@ def build_weekly_analysis(
         "bundle_count": len(bundles_out),
         "etf_count": etf_count,
         "coverage": coverage,
+        "market_context": market_context,
         "stale_symbols": stale_symbols,
         "failed_symbols": failed_symbols,
         "panel_missing_symbols": list(getattr(panel, "missing", []) or []),

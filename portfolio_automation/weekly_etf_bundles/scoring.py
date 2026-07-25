@@ -267,7 +267,10 @@ def _bundle_state(
         return "Insufficient data"
     broad = pct_above_50 >= 0.70 and pct_pos_mom_4w >= 0.60
     narrow_only = (concentration is not None and concentration >= 0.25)
-    if broad and not narrow_only:
+    # "Broad leadership" REQUIRES a real dispersion measure (>= 2 scored members).
+    # concentration is None only for a single-member bundle — which can never be
+    # "broad", so it must not slip through the `not narrow_only` branch.
+    if broad and concentration is not None and not narrow_only:
         return "Broad leadership"
     if (pct_above_50 >= 0.50) and narrow_only:
         return "Narrow leadership"
