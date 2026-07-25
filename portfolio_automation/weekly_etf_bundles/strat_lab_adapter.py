@@ -217,8 +217,9 @@ def evaluate_promotion_gates(
     ch_dd = challenger_sc.get("avg_max_drawdown")
     cp_dd = champion_sc.get("avg_max_drawdown")
     dd_regression = (cp_dd - ch_dd) if (ch_dd is not None and cp_dd is not None) else None
-    # drawdowns are negative; challenger must not be worse than champion by > cap
-    dd_ok = dd_regression is None or dd_regression <= g["maximum_drawdown_regression"]
+    # drawdowns are negative; challenger must not be worse than champion by > cap.
+    # Fail-closed on missing data, consistent with the other metric gates.
+    dd_ok = dd_regression is not None and dd_regression <= g["maximum_drawdown_regression"]
     _chk("maximum_drawdown_regression", dd_ok, f"regression={dd_regression}")
 
     if g["require_positive_out_of_sample_result"]:

@@ -283,7 +283,8 @@ REGISTRY: tuple[EnvVar, ...] = (
         required=False,
         default="0",
         secret=False,
-        description="Truthy enables the standalone weekly ETF bundle subsystem. Observe-only.",
+        description="Master kill-switch for the standalone weekly ETF bundle subsystem, honored by "
+                    "scripts/run_weekly_etf_bundles.sh (the cron path skips unless truthy). Observe-only.",
         group=GROUP_EMAIL,
     ),
     EnvVar(

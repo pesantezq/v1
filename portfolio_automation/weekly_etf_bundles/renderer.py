@@ -124,7 +124,7 @@ def render_weekly_md(analysis_payload: dict[str, Any],
     for b in s["bundles"]:
         a(f"## {b.get('name')}  ·  score {_num(b.get('bundle_score'), 1)}  ·  _{b.get('state')}_")
         a("")
-        a(f"- Benchmark: `{b.get('benchmark')}` · 4w excess vs benchmark: {_pct(b.get('excess_return_12w'))} (12w)")
+        a(f"- Benchmark: `{b.get('benchmark')}` · 12w excess vs benchmark: {_pct(b.get('excess_return_12w'))}")
         a(f"- Breadth: {_pct(b.get('pct_above_sma50'), 0)} > 50d · "
           f"{_pct(b.get('pct_above_sma200'), 0)} > 200d · "
           f"{_pct(b.get('pct_positive_momentum_4w'), 0)} positive 4w momentum")

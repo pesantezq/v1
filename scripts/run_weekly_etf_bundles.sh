@@ -18,6 +18,23 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-/opt/stockbot}"
 cd "$REPO_ROOT"
 
+# Load .env early so the master kill-switch below can be read from it.
+if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/.env"
+    set +a
+fi
+
+# Master kill-switch — ships INERT. The cron path does nothing until the operator
+# sets WEEKLY_ETF_BUNDLES_ENABLED=1 (in .env). Direct `python -m ...run` is a
+# deliberate manual/backfill invocation and is intentionally NOT gated here.
+_ENABLED="${WEEKLY_ETF_BUNDLES_ENABLED:-0}"
+if [ "$_ENABLED" != "1" ] && [ "$_ENABLED" != "true" ] && [ "$_ENABLED" != "yes" ]; then
+    echo "$(date -u +%FT%TZ) weekly_etf_bundles: disabled (set WEEKLY_ETF_BUNDLES_ENABLED=1 to enable) — skipping"
+    exit 0
+fi
+
 LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/weekly_etf_bundles_$(date -u +%Y-%m-%d).log"
@@ -39,14 +56,8 @@ fi
     echo "weekly_etf_bundles run @ $(date -u +%FT%TZ)"
     echo "=================================================================="
 
-    # Load .env (transport + gates) the repo-standard way, if present.
-    if [ -f "$REPO_ROOT/.env" ]; then
-        set -a
-        # shellcheck disable=SC1091
-        . "$REPO_ROOT/.env"
-        set +a
-    fi
-
+    # .env was already loaded at the top (for the kill-switch); transport +
+    # email gates are therefore already in the environment here.
     if [ -d "$REPO_ROOT/.venv" ]; then
         # shellcheck disable=SC1091
         source "$REPO_ROOT/.venv/bin/activate"

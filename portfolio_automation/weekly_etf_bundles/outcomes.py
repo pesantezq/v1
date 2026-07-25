@@ -132,13 +132,19 @@ def mature_prediction(
     }
 
     target = horizon_end_target(mdd, spec["weeks"])
-    last_avail = panel.dates[-1] if getattr(panel, "dates", None) else None
-    # Horizon not elapsed in the data yet → pending (NOT a miss).
-    if last_avail is None or last_avail < target:
+    # Bound maturation to the simulated cutoff: never look past min(panel end,
+    # now_date). Today every caller passes panel.dates[-1] (a no-op), but this
+    # makes point-in-time reconstruction (an earlier now_date) leakage-safe.
+    panel_end = panel.dates[-1] if getattr(panel, "dates", None) else None
+    cutoff = panel_end if now_date is None else (
+        min(panel_end, now_date) if panel_end is not None else now_date)
+    # Horizon not elapsed as of the cutoff yet → pending (NOT a miss).
+    if cutoff is None or cutoff < target:
         return {**base, "status": STATUS_PENDING, "horizon_end_target": target,
-                "last_available_date": last_avail}
+                "last_available_date": cutoff}
 
-    end_date = last_on_or_before(panel.dates, target)
+    dates_upto = [d for d in panel.dates if d <= cutoff]
+    end_date = last_on_or_before(dates_upto, target)
     if end_date is None or end_date <= mdd or entry_price is None:
         return {**base, "status": STATUS_UNRESOLVABLE, "horizon_end_target": target,
                 "reason": "no_post_entry_price" if entry_price is not None else "no_entry_price"}

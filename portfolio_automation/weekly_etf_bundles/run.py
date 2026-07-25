@@ -210,11 +210,20 @@ def run_weekly_etf_bundles(
 def _send_block_reason(payload: dict[str, Any]) -> str | None:
     if payload.get("status") != "ok":
         return "analysis_not_ok"
-    if not payload.get("market_data_date"):
+    mdd = payload.get("market_data_date")
+    if not mdd:
         return "no_market_data_date"
     cov = payload.get("coverage")
     if cov is not None and cov < _MIN_COVERAGE_FOR_SEND:
         return "coverage_below_threshold"
+    # Fail-closed on stale market data — never deliver a weeks-old ranking as
+    # the current week (e.g. an FMP outage serving only archive data).
+    try:
+        age_days = (date.today() - date.fromisoformat(str(mdd)[:10])).days
+    except (TypeError, ValueError):
+        return "unparseable_market_data_date"
+    if age_days > _MAX_FRESHNESS_DAYS_FOR_SEND:
+        return "stale_market_data"
     return None
 
 
