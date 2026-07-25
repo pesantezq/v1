@@ -218,12 +218,31 @@ python -m py_compile \
     portfolio_automation/capital_plan_view.py \
     portfolio_automation/institutional_intelligence/context_loader.py \
     portfolio_automation/institutional_intelligence/health.py \
+    portfolio_automation/weekly_etf_bundles/config.py \
+    portfolio_automation/weekly_etf_bundles/models.py \
+    portfolio_automation/weekly_etf_bundles/analysis.py \
+    portfolio_automation/weekly_etf_bundles/scoring.py \
+    portfolio_automation/weekly_etf_bundles/predictions.py \
+    portfolio_automation/weekly_etf_bundles/outcomes.py \
+    portfolio_automation/weekly_etf_bundles/evaluation.py \
+    portfolio_automation/weekly_etf_bundles/calibration.py \
+    portfolio_automation/weekly_etf_bundles/attribution.py \
+    portfolio_automation/weekly_etf_bundles/strat_lab_adapter.py \
+    portfolio_automation/weekly_etf_bundles/renderer.py \
+    portfolio_automation/weekly_etf_bundles/emailer.py \
+    portfolio_automation/weekly_etf_bundles/engine_overlay.py \
+    portfolio_automation/weekly_etf_bundles/health.py \
+    portfolio_automation/weekly_etf_bundles/run.py \
     tools/validate_daily_memo_coherence.py
 pass "Targeted py_compile check passed"
 
 section "Wrapper Syntax Check"
 bash -n "${REPO_ROOT}/scripts/run_daily_safe.sh"
 pass "scripts/run_daily_safe.sh parses cleanly"
+# The weekly ETF bundle job is a standalone wrapper — syntax-check it too
+# (it is not covered by the daily wrapper check above).
+bash -n "${REPO_ROOT}/scripts/run_weekly_etf_bundles.sh"
+pass "scripts/run_weekly_etf_bundles.sh parses cleanly"
 
 section "Advisor Smoke Imports"
 # Import-check the four new observability modules so a typo can't slip
@@ -248,6 +267,10 @@ modules = [
     'portfolio_automation.memo_coherence',
     'portfolio_automation.capital_plan_view',
     'portfolio_automation.institutional_intelligence.context_loader',
+    'portfolio_automation.weekly_etf_bundles.run',
+    'portfolio_automation.weekly_etf_bundles.health',
+    'portfolio_automation.weekly_etf_bundles.strat_lab_adapter',
+    'portfolio_automation.weekly_etf_bundles.emailer',
 ]
 for m in modules:
     importlib.import_module(m)
