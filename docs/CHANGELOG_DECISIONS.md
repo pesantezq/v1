@@ -2610,3 +2610,25 @@ scoring, ranking, allocation, or decision behavior changed**. No source cap valu
   `strategy_selection.py` remain undocumented (`docs/opportunity_decisions.md`,
   `docs/strategy_selection.md` pending). The `memo_top_decision_hit_rate` proxy is flagged for
   retirement (self-invalid join artifact; memos reviewed GREEN).
+
+## 2026-07-25 — Weekly ETF Bundle Watchlist (standalone, observe-only)
+
+Added a standalone weekly subsystem (`portfolio_automation/weekly_etf_bundles/`)
+that analyzes human-curated ETF baskets (`config/weekly_etf_bundles.yaml`), freezes
+each weekly ranking as an immutable prediction, matures outcomes at 1/4/12/26w,
+scores ranking quality (hit rates, precision@K, Spearman/IC, calibration,
+attribution), integrates a `weekly_etf_bundles` Strat Lab family (4 variants,
+walk-forward OOS, human-gated champion/challenger promotion), and sends an
+informational weekly email.
+
+- New `OutputNamespace.WEEKLY_ETF_BUNDLES` → `outputs/weekly_etf_bundles/`.
+- Fully isolated: never writes `decision_plan.json`, never feeds the production
+  decision engine (`feeds_decision_engine=false`), no trades/actions/allocations/
+  approvals, no daily-pipeline changes. Dedicated `run_weekly_etf_bundles.sh` with
+  its own flock lock (isolated from daily + `run_weekly_safe.sh`).
+- Simulation-only bounded (±0.05) decision-engine context overlay: sandbox A/B only,
+  imports nothing from `decision_engine`/`scoring`; production scoring unchanged.
+- Ships INERT: `WEEKLY_ETF_BUNDLES_ENABLED=0`, `WEEKLY_ETF_BUNDLES_EMAIL_ENABLED=0`,
+  `WEEKLY_ETF_BUNDLES_EMAIL_DRY_RUN=1`.
+- Analysis+Health coverage: `/weekly-etf-analysis` skill (member of `/run-all-weekly`)
+  + 8 artifact_registry rows. Env vars registered under GROUP_EMAIL.
