@@ -987,10 +987,25 @@ def _build_verdict(
     return "**Unknown** — insufficient data to render a verdict."
 
 
+def _top_insight_change_flags(changes: dict[str, Any] | None) -> tuple[bool, bool]:
+    """Detect whether the top opportunity / top theme flipped this run.
+
+    Keys off the stable change strings emitted by ``system_summary.py``
+    ("Top opportunity changed: …" / "Top theme changed: …"). Returns
+    ``(opportunity_changed, theme_changed)``; ``(False, False)`` when no change
+    info is available — which preserves the prior "remains" wording.
+    """
+    items = [str(c).strip().lower() for c in ((changes or {}).get("changes") or [])]
+    opportunity_changed = any(c.startswith("top opportunity changed") for c in items)
+    theme_changed = any(c.startswith("top theme changed") for c in items)
+    return opportunity_changed, theme_changed
+
+
 def _build_memo_top_insight(
     top_theme: dict[str, Any],
     top_opportunity: dict[str, Any],
     decision_rows: list[dict[str, Any]],
+    changes: dict[str, Any] | None = None,
 ) -> str:
     structural_rows = _top_structural_decisions(decision_rows)
     if structural_rows:
@@ -1003,17 +1018,23 @@ def _build_memo_top_insight(
     ticker = str(top_opportunity.get("ticker") or "").strip()
     theme_tickers = {str(t).strip().upper() for t in (top_theme.get("tickers") or []) if str(t).strip()}
     ticker_in_theme = bool(ticker) and ticker.upper() in theme_tickers
+    # "remains" asserts continuity; when the change-detector flags the top
+    # opportunity/theme as *newly* changed this run, say "is now" instead so the
+    # Top Insight does not contradict the What Changed section.
+    opportunity_changed, theme_changed = _top_insight_change_flags(changes)
+    opp_state = "is now" if opportunity_changed else "remains"
+    theme_state = "is now" if theme_changed else "remains"
     if theme_name and ticker:
         if ticker_in_theme:
             # Membership verified against top_theme.tickers — safe to link them.
-            return f"{first} {ticker} remains the lead opportunity inside the {theme_name} theme."
+            return f"{first} {ticker} {opp_state} the lead opportunity inside the {theme_name} theme."
         # Lead opportunity is NOT a member of the top theme — state both facts
         # without asserting a theme link the data does not support.
-        return f"{first} {ticker} remains the lead opportunity; {theme_name} remains the dominant theme."
+        return f"{first} {ticker} {opp_state} the lead opportunity; {theme_name} {theme_state} the dominant theme."
     if theme_name:
-        return f"{first} {theme_name} remains the dominant theme."
+        return f"{first} {theme_name} {theme_state} the dominant theme."
     if ticker and not structural_rows:
-        return f"{first} {ticker} remains the lead opportunity."
+        return f"{first} {ticker} {opp_state} the lead opportunity."
     return first
 
 
@@ -2857,7 +2878,7 @@ def build_daily_memo(
     a(_LINE)
     a("  TOP INSIGHT")
     a(_LINE)
-    a(f"  {_build_memo_top_insight(tt, to, top_rows)}")
+    a(f"  {_build_memo_top_insight(tt, to, top_rows, ch)}")
     a("")
 
     # Today's Capital Plan — decision-ready replacement for the legacy
@@ -3093,7 +3114,7 @@ def build_daily_memo_md(
 
     a("## Top Insight")
     a("")
-    a(f"> {_build_memo_top_insight(tt, to, top_rows)}")
+    a(f"> {_build_memo_top_insight(tt, to, top_rows, ch)}")
     a("")
 
     # Today's Capital Plan — decision-ready replacement for the legacy

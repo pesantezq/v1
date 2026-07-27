@@ -231,6 +231,53 @@ class TestTopInsightThemeMembership:
         assert "inside the Energy Transition theme" in s
 
 
+class TestTopInsightChangeGating:
+    """The memo Top Insight must not assert continuity ("remains") for a top
+    opportunity/theme that the change-detector flagged as *newly* changed this
+    run. When either flipped, it should read "is now" instead of "remains".
+    Regression: 2026-07-27 memo-reviewer finding (AAPL/Healthcare Innovation
+    both newly led but the memo said "remains")."""
+
+    def _tt(self, name="Healthcare Innovation", tickers=None):
+        return {"name": name, "persistence": 0.86, "tickers": list(tickers or [])}
+
+    def _to(self, ticker="AAPL"):
+        return {"ticker": ticker, "conviction_band": "defer", "portfolio_fit_label": "strong"}
+
+    def _changes(self, *items):
+        return {"changes": list(items), "previous_available": True}
+
+    def test_opportunity_changed_reads_is_now_not_remains(self):
+        ch = self._changes("Top opportunity changed: NVDA → AAPL")
+        s = _build_memo_top_insight(self._tt(tickers=[]), self._to("AAPL"), [], ch)
+        assert "AAPL is now the lead opportunity" in s
+        assert "AAPL remains the lead opportunity" not in s
+
+    def test_theme_changed_reads_is_now_not_remains(self):
+        ch = self._changes("Top theme changed: Energy Transition → Healthcare Innovation")
+        s = _build_memo_top_insight(self._tt(tickers=[]), self._to("AAPL"), [], ch)
+        assert "Healthcare Innovation is now the dominant theme" in s
+        assert "Healthcare Innovation remains the dominant theme" not in s
+
+    def test_member_case_uses_is_now_when_opportunity_changed(self):
+        ch = self._changes("Top opportunity changed: NVDA → CVX")
+        s = _build_memo_top_insight(self._tt(name="Energy", tickers=["CVX"]), self._to("CVX"), [], ch)
+        assert "CVX is now the lead opportunity inside the Energy theme" in s
+
+    def test_no_change_info_preserves_remains_wording(self):
+        # Backward compatibility: default (no changes arg) keeps "remains".
+        s = _build_memo_top_insight(self._tt(tickers=[]), self._to("AAPL"), [])
+        assert "AAPL remains the lead opportunity" in s
+        assert "Healthcare Innovation remains the dominant theme" in s
+
+    def test_unchanged_items_stay_remains(self):
+        # A run with changes elsewhere but NOT the top opp/theme keeps "remains".
+        ch = self._changes("Best portfolio fit changed: NVDA → AAPL")
+        s = _build_memo_top_insight(self._tt(tickers=[]), self._to("AAPL"), [], ch)
+        assert "AAPL remains the lead opportunity" in s
+        assert "Healthcare Innovation remains the dominant theme" in s
+
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------

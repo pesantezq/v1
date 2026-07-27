@@ -1,5 +1,5 @@
 ---
-description: Run the full WEEKLY cadence suite of the Portfolio Automation System in one shot — invokes doc-audit, strategy-lab-analysis, and strategy-catalog in sequence, then emits a combined roll-up (worst-status lead line + one heartbeat per member) followed by each member's detailed output. Pure orchestration; observe-only (doc-audit's guardrailed drift-fix is the only member that may mutate docs, unchanged here). Run on demand or via the weekly cron.
+description: Run the full WEEKLY cadence suite of the Portfolio Automation System in one shot — invokes doc-audit, strategy-lab-analysis, strategy-catalog, and weekly-etf-analysis in sequence, then emits a combined roll-up (worst-status lead line + one heartbeat per member) followed by each member's detailed output. Pure orchestration; observe-only (doc-audit's guardrailed drift-fix is the only member that may mutate docs, unchanged here). Run on demand or via the weekly cron.
 ---
 
 # Run All — Weekly Suite
@@ -12,6 +12,7 @@ formats the roll-up. Each member keeps its own boundaries.
 1. `doc-audit` — weekly documentation audit; auto-fixes high-confidence factual drift under its own guardrails (cap 10/run, apply_enabled flag) and dispatches portfolio-doc-writer for the rest. This is the ONLY member that may mutate docs, and only within its existing guardrails — the suite does not change that.
 2. `strategy-lab-analysis` — health + status review of the Research-Backed Strategy Lab.
 3. `strategy-catalog` — regenerate + review the Strategy Catalog (Strategy Documentation Requirement); flags any undocumented tactic.
+4. `weekly-etf-analysis` — health + status review of the standalone Weekly ETF Bundle Watchlist (observe-only; verifies the feeds_decision_engine=False / no-auto-promotion invariants).
 
 ## How to run
 Invoke each member via the Skill tool, in the order above, one at a time, letting each
@@ -41,6 +42,7 @@ last ran, or if it has never run:
    `- doc-audit: {its lead line}`
    `- strategy-lab-analysis: {its lead line}`
    `- strategy-catalog: {its one-line summary}`
+   `- weekly-etf-analysis: {its heartbeat line}`
    (Errored member: `- <skill>: ERROR — <reason>`.)
    Append a monthly-chain note line: `- monthly-suite: auto-chained (due {days_since}d)` OR `- monthly-suite: not due (~{days_since:.1f}/30d), skipped`.
 3. **Detailed sections** — each member's full output under a `### <skill>` header, in

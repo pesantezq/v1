@@ -277,6 +277,50 @@ REGISTRY: tuple[EnvVar, ...] = (
         aliases=("EMAIL_TO", "EMAIL_RECIPIENT"),
     ),
 
+    # ---- Weekly ETF bundle watchlist (standalone; observe-only; default INERT) ----
+    EnvVar(
+        name="WEEKLY_ETF_BUNDLES_ENABLED",
+        required=False,
+        default="0",
+        secret=False,
+        description="Master kill-switch for the standalone weekly ETF bundle subsystem, honored by "
+                    "scripts/run_weekly_etf_bundles.sh (the cron path skips unless truthy). Observe-only.",
+        group=GROUP_EMAIL,
+    ),
+    EnvVar(
+        name="WEEKLY_ETF_BUNDLES_EMAIL_ENABLED",
+        required=False,
+        default="0",
+        secret=False,
+        description="Truthy enables the weekly ETF bundle email (independent of MEMO_EMAIL_ENABLED). "
+                    "Sending also requires --send-email (dry_run=false).",
+        group=GROUP_EMAIL,
+    ),
+    EnvVar(
+        name="WEEKLY_ETF_BUNDLES_EMAIL_DRY_RUN",
+        required=False,
+        default="1",
+        secret=False,
+        description="When truthy, the weekly ETF email is built but never sent (no SMTP).",
+        group=GROUP_EMAIL,
+    ),
+    EnvVar(
+        name="WEEKLY_ETF_BUNDLES_EMAIL_TO",
+        required=False,
+        default=None,
+        secret=False,
+        description="Recipient override for the weekly ETF email; falls back to MEMO_EMAIL_TO/EMAIL_TO.",
+        group=GROUP_EMAIL,
+    ),
+    EnvVar(
+        name="WEEKLY_ETF_BUNDLES_EMAIL_FORCE",
+        required=False,
+        default="0",
+        secret=False,
+        description="Truthy bypasses weekly ETF email duplicate-send suppression (force resend).",
+        group=GROUP_EMAIL,
+    ),
+
     # ---- Schwab read-only broker sync (observe-only; NEVER required) ----
     # The layer self-reports `unconfigured` when these are absent, so none may be
     # required — preflight must stay green before provisioning. Trading is not

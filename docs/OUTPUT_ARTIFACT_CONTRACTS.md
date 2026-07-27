@@ -2137,3 +2137,31 @@ contribution_sensitivity, allocation_drift}`. Each chart carries
 `allocation_drift` is currently always `available:false` (no upstream artifact tracks
 per-sleeve composition over time yet). On an unhandled producer error the artifact
 degrades to `{status:"error", observe_only:true, safety{...}}`.
+
+## Weekly ETF Bundle Watchlist Artifacts (`outputs/weekly_etf_bundles/`)
+
+Standalone, observe-only, weekly subsystem — fully isolated from the daily
+pipeline and the production decision engine (`feeds_decision_engine=false`).
+Produced by `portfolio_automation/weekly_etf_bundles/run.py`
+(wrapper `scripts/run_weekly_etf_bundles.sh`); consumed by the
+`/weekly-etf-analysis` skill. All ship INERT (email gated OFF). See
+`docs/WEEKLY_ETF_BUNDLES.md`.
+
+- `latest.{json,md,html}` — weekly watch-score analysis (bundles, global ranking,
+  market/vol regime). `generated_at` (build time) is distinct from
+  `market_data_date` (last trading close ≤ as-of). Missing metrics are `null`, never 0.
+- `predictions/<market_data_date>.json` — immutable, idempotent frozen predictions
+  (champion lane); `predictions/challengers/<variant>__<mdd>.json` for challengers.
+- `outcomes/{1w,4w,12w,26w}/<mdd>.json` — matured forward outcomes; unmatured are
+  `pending`/`unresolvable`, never a miss.
+- `scorecard.json` / `calibration.json` / `attribution.json` — ranking-quality
+  metrics (sample-status gated), score-bucket calibration, and component/bundle
+  attribution + Strat Lab hypotheses (never auto-applied).
+- `strat_lab_comparison.json` / `challenger_registry.json` — champion vs challenger
+  walk-forward OOS comparison + PENDING (human-gated) promotion candidates; champion
+  is locked (change requires `schemas.is_human_approver`).
+- `health.json` — GREEN/AMBER/RED + governance invariants. RED = broken invariant /
+  governance breach (verify; never act on).
+- `email_receipt.json` — send/dry-run/duplicate-suppressed receipt (content hash).
+- Also: `outputs/simulation/weekly_etf_bundle_engine_overlay.json` (sim-only bounded
+  overlay A/B) and `outputs/policy/weekly_etf_email_log.jsonl` (email dedup log).

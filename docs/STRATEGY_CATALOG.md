@@ -29,16 +29,16 @@ Tactics documented: 16 · coverage complete: True
 - Latest: excess vs SPY 0.192413, CAGR 0.669428, maxDD -0.160036 (YTD 2026)
 
 ## Discovery Enhanced (`shadow_discovery_enhanced`)
-- Universe: CHAT, GLD, NASA, QLD, QQQ
+- Universe: AAPL, CHAT, GLD, NASA, QLD, QQQ, XLRE
 - Rationale: Core + a capped sleeve of qualified discovery names.
-- Explanation: Discovery Enhanced: weight vector [('NASA', 0.4054), ('QLD', 0.2162), ('QQQ', 0.1622), ('GLD', 0.1081), ('CHAT', 0.1081)].
-- Latest: excess vs SPY 0.192419, CAGR 0.669443, maxDD -0.160046 (YTD 2026)
+- Explanation: Discovery Enhanced: weight vector [('NASA', 0.3648635136486351), ('QLD', 0.19458054194580543), ('QQQ', 0.145985401459854), ('GLD', 0.09729027097290271), ('CHAT', 0.09729027097290271)].
+- Latest: excess vs SPY 0.159914, CAGR 0.584442, maxDD -0.140802 (YTD 2026)
 
 ## Boom Bucket (`shadow_boom_bucket`)
-- Universe: CHAT, GLD, NASA, QLD, QQQ, XLE, XLF, XLRE, XLV
+- Universe: AAPL, CHAT, GLD, NASA, QLD, QQQ, XLB, XLF, XLRE
 - Rationale: Core + a capped speculative sleeve (≤15%/≤5% per idea).
 - Explanation: Boom Bucket: weight vector [('NASA', 0.34456554344565543), ('QLD', 0.1837816218378162), ('QQQ', 0.13788621137886212), ('GLD', 0.0918908109189081), ('CHAT', 0.0918908109189081)].
-- Latest: excess vs SPY 0.141387, CAGR 0.537004, maxDD -0.120265 (YTD 2026)
+- Latest: excess vs SPY 0.140595, CAGR 0.534994, maxDD -0.133968 (YTD 2026)
 
 ## Aggressive Growth (`profile_aggressive_growth`)
 - Objective: Maximize upside and capital appreciation

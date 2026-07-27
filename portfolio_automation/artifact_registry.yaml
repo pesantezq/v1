@@ -1745,3 +1745,108 @@ artifacts:
     consumer_status: consumed
     notes: Phase 9 structured strategy mandates (objective, universe, control-off variant) + coverage_complete gate. Built weekly by run_weekly_safe. Monthly/yearly retrospectives read coverage_complete + unmandated[] (Strategy Documentation Requirement).
 
+
+  # ── Weekly ETF bundle watchlist (standalone, observe-only; default INERT) ──
+  weekly_etf_bundles/latest.json:
+    path: outputs/weekly_etf_bundles/latest.json
+    label: weekly ETF bundle analysis
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Weekly ETF bundle watch-score analysis (bundles + global ranking + market context). Standalone weekly job (run_weekly_etf_bundles.sh); never feeds decision_plan. Absent until first run.
+
+  weekly_etf_bundles/health.json:
+    path: outputs/weekly_etf_bundles/health.json
+    label: weekly ETF bundle health
+    lens: developer
+    role: probe
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: GREEN/AMBER/RED health + governance invariants (feeds_decision_engine=False, no auto-promotion). Consumed by the weekly-etf-analysis skill.
+
+  weekly_etf_bundles/scorecard.json:
+    path: outputs/weekly_etf_bundles/scorecard.json
+    label: weekly ETF bundle scorecard
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Ranking-quality scorecard (hit rates, precision@K, IC, top-bottom spread, sample-status gated). Matures over 4w/12w/26w horizons.
+
+  weekly_etf_bundles/calibration.json:
+    path: outputs/weekly_etf_bundles/calibration.json
+    label: weekly ETF bundle calibration
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Score-bucket calibration (Wilson intervals + well/over/under/non-monotonic status).
+
+  weekly_etf_bundles/attribution.json:
+    path: outputs/weekly_etf_bundles/attribution.json
+    label: weekly ETF bundle attribution
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Component/bundle/regime attribution + Strat Lab challenger hypotheses (never auto-applied).
+
+  weekly_etf_bundles/strat_lab_comparison.json:
+    path: outputs/weekly_etf_bundles/strat_lab_comparison.json
+    label: weekly ETF Strat Lab comparison
+    lens: quant_learning
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis, strategy-lab-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Champion vs challenger walk-forward OOS comparison + leaderboard + pending promotion candidates (human-gated; no auto-promotion).
+
+  weekly_etf_bundles/challenger_registry.json:
+    path: outputs/weekly_etf_bundles/challenger_registry.json
+    label: weekly ETF challenger registry
+    lens: meta_governance
+    role: advisor
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Champion (locked) + challenger statuses; champion change requires human approval (schemas.is_human_approver).
+
+  weekly_etf_bundles/email_receipt.json:
+    path: outputs/weekly_etf_bundles/email_receipt.json
+    label: weekly ETF email receipt
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: weekly
+    producer: weekly_etf_bundles
+    consumers: [weekly-etf-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: Weekly ETF email send/dry-run/duplicate-suppressed receipt (content hash, recipients, reason). Default inert (email gated OFF).
