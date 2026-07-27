@@ -1,129 +1,210 @@
 # Weekly ETF Bundles — Daily Continuous-Improvement (Split Cadence) — Design
 
 **Date:** 2026-07-27
-**Status:** Design approved (guardrails added by operator); implementation plan pending
-**Scope:** Additive, observe-only. No change to `decision_engine.py`, score semantics, or the daily decision core.
+**Status:** Review changes requested (revised 2026-07-27 per operator amendments 1–12)
+**Scope:** Additive, observe-only. No change to `decision_engine.py`, allocation logic, or
+core score semantics. A human approval may change only the **active weekly ETF sandbox
+variant** (`feeds_decision_engine=false` throughout) — a *human-approved sandbox champion
+activation*, **not** a production mutation.
 
 ## 1. Context
 
-The weekly ETF bundle watchlist subsystem (`portfolio_automation/weekly_etf_bundles/`)
-was merged to main (`7a36dc37`) and **activated** on 2026-07-27:
+The weekly ETF bundle subsystem (`portfolio_automation/weekly_etf_bundles/`) was merged
+(`7a36dc37`) and **activated** 2026-07-27: 23 archives refreshed, first immutable
+prediction frozen (`predictions/2026-07-27.json`, 23 rows), `WEEKLY_ETF_BUNDLES_ENABLED=1`,
+Monday 08:30 UTC cron, email dry-run. Invariants: `observe_only`, `simulation_active`,
+`production_gated`, `feeds_decision_engine=false`.
 
-- 23 bundle-ticker 5y archives refreshed; first immutable prediction frozen
-  (`outputs/weekly_etf_bundles/predictions/2026-07-27.json`, 23 rows).
-- `WEEKLY_ETF_BUNDLES_ENABLED=1`; Monday 08:30 UTC cron (`run_weekly_etf_bundles.sh`).
-- Email stays dry-run. Invariants hold: `observe_only=true`, `simulation_active=true`,
-  `production_gated=true`, `feeds_decision_engine=false`.
-
-The subsystem is architecturally **weekly**: predictions are frozen once per week,
-immutable, keyed on `market_data_date`, with a conflict guard that refuses to
-re-freeze a date. Outcomes mature at 1/4/12/26-week horizons.
+Architecturally **weekly**: predictions frozen once/week, immutable, keyed on
+`market_data_date`, conflict-guarded. Outcomes mature at 1/4/12/26-week horizons. The
+champion is currently a **hard-coded** constant (`strat_lab_adapter.CHAMPION_ID =
+"weekly_etf_bundle_v1_baseline"`) — which cannot support an applied swap (amendment 3).
 
 ## 2. Goal
 
-Let the subsystem **improve continuously** without violating weekly immutability, by
-running the *non-freezing* learning steps daily and routing scoring changes through a
-**human-gated, anti-overfit** champion-swap workflow.
+Improve continuously without breaking weekly immutability: run the non-freezing learning
+steps daily, and route a champion change through a **durable, human-gated, anti-overfit,
+idempotently-reconciled** lifecycle that affects **future weekly freezes only**.
 
 ## 3. Architecture — split cadence
 
-| Cadence | Runner | Does | Freezes? |
-|---|---|---|---|
-| **Weekly** (Mon 08:30) | `run_weekly_etf_bundles.sh` (unchanged) | full run incl. **freeze** new prediction + digest | ✅ once/week |
-| **Daily** (new) | new stage in `run_daily_safe.sh` | mature outcomes → refresh scorecard/calibration/attribution → Strat Lab champion/challenger comparison → health → champion-swap proposer | ❌ never |
+| Cadence | Runner | Does | Freezes? | Writes |
+|---|---|---|---|---|
+| **Weekly** (Mon 08:30) | `run_weekly_etf_bundles.sh` (unchanged) | full run incl. freeze + digest; **reads active champion from `champion_state.json`** | ✅ once/week | weekly artifact set |
+| **Daily** (new) | `run_daily_safe.sh` via `run_aux_stage` | mature → evaluate → Strat Lab OOS compare → health → **evidence → proposal** | ❌ never | daily subtree only |
 
-The daily lane reads the immutable ledger + fresh prices and rewrites the *derived*
-observe artifacts only. It never writes `predictions/<date>.json`.
+## 4. Champion source of truth (amendment 3)
 
-## 4. Components
+`outputs/weekly_etf_bundles/champion_state.json` — versioned, **CAS-protected**:
 
-### 4.1 New non-freezing run mode
-Add `--daily-observe` to `weekly_etf_bundles/run.py` that runs steps: mature outcomes,
-evaluate (scorecard/calibration/attribution), Strat Lab comparison, health, champion-swap
-proposer — with `do_freeze=False` hard-wired. Reuses existing step functions; no new
-analysis math.
+```
+{ "schema":"weekly_etf_champion_state.v1", "version":<int>,
+  "active_champion_id":"weekly_etf_bundle_v1_baseline",
+  "champion_config_hash":"…", "effective_from_market_date":"<YYYY-MM-DD>",
+  "updated_at":"…", "history":[ {from,to,proposal_id,approval_ref,applied_at,
+     before_hash,after_hash,state_version_before,state_version_after,code_sha} ] }
+```
 
-### 4.2 Daily pipeline stage
-New stage in `run_daily_safe.sh`, after the existing observe-only stages:
-- Wrapped in `try/except` (non-blocking; never affects the daily exit code).
-- Gated by `WEEKLY_ETF_BUNDLES_ENABLED` **and** a new daily sub-flag
-  `WEEKLY_ETF_BUNDLES_DAILY_ENABLED` (default 0 — ships inert).
-- Its own in-stage guard/log; writes only to the `WEEKLY_ETF_BUNDLES` namespace.
+- The **weekly freeze reads `active_champion_id` from here** (falls back to the hard-coded
+  baseline if the file is absent — backward compatible).
+- A swap bumps `version` via compare-and-swap and sets `effective_from_market_date` to the
+  **next** weekly freeze date. **Never rewrites or reinterprets historical predictions**;
+  frozen files stay immutable. Swaps affect future freezes only.
 
-### 4.3 Human-gated champion-swap proposer  *(the "auto-tune")*
-When a challenger's **matured** performance beats the champion, emit a champion-swap
-**proposal** through the existing human approval path
-(`portfolio_automation/sim_governance/promotion_approvals.record_approval`, `base_dir=<root>/outputs`).
-**Never auto-applied.** AI/heuristic may recommend; only a human approver promotes.
-Inert for weeks until outcomes mature.
+## 5. Proposal lifecycle (amendments 1, 2, 7)
 
-## 5. Guardrails (operator-mandated)
+`record_approval` **records a decision; it is not the proposal-emission mechanism.** The
+lifecycle is a distinct chain:
 
-### 5.1 Timezone guardrail
-`market_data_date` currently snaps to `last_on_or_before(panel.dates, as_of)` where
-`as_of`/`generated_at` derive from **UTC now** — an off-by-one risk near the UTC/ET
-boundary (a UTC-cron firing after 20:00 ET could pick the wrong calendar date).
-- Compute the "as-of trading date" reference in one **explicit, documented market
-  timezone** (US/Eastern), not UTC-naive `now()`.
-- The daily lane must **never** change an already-frozen `market_data_date`'s prediction;
-  the freeze conflict-guard remains the backstop. Add a test asserting a daily-observe run
-  on the same market date does not mutate the frozen prediction file (content-hash stable).
+```
+Strat Lab evidence  ──gates──▶  informational-only (insufficient sample) [never queued]
+        │ all gates pass
+        ▼
+  emit durable PromotionProposal (type: weekly_etf_champion_change, stable proposal_id)
+        │ human decision via promotion_approvals.record_approval(proposal_id, …)
+        ▼
+  approved_unapplied ──▶ idempotent apply/rollback reconciler ──▶ applied / rolled_back
+```
 
-### 5.2 Rollback evidence
-Every champion-swap **apply** (post human approval) captures **before/after** state
-(active champion variant + its config snapshot) into an append-only audit
-(`outputs/weekly_etf_bundles/champion_swap_audit.jsonl`) — mirroring the sim-gov
-reversible pattern. A human veto rolls back via compare-and-swap (never overwriting
-newer state → `rollback_conflict`). No apply without a captured before-state.
+- **Informational tier:** "promising but insufficient sample" (or any failed gate) is
+  written to the daily evidence/health artifacts only and **never enters the approval
+  queue**.
+- **New proposal type `weekly_etf_champion_change`** (amendment 2) with its **own routing +
+  application contract** — it does **not** fall through to the sim-gov advisory or watchlist
+  workflow. It is applied by the ETF reconciler (§8), not by the sim-gov production overlay.
+- **Stable `proposal_id`** (amendment 7) = deterministic hash of
+  `(active_champion_id, challenger_variant_id, evidence_fingerprint)`, where
+  `evidence_fingerprint` = hash of the set of matured **cohort** identifiers used.
+  **Never** derived from `generated_at` or the daily run date.
+- **Dedup / one-active / cooldown / hysteresis:** at most **one** active
+  `weekly_etf_champion_change` proposal at a time; re-emitting the same `proposal_id` is a
+  no-op (idempotent); a decided (approved/rejected/vetoed) `evidence_fingerprint` is **not
+  re-proposed until new matured evidence exists**; after any apply/reject a **cooldown** of
+  `cooldown_cohorts` newly-matured cohorts applies; a **hysteresis** band requires the
+  challenger to exceed the base threshold by an extra margin to avoid flip-flop.
 
-### 5.3 Anti-overfitting controls for champion swaps
-A challenger may be *proposed* to replace the champion only if **all** hold:
-1. **Minimum matured sample** — ≥ `min_matured_n` resolved predictions per evaluated
-   horizon (config; e.g. 20), never on 0/near-0 samples.
-2. **Out-of-sample / walk-forward** — outperformance measured on walk-forward folds
-   (`list_prediction_dates`), not the in-sample window that selected the variant.
-3. **Sustained margin** — challenger beats champion by ≥ `min_margin` over **K
-   consecutive** evaluation periods (config; e.g. K=4), not a single lucky window.
-4. **Multiple-comparison correction** — because "best of 4 variants" is selection-biased,
-   apply a Holm/Bonferroni-style adjustment (or a raised significance bar) across the
-   variant set; record the adjusted p-value/threshold in the proposal.
-5. **Economic + statistical significance** — margin must clear both a minimum effect size
-   and the corrected significance bar; a Sharpe-style haircut/deflation is recorded.
-A proposal that fails any control is **not** emitted; the reason is logged for the health
-skill. All thresholds live in `config/weekly_etf_bundles.yaml` with recorded rationale
-(Strategy Documentation Requirement).
+## 6. Timezone guardrail — **Phase 1** (amendment 5)
 
-## 6. Analysis + Health coverage (mandatory pairing)
-The daily lane runs at **daily cadence** → extend `.claude/commands/daily-tool-analysis.md`:
-- read the daily ETF artifacts (health, scorecard, calibration, champion-swap proposal);
-- signals: `weekly_etf_daily_ran`, `champion_swap_pending` (a proposal awaiting human
-  approval → AMBER, actionable), content_liveness (`status==ok` but 0 tickers scored);
-- RED only on an invariant breach (`feeds_decision_engine` flips true) — otherwise AMBER-max.
-`/weekly-etf-analysis` remains the deep readout. Add tests asserting healthy vs degraded
-fixture states, per the Analysis+Health Coverage Requirement.
+Resolve the as-of trading session against the **latest *completed* trading session** using
+canonical `America/New_York` (via `zoneinfo`), **not** a UTC-naive `now()` nor merely "the
+Eastern calendar date". Explicitly handle: premarket (session not yet complete → use prior
+session), post-close, exchange holidays, weekends, DST transitions, the UTC-midnight
+boundary, and the **incomplete current bar** (never freeze/evaluate on a partial day). A
+same-market-date daily run must be provably unable to mutate a frozen prediction
+(content-hash stable — tested).
 
-## 7. Error handling
-Non-blocking daily stage; fail-closed champion-swap (no proposal on missing/short data,
-invariant doubt, or failed rollback-precondition). Circuit-breaker on repeated
-apply/rollback failure, matching sim-gov.
+## 7. Statistical unit & anti-overfitting (amendments 6, 8)
 
-## 8. Testing
-- Daily-observe mode: matures + evaluates + does NOT freeze (content-hash of the frozen
-  file unchanged) — healthy + degraded fixtures.
-- Timezone: as-of date resolved in market tz; boundary case near UTC midnight.
-- Anti-overfit: each of the 5 controls blocks a proposal when violated; a clean fixture
-  emits exactly one proposal.
-- Rollback: apply captures before-state; veto restores it; CAS conflict path.
-- Health/analysis: `champion_swap_pending` AMBER; invariant-breach RED.
+**Unit = the weekly cohort** (all predictions frozen on one `market_data_date`), not the
+individual ETF row. Record **both** `prediction_row_count` and `independent_cohort_count`.
 
-## 9. Phasing
-1. Daily-observe mode + daily stage (inert sub-flag) + health/analysis coverage + tests.
-2. Champion-swap proposer with the 5 anti-overfit controls + timezone guardrail (proposal
-   only; inert until data matures).
-3. Human-gated apply + rollback-evidence audit + veto/CAS.
+- **Correlated same-week ETFs:** the ~23 ETFs in one cohort share market beta — treat the
+  cohort as one clustered observation (block/cluster by cohort), never as 23 independent
+  samples.
+- **Overlapping horizons:** 1/4/12/26-week windows overlap in calendar time — use
+  non-overlapping cohorts or a variance adjustment (block bootstrap / Newey-West) so serial
+  correlation doesn't inflate significance.
+- **Holm correction across challengers** after the per-challenger test.
+
+A challenger is *proposed* only if **all** gates pass (else informational-only):
+1. **Min matured sample** — ≥ `min_matured_cohorts` distinct matured cohorts per evaluated
+   horizon (config; e.g. 8 cohorts), never 0/near-0.
+2. **Out-of-sample / walk-forward** — measured on walk-forward folds, not the selection window.
+3. **Sustained margin (K)** (amendment 6) — beats champion by ≥ `min_margin` over **K
+   distinct newly-matured weekly cohorts / unique evaluation-data fingerprints**. Re-running
+   the *same* dataset on consecutive days does **not** advance the streak.
+4. **Multiple-comparison correction** — Holm/Bonferroni across the variant set (best-of-4 is
+   selection-biased); record raw + corrected significance.
+5. **Economic + statistical significance** — clears both a min effect size and the corrected
+   bar; a Sharpe-style haircut/deflation is recorded.
+
+All thresholds live in `config/weekly_etf_bundles.yaml` with recorded rationale (Strategy
+Documentation Requirement).
+
+## 8. Apply / rollback state machine (amendment 9)
+
+Durable, **exactly-once** reconciler. Idempotency key = `proposal_id` + target
+`champion_state.version`.
+
+States: `pending` → `approved_unapplied` → `applied`; and `applied` → `rollback_pending` →
+`rolled_back`; plus `rollback_conflict` (target moved under us — CAS fail, never overwrite
+newer state) and `failure`. Re-running the reconciler in any state is safe (idempotent).
+
+Append-only audit `outputs/weekly_etf_bundles/champion_swap_audit.jsonl`; every entry
+carries: `before_hash`, `after_hash`, `state_version_before`, `state_version_after`,
+`proposal_id`, `approval_ref`, `champion_config_hash`, `code_sha` (`git rev-parse HEAD`),
+`effective_from_market_date`, `timestamp`, `actor`. No apply without a captured before-state.
+
+## 9. Daily-lane write allowlist (amendment 4)
+
+Daily lane writes **only** to a separate subtree `outputs/weekly_etf_bundles/daily/`
+(evidence, daily-health, proposal artifacts) plus the two governance files
+`champion_state.json` (CAS, apply-time only) and `champion_swap_audit.jsonl`. **Explicit
+deny:** it must **never** write/overwrite weekly `latest.json`, the weekly digest
+(MD/HTML), weekly `health.json`, any email artifact or email-dedup state, or any
+`predictions/**` file. Enforced by a write-path allowlist + a test asserting weekly
+artifacts' mtimes/hashes are unchanged by a daily run.
+
+## 10. Shell integration (amendment 10)
+
+Daily lane is added to `run_daily_safe.sh` via the existing **`run_aux_stage`**
+non-blocking helper (never affects the daily exit code). Gated by
+`WEEKLY_ETF_BUNDLES_ENABLED` **and** `WEEKLY_ETF_BUNDLES_DAILY_ENABLED` (default 0 — ships
+inert). **Shared-lock precedence:** the weekly and daily ETF runners share a lock; the
+**weekly freeze takes precedence** — the daily lane must skip (not block/queue) if the
+weekly runner holds the lock, and must never run concurrently with a freeze.
+
+## 11. Proposal evidence schema (amendment 12)
+
+Each `weekly_etf_champion_change` proposal embeds: `current_champion` (id + config hash),
+`challenger` (variant id + config hash), `evaluation_window` {start,end}, `matured_prediction_count`,
+`independent_cohort_count`, `metric_deltas` (hit-rate, mean-return, per horizon),
+`risk_drawdown_comparison`, `significance` {raw_p, corrected_p, method}, `gate_results` (all
+5 gates: pass/fail + values), `artifact_references`, `rationale`, `risks`, `config_hashes`
+{champion, challenger}, and `rollback_target` {champion_id, champion_state.version}.
+
+## 12. Analysis + Health coverage (mandatory pairing)
+
+Daily cadence → extend `.claude/commands/daily-tool-analysis.md`: read the daily-subtree
+artifacts (daily-health, evidence, proposal); signals `weekly_etf_daily_ran`,
+`champion_swap_pending` (a proposal awaiting human approval → **actionable AMBER**),
+content_liveness (`status==ok` but 0 tickers scored); **RED only** on an invariant breach
+(`feeds_decision_engine` flips true) or an `applied`-without-approval / `rollback_conflict`.
+`/weekly-etf-analysis` remains the deep readout. Tests assert healthy vs degraded states.
+
+## 13. Error handling
+Non-blocking daily stage; **fail-closed** proposer (no proposal on missing/short data,
+invariant doubt, CAS/lock contention, or failed rollback-precondition); circuit-breaker on
+repeated apply/rollback failure.
+
+## 14. Testing
+- Daily-observe: matures + evaluates, does **not** freeze; weekly artifacts unchanged
+  (mtime + hash) — write-allowlist enforced.
+- Timezone: latest-*completed*-session resolution across premarket / post-close / holiday /
+  weekend / DST / UTC-boundary / partial-bar.
+- Anti-overfit: each of the 5 gates blocks independently; cohort (not row) counting; K
+  streak does not advance on a re-run of the same fingerprint; Holm across challengers.
+- Proposal: stable id (independent of run date); dedup/one-active/cooldown/hysteresis;
+  insufficient-sample stays informational (never queued).
+- State machine: exactly-once apply; rollback restores before-state; `rollback_conflict` on
+  a moved target; audit entry carries all required fields.
+- champion_state CAS: concurrent bump → one wins, other yields conflict; weekly freeze reads
+  active champion; historical predictions never reinterpreted.
+- Health/analysis: `champion_swap_pending` AMBER; invariant-breach/applied-without-approval RED.
+
+## 15. Phasing
+1. **Phase 1** — timezone guardrail (§6); daily-observe mode (no freeze); daily
+   `run_aux_stage` stage + lock precedence (inert sub-flag); daily write-allowlist +
+   subtree; health/analysis coverage; tests.
+2. **Phase 2** — `champion_state.json` (CAS) + weekly freeze reads it; evidence →
+   `weekly_etf_champion_change` proposal with the §7 statistical unit + 5 anti-overfit gates
+   + §5 dedup/cooldown/hysteresis + §11 evidence schema (proposal only; inert until data matures).
+3. **Phase 3** — human-gated apply/rollback reconciler (§8 state machine, exactly-once,
+   audit, CAS/veto).
 Each phase is independently shippable and observe-only until its gate is flipped.
 
-## 10. Boundaries
-Observe-only; simulation/ sandbox namespaces only; production changes only via
-human-approved champion-swap; `feeds_decision_engine=false` throughout; no
-`decision_engine.py` / scoring / allocation changes.
+## 16. Boundaries (amendment 11)
+No changes to the daily decision engine, allocation logic, or core score semantics. A human
+approval changes **only** the active weekly ETF **sandbox** variant, which remains
+`feeds_decision_engine=false` — a *human-approved sandbox champion activation*, not a
+production mutation. All writes stay in the `WEEKLY_ETF_BUNDLES` namespace.
