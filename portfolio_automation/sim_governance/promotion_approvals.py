@@ -33,6 +33,22 @@ logger = logging.getLogger("stockbot.sim_governance.promotion_approvals")
 _APPROVALS_FILE = "approved_proposals.json"
 
 
+def _looks_like_repo_root(base_dir: str) -> bool:
+    """True when *base_dir* points at the project root instead of its outputs dir.
+
+    The output-namespace convention is ``base_dir=<root>/outputs``; passing
+    ``<root>`` (e.g. ".") silently resolves to ``<root>/promotion_approvals/`` —
+    a location no production loader reads, so the approval would look recorded
+    but never apply. Detect that misuse via repo-root markers that are absent
+    from both an ``outputs`` dir and a bare tmp dir.
+    """
+    try:
+        p = Path(base_dir)
+        return (p / "config.json").is_file() and (p / "CLAUDE.md").is_file()
+    except Exception:
+        return False
+
+
 def _load_raw(base_dir: str) -> dict:
     path = get_output_path(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_FILE, base_dir=base_dir)
     try:
@@ -73,6 +89,14 @@ def record_approval(
     if not ok:
         logger.warning("promotion_approvals: rejecting invalid approval (%s): %s", reason, record)
         return {"ok": False, "reason": reason, "record": None}
+
+    if write_files and _looks_like_repo_root(base_dir):
+        msg = (
+            f"base_dir_is_repo_root: {base_dir!r} looks like the project root; "
+            "approvals must be written under <root>/outputs (pass base_dir=<root>/outputs)"
+        )
+        logger.warning("promotion_approvals: refusing misdirected write — %s", msg)
+        return {"ok": False, "reason": msg, "record": None}
 
     if write_files:
         data = _load_raw(base_dir)
