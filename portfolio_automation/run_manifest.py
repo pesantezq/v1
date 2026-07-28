@@ -19,12 +19,14 @@ import hashlib
 import json
 import platform
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from portfolio_automation.data_governance import (
     OutputNamespace, safe_write_json,
 )
+from portfolio_automation.market_session import session_provenance
 from portfolio_automation.run_status import make_run_id  # reuse the stable id
 
 RUN_MANIFEST_SCHEMA_VERSION = "1"
@@ -89,6 +91,39 @@ def runtime_identity() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _parse_iso(ts: str | None) -> Any:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _session_fields(data_as_of: str | None, started_at: str) -> dict[str, Any]:
+    """Best-effort market-session provenance (Reliability Program D2).
+
+    Additive; degrades to ``None``-valued fields rather than raising, so this
+    module keeps its "never raises" contract. Prefers ``data_as_of``, falls
+    back to ``started_at`` (the manifest's own clock is the honest fallback
+    when no explicit data_as_of was supplied).
+    """
+    dt = _parse_iso(data_as_of) or _parse_iso(started_at)
+    if dt is None:
+        return {
+            "source_data_through": None,
+            "latest_session_represented": None,
+            "session_coverage_exceeded": None,
+        }
+    prov = session_provenance(dt)
+    return {
+        "source_data_through": prov["source_data_through"],
+        "latest_session_represented": prov["latest_session_represented"],
+        "session_coverage_exceeded": prov["coverage_exceeded"],
+    }
+
+
 def build_manifest(
     *,
     run_id: str,
@@ -119,6 +154,7 @@ def build_manifest(
         "upstream_freshness": upstream_freshness or {},
         "status": status,            # running | complete | failed
         "failure_stage": failure_stage,
+        **_session_fields(data_as_of, started_at),
     }
 
 
