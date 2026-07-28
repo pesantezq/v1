@@ -1,7 +1,7 @@
 # Promotion-Overlay Durability — Design
 
 **Date:** 2026-07-28
-**Status:** approved (operator, 2026-07-28) — not yet implemented
+**Status:** implemented 2026-07-28 (plan: `docs/superpowers/plans/2026-07-28-promotion-overlay-durability.md`)
 **Scope:** `sim_governance` promotion pipeline: approval identity + overlay persistence
 **Branch:** `fix/promotion-overlay-durability` (off `main`; independent of the held
 `feat/watchlist-decay-removals`)
