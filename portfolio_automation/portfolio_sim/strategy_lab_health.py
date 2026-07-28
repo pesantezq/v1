@@ -84,6 +84,29 @@ AMBER = degraded but non-fatal (disabled, stale, factor data missing,
         credible OOS evidence).
 GREEN = ran, populated, documented, AND at least one tactic carries positive,
         sufficient, undominated OOS evidence with nothing surfaced as failed.
+
+WS14 regime-concentration downgrade (.superpowers/audit/ws-04-05-14-18-health.md)
+----------------------------------------------------------------------
+The WS14 audit found that NO assessor anywhere read
+`outputs/regime/regime_performance.json`'s per-regime breakdown into a
+validity verdict — a strategy's evidence could be 98.8% one regime label and
+still read as generally validated. This module now consults
+`portfolio_automation.regime_coverage.assess_regime_coverage()` and, when it
+reports `REGIME_CONCENTRATED` or `RISK_OFF_UNPROVEN` (real regime data
+present, not merely absent/thin), downgrades `ranking_credibility` and
+`oos_validity` with a stated reason: a GREEN becomes AMBER, and an
+already-non-GREEN dimension gets the caveat appended to its reasons either
+way. `REGIME_DATA_INSUFFICIENT` alone (no regime artifact yet, or too thin a
+window) never triggers a downgrade — absence of evidence is not evidence of
+concentration, and doing so would falsely penalize the small-fixture tests
+that predate this artifact entirely. This is DISTINCT from the 2026-06-23
+neutral-collapse guard (`semantic_liveness.detect_single_value_collapse`,
+which explicitly whitelists a single `"neutral"` label as a legitimately calm
+window): that guard catches a producer-ordering bug collapsing the regime
+column to ONE value; this module measures SHARE of evidence across however
+many distinct labels exist and fires even with 2-3 labels present. Confirmed
+live (2026-07-28): `REGIME_CONCENTRATED` + `RISK_OFF_UNPROVEN` both fire —
+do not tune thresholds to avoid this.
 """
 from __future__ import annotations
 
@@ -94,6 +117,9 @@ from pathlib import Path
 from typing import Any
 
 from portfolio_automation.portfolio_sim.oos_state import OOSState, build_oos_evidence
+from portfolio_automation.regime_coverage import (
+    REGIME_CONCENTRATED, RISK_OFF_UNPROVEN, assess_regime_coverage,
+)
 
 _SANDBOX = ("outputs", "sandbox")
 
@@ -437,6 +463,41 @@ def _roll_up(dims: dict[str, dict[str, Any]]) -> str:
     return "GREEN"
 
 
+_REGIME_CONCENTRATION_DOWNGRADE_STATES = {REGIME_CONCENTRATED, RISK_OFF_UNPROVEN}
+_REGIME_DOWNGRADED_DIMENSIONS = ("ranking_credibility", "oos_validity")
+
+
+def _load_regime_coverage(root: Path) -> dict[str, Any]:
+    perf = _load_path(root / "outputs" / "regime" / "regime_performance.json")
+    return assess_regime_coverage(perf)
+
+
+def _apply_regime_concentration_downgrade(
+    dims: dict[str, dict[str, Any]], regime_coverage: dict[str, Any],
+) -> None:
+    """WS14 — mutate `dims` in place: if regime evidence is concentrated or
+    risk-off remains unproven, downgrade ranking_credibility/oos_validity
+    with a stated reason. No-op when regime data is merely absent/thin
+    (REGIME_DATA_INSUFFICIENT alone) — absence of evidence must not read as
+    evidence of concentration."""
+    states = set(regime_coverage.get("states") or [])
+    if not (states & _REGIME_CONCENTRATION_DOWNGRADE_STATES):
+        return
+    reason = (
+        f"regime_concentration ({', '.join(sorted(states & _REGIME_CONCENTRATION_DOWNGRADE_STATES))}): "
+        f"{'; '.join(regime_coverage.get('reasons') or [])} — evidence is not "
+        "diversified across market regimes; this dimension cannot read as "
+        "generally validated"
+    )
+    for name in _REGIME_DOWNGRADED_DIMENSIONS:
+        dim = dims.get(name)
+        if dim is None:
+            continue
+        if dim["status"] == "GREEN":
+            dim["status"] = "AMBER"
+        dim["reasons"] = list(dim.get("reasons") or []) + [reason]
+
+
 def _assess_strict(lb, cat, wf, factor, root: Path, now: datetime, legacy: dict[str, Any]) -> dict[str, Any]:
     rows = lb.get("leaderboard") or []
     wf_results = (wf or {}).get("results") or {}
@@ -454,6 +515,8 @@ def _assess_strict(lb, cat, wf, factor, root: Path, now: datetime, legacy: dict[
         "governance_compliance": _dim_governance_compliance(lb, sel_reasons),
         "presentation_consistency": _dim_presentation_consistency(rows, oos_by_tactic),
     }
+    regime_coverage = _load_regime_coverage(root)
+    _apply_regime_concentration_downgrade(dims, regime_coverage)
     overall = _roll_up(dims)
 
     if overall == "GREEN":
@@ -477,6 +540,13 @@ def _assess_strict(lb, cat, wf, factor, root: Path, now: datetime, legacy: dict[
     signals = dict(legacy["signals"])
     signals["oos_state_counts"] = state_counts
     signals["dimension_status"] = {name: d["status"] for name, d in dims.items()}
+    signals["regime_coverage"] = {
+        "states": regime_coverage.get("states"),
+        "primary_state": regime_coverage.get("primary_state"),
+        "resolved_signals": regime_coverage.get("resolved_signals"),
+        "concentration": regime_coverage.get("concentration"),
+        "risk_off": regime_coverage.get("risk_off"),
+    }
 
     return {
         "status": overall,

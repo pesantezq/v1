@@ -172,6 +172,90 @@ def test_at_least_one_supported_tactic_can_reach_green(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# WS14 (.superpowers/audit/ws-04-05-14-18-health.md): regime concentration
+# must downgrade ranking_credibility/oos_validity — a strategy whose evidence
+# is ~99% one regime must not read as generally validated.
+# --------------------------------------------------------------------------
+
+def _write_regime_performance(tmp_path, by_regime, resolved_signals):
+    d = tmp_path / "outputs" / "regime"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "regime_performance.json").write_text(
+        json.dumps({"resolved_signals": resolved_signals, "by_regime": by_regime}))
+
+
+_CONCENTRATED_BY_REGIME = {
+    "high_volatility": {"total_signals": 27, "effective_signals": 27, "avg_return_pct": 0.807,
+                        "win_rate": 0.63, "share_of_evidence": 0.0119, "return_weighted_share": 0.0468},
+    "neutral": {"total_signals": 2211, "effective_signals": 925, "avg_return_pct": 0.226,
+               "win_rate": 0.519, "share_of_evidence": 0.9762, "return_weighted_share": 1.0722},
+}
+
+
+def test_regime_concentration_downgrades_green_to_amber_with_stated_reason(tmp_path):
+    # Same positive-control fixture that reaches GREEN above, but now with a
+    # concentrated + risk-off-unproven regime_performance.json alongside it —
+    # ranking_credibility/oos_validity must downgrade, overall must not be GREEN.
+    rows = [{"tactic_id": "research_momentum_rotation", "name": "Momentum",
+             "strategy_score": 1.2, "mean_excess_vs_spy": 0.11, "still_works_oos": True,
+             **_ENVELOPE_TRUE}]
+    _write(tmp_path, "strategy_leaderboard.json", {
+        "status": "ok", "created_at": "2026-06-12T00:00:00Z", "leaderboard": rows, **_ENVELOPE_TRUE})
+    _write(tmp_path, "research_strategy_catalog.json", {"coverage_complete": True, "undocumented": []})
+    _write(tmp_path, "walk_forward_results.json",
+           {"results": {"research_momentum_rotation": _WF_SUPPORTED}})
+    _write(tmp_path, "factor_exposure_report.json", {"factor_data_available": True})
+    _write_regime_performance(tmp_path, _CONCENTRATED_BY_REGIME, 2238)
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["status"] != "GREEN"
+    assert r["dimensions"]["oos_validity"]["status"] == "AMBER"
+    assert r["dimensions"]["ranking_credibility"]["status"] == "AMBER"
+    assert any("regime_concentration" in reason for reason in r["dimensions"]["oos_validity"]["reasons"])
+    assert any("regime_concentration" in reason for reason in r["dimensions"]["ranking_credibility"]["reasons"])
+    assert any("regime_concentration" in reason for reason in r["blocking_reasons"])
+    assert r["signals"]["regime_coverage"]["primary_state"] == "RISK_OFF_UNPROVEN"
+    assert set(r["signals"]["regime_coverage"]["states"]) == {"REGIME_CONCENTRATED", "RISK_OFF_UNPROVEN"}
+
+
+def test_regime_data_insufficient_does_not_downgrade(tmp_path):
+    # No outputs/regime/regime_performance.json at all (as in the other
+    # fixtures in this file) — REGIME_DATA_INSUFFICIENT must NOT downgrade
+    # anything; absence of evidence is not evidence of concentration.
+    rows = [{"tactic_id": "research_momentum_rotation", "name": "Momentum",
+             "strategy_score": 1.2, "mean_excess_vs_spy": 0.11, "still_works_oos": True,
+             **_ENVELOPE_TRUE}]
+    _write(tmp_path, "strategy_leaderboard.json", {
+        "status": "ok", "created_at": "2026-06-12T00:00:00Z", "leaderboard": rows, **_ENVELOPE_TRUE})
+    _write(tmp_path, "research_strategy_catalog.json", {"coverage_complete": True, "undocumented": []})
+    _write(tmp_path, "walk_forward_results.json",
+           {"results": {"research_momentum_rotation": _WF_SUPPORTED}})
+    _write(tmp_path, "factor_exposure_report.json", {"factor_data_available": True})
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["status"] == "GREEN"
+    assert r["signals"]["regime_coverage"]["primary_state"] == "REGIME_DATA_INSUFFICIENT"
+
+
+def test_regime_concentration_appends_reason_to_already_downgraded_dimension(tmp_path):
+    # oos_validity is already AMBER (no OOS_SUPPORTED tactic) for an unrelated
+    # reason — the regime-concentration caveat must still be appended, not
+    # silently dropped because the dimension wasn't GREEN.
+    rows = [{"tactic_id": "untested_one", "name": "Untested", "strategy_score": 1.0,
+             "still_works_oos": None, **_ENVELOPE_TRUE}]
+    _write(tmp_path, "strategy_leaderboard.json", {
+        "status": "ok", "created_at": "2026-06-12T00:00:00Z", "leaderboard": rows, **_ENVELOPE_TRUE})
+    _write(tmp_path, "research_strategy_catalog.json", {"coverage_complete": True, "undocumented": []})
+    _write_regime_performance(tmp_path, _CONCENTRATED_BY_REGIME, 2238)
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["dimensions"]["oos_validity"]["status"] == "AMBER"
+    reasons = r["dimensions"]["oos_validity"]["reasons"]
+    assert any("no_credible_oos_test" in x for x in reasons)
+    assert any("regime_concentration" in x for x in reasons)
+
+
+# --------------------------------------------------------------------------
 # Every GREEN dimension must carry positive evidence — enforced structurally.
 # --------------------------------------------------------------------------
 
