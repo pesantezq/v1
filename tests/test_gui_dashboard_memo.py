@@ -554,3 +554,111 @@ def test_memo_route_renders_strong_and_code_for_bold_text(tmp_path, monkeypatch)
         assert "**BUY**" not in html
     finally:
         monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
+
+
+# ---------------------------------------------------------------------------
+# Regression: memo section headers -> GUI section contract
+#
+# Commit a5387a27 replaced the memo's "Top Decisions" / "Capital Actions"
+# sections with the "Today's Capital Plan" block, but _HEADER_MAP was not
+# updated. Every capital-plan header mapped to None, so ~21 lines of the
+# operator's actual capital actions, deferrals and bottom line were silently
+# dropped from the mobile memo view (the section still rendered, filled only
+# with "Top Movers" price lines, so the loss was invisible).
+#
+# These tests pin the memo -> GUI header contract so a future rename cannot
+# silently orphan a section again.
+# ---------------------------------------------------------------------------
+
+# The header names the memo renderer actually emits today
+# (portfolio_automation/capital_plan_view.py: h("...") calls).
+SHIPPED_CAPITAL_PLAN_HEADERS = [
+    "Today's Capital Plan",
+    "What To Do Today",
+    "Deferred Recommendations",
+]
+
+
+@pytest.mark.parametrize("header", SHIPPED_CAPITAL_PLAN_HEADERS)
+def test_capital_plan_headers_map_to_portfolio_decisions(header):
+    """The shipped capital-plan headers must reach the Portfolio Decisions section."""
+    from gui_v2.data.dash_memo import _map_header
+
+    assert _map_header(header) == "Portfolio Decisions", (
+        f"memo header {header!r} maps to {_map_header(header)!r}; "
+        "capital-plan content would be dropped from the mobile memo view"
+    )
+
+
+def test_bottom_line_maps_to_top_insight():
+    """`Bottom Line` is the closing verdict, so it joins Top Insight."""
+    from gui_v2.data.dash_memo import _map_header
+
+    assert _map_header("Bottom Line") == "Top Insight"
+
+
+def test_operator_appendix_maps_to_data_quality():
+    """`Operator / System Appendix` is system context, not an action."""
+    from gui_v2.data.dash_memo import _map_header
+
+    assert _map_header("Operator / System Appendix") == "Data Quality"
+
+
+def test_no_shipped_memo_header_is_orphaned():
+    """Every ## header the memo emits must map to some GUI section.
+
+    This is the guard that would have caught a5387a27: an unmapped header is
+    silently skipped by _parse_memo, so a rename loses content with no error.
+    """
+    from gui_v2.data.dash_memo import _map_header
+
+    shipped_headers = [
+        "Today's Verdict",
+        "Top Insight",
+        "Today's Capital Plan",
+        "What To Do Today",
+        "Deferred Recommendations",
+        "Bottom Line",
+        "Risk Focus",
+        "What Changed",
+        "Operator / System Appendix",
+        "Portfolio Pulse",
+        "Risk Delta",
+        "Advisor Stack",
+        "Watch list — pattern-confirmed candidates (advisory)",
+        "Portfolio Growth",
+        "Top Movers",
+        "Decision Hit Rate — Predicted vs Actual",
+        "What To Watch — Sandbox Only",
+        "Crowd Radar — Sandbox Research",
+        "System / Data Health",
+        "Discovery Research — Sandbox Only",
+    ]
+    orphaned = [h for h in shipped_headers if _map_header(h) is None]
+    assert orphaned == [], (
+        f"memo headers with no GUI section: {orphaned} — their content is "
+        "silently dropped from /dashboard/memo"
+    )
+
+
+def test_capital_plan_content_reaches_portfolio_decisions(tmp_path):
+    """End-to-end: capital-plan body lines land in Portfolio Decisions."""
+    from gui_v2.data.dash_memo import _parse_memo
+
+    memo = (
+        "# Daily Investment Memo — 2026-07-28\n\n"
+        "## Today's Capital Plan\n"
+        "- Deployable now: $1,602.13\n"
+        "## What To Do Today\n"
+        "- Fund NVDA starter position\n"
+        "## Bottom Line\n"
+        "- Hold steady; nothing funded today.\n"
+    )
+    sections = _parse_memo(memo)
+
+    decisions = "\n".join(sections.get("Portfolio Decisions") or [])
+    assert "Deployable now: $1,602.13" in decisions
+    assert "Fund NVDA starter position" in decisions
+
+    insight = "\n".join(sections.get("Top Insight") or [])
+    assert "Hold steady; nothing funded today." in insight

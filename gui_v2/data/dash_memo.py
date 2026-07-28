@@ -6,10 +6,14 @@ view stays clean.
 
 Section mapping
 ---------------
-Top Insight      ← "Today's Verdict" / "Top Insight"
+Top Insight      ← "Today's Verdict" / "Top Insight" / "Bottom Line"
 Risk Focus       ← "Risk Delta" / "Risk Focus" / "Portfolio Pulse"
-Portfolio Decisions ← "Top Decisions" / "Capital Actions" / "Top Movers"
-Data Quality     ← "System / Data Health" / "What Changed" / "Advisor Stack"
+Portfolio Decisions ← "Today's Capital Plan" / "What To Do Today" /
+                      "Deferred Recommendations" / "Top Movers"
+                      (+ retired "Top Decisions" / "Capital Actions" for
+                      historical memos under outputs/history/)
+Data Quality     ← "System / Data Health" / "What Changed" / "Advisor Stack" /
+                   "Operator / System Appendix"
 Quant Notes      ← "Decision Hit Rate" / "What To Watch" / "Portfolio Growth" / "Discovery Research"
 Watchlist Notes  ← "Watch list" / "Sandbox"
 
@@ -46,11 +50,18 @@ _HEADER_MAP: list[tuple[str, str]] = [
     # Top Insight
     ("today's verdict", "Top Insight"),
     ("top insight",     "Top Insight"),
+    ("bottom line",     "Top Insight"),
     # Risk Focus
     ("risk delta",      "Risk Focus"),
     ("risk focus",      "Risk Focus"),
     ("portfolio pulse", "Risk Focus"),
     # Portfolio Decisions
+    #   The capital-plan block (a5387a27) replaced the retired "Top Decisions" /
+    #   "Capital Actions" headers; both retired names are kept so historical
+    #   memos under outputs/history/ still map.
+    ("today's capital plan",   "Portfolio Decisions"),
+    ("what to do today",       "Portfolio Decisions"),
+    ("deferred recommendations", "Portfolio Decisions"),
     ("top decisions",          "Portfolio Decisions"),
     ("capital actions",        "Portfolio Decisions"),
     ("top movers",             "Portfolio Decisions"),
@@ -59,6 +70,7 @@ _HEADER_MAP: list[tuple[str, str]] = [
     ("system/data health",     "Data Quality"),
     ("what changed",           "Data Quality"),
     ("advisor stack",          "Data Quality"),
+    ("operator / system appendix", "Data Quality"),
     # Quant Notes
     ("decision hit rate",      "Quant Notes"),
     ("what to watch",          "Quant Notes"),

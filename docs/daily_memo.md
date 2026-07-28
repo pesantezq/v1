@@ -59,7 +59,7 @@ Each row in `decisions` is expected to support these memo-facing fields when pre
 
 | Field | Use in memo |
 | --- | --- |
-| `decision` | action label in Top Decisions and Capital Actions |
+| `decision` | action label in Today's Capital Plan / What To Do Today |
 | `symbol` | symbol display |
 | `priority` | ranked priority shown to operators |
 | `source` | source attribution |
@@ -91,12 +91,21 @@ Current section budget:
   `with moderate persistence` (0 < p < 0.5) / `newly emerging (no prior-day
   persistence yet)` (p ≤ 0). The zero floor (added 2026-05-30) prevents a
   first-seen theme from being mislabelled "moderate persistence".
-- `Top Decisions`
-  Maximum 5 ranked decisions. Reason text is run through a compacting regex
-  so structural cap breaches render as `Leverage exceeds cap (X.X% vs cap).`
-  rather than as raw violation strings.
-- `Capital Actions`
-  Grouped SELL / SCALE / BUY summary only.
+- `Today's Capital Plan`
+  The decision-ready capital block that replaced the retired `Top Decisions` /
+  `Capital Actions` sections (see `portfolio_automation/capital_plan_view.py`).
+  Reports cash on hand, incoming contributions, required reserve, deployable
+  capital above reserve, the unconstrained capital required for all
+  recommendations (explicitly NOT a spend-today budget), and the funded /
+  deferred split from `memo_coherence.compute_funding`.
+- `What To Do Today`
+  Funded actions only — what the operator can actually deploy today.
+- `Deferred Recommendations`
+  Recommendations deferred by weekly/monthly pacing before sizing, each with
+  its blocking reason. Deferred capital reads `not calculated` by design,
+  because pacing defers before sizing.
+- `Bottom Line`
+  One-line closing verdict.
 - `Portfolio Pulse`
   Conviction allocation, top sector vs cap reference, and suggested
   deployment. The cap reference (`(sector cap reference: N%)`) reads from
@@ -159,16 +168,25 @@ The GUI Decision Center now mirrors the same compact presentation contract.
 Shared contract elements:
 
 - `Top Insight`
-- `Top Decisions`
-  Maximum 5.
-- `Capital Actions`
-  Grouped summary only.
+- `Today's Capital Plan`
+  Funding split + capital figures.
+- `What To Do Today`
+  Funded actions only.
+- `Deferred Recommendations`
+  Maximum 5 shown individually (`max_deferred_displayed`), remainder summarized.
 - `Risk Focus`
   Maximum 3.
 - `What Changed`
   Maximum 3.
 - `System / Data Health`
   Only when degraded or fallback conditions are active.
+
+The mobile memo view (`/dashboard/memo`) folds these `##` headers into six
+sections via `gui_v2/data/dash_memo.py:_HEADER_MAP`. **Renaming a memo section
+requires updating that map** — an unmapped header is silently skipped, which
+drops its content from the GUI with no error (this happened to the whole
+capital-plan block between `a5387a27` and its 2026-07-28 fix). The regression
+guard is `tests/test_gui_dashboard_memo.py::test_no_shipped_memo_header_is_orphaned`.
 
 Boundary rules remain the same:
 
@@ -178,9 +196,9 @@ Boundary rules remain the same:
 - full detail remains available in `decision_plan.json` and in GUI expanders / tables
 - the GUI now renders top rows in `ACTION SYMBOL | source | urgency | pri X.XXX` format with short human-readable reasons
 
-### Top Decisions
+### Decision rows (GUI Decision Center)
 
-Shows the top 5 decision rows, including:
+The GUI Decision Center shows up to 5 decision rows, including:
 
 - decision or action
 - symbol
@@ -198,15 +216,16 @@ The GUI uses the same compact intent but with a more scan-oriented reason format
 - `Relative strength near highs.`
 - `Momentum breakout near highs.`
 
-### Capital Actions
+### Capital roll-up
 
-Summarizes action-bearing decisions:
+Action-bearing decisions (`SELL` / `SCALE` / `BUY`) are summarized for the GUI.
 
-- `SELL`
-- `SCALE`
-- `BUY`
-
-When `recommended_amount` values exist, the memo also reports the total recommended capital amount across those actions.
+In the **memo**, this roll-up was superseded by `Today's Capital Plan`
+(`a5387a27`): rather than a bare `SELL: 1` count plus a "total recommended
+capital" figure that summed every recommendation as though it should all be
+spent today, the memo now reports the funded / deferred split with explicit
+cash, reserve and deployable figures. See
+`portfolio_automation/capital_plan_view.py` for the honesty rules.
 
 ### Risk Focus
 

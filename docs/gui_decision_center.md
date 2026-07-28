@@ -41,16 +41,20 @@ Required top-of-panel sections:
 
 1. `Top Insight`
    One or two short sentences only.
-2. `Top Decisions`
-   Maximum 5 ranked decisions.
-3. `Capital Actions`
-   Grouped SELL / SCALE / BUY summary only.
-4. `Risk Focus`
+2. `Decisions`
+   Maximum 5 ranked decisions. (Rendered as `Decisions` in the dashboard
+   templates; the memo presents the same underlying decision set through its
+   `Today's Capital Plan` block — see `docs/daily_memo.md`.)
+3. `Risk Focus`
    Maximum 3 items.
-5. `What Changed`
+4. `What Changed`
    Maximum 3 bullets.
-6. `System / Data Health`
+5. `System / Data Health`
    Shown only when degraded or fallback conditions are active.
+
+The retired `Top Decisions` / `Capital Actions` section names were replaced on
+the memo side by `a5387a27`; the mobile memo view maps memo headers to GUI
+sections in `gui_v2/data/dash_memo.py:_HEADER_MAP`.
 
 Final v1 layout:
 
@@ -67,7 +71,7 @@ Rules:
 - do not surface low-priority overflow items in the compact brief
 - prefer grouped summaries over long enumerations
 
-## Top Decisions Row Format
+## Decision Row Format
 
 Each compact decision row renders as:
 
@@ -139,7 +143,8 @@ The GUI Decision Center:
 
 The GUI compact brief and the daily memo share the same presentation intent:
 
-- same capped `Top Decisions`
+- same capped decision set (`Decisions` in the GUI, `Today's Capital Plan` +
+  `What To Do Today` in the memo)
 - same capped `Risk Focus`
 - same capped `What Changed`
 - same degraded-only `System / Data Health`
