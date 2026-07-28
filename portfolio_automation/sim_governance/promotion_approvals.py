@@ -292,6 +292,70 @@ def revoke_application(
     return {"ok": True, "reason": "ok", "record": record}
 
 
+def revocations_log_unreadable(base_dir: str) -> str | None:
+    """Reason string when the revocation ledger EXISTS but cannot be trusted; else None.
+
+    Mirrors ``approvals_log_unreadable`` for the same "absent vs. present-but-
+    unparseable" distinction, adapted for a line-oriented (JSONL) append-only
+    log rather than a single JSON document:
+
+      * file ABSENT — a legitimate "no revocations recorded yet" → None.
+      * file present, every non-blank line parses as a JSON object (including
+        the degenerate case of an all-blank/empty file) → None.
+      * file present but unreadable at the filesystem level (permissions, I/O
+        error) → a reason.
+      * file present, non-empty, and NOT ONE non-blank line parses as a JSON
+        object → a reason ("wholly corrupt").
+
+    The line-count-zero-parsed rule is the deliberate boundary between two very
+    different failure shapes:
+
+      * A crash mid-append can leave a single torn TRAILING line (e.g. a
+        partially-flushed write). ``revoked_ids`` already skips any line that
+        fails to parse, so a torn tail costs nothing but that one record and
+        must not fail the whole pipeline closed — this is a known, accepted
+        residual risk of an append-only line log, not an authority failure.
+      * A file where NO line parses at all — every line corrupt, or the file
+        truncated/overwritten with non-JSONL content — means nothing in it can
+        be recovered even partially. Treating that as "readable" would let
+        ``revoked_ids`` silently degrade toward ``set()`` and resurrect a
+        revoked op into the live production overlay, exactly the defect this
+        guard exists to close.
+
+    So: any file with at least one parseable line is trusted (partial-tail-loss
+    tolerated); a file with zero parseable lines despite being non-empty is
+    unreadable (total corruption is not tolerated).
+    """
+    path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                _REVOCATIONS_FILE, base_dir=base_dir))
+    try:
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"unreadable_file: {exc}"
+
+    total = 0
+    parsed = 0
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        total += 1
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(rec, dict):
+            parsed += 1
+
+    if total == 0:
+        return None
+    if parsed == 0:
+        return f"wholly_corrupt: 0 of {total} line(s) parsed as a JSON object"
+    return None
+
+
 def revoked_ids(base_dir: str) -> set[str]:
     """Target ids (proposal_id or candidate_id) with a valid human revocation."""
     out: set[str] = set()
