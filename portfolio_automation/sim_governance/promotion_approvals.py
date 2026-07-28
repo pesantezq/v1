@@ -23,6 +23,7 @@ from pathlib import Path
 
 from portfolio_automation.data_governance import (
     OutputNamespace,
+    ensure_output_dir,
     get_output_path,
     safe_write_json,
 )
@@ -185,7 +186,7 @@ def rejected_candidate_ids(base_dir: str) -> set[str]:
             if dec == S.HUMAN_REJECT}
 
 
-_REVOCATIONS_FILE = "production_revocations.json"
+_REVOCATIONS_FILE = "production_revocations.jsonl"
 
 
 def revoke_application(
@@ -227,23 +228,18 @@ def revoke_application(
                 "record": None}
 
     if write_files:
-        existing = []
+        # Append-only JSONL, mirroring production_application's audit log
+        # (production_application.py's _AUDIT_FILE append). Never read the
+        # existing ledger on the write path and never rewrite the whole
+        # document — a single appended line can neither race-lose a concurrent
+        # revocation nor be destroyed by another revocation's corrupt read.
         try:
-            path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
-                                        _REVOCATIONS_FILE, base_dir=base_dir))
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    existing = list(data.get("revocations", []) or [])
-        except Exception:
-            existing = []
-        payload = {"generated_at": now, "schema": "production_revocations.v1",
-                   "note": "Human revocations only. Revoking un-applies a durable "
-                           "production op; evidence going stale never does.",
-                   "revocations": existing + [record]}
-        try:
-            safe_write_json(OutputNamespace.PROMOTION_APPROVALS, _REVOCATIONS_FILE,
-                            payload, base_dir=base_dir)
+            ensure_output_dir(OutputNamespace.PROMOTION_APPROVALS, _REVOCATIONS_FILE,
+                              base_dir=base_dir)
+            path = get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                    _REVOCATIONS_FILE, base_dir=base_dir)
+            with Path(path).open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, default=str) + "\n")
         except Exception as exc:
             logger.warning("promotion_approvals: revocation write failed: %s", exc)
             return {"ok": False, "reason": f"write_failed: {exc}", "record": record}
@@ -253,18 +249,24 @@ def revoke_application(
 
 def revoked_ids(base_dir: str) -> set[str]:
     """Target ids (proposal_id or candidate_id) with a valid human revocation."""
+    out: set[str] = set()
     try:
         path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
                                     _REVOCATIONS_FILE, base_dir=base_dir))
         if not path.exists():
             return set()
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return set()
-    if not isinstance(data, dict):
-        return set()
-    out: set[str] = set()
-    for rec in data.get("revocations", []) or []:
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            # One corrupt line must not discard the valid revocations around it.
+            continue
         if not isinstance(rec, dict):
             continue
         tid = rec.get("target_id")

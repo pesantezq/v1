@@ -93,3 +93,37 @@ def test_unrevoked_sibling_op_survives_a_revoke(tmp_path):
 
 def test_missing_revoke_log_degrades_to_empty(tmp_path):
     assert PA.revoked_ids(_outputs(tmp_path)) == set()
+
+
+def test_two_sequential_revocations_are_both_present(tmp_path):
+    """Append-only: a second revocation must not lose the first (no lost-update)."""
+    base = _outputs(tmp_path)
+    res1 = PA.revoke_application("cand_riot", "pesantez", _NOW, base_dir=base)
+    res2 = PA.revoke_application("cand_tsla", "pesantez", _NOW, base_dir=base)
+    assert res1["ok"] is True, res1["reason"]
+    assert res2["ok"] is True, res2["reason"]
+    assert PA.revoked_ids(base) == {"cand_riot", "cand_tsla"}
+
+
+def test_corrupt_line_does_not_hide_valid_revocations(tmp_path):
+    """One malformed JSONL line must not discard the valid records around it."""
+    base = _outputs(tmp_path)
+    PA.revoke_application("cand_riot", "pesantez", _NOW, base_dir=base)
+    d = Path(base) / "promotion_approvals"
+    with (d / "production_revocations.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write("{not valid json\n")
+    PA.revoke_application("cand_tsla", "pesantez", _NOW, base_dir=base)
+    assert PA.revoked_ids(base) == {"cand_riot", "cand_tsla"}
+
+
+def test_revoke_refuses_repo_root_base_dir(tmp_path):
+    """Same repo-root guard as record_approval; nothing gets written."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "config.json").write_text("{}", encoding="utf-8")
+    (repo_root / "CLAUDE.md").write_text("# claude", encoding="utf-8")
+
+    res = PA.revoke_application("cand_riot", "pesantez", _NOW, base_dir=str(repo_root))
+    assert res["ok"] is False
+    assert not (repo_root / "promotion_approvals" / "production_revocations.jsonl").exists()
+    assert PA.revoked_ids(str(repo_root)) == set()
