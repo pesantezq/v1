@@ -509,7 +509,10 @@
         "trailing_3y",
         "trailing_5y",
         "ytd"
-      ]
+      ],
+      "health": {
+        "strict_oos_rollup_enabled": true
+      }
     }
   },
   "market_universe": {
