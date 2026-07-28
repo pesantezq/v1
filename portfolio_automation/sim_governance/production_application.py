@@ -386,22 +386,41 @@ def apply_approved_proposals(
             keyed on the durable candidate_id (default: loaded from the
             validated approval log).
     """
-    # FAIL CLOSED on an unreadable approvals log. "Degrade to empty" is safe for an
-    # advisory refresh but wrong for durable state: an empty `approved` set drops
-    # every carried op and writes `ops: []`, which SILENTLY REVERSES established
-    # production membership. An ABSENT log still means "no approvals yet"; a log
-    # that exists but cannot be parsed means the authority is unreadable, and the
-    # only safe action is to leave the existing overlay exactly as it is.
+    # FAIL CLOSED on an unreadable approvals log OR an unreadable revocation
+    # ledger. "Degrade to empty" is safe for an advisory refresh but wrong for
+    # durable state:
+    #   * an empty `approved` set drops every carried op and writes `ops: []`,
+    #     which SILENTLY REVERSES established production membership;
+    #   * an empty `revoked` set (promotion_approvals.revoked_ids degrading on
+    #     failure) RESURRECTS an op a human explicitly revoked.
+    # Both are the same class of failure — an authority log that exists but
+    # cannot be trusted — so both are refused through this ONE path rather than
+    # two different mechanisms. An ABSENT log/ledger still means "nothing
+    # recorded yet"; one that exists but cannot be parsed means the authority is
+    # unreadable, and the only safe action is to leave the existing overlay
+    # exactly as it is.
     unreadable = promotion_approvals.approvals_log_unreadable(base_dir)
-    if unreadable:
+    revocations_unreadable = promotion_approvals.revocations_log_unreadable(base_dir)
+    reason = unreadable or revocations_unreadable
+    if reason:
         logger.error(
-            "production_application: REFUSING overlay rebuild — approvals log is "
-            "unreadable (%s); the existing overlays are left untouched", unreadable)
+            "production_application: REFUSING overlay rebuild — authority log is "
+            "unreadable (approvals=%s, revocations=%s); the existing overlays are "
+            "left untouched", unreadable, revocations_unreadable)
         state = {
             "generated_at": now,
             "schema": "production_application_state.v1",
             "overlay_rebuild_skipped": True,
+            # Keep the original field name for backward compatibility with
+            # existing readers (GUI, health checks) that key on it directly;
+            # it is None (not a lie) when the revocation ledger was the cause.
             "approvals_log_unreadable": unreadable,
+            "revocations_log_unreadable": revocations_unreadable,
+            # Unified human-readable reason: whichever of the two fired. This
+            # is what a caller should display/probe rather than reaching into
+            # either specific field, since either condition alone must never
+            # read back as a missing reason.
+            "reason": reason,
             "applied_count": 0,
             "applied_today_count": 0,
             "ignored_count": 0,
