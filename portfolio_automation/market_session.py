@@ -117,31 +117,68 @@ HOLIDAY_COVERAGE_THROUGH: date = date(2027, 12, 24)
 _SESSION_CLOSE_UTC_HOUR = 21
 
 
-def is_past_coverage_horizon(d: date) -> bool:
-    """True if *d* is beyond the hardcoded holiday data's coverage window."""
-    return d > HOLIDAY_COVERAGE_THROUGH
+def _to_utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
 
 
-def is_trading_day(d: date) -> bool:
+def _coerce_date(d: "date | datetime") -> date:
+    """Normalize a ``date`` OR ``datetime`` argument to a plain ``date``.
+
+    ``datetime`` is a subclass of ``date`` in Python, so a caller passing a
+    ``datetime`` into a ``d: date``-annotated function satisfies every static
+    check and then crashes at runtime the moment the function compares *d*
+    against a ``date`` constant (e.g. ``d > HOLIDAY_COVERAGE_THROUGH``). Every
+    date-taking public function in this module routes through this coercion
+    first so that failure mode cannot happen.
+
+    **TZ policy (explicit, not implicit):** a timezone-AWARE datetime is
+    converted to UTC before taking its calendar date (matching
+    :func:`_to_utc`'s convention used elsewhere in this module for
+    timestamp-taking functions). A timezone-NAIVE datetime is treated AS
+    UTC (not local time) -- again matching :func:`_to_utc`. This means a
+    naive and a UTC-aware datetime for "the same wall-clock instant" always
+    agree on which calendar day they fall on. NOTE: the ``isinstance``
+    check MUST test ``datetime`` before ``date`` -- since ``datetime`` is a
+    ``date`` subclass, checking ``date`` first would make the ``datetime``
+    branch unreachable.
+    """
+    if isinstance(d, datetime):
+        return _to_utc(d).date()
+    return d
+
+
+def is_past_coverage_horizon(d: "date | datetime") -> bool:
+    """True if *d* is beyond the hardcoded holiday data's coverage window.
+
+    Accepts either a ``date`` or a ``datetime`` (see :func:`_coerce_date` for
+    the datetime-to-date TZ policy).
+    """
+    return _coerce_date(d) > HOLIDAY_COVERAGE_THROUGH
+
+
+def is_trading_day(d: "date | datetime") -> bool:
     """True if *d* is a NYSE trading day (Mon-Fri, not a known holiday).
 
-    Past :data:`HOLIDAY_COVERAGE_THROUGH` this degrades to weekday-only (no
+    Accepts either a ``date`` or a ``datetime`` (see :func:`_coerce_date` for
+    the datetime-to-date TZ policy). Past
+    :data:`HOLIDAY_COVERAGE_THROUGH` this degrades to weekday-only (no
     holiday awareness) -- call :func:`is_past_coverage_horizon` to detect
     that condition explicitly rather than trusting the answer blindly.
     """
-    return d.weekday() < 5 and d not in NYSE_HOLIDAYS
+    dd = _coerce_date(d)
+    return dd.weekday() < 5 and dd not in NYSE_HOLIDAYS
 
 
-def previous_trading_day(d: date) -> date:
-    """The most recent NYSE trading day strictly before *d*."""
-    cur = d - timedelta(days=1)
+def previous_trading_day(d: "date | datetime") -> date:
+    """The most recent NYSE trading day strictly before *d*.
+
+    Accepts either a ``date`` or a ``datetime`` (see :func:`_coerce_date` for
+    the datetime-to-date TZ policy). Always returns a plain ``date``.
+    """
+    cur = _coerce_date(d) - timedelta(days=1)
     while not is_trading_day(cur):
         cur -= timedelta(days=1)
     return cur
-
-
-def _to_utc(ts: datetime) -> datetime:
-    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
 
 
 def latest_completed_session(ts: datetime) -> date:

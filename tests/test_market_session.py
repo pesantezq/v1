@@ -56,6 +56,71 @@ class TestIsTradingDay(unittest.TestCase):
         self.assertTrue(is_trading_day(far_future))
 
 
+class TestDateOrDatetimeAcceptance(unittest.TestCase):
+    """Regression coverage for the date/datetime coercion bug: datetime IS a
+    date subclass, so a caller passing a datetime satisfies the ``d: date``
+    annotation and then crashed at runtime inside is_past_coverage_horizon's
+    ``d > HOLIDAY_COVERAGE_THROUGH`` comparison. Every date-taking public
+    function must accept either type and agree on the same calendar day.
+
+    TZ policy under test: a timezone-AWARE datetime is converted to UTC
+    before taking its calendar date; a timezone-NAIVE datetime is treated AS
+    UTC (not local time) -- same convention as the rest of this module's
+    timestamp handling (_to_utc). A naive and a UTC-aware datetime for the
+    same wall-clock instant must therefore agree on the calendar day.
+    """
+
+    def test_is_trading_day_agrees_for_date_and_datetime(self):
+        d = date(2026, 7, 28)
+        dt = datetime(2026, 7, 28, 9, 0, tzinfo=timezone.utc)
+        self.assertEqual(is_trading_day(d), is_trading_day(dt))
+        self.assertTrue(is_trading_day(d))
+
+    def test_is_trading_day_agrees_for_date_and_datetime_on_a_holiday(self):
+        d = date(2026, 9, 7)  # Labor Day
+        dt = datetime(2026, 9, 7, 15, 0, tzinfo=timezone.utc)
+        self.assertEqual(is_trading_day(d), is_trading_day(dt))
+        self.assertFalse(is_trading_day(d))
+
+    def test_previous_trading_day_agrees_for_date_and_datetime(self):
+        d = date(2026, 7, 27)
+        dt = datetime(2026, 7, 27, 9, 0, tzinfo=timezone.utc)
+        self.assertEqual(previous_trading_day(d), previous_trading_day(dt))
+        self.assertEqual(previous_trading_day(d), date(2026, 7, 24))
+
+    def test_is_past_coverage_horizon_datetime_does_not_raise(self):
+        # This is the exact reported crash: TypeError comparing datetime to
+        # date inside is_past_coverage_horizon.
+        dt = datetime(2028, 1, 3, 12, 0, tzinfo=timezone.utc)
+        try:
+            result = is_past_coverage_horizon(dt)
+        except TypeError as exc:
+            self.fail(f"is_past_coverage_horizon raised on a datetime: {exc}")
+        self.assertTrue(result)
+
+    def test_is_past_coverage_horizon_true_past_horizon_both_types(self):
+        past_date = date(2027, 12, 25)  # one day after HOLIDAY_COVERAGE_THROUGH
+        past_dt = datetime(2027, 12, 25, 12, 0, tzinfo=timezone.utc)
+        self.assertTrue(is_past_coverage_horizon(past_date))
+        self.assertTrue(is_past_coverage_horizon(past_dt))
+
+    def test_is_past_coverage_horizon_false_before_horizon_both_types(self):
+        before_date = HOLIDAY_COVERAGE_THROUGH  # exactly on the boundary: not exceeded
+        before_dt = datetime(2027, 12, 24, 12, 0, tzinfo=timezone.utc)
+        self.assertFalse(is_past_coverage_horizon(before_date))
+        self.assertFalse(is_past_coverage_horizon(before_dt))
+
+    def test_naive_and_aware_datetime_agree_for_same_calendar_day(self):
+        # Naive is treated as UTC, so a naive and an explicitly-UTC datetime
+        # for the same wall-clock instant must agree on every date-taking
+        # function's answer.
+        naive = datetime(2026, 7, 28, 9, 0)
+        aware_utc = datetime(2026, 7, 28, 9, 0, tzinfo=timezone.utc)
+        self.assertEqual(is_trading_day(naive), is_trading_day(aware_utc))
+        self.assertEqual(previous_trading_day(naive), previous_trading_day(aware_utc))
+        self.assertEqual(is_past_coverage_horizon(naive), is_past_coverage_horizon(aware_utc))
+
+
 class TestPreviousTradingDay(unittest.TestCase):
     def test_monday_previous_is_friday(self):
         # 2026-07-27 is a Monday.
