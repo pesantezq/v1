@@ -190,6 +190,68 @@ def _drop_rolled_back(seen: dict[str, tuple[str, dict]], row: dict) -> None:
             seen.pop(key, None)
 
 
+def audit_log_unreadable(base_dir: str) -> str | None:
+    """Reason string when ``production_application_audit.jsonl`` EXISTS but
+    cannot be trusted; else None.
+
+    ``_prior_durable_ops`` is the SOLE source from which durable watchlist
+    membership is reconstructed across runs. It tolerates individual corrupt
+    lines (a torn trailing line from a crash mid-append costs only that one
+    record) by design — but until this guard existed, TOTAL corruption of the
+    file degraded identically to "no prior ops": ``_prior_durable_ops`` returns
+    ``[]`` on any read exception (see its own try/except), which is the exact
+    same shape as a legitimately-absent file. Confirmed by experiment: seeding
+    one valid durable op then overwriting the log with zero parseable lines
+    dropped ``durably_live_count`` from 1 to 0 while ``overlay_rebuild_skipped``
+    stayed False — a silent membership loss on a successful write, mirroring
+    the defect ``promotion_approvals.approvals_log_unreadable`` and
+    ``revocations_log_unreadable`` were built to close for their own logs.
+
+    Mirrors ``revocations_log_unreadable``'s exact "torn tail vs total
+    corruption" rule, applied to this JSONL log instead:
+
+      * file ABSENT — legitimate "no prior applications yet" → None.
+      * file present, at least one non-blank line parses as a JSON object
+        (including the degenerate all-blank/empty file) → None. A torn
+        trailing line from a crash mid-append is a known, accepted residual
+        risk — ``_prior_durable_ops`` already skips any line that fails to
+        parse, so this costs only that one record, not the whole file.
+      * file present but unreadable at the filesystem level (permissions, I/O
+        error) → a reason.
+      * file present, non-empty, and NOT ONE non-blank line parses → a reason
+        ("wholly corrupt") — total corruption must not silently degrade to
+        "no prior ops" and reverse durable production membership.
+    """
+    path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS, _AUDIT_FILE,
+                                base_dir=base_dir))
+    try:
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"unreadable_file: {exc}"
+
+    total = 0
+    parsed = 0
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        total += 1
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            parsed += 1
+
+    if total == 0:
+        return None
+    if parsed == 0:
+        return f"wholly_corrupt: 0 of {total} line(s) parsed as a JSON object"
+    return None
+
+
 def _prior_durable_ops(
     base_dir: str,
     *,
@@ -386,39 +448,46 @@ def apply_approved_proposals(
             keyed on the durable candidate_id (default: loaded from the
             validated approval log).
     """
-    # FAIL CLOSED on an unreadable approvals log OR an unreadable revocation
-    # ledger. "Degrade to empty" is safe for an advisory refresh but wrong for
-    # durable state:
+    # FAIL CLOSED on an unreadable approvals log, an unreadable revocation
+    # ledger, OR an unreadable audit log. "Degrade to empty" is safe for an
+    # advisory refresh but wrong for durable state:
     #   * an empty `approved` set drops every carried op and writes `ops: []`,
     #     which SILENTLY REVERSES established production membership;
     #   * an empty `revoked` set (promotion_approvals.revoked_ids degrading on
-    #     failure) RESURRECTS an op a human explicitly revoked.
-    # Both are the same class of failure — an authority log that exists but
-    # cannot be trusted — so both are refused through this ONE path rather than
-    # two different mechanisms. An ABSENT log/ledger still means "nothing
-    # recorded yet"; one that exists but cannot be parsed means the authority is
-    # unreadable, and the only safe action is to leave the existing overlay
-    # exactly as it is.
+    #     failure) RESURRECTS an op a human explicitly revoked;
+    #   * a wholly-corrupt audit log makes `_prior_durable_ops` return `[]`
+    #     (identical to "no prior ops"), which drops every durable op that was
+    #     ever carried forward — confirmed by experiment (see
+    #     `audit_log_unreadable`'s docstring).
+    # All three are the same class of failure — an authority log that exists
+    # but cannot be trusted — so all three are refused through this ONE path
+    # rather than three different mechanisms. An ABSENT log/ledger still means
+    # "nothing recorded yet"; one that exists but cannot be parsed means the
+    # authority is unreadable, and the only safe action is to leave the
+    # existing overlay exactly as it is.
     unreadable = promotion_approvals.approvals_log_unreadable(base_dir)
     revocations_unreadable = promotion_approvals.revocations_log_unreadable(base_dir)
-    reason = unreadable or revocations_unreadable
+    audit_unreadable = audit_log_unreadable(base_dir)
+    reason = unreadable or revocations_unreadable or audit_unreadable
     if reason:
         logger.error(
             "production_application: REFUSING overlay rebuild — authority log is "
-            "unreadable (approvals=%s, revocations=%s); the existing overlays are "
-            "left untouched", unreadable, revocations_unreadable)
+            "unreadable (approvals=%s, revocations=%s, audit=%s); the existing "
+            "overlays are left untouched", unreadable, revocations_unreadable,
+            audit_unreadable)
         state = {
             "generated_at": now,
             "schema": "production_application_state.v1",
             "overlay_rebuild_skipped": True,
-            # Keep the original field name for backward compatibility with
-            # existing readers (GUI, health checks) that key on it directly;
-            # it is None (not a lie) when the revocation ledger was the cause.
+            # Keep the original field names for backward compatibility with
+            # existing readers (GUI, health checks) that key on them directly;
+            # each is None (not a lie) when a different condition was the cause.
             "approvals_log_unreadable": unreadable,
             "revocations_log_unreadable": revocations_unreadable,
-            # Unified human-readable reason: whichever of the two fired. This
+            "audit_log_unreadable": audit_unreadable,
+            # Unified human-readable reason: whichever of the three fired. This
             # is what a caller should display/probe rather than reaching into
-            # either specific field, since either condition alone must never
+            # any one specific field, since any condition alone must never
             # read back as a missing reason.
             "reason": reason,
             "applied_count": 0,
