@@ -524,6 +524,67 @@ class TestContentLiveness(unittest.TestCase):
             self.assertEqual(payload["content_warn_count"], 1)
 
 
+class TestTop100DailyRankingQuality(unittest.TestCase):
+    """WS9 fix (2026-07-28): `_check_top100_daily` must also warn on a
+    degenerate ranking (per `universe_sanitation.ranking_diagnostics`), not
+    just on zero candidates. A looks-fresh-but-full artifact whose ordering
+    is 55% tied and alphabetically broken must not read as healthy."""
+
+    def _write_top100_daily(self, root: Path, payload: dict) -> None:
+        p = root / "outputs" / "latest" / "top100_daily.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload))
+
+    def test_nondegenerate_ranking_is_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_top100_daily(root, {
+                "candidates": [{"symbol": "AAPL", "score": 0.9}, {"symbol": "MSFT", "score": 0.4}],
+                "ranking_diagnostics": {"degenerate_ranking": False},
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "universe_sanitation.top100_daily")
+            self.assertEqual(row["status"], "ok")
+            self.assertEqual(row["observed"], 2)
+
+    def test_degenerate_ranking_warns_even_with_nonzero_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_top100_daily(root, {
+                "candidates": [{"symbol": s, "score": 0.16} for s in ("AAPL", "MSFT", "TSLA")],
+                "ranking_diagnostics": {
+                    "degenerate_ranking": True,
+                    "largest_tie_fraction": 1.0,
+                    "zero_information_terms": ["recent_hit_rate"],
+                },
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "universe_sanitation.top100_daily")
+            self.assertEqual(row["status"], "warn")
+            self.assertEqual(row["observed"], 3)
+
+    def test_zero_candidates_still_warns_as_before(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_top100_daily(root, {"candidates": [], "ranking_diagnostics": {}})
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "universe_sanitation.top100_daily")
+            self.assertEqual(row["status"], "warn")
+            self.assertEqual(row["observed"], 0)
+
+    def test_missing_ranking_diagnostics_key_does_not_warn(self):
+        """Backward compatible: an old artifact without ranking_diagnostics
+        (pre-WS9-fix) must not spuriously warn."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_top100_daily(root, {
+                "candidates": [{"symbol": "AAPL", "score": 0.9}],
+            })
+            results = scan_content_liveness(root)
+            row = next(r for r in results if r["name"] == "universe_sanitation.top100_daily")
+            self.assertEqual(row["status"], "ok")
+
+
 class TestRunOrchestrator(unittest.TestCase):
     def test_writes_both_artifacts(self):
         with tempfile.TemporaryDirectory() as td:

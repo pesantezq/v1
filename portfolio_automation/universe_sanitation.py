@@ -43,6 +43,7 @@ import csv
 import json
 import logging
 import sqlite3
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -458,6 +459,120 @@ def _rank_candidates(
     return rows[:_TOP_N]
 
 
+def _diagnose_ranking(
+    candidates: list[dict[str, Any]],
+    score_weights: dict[str, float],
+) -> dict[str, Any]:
+    """Diagnostic-only pass over an already-ranked candidate list (WS9 fix,
+    2026-07-28). Detects a degenerate ranking — zero-variance scores, a
+    dominant tie bucket that collapses the tiebreak to alphabetical symbol
+    order, and any weighted scoring term that contributed no information this
+    run — without changing any candidate's score, rank, or sort order. See
+    docs/... audit `.superpowers/audit/ws-08-09-freshness-silentzero.md`.
+
+    A tie group is defined on the FULL effective sort key
+    `_rank_candidates` uses ahead of the symbol tiebreak
+    (score, distinct source count, theme_confidence_max) — candidates that
+    tie on all three are, by construction, ordered purely by symbol name
+    among themselves (`_rank_candidates`'s sort key ends in `r["symbol"]`).
+    """
+    n = len(candidates)
+    if n == 0:
+        return {
+            "candidate_count": 0,
+            "distinct_score_count": 0,
+            "zero_variance": False,
+            "largest_tie_group_size": 0,
+            "largest_tie_fraction": 0.0,
+            "largest_tie_score": None,
+            "alphabetical_tiebreak_detected": False,
+            "zero_information_terms": [],
+            "small_universe": True,
+            "degenerate_ranking": False,
+            "warning": "",
+        }
+
+    scores = [round(float(c.get("score") or 0.0), 6) for c in candidates]
+    distinct_scores = sorted(set(scores))
+    zero_variance = n > 1 and len(distinct_scores) <= 1
+
+    def _tiebreak_key(c: dict[str, Any]) -> tuple[float, int, float]:
+        return (
+            round(float(c.get("score") or 0.0), 6),
+            len(c.get("sources") or []),
+            round(float(c.get("theme_confidence_max") or 0.0), 6),
+        )
+
+    tie_counts = Counter(_tiebreak_key(c) for c in candidates)
+    largest_key, largest_count = tie_counts.most_common(1)[0]
+    largest_tie_fraction = round(largest_count / n, 4)
+
+    # Which weighted terms contributed no information (identical value across
+    # every candidate) this run. Meaningless to judge with <=1 candidate.
+    term_values: dict[str, set[float]] = {
+        "sources_presence": set(),
+        "theme_confidence": set(),
+        "recent_hit_rate": set(),
+        "fmp_top100_presence": set(),
+    }
+    for c in candidates:
+        sources = c.get("sources") or []
+        term_values["sources_presence"].add(
+            round(min(len(set(sources)) / len(_KNOWN_SOURCES), 1.0), 6))
+        term_values["theme_confidence"].add(round(float(c.get("theme_confidence_max") or 0.0), 6))
+        hr = c.get("recent_hit_rate_1d")
+        term_values["recent_hit_rate"].add(round(float(hr), 6) if hr is not None else 0.0)
+        term_values["fmp_top100_presence"].add(1.0 if "fmp_top100" in sources else 0.0)
+
+    zero_information_terms = [
+        name for name in ("sources_presence", "theme_confidence", "recent_hit_rate", "fmp_top100_presence")
+        if n > 1 and score_weights.get(name, 0) > 0 and len(term_values[name]) <= 1
+    ]
+
+    small_universe = n < 10
+    degenerate = bool(zero_variance or largest_tie_fraction >= 0.5 or zero_information_terms)
+
+    warning = ""
+    if degenerate:
+        parts: list[str] = []
+        if zero_variance:
+            parts.append("all candidates share an identical score (zero variance)")
+        elif largest_tie_fraction >= 0.5:
+            tied_syms = sorted(
+                c.get("symbol", "") for c in candidates if _tiebreak_key(c) == largest_key
+            )
+            span = f"{tied_syms[0]}…{tied_syms[-1]}" if tied_syms else ""
+            parts.append(
+                f"{largest_count}/{n} candidates ({largest_tie_fraction * 100:.0f}%) tie exactly at "
+                f"score {largest_key[0]} and fall back to alphabetical symbol order within that "
+                f"group ({span})"
+            )
+        if zero_information_terms:
+            parts.append(
+                f"weighted term(s) {', '.join(zero_information_terms)} contributed no information "
+                "this run (identical value for every candidate)"
+            )
+        warning = (
+            "Ranking is degenerate this run — " + "; ".join(parts) + ". Rank order within the "
+            "affected tie group does NOT reflect a genuine signal difference. Diagnostic only; "
+            "ranking output itself is unchanged."
+        )
+
+    return {
+        "candidate_count": n,
+        "distinct_score_count": len(distinct_scores),
+        "zero_variance": zero_variance,
+        "largest_tie_group_size": largest_count,
+        "largest_tie_fraction": largest_tie_fraction,
+        "largest_tie_score": largest_key[0],
+        "alphabetical_tiebreak_detected": largest_count > 1,
+        "zero_information_terms": zero_information_terms,
+        "small_universe": small_universe,
+        "degenerate_ranking": degenerate,
+        "warning": warning,
+    }
+
+
 def _source_breakdown(by_sym: dict[str, dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {s: 0 for s in _KNOWN_SOURCES}
     for rec in by_sym.values():
@@ -482,6 +597,12 @@ def _build_payload(
     if by_sym is None:
         by_sym = _aggregate_universe(root, lookback_days=lookback_days)
     candidates = _rank_candidates(by_sym, root)
+    score_weights = {
+        "sources_presence": _W_SOURCES,
+        "theme_confidence": _W_THEME_CONF,
+        "recent_hit_rate": _W_RECENT_HITRATE,
+        "fmp_top100_presence": _W_FMP_TOP100,
+    }
     return {
         "generated_at": ts,
         "observe_only": _OBSERVE_ONLY,
@@ -493,12 +614,13 @@ def _build_payload(
         "top_n": _TOP_N,
         "candidates": candidates,
         "source_breakdown": _source_breakdown(by_sym),
-        "score_weights": {
-            "sources_presence": _W_SOURCES,
-            "theme_confidence": _W_THEME_CONF,
-            "recent_hit_rate": _W_RECENT_HITRATE,
-            "fmp_top100_presence": _W_FMP_TOP100,
-        },
+        "score_weights": score_weights,
+        # WS9 fix (2026-07-28): diagnostic-only degenerate-ranking detector.
+        # Never changes `candidates`/scores/rank above; makes the artifact
+        # self-describing when its ordering is tie-dominated / zero-variance /
+        # driven by a zero-information weighted term (e.g. recent_hit_rate at
+        # lookback_days=1, which cannot have any resolved outcomes yet).
+        "ranking_diagnostics": _diagnose_ranking(candidates, score_weights),
         "disclaimer": _DISCLAIMER,
     }
 
@@ -532,6 +654,21 @@ def render_top100_md(payload: dict[str, Any]) -> str:
     a("")
     a(f"> {payload.get('disclaimer', _DISCLAIMER)}")
     a("")
+
+    diag = payload.get("ranking_diagnostics") or {}
+    if diag:
+        a("## Ranking quality")
+        a("")
+        if diag.get("degenerate_ranking"):
+            a(f"**WARNING:** {diag.get('warning', '')}")
+        else:
+            a(
+                f"Ranking looks discriminative: {diag.get('distinct_score_count', 0)} distinct "
+                f"score(s) across {diag.get('candidate_count', 0)} candidates; largest tie group "
+                f"is {diag.get('largest_tie_group_size', 0)} "
+                f"({diag.get('largest_tie_fraction', 0.0) * 100:.0f}%)."
+            )
+        a("")
 
     sb = payload.get("source_breakdown") or {}
     if sb:
