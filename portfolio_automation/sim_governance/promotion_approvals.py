@@ -141,6 +141,16 @@ def record_approval(
         return {"ok": False, "reason": msg, "record": None}
 
     if write_files:
+        unreadable = approvals_log_unreadable(base_dir)
+        if unreadable:
+            msg = f"approvals_log_unreadable: {unreadable}"
+            logger.error(
+                "promotion_approvals: REFUSING to record approval — %s; a "
+                "read-modify-write through the unreadable log would silently "
+                "discard the existing approval records", msg)
+            return {"ok": False, "reason": msg, "record": None}
+
+    if write_files:
         data = _load_raw(base_dir)
         approvals = list(data.get("approvals", []))
         approvals.append(record)

@@ -349,9 +349,19 @@ def _overlay_op_ids(data: dict) -> set[str]:
     return out
 
 
-def _live_overlay_op_count(filename: str, base_dir: str) -> int:
-    """Number of ops in the overlay currently on disk (0 when absent/unreadable)."""
-    return len(_read_overlay_for_rollback(filename, base_dir).get("ops") or [])
+def _live_overlay_op_count(filename: str, base_dir: str, *, durable_only: bool = False) -> int:
+    """Number of ops in the overlay currently on disk (0 when absent/unreadable).
+
+    ``durable_only`` restricts the count to ops whose ``proposal_type`` satisfies
+    ``is_durable_proposal_type`` — e.g. the watchlist overlay also carries
+    state-derived ops (flock candidate logic) that are NOT durable and must not
+    be reported as "live in production" durability.
+    """
+    ops = _read_overlay_for_rollback(filename, base_dir).get("ops") or []
+    if durable_only:
+        return sum(1 for op in ops
+                   if isinstance(op, dict) and is_durable_proposal_type(op.get("proposal_type")))
+    return len(ops)
 
 
 def apply_approved_proposals(
@@ -400,7 +410,7 @@ def apply_approved_proposals(
             "watchlist_applied": _live_overlay_op_count(WATCHLIST_OVERLAY, base_dir),
             "watchlist_applied_today": 0,
             "watchlist_carried_forward": _live_overlay_op_count(WATCHLIST_OVERLAY, base_dir),
-            "durably_live_count": _live_overlay_op_count(WATCHLIST_OVERLAY, base_dir),
+            "durably_live_count": _live_overlay_op_count(WATCHLIST_OVERLAY, base_dir, durable_only=True),
             "advisory_applied": _live_overlay_op_count(ADVISORY_OVERLAY, base_dir),
             "applied": [],
             "ignored": [],
@@ -482,6 +492,16 @@ def apply_approved_proposals(
     watchlist_today = sum(1 for o in watchlist_ops if id(o) in _today_op_ids)
     watchlist_carried = len(watchlist_ops) - watchlist_today
 
+    # Durability is a property of the proposal TYPE (see _DURABLE_PROPOSAL_TYPES):
+    # watchlist_ops also carries state-derived ops (e.g. flock candidate logic)
+    # that are routed to this overlay by workflow but are NOT durable membership
+    # decisions. "durably_live_count" / "watchlist_applied_today" must count only
+    # the durable subset, or the GUI's "N durable op(s) live in production" label
+    # claims durability for an op that refreshes away on the next run.
+    durable_watchlist_ops = [o for o in watchlist_ops
+                             if is_durable_proposal_type(o.get("proposal_type"))]
+    durable_watchlist_today = sum(1 for o in durable_watchlist_ops if id(o) in _today_op_ids)
+
     watchlist_overlay = {
         "generated_at": now,
         "schema": "approved_watchlist_proposals.v1",
@@ -541,9 +561,9 @@ def apply_approved_proposals(
         "applied_today_count": len(applied),
         "ignored_count": len(ignored),
         "watchlist_applied": len(watchlist_ops),
-        "watchlist_applied_today": watchlist_today,
+        "watchlist_applied_today": durable_watchlist_today,
         "watchlist_carried_forward": watchlist_carried,
-        "durably_live_count": len(watchlist_ops),
+        "durably_live_count": len(durable_watchlist_ops),
         "advisory_applied": len(advisory_ops),
         "applied": applied,
         "ignored": ignored,
