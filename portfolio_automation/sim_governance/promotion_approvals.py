@@ -183,3 +183,91 @@ def rejected_candidate_ids(base_dir: str) -> set[str]:
     """candidate_ids whose latest valid human decision is 'reject'."""
     return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
             if dec == S.HUMAN_REJECT}
+
+
+_REVOCATIONS_FILE = "production_revocations.json"
+
+
+def revoke_application(
+    target_id: str,
+    approver: str,
+    now: str,
+    *,
+    base_dir: str,
+    notes: str | None = None,
+    write_files: bool = True,
+) -> dict:
+    """Record a human revocation of a previously-applied production op.
+
+    ``target_id`` may be a proposal_id OR a candidate_id — both are matched when
+    the durable watchlist overlay is rebuilt.
+
+    Revocation is the ONLY thing that un-applies a durable watchlist op: evidence
+    going stale never restores a symbol, so production membership changes only on
+    a recorded human decision. Human-gated exactly like approval.
+
+    Returns {"ok": bool, "reason": str, "record": dict|None}.
+    """
+    if not target_id:
+        return {"ok": False, "reason": "missing target_id", "record": None}
+    if not S.is_human_approver(approver):
+        logger.warning("promotion_approvals: rejecting non-human revocation by %r", approver)
+        return {"ok": False,
+                "reason": f"approver {approver!r} is not a valid human approver",
+                "record": None}
+    if not now:
+        return {"ok": False, "reason": "missing timestamp", "record": None}
+
+    record = {"target_id": target_id, "approver": approver,
+              "timestamp": now, "notes": notes}
+
+    if write_files and _looks_like_repo_root(base_dir):
+        return {"ok": False,
+                "reason": f"base_dir_is_repo_root: {base_dir!r}; pass <root>/outputs",
+                "record": None}
+
+    if write_files:
+        existing = []
+        try:
+            path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                        _REVOCATIONS_FILE, base_dir=base_dir))
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    existing = list(data.get("revocations", []) or [])
+        except Exception:
+            existing = []
+        payload = {"generated_at": now, "schema": "production_revocations.v1",
+                   "note": "Human revocations only. Revoking un-applies a durable "
+                           "production op; evidence going stale never does.",
+                   "revocations": existing + [record]}
+        try:
+            safe_write_json(OutputNamespace.PROMOTION_APPROVALS, _REVOCATIONS_FILE,
+                            payload, base_dir=base_dir)
+        except Exception as exc:
+            logger.warning("promotion_approvals: revocation write failed: %s", exc)
+            return {"ok": False, "reason": f"write_failed: {exc}", "record": record}
+
+    return {"ok": True, "reason": "ok", "record": record}
+
+
+def revoked_ids(base_dir: str) -> set[str]:
+    """Target ids (proposal_id or candidate_id) with a valid human revocation."""
+    try:
+        path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                    _REVOCATIONS_FILE, base_dir=base_dir))
+        if not path.exists():
+            return set()
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    out: set[str] = set()
+    for rec in data.get("revocations", []) or []:
+        if not isinstance(rec, dict):
+            continue
+        tid = rec.get("target_id")
+        if tid and rec.get("timestamp") and S.is_human_approver(rec.get("approver")):
+            out.add(str(tid))
+    return out

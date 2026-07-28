@@ -217,8 +217,7 @@ def apply_approved_proposals(
     # a re-proposed candidate is not applied twice. Advisory ops are untouched —
     # they must refresh from the current pending set.
     _today_keys = {str(o.get("candidate_id") or o.get("proposal_id")) for o in watchlist_ops}
-    _revoked = promotion_approvals.revoked_ids(base_dir) if hasattr(
-        promotion_approvals, "revoked_ids") else set()
+    _revoked = promotion_approvals.revoked_ids(base_dir)
     for _prior in _prior_watchlist_ops(
         base_dir,
         approved=approved, approved_cands=approved_cands,
