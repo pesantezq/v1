@@ -530,6 +530,75 @@ def scan_content_liveness(root: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Run coherence (Phase 1 F4 wiring)
+# ---------------------------------------------------------------------------
+
+# Decision-critical artifacts that inherit run_id from the Phase 1 run
+# manifest (see run_manifest.py:begin_run / daily_input_snapshot.py:249 /
+# main.py:_decision_plan_lineage). This is exactly the "daily consumer"
+# mixed-run scenario coherent_run_ids() was built to catch: the decision plan
+# itself + the frozen input snapshot it was built from. Artifacts that stamp
+# their OWN unrelated run_id concept (e.g. pipeline_run_status.json carries
+# whichever pipeline_mode most recently ran -- daily/weekly/monthly -- not
+# this run's identity; memo_delivery_status.json / theme_engine_llm_metadata
+# use run_id for their own subsystem's run, not the daily manifest's) are
+# deliberately excluded -- including them would produce false-positive
+# "incoherence" against artifacts that were never meant to share this run_id.
+_RUN_COHERENCE_ARTIFACTS: tuple[tuple[str, str], ...] = (
+    ("outputs/latest/decision_plan.json", "decision_plan"),
+    ("outputs/sandbox/daily_input_snapshot.json", "daily_input_snapshot"),
+)
+
+
+def check_run_coherence(
+    root: Path, manifest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validation-only wiring of ``run_manifest.coherent_run_ids`` (WS8-F4).
+
+    Reports whether the decision-critical artifacts in
+    ``_RUN_COHERENCE_ARTIFACTS`` carry the SAME ``run_id`` as the current run
+    manifest -- i.e. whether today's operator-facing decision was actually
+    built under the run the manifest currently on disk records, as opposed to
+    a stale artifact left behind by a partial re-run, a manual out-of-band
+    regeneration, or a crash between two stages of the same run.
+
+    This function only REPORTS; it never raises, never blocks, and never
+    alters any decision, allocation, or artifact content. When the manifest
+    or all watched artifacts are absent, coherence is genuinely unknown (not
+    a false-positive "incoherent") so ``coherent`` is ``None`` in that case.
+    """
+    expected_run_id = (manifest or {}).get("run_id")
+    checked: list[dict[str, Any]] = []
+    for rel_path, name in _RUN_COHERENCE_ARTIFACTS:
+        payload = _load_json_safe(root / rel_path)
+        checked.append({
+            "name": name,
+            "path": rel_path,
+            "present": payload is not None,
+            "run_id": (payload or {}).get("run_id") if payload else None,
+        })
+
+    present = [c for c in checked if c["present"]]
+    if not expected_run_id or not present:
+        return {
+            "expected_run_id": expected_run_id,
+            "checked": checked,
+            "coherent": None,
+            "mismatched": [],
+        }
+
+    from portfolio_automation.run_manifest import coherent_run_ids
+    is_coherent = coherent_run_ids(expected_run_id, present)
+    mismatched = [c["name"] for c in present if c["run_id"] != expected_run_id]
+    return {
+        "expected_run_id": expected_run_id,
+        "checked": checked,
+        "coherent": is_coherent,
+        "mismatched": mismatched,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Build artifact
 # ---------------------------------------------------------------------------
 
@@ -580,6 +649,12 @@ def build_daily_run_status(
         "future_rejected_count": (_snap or {}).get("future_rejected_count", 0),
     }
 
+    # WS8-F4 wiring: validation-only mixed-run detection. Reports whether the
+    # decision plan + its frozen input snapshot actually belong to the SAME
+    # run the manifest records. REPORTS only -- see check_run_coherence's
+    # docstring; never blocks or alters the pipeline or any decision content.
+    run_coherence = check_run_coherence(root_path, _manifest)
+
     # Phase 13: surface the remaining SQG producers on the operator status with
     # graceful degrade (present=False when the artifact is absent). Each gets one
     # headline field so the operator can glance the program's health.
@@ -621,10 +696,11 @@ def build_daily_run_status(
     ]
 
     content_warn_count = sum(1 for c in content_liveness if c["status"] == "warn")
+    run_incoherent = run_coherence.get("coherent") is False
 
     if failed_count > 0 or required_missing:
         overall_status = "failed" if failed_count else "partial"
-    elif warn_count > 0 or content_warn_count > 0:
+    elif warn_count > 0 or content_warn_count > 0 or run_incoherent:
         overall_status = "ok_with_warnings"
     elif stage_count == 0:
         overall_status = "no_log"
@@ -652,6 +728,7 @@ def build_daily_run_status(
         "optional_missing_count": len(optional_missing),
         "run_manifest": run_manifest_summary,
         "input_snapshot": input_snapshot_summary,
+        "run_coherence": run_coherence,
         "sqg_surfaces": sqg_surfaces,
         "disclaimer": _DISCLAIMER,
     }
@@ -732,6 +809,31 @@ def render_daily_run_status_md(payload: dict[str, Any]) -> str:
             a(f"- {glyph} `{c.get('name')}` — {c.get('status')} (observed={observed})")
             if c.get("status") == "warn":
                 a(f"    > {c.get('rationale', '')}")
+        a("")
+
+    run_coherence = payload.get("run_coherence") or {}
+    if run_coherence.get("checked"):
+        coherent = run_coherence.get("coherent")
+        tag = {True: "coherent", False: "INCOHERENT", None: "unknown"}.get(coherent, "unknown")
+        a(f"## Run Coherence — {tag}")
+        a("")
+        a(f"**Expected run_id:** `{run_coherence.get('expected_run_id') or '—'}`")
+        a("")
+        for c in run_coherence["checked"]:
+            if not c.get("present"):
+                a(f"- `{c.get('name')}` — absent")
+                continue
+            match = "match" if c.get("run_id") == run_coherence.get("expected_run_id") else "MISMATCH"
+            a(f"- `{c.get('name')}` — run_id=`{c.get('run_id') or '—'}` ({match})")
+        if coherent is False:
+            a("")
+            a(
+                "> Validation-only: one or more decision-critical artifacts do "
+                "not share this run's run_id (a stale artifact left behind by a "
+                "partial re-run or a mixed-run condition). This does NOT block "
+                "the pipeline or change any decision content -- it is a report "
+                "for the operator to verify."
+            )
         a("")
 
     a("---")

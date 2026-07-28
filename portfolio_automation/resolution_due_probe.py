@@ -27,9 +27,10 @@ follow-up resolver) can investigate. Responsibilities:
 The 2x multiplier in trading-day units gives the resolver one full
 cron cycle of grace after the window matures. Weekend days contribute
 zero trading time, so a Friday signal cannot false-fire on Sunday.
-NYSE holiday awareness is modeled via _NYSE_HOLIDAYS: those dates
-contribute zero trading time too, so a Friday signal cannot false-fire
-on Tuesday if the only weekday between them was Memorial Day.
+NYSE holiday awareness is modeled via the shared
+``portfolio_automation.market_session.is_trading_day`` predicate: those
+dates contribute zero trading time too, so a Friday signal cannot
+false-fire on Tuesday if the only weekday between them was Memorial Day.
 
 Hard guarantees:
   - observe_only=True hardcoded.
@@ -46,7 +47,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,7 @@ from portfolio_automation.data_governance import (
     safe_write_json,
     safe_write_text,
 )
+from portfolio_automation.market_session import is_trading_day
 
 logger = logging.getLogger("stockbot.portfolio_automation.resolution_due_probe")
 
@@ -82,46 +84,6 @@ _DISCLAIMER = (
 )
 
 
-# NYSE-closed dates. Markets are closed on these days, so they contribute
-# zero trading time. Treating them as trading days inflates
-# _trading_days_elapsed and causes the probe to flag Friday signals as
-# stuck a day early when a holiday Monday follows. Static set keeps this
-# self-contained — no new dependency.
-_NYSE_HOLIDAYS: frozenset[date] = frozenset({
-    date(2025, 1, 1),    # New Year's Day
-    date(2025, 1, 9),    # National Day of Mourning (Jimmy Carter)
-    date(2025, 1, 20),   # MLK Jr Day
-    date(2025, 2, 17),   # Presidents Day
-    date(2025, 4, 18),   # Good Friday
-    date(2025, 5, 26),   # Memorial Day
-    date(2025, 6, 19),   # Juneteenth
-    date(2025, 7, 4),    # Independence Day
-    date(2025, 9, 1),    # Labor Day
-    date(2025, 11, 27),  # Thanksgiving
-    date(2025, 12, 25),  # Christmas
-    date(2026, 1, 1),    # New Year's Day
-    date(2026, 1, 19),   # MLK Jr Day
-    date(2026, 2, 16),   # Presidents Day
-    date(2026, 4, 3),    # Good Friday
-    date(2026, 5, 25),   # Memorial Day
-    date(2026, 6, 19),   # Juneteenth (Friday)
-    date(2026, 7, 3),    # Independence Day observed (Jul 4 = Saturday)
-    date(2026, 9, 7),    # Labor Day
-    date(2026, 11, 26),  # Thanksgiving
-    date(2026, 12, 25),  # Christmas
-    date(2027, 1, 1),    # New Year's Day
-    date(2027, 1, 18),   # MLK Jr Day
-    date(2027, 2, 15),   # Presidents Day
-    date(2027, 3, 26),   # Good Friday
-    date(2027, 5, 31),   # Memorial Day
-    date(2027, 6, 18),   # Juneteenth observed (Jun 19 = Saturday)
-    date(2027, 7, 5),    # Independence Day observed (Jul 4 = Sunday)
-    date(2027, 9, 6),    # Labor Day
-    date(2027, 11, 25),  # Thanksgiving
-    date(2027, 12, 24),  # Christmas observed (Dec 25 = Saturday)
-})
-
-
 def _trading_days_elapsed(start: datetime, end: datetime) -> float:
     """Count NYSE-trading time between `start` and `end`, in 24h-day units.
 
@@ -142,7 +104,7 @@ def _trading_days_elapsed(start: datetime, end: datetime) -> float:
     while cur < end:
         next_midnight = datetime.combine(cur.date(), datetime.min.time()) + timedelta(days=1)
         chunk_end = min(next_midnight, end)
-        if cur.weekday() < 5 and cur.date() not in _NYSE_HOLIDAYS:
+        if is_trading_day(cur.date()):
             total += (chunk_end - cur).total_seconds() / 86400.0
         cur = chunk_end
     return total

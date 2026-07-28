@@ -20,11 +20,16 @@ trades, writes to a broker, places an order, or mutates holdings.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 # Imported lazily-safe: the namespace enum is the governance source of truth.
 from portfolio_automation.data_governance import OutputNamespace
+# Reliability Program D2: shared calendar-aware session helper. market_session
+# has zero portfolio_automation-internal dependencies, so this import cannot
+# introduce a cycle.
+from portfolio_automation.market_session import session_provenance
 
 SCHEMA_VERSION = 1
 OBSERVE_ONLY = True  # hard invariant for every next-stage artifact
@@ -58,6 +63,36 @@ def observe_only_envelope(generated_at: str, **extra: Any) -> dict[str, Any]:
     return env
 
 
+def _parse_iso(ts: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _session_fields(data_as_of: str) -> dict[str, Any]:
+    """Best-effort market-session provenance derived from ``data_as_of``.
+
+    Additive (Reliability Program D2): degrades to ``None``-valued fields
+    rather than raising when ``data_as_of`` is missing/unparseable, so this
+    stays a pure, never-raising helper exactly like the rest of this module.
+    """
+    dt = _parse_iso(data_as_of) if data_as_of else None
+    if dt is None:
+        return {
+            "source_data_through": None,
+            "latest_session_represented": None,
+            "session_coverage_exceeded": None,
+        }
+    prov = session_provenance(dt)
+    return {
+        "source_data_through": prov["source_data_through"],
+        "latest_session_represented": prov["latest_session_represented"],
+        "session_coverage_exceeded": prov["coverage_exceeded"],
+    }
+
+
 def lineage(
     *,
     run_id: str,
@@ -79,6 +114,16 @@ def lineage(
 
     Pure: no I/O, no clock. Defaults keep the keys present (``upstream_refs``
     becomes ``[]``, not ``None``) so consumers can rely on the shape.
+
+    Reliability Program D2 (additive, artifact-only -- no consumer reads
+    these yet): also stamps ``source_data_through``,
+    ``latest_session_represented``, and ``session_coverage_exceeded``,
+    derived from ``data_as_of`` via the shared
+    :mod:`portfolio_automation.market_session` helper. This answers "what is
+    the last completed NYSE session this artifact's data reflects" as a
+    calendar-aware companion to the existing wall-clock ``data_as_of`` field
+    (WS8-F1/F2). Degrades to ``None`` fields (never raises) when
+    ``data_as_of`` is missing or unparseable.
     """
     return {
         "run_id": run_id,
@@ -89,6 +134,7 @@ def lineage(
         "upstream_refs": list(upstream_refs or []),
         "quality": quality,
         "freshness": freshness,
+        **_session_fields(data_as_of),
     }
 
 
