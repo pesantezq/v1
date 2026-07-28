@@ -224,6 +224,9 @@ def _score_tactic(tac, panel, windows, bench, cfg, overfit_by_tactic=None) -> di
             "approximate": tac.approximate,
             "academic_basis": tac.metadata.get("academic_basis", ""),
             "strategy_score": sc["strategy_score"], "flags": sc["flags"],
+            # ws-01a: full component breakdown, persisted so strategy_score is
+            # reproducible from the artifact itself (audit ws-01-strategy-score.md §2).
+            "score_decomposition": sc["score_decomposition"],
             "mean_excess_vs_spy": round(mean_excess, 6), "prob_beat_spy": round(prob_beat, 4),
             "worst_max_drawdown": round(worst_dd, 6), "by_window": finals,
             "overfit": overfit,
