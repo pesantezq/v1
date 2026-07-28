@@ -35,14 +35,28 @@ _LOG_FILE = "proposals_log.jsonl"
 
 def _rollback_plan_for(proposal_type: str, symbol: str | None) -> str:
     sym = symbol or "the affected item"
+    # Durable watchlist ops (watchlist_add / _remove / _rank_change / _tag_change) are
+    # rebuilt from the append-only audit log on every run, so hand-editing or deleting
+    # the overlay entry is SILENTLY UNDONE on the next run. The only durable reversal
+    # is a recorded human revocation: promotion_approvals.revoke_application, which is
+    # human-gated exactly like the approval it reverses.
+    _revoke = ("promotion_approvals.revoke_application(<candidate_id or proposal_id>, "
+               "<human_approver>, <now>, base_dir='outputs')")
     if proposal_type in (S.PROPOSAL_WATCHLIST_ADD, S.PROPOSAL_DISCOVERY_PROMOTION):
-        return (f"Remove {sym} from the approved-watchlist overlay artifact and re-run "
-                "the watchlist loader; production reverts to the baseline watchlist.")
+        return (f"Revoke the application for {sym} via {_revoke}; the op stops being "
+                "carried forward and production reverts to the baseline watchlist. Do "
+                "NOT hand-edit the overlay — the next run rebuilds it from the audit log.")
     if proposal_type == S.PROPOSAL_WATCHLIST_REMOVE:
-        return f"Restore {sym} to the approved-watchlist overlay; baseline membership returns."
-    if proposal_type in (S.PROPOSAL_WATCHLIST_RANK, S.PROPOSAL_WATCHLIST_TAG,
-                         S.PROPOSAL_FLOCK_WATCHLIST_LOGIC):
-        return f"Delete the {sym} overlay entry; ranking/tags revert to baseline."
+        return (f"Revoke the application for {sym} via {_revoke}; the removal stops being "
+                f"carried forward and baseline membership returns. Do NOT re-add {sym} by "
+                "hand-editing the overlay — the next run rebuilds it from the audit log.")
+    if proposal_type in (S.PROPOSAL_WATCHLIST_RANK, S.PROPOSAL_WATCHLIST_TAG):
+        return (f"Revoke the application for {sym} via {_revoke}; ranking/tags revert to "
+                "baseline. Deleting the overlay entry alone is undone on the next run.")
+    if proposal_type == S.PROPOSAL_FLOCK_WATCHLIST_LOGIC:
+        return (f"Delete the {sym} overlay entry; ranking/tags revert to baseline. This "
+                "type is a state-derived label and is NOT durable — it refreshes from "
+                "the current pending set every run.")
     if proposal_type in (S.PROPOSAL_FLOCK_CONTEXT_DISPLAY, S.PROPOSAL_FLOCK_ADVISORY_CONTEXT,
                          S.PROPOSAL_FLOCK_RISK_OVERLAY):
         return (f"Delete the {sym} flock-context/risk overlay entry and re-run the advisory "

@@ -77,6 +77,35 @@ injected, the entrypoint builds one from config (`daily_ai_review.build_configur
   Each op carries its `proposal_id` + `rollback_plan`. Every application appends to
   `outputs/promotion_approvals/production_application_audit.jsonl`, and the prior
   overlay is snapshotted under `…/snapshots/` for `rollback_last`.
+- **Durable approval identity.** Approvals record the `candidate_id` alongside the
+  `proposal_id` and are matched on **either**. `make_proposal_id` is clock-salted, so
+  keying only on it meant an unchanged fact needed re-approval every run; the
+  `candidate_id` is stable while the fact is unchanged and new when it changes, so a
+  genuine change still requires fresh human approval. Legacy records that carry no
+  `candidate_id` keep working via `proposal_id`.
+- **Durable vs refreshing ops.** Membership *decisions* (`watchlist_add`,
+  `watchlist_remove`, `watchlist_rank_change`, `watchlist_tag_change`) persist across
+  runs until a human reverses them. State-derived *labels*
+  (`flock_watchlist_candidate_logic`, every advisory type) refresh from the current
+  pending set every run — a stale label would actively mislead. See
+  `docs/production_application.md → Durability`.
+- **Reversing an applied op — `promotion_approvals.revoke_application(target_id,
+  approver, now, base_dir=…)`.** This is the ONLY working reversal for a durable op:
+  hand-editing or deleting the overlay entry is silently undone on the next run,
+  because durable ops are rebuilt from the append-only audit log. It is human-gated
+  exactly like approval (`schemas.is_human_approver` must pass — the AI reviewer and
+  the `auto_approval` marker are rejected), accepts a `proposal_id` OR a
+  `candidate_id` matched exactly, and appends to
+  `outputs/promotion_approvals/production_revocations.jsonl`. A revoked target is
+  skipped in the carry-forward *and* in today's per-proposal loop. Evidence going
+  stale never restores a symbol; to re-establish a revoked op, approve a NEW proposal
+  through the normal flow. `rollback_last` is the coarser reversal (whole overlay,
+  from a snapshot) and its `rolled_back` audit event is honoured by the rebuild.
+- **Fail-closed on an unreadable approvals log.** If `approved_proposals.json` exists
+  but cannot be parsed, `apply_approved_proposals` REFUSES to rebuild the overlay,
+  leaves the existing overlays untouched, and reports `overlay_rebuild_skipped` +
+  `approvals_log_unreadable` (surfaced on the Governance page and by daily-tool
+  analysis item 6s). An *absent* log still means "no approvals yet".
 - The live loaders (`production_overlays.load_production_*`) are **gated by config
   flags that default OFF**:
   `config.json → sim_governance.production_application.apply_{watchlist,advisory}_overlay`.
