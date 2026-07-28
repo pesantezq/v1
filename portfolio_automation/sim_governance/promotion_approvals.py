@@ -61,6 +61,41 @@ def _load_raw(base_dir: str) -> dict:
     return {"approvals": []}
 
 
+def approvals_log_unreadable(base_dir: str) -> str | None:
+    """Reason string when the approvals log EXISTS but cannot be trusted; else None.
+
+    ``_load_raw`` degrades to ``{"approvals": []}`` on any failure, which cannot
+    distinguish two very different situations:
+
+      * the file is ABSENT — a legitimate "no approvals recorded yet";
+      * the file is PRESENT but unparseable — the production authority itself is
+        unreadable.
+
+    That conflation was harmless while a lost approval merely blocked a NEW
+    application. With durable overlays it is not: an empty approval set drops every
+    carried op and rewrites the overlay as ``ops: []``, silently reversing
+    established production membership — and the write SUCCEEDS, so nothing surfaces.
+    Callers that rebuild durable state must fail closed on a non-None result.
+    """
+    path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_FILE,
+                                base_dir=base_dir))
+    try:
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"unreadable_file: {exc}"
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        return f"unparseable_json: {exc}"
+    if not isinstance(data, dict):
+        return f"unexpected_top_level_type: {type(data).__name__}"
+    if not isinstance(data.get("approvals", []), list):
+        return "approvals_field_is_not_a_list"
+    return None
+
+
 def record_approval(
     proposal_id: str,
     decision: str,
