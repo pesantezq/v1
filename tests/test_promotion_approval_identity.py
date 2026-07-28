@@ -101,3 +101,91 @@ def test_ai_approver_still_rejected_with_candidate_id(tmp_path):
                              base_dir=base, candidate_id="cand_x")
     assert res["ok"] is False
     assert "human" in res["reason"].lower() or "approver" in res["reason"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Falsy candidate_id non-leakage (Fix 8, 2026-07-28).
+#
+# `if candidate_id:` (record side) and `if cid:` (fold side) are the ONLY things
+# stopping an empty-string id from becoming a wildcard in a human-gated path: an
+# empty key in the candidate fold would be matched by every proposal that also has
+# an empty candidate_id, i.e. every legacy proposal. Pinned on BOTH sides so a
+# future refactor to `is not None` fails loudly here.
+# ---------------------------------------------------------------------------
+
+def _falsy_ids():
+    return ["", None, 0, False, [], {}]
+
+
+def test_falsy_candidate_id_is_never_persisted_on_the_approval_record(tmp_path):
+    for i, falsy in enumerate(_falsy_ids()):
+        base = _outputs(tmp_path / f"case{i}")
+        res = PA.record_approval(f"prop_{i}", "approve", "pesantez", _NOW,
+                                 base_dir=base, candidate_id=falsy)
+        assert res["ok"], (falsy, res)
+        assert "candidate_id" not in res["record"], falsy
+        stored = PA.load_valid_approvals(base)
+        assert len(stored) == 1
+        assert "candidate_id" not in stored[0], falsy
+
+
+def test_falsy_candidate_id_is_never_matched_in_the_candidate_fold(tmp_path):
+    """An empty stored id must not become a wildcard key in the durable fold."""
+    for i, falsy in enumerate(_falsy_ids()):
+        base = _outputs(tmp_path / f"fold{i}")
+        rec = _rec(f"prop_{i}")
+        rec["candidate_id"] = falsy
+        _write_log(base, [rec])
+
+        assert PA.effective_approvals_by_candidate(base) == {}, falsy
+        assert PA.approved_candidate_ids(base) == set(), falsy
+        assert PA.rejected_candidate_ids(base) == set(), falsy
+        # the record is still fully effective on its proposal_id
+        assert PA.approved_proposal_ids(base) == {f"prop_{i}"}, falsy
+
+
+def test_falsy_candidate_id_on_a_proposal_is_never_matched(tmp_path):
+    """The proposal side: a falsy candidate_id must not match an approved candidate.
+
+    `cid and cid in approved_cands` is what stops an empty-string proposal id from
+    matching; if it were dropped, an unapproved proposal could be applied.
+    """
+    from portfolio_automation.sim_governance import production_application as PAP
+
+    for i, falsy in enumerate(_falsy_ids()):
+        base = _outputs(tmp_path / f"prop{i}")
+        proposal = {"proposal_id": f"prop_{i}", "candidate_id": falsy,
+                    "proposal_type": S.PROPOSAL_WATCHLIST_REMOVE,
+                    "proposed_production_change": {"symbol": "RIOT"},
+                    "rollback_plan": ""}
+        # An empty-string approval in the candidate set must not authorize it.
+        res = PAP.apply_approved_proposals(
+            _NOW, base_dir=base, proposals=[proposal],
+            approved_ids=set(), approved_candidate_ids={"", "cand_other"},
+            write_files=False)
+        assert res["applied_count"] == 0, falsy
+        assert res["watchlist_applied"] == 0, falsy
+        assert [x["reason"] for x in res["ignored"]] == ["pending_or_unapproved"], falsy
+
+
+def test_falsy_candidate_id_on_an_audit_row_is_not_carried_by_a_wildcard(tmp_path):
+    """The carry-forward side: an empty audit-row id must not match an approval."""
+    import json as _json
+    from portfolio_automation.sim_governance import production_application as PAP
+
+    for i, falsy in enumerate(_falsy_ids()):
+        base = _outputs(tmp_path / f"audit{i}")
+        d = Path(base) / "promotion_approvals"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "production_application_audit.jsonl").write_text(_json.dumps({
+            "ts": "2026-07-01T00:00:00+00:00", "event": "applied_to_production",
+            "proposal_id": f"prop_{i}", "candidate_id": falsy,
+            "proposal_type": S.PROPOSAL_WATCHLIST_REMOVE,
+            "change": {"symbol": "RIOT"}, "rollback_plan": "",
+        }) + "\n", encoding="utf-8")
+
+        res = PAP.apply_approved_proposals(
+            _NOW, base_dir=base, proposals=[],
+            approved_ids=set(), approved_candidate_ids={"", "cand_other"},
+            write_files=False)
+        assert res["watchlist_applied"] == 0, falsy
