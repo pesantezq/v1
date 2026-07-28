@@ -295,9 +295,56 @@ def run_watchlist_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRe
 # ---------------------------------------------------------------------------
 
 
+def _leaderboard_top_tactic_id(base_dir: str) -> str | None:
+    """Ground-truth lookup of the CURRENT sandbox strategy leaderboard's #1-ranked
+    ``tactic_id``, read directly from ``strategy_leaderboard.json``.
+
+    This backs the ``not_ranking_triggered`` gate below. It deliberately does NOT
+    trust anything the candidate claims about its own origin/provenance -- a
+    self-reported field is exactly the kind of "flag someone can flip" the WS5
+    audit warned against (see .superpowers/audit/ws-04-05-14-18-health.md). By
+    recomputing the #1 tactic straight from the artifact every time, no future
+    widening of the candidate collector can spoof its way past this check: if the
+    requested strategy resolves to whatever the leaderboard currently ranks #1,
+    this returns that tactic_id regardless of how the candidate got built.
+
+    Fail-closed: any read/parse/shape problem (missing file, empty leaderboard,
+    corrupt JSON) returns ``None``. Callers must treat ``None`` as "cannot verify"
+    -- refuse, never silently accept an unverifiable candidate.
+    """
+    try:
+        from portfolio_automation.data_governance import OutputNamespace, get_output_path
+        path = get_output_path(OutputNamespace.SANDBOX, "strategy_leaderboard.json", base_dir=base_dir)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        rows = data.get("leaderboard") or []
+        if not rows:
+            return None
+        top_id = rows[0].get("tactic_id")
+        return str(top_id) if top_id else None
+    except Exception:
+        return None
+
+
 def run_strategy_gates(candidate: dict, config: dict, ctx: dict) -> list[GateResult]:
     """Bounded strategy gates. ``ctx`` carries: applied_today, active_awaiting_veto,
-    active_strategy_count, valid_strategy_ids (set), prior_active_capturable (bool)."""
+    active_strategy_count, valid_strategy_ids (set), prior_active_capturable (bool),
+    leaderboard_top_tactic_id (str | None -- the CURRENT #1-ranked tactic_id, see
+    ``_leaderboard_top_tactic_id``; omit/None is treated as "cannot verify").
+
+    ``not_ranking_triggered`` (WS5 structural guard, .superpowers/audit/
+    ws-04-05-14-18-health.md): a ranking change must never automatically
+    re-anchor the active strategy. Rather than gating on a config flag or a
+    self-reported "this candidate isn't ranking-derived" field -- either of
+    which a later change to the candidate collector could simply set/omit --
+    this gate independently resolves the candidate's ``strategy_id`` against
+    the tactic ids on the CURRENT leaderboard (the same ``resolve_anchor_
+    tactic_id`` mapping the sandbox comparator uses) and refuses whenever that
+    resolves to the leaderboard's #1-ranked tactic. It also refuses when the
+    leaderboard cannot be read at all (fail-closed): "cannot prove this isn't
+    ranking-derived" is treated the same as "is ranking-derived."
+    """
+    from portfolio_automation.strategy.strategy_selection import resolve_anchor_tactic_id
+
     c = candidate or {}
     sid = c.get("strategy_id")
     daily_cap = int(config.get("strategy_daily_cap", 0))
@@ -306,6 +353,11 @@ def run_strategy_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRes
     awaiting = int(ctx.get("active_awaiting_veto", 0))
     active_count = int(ctx.get("active_strategy_count", 0))
     valid_ids = ctx.get("valid_strategy_ids") or set()
+    top_tactic_id = ctx.get("leaderboard_top_tactic_id")
+    matched_tactic_id = (
+        resolve_anchor_tactic_id(sid, {top_tactic_id}) if top_tactic_id else None
+    )
+    ranking_triggered = top_tactic_id is None or matched_tactic_id is not None
 
     return [
         GateResult("sandbox_only_assertion", c.get("target_lane") == "simulation",
@@ -338,6 +390,28 @@ def run_strategy_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRes
                    "under max active awaiting-veto" if awaiting < max_active_veto
                    else "too many items awaiting veto",
                    observed_value=awaiting, required_value=f"< {max_active_veto}"),
+        GateResult(
+            "not_ranking_triggered",
+            passed=not ranking_triggered,
+            reason=(
+                "candidate strategy_id does not resolve to the leaderboard's "
+                "current #1-ranked tactic"
+                if not ranking_triggered
+                else (
+                    f"candidate strategy_id {sid!r} resolves to {matched_tactic_id!r}, "
+                    f"the leaderboard's current #1-ranked tactic ({top_tactic_id!r}) — "
+                    "a ranking change must never automatically re-anchor the active "
+                    "strategy (structural guard, WS5 — see "
+                    ".superpowers/audit/ws-04-05-14-18-health.md)"
+                    if top_tactic_id is not None
+                    else "cannot verify the candidate against the current leaderboard "
+                         "(unavailable/unparsable) — fails closed rather than silently "
+                         "accepting an unverifiable strategy candidate"
+                )
+            ),
+            observed_value=matched_tactic_id if top_tactic_id is not None else "leaderboard_unavailable",
+            required_value="must not match the leaderboard's #1-ranked tactic_id",
+        ),
     ]
 
 
@@ -868,6 +942,9 @@ def run_auto_approval(
                 "active_awaiting_veto": build_summary(base_dir=base_dir, now=now)["active_item_count"],
                 "active_strategy_count": 1 if active_id else 0,
                 "valid_strategy_ids": valid_strategy_ids, "prior_active_capturable": True,
+                # WS5 structural guard: recomputed fresh from the real leaderboard,
+                # never trusted from the candidate itself. See run_strategy_gates.
+                "leaderboard_top_tactic_id": _leaderboard_top_tactic_id(base_dir),
             }
             gates = run_strategy_gates(cand, config, ctx)
 
