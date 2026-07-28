@@ -99,7 +99,34 @@ _CURRENT_WEIGHTS = {
 
 
 def _propose_weight_changes(by_tag: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Translate per-tag efficacy deltas into proposed score-weight changes."""
+    """Translate per-tag efficacy deltas into proposed score-weight changes.
+
+    Expectancy gate (fail-closed tightening)
+    -----------------------------------------
+    Hit-rate delta (``vs_baseline_pp``) alone cannot tell a reviewer whether a
+    tag is actually profitable: a tag can win more often than baseline while
+    losing money on average (accuracy vs. expectancy are different axes — the
+    same confusion that invalidated a watchlist-removal gate elsewhere in this
+    program). Every proposal below therefore always carries the tag's
+    ``mean_return_1d`` (and its backing resolved-sample count — no return
+    dispersion/variance statistic is computed upstream in pattern_learning.py,
+    so none is invented here) as a visible diagnostic alongside the hit-rate
+    delta.
+
+    ``auto_applicable`` additionally requires:
+      - ``mean_return_1d`` to be a known number. Missing return data is
+        treated as NOT auto-applicable (never imputed as 0.0 — a fabricated
+        zero would silently read as "not negative" and pass the gate).
+      - No sign contradiction: a hit-rate delta that would INCREASE this
+        tag's weight while its mean return is negative is refused and
+        flagged via ``expectancy_contradiction`` for human review.
+
+    This can only ever turn an existing ``auto_applicable=True`` into
+    ``False`` — it never grants auto-applicability that the pre-existing
+    magnitude/n/significance guardrails already refused. The proposal itself
+    (and its contradiction) always stays visible in the artifact; nothing is
+    dropped from the human-reviewable list.
+    """
     proposals: list[dict[str, Any]] = []
     for tag, weight_key in _SOURCE_TAG_TO_WEIGHT_KEY.items():
         if not weight_key:
@@ -112,10 +139,49 @@ def _propose_weight_changes(by_tag: dict[str, dict[str, Any]]) -> list[dict[str,
         proposed_delta = round(delta_pp * _WEIGHT_DELTA_PER_PP, 4)
         current = _CURRENT_WEIGHTS.get(weight_key, 0.0)
         proposed = round(max(0.0, min(1.0, current + proposed_delta)), 4)
+
+        # --- Expectancy diagnostic: always recorded, never imputed --------
+        mean_return_1d = stats.get("mean_return_1d")
+        mean_return_resolved_n = stats.get("resolved_1d")
+        expectancy_available = mean_return_1d is not None
+        expectancy_contradiction = bool(
+            expectancy_available and proposed_delta > 0 and mean_return_1d < 0
+        )
+        if not expectancy_available:
+            expectancy_note = (
+                "mean_return_1d unavailable for this tag — expectancy cannot "
+                "be verified from this efficacy window; NOT auto-applicable "
+                "(missing data is never treated as a confirmed non-negative "
+                "return)."
+            )
+        elif expectancy_contradiction:
+            expectancy_note = (
+                f"EXPECTANCY CONTRADICTION: hit-rate delta favors a weight "
+                f"INCREASE but mean_return_1d is negative "
+                f"({mean_return_1d:+.4f} over "
+                f"{mean_return_resolved_n if mean_return_resolved_n is not None else '?'} "
+                f"resolved samples) — this tag wins more often than baseline "
+                f"while losing money on average. NOT auto-applicable; "
+                f"surfaced for human review."
+            )
+        else:
+            resolved_str = (
+                str(mean_return_resolved_n)
+                if mean_return_resolved_n is not None else "?"
+            )
+            expectancy_note = (
+                f"mean_return_1d {mean_return_1d:+.4f} over {resolved_str} "
+                f"resolved samples (no return-dispersion statistic is "
+                f"currently computed upstream; only the mean and resolved "
+                f"sample count are available)."
+            )
+
         auto_applicable = (
             abs(proposed_delta) <= _AUTO_APPLY_WEIGHT_MAX_DELTA
             and n >= _AUTO_APPLY_MIN_N
             and stats.get("significance") not in (None, "insufficient_sample")
+            and expectancy_available
+            and not expectancy_contradiction
         )
         proposals.append({
             "parameter": f"sanitation_weight.{weight_key}",
@@ -126,11 +192,17 @@ def _propose_weight_changes(by_tag: dict[str, dict[str, Any]]) -> list[dict[str,
             "n_samples": n,
             "evidence_delta_pp": delta_pp,
             "significance": stats.get("significance"),
+            "mean_return_1d": mean_return_1d,
+            "mean_return_resolved_n": mean_return_resolved_n,
+            "expectancy_available": expectancy_available,
+            "expectancy_contradiction": expectancy_contradiction,
+            "expectancy_note": expectancy_note,
             "auto_applicable": auto_applicable,
             "rationale": (
                 f"Tag {tag} carried Δ {delta_pp:+.1f}pp vs baseline over n={n} "
                 f"samples ({stats.get('significance')}). Proposed weight shift "
-                f"{current:.3f} → {proposed:.3f} (Δ {proposed_delta:+.4f})."
+                f"{current:.3f} → {proposed:.3f} (Δ {proposed_delta:+.4f}). "
+                f"{expectancy_note}"
             ),
         })
     return proposals
@@ -269,17 +341,23 @@ def render_retune_suggestions_md(payload: dict[str, Any]) -> str:
     a("")
     wp = payload.get("weight_proposals") or []
     if wp:
-        a("| Parameter | Current | Proposed | Δ | n | Δ vs baseline | Significance | Auto-apply? |")
-        a("|---|---|---|---|---|---|---|---|")
+        a("| Parameter | Current | Proposed | Δ | n | Δ vs baseline | Mean return (1d) | Significance | Auto-apply? |")
+        a("|---|---|---|---|---|---|---|---|---|")
         for p in wp:
             edpp = p.get("evidence_delta_pp")
             edpp_str = f"{edpp:+.1f}pp" if edpp is not None else "—"
+            mr = p.get("mean_return_1d")
+            mr_str = f"{mr:+.4f}" if mr is not None else "unavailable"
             auto = "✓" if p.get("auto_applicable") else "—"
             a(
                 f"| `{p['parameter']}` | {p['current_value']:.3f} | {p['proposed_value']:.3f} | "
-                f"{p['delta']:+.4f} | {p.get('n_samples', 0)} | {edpp_str} | "
+                f"{p['delta']:+.4f} | {p.get('n_samples', 0)} | {edpp_str} | {mr_str} | "
                 f"{p.get('significance', '—')} | {auto} |"
             )
+        a("")
+        for p in wp:
+            if p.get("expectancy_contradiction"):
+                a(f"- ⚠ `{p['parameter']}`: {p.get('expectancy_note', '')}")
         a("")
     else:
         a("_No weight proposals from this efficacy window._")
