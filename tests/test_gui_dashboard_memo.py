@@ -566,22 +566,76 @@ def test_memo_route_renders_strong_and_code_for_bold_text(tmp_path, monkeypatch)
 # dropped from the mobile memo view (the section still rendered, filled only
 # with "Top Movers" price lines, so the loss was invisible).
 #
-# These tests pin the memo -> GUI header contract so a future rename cannot
-# silently orphan a section again.
+# That first fix (8686898d) was itself incomplete: it only mapped the three
+# headers visible in the memo sample it was written against. "Funded Market
+# Opportunities" and "Sell and Funding Dependencies" sit inside conditional
+# blocks in capital_plan_view.render_capital_plan_md and were still silently
+# dropped whenever those blocks fired.
+#
+# The root cause both times was the same: a HAND-MAINTAINED literal list of
+# headers "someone observed once" cannot catch a header the author didn't
+# happen to see. So instead of hand-listing capital_plan_view.py's headers,
+# `_capital_plan_view_headers()` below statically extracts every literal
+# string passed to `h(...)` in render_capital_plan_md via AST — including
+# ones gated behind an `if` that a single fixture might never execute. A
+# future header added to that function is picked up automatically; it cannot
+# silently orphan itself the way both prior bugs did.
 # ---------------------------------------------------------------------------
 
-# The header names the memo renderer actually emits today
-# (portfolio_automation/capital_plan_view.py: h("...") calls).
+
+def _capital_plan_view_headers() -> list[str]:
+    """Statically extract every header `capital_plan_view.render_capital_plan_md`
+    can emit — the exhaustive set of `h("...")` call-site literals, including
+    ones inside conditional branches (e.g. "Funded Market Opportunities" only
+    renders when a funded action has entry-setup data available).
+
+    This is source-derived, not a hand-maintained list: a header added to a
+    new (or existing) conditional branch is picked up the moment this test
+    module runs, without anyone needing to remember to update a literal.
+    """
+    import ast
+    import inspect
+
+    from portfolio_automation import capital_plan_view
+
+    source = inspect.getsource(capital_plan_view.render_capital_plan_md)
+    tree = ast.parse(source)
+    headers: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "h"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            headers.append(node.args[0].value)
+    return headers
+
+
+# The capital-plan headers that belong in "Portfolio Decisions" — i.e. every
+# header the producer emits except "Bottom Line" (which is the closing
+# verdict and belongs with Top Insight; see test_bottom_line_maps_to_top_insight).
 SHIPPED_CAPITAL_PLAN_HEADERS = [
-    "Today's Capital Plan",
-    "What To Do Today",
-    "Deferred Recommendations",
+    h for h in _capital_plan_view_headers() if h != "Bottom Line"
 ]
+
+
+def test_capital_plan_view_headers_nonempty():
+    """Sanity check that the AST extraction actually found the producer's
+    h(...) call sites — an empty result would make every test below vacuous."""
+    assert len(_capital_plan_view_headers()) >= 6, (
+        "static extraction found too few headers in capital_plan_view.py — "
+        "the AST walk may no longer match its render_capital_plan_md shape"
+    )
 
 
 @pytest.mark.parametrize("header", SHIPPED_CAPITAL_PLAN_HEADERS)
 def test_capital_plan_headers_map_to_portfolio_decisions(header):
-    """The shipped capital-plan headers must reach the Portfolio Decisions section."""
+    """Every shipped capital-plan header (source-derived) must reach the
+    Portfolio Decisions section — including headers inside conditional
+    blocks, which is exactly what the previous, hand-maintained list missed."""
     from gui_v2.data.dash_memo import _map_header
 
     assert _map_header(header) == "Portfolio Decisions", (
@@ -607,18 +661,23 @@ def test_operator_appendix_maps_to_data_quality():
 def test_no_shipped_memo_header_is_orphaned():
     """Every ## header the memo emits must map to some GUI section.
 
-    This is the guard that would have caught a5387a27: an unmapped header is
-    silently skipped by _parse_memo, so a rename loses content with no error.
+    This is the guard that would have caught a5387a27 (and its incomplete
+    follow-up fix 8686898d): an unmapped header is silently skipped by
+    _parse_memo, so a rename — or a new conditional header — loses content
+    with no error.
+
+    The capital_plan_view.py portion of this list is source-derived (see
+    `_capital_plan_view_headers`), not hand-maintained, so it cannot repeat
+    the exact failure mode that caused both prior bugs. The remaining
+    headers below come from other memo-producing modules that do not yet
+    have an equivalent static-extraction helper; they are out of scope for
+    this regression (capital_plan_view.py was the implicated producer).
     """
     from gui_v2.data.dash_memo import _map_header
 
-    shipped_headers = [
+    shipped_headers = _capital_plan_view_headers() + [
         "Today's Verdict",
         "Top Insight",
-        "Today's Capital Plan",
-        "What To Do Today",
-        "Deferred Recommendations",
-        "Bottom Line",
         "Risk Focus",
         "What Changed",
         "Operator / System Appendix",
@@ -639,6 +698,36 @@ def test_no_shipped_memo_header_is_orphaned():
         f"memo headers with no GUI section: {orphaned} — their content is "
         "silently dropped from /dashboard/memo"
     )
+
+
+def test_orphan_guard_detects_a_removed_mapping():
+    """Meta-test: prove the orphan guard is not a tautology.
+
+    Simulates the exact a5387a27 regression (capital-plan mappings dropped
+    from _HEADER_MAP) and asserts the source-derived header list catches it.
+    Without this, a future edit could make `_capital_plan_view_headers()`
+    return `[]` (e.g. a refactor that renames `h(...)` to something else)
+    and every test above would pass vacuously while the real bug recurred.
+    """
+    from gui_v2.data import dash_memo
+
+    headers = _capital_plan_view_headers()
+    assert headers, "extraction must find headers for this test to be meaningful"
+
+    original_map = dash_memo._HEADER_MAP
+    try:
+        dash_memo._HEADER_MAP = [
+            (fragment, section) for fragment, section in original_map
+            if section != "Portfolio Decisions"
+        ]
+        orphaned = [h for h in headers if dash_memo._map_header(h) is None]
+        assert orphaned, (
+            "expected removing the Portfolio Decisions mappings to orphan "
+            "the capital-plan headers; the guard would not have caught the "
+            "real regression"
+        )
+    finally:
+        dash_memo._HEADER_MAP = original_map
 
 
 def test_capital_plan_content_reaches_portfolio_decisions(tmp_path):

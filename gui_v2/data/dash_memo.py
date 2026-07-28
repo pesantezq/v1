@@ -9,7 +9,8 @@ Section mapping
 Top Insight      ← "Today's Verdict" / "Top Insight" / "Bottom Line"
 Risk Focus       ← "Risk Delta" / "Risk Focus" / "Portfolio Pulse"
 Portfolio Decisions ← "Today's Capital Plan" / "What To Do Today" /
-                      "Deferred Recommendations" / "Top Movers"
+                      "Funded Market Opportunities" / "Deferred Recommendations" /
+                      "Sell and Funding Dependencies" / "Top Movers"
                       (+ retired "Top Decisions" / "Capital Actions" for
                       historical memos under outputs/history/)
 Data Quality     ← "System / Data Health" / "What Changed" / "Advisor Stack" /
@@ -61,7 +62,9 @@ _HEADER_MAP: list[tuple[str, str]] = [
     #   memos under outputs/history/ still map.
     ("today's capital plan",   "Portfolio Decisions"),
     ("what to do today",       "Portfolio Decisions"),
+    ("funded market opportunities", "Portfolio Decisions"),
     ("deferred recommendations", "Portfolio Decisions"),
+    ("sell and funding dependencies", "Portfolio Decisions"),
     ("top decisions",          "Portfolio Decisions"),
     ("capital actions",        "Portfolio Decisions"),
     ("top movers",             "Portfolio Decisions"),

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from portfolio_automation.daily_run_status import (
     build_daily_run_status,
+    check_run_coherence,
     run_daily_run_status,
     scan_content_liveness,
     scan_expected_artifacts,
@@ -263,6 +264,109 @@ class TestOverallStatus(unittest.TestCase):
             payload = build_daily_run_status(root=root, log_path=log)
             self.assertEqual(payload["overall_status"], "partial")
             self.assertGreater(payload["required_missing_count"], 0)
+
+
+class TestRunCoherence(unittest.TestCase):
+    """WS8-F4 wiring: coherent_run_ids() is now consumed via check_run_coherence.
+
+    Validation-only -- reports mixed-run conditions, never blocks.
+    """
+
+    def _write(self, root: Path, rel: str, payload: dict) -> None:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload))
+
+    def test_coherent_when_run_ids_match(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rid = "2026-07-28_daily_official"
+            self._write(root, "outputs/latest/decision_plan.json", {"run_id": rid})
+            self._write(root, "outputs/sandbox/daily_input_snapshot.json", {"run_id": rid})
+            result = check_run_coherence(root, {"run_id": rid})
+            self.assertTrue(result["coherent"])
+            self.assertEqual(result["mismatched"], [])
+
+    def test_incoherent_when_a_run_id_is_mixed(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rid = "2026-07-28_daily_official"
+            self._write(root, "outputs/latest/decision_plan.json", {"run_id": rid})
+            # Stale artifact left behind from yesterday's run.
+            self._write(root, "outputs/sandbox/daily_input_snapshot.json",
+                        {"run_id": "2026-07-27_daily_official"})
+            result = check_run_coherence(root, {"run_id": rid})
+            self.assertFalse(result["coherent"])
+            self.assertEqual(result["mismatched"], ["daily_input_snapshot"])
+
+    def test_unknown_when_manifest_absent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, "outputs/latest/decision_plan.json", {"run_id": "x"})
+            result = check_run_coherence(root, None)
+            self.assertIsNone(result["coherent"])
+
+    def test_unknown_when_watched_artifacts_absent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = check_run_coherence(root, {"run_id": "2026-07-28_daily_official"})
+            self.assertIsNone(result["coherent"])
+
+    def test_build_daily_run_status_escalates_overall_status_on_incoherence(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log = root / "logs" / "test.log"
+            log.parent.mkdir(parents=True)
+            log.write_text(_FAKE_LOG)
+            today = datetime.now(timezone.utc).date()
+            for rel in [
+                "outputs/latest/decision_plan.md",
+                "outputs/latest/system_decision_summary.json",
+                "outputs/latest/daily_memo.md",
+                "outputs/latest/daily_memo.txt",
+                "outputs/latest/news_intelligence.json",
+                "outputs/latest/risk_delta.json",
+                "outputs/portfolio/portfolio_snapshot.json",
+            ]:
+                p = root / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("{}")
+            rid = "2026-07-28_daily_official"
+            self._write(root, "outputs/policy/run_manifest.json",
+                        {"run_id": rid, "status": "complete"})
+            self._write(root, "outputs/latest/decision_plan.json", {"run_id": rid})
+            self._write(root, "outputs/sandbox/daily_input_snapshot.json",
+                        {"run_id": "2026-07-27_daily_official"})
+            payload = build_daily_run_status(root=root, log_path=log)
+            self.assertFalse(payload["run_coherence"]["coherent"])
+            self.assertEqual(payload["overall_status"], "ok_with_warnings")
+
+    def test_build_daily_run_status_stays_ok_when_coherent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            log = root / "logs" / "test.log"
+            log.parent.mkdir(parents=True)
+            log.write_text(_FAKE_LOG)
+            for rel in [
+                "outputs/latest/decision_plan.md",
+                "outputs/latest/system_decision_summary.json",
+                "outputs/latest/daily_memo.md",
+                "outputs/latest/daily_memo.txt",
+                "outputs/latest/news_intelligence.json",
+                "outputs/latest/risk_delta.json",
+                "outputs/portfolio/portfolio_snapshot.json",
+            ]:
+                p = root / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("{}")
+            rid = "2026-07-28_daily_official"
+            self._write(root, "outputs/policy/run_manifest.json",
+                        {"run_id": rid, "status": "complete"})
+            self._write(root, "outputs/latest/decision_plan.json", {"run_id": rid})
+            self._write(root, "outputs/sandbox/daily_input_snapshot.json", {"run_id": rid})
+            payload = build_daily_run_status(root=root, log_path=log)
+            self.assertTrue(payload["run_coherence"]["coherent"])
+            self.assertEqual(payload["overall_status"], "ok")
 
 
 class TestContentLiveness(unittest.TestCase):

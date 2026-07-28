@@ -33,6 +33,35 @@ by `run_daily_safe.sh` Stage 10b2; see `docs/SIMULATION_CHARTS.md`):
 - It is sandbox/observe-only and **never RED** — it never feeds `decision_plan.json`.
   `allocation_drift` being empty is expected (no upstream composition series yet), not a finding.
 
+**Also check the active-strategy divergence artifact** (`outputs/sandbox/strategy_divergence.json`,
+WS5 — see `.superpowers/audit/ws-04-05-14-18-health.md`; producer
+`portfolio_automation/strategy/strategy_divergence.py`, observe-only/sandbox, compares the
+operator-approved active strategy against the leaderboard's #1-ranked tactic):
+```bash
+.venv/bin/python -c "import json; from portfolio_automation.strategy.strategy_divergence import compute_strategy_divergence; print(json.dumps(compute_strategy_divergence(root='.'), indent=2, default=str))"
+```
+- Read `classification` (one of `EXPECTED_POLICY_DIVERGENCE`, `PENDING_REVIEW`,
+  `INSUFFICIENT_EVIDENCE`, `STALE_ACTIVE_STRATEGY`, `UNEXPLAINED_DIVERGENCE`),
+  `rank_difference`, `top_tactic_oos.state`, and `structural_unpromotability`.
+- **`INSUFFICIENT_EVIDENCE`** (today's real, non-regression state: the top-ranked
+  tactic is `OOS_NOT_TESTED`) — report, don't alert. Do not treat this as something
+  to "fix" by loosening the classifier; it is the honest answer given 25/26
+  leaderboard tactics have never been walk-forward tested.
+- **`structural_unpromotability.blocked: true`** — the top tactic is a Strategy-Lab
+  research/shadow tactic, not one of the 8 fixed `SEED_PROFILES` in
+  `strategy_review_queue.json`; a human cannot currently approve it via the
+  existing GUI decide-route. Always surface this fact verbatim regardless of
+  classification — it is the structural reason "why hasn't the top tactic just
+  been promoted" has no simple answer today.
+- **`UNEXPLAINED_DIVERGENCE`** — the top tactic IS `OOS_SUPPORTED`, is promotable,
+  and nothing explains the gap; flag for operator attention (still no auto-dispatch
+  — this artifact only ever reports, it never re-anchors anything).
+- **`STALE_ACTIVE_STRATEGY`** — matches `strategy_lab_health`'s existing
+  `stale_active_strategy_selection` signal; resolve that first before trusting any
+  rank comparison.
+- Absent artifact (producer not yet run this cycle) is the inert pre-pipeline
+  state — report, don't alert.
+
 ## Step 2 — Triage
 
 **WS4 update (2026-07-28, .superpowers/audit/ws-02-03-oos-selection.md):** the
@@ -105,7 +134,8 @@ regression when the artifact simply hasn't run yet.
 Heartbeat: `"Strategy-Lab: {status} · {tactic_count} tactics · top {top_tactic}
 (score {top_score}, excess vs SPY {top_excess_vs_spy}) · coverage {complete|INCOMPLETE}
 · factors {available|missing} · OOS states {oos_state_counts} · active-strategy
-{active_strategy_id|none} ({strategy_decisions_count} decisions)"`.
+{active_strategy_id|none} ({strategy_decisions_count} decisions) · divergence
+{classification|absent}"`.
 
 For RED/AMBER, append `blocking_reasons` verbatim. For coverage violations,
 name the undocumented tactics. For an `OOS_FAILED` tactic, name it (it overfit
@@ -118,3 +148,8 @@ GREEN.
 If RED `looks_fresh_but_empty` persists, the price archive likely lacks the
 portfolio/benchmark tickers — recommend backfilling `outputs/backtest/historical/`.
 No agent auto-dispatch; this is a research lane that never feeds `decision_plan`.
+
+If the divergence artifact's `classification` is `UNEXPLAINED_DIVERGENCE`, name
+the top tactic and its score/rank gap in the body so the operator can decide
+whether to widen the review queue and route a human promotion decision — this
+skill never does so itself.
