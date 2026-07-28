@@ -222,10 +222,21 @@
   <section aria-label="Production decisions" class="space-y-3">
     {{ ui.section_header("Production Decisions", "approved → applied · rejected", "approved_proposals.json") }}
     <div class="grid gap-3 sm:grid-cols-3 text-sm">
-      {{ ui.hero_stat(labels.approved, approved_proposal_ids|length, "green", applied_count ~ " applied to production") }}
-      {{ ui.hero_stat(labels.applied, applied_count, "green", "via approved overlays") }}
+      {# durably_live_count is the honest "live in production" figure: a durable
+         membership op stays in force across runs without being re-applied, so
+         applied_count (this run only) reads 0 on a quiet day. Show both, labelled. #}
+      {{ ui.hero_stat(labels.approved, approved_proposal_ids|length, "green", durably_live_count ~ " live in production") }}
+      {{ ui.hero_stat(labels.applied, durably_live_count, "green", applied_today_count ~ " newly applied this run") }}
       {{ ui.hero_stat("Rejected", rejected_proposal_ids|length, "gray", "ignored by production") }}
     </div>
+    {% if overlay_rebuild_skipped %}
+    <p class="text-xs text-amber-300/90">
+      Last run REFUSED to rebuild the production overlay because the approvals log
+      could not be read ({{ approvals_log_unreadable }}). The overlay on disk is
+      unchanged from the last good run — no approval was lost, but no new approval
+      took effect either. Fix the approvals log, then re-run the governance stage.
+    </p>
+    {% endif %}
 
     {# AI review details — raw precision + counts, secondary. #}
     <details class="group rounded-xl border border-zinc-800 bg-zinc-900/40">

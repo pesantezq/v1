@@ -17,7 +17,8 @@ from gui_v2.data.shared import _read_json, card
 LABEL_SIM_ACTIVE = "Simulation Active"
 LABEL_PENDING = "Production Pending Approval"
 LABEL_APPROVED = "Approved for Production"
-LABEL_APPLIED = "Applied to Production"
+LABEL_APPLIED = "Live in Production"
+LABEL_APPLIED_TODAY = "Newly Applied This Run"
 
 
 def collect_governance_view(root: Path) -> dict[str, Any]:
@@ -50,7 +51,18 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
     approval_recs = approvals.get("approvals", []) or []
     approved_ids = {r.get("proposal_id") for r in approval_recs if r.get("decision") == "approve"}
     rejected_ids = {r.get("proposal_id") for r in approval_recs if r.get("decision") == "reject"}
+    # applied_count counts only the LAST RUN's approvals. Durable watchlist ops stay
+    # live across runs without being re-applied, so on a quiet day it reads 0 while
+    # membership ops are still in force — showing it alone told the operator
+    # "0 applied to production" while production was carrying live ops. Surface the
+    # durable count next to it and label both.
     applied_count = int(app_state.get("applied_count", 0) or 0)
+    applied_today_count = int(app_state.get("applied_today_count", applied_count) or 0)
+    durably_live_count = int(
+        app_state.get("durably_live_count",
+                      app_state.get("watchlist_applied", 0)) or 0)
+    overlay_rebuild_skipped = bool(app_state.get("overlay_rebuild_skipped"))
+    approvals_log_unreadable = app_state.get("approvals_log_unreadable")
 
     pending_only = [p for p in proposals
                     if p.get("proposal_id") not in approved_ids
@@ -73,10 +85,16 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
     ))
     cards.append(card(
         "Production lane",
-        status="info" if not prod_live else "ok",
-        label="Live overlays ON" if prod_live else "Human-gated (overlays OFF)",
-        summary=f"{applied_count} approved proposal(s) applied; "
-                "production changes only after human approval.",
+        status=("warning" if overlay_rebuild_skipped
+                else ("info" if not prod_live else "ok")),
+        label=("Overlay rebuild REFUSED (approvals log unreadable)"
+               if overlay_rebuild_skipped
+               else ("Live overlays ON" if prod_live else "Human-gated (overlays OFF)")),
+        summary=(f"{durably_live_count} durable op(s) live in production · "
+                 f"{applied_today_count} newly applied this run; "
+                 "production changes only after human approval."
+                 + (f" Last run left the overlay untouched: {approvals_log_unreadable}."
+                    if overlay_rebuild_skipped else "")),
         source_artifacts=["outputs/promotion_approvals/production_application_state.json"],
         updated_at=app_state.get("generated_at"),
     ))
@@ -160,6 +178,11 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
         "approved_proposal_ids": sorted(approved_ids),
         "rejected_proposal_ids": sorted(rejected_ids),
         "applied_count": applied_count,
+        # "newly applied this run" vs "durably live in production" — see above.
+        "applied_today_count": applied_today_count,
+        "durably_live_count": durably_live_count,
+        "overlay_rebuild_skipped": overlay_rebuild_skipped,
+        "approvals_log_unreadable": approvals_log_unreadable,
         "approval_records": approval_recs,
         # auto-approval (simulation) channel
         "auto_applied_items": auto_applied_items,
@@ -169,6 +192,7 @@ def collect_governance_view(root: Path) -> dict[str, Any]:
             "pending": LABEL_PENDING,
             "approved": LABEL_APPROVED,
             "applied": LABEL_APPLIED,
+            "applied_today": LABEL_APPLIED_TODAY,
         },
         "has_data": bool(status or bundle or review),
     }

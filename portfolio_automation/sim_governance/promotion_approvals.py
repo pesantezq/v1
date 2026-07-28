@@ -23,6 +23,7 @@ from pathlib import Path
 
 from portfolio_automation.data_governance import (
     OutputNamespace,
+    ensure_output_dir,
     get_output_path,
     safe_write_json,
 )
@@ -60,6 +61,41 @@ def _load_raw(base_dir: str) -> dict:
     return {"approvals": []}
 
 
+def approvals_log_unreadable(base_dir: str) -> str | None:
+    """Reason string when the approvals log EXISTS but cannot be trusted; else None.
+
+    ``_load_raw`` degrades to ``{"approvals": []}`` on any failure, which cannot
+    distinguish two very different situations:
+
+      * the file is ABSENT — a legitimate "no approvals recorded yet";
+      * the file is PRESENT but unparseable — the production authority itself is
+        unreadable.
+
+    That conflation was harmless while a lost approval merely blocked a NEW
+    application. With durable overlays it is not: an empty approval set drops every
+    carried op and rewrites the overlay as ``ops: []``, silently reversing
+    established production membership — and the write SUCCEEDS, so nothing surfaces.
+    Callers that rebuild durable state must fail closed on a non-None result.
+    """
+    path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_FILE,
+                                base_dir=base_dir))
+    try:
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"unreadable_file: {exc}"
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        return f"unparseable_json: {exc}"
+    if not isinstance(data, dict):
+        return f"unexpected_top_level_type: {type(data).__name__}"
+    if not isinstance(data.get("approvals", []), list):
+        return "approvals_field_is_not_a_list"
+    return None
+
+
 def record_approval(
     proposal_id: str,
     decision: str,
@@ -69,6 +105,7 @@ def record_approval(
     base_dir: str,
     notes: str | None = None,
     review_date: str | None = None,
+    candidate_id: str | None = None,
     write_files: bool = True,
 ) -> dict:
     """Record a human approve/reject decision against a proposal.
@@ -85,6 +122,11 @@ def record_approval(
         "notes": notes,
         "review_date": review_date,
     }
+    if candidate_id:
+        # The durable identity. make_proposal_id is clock-salted, so proposal_id
+        # churns every run for an unchanged fact; candidate_id does not. Recording
+        # it lets one approval outlive the proposal id it was filed against.
+        record["candidate_id"] = candidate_id
     ok, reason = S.is_valid_approval_record(record)
     if not ok:
         logger.warning("promotion_approvals: rejecting invalid approval (%s): %s", reason, record)
@@ -97,6 +139,16 @@ def record_approval(
         )
         logger.warning("promotion_approvals: refusing misdirected write — %s", msg)
         return {"ok": False, "reason": msg, "record": None}
+
+    if write_files:
+        unreadable = approvals_log_unreadable(base_dir)
+        if unreadable:
+            msg = f"approvals_log_unreadable: {unreadable}"
+            logger.error(
+                "promotion_approvals: REFUSING to record approval — %s; a "
+                "read-modify-write through the unreadable log would silently "
+                "discard the existing approval records", msg)
+            return {"ok": False, "reason": msg, "record": None}
 
     if write_files:
         data = _load_raw(base_dir)
@@ -147,3 +199,122 @@ def approved_proposal_ids(base_dir: str) -> set[str]:
 
 def rejected_proposal_ids(base_dir: str) -> set[str]:
     return {pid for pid, dec in effective_approvals(base_dir).items() if dec == S.HUMAN_REJECT}
+
+
+def effective_approvals_by_candidate(base_dir: str) -> dict[str, str]:
+    """Fold the approval log to the latest valid decision per candidate_id.
+
+    Mirrors ``effective_approvals`` but keys on the DURABLE identity. Records
+    without a ``candidate_id`` (every record written before this field existed)
+    are skipped here — they remain fully effective via ``effective_approvals``.
+
+    Returns {candidate_id: 'approve'|'reject'}; file order is chronological, so
+    the last record wins.
+    """
+    latest: dict[str, str] = {}
+    for rec in load_valid_approvals(base_dir):
+        cid = rec.get("candidate_id")
+        if cid:
+            latest[str(cid)] = rec["decision"]
+    return latest
+
+
+def approved_candidate_ids(base_dir: str) -> set[str]:
+    """candidate_ids whose latest valid human decision is 'approve'."""
+    return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
+            if dec == S.HUMAN_APPROVE}
+
+
+def rejected_candidate_ids(base_dir: str) -> set[str]:
+    """candidate_ids whose latest valid human decision is 'reject'."""
+    return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
+            if dec == S.HUMAN_REJECT}
+
+
+_REVOCATIONS_FILE = "production_revocations.jsonl"
+
+
+def revoke_application(
+    target_id: str,
+    approver: str,
+    now: str,
+    *,
+    base_dir: str,
+    notes: str | None = None,
+    write_files: bool = True,
+) -> dict:
+    """Record a human revocation of a previously-applied production op.
+
+    ``target_id`` may be a proposal_id OR a candidate_id — both are matched when
+    the durable watchlist overlay is rebuilt.
+
+    Revocation is the ONLY thing that un-applies a durable watchlist op: evidence
+    going stale never restores a symbol, so production membership changes only on
+    a recorded human decision. Human-gated exactly like approval.
+
+    Returns {"ok": bool, "reason": str, "record": dict|None}.
+    """
+    if not target_id:
+        return {"ok": False, "reason": "missing target_id", "record": None}
+    if not S.is_human_approver(approver):
+        logger.warning("promotion_approvals: rejecting non-human revocation by %r", approver)
+        return {"ok": False,
+                "reason": f"approver {approver!r} is not a valid human approver",
+                "record": None}
+    if not now:
+        return {"ok": False, "reason": "missing timestamp", "record": None}
+
+    record = {"target_id": target_id, "approver": approver,
+              "timestamp": now, "notes": notes}
+
+    if write_files and _looks_like_repo_root(base_dir):
+        return {"ok": False,
+                "reason": f"base_dir_is_repo_root: {base_dir!r}; pass <root>/outputs",
+                "record": None}
+
+    if write_files:
+        # Append-only JSONL, mirroring production_application's audit log
+        # (production_application.py's _AUDIT_FILE append). Never read the
+        # existing ledger on the write path and never rewrite the whole
+        # document — a single appended line can neither race-lose a concurrent
+        # revocation nor be destroyed by another revocation's corrupt read.
+        try:
+            ensure_output_dir(OutputNamespace.PROMOTION_APPROVALS, _REVOCATIONS_FILE,
+                              base_dir=base_dir)
+            path = get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                    _REVOCATIONS_FILE, base_dir=base_dir)
+            with Path(path).open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, default=str) + "\n")
+        except Exception as exc:
+            logger.warning("promotion_approvals: revocation write failed: %s", exc)
+            return {"ok": False, "reason": f"write_failed: {exc}", "record": record}
+
+    return {"ok": True, "reason": "ok", "record": record}
+
+
+def revoked_ids(base_dir: str) -> set[str]:
+    """Target ids (proposal_id or candidate_id) with a valid human revocation."""
+    out: set[str] = set()
+    try:
+        path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS,
+                                    _REVOCATIONS_FILE, base_dir=base_dir))
+        if not path.exists():
+            return set()
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            # One corrupt line must not discard the valid revocations around it.
+            continue
+        if not isinstance(rec, dict):
+            continue
+        tid = rec.get("target_id")
+        if tid and rec.get("timestamp") and S.is_human_approver(rec.get("approver")):
+            out.add(str(tid))
+    return out
