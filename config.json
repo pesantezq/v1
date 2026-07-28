@@ -652,6 +652,10 @@
       "deep_link_base": "https://dashboard.portfolio-ops-center.com",
       "stale_pending_days": 3,
       "note": "One-shot operator approval packet. Read-only builder + GUI approve route reusing the human-gated promotion_approvals path. Ships GATED. Disabled => no Step 8, approve route responds disabled, email unchanged. No new production-mutation path."
+    },
+    "experiments": {
+      "watchlist_discovery_adds_enabled": false,
+      "note": "Gate for experiment_watchlist_discovery_adds (WS13 fix, 2026-07-28). The experiment read automatic_promotion_candidates.json under the wrong container key ('candidates' instead of the real 'decisions') since its original commit (2026-06-16) and returned 0 candidates for its entire existence as a result. Fixing the key mismatch makes a previously-dead experiment start emitting real (sandbox-only, human-gated-before-production) candidates, changing operator-visible candidate volume, so it ships default OFF for explicit operator opt-in. Kill-switch (wins even if enabled=true): config/experiment_watchlist_discovery_adds.DISABLED file or STOCKBOT_SIM_GOV_DISCOVERY_ADDS_DISABLED=1. See docs/SIM_GOVERNANCE.md."
     }
   }
 }

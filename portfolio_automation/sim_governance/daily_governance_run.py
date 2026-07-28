@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -60,7 +61,25 @@ _DEFAULTS = {
     "auto_approval": {
         "enabled": False,
     },
+    "experiments": {
+        "watchlist_discovery_adds_enabled": False,
+    },
 }
+
+# Gate for experiment_watchlist_discovery_adds (WS13 fix, 2026-07-28). The
+# experiment was reading automatic_promotion_candidates.json under the wrong
+# container key ("candidates" instead of the real "decisions") since its
+# original commit (66218b39, 2026-06-16) and has therefore returned 0
+# candidates for its entire existence. Fixing the key mismatch makes a
+# previously-dead experiment start emitting real candidates into the
+# simulation lane — sandbox-only and human-gated before anything reaches
+# production, but a real change in operator-visible candidate volume. Ships
+# default OFF; the operator opts in explicitly. Kill-switch (wins over
+# config even when enabled=true): file
+# `config/experiment_watchlist_discovery_adds.DISABLED` or env
+# `STOCKBOT_SIM_GOV_DISCOVERY_ADDS_DISABLED=1`. See docs/SIM_GOVERNANCE.md.
+_DISCOVERY_ADDS_KILL_FILE = "config/experiment_watchlist_discovery_adds.DISABLED"
+_DISCOVERY_ADDS_KILL_ENV = "STOCKBOT_SIM_GOV_DISCOVERY_ADDS_DISABLED"
 
 
 def load_sim_governance_config(root: Path) -> dict:
@@ -72,14 +91,45 @@ def load_sim_governance_config(root: Path) -> dict:
         block = {}
     merged = {**_DEFAULTS, **block}
     # shallow-merge nested dicts
-    for k in ("simulation_lane", "ai_review", "production_application", "auto_approval"):
+    for k in ("simulation_lane", "ai_review", "production_application", "auto_approval", "experiments"):
         merged[k] = {**_DEFAULTS[k], **(block.get(k, {}) or {})}
     return merged
 
 
-def _enrich_baseline(root: Path, baseline: dict) -> dict:
-    """Best-effort pull of discovery candidates + crowd context for experiments."""
+def _discovery_adds_gate(root: Path, cfg: dict) -> tuple[bool, str]:
+    """Enablement for experiment_watchlist_discovery_adds. Fail-closed: any
+    kill switch wins over config even when the config flag is true. Returns
+    (enabled, reason)."""
+    if os.environ.get(_DISCOVERY_ADDS_KILL_ENV, "").strip().lower() in ("1", "true", "yes"):
+        return False, "env_kill_switch"
+    if (Path(root) / _DISCOVERY_ADDS_KILL_FILE).exists():
+        return False, "file_kill_switch"
+    enabled = bool((cfg.get("experiments", {}) or {}).get("watchlist_discovery_adds_enabled", False))
+    return enabled, ("config_enabled" if enabled else "config_disabled_default")
+
+
+# Promotion-governance decisions whose `proposed_status` represents something
+# actually worth proposing to add to the watchlist. REJECTED/EXPIRED/hold_status
+# decisions must never be surfaced here — only a decision that promoted the
+# ticker to MONITOR status is a genuine "worth watching" signal.
+_PROMOTABLE_STATUSES = frozenset({"MONITOR"})
+
+
+def _enrich_baseline(root: Path, baseline: dict, *, cfg: dict | None = None) -> dict:
+    """Best-effort pull of discovery candidates + crowd context for experiments.
+
+    WS13 fix (2026-07-28): the real container key in
+    automatic_promotion_candidates.json is "decisions" (produced by
+    automatic_promotion_governance._report_to_dict), not "candidates" — the
+    key this function read since its original commit. That mismatch meant
+    experiment_watchlist_discovery_adds returned 0 candidates for its entire
+    existence, independent of how many decisions the producer emitted.
+    Gated: only populates real candidates when the operator has opted in via
+    `_discovery_adds_gate`; otherwise reproduces the historical (always-empty)
+    behavior exactly.
+    """
     root = Path(root)
+    cfg = cfg or {}
 
     def _read(p: Path):
         try:
@@ -87,25 +137,37 @@ def _enrich_baseline(root: Path, baseline: dict) -> dict:
         except Exception:
             return None
 
-    # Discovery promotion candidates (sandbox).
-    promo = _read(root / "outputs" / "sandbox" / "discovery" / "automatic_promotion_candidates.json")
+    enabled, reason = _discovery_adds_gate(root, cfg)
+
     cands: list[dict] = []
-    rows = (promo or {}).get("candidates", []) if isinstance(promo, dict) else []
-    for r in rows if isinstance(rows, list) else []:
-        if not isinstance(r, dict):
-            continue
-        cands.append({
-            "symbol": r.get("ticker") or r.get("symbol"),
-            "score": r.get("corroboration_score", r.get("evidence_score", 0.0)),
-            "reason": "Discovery promotion-governance candidate",
-            "tags": r.get("catalyst_flags", []),
-            "evidence": ["outputs/sandbox/discovery/automatic_promotion_candidates.json"],
-            "risk_impact": "medium" if r.get("risk_flags") else "low",
-            "data_quality": "ok",
-        })
+    if enabled:
+        # Discovery promotion candidates (sandbox). Tolerant: any missing/
+        # malformed artifact degrades to [] rather than raising.
+        promo = _read(root / "outputs" / "sandbox" / "discovery" / "automatic_promotion_candidates.json")
+        rows = promo.get("decisions", []) if isinstance(promo, dict) else []
+        if not isinstance(rows, list):
+            rows = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("proposed_status") not in _PROMOTABLE_STATUSES:
+                continue
+            cands.append({
+                "symbol": r.get("ticker") or r.get("symbol"),
+                "score": r.get("corroboration_score", r.get("evidence_score", 0.0)),
+                "reason": "Discovery promotion-governance candidate (promoted to MONITOR)",
+                "tags": r.get("catalyst_flags", []),
+                "evidence": ["outputs/sandbox/discovery/automatic_promotion_candidates.json"],
+                "risk_impact": "medium" if r.get("risk_flags") else "low",
+                "data_quality": "ok",
+            })
+
     baseline["discovery_candidates"] = [c for c in cands if c.get("symbol")]
     baseline.setdefault("crowd", {})
     baseline.setdefault("watchlist_ranked", [])
+    baseline["_experiment_gates"] = {
+        "watchlist_discovery_adds": {"enabled": enabled, "reason": reason},
+    }
     return baseline
 
 
@@ -155,13 +217,17 @@ def run_daily_governance(
 
     # ── Step 2: active simulation lane (after production baseline exists) ────
     try:
-        baseline = _enrich_baseline(root, simulation_lane.load_production_baseline(root))
+        baseline = _enrich_baseline(root, simulation_lane.load_production_baseline(root), cfg=cfg)
         lane = simulation_lane.run_simulation_lane(
             root, now, baseline=baseline, write_files=write_files, base_dir=base_dir)
         status["stages"]["simulation_lane"] = {
             "ok": True, "candidate_count": lane.get("candidate_count", 0),
             "watchlist_changed": bool(set(lane.get("simulated_watchlist", []))
                                       != set(baseline.get("watchlist", []))),
+            # Per-experiment input accounting (WS13 fix) — makes a structurally
+            # zero experiment visible instead of hiding behind the aggregate
+            # candidate_count above. See simulation_lane.build_experiment_diagnostics.
+            "experiment_diagnostics": lane.get("experiment_diagnostics", []),
         }
     except Exception as exc:
         logger.warning("daily_governance: simulation lane failed: %s", exc)
