@@ -69,6 +69,7 @@ def record_approval(
     base_dir: str,
     notes: str | None = None,
     review_date: str | None = None,
+    candidate_id: str | None = None,
     write_files: bool = True,
 ) -> dict:
     """Record a human approve/reject decision against a proposal.
@@ -85,6 +86,11 @@ def record_approval(
         "notes": notes,
         "review_date": review_date,
     }
+    if candidate_id:
+        # The durable identity. make_proposal_id is clock-salted, so proposal_id
+        # churns every run for an unchanged fact; candidate_id does not. Recording
+        # it lets one approval outlive the proposal id it was filed against.
+        record["candidate_id"] = candidate_id
     ok, reason = S.is_valid_approval_record(record)
     if not ok:
         logger.warning("promotion_approvals: rejecting invalid approval (%s): %s", reason, record)
@@ -147,3 +153,33 @@ def approved_proposal_ids(base_dir: str) -> set[str]:
 
 def rejected_proposal_ids(base_dir: str) -> set[str]:
     return {pid for pid, dec in effective_approvals(base_dir).items() if dec == S.HUMAN_REJECT}
+
+
+def effective_approvals_by_candidate(base_dir: str) -> dict[str, str]:
+    """Fold the approval log to the latest valid decision per candidate_id.
+
+    Mirrors ``effective_approvals`` but keys on the DURABLE identity. Records
+    without a ``candidate_id`` (every record written before this field existed)
+    are skipped here — they remain fully effective via ``effective_approvals``.
+
+    Returns {candidate_id: 'approve'|'reject'}; file order is chronological, so
+    the last record wins.
+    """
+    latest: dict[str, str] = {}
+    for rec in load_valid_approvals(base_dir):
+        cid = rec.get("candidate_id")
+        if cid:
+            latest[str(cid)] = rec["decision"]
+    return latest
+
+
+def approved_candidate_ids(base_dir: str) -> set[str]:
+    """candidate_ids whose latest valid human decision is 'approve'."""
+    return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
+            if dec == S.HUMAN_APPROVE}
+
+
+def rejected_candidate_ids(base_dir: str) -> set[str]:
+    """candidate_ids whose latest valid human decision is 'reject'."""
+    return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
+            if dec == S.HUMAN_REJECT}
