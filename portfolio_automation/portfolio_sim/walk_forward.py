@@ -42,6 +42,8 @@ def walk_forward(
 
     pol = make_policy("periodic")
     is_excess, oos_excess = [], []
+    oos_returns, oos_drawdowns = [], []
+    fold_test_starts, fold_test_ends = [], []
     splits = 0
     i = train_months
     while i + test_months <= len(mdates):
@@ -65,6 +67,10 @@ def walk_forward(
         if rt.metrics.get("status") == "ok":
             is_excess.append(best_train)
             oos_excess.append(rt.metrics["excess_vs_spy"])
+            oos_returns.append(rt.metrics.get("cagr"))
+            oos_drawdowns.append(rt.metrics.get("max_drawdown"))
+            fold_test_starts.append(te.start)
+            fold_test_ends.append(te.end)
             splits += 1
         i += test_months
 
@@ -75,6 +81,24 @@ def walk_forward(
     oos_mean = sum(oos_excess) / len(oos_excess)
     oos_hit = sum(1 for e in oos_excess if e > 0) / len(oos_excess)
     gap = is_mean - oos_mean   # positive = degrades out-of-sample (overfit)
+
+    # WS2 (evidence-record) additions below are purely additive: they do not
+    # change is_mean/oos_mean/oos_hit/gap/overfit/still_works_oos in any way.
+    _returns = [r for r in oos_returns if r is not None]
+    oos_mean_return = sum(_returns) / len(_returns) if _returns else None
+    oos_mean_drawdown = sum(oos_drawdowns) / len(oos_drawdowns) if oos_drawdowns else None
+    abs_excess = [abs(e) for e in oos_excess]
+    total_abs = sum(abs_excess)
+    one_fold_controls_result = bool(
+        len(abs_excess) > 1 and total_abs > 0 and (max(abs_excess) / total_abs) > 0.5
+    )
+    distinct_test_dates = len(set(fold_test_starts))
+    try:
+        span_days = (date.fromisoformat(fold_test_ends[-1]) - date.fromisoformat(fold_test_starts[0])).days
+        distinct_test_weeks = max(1, span_days // 7)
+    except Exception:
+        distinct_test_weeks = None
+
     return {
         "status": "ok",
         "train_months": train_months, "test_months": test_months, "splits": splits,
@@ -82,4 +106,9 @@ def walk_forward(
         "oos_hit_rate": round(oos_hit, 4), "is_oos_gap": round(gap, 6),
         "overfit": round(max(0.0, gap), 6),
         "still_works_oos": bool(oos_mean > 0 and oos_hit >= 0.5),
+        "oos_mean_return": round(oos_mean_return, 6) if oos_mean_return is not None else None,
+        "oos_mean_drawdown": round(oos_mean_drawdown, 6) if oos_mean_drawdown is not None else None,
+        "one_fold_controls_result": one_fold_controls_result,
+        "distinct_test_dates": distinct_test_dates,
+        "distinct_test_weeks": distinct_test_weeks,
     }

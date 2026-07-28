@@ -133,12 +133,26 @@ def _check_pulse_last_run_age(payload: dict[str, Any]) -> tuple[str, int]:
 
 def _check_top100_daily(payload: dict[str, Any]) -> tuple[str, int]:
     """Universe sanitation: warn if top100_daily has zero candidates OR is
-    missing the candidates list. Reports the candidate count."""
+    missing the candidates list, OR the ranking is degenerate this run
+    (zero-variance scores, a majority tie bucket collapsing the tiebreak to
+    alphabetical symbol order, or a zero-information weighted term — e.g.
+    `recent_hit_rate` at `lookback_days=1`, which structurally can never have
+    a resolved outcome). WS9 fix, 2026-07-28: a degenerate ranking used to
+    read as healthy ("candidates present") even when 55%+ of the daily
+    universe ties at an identical score and sorts alphabetically for a
+    reason that has nothing to do with signal quality. See
+    `ranking_diagnostics.degenerate_ranking` (universe_sanitation._diagnose_ranking).
+    Reports the candidate count."""
     cands = payload.get("candidates")
     if not isinstance(cands, list):
         return ("unknown", 0)
     n = len(cands)
-    return (("ok" if n > 0 else "warn"), n)
+    if n == 0:
+        return ("warn", 0)
+    diag = payload.get("ranking_diagnostics") or {}
+    if diag.get("degenerate_ranking"):
+        return ("warn", n)
+    return ("ok", n)
 
 
 def _check_historical_backfill(payload: dict[str, Any]) -> tuple[str, int]:
@@ -229,8 +243,12 @@ _CONTENT_LIVENESS_CHECKS: list[tuple[str, str, Any, str]] = [
         "outputs/latest/top100_daily.json",
         "universe_sanitation.top100_daily",
         _check_top100_daily,
-        "Universe sanitation produced an empty top100_daily — either no "
-        "dynamic sources contributed tickers or the producer hit an error.",
+        "Universe sanitation produced an empty top100_daily (no dynamic "
+        "sources contributed tickers or the producer hit an error), OR the "
+        "ranking is degenerate (zero-variance scores / a majority tie bucket "
+        "that collapses to alphabetical symbol order / a zero-information "
+        "weighted term such as recent_hit_rate at lookback_days=1) — see "
+        "top100_daily.json:ranking_diagnostics for the specific finding.",
     ),
     (
         "outputs/latest/historical_backfill_status.json",

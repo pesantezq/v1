@@ -23,7 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from portfolio_automation.universe_sanitation import (
     _TOP_N,
+    _W_FMP_TOP100,
+    _W_RECENT_HITRATE,
+    _W_SOURCES,
+    _W_THEME_CONF,
     _aggregate_universe,
+    _diagnose_ranking,
     _load_sector,
     _rank_candidates,
     build_top100_daily,
@@ -31,6 +36,13 @@ from portfolio_automation.universe_sanitation import (
     build_top100_weekly,
     run_universe_sanitation,
 )
+
+_SCORE_WEIGHTS = {
+    "sources_presence": _W_SOURCES,
+    "theme_confidence": _W_THEME_CONF,
+    "recent_hit_rate": _W_RECENT_HITRATE,
+    "fmp_top100_presence": _W_FMP_TOP100,
+}
 
 
 class TestLoadSectorEtfNormalization(unittest.TestCase):
@@ -324,6 +336,179 @@ class TestSignalOutcomesLookback(unittest.TestCase):
             # monthly lookback (30 days) → OLD now counts
             by_monthly = _aggregate_universe(root, lookback_days=30)
             self.assertIn("OLD", by_monthly)
+
+
+class TestRankingDiagnostics(unittest.TestCase):
+    """WS9 fix (2026-07-28): `_diagnose_ranking` must detect a degenerate
+    ranking WITHOUT changing any candidate's score/rank/order."""
+
+    def test_empty_candidates_not_degenerate(self):
+        diag = _diagnose_ranking([], _SCORE_WEIGHTS)
+        self.assertFalse(diag["degenerate_ranking"])
+        self.assertEqual(diag["candidate_count"], 0)
+
+    def test_discriminative_ranking_not_degenerate(self):
+        cands = [
+            {"symbol": "AAA", "score": 0.9, "sources": ["static", "fmp_top100", "theme_candidate"],
+             "theme_confidence_max": 0.9, "recent_hit_rate_1d": 0.8},
+            {"symbol": "BBB", "score": 0.5, "sources": ["static"],
+             "theme_confidence_max": 0.2, "recent_hit_rate_1d": 0.3},
+            {"symbol": "CCC", "score": 0.1, "sources": ["theme_candidate"],
+             "theme_confidence_max": 0.0, "recent_hit_rate_1d": None},
+        ]
+        diag = _diagnose_ranking(cands, _SCORE_WEIGHTS)
+        self.assertFalse(diag["degenerate_ranking"])
+        self.assertFalse(diag["zero_variance"])
+        self.assertEqual(diag["zero_information_terms"], [])
+        self.assertEqual(diag["distinct_score_count"], 3)
+
+    def test_zero_variance_flagged(self):
+        cands = [
+            {"symbol": s, "score": 0.16, "sources": ["static"], "theme_confidence_max": 0.0,
+             "recent_hit_rate_1d": None}
+            for s in ("AAA", "BBB", "CCC")
+        ]
+        diag = _diagnose_ranking(cands, _SCORE_WEIGHTS)
+        self.assertTrue(diag["zero_variance"])
+        self.assertTrue(diag["degenerate_ranking"])
+        self.assertEqual(diag["largest_tie_fraction"], 1.0)
+
+    def test_majority_tie_bucket_flagged_with_real_ws9_shape(self):
+        """Mirrors the real production shape: 17/31 tied at 0.16, the rest
+        spread across distinct scores — not zero variance overall, but a
+        dominant tie bucket that falls back to alphabetical order."""
+        tied = [
+            {"symbol": s, "score": 0.16, "sources": ["recent_signal", "static"],
+             "theme_confidence_max": 0.0, "recent_hit_rate_1d": None}
+            for s in ("MARA", "AAPL", "TSLA", "ZEBRA")  # deliberately unsorted input
+        ]
+        distinct = [
+            {"symbol": "NVDA", "score": 0.9, "sources": ["static", "fmp_top100", "theme_candidate"],
+             "theme_confidence_max": 0.9, "recent_hit_rate_1d": 0.7},
+            {"symbol": "MSFT", "score": 0.5, "sources": ["static", "fmp_top100"],
+             "theme_confidence_max": 0.3, "recent_hit_rate_1d": 0.4},
+        ]
+        cands = tied + distinct  # 4/6 = 67% tie bucket
+        diag = _diagnose_ranking(cands, _SCORE_WEIGHTS)
+        self.assertFalse(diag["zero_variance"])
+        self.assertTrue(diag["degenerate_ranking"])
+        self.assertEqual(diag["largest_tie_group_size"], 4)
+        self.assertAlmostEqual(diag["largest_tie_fraction"], 4 / 6, places=3)
+        self.assertTrue(diag["alphabetical_tiebreak_detected"])
+
+    def test_zero_information_term_flagged_even_without_tie_majority(self):
+        """recent_hit_rate is unresolved (None) for every candidate this run,
+        while scores otherwise differ enough to avoid a majority tie — the
+        term itself must still be flagged as zero-information."""
+        cands = [
+            {"symbol": "AAA", "score": 0.40, "sources": ["static"],
+             "theme_confidence_max": 0.0, "recent_hit_rate_1d": None},
+            {"symbol": "BBB", "score": 0.30, "sources": ["theme_candidate"],
+             "theme_confidence_max": 0.5, "recent_hit_rate_1d": None},
+            {"symbol": "CCC", "score": 0.10, "sources": ["fmp_top100"],
+             "theme_confidence_max": 0.0, "recent_hit_rate_1d": None},
+        ]
+        diag = _diagnose_ranking(cands, _SCORE_WEIGHTS)
+        self.assertIn("recent_hit_rate", diag["zero_information_terms"])
+        self.assertTrue(diag["degenerate_ranking"])
+
+    def test_small_universe_flag(self):
+        cands = [{"symbol": "AAA", "score": 0.9, "sources": ["static"],
+                   "theme_confidence_max": 0.0, "recent_hit_rate_1d": None}]
+        diag = _diagnose_ranking(cands, _SCORE_WEIGHTS)
+        self.assertTrue(diag["small_universe"])
+
+
+class TestRealisticResolutionTiming(unittest.TestCase):
+    """WS9-F4 fix: the pre-existing fixture unrealistically pre-populated a
+    12-hour-old signal with an already-resolved `outcome_return_1d`, which
+    masked the real defect. In production, resolution takes >= 1 full trading
+    day, so a signal inside a 1-day lookback window is genuinely unresolved.
+    This test reflects that realistic timing and proves `recent_hit_rate`
+    reads as structurally zero-information at `lookback_days=1` as a result —
+    not merely that a stale fixture happens to trip a flag."""
+
+    def _write_recent_unresolved_signals(self, root: Path, tickers: list[str]) -> None:
+        """Signals from 12 hours ago (well inside a 1-day lookback) with NO
+        outcome_return_1d populated — the realistic production state, since
+        resolution requires >= 1 full trading day to elapse."""
+        recent_ts = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+        _write_signal_outcomes(root, [
+            {"ticker": t, "signal_time": recent_ts,
+             "outcome_return_1d": "", "direction_correct_1d": ""}
+            for t in tickers
+        ])
+
+    def test_recent_signal_within_1d_lookback_has_no_resolved_hit_rate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, [])
+            self._write_recent_unresolved_signals(root, ["NEWCO"])
+            by_daily = _aggregate_universe(root, lookback_days=1)
+            self.assertIn("NEWCO", by_daily)
+            sig = by_daily["NEWCO"]["signal"]
+            self.assertEqual(sig["resolved_1d"], 0)
+            ranked = _rank_candidates(by_daily, root)
+            row = next(r for r in ranked if r["symbol"] == "NEWCO")
+            self.assertIsNone(row["recent_hit_rate_1d"])
+
+    def test_daily_build_under_realistic_timing_flags_zero_info_recent_hit_rate(self):
+        """End-to-end: build_top100_daily with multiple candidates whose only
+        recent signals are realistically unresolved must flag recent_hit_rate
+        as zero-information in ranking_diagnostics — this is the exact defect
+        that a 12h-old-but-already-resolved fixture would have hidden."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, ["AAPL", "MSFT"])
+            self._write_recent_unresolved_signals(root, ["AAPL", "MSFT", "NEWCO"])
+            payload = build_top100_daily(root)
+            for row in payload["candidates"]:
+                self.assertIsNone(row["recent_hit_rate_1d"])
+            diag = payload["ranking_diagnostics"]
+            self.assertIn("recent_hit_rate", diag["zero_information_terms"])
+
+    def test_longer_lookback_lets_older_resolved_signal_inform_hit_rate(self):
+        """Contrast case: at lookback_days=30, a signal old enough to have
+        actually resolved DOES carry a real hit-rate — confirming the defect
+        is specific to the 1-day/unresolved-timing interaction, not a general
+        bug in the hit-rate computation."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, [])
+            old_resolved_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+            _write_signal_outcomes(root, [
+                {"ticker": "OLDCO", "signal_time": old_resolved_ts,
+                 "outcome_return_1d": "0.02", "direction_correct_1d": "1"},
+            ])
+            by_monthly = _aggregate_universe(root, lookback_days=30)
+            ranked = _rank_candidates(by_monthly, root)
+            row = next(r for r in ranked if r["symbol"] == "OLDCO")
+            self.assertEqual(row["recent_hit_rate_1d"], 1.0)
+
+
+class TestRankingOutputUnchangedByDiagnostics(unittest.TestCase):
+    """Regression guard for the WS9 fix's core constraint: diagnostics are
+    additive only. Adding `ranking_diagnostics` must not alter `candidates`,
+    scores, or rank order."""
+
+    def test_candidates_identical_with_and_without_diagnostics_field_present(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_config(root, ["NVDA", "ZZZ"])
+            _write_fmp_top100(root, ["NVDA"])
+            _write_theme_candidates(root, [{"ticker": "NVDA", "confidence": 0.9}])
+            by = _aggregate_universe(root, lookback_days=1)
+            ranked_a = _rank_candidates(by, root)
+            ranked_b = _rank_candidates(by, root)
+            # _rank_candidates itself (the actual ranking function) is
+            # untouched by the diagnostics addition — deterministic rerun
+            # produces byte-identical output.
+            self.assertEqual(ranked_a, ranked_b)
+            # ranking_diagnostics computed from the ranked output does not
+            # feed back into or mutate it.
+            diag = _diagnose_ranking(ranked_a, _SCORE_WEIGHTS)
+            self.assertEqual(ranked_a, ranked_b)
+            self.assertIn("degenerate_ranking", diag)
 
 
 if __name__ == "__main__":

@@ -389,6 +389,133 @@ DEFAULT_EXPERIMENTS: list[Experiment] = [
 
 
 # ---------------------------------------------------------------------------
+# Per-experiment input accounting (WS13 fix).
+#
+# A "0 candidates" outcome is ambiguous on its own — it can mean "ran fine,
+# nothing qualified today", "has no admissible input at all", "gated off by
+# config", or "no producer for this input exists anywhere in the codebase".
+# `experiment_watchlist_discovery_adds` returned 0 for six weeks (2026-06-16 ->
+# 2026-07-28) because of a container-key mismatch reading its upstream
+# artifact, and the only health signal available (`candidate_count`, an
+# aggregate across all experiments) could never have caught it because the
+# other experiments kept the aggregate non-zero. This table + the diagnostics
+# below make each experiment's input self-reporting so that never recurs
+# silently. See docs/SIM_GOVERNANCE.md.
+# ---------------------------------------------------------------------------
+
+# Baseline key(s) each experiment expects as its primary admissible input.
+_EXPERIMENT_INPUT_KEYS: dict[str, tuple[str, ...]] = {
+    "experiment_watchlist_discovery_adds": ("discovery_candidates",),
+    "experiment_watchlist_rerank": ("watchlist_ranked",),
+    "experiment_advisory_crowd_context": ("advisory", "crowd"),
+    "experiment_flock_intelligence": ("flock",),
+}
+
+# Experiments whose expected input has NO producer anywhere in this codebase.
+# Do not invent one — report the absence explicitly so health checks can tell
+# "ran and found nothing" apart from "cannot ever have admissible input".
+_EXPERIMENT_NO_PRODUCER: dict[str, str] = {
+    "experiment_watchlist_rerank": (
+        "No producer anywhere in this codebase populates 'watchlist_ranked' — "
+        "load_production_baseline()/_enrich_baseline() always default it to []. "
+        "This is a structural INERT_NO_PRODUCER state (do not invent a ranking "
+        "source to fill it); it is expected to read 0 candidates forever until "
+        "an operator adds a real producer."
+    ),
+}
+
+
+def _input_count(baseline: dict, key: str) -> int:
+    val = baseline.get(key)
+    if isinstance(val, dict):
+        return len(val)
+    if isinstance(val, list):
+        return len(val)
+    return 0
+
+
+def _experiment_gate(baseline: dict, name: str) -> dict | None:
+    """Look up an optional {'enabled': bool, 'reason': str} gate a baseline
+    producer (e.g. daily_governance_run._enrich_baseline) may have recorded
+    under baseline['_experiment_gates'][<short name>]. Absent for experiments
+    with no config gate."""
+    gates = baseline.get("_experiment_gates") or {}
+    gate_key = {
+        "experiment_watchlist_discovery_adds": "watchlist_discovery_adds",
+    }.get(name)
+    if gate_key is None:
+        return None
+    gate = gates.get(gate_key)
+    return gate if isinstance(gate, dict) else None
+
+
+def _classify_experiment(
+    name: str, baseline: dict, candidate_count: int, error: str | None,
+) -> dict:
+    input_keys = _EXPERIMENT_INPUT_KEYS.get(name, ())
+    input_count = sum(_input_count(baseline, k) for k in input_keys)
+    entry = {
+        "experiment": name,
+        "expected_input_key": ",".join(input_keys) or None,
+        "actual_input_count": input_count,
+        "candidate_count": candidate_count,
+        "zero_expected": False,
+        "classification": "OPERATIONAL",
+        "reason": "",
+    }
+
+    if error is not None:
+        entry["classification"] = "BROKEN"
+        entry["reason"] = f"Experiment raised an exception this run: {error}"
+        return entry
+
+    no_producer_reason = _EXPERIMENT_NO_PRODUCER.get(name)
+    if no_producer_reason is not None:
+        entry["classification"] = "INERT_NO_PRODUCER"
+        entry["zero_expected"] = True
+        entry["reason"] = no_producer_reason
+        return entry
+
+    gate = _experiment_gate(baseline, name)
+    if gate is not None and not gate.get("enabled", True):
+        entry["classification"] = "INERT_GATED_OFF"
+        entry["zero_expected"] = True
+        entry["reason"] = (
+            f"Gated OFF ({gate.get('reason', 'config_disabled_default')}); "
+            "operator opt-in required. See docs/SIM_GOVERNANCE.md."
+        )
+        return entry
+
+    if candidate_count > 0:
+        return entry  # OPERATIONAL, zero_expected stays False
+
+    if input_count == 0:
+        entry["zero_expected"] = True
+        entry["reason"] = "No admissible input this run (expected input is empty upstream)."
+        return entry
+
+    entry["reason"] = (
+        "Input was present but no candidate passed the experiment's own "
+        "logic this run — a real zero, not a missing-input zero."
+    )
+    return entry
+
+
+def build_experiment_diagnostics(
+    baseline: dict,
+    candidates_by_experiment: dict[str, list],
+    errors_by_experiment: dict[str, str] | None = None,
+) -> list[dict]:
+    """Per-experiment input/output accounting so a zero is never structurally
+    invisible behind the lane's aggregate `candidate_count`."""
+    errors_by_experiment = errors_by_experiment or {}
+    return [
+        _classify_experiment(name, baseline, len(cands), errors_by_experiment.get(name))
+        for name, cands in candidates_by_experiment.items()
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Active materialization — the simulated views that experiments mutate.
 # ---------------------------------------------------------------------------
 
@@ -467,15 +594,23 @@ def run_simulation_lane(
     exps = experiments if experiments is not None else DEFAULT_EXPERIMENTS
 
     candidates: list[S.SimulationCandidate] = []
+    candidates_by_experiment: dict[str, list[S.SimulationCandidate]] = {}
+    errors_by_experiment: dict[str, str] = {}
     for exp in exps:
+        name = getattr(exp, "__name__", str(exp))
         try:
-            candidates.extend(exp(bl) or [])
+            exp_cands = exp(bl) or []
         except Exception as exc:  # one bad experiment must not sink the lane
-            logger.warning("simulation_lane: experiment %s failed: %s",
-                           getattr(exp, "__name__", exp), exc)
+            logger.warning("simulation_lane: experiment %s failed: %s", name, exc)
+            exp_cands = []
+            errors_by_experiment[name] = str(exc)
+        candidates_by_experiment[name] = exp_cands
+        candidates.extend(exp_cands)
 
     views = materialize_simulated_views(bl, candidates)
     snapshot_binding = _input_snapshot_binding(base_dir)
+    experiment_diagnostics = build_experiment_diagnostics(
+        bl, candidates_by_experiment, errors_by_experiment)
 
     result = {
         "generated_at": now,
@@ -491,6 +626,10 @@ def run_simulation_lane(
         "advisory_candidate_count": sum(1 for c in candidates if c.workflow == S.WORKFLOW_ADVISORY),
         "watchlist_candidate_count": sum(1 for c in candidates if c.workflow == S.WORKFLOW_WATCHLIST),
         "candidates": [c.to_dict() for c in candidates],
+        # Per-experiment input/output accounting (WS13 fix, 2026-07-28): makes a
+        # structurally-zero experiment visible even while the aggregate
+        # candidate_count above stays healthy-looking because other experiments fire.
+        "experiment_diagnostics": experiment_diagnostics,
         "simulated_watchlist": views["simulated_watchlist"],
         "simulated_advisory": views["simulated_advisory"],
         "production_baseline": bl,

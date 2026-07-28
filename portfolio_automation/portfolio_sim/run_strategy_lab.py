@@ -25,6 +25,7 @@ from portfolio_automation.portfolio_sim.backtest_engine import benchmark_total_r
 from portfolio_automation.portfolio_sim.prices import load_price_panel
 from portfolio_automation.portfolio_sim.rebalance import make_policy
 from portfolio_automation.portfolio_sim.crowd_tactic import CrowdTactic, apply_sentiment_tilt
+from portfolio_automation.portfolio_sim.oos_state import build_oos_evidence
 from portfolio_automation.portfolio_sim.research_library import research_tactics
 from portfolio_automation.portfolio_sim.sim_base import SimStatus, sim_envelope, utc_now_iso
 from portfolio_automation.portfolio_sim.strategy_score import rank, score
@@ -220,14 +221,23 @@ def _score_tactic(tac, panel, windows, bench, cfg, overfit_by_tactic=None) -> di
         "overfit": overfit,
     }
     sc = score(components, cfg["scoring_weights"])
+    # WS2: structured, non-fabricated OOS evidence record replaces the bare
+    # boolean as the source of truth. `still_works_oos` below is now DERIVED
+    # from the classified state (never computed independently) — see
+    # portfolio_sim/oos_state.py and .superpowers/audit/ws-02-03-oos-selection.md.
+    oos_evidence = build_oos_evidence(tac.tactic_id, wf if isinstance(wf, dict) else None)
     return {"tactic_id": tac.tactic_id, "name": tac.name, "source": tac.source,
             "approximate": tac.approximate,
             "academic_basis": tac.metadata.get("academic_basis", ""),
             "strategy_score": sc["strategy_score"], "flags": sc["flags"],
+            # ws-01a: full component breakdown, persisted so strategy_score is
+            # reproducible from the artifact itself (audit ws-01-strategy-score.md §2).
+            "score_decomposition": sc["score_decomposition"],
             "mean_excess_vs_spy": round(mean_excess, 6), "prob_beat_spy": round(prob_beat, 4),
             "worst_max_drawdown": round(worst_dd, 6), "by_window": finals,
             "overfit": overfit,
-            "still_works_oos": (wf.get("still_works_oos") if isinstance(wf, dict) and wf.get("status") == "ok" else None),
+            "still_works_oos": oos_evidence["legacy_still_works_oos"],
+            "oos_evidence": oos_evidence,
             "tax_note": "gross_until_cost_model"}
 
 

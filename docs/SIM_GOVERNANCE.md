@@ -151,9 +151,72 @@ sim lane no longer mints new ones.
   "ai_review": {"enabled": true, "llm_enabled": true, "daily_cost_cap_usd": 0.5,
                 "provider": "openai", "model": "gpt-4o-mini", "max_calls_per_day": 1},
   "production_application": {"apply_watchlist_overlay": false,
-                            "apply_advisory_overlay": false}
+                            "apply_advisory_overlay": false},
+  "experiments": {"watchlist_discovery_adds_enabled": false}
 }
 ```
+
+## `experiment_watchlist_discovery_adds` gate + per-experiment diagnostics — WS13 fix, 2026-07-28
+
+**What was broken.** `daily_governance_run._enrich_baseline` read
+`outputs/sandbox/discovery/automatic_promotion_candidates.json` via
+`.get("candidates", [])`. The producer (`automatic_promotion_governance.py`)
+has always written its results under `"decisions"`, not `"candidates"` — since
+before `_enrich_baseline` was even written. The result:
+`experiment_watchlist_discovery_adds` (`simulation_lane.py`) received `[]` on
+every run, regardless of how many real promotion decisions existed, for its
+entire existence (2026-06-16 → 2026-07-28, ~6 weeks). It was never a
+regression — the key was wrong from the day the function was authored.
+
+**The fix.** `_enrich_baseline` now reads the real `"decisions"` key, degrades
+to `[]` (never raises) on a missing/malformed artifact, and filters to
+decisions whose `proposed_status == "MONITOR"` — a decision the promotion
+governance layer actually promoted to research-monitor status. Decisions with
+`proposed_status` of `REJECTED`/`EXPIRED`/`NEEDS_REVIEW`/hold-at-prior-status
+are never surfaced as watchlist-add candidates.
+
+**Why it's gated (default OFF).** This experiment feeds the SANDBOX
+simulation lane only — it can never reach production without a human-approved
+proposal — but making a permanently-dead experiment start emitting real
+candidates changes operator-visible candidate volume in the simulation lane
+and the AI review packet. The operator opts in explicitly:
+
+```json
+"sim_governance": {"experiments": {"watchlist_discovery_adds_enabled": true}}
+```
+
+**Kill-switch** (wins over config even when `enabled: true`):
+`config/experiment_watchlist_discovery_adds.DISABLED` file, or env
+`STOCKBOT_SIM_GOV_DISCOVERY_ADDS_DISABLED=1`.
+
+**`experiment_watchlist_rerank` — `INERT_NO_PRODUCER`, not a bug.** No
+producer anywhere in this codebase populates `watchlist_ranked`. Rather than
+inventing one, the lane reports this experiment's diagnostic classification
+as `INERT_NO_PRODUCER` explicitly (see below) so health checks can tell "ran
+and found nothing" apart from "structurally has no admissible input, ever".
+
+**Per-experiment input accounting.** `simulation_lane.run_simulation_lane`
+attaches an `experiment_diagnostics` list to its result (and to
+`daily_governance_status.json → stages.simulation_lane.experiment_diagnostics`)
+so a zero is never invisible behind the aggregate `candidate_count`. Each
+entry:
+
+```json
+{
+  "experiment": "experiment_watchlist_discovery_adds",
+  "expected_input_key": "discovery_candidates",
+  "actual_input_count": 0,
+  "candidate_count": 0,
+  "zero_expected": true,
+  "classification": "INERT_GATED_OFF",
+  "reason": "Gated OFF (config_disabled_default); operator opt-in required. …"
+}
+```
+
+`classification` ∈ `OPERATIONAL` (ran; `zero_expected` distinguishes a
+legitimate "nothing qualified" zero from "input was empty upstream"),
+`INERT_GATED_OFF` (config gate off), `INERT_NO_PRODUCER` (no upstream
+producer exists — permanent), `BROKEN` (the experiment raised this run).
 
 ## Namespaces (added to `data_governance.OutputNamespace`)
 

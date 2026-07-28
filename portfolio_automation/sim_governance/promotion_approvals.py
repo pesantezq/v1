@@ -17,8 +17,11 @@ so a later reject overrides an earlier approve (and vice-versa).
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import logging
+import os
 from pathlib import Path
 
 from portfolio_automation.data_governance import (
@@ -32,6 +35,50 @@ from portfolio_automation.sim_governance import schemas as S
 logger = logging.getLogger("stockbot.sim_governance.promotion_approvals")
 
 _APPROVALS_FILE = "approved_proposals.json"
+_APPROVALS_LOCK_FILE = "approved_proposals.json.lock"
+
+
+@contextlib.contextmanager
+def _approvals_write_lock(base_dir: str):
+    """Advisory exclusive lock serializing ``record_approval``'s read-modify-write.
+
+    ``safe_write_text``'s tempfile+``os.replace`` gives atomicity of a SINGLE
+    write, but does nothing to make "read the document, append a record, write
+    it back" atomic as a unit across two concurrent callers — two humans (or
+    two GUI tabs / a single-item click racing a bulk-approve loop) approving
+    DIFFERENT proposals at the same moment can both read the same on-disk
+    state, both append in memory, and the second writer's replace silently
+    discards the first writer's approval — both calls still report ``ok: True``
+    (confirmed by a thread-barrier interleaving experiment; see
+    ``.superpowers/audit/ws-10-11-12-persistence.md`` WS11.2).
+
+    ``fcntl.flock`` on a dedicated ``.lock`` sidecar file (never the document
+    itself, so a lock holder never blocks a plain read of the approvals log)
+    is the smallest mechanism that closes this for BOTH threads within one
+    process and separate OS processes on Linux — the two shapes that matter
+    here (single long-lived uvicorn process today; a second writer process is
+    not ruled out for the future). Each call opens its own file descriptor,
+    acquires the lock, and unconditionally releases + closes it in ``finally``
+    — including on any exception raised by the guarded block — so a crash
+    mid-write can never leave the lock held. Because every call opens a FRESH
+    descriptor and never re-enters this context manager while already holding
+    one (record_approval does not call itself, and nothing else acquires this
+    lock), there is no path by which the same process can deadlock against
+    itself: the only way to block is a DIFFERENT call (thread or process)
+    holding the lock, and that call is guaranteed to release it.
+    """
+    ensure_output_dir(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_LOCK_FILE, base_dir=base_dir)
+    lock_path = get_output_path(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_LOCK_FILE,
+                                base_dir=base_dir)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _looks_like_repo_root(base_dir: str) -> bool:
@@ -141,30 +188,36 @@ def record_approval(
         return {"ok": False, "reason": msg, "record": None}
 
     if write_files:
-        unreadable = approvals_log_unreadable(base_dir)
-        if unreadable:
-            msg = f"approvals_log_unreadable: {unreadable}"
-            logger.error(
-                "promotion_approvals: REFUSING to record approval — %s; a "
-                "read-modify-write through the unreadable log would silently "
-                "discard the existing approval records", msg)
-            return {"ok": False, "reason": msg, "record": None}
+        # The unreadable-check and the read-modify-write must happen as ONE
+        # atomic unit under the lock: checking outside it would leave a window
+        # where a concurrent writer corrupts (or repairs) the file between the
+        # check and the read, reintroducing exactly the race this guards
+        # against. See ``_approvals_write_lock`` for why flock is sufficient.
+        with _approvals_write_lock(base_dir):
+            unreadable = approvals_log_unreadable(base_dir)
+            if unreadable:
+                msg = f"approvals_log_unreadable: {unreadable}"
+                logger.error(
+                    "promotion_approvals: REFUSING to record approval — %s; a "
+                    "read-modify-write through the unreadable log would silently "
+                    "discard the existing approval records", msg)
+                return {"ok": False, "reason": msg, "record": None}
 
-    if write_files:
-        data = _load_raw(base_dir)
-        approvals = list(data.get("approvals", []))
-        approvals.append(record)
-        payload = {
-            "generated_at": now,
-            "schema": "approved_proposals.v1",
-            "note": "Human approvals only. AI/product review cannot approve production.",
-            "approvals": approvals,
-        }
-        try:
-            safe_write_json(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_FILE, payload, base_dir=base_dir)
-        except Exception as exc:
-            logger.warning("promotion_approvals: write failed: %s", exc)
-            return {"ok": False, "reason": f"write_failed: {exc}", "record": record}
+            data = _load_raw(base_dir)
+            approvals = list(data.get("approvals", []))
+            approvals.append(record)
+            payload = {
+                "generated_at": now,
+                "schema": "approved_proposals.v1",
+                "note": "Human approvals only. AI/product review cannot approve production.",
+                "approvals": approvals,
+            }
+            try:
+                safe_write_json(OutputNamespace.PROMOTION_APPROVALS, _APPROVALS_FILE, payload,
+                                base_dir=base_dir)
+            except Exception as exc:
+                logger.warning("promotion_approvals: write failed: %s", exc)
+                return {"ok": False, "reason": f"write_failed: {exc}", "record": record}
 
     return {"ok": True, "reason": "ok", "record": record}
 
