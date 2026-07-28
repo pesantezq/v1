@@ -84,6 +84,74 @@ def _overlay_entry(proposal: dict) -> dict:
     }
 
 
+def _prior_watchlist_ops(
+    base_dir: str,
+    *,
+    approved: set[str],
+    approved_cands: set[str],
+    rejected: set[str],
+    rejected_cands: set[str],
+    revoked: set[str],
+) -> list[dict]:
+    """Previously-applied WATCHLIST ops, from the append-only audit log.
+
+    Watchlist ops are durable membership state: once applied they must survive
+    runs in which their candidate is no longer proposed — which is precisely what
+    happens after a removal is applied and the producer self-suppresses. Advisory
+    ops are deliberately NOT included: they annotate today's decision rows from
+    live state and must refresh.
+
+    An audit row is not authority on its own. A prior op is carried forward only
+    while it is still backed by a valid human approval and has not been rejected
+    or revoked.
+
+    Tolerant: a missing or partly-corrupt log yields whatever rows parse.
+    """
+    path = Path(get_output_path(OutputNamespace.PROMOTION_APPROVALS, _AUDIT_FILE,
+                                base_dir=base_dir))
+    if not path.exists():
+        return []
+
+    seen: dict[str, dict] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(row, dict) or row.get("event") != "applied_to_production":
+                continue
+            ptype = row.get("proposal_type")
+            if not S.is_valid_proposal_type(ptype):
+                continue
+            if S.workflow_for_proposal_type(ptype) != S.WORKFLOW_WATCHLIST:
+                continue
+            pid = row.get("proposal_id")
+            cid = row.get("candidate_id")
+            if pid in revoked or (cid and cid in revoked):
+                continue
+            if pid in rejected or (cid and cid in rejected_cands):
+                continue
+            if pid not in approved and not (cid and cid in approved_cands):
+                continue
+            key = str(cid or pid)
+            seen[key] = {
+                "proposal_id": pid,
+                "candidate_id": cid,
+                "proposal_type": ptype,
+                "change": row.get("change", {}),
+                "rollback_plan": row.get("rollback_plan", ""),
+                "applied_from": "human_approved_promotion_proposal",
+            }
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("production_application: prior-ops read failed: %s", exc)
+        return []
+    return list(seen.values())
+
+
 def apply_approved_proposals(
     now: str,
     *,
@@ -143,6 +211,22 @@ def apply_approved_proposals(
             advisory_ops.append(entry)
         applied.append({"proposal_id": pid, "proposal_type": ptype,
                         "workflow": S.workflow_for_proposal_type(ptype)})
+
+    # Watchlist membership is durable: carry forward previously-applied ops that
+    # are still approved and not rejected/revoked. Today's op wins on a clash, so
+    # a re-proposed candidate is not applied twice. Advisory ops are untouched —
+    # they must refresh from the current pending set.
+    _today_keys = {str(o.get("candidate_id") or o.get("proposal_id")) for o in watchlist_ops}
+    _revoked = promotion_approvals.revoked_ids(base_dir) if hasattr(
+        promotion_approvals, "revoked_ids") else set()
+    for _prior in _prior_watchlist_ops(
+        base_dir,
+        approved=approved, approved_cands=approved_cands,
+        rejected=rejected, rejected_cands=rejected_cands,
+        revoked=_revoked,
+    ):
+        if str(_prior.get("candidate_id") or _prior.get("proposal_id")) not in _today_keys:
+            watchlist_ops.append(_prior)
 
     watchlist_overlay = {
         "generated_at": now,
