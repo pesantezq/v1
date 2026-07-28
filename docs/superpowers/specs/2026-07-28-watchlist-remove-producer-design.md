@@ -96,11 +96,14 @@ only unit tests. The end-to-end test is therefore load-bearing, not a formality.
 
 **Goals**
 
-1. Emit `watchlist_remove` candidates for decayed static universe members, via
-   the existing human-gated promotion workflow.
-2. Fix `load_production_baseline` to reflect effective production state.
-3. Record the universe-composition break so gauge attribution stays honest.
-4. Pair the feature with a health check (CLAUDE.md Analysis + Health
+1. Emit `watchlist_remove` candidates for static universe members that are
+   decayed on **both** accuracy and expectancy, via the existing human-gated
+   promotion workflow. On today's data that is RIOT alone.
+2. Extend `universe_sanitation` to emit `recent_mean_return_1d` (the expectancy
+   term the gate needs).
+3. Fix `load_production_baseline` to reflect effective production state.
+4. Record the universe-composition break so gauge attribution stays honest.
+5. Pair the feature with a health check (CLAUDE.md Analysis + Health
    Coverage Requirement).
 
 **Non-goals**
@@ -129,7 +132,8 @@ the invariant.
 
 ```
 universe_sanitation (monthly) -> outputs/latest/top100_monthly.json
-                                   (rank, recent_hit_rate_1d, recent_resolved_1d)
+                                   (rank, recent_hit_rate_1d, recent_resolved_1d,
+                                    recent_mean_return_1d  [NEW field])
                                           |
                                           v
 load_production_baseline  ->  baseline["watchlist"] = EFFECTIVE runtime list
@@ -138,7 +142,8 @@ load_production_baseline  ->  baseline["watchlist"] = EFFECTIVE runtime list
                                           v
 experiment_watchlist_decay_removals(baseline)                        [NEW]
    gate: recent_resolved_1d >= 30
-     AND recent_hit_rate_1d < 0.40
+     AND recent_hit_rate_1d < 0.40        (decayed accuracy)
+     AND recent_mean_return_1d < 0        (negative expectancy)
      AND symbol present in effective baseline
                                           |
                                           v
@@ -157,16 +162,43 @@ daily_simulation_bundle (workflow=watchlist bucket)
 
 ### Gate rationale
 
-`recent_resolved_1d >= 30 AND recent_hit_rate_1d < 0.40`.
+```
+recent_resolved_1d      >= 30
+AND recent_hit_rate_1d   < 0.40
+AND recent_mean_return_1d < 0
+```
 
-- Today's output: **RIOT** (0.3548) and **SMCI** (0.2903).
-- MARA (0.4516) does **not** qualify. Its real disqualifier is the $4.62B market
-  cap, which belongs to a separate market-cap screen (follow-up), not a
-  hit-rate rule. Removing it for the wrong reason would be incoherent.
+Measured on the real 30-day monthly lookback window (2026-06-27 to 2026-07-27),
+the window the gate actually reads:
+
+| symbol | n | hit% | mean_1d | outcome |
+|---|---|---|---|---|
+| **RIOT** | 34 | 32.35% | **-0.324** | **propose remove** |
+| SMCI | 34 | 26.47% | +0.072 | excluded — positive expectancy |
+| MARA | 34 | 41.18% | -0.487 | excluded — hit rate above gate |
+| LLY | 0 | `null` | `null` | excluded — `n` guard |
+
+**Why expectancy, not a tighter hit-rate threshold.** SMCI has a *lower* hit rate
+than RIOT (26.47% vs 32.35%) and a lower composite score (0.218 vs 0.231), so no
+hit-rate threshold can admit RIOT without also admitting SMCI. The two diverge on
+expectancy: SMCI wins rarely but with large winners, netting **positive** mean
+return, while RIOT loses often, loses money on average, and owns the worst tail
+(-15.01 worst 1d). A low hit rate with positive expectancy is a legitimate
+profile; a low hit rate with negative expectancy is broken. The mean-return
+condition encodes that distinction.
+
+Rejected: `recent_hit_rate_1d < 0.33`. It would exclude RIOT (0.3548) and select
+only SMCI — the inverse of the intent.
+
 - The `n >= 30` guard is load-bearing: without it LLY (rank 31, **0 resolved**,
   `recent_hit_rate_1d = null`) is swept purely for lacking history.
 - Absolute rather than rank-relative: a bottom-decile rule always removes
   someone, even when the whole universe is healthy.
+- **MARA is a near-miss and is expected to qualify soon.** Its expectancy
+  (-0.487) is *worse* than RIOT's, and it misses only on hit rate, by 1.2pp.
+  This is the mechanism working — the rule will surface it for human approval
+  when it crosses — but it means the producer should not be assumed to be a
+  one-symbol change over time.
 
 ### Idempotence
 
@@ -183,11 +215,24 @@ config-reading baseline would re-propose the same removal forever.
 
 | Change | File / symbol | Nature |
 |---|---|---|
+| Emit `recent_mean_return_1d` | `portfolio_automation/universe_sanitation.py:170-178, 438` | additive field |
 | Baseline reads effective runtime watchlist | `sim_governance/simulation_lane.py:111` `load_production_baseline` | bug fix |
 | New producer | `simulation_lane.py` `experiment_watchlist_decay_removals` | new |
 | Register experiment | `simulation_lane.py:383` `DEFAULT_EXPERIMENTS` | one line |
 | Composition-break probe | `portfolio_automation/quant_watch_probes.py` | new detector |
 | Health check | `.claude/commands/daily-tool-analysis.md` §6n + `portfolio-discovery-health` | pairing |
+
+### `recent_mean_return_1d`
+
+`top100_monthly.json` carries `recent_hit_rate_1d` but no expectancy field. The
+extension is near-free: `universe_sanitation.py:173` already computes
+`float(ret)` and **discards it** (`_ = float(ret)`). Accumulate the sum into the
+existing per-ticker bucket (`:164-166`) and emit the mean alongside
+`recent_hit_rate_1d` (`:438-439`).
+
+Additive and observe-only — `universe_sanitation._OBSERVE_ONLY` stays `True`, and
+no existing consumer of the artifact changes behavior. Emit `null` (not `0.0`)
+when `resolved_1d == 0`, matching how `recent_hit_rate_1d` already behaves.
 
 No new module: `simulation_lane.py` is 516 lines with an established experiment
 registry, and a fifth sibling experiment does not justify a new file or a second
@@ -221,9 +266,13 @@ over the current gauge window (881 resolved rows):
 
 | removed | n | share of resolved |
 |---|---|---|
-| RIOT | 33 | 3.75% |
-| SMCI | 33 | 3.75% |
-| RIOT + SMCI | 66 | **7.49%** |
+| **RIOT (this change)** | 33 | **3.75%** |
+| SMCI (excluded by the gate) | 33 | 3.75% |
+| MARA (likely future qualifier) | 33 | 3.75% |
+
+The current gate removes RIOT only, so the immediate composition break is
+**3.75%**. If MARA later qualifies (see gate rationale) the cumulative break
+grows, which is why the probe records each removal rather than a single total.
 
 Mitigation: on a successful removal apply, auto-register a quant-watch probe
 recording the break (symbol, sample share, date, fingerprint) so any later
@@ -257,13 +306,27 @@ The simulation lane is non-fatal per experiment. Specifically:
 ## 8. Testing
 
 Gate behavior
-- boundaries: `n = 29` vs `30`; `hit_rate = 0.399` / `0.400` / `0.401`
-- today's real `top100_monthly.json` -> proposes exactly `{RIOT, SMCI}`
-- MARA excluded (hit_rate above threshold); LLY excluded (`n = 0`)
-- **`recent_hit_rate_1d = null` is skipped, never coerced to `0.0`** — a
-  null-to-zero coercion would read as the worst possible hit rate and remove
-  every no-history symbol. Asserted with `n >= 30` *and* a null hit rate, so the
-  test fails if the code relies on the `n` guard alone.
+- boundaries: `n = 29` vs `30`; `hit_rate = 0.399` / `0.400` / `0.401`;
+  `mean_return = -0.001` / `0.0` / `+0.001` (zero must NOT qualify — the
+  condition is strictly `< 0`)
+- today's real 30-day window -> proposes exactly `{RIOT}`
+- SMCI excluded despite the **lowest** hit rate, because expectancy is positive
+  (this is the test that pins the expectancy condition — it fails if someone
+  later "simplifies" the gate back to hit-rate-only)
+- MARA excluded (hit_rate 0.4118 above threshold) *even though* its expectancy
+  (-0.487) is worse than RIOT's — documents that both conditions are required
+- LLY excluded (`n = 0`)
+- **`recent_hit_rate_1d` / `recent_mean_return_1d` of `null` are skipped, never
+  coerced to `0.0`** — a null-to-zero hit rate reads as worst-possible and a
+  null-to-zero mean is not `< 0`, so the two coercions fail in opposite
+  directions. Asserted with `n >= 30` *and* null values, so the test fails if the
+  code relies on the `n` guard alone.
+
+`universe_sanitation` extension
+- `recent_mean_return_1d` matches a hand-computed mean over a fixture
+- emits `null`, not `0.0`, when `resolved_1d == 0`
+- existing `recent_hit_rate_1d` / `recent_resolved_1d` values are unchanged
+  (pure addition)
 
 Baseline fix
 - `baseline["watchlist"]` is non-empty and contains `RIOT`
@@ -297,7 +360,7 @@ Health check
 | Removal path never exercised in production | load-bearing end-to-end test before enabling |
 | Composition break inflates gauge hit-rate | quant-watch probe + after-retune timing guidance |
 | Rule sweeps a symbol for lacking data | `n >= 30` guard, tested at the boundary |
-| SMCI removal is broader than the original probe | surfaced for human approval; never auto-applied |
+| MARA likely qualifies later (worse expectancy, 1.2pp off the hit-rate gate) | expected, not a defect; each removal is surfaced for human approval and recorded by its own probe |
 | Baseline fix changes lane behavior | verified zero effect on the other three experiments |
 
 ---
