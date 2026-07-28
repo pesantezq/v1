@@ -91,6 +91,8 @@ def apply_approved_proposals(
     proposals: list[dict] | None = None,
     approved_ids: set[str] | None = None,
     rejected_ids: set[str] | None = None,
+    approved_candidate_ids: set[str] | None = None,
+    rejected_candidate_ids: set[str] | None = None,
     write_files: bool = True,
 ) -> dict:
     """Apply only human-approved proposals into the production overlay artifacts.
@@ -100,10 +102,20 @@ def apply_approved_proposals(
         proposals: pending-proposal set (defaults to the persisted set).
         approved_ids / rejected_ids: effective human decisions (default: loaded
             from the validated approval log).
+        approved_candidate_ids / rejected_candidate_ids: effective human decisions
+            keyed on the durable candidate_id (default: loaded from the
+            validated approval log).
     """
     proposals = proposals if proposals is not None else promotion_proposals.load_pending_proposals(base_dir)
     approved = approved_ids if approved_ids is not None else promotion_approvals.approved_proposal_ids(base_dir)
     rejected = rejected_ids if rejected_ids is not None else promotion_approvals.rejected_proposal_ids(base_dir)
+    # Durable identity: proposal_id is clock-salted and churns every run, so an
+    # unchanged fact would otherwise need re-approval daily. candidate_id is
+    # stable-when-unchanged, so an approval filed against it stays effective.
+    approved_cands = (approved_candidate_ids if approved_candidate_ids is not None
+                      else promotion_approvals.approved_candidate_ids(base_dir))
+    rejected_cands = (rejected_candidate_ids if rejected_candidate_ids is not None
+                      else promotion_approvals.rejected_candidate_ids(base_dir))
 
     watchlist_ops: list[dict] = []
     advisory_ops: list[dict] = []
@@ -113,9 +125,13 @@ def apply_approved_proposals(
     for p in proposals:
         pid = p.get("proposal_id")
         ptype = p.get("proposal_type")
-        if pid not in approved:
-            reason = "rejected" if pid in rejected else "pending_or_unapproved"
-            ignored.append({"proposal_id": pid, "reason": reason})
+        cid = p.get("candidate_id")
+        # Reject wins over approve on BOTH identities — the gate never loosens.
+        if pid in rejected or (cid and cid in rejected_cands):
+            ignored.append({"proposal_id": pid, "reason": "rejected"})
+            continue
+        if pid not in approved and not (cid and cid in approved_cands):
+            ignored.append({"proposal_id": pid, "reason": "pending_or_unapproved"})
             continue
         if not S.is_valid_proposal_type(ptype):
             ignored.append({"proposal_id": pid, "reason": "invalid_proposal_type"})
@@ -166,6 +182,7 @@ def apply_approved_proposals(
                         "ts": now,
                         "event": "applied_to_production",
                         "proposal_id": o["proposal_id"],
+                        "candidate_id": o.get("candidate_id"),
                         "proposal_type": o["proposal_type"],
                         "change": o["change"],
                         "rollback_plan": o["rollback_plan"],
