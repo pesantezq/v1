@@ -759,13 +759,17 @@ async def page_governance_decide(
 
     approver = _a or "operator"
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    base_dir = str(REPO_ROOT / "outputs")
     result = record_approval(
         proposal_id=proposal_id,
         decision=decision,
         approver=approver,
         now=now,
-        base_dir=str(REPO_ROOT / "outputs"),
+        base_dir=base_dir,
         notes=notes,
+        # Durable identity — best-effort; a failed lookup must not block the
+        # approval, so it degrades to proposal_id-only matching.
+        candidate_id=_candidate_id_for_proposal(base_dir, proposal_id),
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("reason", "approval rejected"))
@@ -841,11 +845,35 @@ async def page_governance_veto(
     return _redirect(f"Veto {status} for {event_id}.", level)
 
 
+def _candidate_id_for_proposal(base_dir, proposal_id):
+    """The pending proposal's DURABLE identity, or None.
+
+    make_proposal_id is clock-salted, so an approval filed only against a
+    proposal_id can never match a later regeneration of the same unchanged fact —
+    the operator re-approves it every run. candidate_id is stable while the fact is
+    unchanged, so recording it is what actually ends the re-approval treadmill.
+
+    Best-effort by design: recording the human's approval must NEVER become
+    conditional on this lookup succeeding, so any failure yields None and the
+    approval is still recorded (matching on proposal_id, exactly as before).
+    """
+    try:
+        from portfolio_automation.sim_governance import promotion_proposals
+        for p in promotion_proposals.load_pending_proposals(base_dir):
+            if p.get("proposal_id") == proposal_id:
+                return p.get("candidate_id") or None
+    except Exception:
+        return None
+    return None
+
+
 def _promotion_approvals_record(**kw):
     from portfolio_automation.sim_governance import promotion_approvals
     return promotion_approvals.record_approval(
         kw["proposal_id"], kw["decision"], kw["approver"], kw["now"],
-        base_dir=kw["base_dir"])
+        base_dir=kw["base_dir"],
+        candidate_id=kw.get("candidate_id") or _candidate_id_for_proposal(
+            kw["base_dir"], kw["proposal_id"]))
 
 
 def _pending_ids(base_dir):

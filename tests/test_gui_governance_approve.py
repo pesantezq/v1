@@ -163,3 +163,73 @@ def test_route_approve_same_origin_records_with_session_actor(appmod, monkeypatc
     assert calls[0]["proposal_id"] == "p1"
     assert calls[0]["decision"] == "approve"
     assert calls[0]["approver"] == "op"
+
+
+# ---------------------------------------------------------------------------
+# Durable approval identity at the GUI call sites (Fix 3, 2026-07-28).
+#
+# The candidate-matching layer in promotion_approvals is unreachable unless a
+# PRODUCER passes candidate_id. Both GUI approval call sites must look it up on the
+# pending proposal, and a failed lookup must never block the approval itself.
+# ---------------------------------------------------------------------------
+
+_APPROVAL_NOW = "2026-07-28T17:00:00+00:00"
+
+
+def _seed_pending(tmp_path, proposals):
+    import json
+    base = tmp_path / "outputs"
+    (base / "promotion_review").mkdir(parents=True, exist_ok=True)
+    (base / "promotion_review" / "pending_proposals.json").write_text(
+        json.dumps({"schema": "pending_proposals.v1", "proposals": proposals}),
+        encoding="utf-8")
+    return str(base)
+
+
+def test_bulk_record_persists_the_candidate_id(appmod, tmp_path):
+    from portfolio_automation.sim_governance import promotion_approvals as PA
+    base = _seed_pending(tmp_path, [{"proposal_id": "p1", "candidate_id": "cand_riot"}])
+
+    res = appmod._promotion_approvals_record(
+        proposal_id="p1", decision="approve", approver="pesantez",
+        now=_APPROVAL_NOW, base_dir=base)
+
+    assert res["ok"], res
+    assert [r.get("candidate_id") for r in PA.load_valid_approvals(base)] == ["cand_riot"]
+    # ...and the durable fold now actually sees it (it returned {} before this fix).
+    assert PA.approved_candidate_ids(base) == {"cand_riot"}
+
+
+def test_record_still_succeeds_when_the_proposal_cannot_be_found(appmod, tmp_path):
+    """Recording a human approval must never be conditional on the lookup."""
+    from portfolio_automation.sim_governance import promotion_approvals as PA
+    base = _seed_pending(tmp_path, [{"proposal_id": "other", "candidate_id": "cand_x"}])
+
+    res = appmod._promotion_approvals_record(
+        proposal_id="p1", decision="approve", approver="pesantez",
+        now=_APPROVAL_NOW, base_dir=base)
+
+    assert res["ok"], res
+    recs = PA.load_valid_approvals(base)
+    assert len(recs) == 1
+    assert "candidate_id" not in recs[0]
+    assert PA.approved_proposal_ids(base) == {"p1"}
+
+
+def test_candidate_lookup_tolerates_a_missing_pending_file(appmod, tmp_path):
+    assert appmod._candidate_id_for_proposal(str(tmp_path / "outputs"), "p1") is None
+
+
+def test_decide_route_records_the_candidate_id(appmod, monkeypatch, tmp_path):
+    from starlette.testclient import TestClient
+    from portfolio_automation.sim_governance import promotion_approvals as PA
+
+    _seed_pending(tmp_path, [{"proposal_id": "p1", "candidate_id": "cand_cvx"}])
+    monkeypatch.setattr(appmod, "REPO_ROOT", tmp_path)
+
+    client = TestClient(appmod.app)
+    r = client.post("/dashboard/governance/decide",
+                    data={"proposal_id": "p1", "decision": "approve"},
+                    auth=("op", "pw"), follow_redirects=False)
+    assert r.status_code == 303
+    assert PA.approved_candidate_ids(str(tmp_path / "outputs")) == {"cand_cvx"}
