@@ -402,6 +402,17 @@ run_aux_stage "Today's Capital Plan view" \
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
 
+# Stage 10a — Watchlist email (observe-only). A SEPARATE send from the memo email
+# above, by operator decision (2026-07-29): isolated so neither email can break
+# the other, with its own WATCHLIST_EMAIL_ENABLED opt-in, its own delivery-status
+# artifact and its own append-only log + date-based dedup. Renders the ranked
+# universe (top100_daily.json), new watch candidates and the operator alert queue
+# — content the memo does not carry. Ships DISABLED; with the flag unset this
+# stage records reason="disabled" and sends nothing. Read-only: no market-data or
+# LLM calls, never touches decision_plan.json.
+run_aux_stage "Watchlist email" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.watchlist_email_sender import run_watchlist_email_delivery; r = run_watchlist_email_delivery(root='.'); print('enabled:', r.get('enabled'), 'sent:', r.get('sent'), 'reason:', r.get('reason'), 'ranked:', r.get('ranked_count'), 'alerts:', r.get('alert_count'))"
+
 # Stage 10c — Memo datasets (observe-only): reassemble the memo-producer
 # artifacts into per-domain datasets + briefs for the GUI sub-tabs. Runs after
 # Stage 10 so the memo artifacts are fresh. Non-blocking; feeds_decision_engine=false.

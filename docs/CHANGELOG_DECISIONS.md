@@ -71,6 +71,77 @@ Explicitly note:
 
 ---
 
+## Watchlist ships as its own email, isolated from the memo
+
+### Date
+
+`2026-07-29`
+
+### Area
+alerts
+
+### Files / Functions
+New `portfolio_automation/watchlist_email_sender.py` (config, input collection,
+text + HTML body, delivery, artifacts, `assess_watchlist_email_health`, CLI).
+`scripts/run_daily_safe.sh` Stage 10a. `portfolio_automation/artifact_registry.yaml`
+(new `watchlist_email_status.json` row). `.claude/commands/daily-tool-analysis.md`
+(artifacts item 31 + body line 6t). `tests/conftest.py` (flag-leak guard extended).
+New `tests/test_watchlist_email_sender.py` (33 tests);
+`tests/test_run_daily_safe_wiring.py` (+5). Operator config: `.env` gains
+`WATCHLIST_EMAIL_ENABLED=1` / `_DRY_RUN=0` / `_SUBJECT_PREFIX=[stockbot]`.
+
+### Decision
+Operator asked for the watchlist as a third email alongside the memo and the
+governance digest, explicitly: "make a new one so it's isolated and can be handled
+independently to not cause conflicts with the memo, but use existing
+infrastructure."
+
+So: a new module that imports nothing from `memo_email_sender` and shares no
+state, config key, artifact, or dedup ledger with it — while reusing
+`utils.get_env_first`, the `data_governance` namespaces, the established
+delivery-status + append-only-log + date-dedup shape, and `run_aux_stage` wiring.
+
+`email_digest.FinanceEmailDigest` was deliberately NOT reused: its sections (Top 3
+Actions, Portfolio Summary, What Changed, Theme Highlights, Position Rationale)
+largely repeat the memo, and it only sends on `run_mode=daily` when an item is
+ACTION_REQUIRED. The new email carries what the memo does not — the ranked
+universe from `top100_daily.json`, the source breakdown, new `watch_candidates`,
+and the operator alert queue from `watchlist_alerts.csv`.
+
+### Why
+The memo covers the capital plan; nothing delivered the watchlist. Bolting a flag
+onto the memo sender would have coupled the operator's one load-bearing daily email
+to a new code path.
+
+### Invariants Preserved
+`observe_only: true` / `no_trade: true` hardcoded in every artifact. Read-only: no
+market-data or LLM calls, never reads or writes `decision_plan.json`, no portfolio
+mutation. `WATCHLIST_EMAIL_ENABLED` has no fallback — a working SMTP config is
+never sufficient to start emailing (same reasoning as `MEMO_EMAIL_ENABLED`).
+Date-based dedup keyed on the universe artifact's `generated_at` (not wall clock),
+so a re-run cannot double-send. Every input degrades independently with a distinct
+reason, so a broken upstream producer reports `no_watchlist_content` and can never
+be mistaken for `disabled`. Password sanitized out of all artifacts (pinned by
+test). Health is AMBER-max, never RED.
+
+### Downstream Impact
+New `outputs/latest/watchlist_email_status.json` (registered, consumed by
+daily-tool-analysis) + append-only `outputs/policy/watchlist_email_log.jsonl`.
+Wiring probe audits 125 producers (was 124) and reports the new artifact `healthy`
+with `caller_cadences: ["daily"]`; registry tracks 143 artifacts. The
+ranking-degeneracy caveat from `ranking_diagnostics` is carried into the email body
+*above* the rank table, so a reader meets the caveat before the order it qualifies.
+
+### Artifact Health Severity
+`severity_if_missing: info`, `required: false` — `reason="disabled"` is the
+expected inert state pre-activation, and `required: true` would move
+`daily_run_status.required_missing_count` off zero. AMBER on `send_failed`,
+`no_watchlist_content` while enabled, misconfigured recipients/SMTP while enabled,
+or a stale/unreadable status artifact. `already_sent` is the dedup guard working,
+not a fault. Never RED: an email that did not go out must not gate the pipeline.
+
+---
+
 ## Risk weights derive from broker truth; memo bullets stop double-marking
 
 ### Date

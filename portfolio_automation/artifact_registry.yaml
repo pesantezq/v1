@@ -281,6 +281,24 @@ artifacts:
     consumer_status: consumed
     notes: "consumers quant-watch-analysis + daily-tool-analysis land when feat/quant-watch-probes merges"
 
+  watchlist_email_status.json:
+    path: outputs/latest/watchlist_email_status.json
+    label: watchlist email delivery status
+    lens: developer
+    role: probe
+    required: false
+    cadence: daily
+    producer: watchlist_email_sender
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "Separate daily send from the memo email (operator decision 2026-07-29),
+      isolated so neither can break the other. Ships opt-in via
+      WATCHLIST_EMAIL_ENABLED, so required:false — reason='disabled' is the expected
+      inert state and required:true would move daily_run_status.required_missing_count
+      off zero before activation. Append-only audit log lives at
+      outputs/policy/watchlist_email_log.jsonl."
+
   regime_coverage_status.json:
     path: outputs/latest/regime_coverage_status.json
     label: regime coverage status
