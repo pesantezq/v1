@@ -43,7 +43,15 @@ _HEX_HASH_RE = re.compile(r"\b[0-9a-f]{16}\b", re.IGNORECASE)
 # Inline-markdown conversion patterns (M2 fix).
 # Applied AFTER HTML-escaping so markup delimiters are safe.
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+# Italic must not match the `**bold**` delimiters, so it runs after _BOLD_RE and
+# requires a single underscore with non-underscore content.
+_ITALIC_RE = re.compile(r"_([^_]+)_")
 _CODE_RE = re.compile(r"`([^`]+)`")
+
+# A leading list marker: optional indent, then '-' or '*', then whitespace.
+# Applied BEFORE escaping, on the raw line. The trailing \s+ is what keeps
+# "-42 is a negative number" intact — a bare hyphen is not a marker.
+_LIST_MARKER_RE = re.compile(r"^\s*[-*]\s+")
 
 # Mapping from normalised header text → section key
 # Matching is case-insensitive, substring-based.
@@ -106,14 +114,26 @@ def _render_inline_md(text: str) -> str:
     Convert a single line of memo text to safe HTML (M2 fix).
 
     Steps:
+    0. Strip a leading list marker (``- ``/``* ``, optionally indented).
     1. HTML-escape the entire string (prevents XSS).
     2. Convert ``**x**`` → ``<strong>x</strong>`` (bold).
-    3. Convert `` `x` `` → ``<code>x</code>`` (inline code).
+    3. Convert ``_x_`` → ``<em>x</em>`` (italic).
+    4. Convert `` `x` `` → ``<code>x</code>`` (inline code).
 
     The result is marked safe for template rendering via ``| safe``.
+
+    Step 0 exists because ``memo.html`` picks the bullet GLYPH by branching on the
+    raw ``line`` and then renders this output beside it. Leaving the marker in
+    produced a doubled marker on every bullet of ``/dashboard/memo``
+    ("• - Cash on hand: $2,100"). The raw ``lines`` list is untouched, so the
+    template's prefix branching still works — only the rendered content changes.
+    The marker must be followed by whitespace, so content that merely starts with
+    a hyphen (a negative number) is preserved.
     """
-    escaped = _html_mod.escape(text)
+    stripped = _LIST_MARKER_RE.sub("", text, count=1)
+    escaped = _html_mod.escape(stripped)
     escaped = _BOLD_RE.sub(r"<strong>\1</strong>", escaped)
+    escaped = _ITALIC_RE.sub(r"<em>\1</em>", escaped)
     escaped = _CODE_RE.sub(r"<code>\1</code>", escaped)
     return escaped
 

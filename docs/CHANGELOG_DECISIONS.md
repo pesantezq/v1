@@ -71,6 +71,78 @@ Explicitly note:
 
 ---
 
+## Risk weights derive from broker truth; memo bullets stop double-marking
+
+### Date
+
+`2026-07-29`
+
+### Area
+state
+
+### Files / Functions
+`portfolio_automation/risk_delta_advisor.py` — `_load_quotes` (staleness reject +
+`now_iso`), new `_load_broker_market_values`, new `_parse_iso`,
+`compute_concentration` / `compute_leverage` / `build_risk_delta` gain
+`market_values`, `render_risk_delta_md` surfaces the weight-sum + source notes.
+`gui_v2/data/dash_memo.py` — `_render_inline_md` strips the list marker, adds
+italic. `portfolio_automation/capital_plan_view.py` — new `sub_bullet`.
+Tests: `tests/test_risk_delta_advisor.py` (+10, 1 updated),
+`tests/test_gui_dashboard_memo.py` (+14).
+
+### Decision
+Two operator-facing honesty defects surfaced by the 2026-07-29 memo-reviewer and
+render-reviewer.
+
+1. Every concentration and leverage figure was computed from
+   `data/price_cache.json` with **no freshness check**; on the live deployment its
+   entries were dated 2026-06-12 — 47 days stale. Compounding that, `shares <= 0`
+   fell through to `target_weight`, and `price_source` was derived from
+   `price is not None` alone, so it described the quote lookup rather than the
+   number actually used. Result: rendered weights summed to **107.1%**, QQQ showed
+   50.2% vs 47.35% actual, VFH (15%) and VXUS (10%) were rendered although zero
+   shares are held and were labelled `live_quote`, held LCID ($392) rendered 0.0%,
+   top-3 read 80.7% vs 68.7%, leverage 14.8% vs 12.97%. No cap status flipped,
+   which is precisely why nothing caught it.
+   Weight source precedence is now explicit and named in `price_source`:
+   `broker_market_value` (from `schwab_positions.json`, refreshed at Stage 0b
+   before the decision run) → `live_quote` (fresh only) → `not_held` (weight 0
+   when shares are explicitly 0) → `target_weight_fallback` (shares unknown, no
+   price). Stale or **undated** cache entries are rejected — an undated entry
+   cannot be shown to be fresh, so absence of evidence is not treated as freshness.
+2. `/dashboard/memo` rendered `• - Cash on hand: $2,100` on every bullet:
+   `memo.html` picks the glyph by branching on the raw `line` but rendered
+   `rendered_lines`, which still carried the `- ` prefix. Fixed in the producer so
+   `lines` stays verbatim (template branching intact) and `rendered_lines` carries
+   content only. `capital_plan_view` nested items emitted a literal `  • `, which
+   the nested branch could not match; they now emit real markdown via `sub_bullet`.
+
+### Why
+The risk numbers are the first thing read each morning and were wrong in a way
+invisible from the memo itself — two positions the operator does not own were
+presented as 15% and 10% holdings for weeks, and a real $392 position as 0.0%.
+
+### Invariants Preserved
+Observe-only; no `decision_engine`, scoring, allocation, or holdings mutation —
+`risk_delta_advisor` remains a read-only advisory producer and holdings still come
+from `holdings_resolver`. The degraded-mode `target_weight` fallback is retained
+for its real case (shares unknown). New keys are additive.
+
+### Downstream Impact
+`risk_delta.json:concentration` gains `weights_sum` + `weights_sum_exceeds_100`;
+`price_source` gains the values `broker_market_value` and `not_held`. `risk_delta.md`
+and the memo's Risk Delta line now show corrected figures, state the weight sum, and
+annotate any non-holdings-derived weight inline. Live check: positions total 78.97%
+and cash is $2,100.18 of $9,989.91 (21.02%) — 99.99% combined, a reconciliation the
+prior code could not pass.
+
+### Artifact Health Severity
+Unchanged (advisory, never RED). `weights_sum_exceeds_100` is the new tripwire for
+this defect class: an impossible total is now stated in the Markdown instead of
+rendering as fact.
+
+---
+
 ## Email delivery restored: generic-mail-config fallback for the legacy senders + memo email enabled
 
 ### Date

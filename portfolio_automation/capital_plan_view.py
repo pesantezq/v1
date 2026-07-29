@@ -795,6 +795,16 @@ def render_capital_plan_md(view: dict[str, Any], *, markdown: bool = True,
     def bullet(text: str) -> None:
         out.append(f"- {text}" if markdown else f"  {text}")
 
+    def sub_bullet(text: str) -> None:
+        """A nested list item.
+
+        Must emit real markdown ("  - x"), not a literal glyph. Passing "  • x"
+        through ``bullet`` produced "-   • x", which the GUI's nested-list branch
+        could not recognise, so it fell through to the top-level branch and
+        rendered its own bullet beside the literal one ("• - • 22 due to ...").
+        """
+        out.append(f"  - {text}" if markdown else f"    {text}")
+
     if not view.get("available"):
         h("Today's Capital Plan")
         bullet("Capital plan unavailable — funding data could not be loaded.")
@@ -896,7 +906,7 @@ def render_capital_plan_md(view: dict[str, Any], *, markdown: bool = True,
                 buckets[a["reason_bucket"]] = buckets.get(a["reason_bucket"], 0) + 1
             bullet(f"{len(rest)} additional action(s) deferred:")
             for reason, n in sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0])):
-                bullet(f"  • {n} due to {reason}")
+                sub_bullet(f"{n} due to {reason}")
         line("")
 
     # 5. Sell and Funding Dependencies
