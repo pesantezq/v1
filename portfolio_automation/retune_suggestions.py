@@ -210,9 +210,42 @@ def _propose_weight_changes(by_tag: dict[str, dict[str, Any]]) -> list[dict[str,
 
 def _propose_promotion_gate(by_tag: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Translate efficacy of `promoted_to_extended` + `high_theme_confidence`
-    into a proposed confidence_threshold adjustment."""
+    into a proposed confidence_threshold adjustment.
+
+    Expectancy gate (fail-closed tightening) — symmetric with
+    :func:`_propose_weight_changes`
+    ---------------------------------------------------------------------------
+    The expectancy gate added to the weight proposer was initially applied only
+    there, leaving this sibling path gating ``auto_applicable`` on delta
+    magnitude, n, and significance alone — the exact pre-fix shape. That matters
+    because this proposal is counted into the same ``auto_applicable_count`` the
+    armed auto-apply layer reads, so the accuracy-vs-expectancy confusion simply
+    moved next door.
+
+    Direction semantics differ from the weight path and are worth stating: a
+    POSITIVE ``high_theme_confidence`` hit-rate delta RAISES
+    ``extended_watchlist.confidence_threshold``, i.e. it leans HARDER on that
+    tag as a promotion filter. The contradiction is therefore "lean harder on a
+    tag that loses money on average" — same shape as the weight path's
+    ``proposed_delta > 0`` condition, and the reason a threshold DECREASE
+    alongside a negative mean return is *not* flagged (both point the same way).
+
+    As with the weight path this can only turn an existing ``True`` into
+    ``False``; missing return data is never imputed as 0.0 (a fabricated zero
+    would silently read as "not negative"), and the proposal plus its
+    contradiction always stay visible for human review.
+    """
     promo = by_tag.get("promoted_to_extended") or {}
     high_conf = by_tag.get("high_theme_confidence") or {}
+
+    # --- Expectancy diagnostic: always recorded, never imputed -------------
+    # Read from high_theme_confidence, the tag that drives the threshold move.
+    # Computed before the branch so the no-change default carries the same
+    # schema — a consumer must never have to distinguish "key absent" from
+    # "expectancy unverified".
+    mean_return_1d = high_conf.get("mean_return_1d")
+    mean_return_resolved_n = high_conf.get("resolved_1d")
+    expectancy_available = mean_return_1d is not None
 
     current_threshold = 0.80  # config.json default
     proposal: dict[str, Any] = {
@@ -220,6 +253,10 @@ def _propose_promotion_gate(by_tag: dict[str, dict[str, Any]]) -> dict[str, Any]
         "current_value": current_threshold,
         "proposed_value": current_threshold,
         "delta": 0.0,
+        "mean_return_1d": mean_return_1d,
+        "mean_return_resolved_n": mean_return_resolved_n,
+        "expectancy_available": expectancy_available,
+        "expectancy_contradiction": False,
         "auto_applicable": False,
         "rationale": "Insufficient samples; no change recommended.",
     }
@@ -232,22 +269,61 @@ def _propose_promotion_gate(by_tag: dict[str, dict[str, Any]]) -> dict[str, Any]
         # Clamp to a sensible range
         proposed_delta = max(-0.10, min(0.10, proposed_delta))
         proposed = round(max(0.50, min(0.95, current_threshold + proposed_delta)), 4)
+        applied_delta = round(proposed - current_threshold, 4)
+
+        # A threshold INCREASE leans harder on high_theme_confidence; a negative
+        # mean return contradicts that. A decrease agrees with it.
+        expectancy_contradiction = bool(
+            expectancy_available and applied_delta > 0 and mean_return_1d < 0
+        )
+        resolved_str = (
+            str(mean_return_resolved_n)
+            if mean_return_resolved_n is not None else "?"
+        )
+        if not expectancy_available:
+            expectancy_note = (
+                "mean_return_1d unavailable for high_theme_confidence — "
+                "expectancy cannot be verified from this efficacy window; NOT "
+                "auto-applicable (missing data is never treated as a confirmed "
+                "non-negative return)."
+            )
+        elif expectancy_contradiction:
+            expectancy_note = (
+                f"EXPECTANCY CONTRADICTION: hit-rate delta favors RAISING the "
+                f"promotion threshold (leaning harder on high_theme_confidence) "
+                f"but its mean_return_1d is negative ({mean_return_1d:+.4f} over "
+                f"{resolved_str} resolved samples) — this tag wins more often "
+                f"than baseline while losing money on average. NOT "
+                f"auto-applicable; surfaced for human review."
+            )
+        else:
+            expectancy_note = (
+                f"mean_return_1d {mean_return_1d:+.4f} over {resolved_str} "
+                f"resolved samples (no return-dispersion statistic is currently "
+                f"computed upstream; only the mean and resolved sample count are "
+                f"available)."
+            )
+
         proposal.update({
             "proposed_value": proposed,
-            "delta": round(proposed - current_threshold, 4),
+            "delta": applied_delta,
             "n_samples": n,
             "evidence_delta_pp": delta_pp,
             "significance": high_conf.get("significance"),
+            "expectancy_contradiction": expectancy_contradiction,
+            "expectancy_note": expectancy_note,
             "auto_applicable": (
-                abs(proposed - current_threshold) <= _AUTO_APPLY_THRESHOLD_MAX_DELTA
+                abs(applied_delta) <= _AUTO_APPLY_THRESHOLD_MAX_DELTA
                 and n >= _AUTO_APPLY_MIN_N
                 and high_conf.get("significance") not in (None, "insufficient_sample")
+                and expectancy_available
+                and not expectancy_contradiction
             ),
             "rationale": (
                 f"high_theme_confidence carries Δ {delta_pp:+.1f}pp vs baseline "
                 f"over n={n} samples. Proposed threshold "
                 f"{current_threshold:.2f} → {proposed:.2f}. "
-                f"({high_conf.get('significance')})"
+                f"({high_conf.get('significance')}) {expectancy_note}"
             ),
         })
 
@@ -368,8 +444,19 @@ def render_retune_suggestions_md(payload: dict[str, Any]) -> str:
     a(f"- Parameter: `{gp.get('parameter')}`")
     a(f"- Current: {gp.get('current_value')}")
     a(f"- Proposed: {gp.get('proposed_value')}")
+    gp_mr = gp.get("mean_return_1d")
+    gp_mr_n = gp.get("mean_return_resolved_n")
+    if gp_mr is None:
+        a("- Mean return (1d): unavailable — expectancy unverified, not auto-applicable")
+    else:
+        a(
+            f"- Mean return (1d): {gp_mr:+.4f} over "
+            f"{gp_mr_n if gp_mr_n is not None else '?'} resolved samples"
+        )
     a(f"- Auto-applicable: {'✓' if gp.get('auto_applicable') else '—'}")
     a(f"- Rationale: {gp.get('rationale')}")
+    if gp.get("expectancy_contradiction"):
+        a(f"- ⚠ {gp.get('expectancy_note', '')}")
     if gp.get("caveat"):
         a(f"- ⚠ Caveat: {gp['caveat']}")
     a("")

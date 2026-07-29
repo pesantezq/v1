@@ -225,3 +225,89 @@ def test_schwab_advisor_artifacts_stay_on_demand() -> None:
         assert entry.get("cadence") == "on_demand", (
             f"{name} must stay on_demand (only exists after a live authenticated sync)."
         )
+
+
+# ── Regime-coverage producer wiring (B4/WS14 completion, 2026-07-29) ──────────
+#
+# B4/WS14 (f7f70f63, 0180cd27) shipped portfolio_automation/regime_coverage.py
+# with the pure assessor, an in-process consumer (strategy_lab_health), and the
+# daily-tool-analysis skill prose — but neither of the two registration steps the
+# quant_watch_probes precedent establishes. The consequence was worse than a
+# stale artifact: because BOTH the artifact-registry validator and the
+# pipeline-wiring probe enumerate producers from artifact_registry.yaml's
+# `artifacts:` map, an unregistered artifact is outside their loop domain, so
+# both meta-monitors reported GREEN (`unwired: 0`) over its absence while the
+# daily check read the literal string "Regime-coverage: not run" every day.
+#
+# This is the same "ships code + tests but leaves the producer unwired" pattern
+# this module was created for, one level up — a meta-monitor deriving GREEN from
+# an absent registration rather than a producer deriving a verdict from absent
+# input.
+
+def test_regime_coverage_is_wired_daily(daily: str) -> None:
+    assert "run_regime_coverage" in daily, (
+        "run_daily_safe.sh must invoke run_regime_coverage so "
+        "regime_coverage_status.json refreshes every cron run. Its only other "
+        "invocation is the /daily-tool-analysis skill prose, which is gated "
+        "behind daily_check.sh's RED-only branch and executes "
+        "non-deterministically — the artifact was absent for that reason."
+    )
+
+
+def test_regime_coverage_uses_nonblocking_aux_stage(daily: str) -> None:
+    assert 'run_aux_stage "Regime coverage' in daily, (
+        "Regime coverage must run through the non-blocking run_aux_stage wrapper "
+        "so a malformed regime_performance.json degrades the status artifact "
+        "instead of aborting the pipeline."
+    )
+
+
+def test_regime_coverage_runs_after_its_input(daily: str) -> None:
+    """regime_coverage reads outputs/regime/regime_performance.json, written by
+    performance_feedback inside `main.py --run-mode daily`."""
+    assert daily.index("main.py --run-mode daily") < daily.index("run_regime_coverage"), (
+        "run_regime_coverage must run after `main.py --run-mode daily` — its only "
+        "input, outputs/regime/regime_performance.json, is written by "
+        "performance_feedback.generate_regime_performance_reports during that run."
+    )
+
+
+def test_regime_coverage_runs_before_daily_run_status(daily: str) -> None:
+    """Stages 11/12/13 (daily_run_status, registry validator, wiring probe) must
+    see a fresh artifact, otherwise they re-manufacture the false GREEN."""
+    assert daily.index("run_regime_coverage") < daily.index("run_daily_run_status"), (
+        "run_regime_coverage must run before run_daily_run_status so the registry "
+        "validator and the wiring probe assess a same-run-fresh artifact."
+    )
+
+
+def test_regime_coverage_status_is_registered() -> None:
+    """The registry row is what makes the gap VISIBLE to both meta-monitors.
+
+    Verified counterfactually during the 2026-07-29 investigation: adding this
+    row alone flips pipeline_wiring_status.json to `unwired`/AMBER when the cron
+    caller is missing. Without the row neither probe can report on the artifact
+    at all.
+    """
+    entry = _registry_entry("regime_coverage_status.json")
+    assert entry is not None, (
+        "regime_coverage_status.json missing from artifact_registry.yaml — this is "
+        "the missed hand-edit that blinded the registry validator AND the pipeline "
+        "wiring probe (both enumerate producers from the `artifacts:` map)."
+    )
+    assert entry.get("cadence") == "daily", "regime coverage is a daily probe"
+    assert entry.get("producer") == "regime_coverage"
+    assert entry.get("role") == "probe", (
+        "regime coverage is evidence-sufficiency instrumentation, not a "
+        "source_of_truth — it must never gate a decision."
+    )
+
+
+def test_regime_coverage_status_stays_non_required() -> None:
+    """required: true would move daily_run_status.required_missing_count off zero
+    on any degraded run, and every consumer already degrades gracefully to
+    "Regime-coverage: not run"."""
+    entry = _registry_entry("regime_coverage_status.json")
+    assert entry is not None, "regime_coverage_status.json missing from registry"
+    assert entry.get("required") is False
+    assert entry.get("severity_if_missing") == "info"

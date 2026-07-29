@@ -71,6 +71,68 @@ Explicitly note:
 
 ---
 
+## Regime-coverage producer wiring + symmetric expectancy gate (B4 / c0fc3c6c completion)
+
+### Date
+
+`2026-07-29`
+
+### Area
+architecture
+
+### Files / Functions
+`portfolio_automation/artifact_registry.yaml` (new `regime_coverage_status.json` row);
+`scripts/run_daily_safe.sh` (new non-blocking Stage 7f1 calling
+`regime_coverage.run_regime_coverage`); `portfolio_automation/retune_suggestions.py`
+(`_propose_promotion_gate` expectancy gate + `render_retune_suggestions_md` gate
+section); `tests/test_run_daily_safe_wiring.py` (+6);
+`tests/test_retune_suggestions.py` (+9).
+
+### Decision
+Completed two changes that shipped incomplete on 2026-07-28. (1) B4/WS14 shipped the
+regime-coverage assessor, its in-process consumer and 15 tests, but never registered
+the artifact or wired the writer — `run_regime_coverage` had no cron caller and
+`outputs/latest/regime_coverage_status.json` did not exist. (2) `c0fc3c6c` applied its
+expectancy gate to `_propose_weight_changes` only, leaving `_propose_promotion_gate`
+in the pre-fix shape.
+
+### Why
+Both the artifact-registry validator and the pipeline-wiring probe enumerate producers
+from the `artifacts:` map in `artifact_registry.yaml`, so an unregistered artifact is
+outside their loop domain and cannot be reported `unwired`. Both meta-monitors
+therefore reported GREEN over the absence while the daily check read
+`"Regime-coverage: not run"` every day — the program's recurring verdict-from-absent-data
+class, one level up. The gate proposal is appended to the same candidate list as the
+weight proposals in `retune_auto_apply.apply_suggestions`, so the accuracy-vs-expectancy
+confusion `c0fc3c6c` fixed still reached the armed auto-apply layer via the sibling path.
+
+### Invariants Preserved
+No decision_engine or protected-score change; `decision_plan.json` never written.
+Regime coverage stays observe-only, `role: probe`, `required: false` (consumers already
+degrade to "not run", and `required: true` would move
+`daily_run_status.required_missing_count` off zero); kept out of the order-pinned
+`daily_run_status_tracked` list; wrapped in `run_aux_stage` so a malformed
+`regime_performance.json` degrades the status instead of aborting the pipeline. The
+expectancy gate is fail-closed tightening only — it can turn `auto_applicable` `True`
+into `False`, never the reverse; missing `mean_return_1d` is never imputed as `0.0`.
+
+### Downstream Impact
+Wiring probe audits 124 producers (was 123) and reports the new artifact `healthy`
+with `caller_cadences: ["daily"]`; registry tracks 142 artifacts (was 141). Daily
+check line 6m2 / item 26b now read a same-run-fresh artifact instead of "not run".
+Gate proposal gains `mean_return_1d`, `mean_return_resolved_n`,
+`expectancy_available`, `expectancy_contradiction`, `expectancy_note`; the 2-run
+confirmation token is `(proposed_value, delta)` only, so `pending_confirmations` is
+not reset. On live data the gate's expectancy is `+0.8079` over 190 resolved samples,
+so `auto_applicable_count` is unchanged at 4.
+
+### Artifact Health Severity
+`regime_coverage_status.json` is `severity_if_missing: info`, AMBER-max, never RED,
+never gates a decision. Its two states (`REGIME_CONCENTRATED`, `RISK_OFF_UNPROVEN`)
+are evidence-sufficiency caveats, not market calls.
+
+---
+
 ## Memo datasets — per-domain reassembly producer + wiring (Task 5)
 
 ### Date

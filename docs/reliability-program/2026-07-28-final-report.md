@@ -389,3 +389,117 @@ Nothing from B4. The regime-concentration verdict now reaches the Strategy Lab's
 validity dimensions from measured shares. The `98.8% neutral` concentration itself is
 unchanged and remains a live caveat on every claimed edge — the fix makes it visible,
 it does not resolve it.
+
+---
+
+# Addendum — 2026-07-29: B4 completion (the producer was never wired)
+
+"Nothing from B4" above was wrong on one point, found by the next day's
+`/run-all-daily`: B4 shipped `portfolio_automation/regime_coverage.py` with the pure
+assessor, an in-process consumer, 15 tests, and the `/daily-tool-analysis` prose —
+but **neither of the two registration steps** the `quant_watch_probes` precedent
+establishes. `run_regime_coverage`, the function that writes
+`outputs/latest/regime_coverage_status.json`, had **no caller** in
+`scripts/run_daily_safe.sh`, `main.py`, or any crontab line. The artifact did not
+exist on disk.
+
+## Why nothing caught it
+
+This is the program's own recurring defect class — a verdict derived from absent data
+— but one level up: not a producer deriving a verdict from a missing input, **two
+meta-monitors deriving GREEN from an absent registration.**
+
+Both the artifact-registry validator and the pipeline-wiring probe enumerate
+producers from the *same* source: the `artifacts:` map in
+`portfolio_automation/artifact_registry.yaml` (`pipeline_wiring_probe._load_registry`
+→ `classify_producers` iterates `registry.items()`). An artifact absent from that
+YAML is outside the loop domain, so it **cannot** be classified `unwired` — hence
+`unwired: 0` over 123 audited producers, and `overall_status: green`. The registry's
+own header states the requirement it depends on: *"Hand-edited on every new
+artifact."* That hand-edit was the miss.
+
+Verified counterfactually: with the row present and the caller absent, the probe
+correctly returns `status: unwired` / `overall: amber`. The row is what makes the gap
+**visible**; the cron stage is what makes it **fixed**. Both were needed.
+
+The intended path was skill-invoked, and it was doubly fragile: `scripts/daily_check.sh:80`
+only runs the skill on a RED deterministic verdict, and even when it does run, the
+sub-check is prose instructing an LLM to execute a bash block. On 2026-07-29 the skill
+*did* run at 09:15 and the artifact was still absent.
+
+## Shipped
+
+| Change | File |
+|---|---|
+| Registry row (`role: probe`, `required: false`, `severity_if_missing: info`, `cadence: daily`, `producer: regime_coverage`) | `portfolio_automation/artifact_registry.yaml` |
+| Deterministic cron caller, Stage 7f1, non-blocking `run_aux_stage`, after the decision run and before `run_daily_run_status` | `scripts/run_daily_safe.sh` |
+| 6 wiring/contract tests | `tests/test_run_daily_safe_wiring.py` |
+
+`required: false` / `severity_if_missing: info` is deliberate: every consumer already
+degrades to `"Regime-coverage: not run"`, and `required: true` would move
+`daily_run_status.required_missing_count` off zero on any degraded run. The row is
+also kept out of the order-pinned `daily_run_status_tracked` list.
+
+Post-fix live state: probe audits 124 producers (was 123) and reports
+`regime_coverage_status.json` `healthy` with `caller_cadences: ["daily"]`; the registry
+tracks 142 artifacts (was 141), 133 present, `regime_coverage_status.json` absent from
+`missing[]`. Assessor output unchanged: `REGIME_CONCENTRATED` + `RISK_OFF_UNPROVEN`,
+`resolved_signals: 2265`, `assessable: true`.
+
+**Not changed:** the `/daily-tool-analysis` sub-check still runs `run_regime_coverage`
+itself. It is idempotent and harmless now that cron writes the artifact, but note that
+`write_files` defaults to `True`, so an out-of-band skill run stamps a fresh
+`generated_at` that no pipeline produced. Removing the now-redundant sub-check touches
+oversight config and needs explicit operator sign-off.
+
+## Also completed from 2026-07-28: the expectancy gate was applied to one path only
+
+`c0fc3c6c` ("gate weight auto-applicability on expectancy, not just hit-rate") fixed
+`_propose_weight_changes` and left `_propose_promotion_gate` in the exact pre-fix
+shape — `auto_applicable` read delta magnitude, `n`, and significance, and never
+referenced `mean_return`. That was load-bearing, not cosmetic:
+`retune_auto_apply.apply_suggestions` appends the gate proposal to the **same**
+candidate list as the weight proposals (`retune_auto_apply.py:282-284`) and passes
+each through `_apply_one`, so the accuracy-vs-expectancy confusion simply moved next
+door on a path the armed auto-apply layer reads.
+
+Symmetric fix in `portfolio_automation/retune_suggestions.py`:
+
+- `mean_return_1d` + `mean_return_resolved_n` are always recorded on the gate
+  proposal, including on the no-change default, so a consumer never has to
+  distinguish "key absent" from "expectancy unverified".
+- `auto_applicable` additionally requires `expectancy_available` and
+  `not expectancy_contradiction`. Missing return data is never imputed as `0.0`.
+- **Direction semantics differ from the weight path and are documented in the
+  docstring:** a *positive* `high_theme_confidence` hit-rate delta *raises*
+  `extended_watchlist.confidence_threshold`, i.e. leans **harder** on that tag. The
+  contradiction is therefore "lean harder on a tag that loses money on average". A
+  threshold *decrease* alongside a negative mean return is consistent and is **not**
+  flagged.
+- The Markdown renderer's gate section gained an explicit mean-return line and a
+  `⚠` contradiction line, matching the column + warning `c0fc3c6c` added to the
+  weight table (previously these facts existed only inside the rationale prose).
+
+Fail-closed tightening only — it can turn an existing `True` into `False`, never the
+reverse. On today's live `pattern_efficacy_monthly.json` the gate's expectancy is
+`+0.8079` over 190 resolved samples, so `auto_applicable` stays `True` and
+`auto_applicable_count` is unchanged at 4 — the same "no behaviour change today, gap
+closed for the divergent window" outcome `c0fc3c6c` reported for the weight path. The
+2-run confirmation token is `(proposed_value, delta)` only, not the artifact hash, so
+the added schema keys do not reset `pending_confirmations`.
+
+9 new tests (`tests/test_retune_suggestions.py::TestGateExpectancyGate`), all watched
+failing first.
+
+## Still open after this addendum
+
+- The broader `auto_applicable` evidence bar is unchanged and remains loose: it
+  accepts any significance not in `(None, "insufficient_sample")`, so `"neutral"`
+  passes — 3 of today's 4 auto-applicable proposals are statistically neutral (one on
+  a **+0.23pp** delta), while the only `winner` is blocked on `n < 200`. Tightening it
+  is a policy change beyond completing `c0fc3c6c` and is queued for operator review,
+  not shipped here.
+- The 2-run confirmation token requires `(proposed, delta)` byte-identical across
+  consecutive runs while the rolling-30d recompute changes it weekly, so it is
+  structurally unsatisfiable — the loop has never actuated (`data/retune_audit_log.jsonl`
+  does not exist; 0 applies lifetime). Also queued, not shipped.
