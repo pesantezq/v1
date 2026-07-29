@@ -48,6 +48,35 @@ States are not mutually exclusive at the data-sufficient tier — a window can
 be simultaneously REGIME_CONCENTRATED and RISK_OFF_UNPROVEN (this is, in
 fact, today's real state — the fix does not tune toward a friendlier label).
 
+B4 correction (2026-07-29, docs/reliability-program/2026-07-28-final-report.md
+addendum "Sent back for correction"). Two ways this assessor derived a
+plausible verdict from ABSENT data, both now closed:
+
+1. ``share_of_evidence`` is the only input to the concentration verdict, and a
+   MISSING value was coerced to 0.0 by ``float(None or 0.0)``. A 98.8%-neutral
+   window therefore read as perfectly balanced, ``REGIME_CONCENTRATED``
+   structurally could not fire, and ``max()`` over the all-zeros dict named the
+   SMALLEST regime (high_volatility, n=27) as the concentration leader at 0.0%.
+   Now fail-closed: absent required fields → ``REGIME_DATA_INSUFFICIENT`` with
+   ``insufficiency_kind == INSUFFICIENCY_MISSING_FIELDS``, no leader named.
+   ``insufficiency_kind`` matters to the consumer — a thin window costs no
+   credibility, an UNREADABLE one does (see ``strategy_lab_health``).
+
+2. ``by_regime`` covers only rows resolved at the primary window, so a regime
+   label observed but not yet matured is absent from it — and the old code
+   reported that absence as "never observed in resolved evidence". Live
+   2026-07-28 that claim was false: 108 ``risk_off`` rows existed (2026-07-25..27,
+   all ``regime_data_quality=full``), 54 resolved at 1d, ZERO at the 3d primary
+   window, so the verdict would have flipped to "proven" purely on maturation.
+   The producer now emits an additive ``regime_census`` (observed vs resolved
+   per label over ALL rows) and ``absence_kind`` distinguishes
+   never_observed / immature / indeterminate / inconsistent.
+
+Note on the two neutral-share figures in the program's write-ups: 2211/2238 =
+98.79% at the 3-day primary window and 2211/2292 = 96.47% at the 1-day window
+are BOTH correct. They differ by resolution horizon, not by any artifact
+omission — the addendum's "corrected claim" mis-attributed the gap.
+
 Consumer: ``portfolio_automation.portfolio_sim.strategy_lab_health`` reads
 this assessor's ``states`` to downgrade its ``ranking_credibility`` and
 ``oos_validity`` dimensions with a stated reason (WS14 item 3) — a strategy
@@ -68,6 +97,9 @@ from portfolio_automation.data_governance import OutputNamespace, safe_write_jso
 __all__ = [
     "REGIME_COVERAGE_BALANCED", "REGIME_CONCENTRATED", "RISK_OFF_UNPROVEN",
     "REGIME_DATA_INSUFFICIENT", "assess_regime_coverage", "run_regime_coverage",
+    "INSUFFICIENCY_TOO_FEW_RESOLVED", "INSUFFICIENCY_MISSING_FIELDS",
+    "ABSENCE_NEVER_OBSERVED", "ABSENCE_IMMATURE", "ABSENCE_INDETERMINATE",
+    "ABSENCE_INCONSISTENT",
 ]
 
 REGIME_COVERAGE_BALANCED = "REGIME_COVERAGE_BALANCED"
@@ -93,6 +125,32 @@ CONCENTRATION_SHARE_THRESHOLD = 0.80
 
 RISK_OFF_LABEL = "risk_off"
 
+# Fields this assessor cannot substitute a default for. `share_of_evidence` is
+# the ONLY input to the concentration verdict; coercing a missing value to 0.0
+# (as this module did before the B4 correction) imputes the BEST case from
+# missing data — a 98.8%-concentrated window read as perfectly balanced,
+# because `float(None or 0.0)` is 0.0. The program's standing decision is
+# "never impute a missing component": a window whose derived fields are absent
+# is not assessable, and must say so rather than return a verdict.
+_REQUIRED_REGIME_FIELDS = ("share_of_evidence",)
+
+# Why a regime window is not assessable. These are NOT interchangeable:
+# `too_few_resolved` means there is genuinely no evidence yet (absence of
+# evidence is not evidence of concentration, so it costs no credibility
+# downstream); `missing_derived_fields` means the evidence EXISTS but the
+# artifact cannot be read — an instrumentation failure that must not buy a
+# free pass. See `strategy_lab_health._apply_regime_concentration_downgrade`.
+INSUFFICIENCY_TOO_FEW_RESOLVED = "too_few_resolved"
+INSUFFICIENCY_MISSING_FIELDS = "missing_derived_fields"
+
+# How a risk_off absence from `by_regime` is explained. `by_regime` covers only
+# rows RESOLVED at the primary window, so absence has three possible meanings
+# and the pre-correction code asserted the strongest one unconditionally.
+ABSENCE_NEVER_OBSERVED = "never_observed"   # census proves zero rows, ever
+ABSENCE_IMMATURE = "immature"               # observed, none matured at window
+ABSENCE_INDETERMINATE = "indeterminate"     # no census: cannot distinguish
+ABSENCE_INCONSISTENT = "inconsistent"       # census says resolved, by_regime disagrees
+
 _STATUS_REL = "regime_coverage_status.json"  # under outputs/latest/
 
 _DISCLAIMER = (
@@ -108,6 +166,64 @@ _DISCLAIMER = (
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _missing_required_fields(by_regime: dict[str, Any]) -> list[str]:
+    """``["neutral.share_of_evidence", ...]`` for every regime missing a field
+    the verdict depends on. Empty list means the window is assessable."""
+    missing: list[str] = []
+    for label, metrics in sorted(by_regime.items()):
+        for field in _REQUIRED_REGIME_FIELDS:
+            if (metrics or {}).get(field) is None:
+                missing.append(f"{label}.{field}")
+    return missing
+
+
+def _classify_risk_off(
+    by_regime: dict[str, Any], census_observed: dict[str, Any],
+) -> tuple[str | None, int | None, int | None]:
+    """Return ``(absence_kind, observed, resolved_at_primary_window)`` for
+    risk_off. ``absence_kind`` is None when risk_off IS present in the resolved
+    breakdown. Without a census the honest answer is ABSENCE_INDETERMINATE —
+    never a claim that the label was never observed."""
+    entry = census_observed.get(RISK_OFF_LABEL) if census_observed else None
+    observed = int((entry or {}).get("observed") or 0) if entry is not None else None
+    resolved = int((entry or {}).get("resolved") or 0) if entry is not None else None
+
+    if RISK_OFF_LABEL in by_regime:
+        return None, observed, resolved
+    if not census_observed:
+        return ABSENCE_INDETERMINATE, None, None
+    if entry is None or not observed:
+        return ABSENCE_NEVER_OBSERVED, observed or 0, resolved or 0
+    if not resolved:
+        return ABSENCE_IMMATURE, observed, resolved or 0
+    return ABSENCE_INCONSISTENT, observed, resolved
+
+
+def _risk_off_absence_reason(
+    absence_kind: str, observed: int | None, primary_window_days: Any,
+) -> str:
+    window = f"{primary_window_days}-day" if primary_window_days else "primary"
+    if absence_kind == ABSENCE_NEVER_OBSERVED:
+        return (
+            "risk_off regime label never observed in any tracked signal (resolved "
+            "or not) — strategy/gauge behavior in a genuine risk-off regime is "
+            "completely unproven")
+    if absence_kind == ABSENCE_IMMATURE:
+        return (
+            f"risk_off observed {observed} time(s) but 0 resolved at the {window} "
+            "primary window (immature, NOT unobserved) — behavior in a genuine "
+            "risk-off regime remains unproven until those outcomes mature")
+    if absence_kind == ABSENCE_INCONSISTENT:
+        return (
+            f"risk_off census reports resolved rows at the {window} window but "
+            "by_regime carries no risk_off entry — artifact internally "
+            "inconsistent; risk-off validity cannot be claimed")
+    return (
+        f"risk_off absent from resolved evidence at the {window} window and this "
+        "artifact carries no regime_census, so never-observed cannot be "
+        "distinguished from not-yet-matured — risk-off validity unproven")
 
 
 def assess_regime_coverage(
@@ -128,20 +244,55 @@ def assess_regime_coverage(
         resolved_total = sum(int((m or {}).get("total_signals") or 0) for m in by_regime.values())
     resolved_total = int(resolved_total or 0)
 
+    primary_window_days = (regime_perf or {}).get("primary_window_days")
+    census = dict((regime_perf or {}).get("regime_census") or {})
+    census_observed = dict(census.get("observed") or {})
+    if census.get("primary_window_days") is not None:
+        primary_window_days = census.get("primary_window_days")
+    absence_kind, risk_off_observed, risk_off_resolved = _classify_risk_off(
+        by_regime, census_observed)
+
+    def _risk_off_block(present: bool, effective: int) -> dict[str, Any]:
+        return {
+            "present": present, "effective_signals": effective,
+            "min_required": min_regime_effective_n,
+            "observed": risk_off_observed,
+            "resolved_at_primary_window": risk_off_resolved,
+            "absence_kind": absence_kind,
+        }
+
+    def _not_assessable(kind: str, reasons: list[str]) -> dict[str, Any]:
+        return {
+            "generated_at": now, "observe_only": True, "schema_version": "2",
+            "source": "regime_coverage",
+            "resolved_signals": resolved_total,
+            "primary_window_days": primary_window_days,
+            "by_regime": {}, "concentration": {},
+            "risk_off": _risk_off_block(RISK_OFF_LABEL in by_regime, 0),
+            "states": [REGIME_DATA_INSUFFICIENT], "primary_state": REGIME_DATA_INSUFFICIENT,
+            "assessable": False, "insufficiency_kind": kind,
+            "reasons": reasons, "disclaimer": _DISCLAIMER,
+        }
+
     if not by_regime or resolved_total < min_resolved_total:
-        reason = (
+        return _not_assessable(INSUFFICIENCY_TOO_FEW_RESOLVED, [
             f"only {resolved_total} resolved signal(s) across {len(by_regime)} regime "
             f"label(s) (< {min_resolved_total}) — too thin to assess regime coverage "
             "either way"
-        )
-        return {
-            "generated_at": now, "observe_only": True, "schema_version": "1",
-            "source": "regime_coverage",
-            "resolved_signals": resolved_total,
-            "by_regime": {}, "concentration": {}, "risk_off": {"present": False, "effective_signals": 0},
-            "states": [REGIME_DATA_INSUFFICIENT], "primary_state": REGIME_DATA_INSUFFICIENT,
-            "reasons": [reason], "disclaimer": _DISCLAIMER,
-        }
+        ])
+
+    # Fail closed on an artifact whose derived fields are absent. This is NOT a
+    # thin window — the evidence exists (resolved_total signals) and cannot be
+    # read, typically because the on-disk artifact predates the producer's WS14
+    # enrichment fields. Returning a verdict here would mean imputing one.
+    missing = _missing_required_fields(by_regime)
+    if missing:
+        return _not_assessable(INSUFFICIENCY_MISSING_FIELDS, [
+            f"{resolved_total} resolved signal(s) present but required field(s) "
+            f"absent: {', '.join(missing)} — cannot assess regime concentration "
+            "without imputing them; regenerate outputs/regime/regime_performance.json "
+            "with the current producer"
+        ])
 
     states: list[str] = []
     reasons: list[str] = []
@@ -176,9 +327,8 @@ def assess_regime_coverage(
     risk_off_effective = int((risk_off_metrics or {}).get("effective_signals") or 0)
     if not risk_off_present:
         states.append(RISK_OFF_UNPROVEN)
-        reasons.append(
-            "risk_off regime label never observed in resolved evidence — strategy/"
-            "gauge behavior in a genuine risk-off regime is completely unproven")
+        reasons.append(_risk_off_absence_reason(
+            absence_kind or ABSENCE_INDETERMINATE, risk_off_observed, primary_window_days))
     elif risk_off_effective < min_regime_effective_n:
         states.append(RISK_OFF_UNPROVEN)
         reasons.append(
@@ -195,9 +345,11 @@ def assess_regime_coverage(
     primary_state = next(s for s in priority if s in states)
 
     return {
-        "generated_at": now, "observe_only": True, "schema_version": "1",
+        "generated_at": now, "observe_only": True, "schema_version": "2",
         "source": "regime_coverage",
         "resolved_signals": resolved_total,
+        "primary_window_days": primary_window_days,
+        "assessable": True, "insufficiency_kind": None,
         "by_regime": {
             r: {
                 "total_signals": (m or {}).get("total_signals"),
@@ -218,10 +370,7 @@ def assess_regime_coverage(
             "return_weighted_max_share": max_rw_share,
             "threshold": concentration_share_threshold,
         },
-        "risk_off": {
-            "present": risk_off_present, "effective_signals": risk_off_effective,
-            "min_required": min_regime_effective_n,
-        },
+        "risk_off": _risk_off_block(risk_off_present, risk_off_effective),
         "states": states,
         "primary_state": primary_state,
         "reasons": reasons,
@@ -246,10 +395,18 @@ def run_regime_coverage(*, root: str | Path = ".", now_iso: str | None = None,
         return status
     except Exception as exc:
         return {
-            "generated_at": now, "observe_only": True, "schema_version": "1",
+            "generated_at": now, "observe_only": True, "schema_version": "2",
             "source": "regime_coverage", "resolved_signals": 0,
-            "by_regime": {}, "concentration": {}, "risk_off": {"present": False, "effective_signals": 0},
+            "primary_window_days": None,
+            "by_regime": {}, "concentration": {},
+            "risk_off": {
+                "present": False, "effective_signals": 0,
+                "min_required": MIN_REGIME_EFFECTIVE_N,
+                "observed": None, "resolved_at_primary_window": None,
+                "absence_kind": ABSENCE_INDETERMINATE,
+            },
             "states": [REGIME_DATA_INSUFFICIENT], "primary_state": REGIME_DATA_INSUFFICIENT,
+            "assessable": False, "insufficiency_kind": INSUFFICIENCY_TOO_FEW_RESOLVED,
             "reasons": [f"error computing regime coverage: {exc}"],
             "disclaimer": _DISCLAIMER,
         }

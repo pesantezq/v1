@@ -237,6 +237,39 @@ def test_regime_data_insufficient_does_not_downgrade(tmp_path):
     assert r["signals"]["regime_coverage"]["primary_state"] == "REGIME_DATA_INSUFFICIENT"
 
 
+def test_unreadable_regime_artifact_downgrades_and_does_not_buy_a_free_pass(tmp_path):
+    # B4 correction. Two absences reach the consumer as REGIME_DATA_INSUFFICIENT
+    # and must NOT be treated alike:
+    #   - no artifact / too thin  -> no downgrade (test above); absence of
+    #     evidence is not evidence of concentration
+    #   - 2238 resolved signals present but the artifact's derived fields are
+    #     absent (a pre-WS14 artifact, exactly what was on disk 2026-07-28)
+    #     -> the evidence EXISTS and cannot be read. That is an instrumentation
+    #     failure, and letting it pass as GREEN is how a stale artifact silently
+    #     buys the credibility it never earned.
+    rows = [{"tactic_id": "research_momentum_rotation", "name": "Momentum",
+             "strategy_score": 1.2, "mean_excess_vs_spy": 0.11, "still_works_oos": True,
+             **_ENVELOPE_TRUE}]
+    _write(tmp_path, "strategy_leaderboard.json", {
+        "status": "ok", "created_at": "2026-06-12T00:00:00Z", "leaderboard": rows, **_ENVELOPE_TRUE})
+    _write(tmp_path, "research_strategy_catalog.json", {"coverage_complete": True, "undocumented": []})
+    _write(tmp_path, "walk_forward_results.json",
+           {"results": {"research_momentum_rotation": _WF_SUPPORTED}})
+    _write(tmp_path, "factor_exposure_report.json", {"factor_data_available": True})
+    _write_regime_performance(tmp_path, {
+        "high_volatility": {"total_signals": 27, "win_rate": 0.63, "avg_return_pct": 0.807},
+        "neutral": {"total_signals": 2211, "win_rate": 0.519, "avg_return_pct": 0.226},
+    }, 2238)
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["status"] != "GREEN"
+    assert r["dimensions"]["oos_validity"]["status"] == "AMBER"
+    assert r["dimensions"]["ranking_credibility"]["status"] == "AMBER"
+    assert any("regime_coverage_unreadable" in x
+               for x in r["dimensions"]["ranking_credibility"]["reasons"])
+    assert r["signals"]["regime_coverage"]["insufficiency_kind"] == "missing_derived_fields"
+
+
 def test_regime_concentration_appends_reason_to_already_downgraded_dimension(tmp_path):
     # oos_validity is already AMBER (no OOS_SUPPORTED tactic) for an unrelated
     # reason — the regime-concentration caveat must still be appended, not

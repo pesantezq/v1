@@ -118,6 +118,7 @@ from typing import Any
 
 from portfolio_automation.portfolio_sim.oos_state import OOSState, build_oos_evidence
 from portfolio_automation.regime_coverage import (
+    INSUFFICIENCY_MISSING_FIELDS,
     REGIME_CONCENTRATED, RISK_OFF_UNPROVEN, assess_regime_coverage,
 )
 
@@ -478,17 +479,34 @@ def _apply_regime_concentration_downgrade(
     """WS14 — mutate `dims` in place: if regime evidence is concentrated or
     risk-off remains unproven, downgrade ranking_credibility/oos_validity
     with a stated reason. No-op when regime data is merely absent/thin
-    (REGIME_DATA_INSUFFICIENT alone) — absence of evidence must not read as
-    evidence of concentration."""
+    (REGIME_DATA_INSUFFICIENT with `too_few_resolved`) — absence of evidence
+    must not read as evidence of concentration.
+
+    B4 correction: an UNREADABLE artifact is not a thin one. When the assessor
+    reports `insufficiency_kind == missing_derived_fields`, resolved evidence
+    exists and cannot be read (typically an on-disk artifact predating the
+    producer's enrichment fields). That is an instrumentation failure, and it
+    must cost the same downgrade — otherwise a stale artifact silently buys the
+    credibility it never earned, which is the failure mode this whole
+    workstream exists to close."""
     states = set(regime_coverage.get("states") or [])
-    if not (states & _REGIME_CONCENTRATION_DOWNGRADE_STATES):
+    unreadable = regime_coverage.get("insufficiency_kind") == INSUFFICIENCY_MISSING_FIELDS
+    if not (states & _REGIME_CONCENTRATION_DOWNGRADE_STATES) and not unreadable:
         return
-    reason = (
-        f"regime_concentration ({', '.join(sorted(states & _REGIME_CONCENTRATION_DOWNGRADE_STATES))}): "
-        f"{'; '.join(regime_coverage.get('reasons') or [])} — evidence is not "
-        "diversified across market regimes; this dimension cannot read as "
-        "generally validated"
-    )
+    if unreadable:
+        reason = (
+            "regime_coverage_unreadable: "
+            f"{'; '.join(regime_coverage.get('reasons') or [])} — regime evidence "
+            "exists but cannot be read, so regime diversification is unverified; "
+            "this dimension cannot read as generally validated"
+        )
+    else:
+        reason = (
+            f"regime_concentration ({', '.join(sorted(states & _REGIME_CONCENTRATION_DOWNGRADE_STATES))}): "
+            f"{'; '.join(regime_coverage.get('reasons') or [])} — evidence is not "
+            "diversified across market regimes; this dimension cannot read as "
+            "generally validated"
+        )
     for name in _REGIME_DOWNGRADED_DIMENSIONS:
         dim = dims.get(name)
         if dim is None:
@@ -544,6 +562,11 @@ def _assess_strict(lb, cat, wf, factor, root: Path, now: datetime, legacy: dict[
         "states": regime_coverage.get("states"),
         "primary_state": regime_coverage.get("primary_state"),
         "resolved_signals": regime_coverage.get("resolved_signals"),
+        # B4: `assessable`/`insufficiency_kind` distinguish "no regime evidence
+        # yet" from "evidence present but unreadable" — the latter downgrades.
+        "assessable": regime_coverage.get("assessable"),
+        "insufficiency_kind": regime_coverage.get("insufficiency_kind"),
+        "primary_window_days": regime_coverage.get("primary_window_days"),
         "concentration": regime_coverage.get("concentration"),
         "risk_off": regime_coverage.get("risk_off"),
     }

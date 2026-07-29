@@ -633,6 +633,25 @@ def build_regime_performance_summary(
             by_regime[regime_label]["return_weighted_share"] = round(
                 contribution / _total_contribution, 4)
 
+    # B4 correction (docs/reliability-program/2026-07-28-final-report.md
+    # addendum) — regime census over ALL rows, resolved or not. `by_regime`
+    # covers only rows resolved at the primary window, so a regime label that
+    # was observed but has not yet matured is absent from it and becomes
+    # indistinguishable from a label never observed at all. Live 2026-07-28:
+    # 108 risk_off rows existed (2026-07-25..27, all regime_data_quality=full)
+    # with ZERO resolved at the 3-day primary window, and regime_coverage.py
+    # reported "risk_off never observed" — a false claim, and a verdict that
+    # would flip to "proven" purely on window maturation. This census is the
+    # instrumentation that makes immature-vs-never-observed separable; it is
+    # additive and changes no existing field.
+    census_observed: dict[str, dict[str, int]] = {}
+    for row in rows:
+        label = str(row.get("regime_label") or "neutral")
+        entry = census_observed.setdefault(label, {"observed": 0, "resolved": 0})
+        entry["observed"] += 1
+        if row.get(primary_return_col) is not None:
+            entry["resolved"] += 1
+
     confidence_buckets: dict[str, list[dict[str, Any]]] = {"high": [], "medium": [], "low": []}
     for row in resolved_rows:
         confidence = float(row.get("confidence_score") or 0.0)
@@ -648,6 +667,10 @@ def build_regime_performance_summary(
         "primary_window_days": primary_window_days,
         "resolved_signals": len(resolved_rows),
         "by_regime": by_regime,
+        "regime_census": {
+            "primary_window_days": primary_window_days,
+            "observed": dict(sorted(census_observed.items())),
+        },
         "observability": {
             "regime_vs_success_correlation": {
                 regime: metrics.get("win_rate")

@@ -117,24 +117,62 @@ def test_single_value_collapse_detector_is_blind_to_two_label_concentration():
         "detector's contract changed and this probe's premise needs revisiting")
 
 
-def test_no_module_reads_regime_performance_into_a_validity_verdict_STILL_OPEN():
-    """STILL OPEN (F14.1): grep the two real health/validity assessors most
-    likely to own this (`strategy_lab_health.py`, `quant_watch_probes.py`)
-    and confirm neither reads `regime_performance.json` at all -- regime
-    concentration feeds no GREEN/AMBER/RED verdict anywhere today. The two
-    real readers that DO exist (`decision_context_capture.py`,
-    `daily_input_snapshot.py`) are descriptive/freshness-only, not validity
-    checks; this test does not need to inspect them to make its point."""
-    from portfolio_automation.portfolio_sim import strategy_lab_health as SLH
-    from portfolio_automation import quant_watch_probes as QW
+def test_concentrated_regime_downgrades_a_validity_verdict():
+    """CLOSED by B4 (f7f70f63) + the 2026-07-29 correction. This probe
+    previously asserted the gap: that NO health/validity assessor read
+    `regime_performance.json` at all. Its own failure message specified the
+    rewrite -- "assert it correctly downgrades a concentrated regime instead
+    of asserting the absence of any regime awareness" -- so that is what it
+    now does, at the level the tripwire cared about: a concentrated window
+    must not be describable as generally validated."""
+    from portfolio_automation.regime_coverage import (
+        REGIME_CONCENTRATED, assess_regime_coverage)
 
-    for module in (SLH, QW):
-        src = inspect.getsource(module)
-        assert "regime_performance" not in src and "regime" not in src.lower(), (
-            f"{module.__name__} now references regime data -- if a "
-            "regime-aware validity dimension has been added, rewrite this "
-            "probe to assert it correctly downgrades a concentrated regime "
-            "instead of asserting the absence of any regime awareness")
+    def _m(total, effective, share, rw_share):
+        return {"total_signals": total, "effective_signals": effective,
+                "avg_return_pct": 0.2, "win_rate": 0.52,
+                "share_of_evidence": share, "return_weighted_share": rw_share}
+
+    verdict = assess_regime_coverage({
+        "resolved_signals": 2238, "primary_window_days": 3,
+        "by_regime": {
+            "high_volatility": _m(27, 27, 0.0121, 0.0418),
+            "neutral": _m(2211, 925, 0.9879, 0.9582),
+        },
+    })
+    assert REGIME_CONCENTRATED in verdict["states"], (
+        "a 98.8%-single-regime window must be reported as concentrated -- if "
+        "this stops firing, regime concentration has silently stopped "
+        "reaching any validity verdict again (F14.1 re-opened)")
+    assert verdict["concentration"]["max_share_regime"] == "neutral"
+
+
+def test_unreadable_regime_artifact_is_not_reported_as_a_calm_window():
+    """The B4 correction's own tripwire (2026-07-29). An artifact carrying
+    plenty of resolved evidence but missing the derived fields the verdict
+    depends on must fail CLOSED and be distinguishable from a genuinely thin
+    window -- the pre-correction code coerced the missing share to 0.0 and
+    read a 98.8%-concentrated window as perfectly balanced."""
+    from portfolio_automation.regime_coverage import (
+        INSUFFICIENCY_MISSING_FIELDS, REGIME_COVERAGE_BALANCED,
+        assess_regime_coverage)
+
+    verdict = assess_regime_coverage({
+        "resolved_signals": 2238, "primary_window_days": 3,
+        "by_regime": {  # pre-WS14 artifact shape: counts only, no derived fields
+            "high_volatility": {"total_signals": 27, "win_rate": 0.63},
+            "neutral": {"total_signals": 2211, "win_rate": 0.519},
+        },
+    })
+    assert REGIME_COVERAGE_BALANCED not in verdict["states"], (
+        "an unreadable artifact must never read as balanced -- that is "
+        "imputing the best case from missing data")
+    assert verdict["insufficiency_kind"] == INSUFFICIENCY_MISSING_FIELDS, (
+        "an unreadable artifact must be distinguishable from a thin one; "
+        "only the former costs a credibility downgrade downstream")
+    assert verdict["concentration"].get("max_share_regime") is None, (
+        "no concentration leader may be named from missing shares -- the "
+        "pre-correction code named the SMALLEST regime at 0.0%")
 
 
 # ---------------------------------------------------------------------------

@@ -257,7 +257,7 @@ static check, then fails at runtime — in the one function whose job is to warn
 caller they are past the hardcoded holiday horizon. Fixed with subclass-ordered
 coercion and an explicit tz policy (naive treated as UTC).
 
-## Sent back for correction (open at time of writing)
+## Sent back for correction (RESOLVED 2026-07-29 — see Addendum 2; two of the claims below are themselves wrong)
 
 **B4 regime coverage is inert on the input it actually reads.** The implementation
 report quoted 2265 resolved signals across three regimes with effective counts and
@@ -286,3 +286,106 @@ Regime concentration was reported earlier in this document as 98.8% neutral from
 `regime_performance.json`. The CSV source of truth gives **96.47% neutral, 2.36%
 risk_off, 1.18% high_volatility across 2292 resolved rows**. The artifact's figure
 excludes `risk_off` entirely, which is the defect above.
+
+> **Superseded 2026-07-29 — see "B4 correction resolved" below.** Both figures are
+> correct at different resolution horizons (98.79% at the 3-day primary window,
+> 96.47% at 1-day); the gap is not an artifact omission.
+
+---
+
+# Addendum 2 — B4 correction resolved (2026-07-29)
+
+## What the previous addendum got wrong
+
+**The producer was not broken.** `build_regime_performance_summary` does emit the
+enrichment fields — verified against live rows: `neutral.share_of_evidence 0.9879`,
+`return_weighted_share 0.9582`, `effective_signals 925`. The on-disk artifact
+(`generated_at 2026-07-28T09:03:30`) lacked them because it was written by the
+**2026-07-28 cron running pre-B4 `main` code**, while B4 sat on an unmerged branch.
+The real fault was a *stale-artifact coupling*: an assessor reading an artifact one
+schema generation behind its own producer.
+
+**`risk_off` was not omitted — it was immature.** 108 `risk_off` rows existed
+(2026-07-25→27, all `regime_data_quality=full`), 54 resolved at the 1-day window and
+**zero at the 3-day primary window**. `by_regime` only covers rows resolved at the
+primary window, so the label was two days too young to appear. The addendum read
+that absence as the producer dropping a label.
+
+**The two neutral-share figures were both right.** 2211/2238 = **98.79%** at the
+3-day window; 2211/2292 = **96.47%** at 1-day. Different horizons, not a defect.
+
+**The `n`/`share` diagnosis was imprecise.** The artifact *did* carry `total_signals`
+(27 / 2211) and top-level `resolved_signals` (2238). What was absent was the derived
+`share_of_evidence`, which `float(None or 0.0)` coerced to **0.0**.
+
+## The defects that were real, and survive the staleness explanation
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | Missing `share_of_evidence` coerced to `0.0` (`regime_coverage.py:149`) | A 98.8%-concentrated window read as balanced; `REGIME_CONCENTRATED` structurally could not fire. **Best-case imputation from missing data** — the practice the program's own "never impute a missing component" decision forbids. |
+| 2 | `max()` over an all-zeros share dict | Named `high_volatility` (n=**27**) as the concentration leader at 0.0%, while `neutral` held 98.8%. A misleading attribution, not merely a missing one. |
+| 3 | `risk_off` absent → *"never observed in resolved evidence"* | **Factually false**, and the verdict would flip to "proven" purely on maturation. |
+| 4 | Both absences collapse to `REGIME_DATA_INSUFFICIENT`, which by contract does **not** downgrade | An unreadable artifact bought a **GREEN** `strategy_lab_health` — verified before the fix. A stale producer silently earned credibility it never measured. |
+
+Defect 4 was not in the sent-back list. It is the one that mattered most: the
+fail-closed fix requested for defect 1 would, on its own, have *weakened* the
+downgrade it was meant to strengthen.
+
+## Changes
+
+| Change | Rollout class |
+|---|---|
+| Producer emits additive `regime_census` — `{observed, resolved}` per label over ALL rows, resolved or not | artifact-only, backward compatible |
+| Assessor fails closed on absent required fields → `REGIME_DATA_INSUFFICIENT` + `insufficiency_kind: missing_derived_fields`, naming the exact missing field(s); no concentration leader named | artifact-only |
+| `insufficiency_kind` splits `too_few_resolved` (no evidence — no downgrade) from `missing_derived_fields` (unreadable evidence — **downgrades**) | artifact-only + health |
+| `risk_off.absence_kind` ∈ `never_observed` / `immature` / `indeterminate` / `inconsistent`; no census → `indeterminate`, never a "never observed" claim | artifact-only |
+| `strategy_lab_health` downgrades `ranking_credibility`/`oos_validity` on `regime_coverage_unreadable` | gated, default ON (health only) |
+| `daily-tool-analysis` 26b / signals / 6m2 updated: unreadable ≠ thin, dispatches `portfolio-resolver-investigator` (developer lens) | analysis-only |
+| Status artifact `schema_version` 1 → 2 | artifact-only |
+
+## Verified on live state
+
+Re-derived through the shipped path (`generate_regime_performance_reports` against
+`data/portfolio.db`, 2026-07-29):
+
+```
+regime_census: neutral {observed 2238, resolved 2211}
+               risk_off {observed 108, resolved 27}
+               high_volatility {observed 27, resolved 27}
+by_regime:     neutral share 0.9762 (return-wtd 1.0722), risk_off share 0.0119, high_vol 0.0119
+assessor:      REGIME_CONCENTRATED + RISK_OFF_UNPROVEN, assessable: true
+               concentration.max_share_regime: neutral (0.9762)  [was high_volatility @ 0.0]
+               risk_off: effective_signals 27 < 30  [measured, not inferred from absence]
+```
+
+**`risk_off` matured 0 → 27 resolved overnight**, exactly as predicted. The verdict
+label is unchanged (`RISK_OFF_UNPROVEN`) but it is now reached through the *measured*
+sufficiency route instead of a false absence claim — yesterday's wrong reason would
+have become a different wrong reason today.
+
+`return_weighted_share 1.0722` exceeds 1.0 because contributions are signed and
+`risk_off`'s is negative (−0.1189); that is the producer's documented caveat, not a
+new defect.
+
+## Tests
+
+15 new tests, all watched failing first:
+
+- `tests/test_regime_coverage.py` — 11 new: no-imputation, missing field named, no
+  leader named, `too_few_resolved` vs `missing_derived_fields`, three `absence_kind`
+  paths, plus two regression locks (the literal 2026-07-28 stale shape → fails
+  closed; the regenerated shape → concentrated).
+- `tests/test_regime_performance.py` — 2 new: census counts observed vs resolved;
+  census includes labels absent from `by_regime`.
+- `tests/portfolio_sim/test_strategy_lab_health.py` — 1 new: unreadable artifact
+  downgrades and does not buy a free pass (failed with `GREEN != GREEN` pre-fix).
+
+Suites run: 278 passed across `tests/portfolio_sim/` + the regime/quant-watch set;
+54 passed across the performance-feedback set.
+
+## Still open
+
+Nothing from B4. The regime-concentration verdict now reaches the Strategy Lab's
+validity dimensions from measured shares. The `98.8% neutral` concentration itself is
+unchanged and remains a live caveat on every claimed edge — the fix makes it visible,
+it does not resolve it.
