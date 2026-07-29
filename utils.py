@@ -122,6 +122,28 @@ def get_env(key: str, default: Optional[str] = None, required: bool = False) -> 
     return value
 
 
+def get_env_first(keys: "list[str] | tuple[str, ...]",
+                  default: Optional[str] = None) -> Optional[str]:
+    """Return the first non-blank value among *keys*, else *default*.
+
+    Whitespace-only values are treated as absent, so a stray `EMAIL_SENDER= `
+    in a .env cannot shadow a real value later in the chain. The first name
+    always wins when set, which keeps existing single-name configs unchanged.
+
+    Exists so the legacy senders (``email_reporter``, ``email_digest``) can read
+    the same generic mail config that ``memo_email_sender._env_str_fallback``,
+    the Schwab re-auth notifier and ``tools/notify_status.py`` already use.
+    Before this, the legacy pair read EMAIL_SENDER / EMAIL_RECIPIENT /
+    EMAIL_PASSWORD while deployments set EMAIL_USER / EMAIL_TO / EMAIL_PASS,
+    so every send failed `is_configured()` with valid credentials on disk.
+    """
+    for key in keys:
+        value = os.environ.get(key)
+        if value and value.strip():
+            return value.strip()
+    return default
+
+
 @dataclass
 class Holding:
     """Represents a single portfolio holding."""
