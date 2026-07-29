@@ -4,21 +4,23 @@ Scenario 2  -- a dashboard renders while omitting a decision-critical section.
 Scenario 3  -- a test fixture uses obsolete headers.
 Scenario 19 -- memo, GUI and decision artifact disagree.
 
-Scenario 2/3 also surface a NEW finding from this probe suite: two of the six
-headers `capital_plan_view.render_capital_plan_md` actually emits today
-("Funded Market Opportunities", "Sell and Funding Dependencies") are STILL
-NOT in `gui_v2/data/dash_memo.py`'s `_HEADER_MAP` -- a residual instance of
-the exact defect class fixed by commit 8686898d for the other four headers
-(Today's Capital Plan / What To Do Today / Deferred Recommendations /
-Bottom Line). The existing regression guard in
-``tests/test_gui_dashboard_memo.py`` (``SHIPPED_CAPITAL_PLAN_HEADERS`` /
-``test_no_shipped_memo_header_is_orphaned``) does not catch this because its
-header list is itself a hand-maintained literal that was never updated to
-include these two headers -- i.e. the exact "test fixture uses obsolete
-headers" shape this probe suite exists to guard against, still live in the
-repo's OWN prior fix for this bug class. Per the task's instructions this is
-NOT fixed here (test-and-helpers change only); it is asserted as the current
-honest state and reported as a new finding.
+Scenario 2/3 surfaced a NEW finding from this probe suite, since FIXED by
+`c8ff5d95` (2026-07-28): two of the six headers
+`capital_plan_view.render_capital_plan_md` emits ("Funded Market
+Opportunities", "Sell and Funding Dependencies") were absent from
+`gui_v2/data/dash_memo.py`'s `_HEADER_MAP` -- a residual instance of the
+defect class commit 8686898d fixed for the other four headers (Today's
+Capital Plan / What To Do Today / Deferred Recommendations / Bottom Line).
+Both are mapped now, and the probes below assert coverage rather than
+documenting the gap.
+
+The reason it survived that earlier fix is the point worth keeping: the
+regression guard in ``tests/test_gui_dashboard_memo.py`` was itself a
+hand-maintained literal header list, so it structurally could not catch a
+header its author had not seen -- a stale fixture guarding against stale
+fixtures. Both that guard and the probes here now derive the header set from
+the producer's own `h("...")` call sites, which is why the pair below stays
+source-derived rather than hardcoded.
 """
 from __future__ import annotations
 
@@ -34,15 +36,15 @@ from tests.probes.assertions import (
     extract_literal_header_calls,
 )
 
-# Headers with a currently-open gap: capital_plan_view.py emits them, but
-# dash_memo._HEADER_MAP has no fragment matching them. Discovered by this
-# probe suite (2026-07-28) -- NOT present before this file existed. If a fix
-# lands, this set should shrink to `set()` and the surrounding tests below
-# should be updated to assert full coverage instead of documenting the gap.
-_KNOWN_ORPHANED_CAPITAL_PLAN_HEADERS = {
-    "Funded Market Opportunities",
-    "Sell and Funding Dependencies",
-}
+# CLOSED by `c8ff5d95` (2026-07-28). This set held the two headers
+# capital_plan_view.py emitted with no matching dash_memo._HEADER_MAP
+# fragment -- "Funded Market Opportunities" and "Sell and Funding
+# Dependencies", both inside conditional blocks and therefore absent from the
+# memo sampled when the original fix was written. It is now EMPTY and stays
+# that way: the carve-out is retained (rather than deleted) so that a header
+# regressing into an orphan fails with the diff spelled out, which is the
+# a5387a27 defect class this suite exists to catch.
+_KNOWN_ORPHANED_CAPITAL_PLAN_HEADERS: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -169,15 +171,16 @@ def test_full_capital_plan_render_hits_all_six_sections():
         "widen the fixture so the omission probe below is testing something real")
 
 
-def test_dashboard_omits_two_decision_critical_sections_from_full_render():
-    """The core scenario-2 reproduction: a fully-populated capital plan
-    (all six sections present in the rendered Markdown) is parsed by the
-    GUI's mobile memo collector, and two sections' content -- a funded
-    market opportunity's entry guidance, and a pending sell's proceeds
-    detail -- are silently absent from the resulting `Portfolio Decisions`
-    section, with NO error and NO signal that anything was dropped (the
-    section still renders, non-empty, from the OTHER four sections' content
-    -- exactly how the original a5387a27 loss was invisible)."""
+def test_dashboard_preserves_every_decision_critical_section_from_full_render():
+    """CLOSED by `c8ff5d95`. The scenario-2 reproduction, now inverted to pin
+    the fix: a fully-populated capital plan (all six sections in the rendered
+    Markdown) is parsed by the GUI's mobile memo collector, and NO section's
+    content may go missing. Previously a funded market opportunity's entry
+    guidance and a pending sell's proceeds detail vanished with no error and
+    no signal -- the `Portfolio Decisions` section still rendered non-empty
+    from the other four sections, which is exactly how the original a5387a27
+    loss stayed invisible. Content-level, not header-level: a header can map
+    correctly while its body is still dropped."""
     view = _full_coverage_view()
     md = "\n".join(cpv.render_capital_plan_md(view, markdown=True))
     assert "Entry setup:" in md  # the market-opportunity content exists in the source memo
@@ -190,15 +193,14 @@ def test_dashboard_omits_two_decision_critical_sections_from_full_render():
     assert "Cash on hand" in portfolio_decisions_text
     assert "AAPL" in portfolio_decisions_text
 
-    # The two still-orphaned headers' content does NOT survive anywhere in
-    # the parsed sections -- it is not merely misfiled, it is gone.
+    # The two formerly-orphaned headers' content now survives the round trip.
     all_parsed_text = "\n".join(line for lines in parsed.values() for line in lines)
-    assert "Entry setup:" not in all_parsed_text, (
-        "KNOWN OPEN GAP: 'Funded Market Opportunities' content is silently "
-        "dropped by the GUI memo collector -- see module docstring")
-    assert "Estimated proceeds:" not in all_parsed_text, (
-        "KNOWN OPEN GAP: 'Sell and Funding Dependencies' content is silently "
-        "dropped by the GUI memo collector -- see module docstring")
+    assert "Entry setup:" in all_parsed_text, (
+        "'Funded Market Opportunities' content is being dropped by the GUI "
+        "memo collector again -- a5387a27 defect class, fourth occurrence")
+    assert "Estimated proceeds:" in all_parsed_text, (
+        "'Sell and Funding Dependencies' content is being dropped by the GUI "
+        "memo collector again -- a5387a27 defect class, fourth occurrence")
 
 
 # ---------------------------------------------------------------------------

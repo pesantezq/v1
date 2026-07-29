@@ -7,13 +7,17 @@ Scenario 15 -- a regime-concentrated signal is described as generally
 Scenario 16 -- a strong raw hit rate coexists with negative
                benchmark-relative expectancy.
 
-All three document STILL-OPEN gaps (F15.1, F14.1, and a hit-rate/expectancy
-conflation in ``retune_suggestions.py`` respectively). None appear in the
-reliability-program's implemented-changes table. Each probe demonstrates the
-shared assertion catching the shape when it occurs, and documents that the
-production data needed to run it for real (a "screened" label field; a
-regime-aware validity check; an expectancy-aware weight-proposal gate) does
-not exist yet.
+Two of the three have since been CLOSED and their probes inverted to pin the
+fix rather than the gap: F14.1 by B4 (`f7f70f63` + the 2026-07-29 correction
+— regime concentration now reaches a validity verdict, and an unreadable
+regime artifact fails closed instead of reading as balanced), and the
+hit-rate/expectancy conflation in ``retune_suggestions.py`` by `c0fc3c6c`
+— which mattered most, being the one path allowed to mutate registry weights.
+
+F15.1 remains genuinely OPEN: no "screened"/"passed_screen" label field
+exists anywhere, so provenance still records WHERE a symbol came from and
+never WHICH filters ran (Phase E2, unimplemented). Its probe below still
+documents the honest gap.
 """
 from __future__ import annotations
 
@@ -178,8 +182,8 @@ def test_unreadable_regime_artifact_is_not_reported_as_a_calm_window():
 # ---------------------------------------------------------------------------
 # Scenario 16 -- a strong raw hit-rate delta produces an auto-applicable
 # weight-INCREASE proposal even when the SAME tag's mean_return is
-# negative -- retune_suggestions._propose_weight_changes never reads
-# mean_return at all. STILL OPEN.
+# negative, because retune_suggestions._propose_weight_changes never read
+# mean_return at all. CLOSED by `c0fc3c6c`; the probes now assert the gate.
 # ---------------------------------------------------------------------------
 
 
@@ -203,36 +207,35 @@ def _efficacy_payload_with_hitrate_expectancy_conflict() -> dict:
     }
 
 
-def test_retune_suggestion_proposes_weight_increase_despite_negative_expectancy():
-    """Real production function, real-shaped input. `source:recent_signal`
-    carries a positive hit-rate delta (+5pp, 'winner', n=260 -- comfortably
-    clears the auto-apply sample/magnitude/significance gates) but its OWN
-    mean_return_1d in the SAME record is negative. The proposal still comes
-    back `auto_applicable: True` with a weight INCREASE, because
-    `_propose_weight_changes` never reads `mean_return_1d` at all."""
+def test_negative_expectancy_withholds_auto_applicability_from_a_winning_hit_rate():
+    """CLOSED by `c0fc3c6c`. The gap: `source:recent_signal` carries a positive
+    hit-rate delta (+5pp, 'winner', n=260 -- clears every sample/magnitude/
+    significance gate) while its OWN mean_return_1d in the SAME record is
+    negative, and the proposal still came back `auto_applicable: True` with a
+    weight INCREASE because `_propose_weight_changes` never read expectancy.
+    This matters more than most probes here: it is the ONE path allowed to
+    mutate registry weights (`backtesting.auto_apply.enabled` is true). The
+    old probe's failure message specified this rewrite."""
     payload = _efficacy_payload_with_hitrate_expectancy_conflict()
     result = RS.build_retune_suggestions(efficacy_payload=payload)
 
-    hit_rate_proposal = next(p for p in result["weight_proposals"]
-                             if p["source_tag"] == "source:recent_signal")
-    assert hit_rate_proposal["delta"] > 0, "hit-rate delta alone drives an INCREASE"
-    assert hit_rate_proposal["auto_applicable"] is True
-
-    tag_stats = payload["by_tag"]["source:recent_signal"]
-    assert tag_stats["mean_return_1d"] < 0, (
-        "fixture sanity: the tag genuinely has negative expectancy alongside "
-        "its positive hit-rate delta")
-    assert "mean_return" not in hit_rate_proposal["rationale"].lower(), (
-        "the proposal's own rationale text never mentions expectancy -- "
-        "confirming it was never considered, not merely omitted from display")
+    proposal = next(p for p in result["weight_proposals"]
+                    if p["source_tag"] == "source:recent_signal")
+    assert payload["by_tag"]["source:recent_signal"]["mean_return_1d"] < 0, (
+        "fixture sanity: the tag must genuinely have negative expectancy "
+        "alongside its positive hit-rate delta")
+    assert proposal["auto_applicable"] is False, (
+        "a tag that is right more often while LOSING money must never be "
+        "auto-applicable -- being correct and being profitable are different "
+        "claims, and only the second justifies more weight")
 
 
-def test_propose_weight_changes_source_never_reads_mean_return_STILL_OPEN():
-    """STILL OPEN: static confirmation that `_propose_weight_changes` has no
-    code path touching `mean_return` at all -- the gap demonstrated above is
-    not a fixture artifact, it is structural. If this test starts failing
-    (mean_return referenced), rewrite the test above to assert the gate
-    correctly WITHHOLDS auto-applicability for negative-expectancy tags
-    instead of asserting today's honest gap."""
+def test_propose_weight_changes_reads_expectancy_structurally():
+    """Static complement: the gate must be structural, not a fixture artifact.
+    `_propose_weight_changes` has to touch `mean_return` at all for the
+    behavioural assertion above to mean anything."""
     src = inspect.getsource(RS._propose_weight_changes)
-    assert "mean_return" not in src
+    assert "mean_return" in src, (
+        "expectancy is unreferenced again -- the hit-rate/expectancy "
+        "conflation has structurally re-opened in the one path that can "
+        "mutate registry weights")

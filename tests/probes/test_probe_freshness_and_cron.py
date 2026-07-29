@@ -12,6 +12,7 @@ names the open item explicitly, rather than fabricating a passing "fix".
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -117,23 +118,53 @@ def _grep_repo_for_calls(root: Path, symbol: str, *, exclude: tuple[str, ...]) -
     return hits
 
 
-def test_coherent_run_ids_is_still_unwired_in_production_STILL_OPEN():
-    """STILL OPEN (F8.1): `coherent_run_ids()` was built and tested precisely
-    to catch a cron that exits zero after silently combining today's run
-    with a stale/mismatched artifact -- but no production pipeline stage
-    calls it. If this test ever fails (a real caller appears), that is GOOD
-    NEWS -- update it to assert the new call site instead of asserting the
-    absence, and cross-reference `docs/reliability-program/2026-07-28-spec.md`
-    Phase D1 as closed."""
+def test_coherent_run_ids_is_wired_into_a_production_consumer():
+    """CLOSED by Phase D1 (`3287b37d`). F8.1 was that `coherent_run_ids()` --
+    built and tested precisely to catch a cron exiting zero after silently
+    combining today's run with a stale artifact -- had no production caller.
+    A caller now exists; this half of the probe keeps the WIRING from silently
+    disappearing again. The half that matters more is below: that the wiring
+    actually FLAGS a mismatch."""
     root = Path(__file__).resolve().parents[2]  # repo root
     callers = _grep_repo_for_calls(
         root, "coherent_run_ids",
         exclude=("run_manifest.py", "tests/", ".venv", "node_modules"))
-    assert callers == [], (
-        f"coherent_run_ids() now has real caller(s) outside its own module/tests: "
-        f"{callers} -- if this is Phase D1 landing, rewrite this probe to assert the "
-        "new integration behaves correctly (e.g. a run with mismatched run_ids is "
-        "actually refused/flagged), not merely that a call exists")
+    assert callers, (
+        "coherent_run_ids() has no production caller -- F8.1 has re-opened: the "
+        "safeguard for stale-artifact mixing exists but nothing invokes it")
+
+
+def test_run_coherence_flags_a_decision_plan_built_under_a_different_run(tmp_path):
+    """The behavioural half the old probe's failure message asked for: a
+    mismatched run_id must actually be reported, not merely passed to a
+    function. A cron that regenerates decision_plan.json out of band -- the
+    exact F8.1 scenario -- must come back `coherent: False` and name the
+    offending artifact."""
+    from portfolio_automation.daily_run_status import check_run_coherence
+
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    (tmp_path / "outputs" / "sandbox").mkdir(parents=True)
+    (tmp_path / "outputs" / "latest" / "decision_plan.json").write_text(
+        json.dumps({"run_id": "run-STALE-from-a-previous-run"}), encoding="utf-8")
+    (tmp_path / "outputs" / "sandbox" / "daily_input_snapshot.json").write_text(
+        json.dumps({"run_id": "run-TODAY"}), encoding="utf-8")
+
+    result = check_run_coherence(tmp_path, {"run_id": "run-TODAY"})
+    assert result["coherent"] is False, (
+        "a decision_plan carrying a foreign run_id must be reported incoherent")
+    assert result["mismatched"] == ["decision_plan"]
+
+
+def test_run_coherence_reports_unknown_rather_than_incoherent_when_nothing_is_present(tmp_path):
+    """Fail-closed direction check. Absence of artifacts must read as UNKNOWN
+    (`None`), never as a confident `False` -- inventing an incoherence verdict
+    from missing data is the same defect class the B4 correction closed in
+    regime_coverage."""
+    from portfolio_automation.daily_run_status import check_run_coherence
+
+    result = check_run_coherence(tmp_path, {"run_id": "run-TODAY"})
+    assert result["coherent"] is None
+    assert result["mismatched"] == []
 
 
 def test_cron_exit_zero_with_stale_input_is_not_caught_by_pipeline_wiring_probe():

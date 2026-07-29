@@ -3,8 +3,8 @@
 Scenario 5  -- an OOS field claims true without sufficient folds.
 Scenario 6  -- complete documentation coexists with invalid statistics.
 Scenario 17 -- one observation/week controls a removal/pass-fail verdict
-               (+ a still-open sibling: concerns auto-close by age
-               regardless of remediation, F16.1).
+               (+ a sibling CLOSED by E3/WS16 `88281d6c`: concerns no longer
+               auto-close by age regardless of remediation, F16.1).
 Scenario 18 -- many tested tactics create a false leaderboard winner
                (selection bias -- STILL OPEN, no probe passes here, this is
                an honest-state documentation of the gap).
@@ -209,26 +209,33 @@ def test_evenly_distributed_folds_pass_the_dominance_probe():
         [0.02, 0.018, 0.021, 0.019, 0.017], context="tactic.per_fold_excess (even)")
 
 
-def test_only_prior_gauge_detector_can_escalate_concerns_STILL_OPEN():
-    """STILL OPEN (F16.1, not in the reliability-program implemented-changes
-    table): all three quant-watch concern detectors auto-resolve purely by
-    age (`MAX_PROBE_AGE_DAYS`, quant_watch_probes.py) regardless of whether
-    the underlying issue was actually remediated -- i.e. a persistent
-    concern can silently 'age out' rather than being closed by evidence.
-    Only `_eval_prior_gauge` can ever escalate an aging concern to RED; the
-    other two detectors have no escalation path at all, so severity can
-    never override a stale close for them. This is a structural, static
-    check (source contains/does not contain a call to `_escalated`) rather
-    than a full ledger simulation -- sufficient to pin the current honest
-    state without fabricating conviction. Do not treat this test going RED
-    (source gaining/losing an `_escalated` call) as a regression to revert;
-    it is the intended detector for this specific gap closing."""
-    assert "_escalated(" in inspect.getsource(QW._eval_prior_gauge)
-    assert "_escalated(" not in inspect.getsource(QW._eval_neg_return)
-    assert "_escalated(" not in inspect.getsource(QW._eval_sector_drag)
-    # All three still share the same unconditional age-based auto-resolve.
+def test_every_concern_detector_can_escalate_and_none_closes_by_age():
+    """CLOSED by Phase E3/WS16 (`88281d6c`). F16.1 was that all three
+    quant-watch detectors auto-resolved purely by age (`MAX_PROBE_AGE_DAYS`)
+    regardless of remediation -- an unfixed concern silently vanished after 60
+    days -- and that only `_eval_prior_gauge` could ever escalate. Both halves
+    are now closed, so this probe pins the FIX rather than the gap: severity
+    must be expressible by every detector, and age must not be a closure path
+    in any of them."""
     for fn in (QW._eval_prior_gauge, QW._eval_neg_return, QW._eval_sector_drag):
-        assert "MAX_PROBE_AGE_DAYS" in inspect.getsource(fn)
+        src = inspect.getsource(fn)
+        assert "_escalated(" in src, (
+            f"{fn.__name__} lost its escalation path -- F16.1 half-reopened: a "
+            "severe concern from this detector can no longer be raised to RED")
+        assert "MAX_PROBE_AGE_DAYS" not in src, (
+            f"{fn.__name__} consults age again -- F16.1 reopened: a concern "
+            "that ages out has not been remediated, it has been forgotten")
+
+
+def test_age_survives_only_as_an_operator_visibility_marker():
+    """The complement: `MAX_PROBE_AGE_DAYS` must still EXIST (an old
+    unresolved concern is worth surfacing) but only as a `stale_unresolved`
+    display flag -- deleting it outright would lose that signal, while letting
+    it resolve anything would re-open F16.1."""
+    assert QW.MAX_PROBE_AGE_DAYS > 0
+    render_src = inspect.getsource(QW.render_status)
+    assert "stale_unresolved" in render_src, (
+        "age no longer surfaces long-unresolved concerns to the operator")
 
 
 # ---------------------------------------------------------------------------
