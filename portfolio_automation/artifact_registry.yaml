@@ -281,6 +281,23 @@ artifacts:
     consumer_status: consumed
     notes: "consumers quant-watch-analysis + daily-tool-analysis land when feat/quant-watch-probes merges"
 
+  regime_coverage_status.json:
+    path: outputs/latest/regime_coverage_status.json
+    label: regime coverage status
+    lens: quant_learning
+    role: probe
+    required: false
+    cadence: daily
+    producer: regime_coverage
+    consumers: [daily-tool-analysis, strategy-lab-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: "WS14 evidence-sufficiency assessor. required:false — consumers degrade to
+      'Regime-coverage: not run', and required:true would move
+      daily_run_status.required_missing_count off zero. strategy-lab-analysis reads the
+      pure assessor in-process (strategy_lab_health), so the weekly quant lens does not
+      depend on this artifact; the daily check's item 26b / line 6m2 do."
+
   # ── Market discovery ──────────────────────────────────────────────────────
   theme_signals.json:
     path: outputs/latest/theme_signals.json

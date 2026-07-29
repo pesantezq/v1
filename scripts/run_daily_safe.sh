@@ -246,6 +246,19 @@ run_aux_stage "Resolution-due probe" \
 run_aux_stage "Quant-watch probe ledger" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.quant_watch_probes import run_quant_watch; r = run_quant_watch(root='.', created_run='run_daily_safe'); print('overall:', r.get('overall_status'), 'active:', r.get('active_count'), 'registered:', len(r.get('registered_today') or []), 'escalated:', len(r.get('escalated_today') or []))"
 
+# Stage 7f1 — Regime coverage (WS14): evidence-sufficiency assessor over the
+# ALREADY-computed outputs/regime/regime_performance.json (written by
+# performance_feedback inside the decision run above). Measures SHARE of resolved
+# evidence per regime label, which the label-cardinality guard structurally cannot
+# see — a 97%-neutral 3-label distribution looks healthy by cardinality.
+# Wired here deterministically for the same reason as Stage 7f: B4 shipped this
+# producer with only the /daily-tool-analysis skill prose as its caller, and that
+# prose sits behind daily_check.sh's RED-only branch, so the artifact was simply
+# never written. Observe-only; run_regime_coverage never raises (degrades to
+# REGIME_DATA_INSUFFICIENT); never feeds the decision plan.
+run_aux_stage "Regime coverage (evidence sufficiency)" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.regime_coverage import run_regime_coverage; r = run_regime_coverage(root='.'); print('primary:', r.get('primary_state'), 'states:', ','.join(r.get('states') or []) or 'none', 'resolved:', r.get('resolved_signals'), 'assessable:', r.get('assessable'))"
+
 # Stage 7f2 — Institutional Intelligence (SEC 13F): observe-only institutional-
 # positioning consensus. Runs BEFORE the daily input snapshot (Stage 7g) so its
 # artifact is frozen into the immutable snapshot and available to decision-time
