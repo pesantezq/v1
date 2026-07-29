@@ -122,6 +122,52 @@ class TestRegimePerformance(unittest.TestCase):
         self.assertAlmostEqual(summary["by_regime"]["risk_on"]["avg_return_pct"], 5.0)
         self.assertAlmostEqual(summary["by_regime"]["risk_off"]["avg_return_pct"], -3.0)
 
+    # ---------------------------------------------------------------------
+    # B4 correction: `by_regime` covers only rows RESOLVED at the primary
+    # window, so a regime label observed but not yet matured is
+    # indistinguishable from one never observed at all. Live 2026-07-28: 108
+    # risk_off rows existed (2026-07-25..27) with ZERO resolved at the 3d
+    # window, and the coverage assessor reported "never observed". The census
+    # is additive instrumentation that makes the two absences separable.
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _row(regime_label, *, resolved_3d=True, return_pct=1.0, quality="full"):
+        row = {
+            "regime_label": regime_label,
+            "regime_confidence": 0.7,
+            "regime_data_quality": quality,
+            "conviction_band": "normal",
+            "conviction_score": 0.5,
+            "signal_score": 0.4,
+            "normalized_allocation": 0.01,
+            "signal_time": "2026-07-27T09:00:00",
+            "degraded_mode": False,
+        }
+        if resolved_3d:
+            row["outcome_return_3d"] = return_pct
+            row["outcome_success_3d"] = return_pct > 0
+        return row
+
+    def test_regime_census_counts_observed_and_resolved_per_label(self):
+        rows = (
+            [self._row("neutral") for _ in range(5)]
+            + [self._row("risk_off", resolved_3d=False) for _ in range(3)]
+        )
+        summary = build_regime_performance_summary(rows, primary_window_days=3)
+        census = summary["regime_census"]
+        self.assertEqual(census["primary_window_days"], 3)
+        self.assertEqual(census["observed"]["neutral"], {"observed": 5, "resolved": 5})
+        self.assertEqual(census["observed"]["risk_off"], {"observed": 3, "resolved": 0})
+
+    def test_regime_census_includes_labels_absent_from_by_regime(self):
+        # The whole point: a label with zero resolved rows is missing from
+        # by_regime but MUST still appear in the census.
+        rows = [self._row("neutral")] + [self._row("risk_off", resolved_3d=False)]
+        summary = build_regime_performance_summary(rows, primary_window_days=3)
+        self.assertNotIn("risk_off", summary["by_regime"])
+        self.assertIn("risk_off", summary["regime_census"]["observed"])
+
     def test_regime_reports_are_written_without_affecting_rows(self):
         record_scan_signals(self._scan_result(), db_path=self.db_path)
         self.store.resolve_signal_feedback(

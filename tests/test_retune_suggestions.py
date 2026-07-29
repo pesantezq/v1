@@ -38,11 +38,18 @@ from portfolio_automation.retune_auto_apply import (
 def _build_efficacy(tag_specs: list[dict]) -> dict:
     by_tag = {}
     for spec in tag_specs:
+        n = spec.get("n", 100)
+        # Default mean_return_1d is a small positive number so existing
+        # tests (written before the expectancy gate existed) keep passing;
+        # tests that care about the gate pass mean_return_1d explicitly
+        # (including None, to simulate missing return data).
         by_tag[spec["tag"]] = {
-            "n_samples": spec.get("n", 100),
+            "n_samples": n,
             "hit_rate_1d": spec.get("hr", 0.5),
             "vs_baseline_pp": spec.get("delta_pp", 0.0),
             "significance": spec.get("significance", "neutral"),
+            "mean_return_1d": spec.get("mean_return_1d", 0.5),
+            "resolved_1d": spec.get("resolved_1d", n),
         }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -116,6 +123,92 @@ class TestAutoApplicableFlag(unittest.TestCase):
             theme_prop = next(p for p in r["weight_proposals"]
                               if p["parameter"] == "sanitation_weight.theme")
             self.assertTrue(theme_prop["auto_applicable"])
+
+
+class TestExpectancyGate(unittest.TestCase):
+    """Defect: the weight proposer was blind to expectancy — a tag with a
+    positive hit-rate delta (proposing a weight INCREASE) but a NEGATIVE
+    mean return could still be auto_applicable=True. These pin the fix:
+    mean_return_1d is always surfaced, and a hit-rate/expectancy sign
+    contradiction (or missing return data) refuses auto-applicability
+    without hiding the proposal itself.
+    """
+
+    def test_mean_return_always_recorded_on_proposal(self):
+        eff = _build_efficacy([
+            {"tag": "source:theme_candidate", "n": 250, "delta_pp": 3.0,
+             "significance": "winner", "mean_return_1d": 0.42, "resolved_1d": 220},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            r = build_retune_suggestions(root=Path(td), efficacy_payload=eff)
+            prop = next(p for p in r["weight_proposals"]
+                        if p["parameter"] == "sanitation_weight.theme")
+            self.assertEqual(prop["mean_return_1d"], 0.42)
+            self.assertEqual(prop["mean_return_resolved_n"], 220)
+            self.assertTrue(prop["expectancy_available"])
+
+    def test_positive_hitrate_delta_negative_mean_return_blocks_auto_apply(self):
+        # Strong positive hit-rate delta (would raise the weight) but the
+        # tag actually loses money on average — must NOT be auto-applicable.
+        eff = _build_efficacy([
+            {"tag": "source:theme_candidate", "n": 250, "delta_pp": 5.0,
+             "significance": "winner", "mean_return_1d": -0.30, "resolved_1d": 210},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            r = build_retune_suggestions(root=Path(td), efficacy_payload=eff)
+            prop = next(p for p in r["weight_proposals"]
+                        if p["parameter"] == "sanitation_weight.theme")
+            self.assertGreater(prop["delta"], 0, "sanity: this would have raised the weight")
+            self.assertTrue(prop["expectancy_contradiction"])
+            self.assertFalse(prop["auto_applicable"])
+            # Visible, not dropped, for human review.
+            self.assertIn("sanitation_weight.theme", [
+                p["parameter"] for p in r["weight_proposals"]
+            ])
+
+    def test_missing_mean_return_blocks_auto_apply_without_imputing_zero(self):
+        eff = _build_efficacy([
+            {"tag": "source:theme_candidate", "n": 250, "delta_pp": 3.0,
+             "significance": "winner", "mean_return_1d": None},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            r = build_retune_suggestions(root=Path(td), efficacy_payload=eff)
+            prop = next(p for p in r["weight_proposals"]
+                        if p["parameter"] == "sanitation_weight.theme")
+            self.assertIsNone(prop["mean_return_1d"])
+            self.assertFalse(prop["expectancy_available"])
+            self.assertFalse(prop["expectancy_contradiction"])  # not a contradiction, just unknown
+            self.assertFalse(prop["auto_applicable"])
+
+    def test_positive_hitrate_delta_positive_mean_return_stays_auto_applicable(self):
+        # Same magnitude/n/significance as the safe-proposal test, but now
+        # with an explicit, confirmed positive mean return: the gate must
+        # not block a proposal whose expectancy agrees with its hit-rate delta.
+        eff = _build_efficacy([
+            {"tag": "source:theme_candidate", "n": 250, "delta_pp": 3.0,
+             "significance": "winner", "mean_return_1d": 0.45, "resolved_1d": 210},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            r = build_retune_suggestions(root=Path(td), efficacy_payload=eff)
+            prop = next(p for p in r["weight_proposals"]
+                        if p["parameter"] == "sanitation_weight.theme")
+            self.assertTrue(prop["auto_applicable"])
+
+    def test_negative_hitrate_delta_negative_mean_return_not_a_contradiction(self):
+        # Weight DECREASE proposed, and the tag also loses money: signals
+        # agree (both say "less weight"), so this is not a contradiction —
+        # the pre-existing guardrails alone govern auto_applicable here.
+        eff = _build_efficacy([
+            {"tag": "source:fmp_top100", "n": 250, "delta_pp": -3.0,
+             "significance": "loser", "mean_return_1d": -0.20, "resolved_1d": 210},
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            r = build_retune_suggestions(root=Path(td), efficacy_payload=eff)
+            prop = next(p for p in r["weight_proposals"]
+                        if p["parameter"] == "sanitation_weight.fmp")
+            self.assertLess(prop["delta"], 0)
+            self.assertFalse(prop["expectancy_contradiction"])
+            self.assertTrue(prop["auto_applicable"])
 
 
 class TestAutoApplyFlow(unittest.TestCase):

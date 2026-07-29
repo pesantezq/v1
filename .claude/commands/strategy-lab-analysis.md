@@ -110,6 +110,25 @@ fix.
   `OOS_FAILED` tactic, AND at least one tactic reaches `OOS_SUPPORTED` with
   positive evidence (folds ≥ 4, no single fold dominating the aggregate).
 
+**WS14 update (2026-07-28, .superpowers/audit/ws-04-05-14-18-health.md):**
+`ranking_credibility` and `oos_validity` are now ALSO downgraded (GREEN→AMBER,
+with a stated `regime_concentration` reason appended either way) whenever
+`portfolio_automation.regime_coverage.assess_regime_coverage()` — reading
+`outputs/regime/regime_performance.json` — reports `REGIME_CONCENTRATED`
+(a single regime holds ≥80% of resolved evidence, by count or return-weighted)
+or `RISK_OFF_UNPROVEN` (the risk_off regime label is absent or has <30
+full-quality observations). Confirmed live (2026-07-28): both fire —
+~98% of resolved evidence is `neutral`, and `risk_off` carries only n=27
+effective observations. Read `result["signals"]["regime_coverage"]` for the
+full state. This is DISTINCT from the daily check's regime-degeneracy guard
+(`daily-tool-analysis.md` item 26/6m) — that one only catches a
+producer-ordering bug collapsing the column to a SINGLE value and explicitly
+allows a legitimately calm single-`"neutral"` window; this measures SHARE of
+evidence and fires even with 2-3 labels present. `REGIME_DATA_INSUFFICIENT`
+alone (no regime artifact yet, or <30 resolved signals) never triggers this
+downgrade — do not treat a small/fixture-only run's clean GREEN as a
+regression when the artifact simply hasn't run yet.
+
 ## Step 3 — Output
 
 Heartbeat: `"Strategy-Lab: {status} · {tactic_count} tactics · top {top_tactic}

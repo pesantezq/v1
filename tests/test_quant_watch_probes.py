@@ -27,8 +27,48 @@ def test_load_ledger_backfills_missing_keys(tmp_path):
     p.write_text(json.dumps({"active": [{"id": "x"}]}), encoding="utf-8")
     led = qwp.load_ledger(p)
     assert led["schema_version"] == "1"
-    assert led["active"] == [{"id": "x"}]
+    # WS16: load_ledger now migrates every probe onto the expanded schema
+    # (see test_load_ledger_migrates_probe_schema_tolerantly below) — the
+    # historical field is preserved, new fields are backfilled.
+    assert led["active"][0]["id"] == "x"
     assert led["archive"] == []
+
+
+def test_load_ledger_migrates_probe_schema_tolerantly(tmp_path):
+    # WS16: a bare-minimum legacy probe (as if written before the schema
+    # expansion) must load with every new field backfilled to a safe default,
+    # without losing the fields it already had.
+    p = tmp_path / "ledger.json"
+    p.write_text(json.dumps({"active": [
+        {"id": "sector_drag:Foo", "detector": "sector_drag", "scope_key": "Foo",
+         "created_at": "2026-06-01T00:00:00+00:00", "observations": [{"run": "a"}, {"run": "b"}]},
+    ], "archive": [
+        {"id": "manual:old", "detector": "manual", "scope_key": "old",
+         "created_at": "2026-01-01T00:00:00+00:00", "resolved_at": "2026-02-01T00:00:00+00:00",
+         "resolution": "recovered", "resolution_detail": "metric recovered",
+         # ad hoc free-text owner — proves the historical shape had none enforced
+         "owner": "regime-classifier owner (market_regime.py)"},
+    ]}), encoding="utf-8")
+    led = qwp.load_ledger(p)
+
+    active = led["active"][0]
+    assert active["concern_class"] == "sector_drag"          # derived from detector
+    assert active["consecutive_observations"] == 2           # derived from observations trail
+    assert active["remediation_status"] == "open"
+    assert active["closure_evidence"] is None
+    for k in ("evidence_artifact", "affected_component", "escalation_threshold",
+              "regression_test_reference"):
+        assert active[k] is None
+
+    archived = led["archive"][0]
+    # tolerant migration: the ad hoc free-text owner is preserved, not dropped
+    assert archived["owner"]["identifier"] == "regime-classifier owner (market_regime.py)"
+    assert archived["owner"]["note"] == "regime-classifier owner (market_regime.py)"
+    assert archived["remediation_status"] == "closed"
+    # closure_evidence is backfilled (honestly marked as such) from the
+    # pre-existing resolution/resolution_detail fields, not fabricated
+    assert archived["closure_evidence"]["backfilled"] is True
+    assert archived["closure_evidence"]["note"] == "metric recovered"
 
 
 def test_select_prior_gauge_picks_latest_non_current_non_pretracker():
@@ -342,21 +382,48 @@ def test_d2_eval_active_when_mean_return_absent():
     assert t["status"] == "active"
 
 
-def test_d2_eval_ttl_expires():
+def test_d2_eval_stays_active_past_60_days_when_still_firing():
+    # WS16 fix: age alone must NEVER close a concern. 100 days later, the
+    # underlying condition (still negative, but below the RED severity/n/
+    # consecutive gates) is unchanged -> the probe must stay active, not
+    # silently auto-resolve via a TTL.
     probe = qwp.detect_negative_mean_return_persistence(
         _retune_fixture(mean_ret=-1.18), "2026-06-08T09:00:00+00:00", "r")
-    # 100 days later, still negative → TTL (60d) expires it
     t = qwp._eval_neg_return(probe, _retune_fixture(mean_ret=-1.0), None, "d95e",
                              "2026-09-16T09:00:00+00:00")
-    assert t["status"] == "resolved" and t["resolution"] == "ttl_expired"
+    assert t["status"] == "active"
+    assert "ttl" not in t["detail"].lower()
 
 
-def test_d3_eval_ttl_expires():
+def test_d2_eval_escalates_on_persistence_plus_severe_impact_not_age():
+    # Persistence (>= NEG_RETURN_RED_MIN_CONSECUTIVE consecutive observations)
+    # + impact (mean_return_1d <= NEG_RETURN_RED_PCT) + sample size escalates —
+    # explicitly NOT gated on age (created_at is "today").
+    probe = qwp.detect_negative_mean_return_persistence(
+        _retune_fixture(mean_ret=-1.5, resolved=70), "2026-06-08T09:00:00+00:00", "r")
+    probe["consecutive_observations"] = 2  # this eval would be the 3rd
+    t = qwp._eval_neg_return(probe, _retune_fixture(mean_ret=-1.5, resolved=70), None, "d95e",
+                             "2026-06-09T09:00:00+00:00")
+    assert t["status"] == "escalated"
+    assert "persistent severe negative return" in t["detail"]
+
+
+def test_d3_eval_stays_active_past_60_days_when_still_firing():
+    # WS16 fix: same as D2 — age alone must never close a concern.
     probe = qwp.detect_sector_drag(_efficacy_fixture(), "2026-06-08T09:00:00+00:00", "r")[0]
-    # 100 days later, still loser → TTL expires
     t = qwp._eval_sector_drag(probe, None, _efficacy_fixture(), "d95e",
                               "2026-09-16T09:00:00+00:00")
-    assert t["status"] == "resolved" and t["resolution"] == "ttl_expired"
+    assert t["status"] == "active"
+    assert "ttl" not in t["detail"].lower()
+
+
+def test_d3_eval_escalates_on_persistence_plus_severe_impact_not_age():
+    eff = _efficacy_fixture(sector="sector:Consumer_Cyclical", n=70, vs_baseline=-20.0)
+    probe = qwp.detect_sector_drag(eff, "2026-06-08T09:00:00+00:00", "r")[0]
+    probe["consecutive_observations"] = 2  # this eval would be the 3rd
+    t = qwp._eval_sector_drag(probe, None, eff, "d95e", "2026-06-09T09:00:00+00:00")
+    assert t["status"] == "escalated"
+    assert "persistent severe sector drag" in t["detail"]
 
 
 def test_d3_eval_tag_absent_is_scope_changed():
@@ -576,3 +643,212 @@ def test_run_quant_watch_degrades_when_artifacts_missing(tmp_path):
     assert result["overall_status"] == "green"
     assert result["active_count"] == 0
     assert result["schema_version"] == "1"
+
+
+# ── WS16: closure-evidence-gated resolution (never age-based) ────────────────
+
+def test_update_ledger_populates_closure_evidence_on_resolve():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": [], "evidence_artifact": "outputs/latest/retune_impact.json"}],
+        "archive": []}
+    transitions = [qwp._resolved({"id": "a"}, "recovered", "delta +3pp", now)]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    closed = out["archive"][0]
+    assert closed["remediation_status"] == "closed"
+    assert closed["closure_evidence"]["note"] == "delta +3pp"
+    assert closed["closure_evidence"]["artifact"] == "outputs/latest/retune_impact.json"
+    assert closed["closure_evidence"]["backfilled"] is False
+
+
+def test_update_ledger_preserves_pre_attached_closure_evidence():
+    # A human called record_closure() before the detector confirmed recovery —
+    # update_ledger must not overwrite that evidence when it later archives.
+    now = "2026-06-09T09:00:00+00:00"
+    pre_attached = {"artifact": "manual", "snapshot": None, "note": "operator verified fix",
+                    "closed_by": "operator", "closed_at": "2026-06-08T00:00:00+00:00",
+                    "backfilled": False}
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": [], "closure_evidence": pre_attached}], "archive": []}
+    transitions = [qwp._resolved({"id": "a"}, "recovered", "delta +3pp", now)]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    assert out["archive"][0]["closure_evidence"] == pre_attached
+
+
+def test_update_ledger_increments_consecutive_observations_on_active():
+    now = "2026-06-09T09:00:00+00:00"
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "d", "created_at": "2026-06-01T09:00:00+00:00",
+         "observations": [], "consecutive_observations": 2}], "archive": []}
+    transitions = [qwp._active({"id": "a"}, "still bad", now, {"run": "x"})]
+    out = qwp.update_ledger(ledger, [], transitions, now)
+    assert out["active"][0]["consecutive_observations"] == 3
+
+
+def test_render_status_flags_stale_unresolved_without_resolving():
+    now = "2026-09-16T09:00:00+00:00"  # >100 days after created_at below
+    ledger = {"schema_version": "1", "active": [
+        {"id": "a", "detector": "sector_drag", "concern": "still bad",
+         "severity": "amber", "created_at": "2026-06-01T09:00:00+00:00",
+         "last_evaluated_at": now, "observations": [{"run": "2026-09-16"}]}],
+        "archive": []}
+    status = qwp.render_status(ledger, [], [], now)
+    entry = status["active"][0]
+    assert entry["stale_unresolved"] is True
+    # still active — the flag informs, it never removes the concern
+    assert status["active_count"] == 1
+
+
+# ── WS16: overall_status honors a directly-registered RED severity ──────────
+
+def test_overall_status_red_on_registered_severity_without_transition():
+    ledger = {"active": [{"id": "a", "severity": qwp.RED}]}
+    assert qwp.overall_status(ledger, []) == qwp.RED
+
+
+def test_overall_status_amber_when_no_red_severity():
+    ledger = {"active": [{"id": "a", "severity": qwp.AMBER}]}
+    assert qwp.overall_status(ledger, []) == qwp.AMBER
+
+
+# ── WS16: register_manual_concern() / record_closure() ───────────────────────
+
+def test_register_manual_concern_writes_full_schema(tmp_path):
+    (tmp_path / "data").mkdir()
+    result = qwp.register_manual_concern(
+        root=tmp_path, concern="discovery_watchlist_adds permanently zero (WS13)",
+        concern_class=qwp.CONCERN_CLASS_INERT_EXPERIMENT, scope_key="discovery_adds",
+        evidence_artifact="outputs/promotion_review/daily_governance_status.json",
+        affected_component="portfolio_automation/sim_governance/daily_governance_run.py",
+        owner="portfolio-learning-loop-health", now_iso="2026-07-28T09:00:00+00:00")
+    assert result["status"] == "registered"
+    led = qwp.load_ledger(tmp_path / "data" / "quant_watch_ledger.json")
+    probe = led["active"][0]
+    assert probe["id"] == f"{qwp.DETECTOR_MANUAL}:discovery_adds"
+    assert probe["concern_class"] == qwp.CONCERN_CLASS_INERT_EXPERIMENT
+    assert probe["severity"] == qwp.AMBER  # not trust-boundary -> capped at AMBER
+    assert probe["owner"]["identifier"] == "portfolio-learning-loop-health"
+    assert probe["remediation_status"] == "open"
+
+
+def test_register_manual_concern_is_idempotent_by_id(tmp_path):
+    (tmp_path / "data").mkdir()
+    qwp.register_manual_concern(root=tmp_path, concern="x", scope_key="dup",
+                                now_iso="2026-07-28T09:00:00+00:00")
+    result2 = qwp.register_manual_concern(root=tmp_path, concern="x", scope_key="dup",
+                                          now_iso="2026-07-28T09:00:00+00:00")
+    assert result2["status"] == "already_active"
+    led = qwp.load_ledger(tmp_path / "data" / "quant_watch_ledger.json")
+    assert len(led["active"]) == 1
+
+
+def test_register_manual_concern_trust_boundary_gets_red_severity(tmp_path):
+    (tmp_path / "data").mkdir()
+    result = qwp.register_manual_concern(
+        root=tmp_path, concern="approval timestamp leaked across environments",
+        concern_class="timestamp_leakage", scope_key="ts_leak", severity=qwp.RED,
+        now_iso="2026-07-28T09:00:00+00:00")
+    probe = result["probe"]
+    assert probe["severity"] == qwp.RED
+    assert probe["trust_boundary"] is True
+    # a single confirmed occurrence is enough — overall_status must read RED
+    # even though no `evaluate()` transition has run yet.
+    led = qwp.load_ledger(tmp_path / "data" / "quant_watch_ledger.json")
+    assert qwp.overall_status(led, []) == qwp.RED
+
+
+def test_register_manual_concern_non_trust_boundary_cannot_self_escalate_to_red(tmp_path):
+    (tmp_path / "data").mkdir()
+    result = qwp.register_manual_concern(
+        root=tmp_path, concern="not actually a trust boundary issue",
+        concern_class=qwp.CONCERN_CLASS_STATISTICAL_INSUFFICIENCY, severity=qwp.RED,
+        now_iso="2026-07-28T09:00:00+00:00")
+    assert result["probe"]["severity"] == qwp.AMBER
+
+
+def test_record_closure_retires_manual_concern_immediately(tmp_path):
+    (tmp_path / "data").mkdir()
+    qwp.register_manual_concern(root=tmp_path, concern="x", scope_key="foo",
+                                now_iso="2026-07-01T00:00:00+00:00")
+    result = qwp.record_closure(
+        tmp_path, f"{qwp.DETECTOR_MANUAL}:foo",
+        evidence_artifact="outputs/latest/some_fix_verification.json",
+        note="fix shipped and verified", closed_by="pesantez",
+        regression_test_reference="tests/test_some_fix.py::test_regression",
+        now_iso="2026-07-28T00:00:00+00:00")
+    assert result["status"] == "closed"
+    led = qwp.load_ledger(tmp_path / "data" / "quant_watch_ledger.json")
+    assert led["active"] == []
+    archived = led["archive"][0]
+    assert archived["resolution"] == "closed_with_evidence"
+    assert archived["closure_evidence"]["closed_by"] == "pesantez"
+    assert archived["regression_test_reference"] == "tests/test_some_fix.py::test_regression"
+
+
+def test_record_closure_on_detector_probe_does_not_resolve_alone(tmp_path):
+    # Evidence recorded, but the concern stays active until the OWNING
+    # detector also confirms non-firing on the next evaluate() cycle — this
+    # is the "AND" in "detector no longer fires AND a closure record exists".
+    (tmp_path / "data").mkdir()
+    ledger = {"schema_version": "1", "active": [
+        {"id": "sector_drag:Foo", "detector": "sector_drag", "scope_key": "Foo",
+         "created_at": "2026-07-01T00:00:00+00:00", "observations": []}], "archive": []}
+    qwp.write_ledger(tmp_path / "data" / "quant_watch_ledger.json", ledger)
+    result = qwp.record_closure(tmp_path, "sector_drag:Foo", note="fix shipped",
+                                closed_by="pesantez", now_iso="2026-07-28T00:00:00+00:00")
+    assert result["status"] == "evidence_recorded_awaiting_detector_confirmation"
+    led = qwp.load_ledger(tmp_path / "data" / "quant_watch_ledger.json")
+    assert len(led["active"]) == 1  # still active
+    assert led["active"][0]["closure_evidence"]["note"] == "fix shipped"
+    assert led["active"][0]["remediation_status"] == "in_progress"
+
+
+def test_record_closure_not_found(tmp_path):
+    (tmp_path / "data").mkdir()
+    qwp.write_ledger(tmp_path / "data" / "quant_watch_ledger.json", qwp._empty_ledger())
+    result = qwp.record_closure(tmp_path, "nope:nope", now_iso="2026-07-28T00:00:00+00:00")
+    assert result["status"] == "not_found"
+
+
+# ── WS16: the two REAL live-ledger concerns must keep loading unchanged ─────
+
+def test_live_ledger_shaped_probes_keep_loading(tmp_path):
+    """Mirrors the two real open concerns in data/quant_watch_ledger.json
+    (crypto-miner sector drag; regime coverage gap) WITHOUT copying real
+    ledger content — a manual probe with an ad hoc owner string (as
+    `manual:regime_classifier_neutral_collapse` carries in production) plus
+    an active sector_drag probe, both loading tolerantly under the new
+    schema and CLAUDE.md's "never resolve/delete/alter the two live
+    concerns" constraint (this test proves the mechanism, not the data)."""
+    p = tmp_path / "ledger.json"
+    p.write_text(json.dumps({
+        "schema_version": "1",
+        "active": [
+            {"id": "sector_drag:crypto_miners", "detector": "sector_drag",
+             "lens": "quant", "scope_key": "crypto_miners",
+             "created_at": "2026-07-15T00:00:00+00:00", "created_run": "quant-watch-analysis",
+             "severity": "amber", "concern": "crypto-miner sector drag",
+             "trigger_snapshot": {"vs_baseline_pp": -13.1, "n_samples": 40},
+             "resolve_hint": "sector no longer flagged loser",
+             "last_evaluated_at": "2026-07-28T00:00:00+00:00",
+             "observations": [{"run": "2026-07-28", "vs_baseline_pp": -13.1}]},
+            {"id": "manual:regime_coverage_gap_5687885c", "detector": "manual",
+             "lens": "quant", "scope_key": "regime_coverage_gap_5687885c",
+             "created_at": "2026-07-27T00:00:00+00:00", "created_run": "quant-watch-analysis",
+             "severity": "amber", "concern": "regime coverage gap",
+             "trigger_snapshot": {}, "resolve_hint": "operator clears",
+             "last_evaluated_at": "2026-07-28T00:00:00+00:00", "observations": [],
+             "owner": "regime-classifier owner (market_regime.py)"},
+        ],
+        "archive": [],
+    }), encoding="utf-8")
+
+    led = qwp.load_ledger(p)
+    assert len(led["active"]) == 2
+    ids = {pr["id"] for pr in led["active"]}
+    assert ids == {"sector_drag:crypto_miners", "manual:regime_coverage_gap_5687885c"}
+    manual = next(pr for pr in led["active"] if pr["detector"] == "manual")
+    assert manual["owner"]["identifier"] == "regime-classifier owner (market_regime.py)"
+    assert manual["remediation_status"] == "open"  # still active, not silently closed

@@ -483,6 +483,44 @@ def build_theme_type_performance(
     }
 
 
+def _wilson_halfwidth_pp(win_rate: float | None, n: int, *, z: float = 1.96) -> float | None:
+    """Wilson score interval half-width for a binomial proportion, in
+    percentage points, at ~95% confidence. This is the "uncertainty by
+    regime" WS14 asks for — a regime's win_rate carries a WIDE interval at
+    low n even when the point estimate looks decisive. None if n==0 or
+    win_rate is unavailable."""
+    if win_rate is None or n <= 0:
+        return None
+    p = float(win_rate)
+    denom = 1.0 + (z ** 2) / n
+    halfwidth = z * math.sqrt((p * (1 - p) / n) + (z ** 2) / (4 * n ** 2)) / denom
+    return round(halfwidth * 100, 1)
+
+
+def _regime_drawdown_pct(group: list[dict[str, Any]], return_col: str) -> float | None:
+    """Proxy max drawdown of the cumulative-return path for one regime bucket,
+    ordered by signal_time. This is a SIGNAL-LEVEL cumulative-return-path
+    proxy (sum of per-signal primary-window returns in time order) — there is
+    no portfolio-level equity curve segmented by regime anywhere in this
+    codebase, so this is deliberately labeled a proxy, not a true portfolio
+    drawdown. None when fewer than 2 timestamped, resolved rows exist."""
+    timed = [
+        (str(row.get("signal_time") or ""), float(row.get(return_col) or 0.0))
+        for row in group if row.get(return_col) is not None
+    ]
+    if len(timed) < 2:
+        return None
+    timed.sort(key=lambda t: t[0])
+    cum = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for _, ret in timed:
+        cum += ret
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+    return round(max_dd, 4)
+
+
 def build_regime_performance_summary(
     rows: list[dict[str, Any]],
     *,
@@ -491,6 +529,13 @@ def build_regime_performance_summary(
     primary_return_col, primary_success_col = _window_columns(primary_window_days)
     resolved_rows = [row for row in rows if row.get(primary_return_col) is not None]
     by_regime: dict[str, Any] = {}
+    # WS14 (.superpowers/audit/ws-04-05-14-18-health.md): pooled baseline used
+    # to compute each regime's EXCESS return. No benchmark column is tagged by
+    # regime anywhere in this artifact's inputs, so the honest baseline
+    # available is the cross-regime pooled average — this is a documented
+    # approximation, not a vs-SPY excess return.
+    pooled_avg_return = _avg_metric(resolved_rows, primary_return_col)
+    _contribution_by_regime: dict[str, float | None] = {}
 
     regime_groups: dict[str, list[dict[str, Any]]] = {}
     for row in resolved_rows:
@@ -531,10 +576,31 @@ def build_regime_performance_summary(
         normal_rows = [row for row in group if not bool(row.get("degraded_mode"))]
         regime_confidences = [float(row.get("regime_confidence") or 0.0) for row in group if row.get("regime_confidence") is not None]
 
+        # WS14 regime-coverage fields: count / effective-count / return /
+        # excess-return / hit-rate / drawdown / uncertainty / share-of-evidence
+        # per regime, so a concentration/coverage assessor (regime_coverage.py)
+        # can be built on top without re-deriving from raw rows.
+        return_pct = _avg_metric(group, primary_return_col)
+        hit_rate = _success_rate(group, primary_success_col)
+        effective_signals = sum(
+            1 for row in group if str(row.get("regime_data_quality") or "limited") == "full")
+        excess_return_pct = (
+            round(return_pct - pooled_avg_return, 4)
+            if return_pct is not None and pooled_avg_return is not None else None)
+        contribution = (len(group) * return_pct) if return_pct is not None else None
+        _contribution_by_regime[regime_label] = contribution
+
         by_regime[regime_label] = {
             "total_signals": len(group),
+            "effective_signals": effective_signals,
             "win_rate": _success_rate(group, primary_success_col),
             "avg_return_pct": _avg_metric(group, primary_return_col),
+            "excess_return_pct": excess_return_pct,
+            "drawdown_pct": _regime_drawdown_pct(group, primary_return_col),
+            "hit_rate_uncertainty_pp": _wilson_halfwidth_pp(hit_rate, len(group)),
+            "share_of_evidence": (
+                round(len(group) / len(resolved_rows), 4) if resolved_rows else None),
+            "return_weighted_share": None,  # patched below (needs all regimes' contributions)
             "avg_signal_score": _avg_metric(group, "signal_score"),
             "avg_conviction_score": _avg_metric(group, "conviction_score"),
             "avg_holding_outcome_pct": round(
@@ -556,6 +622,36 @@ def build_regime_performance_summary(
             ),
         }
 
+    # return_weighted_share: each regime's signed contribution (count * avg
+    # return) as a fraction of the total signed contribution across regimes.
+    # Documented caveat: with mixed-sign contributions across regimes this can
+    # exceed 1.0 or go negative for a regime — it is a directional attribution
+    # of aggregate return, not a bounded probability; do not treat it as one.
+    _total_contribution = sum(v for v in _contribution_by_regime.values() if v is not None)
+    for regime_label, contribution in _contribution_by_regime.items():
+        if contribution is not None and _total_contribution:
+            by_regime[regime_label]["return_weighted_share"] = round(
+                contribution / _total_contribution, 4)
+
+    # B4 correction (docs/reliability-program/2026-07-28-final-report.md
+    # addendum) — regime census over ALL rows, resolved or not. `by_regime`
+    # covers only rows resolved at the primary window, so a regime label that
+    # was observed but has not yet matured is absent from it and becomes
+    # indistinguishable from a label never observed at all. Live 2026-07-28:
+    # 108 risk_off rows existed (2026-07-25..27, all regime_data_quality=full)
+    # with ZERO resolved at the 3-day primary window, and regime_coverage.py
+    # reported "risk_off never observed" — a false claim, and a verdict that
+    # would flip to "proven" purely on window maturation. This census is the
+    # instrumentation that makes immature-vs-never-observed separable; it is
+    # additive and changes no existing field.
+    census_observed: dict[str, dict[str, int]] = {}
+    for row in rows:
+        label = str(row.get("regime_label") or "neutral")
+        entry = census_observed.setdefault(label, {"observed": 0, "resolved": 0})
+        entry["observed"] += 1
+        if row.get(primary_return_col) is not None:
+            entry["resolved"] += 1
+
     confidence_buckets: dict[str, list[dict[str, Any]]] = {"high": [], "medium": [], "low": []}
     for row in resolved_rows:
         confidence = float(row.get("confidence_score") or 0.0)
@@ -571,6 +667,10 @@ def build_regime_performance_summary(
         "primary_window_days": primary_window_days,
         "resolved_signals": len(resolved_rows),
         "by_regime": by_regime,
+        "regime_census": {
+            "primary_window_days": primary_window_days,
+            "observed": dict(sorted(census_observed.items())),
+        },
         "observability": {
             "regime_vs_success_correlation": {
                 regime: metrics.get("win_rate")
