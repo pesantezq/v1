@@ -125,22 +125,45 @@ def compute_concentration(
     cap: float,
     *,
     quotes: dict[str, float] | None = None,
+    market_values: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """
     Per-position concentration vs the concentration cap.
 
-    Each holding's weight is shares × price / portfolio_value. Price comes
-    from `quotes` (symbol → price). When a quote is missing, the holding's
-    `target_weight` is used as a fallback (lets the panel render in degraded
-    mode rather than emit nothing on a price-cache miss).
+    Weight source precedence, most to least authoritative, with
+    ``price_source`` naming the one actually used:
 
-    Returns a dict with top-3 ranked positions, top-3 total, and the per-
-    position list sorted descending by weight.
+    1. ``broker_market_value`` — ``market_values[symbol] / portfolio_value``.
+       The broker's own valuation, refreshed by run_daily_safe Stage 0b ahead of
+       the decision run. Preferred because shares × price is a reconstruction of
+       a number the broker already reports.
+    2. ``live_quote`` — ``shares × quotes[symbol] / portfolio_value``, and only
+       when ``shares > 0``. The caller is responsible for having excluded stale
+       quotes (see :func:`_load_quotes`).
+    3. ``not_held`` — weight ``0.0`` when ``shares`` is explicitly ``0``. A
+       position the operator does not own has a current weight of zero; its
+       ``target_weight`` is an intention, not a holding.
+    4. ``target_weight_fallback`` — ``target_weight`` when shares are unknown and
+       no price is available, so the panel degrades rather than emitting nothing.
+
+    History (2026-07-29): every branch above except (4) was wrong. Weights were
+    ``shares × price`` off a price cache with no freshness check (47 days stale on
+    the live deployment), ``shares <= 0`` fell through to ``target_weight``, and
+    ``price_source`` was set from ``price is not None`` alone — so it described the
+    quote lookup rather than the number used. Net effect: rendered weights summed
+    to 107.1%, two unheld positions showed at 15% and 10%, and a genuinely held
+    $392 position showed 0.0%. No cap status flipped, which is why nothing else
+    caught it — hence ``weights_sum`` / ``weights_sum_exceeds_100`` below, so an
+    impossible total is surfaced rather than silently rendered.
+
+    Returns a dict with top-3 ranked positions, top-3 total, the per-position
+    list sorted descending by weight, and the weight-sum diagnostic.
     """
     if portfolio_value <= 0 or not isinstance(holdings, list):
         return {"available": False, "reason": "no_portfolio_value_or_holdings"}
 
     quotes = quotes or {}
+    market_values = market_values or {}
     rows: list[dict[str, Any]] = []
     for h in holdings:
         if not isinstance(h, dict):
@@ -148,15 +171,29 @@ def compute_concentration(
         sym = str(h.get("symbol") or "").upper().strip()
         if not sym:
             continue
-        shares = _safe_float(h.get("shares")) or 0.0
+        raw_shares = _safe_float(h.get("shares"))
+        shares = raw_shares if raw_shares is not None else 0.0
+        mv = _safe_float(market_values.get(sym))
         price = quotes.get(sym)
+
         weight: float | None = None
-        if price is not None and shares > 0:
+        price_source: str | None = None
+        if mv is not None and mv > 0:
+            weight = mv / portfolio_value
+            price_source = "broker_market_value"
+        elif price is not None and shares > 0:
             weight = (shares * float(price)) / portfolio_value
+            price_source = "live_quote"
+        elif raw_shares is not None and raw_shares <= 0:
+            # Explicitly zero shares: the position is not held. Its target_weight
+            # is an intention, so using it here would assert a holding.
+            weight = 0.0
+            price_source = "not_held"
         else:
             tw = _safe_float(h.get("target_weight"))
             if tw is not None:
-                weight = tw  # Degraded-mode fallback
+                weight = tw  # Degraded-mode fallback: shares unknown, no price.
+                price_source = "target_weight_fallback"
         if weight is None:
             continue
         headroom = cap - weight
@@ -167,7 +204,7 @@ def compute_concentration(
             "headroom": round(headroom, 4),
             "status": _classify_headroom(headroom),
             "shares": shares,
-            "price_source": "live_quote" if price is not None else "target_weight_fallback",
+            "price_source": price_source,
         })
 
     if not rows:
@@ -175,6 +212,7 @@ def compute_concentration(
 
     rows.sort(key=lambda r: r["weight"], reverse=True)
     top_3_total = round(sum(r["weight"] for r in rows[:3]), 4)
+    weights_sum = round(sum(r["weight"] for r in rows), 4)
 
     return {
         "available": True,
@@ -184,6 +222,13 @@ def compute_concentration(
         "positions": rows,
         "breach_count": sum(1 for r in rows if r["status"] == "breach"),
         "near_cap_count": sum(1 for r in rows if r["status"] == "near_cap"),
+        # Integrity diagnostic. Weights are shares of one portfolio, so the total
+        # cannot legitimately exceed 100% (a small tolerance absorbs rounding and
+        # any cash row). >100% means positions were priced from inconsistent
+        # sources — the 2026-07-29 stale-cache defect summed to 107.1% and read
+        # as fact because nothing checked.
+        "weights_sum": weights_sum,
+        "weights_sum_exceeds_100": weights_sum > 1.02,
     }
 
 
@@ -198,6 +243,7 @@ def compute_leverage(
     cap: float,
     *,
     quotes: dict[str, float] | None = None,
+    market_values: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """
     Total leveraged exposure vs the leverage cap.
@@ -205,11 +251,18 @@ def compute_leverage(
     Each leveraged holding (`is_leveraged=True`) contributes weight ×
     `leverage_factor` to the total. Example: QLD at 5% weight with
     leverage_factor=2 contributes 10% leveraged exposure.
+
+    Weight uses the same source precedence as :func:`compute_concentration`
+    (broker market_value → fresh quote → 0 when explicitly not held → target
+    weight), and for the same reason: this path shared the stale-price and
+    ``shares <= 0`` defects, which is why leverage read 14.8% on 2026-07-29
+    against a broker truth of 12.97%.
     """
     if portfolio_value <= 0 or not isinstance(holdings, list):
         return {"available": False, "reason": "no_portfolio_value_or_holdings"}
 
     quotes = quotes or {}
+    market_values = market_values or {}
     leveraged_rows: list[dict[str, Any]] = []
     total_exposure = 0.0
     for h in holdings:
@@ -218,11 +271,17 @@ def compute_leverage(
         sym = str(h.get("symbol") or "").upper().strip()
         if not sym:
             continue
-        shares = _safe_float(h.get("shares")) or 0.0
+        raw_shares = _safe_float(h.get("shares"))
+        shares = raw_shares if raw_shares is not None else 0.0
         factor = _safe_float(h.get("leverage_factor")) or 1.0
+        mv = _safe_float(market_values.get(sym))
         price = quotes.get(sym)
-        if price is not None and shares > 0:
+        if mv is not None and mv > 0:
+            weight = mv / portfolio_value
+        elif price is not None and shares > 0:
             weight = (shares * float(price)) / portfolio_value
+        elif raw_shares is not None and raw_shares <= 0:
+            weight = 0.0  # Not held — no leveraged exposure to count.
         else:
             weight = _safe_float(h.get("target_weight")) or 0.0
         exposure = weight * factor
@@ -311,15 +370,18 @@ def build_risk_delta(
     leverage_cap: float,
     sigma_annual: float | None,
     quotes: dict[str, float] | None = None,
+    market_values: dict[str, float] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the full artifact dict. Pure function; no file writes."""
     ts = generated_at or datetime.now(timezone.utc).isoformat()
     concentration = compute_concentration(
-        holdings, portfolio_value, concentration_cap, quotes=quotes
+        holdings, portfolio_value, concentration_cap,
+        quotes=quotes, market_values=market_values,
     )
     leverage = compute_leverage(
-        holdings, portfolio_value, leverage_cap, quotes=quotes
+        holdings, portfolio_value, leverage_cap,
+        quotes=quotes, market_values=market_values,
     )
     var = compute_var(portfolio_value, sigma_annual)
 
@@ -392,13 +454,28 @@ def render_risk_delta_md(payload: dict[str, Any]) -> str:
         top3 = conc.get("top_3_total")
         if top3 is not None:
             a(f"- **Top-3 total:** {top3:.1%} of portfolio")
+        wsum = conc.get("weights_sum")
+        if wsum is not None:
+            if conc.get("weights_sum_exceeds_100"):
+                a(
+                    f"- **Weights sum:** {wsum:.1%} — ⚠ **EXCEEDS 100%**. Positions were "
+                    f"priced from inconsistent sources; treat every weight above as "
+                    f"unreliable until resolved."
+                )
+            else:
+                a(f"- **Weights sum:** {wsum:.1%} of portfolio (remainder is cash)")
         positions = conc.get("positions") or []
         if positions:
             a("- **Per-position breakdown:**")
             for p in positions:
+                # Name a degraded weight source inline. Without this, a
+                # target-weight estimate and a broker-confirmed weight render
+                # identically, which is how two unheld positions were read as 15%
+                # and 10% holdings for weeks.
+                note = _PRICE_SOURCE_NOTES.get(p.get("price_source") or "", "")
                 a(
                     f"  - `{p.get('symbol')}`: {p.get('weight', 0):.1%}"
-                    f" (headroom {p.get('headroom', 0) * 100:+.1f}pp) — {_render_status_tag(p.get('status', 'ok'))}"
+                    f" (headroom {p.get('headroom', 0) * 100:+.1f}pp) — {_render_status_tag(p.get('status', 'ok'))}{note}"
                 )
         a("")
     else:
@@ -493,6 +570,36 @@ def write_risk_delta_artifacts(
 _CONFIG_REL = ("config.json",)
 _DECISION_PLAN_REL = ("outputs", "latest", "decision_plan.json")
 _VOL_REGIME_REL = ("outputs", "latest", "vol_regime_advisor.json")
+_SCHWAB_POSITIONS_REL = ("outputs", "latest", "schwab_positions.json")
+
+# Freshness window for data/price_cache.json entries. Generous enough to survive a
+# weekend or a missed run, tight enough that a genuinely abandoned cache (the
+# 47-day-stale one that produced 107%-summing weights on 2026-07-29) is rejected.
+_QUOTE_MAX_AGE_HOURS = 96.0
+
+# Inline note per weight source. `broker_market_value` and `live_quote` are real
+# measurements and need no caveat; the other two are not holdings-derived and must
+# say so wherever the number is shown.
+_PRICE_SOURCE_NOTES = {
+    "not_held": " _(not held — 0 shares; target weight is an intention, not a position)_",
+    "target_weight_fallback": " _(target-weight estimate — shares unknown and no fresh quote)_",
+}
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Parse an ISO-8601 timestamp, treating a naive value as UTC.
+
+    price_cache.json writes naive local-ish timestamps
+    ("2026-06-12T13:04:26.199963"); comparing those to an aware `now` raises, and
+    swallowing that exception would silently mean "no entry is ever stale".
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 _PORTFOLIO_SNAPSHOT_REL = ("outputs", "portfolio", "portfolio_snapshot.json")
 
 
@@ -539,23 +646,75 @@ def _load_sigma(root: Path) -> float | None:
     return _safe_float(vol.get("sigma_annual"))
 
 
-def _load_quotes(root: Path) -> dict[str, float]:
-    """Pull current prices from data/price_cache.json (best-effort)."""
+def _load_quotes(root: Path, *, now_iso: str | None = None,
+                 max_age_hours: float = _QUOTE_MAX_AGE_HOURS) -> dict[str, float]:
+    """Pull current prices from data/price_cache.json, rejecting stale entries.
+
+    Every entry must prove its freshness: an entry older than *max_age_hours*, or
+    carrying no parseable ``timestamp`` at all, is dropped rather than trusted.
+    This loader previously accepted any priced entry, and on 2026-07-29 it was
+    still serving 2026-06-12 prices (47 days old) into the operator's headline
+    concentration and leverage figures. An undated entry cannot be shown to be
+    fresh, so it is treated as stale — absence of evidence is not freshness.
+    """
     cache_path = root / "data" / "price_cache.json"
     quotes: dict[str, float] = {}
     if not cache_path.exists():
         return quotes
+    now = _parse_iso(now_iso) or datetime.now(timezone.utc)
+    dropped: list[str] = []
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8", errors="replace"))
         if isinstance(data, dict):
             for sym, entry in data.items():
-                if isinstance(entry, dict):
-                    p = _safe_float(entry.get("price"))
-                    if p is not None and p > 0:
-                        quotes[str(sym).upper()] = p
+                if not isinstance(entry, dict):
+                    continue
+                p = _safe_float(entry.get("price"))
+                if p is None or p <= 0:
+                    continue
+                ts = _parse_iso(entry.get("timestamp"))
+                if ts is None:
+                    dropped.append(f"{sym}(undated)")
+                    continue
+                age_h = (now - ts).total_seconds() / 3600.0
+                if age_h > max_age_hours:
+                    dropped.append(f"{sym}({age_h / 24.0:.1f}d)")
+                    continue
+                quotes[str(sym).upper()] = p
     except Exception as exc:
         logger.debug("risk_delta: price_cache load failed — %s", exc)
+    if dropped:
+        logger.warning(
+            "risk_delta: dropped %d stale/undated price-cache entr%s (max age %.0fh): %s",
+            len(dropped), "y" if len(dropped) == 1 else "ies",
+            max_age_hours, ", ".join(dropped[:8]),
+        )
     return quotes
+
+
+def _load_broker_market_values(root: Path) -> dict[str, float]:
+    """Per-symbol market_value from the Schwab snapshot (authoritative).
+
+    ``outputs/latest/schwab_positions.json`` is written by ``schwab_sync`` at
+    run_daily_safe Stage 0b, i.e. before the decision run, so it is same-run
+    fresh whenever the broker is credentialed. Absent / unparseable → empty dict
+    and the caller falls back to quote math, exactly as before.
+
+    Note the field is ``quantity``, not ``shares``; only ``market_value`` is read
+    here because it is the broker's own valuation.
+    """
+    data = _load_json_safe(root.joinpath(*_SCHWAB_POSITIONS_REL))
+    out: dict[str, float] = {}
+    if not isinstance(data, dict):
+        return out
+    for pos in data.get("positions") or []:
+        if not isinstance(pos, dict):
+            continue
+        sym = str(pos.get("symbol") or "").upper().strip()
+        mv = _safe_float(pos.get("market_value"))
+        if sym and mv is not None and mv > 0:
+            out[sym] = mv
+    return out
 
 
 def run_risk_delta_advisor(
@@ -570,6 +729,7 @@ def run_risk_delta_advisor(
         concentration_cap, leverage_cap = _load_caps(root_path)
         sigma_annual = _load_sigma(root_path)
         quotes = _load_quotes(root_path)
+        market_values = _load_broker_market_values(root_path)
 
         payload = build_risk_delta(
             holdings=holdings,
@@ -578,6 +738,7 @@ def run_risk_delta_advisor(
             leverage_cap=leverage_cap,
             sigma_annual=sigma_annual,
             quotes=quotes,
+            market_values=market_values,
         )
         if isinstance(payload, dict):
             payload["holdings_source"] = holdings_source

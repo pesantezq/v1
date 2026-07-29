@@ -751,3 +751,89 @@ def test_capital_plan_content_reaches_portfolio_decisions(tmp_path):
 
     insight = "\n".join(sections.get("Top Insight") or [])
     assert "Hold steady; nothing funded today." in insight
+
+
+# ── Doubled bullet markers on /dashboard/memo (2026-07-29) ───────────────────
+#
+# Defect: memo.html picks the bullet GLYPH from the raw `line` (branching on
+# startswith('- ') / ('  - ')) but renders `rendered_lines[idx]`, which still
+# carried the literal "- " prefix. The template had already emitted a &bull; or
+# &middot;, so every bullet on the page read "• - Cash on hand: $2,100".
+# The blockquote branch strips its own escaped marker; the two list branches
+# never got the same treatment. Regression origin e8ca519f (2026-06-08) swapped
+# `{{ line[2:] }}` for `{{ rendered | safe }}` and dropped the slice.
+#
+# Fix belongs in the producer, not the template: `lines` stays verbatim so the
+# template can keep branching on the prefix, and `rendered_lines` carries CONTENT
+# ONLY. capital_plan_view.py's nested bullets are covered too — they used to emit
+# "  • " (a literal glyph), which the template could not recognise as a nested
+# list item at all.
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("raw,expected", [
+    ("- Cash on hand: $2,100",      "Cash on hand: $2,100"),
+    ("* Cash on hand: $2,100",      "Cash on hand: $2,100"),
+    ("  - nested item",             "nested item"),
+    ("  * nested item",             "nested item"),
+    ("-   spaced after marker",     "spaced after marker"),
+])
+def test_rendered_lines_strip_the_list_marker(raw, expected):
+    from gui_v2.data.dash_memo import _render_inline_md
+    assert _render_inline_md(raw) == expected, (
+        "rendered_lines must carry content only — memo.html supplies the bullet glyph"
+    )
+
+
+@_pytest.mark.parametrize("raw", [
+    "Not a list line",
+    "**Bold heading**",
+    "-42 is a negative number",   # hyphen not followed by a space
+    "> quoted line",
+])
+def test_non_list_lines_are_not_stripped(raw):
+    """Only a real list marker may be removed; a leading hyphen that is part of
+    the content (e.g. a negative number) must survive."""
+    from gui_v2.data.dash_memo import _render_inline_md
+    out = _render_inline_md(raw)
+    assert "42" not in raw or "-42" in out
+    assert out.strip() != ""
+    if raw.startswith("Not"):
+        assert out == raw
+
+
+def test_marker_strip_preserves_inline_bold_and_code():
+    from gui_v2.data.dash_memo import _render_inline_md
+    out = _render_inline_md("- **BUY** `CSX` now")
+    assert out == "<strong>BUY</strong> <code>CSX</code> now"
+
+
+def test_italic_underscores_are_converted_not_left_literal():
+    """The live memo emits `_Coverage:_ 3/7 held positions...`; it rendered with
+    literal underscores because only ** and ` were handled."""
+    from gui_v2.data.dash_memo import _render_inline_md
+    out = _render_inline_md("- _Coverage:_ 3/7 held positions")
+    assert out == "<em>Coverage:</em> 3/7 held positions"
+
+
+def test_memo_route_has_no_doubled_bullet_markers():
+    """End-to-end guard on the rendered page: a bullet glyph must never be
+    immediately followed by another literal list marker."""
+    import re as _re
+    from fastapi.testclient import TestClient
+    from gui_v2.app import app
+
+    html = TestClient(app).get("/dashboard/memo").text
+    doubled = _re.findall(r"(?:&bull;|&middot;|•|·)\s*</span>\s*<span[^>]*>\s*[-*]\s", html)
+    assert not doubled, f"doubled bullet markers on /dashboard/memo: {doubled[:3]}"
+
+
+def test_capital_plan_nested_bullets_use_markdown_not_a_glyph():
+    """capital_plan_view must emit '  - ' for nested items so memo.html's nested
+    branch matches; a literal '  • ' produced '- • text' and a triple marker."""
+    from pathlib import Path
+    src = Path("portfolio_automation/capital_plan_view.py").read_text(encoding="utf-8")
+    assert 'bullet(f"  • ' not in src and "bullet(f'  • " not in src, (
+        "nested bullets must be markdown ('  - '), not a literal bullet glyph"
+    )
