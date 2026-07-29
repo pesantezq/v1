@@ -311,3 +311,60 @@ def test_regime_coverage_status_stays_non_required() -> None:
     assert entry is not None, "regime_coverage_status.json missing from registry"
     assert entry.get("required") is False
     assert entry.get("severity_if_missing") == "info"
+
+
+# ── Watchlist email sender wiring (2026-07-29) ───────────────────────────────
+#
+# Shipped WITH its registry row and cron caller from the start, because the same
+# day's B4 investigation showed why a producer needs all three: an artifact absent
+# from artifact_registry.yaml is outside the loop domain of BOTH the registry
+# validator and the pipeline-wiring probe, so neither can report it unwired.
+
+def test_watchlist_email_is_wired_daily(daily: str) -> None:
+    assert "run_watchlist_email_delivery" in daily, (
+        "run_daily_safe.sh must invoke run_watchlist_email_delivery — the "
+        "watchlist email is a separate daily send from the memo email and has its "
+        "own WATCHLIST_EMAIL_ENABLED opt-in."
+    )
+
+
+def test_watchlist_email_uses_nonblocking_aux_stage(daily: str) -> None:
+    assert 'run_aux_stage "Watchlist email"' in daily, (
+        "The watchlist email must run through run_aux_stage so an SMTP failure "
+        "degrades its status artifact and never aborts the pipeline."
+    )
+
+
+def test_watchlist_email_runs_after_its_input_producers(daily: str) -> None:
+    """It reads top100_daily.json / watch_candidates.json / watchlist_alerts.csv,
+    all written by the decision run."""
+    assert daily.index("main.py --run-mode daily") < daily.index(
+        "run_watchlist_email_delivery"
+    ), (
+        "run_watchlist_email_delivery must run after `main.py --run-mode daily`, "
+        "which writes the watchlist artifacts it renders."
+    )
+
+
+def test_watchlist_email_is_independent_of_the_memo_stage(daily: str) -> None:
+    """Operator requirement: isolated so neither email can break the other. Two
+    separate run_aux_stage invocations, not one combined stage."""
+    assert daily.count('run_aux_stage "Watchlist email"') == 1
+    assert 'run_aux_stage "Daily memo + email"' in daily
+
+
+def test_watchlist_email_status_is_registered() -> None:
+    entry = _registry_entry("watchlist_email_status.json")
+    assert entry is not None, (
+        "watchlist_email_status.json missing from artifact_registry.yaml — "
+        "without the row neither the registry validator nor the wiring probe can "
+        "see this producer at all (the 2026-07-29 regime_coverage lesson)."
+    )
+    assert entry.get("cadence") == "daily"
+    assert entry.get("producer") == "watchlist_email_sender"
+    assert entry.get("role") == "probe"
+    assert entry.get("required") is False, (
+        "the watchlist email ships opt-in; required:true would move "
+        "daily_run_status.required_missing_count off zero before activation"
+    )
+    assert entry.get("severity_if_missing") == "info"

@@ -58,6 +58,12 @@ _MEMO_EMAIL_FLAG_VARS = (
     "MEMO_EMAIL_DRY_RUN",
     "MEMO_EMAIL_FORCE_RESEND",
     "MEMO_EMAIL_STRICT_FAILURE",
+    # Same trap, second sender (watchlist email, enabled 2026-07-29). Listed here
+    # pre-emptively so a future test asserting its documented defaults cannot be
+    # broken by the operator's .env, the way three memo tests were.
+    "WATCHLIST_EMAIL_ENABLED",
+    "WATCHLIST_EMAIL_DRY_RUN",
+    "WATCHLIST_EMAIL_FORCE_RESEND",
 )
 
 
