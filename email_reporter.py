@@ -12,7 +12,7 @@ from email.mime.text import MIMEText
 from typing import Optional
 
 from utils import (
-    get_env, format_currency, format_percent,
+    get_env, get_env_first, format_currency, format_percent,
     is_weekly_summary_day, is_annual_review_date
 )
 from portfolio import PortfolioSummary
@@ -43,10 +43,15 @@ class EmailReporter:
         self.smtp_port = smtp_port
         self.use_tls = use_tls
         
-        # Allow env overrides
-        self.sender_email = sender_email or get_env('EMAIL_SENDER')
-        self.recipient_email = recipient_email or get_env('EMAIL_RECIPIENT')
-        self.password = password or get_env('EMAIL_PASSWORD')
+        # Allow env overrides. The dedicated EMAIL_SENDER/EMAIL_RECIPIENT/
+        # EMAIL_PASSWORD names win when set; otherwise fall back to the generic
+        # mail config (EMAIL_USER/EMAIL_TO/EMAIL_PASS) that memo_email_sender,
+        # the Schwab re-auth notifier and tools/notify_status.py already read.
+        # Without the fallback this deployment failed is_configured() on every
+        # run with a valid credential on disk under the other name.
+        self.sender_email = sender_email or get_env_first(['EMAIL_SENDER', 'EMAIL_USER'])
+        self.recipient_email = recipient_email or get_env_first(['EMAIL_RECIPIENT', 'EMAIL_TO'])
+        self.password = password or get_env_first(['EMAIL_PASSWORD', 'EMAIL_PASS'])
     
     def is_configured(self) -> bool:
         """Check if email is properly configured."""

@@ -71,6 +71,77 @@ Explicitly note:
 
 ---
 
+## Email delivery restored: generic-mail-config fallback for the legacy senders + memo email enabled
+
+### Date
+
+`2026-07-29`
+
+### Area
+alerts
+
+### Files / Functions
+`utils.py` (new `get_env_first`); `email_reporter.EmailReporter.__init__`;
+`email_digest.FinanceEmailDigest.__init__`; `tests/conftest.py` (new
+`_clear_memo_email_flag_env` autouse fixture); `tests/test_legacy_email_config.py`
+(new, 17 tests). Operator config: `.env` gains `MEMO_EMAIL_ENABLED=1` /
+`MEMO_EMAIL_DRY_RUN=0` (backed up to `.env.bak-20260729T142849Z`).
+
+### Decision
+Operator reported never receiving watchlist emails. Two independent causes, both
+config/naming, neither a transport fault — the SMTP credential was verified valid by
+a live STARTTLS+AUTH check.
+
+1. `email_reporter` and `email_digest` read `EMAIL_SENDER` / `EMAIL_RECIPIENT` /
+   `EMAIL_PASSWORD`; the deployment sets `EMAIL_USER` / `EMAIL_TO` / `EMAIL_PASS`
+   (the generic mail config `memo_email_sender`, the Schwab re-auth notifier and
+   `tools/notify_status.py` already read). `config.json:email` supplies
+   `smtp_server`/`smtp_port` but leaves `sender_email`/`recipient_email` as empty
+   strings, which are falsy, so both constructors fell through to unset names. Every
+   run therefore logged "Email not configured (missing credentials)" — a real
+   failure that read like configuration intent. Fixed by giving both senders the
+   same dedicated-name-wins fallback chain `memo_email_sender._env_str_fallback`
+   already implements.
+2. `MEMO_EMAIL_ENABLED` was absent from `.env`. It is the one memo-email var with
+   no fallback by design, so `enabled` was always False on cron and Stage 10 only
+   ever ran a dry-run. The sends the operator did receive came from manual CLI
+   `--send` invocations, which force-override the flag.
+
+### Why
+Delivery had never worked from cron on either path, and both failure modes were
+silent-looking: one logged a warning that resembled an opt-out, the other logged
+`reason="disabled"` which is indistinguishable from a deliberate setting.
+
+### Invariants Preserved
+Read-only diagnosis path; no decision_engine, scoring, allocation, or holdings
+change. The dedicated env names still win, so any existing config using them is
+unaffected; absence stays absence (no fallback manufactures a sender — pinned by
+test). Memo email retains its date-based already-sent dedup, so the two callers
+(`main.py` and Stage 10) cannot double-send. `EMAIL_PASS` is not duplicated under a
+second name.
+
+### Downstream Impact
+Daily memo email sends from the 09:00 cron starting 2026-07-30. The watchlist digest
+now passes `is_configured()`; note it stays intentionally quiet on `run_mode=daily`
+unless an item is ACTION_REQUIRED — the Monday weekly run always sends.
+
+### Artifact Health Severity
+Unchanged. `memo_delivery_status.json` / `memo_delivery_log.jsonl` keep recording
+per-run outcome; `reason` now distinguishes `sent` / `already_sent` / `disabled`
+truthfully instead of reading `disabled` on every run.
+
+### Test-Isolation Note
+Enabling `MEMO_EMAIL_ENABLED=1` in `.env` newly tripped a pre-existing leak: product
+code calls `load_dotenv()`, which writes `.env` into `os.environ` mid-session, so
+three tests asserting the module's documented `enabled=False` / `dry_run=True`
+defaults began failing. Those assertions are correct — they pin the module contract,
+not the deployment — so the fix is a new autouse `conftest.py` fixture clearing the
+four `MEMO_EMAIL_*` behaviour flags, mirroring the existing `GUI_V2_AUTH_*` fixture
+added for the identical leak. Transport/credential vars are deliberately left alone
+(they leak too, but predate this and no expected default depends on their absence).
+
+---
+
 ## Regime-coverage producer wiring + symmetric expectancy gate (B4 / c0fc3c6c completion)
 
 ### Date

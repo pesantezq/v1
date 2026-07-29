@@ -24,7 +24,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Optional, List, Dict
 
-from utils import get_env, format_currency, format_percent
+from utils import get_env, get_env_first, format_currency, format_percent
 from scoring import (
     FinanceRecommendation, ActionLevel, ImpactArea,
     categorize_recommendations, filter_for_email, should_send_email,
@@ -866,9 +866,12 @@ class FinanceEmailDigest:
         self.smtp_server = smtp_server
         self.smtp_port = smtp_port
         self.use_tls = use_tls
-        self.sender_email = sender_email or get_env('EMAIL_SENDER')
-        self.recipient_email = recipient_email or get_env('EMAIL_RECIPIENT')
-        self.password = password or get_env('EMAIL_PASSWORD')
+        # Dedicated EMAIL_SENDER/EMAIL_RECIPIENT/EMAIL_PASSWORD win when set;
+        # otherwise fall back to the generic mail config (EMAIL_USER/EMAIL_TO/
+        # EMAIL_PASS) that memo_email_sender already reads. See utils.get_env_first.
+        self.sender_email = sender_email or get_env_first(['EMAIL_SENDER', 'EMAIL_USER'])
+        self.recipient_email = recipient_email or get_env_first(['EMAIL_RECIPIENT', 'EMAIL_TO'])
+        self.password = password or get_env_first(['EMAIL_PASSWORD', 'EMAIL_PASS'])
     
     def is_configured(self) -> bool:
         """Check if email is properly configured."""
