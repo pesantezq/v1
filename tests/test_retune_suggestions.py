@@ -477,3 +477,86 @@ class TestOrchestrator(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestAutoApplyEvidenceGate(unittest.TestCase):
+    """Guardrail 1b — bounded is not the same as justified.
+
+    retune_auto_apply's five guardrails bound MAGNITUDE (delta cap), SAMPLE SIZE
+    (n>=200), REPETITION (2-run confirm) and CUMULATIVE DRIFT — but none of them
+    looked at `significance`, which was recorded in the audit entry and otherwise
+    ignored. pattern_learning._classify returns "neutral" precisely when
+    |delta vs baseline| < 5pp, i.e. NO measured effect, so a zero-evidence
+    proposal could mutate config.json purely by repeating itself for two runs.
+
+    Live on 2026-08-03: three auto_applicable weight proposals were all `neutral`
+    (theme +0.85pp, hit_rate +0.35pp, sources +3.43pp). Sibling defect to the
+    Pattern-Loop mutator's missing CI screen (backtesting/auto_apply.py G3b).
+    """
+
+    def _seed(self, root: Path, proposal: dict) -> None:
+        p = root / "outputs" / "latest" / "gate_retune_suggestions.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "available": True, "weight_proposals": [proposal], "gate_proposal": None}))
+        (root / "config.json").write_text(json.dumps({}))
+
+    def _proposal(self, significance):
+        return {
+            "parameter": "sanitation_weight.theme",
+            "current_value": 0.30, "proposed_value": 0.315, "delta": 0.015,
+            "n_samples": 250, "auto_applicable": True,
+            "significance": significance,
+        }
+
+    def _run_twice(self, significance):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._seed(root, self._proposal(significance))
+            apply_suggestions(root=root)          # would queue
+            r = apply_suggestions(root=root)      # would apply
+            cfg = json.loads((root / "config.json").read_text())
+            return r, cfg
+
+    def test_neutral_significance_never_applies(self):
+        r, cfg = self._run_twice("neutral")
+        self.assertEqual(r["applied_count"], 0)
+        self.assertEqual(cfg, {}, "config.json must be untouched by a no-evidence proposal")
+        reasons = [x.get("reason", "") for x in r.get("actions", [])]
+        self.assertTrue(any("no_significant_evidence" in x for x in reasons), reasons)
+        self.assertEqual(r["skipped_count"], 1)
+
+    def test_insufficient_sample_significance_never_applies(self):
+        r, cfg = self._run_twice("insufficient_sample")
+        self.assertEqual(r["applied_count"], 0)
+        self.assertEqual(cfg, {})
+
+    def test_missing_significance_fails_closed(self):
+        r, cfg = self._run_twice(None)
+        self.assertEqual(r["applied_count"], 0)
+        self.assertEqual(cfg, {})
+
+    def test_unknown_significance_string_fails_closed(self):
+        r, cfg = self._run_twice("probably_fine")
+        self.assertEqual(r["applied_count"], 0)
+        self.assertEqual(cfg, {})
+
+    def test_winner_still_applies(self):
+        """The gate screens evidence — it must not block an evidenced proposal."""
+        r, cfg = self._run_twice("winner")
+        self.assertEqual(r["applied_count"], 1)
+        self.assertAlmostEqual(cfg["sanitation_weight"]["theme"], 0.315, places=4)
+
+    def test_every_directional_class_still_applies(self):
+        for sig in ("winner", "strong_winner", "loser", "strong_loser"):
+            r, _ = self._run_twice(sig)
+            self.assertEqual(r["applied_count"], 1, f"{sig} should be evidenced")
+
+    def test_gate_rejects_before_queueing_for_confirmation(self):
+        """A no-evidence proposal must not even occupy the confirmation queue."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._seed(root, self._proposal("neutral"))
+            apply_suggestions(root=root)
+            state = json.loads((root / "data" / "retune_auto_apply_state.json").read_text())
+            self.assertNotIn("sanitation_weight.theme", state.get("pending_confirmations", {}))
