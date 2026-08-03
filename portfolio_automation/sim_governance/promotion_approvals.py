@@ -174,6 +174,14 @@ def record_approval(
         # churns every run for an unchanged fact; candidate_id does not. Recording
         # it lets one approval outlive the proposal id it was filed against.
         record["candidate_id"] = candidate_id
+        # PROVENANCE. `is_human_approver` establishes WHO recorded the decision, but
+        # says nothing about how this record came to carry candidate reach. Without
+        # that distinction a data migration could stamp candidate_ids onto historical
+        # approvals and thereby grant them authority over proposals the operator
+        # never saw — measured 2026-08-03: backfilling the 43 legacy records would
+        # have silently approved 6 of 10 then-pending proposals. Only a candidate_id
+        # supplied AT the human decision counts; see `_candidate_reach_is_human`.
+        record["candidate_id_source"] = CANDIDATE_SOURCE_HUMAN
     ok, reason = S.is_valid_approval_record(record)
     if not ok:
         logger.warning("promotion_approvals: rejecting invalid approval (%s): %s", reason, record)
@@ -254,12 +262,30 @@ def rejected_proposal_ids(base_dir: str) -> set[str]:
     return {pid for pid, dec in effective_approvals(base_dir).items() if dec == S.HUMAN_REJECT}
 
 
+def _candidate_reach_is_human(rec: dict) -> bool:
+    """True only when this record's candidate_id came FROM the human decision.
+
+    A record whose ``candidate_id`` was written by anything other than the
+    ``record_approval`` call the human made — most obviously a backfill/migration —
+    must not confer candidate-level approval reach, because the operator never
+    decided about that candidate. Missing provenance is treated as NOT human: the
+    legacy records predate the field, and silently promoting them is precisely the
+    failure this guards. They remain fully effective by ``proposal_id`` via
+    ``effective_approvals``.
+    """
+    return rec.get("candidate_id_source") == CANDIDATE_SOURCE_HUMAN
+
+
 def effective_approvals_by_candidate(base_dir: str) -> dict[str, str]:
     """Fold the approval log to the latest valid decision per candidate_id.
 
-    Mirrors ``effective_approvals`` but keys on the DURABLE identity. Records
-    without a ``candidate_id`` (every record written before this field existed)
-    are skipped here — they remain fully effective via ``effective_approvals``.
+    Mirrors ``effective_approvals`` but keys on the DURABLE identity. Two classes of
+    record are skipped, both intentionally:
+      - no ``candidate_id`` at all (every record written before the field existed);
+      - a ``candidate_id`` without ``candidate_id_source == "human_decision"``
+        provenance, i.e. one that arrived by migration rather than by a human
+        decision (see ``_candidate_reach_is_human``).
+    Both remain fully effective by ``proposal_id`` via ``effective_approvals``.
 
     Returns {candidate_id: 'approve'|'reject'}; file order is chronological, so
     the last record wins.
@@ -267,7 +293,7 @@ def effective_approvals_by_candidate(base_dir: str) -> dict[str, str]:
     latest: dict[str, str] = {}
     for rec in load_valid_approvals(base_dir):
         cid = rec.get("candidate_id")
-        if cid:
+        if cid and _candidate_reach_is_human(rec):
             latest[str(cid)] = rec["decision"]
     return latest
 
@@ -283,6 +309,12 @@ def rejected_candidate_ids(base_dir: str) -> set[str]:
     return {cid for cid, dec in effective_approvals_by_candidate(base_dir).items()
             if dec == S.HUMAN_REJECT}
 
+
+# Provenance marker for `candidate_id` on an approval record. Only a candidate_id
+# supplied at the moment of the human decision confers candidate-level reach; see
+# `_candidate_reach_is_human`. Anything else (absent, "derived", a migration's own
+# label) is treated as non-human and grants no reach.
+CANDIDATE_SOURCE_HUMAN = "human_decision"
 
 _REVOCATIONS_FILE = "production_revocations.jsonl"
 
