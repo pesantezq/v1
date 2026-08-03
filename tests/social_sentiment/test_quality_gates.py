@@ -10,15 +10,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from portfolio_automation.social_sentiment.quality_gates import QualityGateChecker
 
 
+def _fresh_ts(hours_ago: float = 1.0) -> str:
+    """A timestamp the freshness gate accepts, relative to NOW.
+
+    The default used to be the hardcoded "2026-06-21T10:00:00Z", which meant the
+    "healthy batch" fixture aged past the 24h freshness gate the day after it was
+    written and failed permanently thereafter (by 2026-08-03 it was 1037h old and
+    reported `too_old:100%_older_than_24.0h`). A freshness gate must be tested
+    against the clock it actually uses.
+    """
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
 def _rec(ticker="NVDA", source="bluesky", author="abc123", text="NVDA is up today!",
-         created_at="2026-06-21T10:00:00Z"):
+         created_at=None):
     return {
         "ticker": ticker, "source": source, "author_hash": author,
-        "text": text, "created_at": created_at,
+        "text": text, "created_at": created_at or _fresh_ts(),
     }
 
 
-def _recs(n=12, *, unique_authors=6, created_at="2026-06-21T10:00:00Z"):
+def _recs(n=12, *, unique_authors=6, created_at=None):
     """Generate n records with at least unique_authors distinct authors."""
     records = []
     for i in range(n):

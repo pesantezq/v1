@@ -14,6 +14,27 @@ import pytest
 from operator_control import work_orders as wo_mod
 
 
+@pytest.fixture(autouse=True)
+def _pin_direct_execution_path(monkeypatch):
+    """Keep LIVE container config out of this file.
+
+    Every test here exercises the DIRECT `claude` invocation path
+    (`_run_direct_claude`); container mode has its own dedicated suites
+    (tests/test_worker_runner_container.py and friends). But `_invoke_claude`
+    routes on `operator_control.worker_container.enabled` read from the real
+    config.json, which is `true` on this VPS — so two tests silently began
+    exercising the container path instead and failed on its error string
+    ("container preconditions unmet: podman=False ...") and on the runuser-wrapped
+    argv. That was carried as a pre-existing failure; it was live-config leakage,
+    NOT a regression — the direct path still strips ANTHROPIC_API_KEY and still
+    passes --permission-mode acceptEdits for safe_repair.
+
+    Pinning container mode OFF here makes the file test what it says it tests.
+    """
+    from operator_control import worker_runner
+    monkeypatch.setattr(worker_runner, "_worker_container_cfg", lambda _root=".": None)
+
+
 def _git(root, *a):
     return subprocess.run(
         ["git", "-C", str(root), *a], capture_output=True, text=True, check=True

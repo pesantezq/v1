@@ -94,11 +94,18 @@ class TestGovernedClientBehavior(unittest.TestCase):
                 fake.last_response_bytes = 123
                 return {"AAPL": {"price": 1.0}}
             fake.get_batch_quotes.side_effect = _fetch
-            gc = gov.client(run_mode="daily", fmp_client=fake, now_month="2026-06")
+            # `now_month` feeds the governor's BANDWIDTH GUARD comparison only; the
+            # ledger row is stamped with the real wall-clock ts and monthly_bytes
+            # filters on substr(ts,1,7). Querying a hardcoded "2026-06" therefore
+            # returned 0 from July onwards — assert against the month the writer
+            # actually used.
+            from datetime import datetime, timezone
+            this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+            gc = gov.client(run_mode="daily", fmp_client=fake, now_month=this_month)
             gc.get_batch_quotes(["AAPL"])
             self.assertEqual(gov.ledger.calls_in_run(run_mode="daily",
                              since="2000-01-01T00:00:00+00:00"), 1)
-            self.assertEqual(gov.ledger.monthly_bytes(month="2026-06"), 123)
+            self.assertEqual(gov.ledger.monthly_bytes(month=this_month), 123)
 
     def test_cache_only_mode_passes_through_to_client(self):
         # historical_replay (cache_only) must reach the cache-first inner client,
