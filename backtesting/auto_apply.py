@@ -63,6 +63,37 @@ def _actionable_proposals(proposals: dict) -> list[dict]:
     return out
 
 
+_NO_SKILL_HIT_RATE_PCT = 50.0
+
+
+def _ci_excludes_no_skill(item: dict) -> bool:
+    """True only when the OOS hit-rate CI lies entirely ABOVE the no-skill point.
+
+    Until 2026-08-03 nothing here computed this. ``_build_prompt`` *instructed*
+    the GPT approver to "veto if ... the confidence interval straddles 50%", and
+    that sentence was the only occurrence of the criterion in the repo — so the
+    deterministic layer bounded MAGNITUDE (``max_abs_delta``, drift cap) while
+    the sole screen on EVIDENCE was an LLM. On 2026-08-01 that approver vetoed
+    both live proposals citing a straddle when both CIs were strictly above 50
+    (``[52.70, 56.23]`` and ``[56.92, 69.71]``), i.e. its reasoning was a prompt
+    echo rather than a reading of the data. A model or prompt change flipping
+    that verdict to "approve" would have mutated a protected registry weight
+    with no evidence gate at all.
+
+    Fails closed: a missing, malformed, or non-numeric CI returns False. A lower
+    bound exactly at 50.0 is rejected — that is the no-skill point itself, not
+    evidence of an edge.
+    """
+    ci = item.get("oos_hit_rate_ci95")
+    if not isinstance(ci, (list, tuple)) or len(ci) != 2:
+        return False
+    try:
+        low = float(ci[0])
+    except (TypeError, ValueError):
+        return False
+    return low > _NO_SKILL_HIT_RATE_PCT
+
+
 def _score_gate(registry_path: str) -> dict[str, Any]:
     """Thin wrapper over the Step-5 protected-score invariance gate (probed with the
     default representative signal). Separated so tests can monkeypatch it."""
@@ -228,6 +259,20 @@ def maybe_auto_apply(
         actionable = _actionable_proposals(proposals)
         if not actionable:
             return _result("no_actionable_proposal", now_iso=now_iso, base_dir=base_dir, write=False)
+        # G3b — deterministic evidence screen. Runs BEFORE the GPT approver so the
+        # LLM can never be the sole defence against applying a weight change whose
+        # out-of-sample edge is indistinguishable from no skill.
+        screened, ci_rejected = [], []
+        for p in actionable:
+            (screened if _ci_excludes_no_skill(p) else ci_rejected).append(p)
+        if not screened:
+            return _result("ci_straddles_no_skill", now_iso=now_iso, base_dir=base_dir,
+                           write=write,
+                           rejected=[{"signal_id": p.get("signal_id"),
+                                      "oos_hit_rate": p.get("oos_hit_rate"),
+                                      "oos_hit_rate_ci95": p.get("oos_hit_rate_ci95")}
+                                     for p in ci_rejected])
+        actionable = screened
         total_delta = round(sum(abs(float(p.get("proposed_delta") or 0.0)) for p in actionable), 6)
         # G4 — drift cap
         state = _load_state(state_path)

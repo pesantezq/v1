@@ -7,8 +7,8 @@ INJECTED. Every test runs against a TEMP copy of the registry and asserts the li
 config/signal_registry.yaml is never touched.
 
 Gate order (first failure wins): disabled → kill_switched → oos_immature →
-no_actionable_proposal → drift_capped → score_gate_blocked → budget_exceeded →
-gpt_vetoed → applied (with post-gate auto-rollback → rolled_back).
+no_actionable_proposal → ci_straddles_no_skill → drift_capped → score_gate_blocked →
+budget_exceeded → gpt_vetoed → applied (with post-gate auto-rollback → rolled_back).
 """
 
 from __future__ import annotations
@@ -22,6 +22,20 @@ import pytest
 from backtesting import auto_apply as aa
 
 _LIVE_REGISTRY = "config/signal_registry.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_kill_switch(tmp_path, monkeypatch):
+    """Keep LIVE operator kill-switch state out of the tests.
+
+    ``_KILL_SWITCH_FILE`` is a CWD-relative path, so a real
+    ``config/auto_apply.DISABLED`` on the operator's box made every gate test
+    below return ``kill_switched`` and silently stop exercising its gate. The
+    suite was green only because the file happened to be absent. Tests that
+    actually want the kill-switch set it explicitly.
+    """
+    monkeypatch.setattr(aa, "_KILL_SWITCH_FILE", str(tmp_path / "no-such-kill-switch"))
+    monkeypatch.delenv(aa._KILL_SWITCH_ENV, raising=False)
 
 
 @pytest.fixture
@@ -200,3 +214,84 @@ def test_live_evidence_unaffected_by_recon_gate(env):
     # No evidence_source → the recon gate is inert; normal apply path.
     out = _call(env, approver=_approve)
     assert out["status"] == "applied"
+
+
+# --- G3b: deterministic CI-vs-no-skill screen -------------------------------
+#
+# Before this gate the ONLY thing screening an edge whose confidence interval
+# includes the 50% no-skill point was the GPT approver — and on 2026-08-01 that
+# approver vetoed both live proposals with the reason "Confidence interval
+# straddles 50%" while both CIs were STRICTLY ABOVE 50 ([52.70, 56.23] and
+# [56.92, 69.71]). The phrase existed only inside _build_prompt's instruction
+# text, i.e. it was never computed. A model/prompt change flipping that verdict
+# to "approve" would have applied a protected registry weight with no
+# deterministic evidence screen at all.
+#
+# The gate runs BEFORE the approver so the LLM is never the sole defence, and
+# fails closed on a missing or malformed CI.
+
+def _proposal_with_ci(ci, *, signal_id="STRONG_MOVE_UP", delta=0.03):
+    p = _actionable_proposals(signal_id=signal_id, delta=delta)
+    p["proposals"][0]["oos_hit_rate_ci95"] = ci
+    return p
+
+
+def test_ci_straddling_no_skill_is_rejected_before_the_approver(env):
+    """An approver that would APPROVE must never even be consulted."""
+    consulted = []
+
+    def _spy_approve(prompt):
+        consulted.append(prompt)
+        return _approve(prompt)
+
+    out = _call(env, proposals=_proposal_with_ci([48.0, 58.0]), approver=_spy_approve)
+    assert out["status"] == "ci_straddles_no_skill"
+    assert consulted == [], "deterministic gate must short-circuit before the LLM"
+    assert _registry_unchanged(env)
+    assert not Path(env["approval_path"]).exists()
+
+
+def test_ci_entirely_above_no_skill_passes_the_gate(env):
+    out = _call(env, proposals=_proposal_with_ci([52.7, 56.23]), approver=_approve)
+    assert out["status"] == "applied"
+
+
+def test_ci_lower_bound_exactly_at_no_skill_is_rejected(env):
+    """50.0 is the no-skill point itself — not evidence of an edge."""
+    out = _call(env, proposals=_proposal_with_ci([50.0, 60.0]), approver=_approve)
+    assert out["status"] == "ci_straddles_no_skill"
+    assert _registry_unchanged(env)
+
+
+def test_missing_ci_fails_closed(env):
+    out = _call(env, proposals=_proposal_with_ci(None), approver=_approve)
+    assert out["status"] == "ci_straddles_no_skill"
+    assert _registry_unchanged(env)
+
+
+def test_malformed_ci_fails_closed(env):
+    out = _call(env, proposals=_proposal_with_ci(["nonsense"]), approver=_approve)
+    assert out["status"] == "ci_straddles_no_skill"
+    assert _registry_unchanged(env)
+
+
+def test_gate_screens_only_the_unevidenced_proposal(env):
+    """A mixed batch keeps the evidenced item and drops the straddling one."""
+    proposals = {"summary": {"proposed_count": 2}, "proposals": [
+        {"signal_id": "STRONG_MOVE_UP", "current_weight": 0.45, "proposed_weight": 0.48,
+         "proposed_delta": 0.03, "status": "proposed", "oos_hit_rate": 62.0,
+         "oos_hit_rate_ci95": [55.0, 69.0], "avg_return": 1.2},
+        {"signal_id": "VOLUME_SPIKE", "current_weight": 0.25, "proposed_weight": 0.28,
+         "proposed_delta": 0.03, "status": "proposed", "oos_hit_rate": 51.0,
+         "oos_hit_rate_ci95": [44.0, 58.0], "avg_return": 0.1},
+    ]}
+    out = _call(env, proposals=proposals, approver=_approve)
+    assert out["status"] == "applied"
+    approval = json.loads(Path(env["approval_path"]).read_text())
+    assert [c["signal_id"] for c in approval["changes"]] == ["STRONG_MOVE_UP"]
+
+
+def test_todays_real_proposals_both_pass_the_gate(env):
+    """Regression-lock the live 2026-08-01 values the GPT approver mislabelled."""
+    assert aa._ci_excludes_no_skill({"oos_hit_rate_ci95": [52.70, 56.23]}) is True
+    assert aa._ci_excludes_no_skill({"oos_hit_rate_ci95": [56.92, 69.71]}) is True
