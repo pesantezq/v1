@@ -63,11 +63,14 @@ source "$REPO_ROOT/.venv/bin/activate"
         exit "$rc"
     fi
 
-    printf '\n-- Verify watchlist freshness --\n'
+    printf '\n-- Verify watchlist freshness + sufficiency --\n'
     python -c "
 import json
-from datetime import datetime, timezone
+import sys
 from pathlib import Path
+# Single source of truth for the floor, shared with main.py's scanner stage —
+# a shell guard that drifts from the pipeline guard is worse than no guard.
+from degraded_mode import MIN_TRUSTED_DATASET_SIZE
 p = Path('data/fmp_cache/top100_watchlist.json')
 d = json.loads(p.read_text())
 src = d.get('watchlist_source','?')
@@ -76,7 +79,17 @@ non_fb = [c for c in cands if c.get('watchlist_source') != 'fallback']
 print(f'watchlist_source={src}  candidates={len(cands)}  non-fallback={len(non_fb)}')
 if src == 'fallback' or len(non_fb) == 0:
     print('WARN: top100_watchlist is still fallback content')
-    import sys; sys.exit(2)
+    sys.exit(2)
+# SUFFICIENCY, not just fallback-ness. This guard passed for nine consecutive
+# weeks on a 3-candidate universe because three non-fallback rows satisfied
+# 'len(non_fb) == 0' — it asked 'did we fall back?' when the universe was
+# quietly ratcheting toward zero. See universe/sp500_constituents.py.
+if len(non_fb) < MIN_TRUSTED_DATASET_SIZE:
+    print(
+        f'WARN: only {len(non_fb)} non-fallback candidates, below the trust '
+        f'floor of {MIN_TRUSTED_DATASET_SIZE} — the scanner universe is degraded'
+    )
+    sys.exit(2)
 "
 
     printf '\n-- Universe sanitation (weekly) --\n'

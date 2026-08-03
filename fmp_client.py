@@ -588,12 +588,23 @@ class FMPClient:
             )
 
         all_profiles: List[Dict] = []
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i:i + batch_size]
-            sym_str = ','.join(batch)
-            data = self._raw_get(f'{_EP_V3_PROFILE_BATCH}/{sym_str}', {})
-            if isinstance(data, list):
-                all_profiles.extend(data)
+        try:
+            for i in range(0, len(symbols), batch_size):
+                batch = symbols[i:i + batch_size]
+                sym_str = ','.join(batch)
+                data = self._raw_get(f'{_EP_V3_PROFILE_BATCH}/{sym_str}', {})
+                if isinstance(data, list):
+                    all_profiles.extend(data)
+        except Exception as exc:
+            # FMP retired the v3 legacy API on 2026-08-31 for non-grandfathered
+            # keys, so this batched call now 403s and full_scan() lost its
+            # market-cap input entirely. stable/profile still works per symbol.
+            logger.warning(
+                "get_batch_profiles_v3: legacy batch endpoint failed (%s) — "
+                "falling back to stable/profile per symbol (%d symbols)",
+                exc, len(symbols),
+            )
+            all_profiles = self._stable_profiles_as_v3(symbols, ttl_days=ttl_days)
 
         self._cache.set(cache_key, all_profiles)
         logger.info(
@@ -601,6 +612,38 @@ class FMPClient:
             len(all_profiles), n_batches, self._counter.today_count, self._budget,
         )
         return all_profiles
+
+    def _stable_profiles_as_v3(
+        self,
+        symbols: List[str],
+        ttl_days: int = 7,
+    ) -> List[Dict]:
+        """Fetch profiles via stable/profile, reshaped to the v3 field contract.
+
+        ``stable/profile`` names the field ``marketCap``; v3 named it ``mktCap``,
+        and that is the name every downstream consumer reads. In particular
+        main.py's non-premium scanner path pre-filters with
+        ``profile.get('mktCap', 0) >= min_mkt_cap`` and has no quote fallback at
+        that point, so returning unnormalized rows would leave the qualifying set
+        empty and make full_scan yield zero candidates — while every individual
+        call reported success. Normalizing here keeps the failure loud instead.
+
+        Symbols with no profile available are omitted; callers assess sufficiency.
+        """
+        out: List[Dict] = []
+        for sym in symbols:
+            profile = self.get_profile(sym, ttl_days=ttl_days)
+            if not profile:
+                continue
+            row = dict(profile)
+            if row.get("mktCap") is None:
+                row["mktCap"] = row.get("marketCap") or 0
+            out.append(row)
+        logger.info(
+            "get_batch_profiles_v3 fallback: %d/%d profiles via stable/profile",
+            len(out), len(symbols),
+        )
+        return out
 
     def get_key_metrics(
         self,

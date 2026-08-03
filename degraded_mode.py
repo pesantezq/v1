@@ -8,6 +8,37 @@ DEFAULT_STALE_DAYS = 7
 MIN_TRUSTED_DATASET_SIZE = 5
 
 
+def assess_scanner_dataset_sufficiency(
+    candidate_count: Any,
+    *,
+    min_size: int = MIN_TRUSTED_DATASET_SIZE,
+) -> list[str]:
+    """Return safe-mode reasons implied by the SIZE of the candidate set.
+
+    Deliberately independent of ``degraded_mode``. Until 2026-08-03 this exact
+    comparison lived inside ``if degraded_mode:`` in main.py, which made it
+    unreachable whenever FMP was healthy — so a 3-candidate universe produced no
+    reason at all, because nothing had "fallen back". Sufficiency is a property
+    of the dataset, not of how the dataset was obtained.
+
+    Note this does NOT compare against ``scanner.top_k_watchlist`` (100). That
+    value is a CAP, not a target: ``min_rev_growth`` is a hard filter applied over
+    only the top ``v3_max_symbols`` by market cap, so the true filter-passing
+    yield is far below 100 and comparing to it would raise a permanent false
+    alarm. The floor is an absolute trust threshold instead.
+
+    Fails closed: a missing or non-integer count reads as empty, never as
+    sufficient.
+    """
+    if not isinstance(candidate_count, int) or isinstance(candidate_count, bool):
+        return ["empty_dataset"]
+    if candidate_count <= 0:
+        return ["empty_dataset"]
+    if candidate_count < min_size:
+        return ["small_dataset"]
+    return []
+
+
 def infer_degraded_reason(
     *,
     fmp_attempted: bool = False,
