@@ -95,7 +95,10 @@ def propose_calibration_correction(results: dict, *, min_band_n: int = 20) -> di
                 "observe_only": _OBSERVE_ONLY, "proposed_only": True, "advisory_only": True,
                 "generated_by": _GENERATED_BY, "status": "insufficient",
                 "calibration_slope": slope, "inverted": False, "bands": [],
-                "apply_gate": apply_gate,
+                # NOT the OOS-derived gate: with no bands there is no map to apply, so
+                # OOS maturity is irrelevant. Passing `apply_gate` through here made the
+                # artifact read "ready" on zero evidence once the window matured.
+                "apply_gate": "insufficient_evidence",
                 "rationale": "no calibration buckets present; nothing to propose",
             }
 
@@ -107,7 +110,8 @@ def propose_calibration_correction(results: dict, *, min_band_n: int = 20) -> di
                 "observe_only": _OBSERVE_ONLY, "proposed_only": True, "advisory_only": True,
                 "generated_by": _GENERATED_BY, "status": "insufficient",
                 "calibration_slope": slope, "inverted": False, "bands": [],
-                "apply_gate": apply_gate,
+                # Same reasoning as above — insufficient evidence outranks OOS maturity.
+                "apply_gate": "insufficient_evidence",
                 "rationale": f"fewer than 2 bands with n >= {min_band_n}; insufficient to propose",
             }
 
