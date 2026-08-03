@@ -134,17 +134,31 @@ _SKILLS: tuple[Skill, ...] = (
     Skill(
         skill_id="diagnose_pipeline_status",
         name="Diagnose pipeline / budget status",
-        description="Read pipeline run status and budget artifacts; explain "
-        "step failures, skips, or budget pressure. Read-only.",
+        description="Read pipeline run status, budget, and memo delivery/coherence "
+        "artifacts; explain step failures, skips, budget pressure, or unresolved memo "
+        "reconciliation contradictions. Read-only.",
         allowed_probe_ids=(
             "pipeline.run_status",
             "ai_budget.status",
             "fmp_budget.status",
             "memo.delivery_status",
+            # Added 2026-08-03. The probe shipped with the memo-coherence layer
+            # (2026-06-30) naming this skill as its recommended handler, but the
+            # allowlist was never extended — so validate_registry() reported both
+            # "recommended skill does not allow this probe" and "action 'diagnose' is
+            # offered but no allowlisting skill permits that mode", and the resulting
+            # test failure was carried as pre-existing. Read-only/diagnose-only, and
+            # it sits beside memo.delivery_status rather than in
+            # regenerate_memo_from_artifacts because regenerating the memo cannot
+            # resolve a coherence contradiction — that lives in the source artifacts.
+            "quant.daily_memo_coherence",
         ),
         allowed_modes=("diagnose",),
         forbidden_actions=("Change budget caps without explicit operator approval",),
-        required_tests=("python -m pytest -q tests/test_pipeline_run_status.py",),
+        required_tests=(
+            "python -m pytest -q tests/test_pipeline_run_status.py",
+            "python -m pytest -q tests/test_memo_coherence.py",
+        ),
         risk_level="low",
         approval_required_for_modes=(),
         output_report_requirements=_REPORT_BASE,
