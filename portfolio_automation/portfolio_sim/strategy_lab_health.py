@@ -331,15 +331,68 @@ def _dim_artifact_completeness(lb, cat, wf, factor) -> dict[str, Any]:
     return _dim("AMBER", [], [f"artifacts_missing:{missing}"])
 
 
-def _dim_documentation_coverage(cat) -> dict[str, Any]:
+def _documented_tactic_ids(cat) -> set[str]:
+    """Tactic ids that carry catalog documentation, unioned across BOTH catalogs.
+
+    The Strategy Lab's research catalog documents `research_*` tactics via
+    `academic_basis`; the backtest lane's `strategy_docs._RATIONALE` documents the
+    shadow / profile / benchmark / crowd tactics. Neither is complete alone, and a
+    tactic can legitimately be documented in only one.
+    """
+    ids: set[str] = set()
+    for c in (cat or {}).get("cards") or []:
+        if isinstance(c, dict) and (c.get("academic_basis") or c.get("rationale")):
+            tid = c.get("tactic_id")
+            if tid:
+                ids.add(str(tid))
+    try:
+        from portfolio_automation.portfolio_sim.strategy_docs import _RATIONALE
+        ids |= {k for k, v in _RATIONALE.items() if v}
+    except Exception:
+        pass
+    return ids
+
+
+def _dim_documentation_coverage(cat, rows=None) -> dict[str, Any]:
     if cat is None:
         return _dim("AMBER", [], ["catalog_absent"])
     coverage = cat.get("coverage_complete")
-    undocumented = cat.get("undocumented") or []
-    if coverage is True and not undocumented:
-        return _dim("GREEN", ["coverage_complete=true, 0 undocumented tactics"])
+    undocumented = list(cat.get("undocumented") or [])
+    reasons: list[str] = []
     if coverage is False or undocumented:
-        return _dim("AMBER", [], [f"undocumented_tactics:{undocumented}"])
+        reasons.append(f"undocumented_tactics:{undocumented}")
+
+    # Cross-catalog check. `coverage_complete` is computed over the cards its
+    # producer was HANDED, so a tactic surfaced in the leaderboard but absent from
+    # the catalog can never flip it. Live 2026-08-03: crowd_signal_only and
+    # crowd_signal_plus_sentiment rank in the 26-row leaderboard while
+    # strategy_catalog.json carries 16 cards, and both gates read complete.
+    #
+    # Only runs when the catalog actually ships `cards` — without them there is no
+    # way to know which ids are documented, and inventing a verdict from absent
+    # data is the defect class this check exists to catch.
+    cards = (cat or {}).get("cards")
+    cross_checked = isinstance(cards, list) and bool(cards)
+    surfaced = [str(r.get("tactic_id")) for r in (rows or [])
+                if isinstance(r, dict) and r.get("tactic_id")]
+    if cross_checked and surfaced:
+        documented = _documented_tactic_ids(cat)
+        unresolved = sorted({t for t in surfaced if t not in documented})
+        if unresolved:
+            reasons.append(
+                "leaderboard tactics surfaced with no catalog documentation in either "
+                f"research_strategy_catalog.json (academic_basis) or "
+                f"strategy_docs._RATIONALE: {unresolved}")
+
+    if reasons:
+        return _dim("AMBER", [], reasons)
+    if coverage is True:
+        ev = "coverage_complete=true, 0 undocumented tactics"
+        if cross_checked and surfaced:
+            ev += f"; all {len(surfaced)} leaderboard tactics resolve to documentation"
+        elif surfaced:
+            ev += "; cross-catalog check skipped (catalog ships no cards)"
+        return _dim("GREEN", [ev])
     return _dim("AMBER", [], ["coverage_complete_unknown"])
 
 
@@ -525,7 +578,7 @@ def _assess_strict(lb, cat, wf, factor, root: Path, now: datetime, legacy: dict[
     dims = {
         "runtime_health": _dim_runtime_health(lb, now),
         "artifact_completeness": _dim_artifact_completeness(lb, cat, wf, factor),
-        "documentation_coverage": _dim_documentation_coverage(cat),
+        "documentation_coverage": _dim_documentation_coverage(cat, rows),
         "data_admissibility": _dim_data_admissibility(lb, factor),
         "statistical_sufficiency": _dim_statistical_sufficiency(rows, oos_by_tactic),
         "oos_validity": _dim_oos_validity(rows, oos_by_tactic),

@@ -389,3 +389,71 @@ def test_gate_enabled_by_default(tmp_path):
     r = assess_strategy_lab_health(tmp_path, now=NOW)
     assert r["gate"]["strict_oos_rollup_enabled"] is True
     assert r["gate"]["source"] == "default_on"
+
+
+# ---------------------------------------------------------------------------
+# Cross-catalog coverage seam (found 2026-08-03).
+#
+# documentation_coverage read research_strategy_catalog.json's own
+# `coverage_complete`, and that flag is computed over the cards the catalog was
+# HANDED — so a tactic surfaced in the leaderboard but absent from the catalog
+# could never flip it. Live instance: crowd_signal_only / crowd_signal_plus_sentiment
+# rank in the 26-row leaderboard while strategy_catalog.json carries only 16 cards,
+# and BOTH gates reported complete. The rationale text for those two does exist in
+# strategy_docs._RATIONALE, so the defect is that catalog documentation never
+# reaches a reader of the catalog — not that the prose was never written.
+# ---------------------------------------------------------------------------
+def _lb(tmp_path, tactic_ids):
+    rows = [{"tactic_id": t, "name": t.replace("_", " ").title(), "strategy_score": 1.0,
+             "still_works_oos": None, **_ENVELOPE_TRUE} for t in tactic_ids]
+    _write(tmp_path, "strategy_leaderboard.json", {
+        "status": "ok", "created_at": "2026-06-12T00:00:00Z",
+        "leaderboard": rows, **_ENVELOPE_TRUE})
+
+
+def test_leaderboard_tactic_absent_from_every_catalog_is_flagged(tmp_path):
+    """A surfaced tactic with no card and no _RATIONALE entry must not read GREEN."""
+    _lb(tmp_path, ["research_dual_momentum", "totally_undocumented_tactic"])
+    _write(tmp_path, "research_strategy_catalog.json", {
+        "coverage_complete": True, "undocumented": [],
+        "cards": [{"tactic_id": "research_dual_momentum", "academic_basis": "Antonacci"}]})
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    dim = r["dimensions"]["documentation_coverage"]
+    assert dim["status"] == "AMBER"
+    assert any("totally_undocumented_tactic" in x for x in dim["reasons"])
+
+
+def test_crowd_tactics_documented_only_in_strategy_docs_still_count(tmp_path):
+    """The live case: no research-catalog card, but _RATIONALE covers them."""
+    _lb(tmp_path, ["research_dual_momentum", "crowd_signal_only",
+                   "crowd_signal_plus_sentiment"])
+    _write(tmp_path, "research_strategy_catalog.json", {
+        "coverage_complete": True, "undocumented": [],
+        "cards": [{"tactic_id": "research_dual_momentum", "academic_basis": "Antonacci"}]})
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["dimensions"]["documentation_coverage"]["status"] == "GREEN"
+
+
+def test_research_catalog_own_undocumented_list_still_respected(tmp_path):
+    _lb(tmp_path, ["research_dual_momentum"])
+    _write(tmp_path, "research_strategy_catalog.json", {
+        "coverage_complete": False, "undocumented": ["research_dual_momentum"],
+        "cards": [{"tactic_id": "research_dual_momentum"}]})
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    assert r["dimensions"]["documentation_coverage"]["status"] == "AMBER"
+
+
+def test_card_without_academic_basis_or_rationale_is_flagged(tmp_path):
+    """A card that exists but carries no documentation is not coverage."""
+    _lb(tmp_path, ["research_made_up_thing"])
+    _write(tmp_path, "research_strategy_catalog.json", {
+        "coverage_complete": True, "undocumented": [],
+        "cards": [{"tactic_id": "research_made_up_thing"}]})
+
+    r = assess_strategy_lab_health(tmp_path, now=NOW)
+    dim = r["dimensions"]["documentation_coverage"]
+    assert dim["status"] == "AMBER"
+    assert any("research_made_up_thing" in x for x in dim["reasons"])
