@@ -46,6 +46,13 @@ _AUDIT_REL = ("data", "retune_audit_log.jsonl")
 _CONFIG_REL = "config.json"
 _SUGGESTIONS_REL = ("outputs", "latest", "gate_retune_suggestions.json")
 
+# Guardrail 1b: the only `significance` values that constitute measured evidence.
+# From pattern_learning._classify — which returns "neutral" when the tag's delta vs
+# baseline is under +/-5pp (i.e. no detectable effect) and "insufficient_sample"
+# below n=30. Anything outside this set, including None or an unrecognised string,
+# is treated as no evidence and blocks the apply (fail-closed).
+_EVIDENCED_SIGNIFICANCE = frozenset({"winner", "strong_winner", "loser", "strong_loser"})
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -183,6 +190,27 @@ def _apply_one(
     # Guardrail 1 — must be flagged auto_applicable upstream
     if not proposal.get("auto_applicable"):
         return {"parameter": parameter, "action": "skipped", "reason": "not_auto_applicable"}
+
+    # Guardrail 1b — statistical evidence (added 2026-08-03). Guardrails 2-5 bound
+    # MAGNITUDE, SAMPLE SIZE, REPETITION and CUMULATIVE DRIFT; none of them looked
+    # at whether the proposal is supported by any measured effect. `significance`
+    # was written into the audit entry below and otherwise ignored, so a proposal
+    # that pattern_learning._classify had explicitly labelled as having NO effect
+    # could mutate config.json just by repeating itself for two runs.
+    #
+    # _classify returns "neutral" exactly when |delta vs baseline| < 5pp, and
+    # "insufficient_sample" below n=30. Neither is evidence. Live on 2026-08-03
+    # three auto_applicable weight proposals were all neutral (+0.85pp / +0.35pp /
+    # +3.43pp). Fails closed on missing or unrecognised values — bounded is not
+    # the same as justified. Sibling of backtesting/auto_apply.py's G3b CI screen.
+    #
+    # Placed before Guardrail 4 so a no-evidence proposal never even occupies the
+    # confirmation queue. Numbered 1b rather than renumbering 2-5, so existing
+    # audit-log reasons and runbook references stay valid.
+    significance = proposal.get("significance")
+    if significance not in _EVIDENCED_SIGNIFICANCE:
+        return {"parameter": parameter, "action": "skipped",
+                "reason": f"no_significant_evidence:{significance!r}"}
 
     # Guardrail 2 — magnitude is enforced by the suggestion builder,
     # but we re-check here in case the artifact was tampered with

@@ -345,3 +345,81 @@ def test_never_fabricates_states_beyond_the_declared_four():
     allowed = {rc.REGIME_COVERAGE_BALANCED, rc.REGIME_CONCENTRATED,
               rc.RISK_OFF_UNPROVEN, rc.REGIME_DATA_INSUFFICIENT}
     assert set(r["states"]) <= allowed
+
+
+# ---------------------------------------------------------------------------
+# The return-weighted concentration arm was UNBOUNDED (found 2026-08-03).
+#
+# `return_weighted_share` is a signed attribution ratio (a regime's return
+# contribution / the NET total), documented in performance_feedback.py:625-634 as
+# "not a bounded probability; do not treat it as one". regime_coverage then did
+# exactly that: `abs(max_rw_share) >= concentration_share_threshold` compares an
+# unbounded quantity against a threshold that is by construction <= 1.0. With
+# mixed-sign contributions that cancel, a well-BALANCED book produces a large
+# ratio and fires REGIME_CONCENTRATED for reasons unrelated to concentration.
+#
+# Live 2026-08-03: neutral 2238x(+0.223) = +499.07, risk_off 108x(-1.240) = -133.92,
+# high_volatility 27x(+0.807) = +21.79, net +386.94 -> 499.07/386.94 = 1.2898,
+# rendered "129.0%". The count arm (94.31%) fired independently, so the verdict was
+# right by luck.
+# ---------------------------------------------------------------------------
+def _by_regime(rows):
+    """rows: {label: (total_signals, avg_return_pct)} -> by_regime with shares."""
+    total_n = sum(n for n, _ in rows.values())
+    contribs = {r: n * ret for r, (n, ret) in rows.items()}
+    net = sum(contribs.values())
+    out = {}
+    for r, (n, ret) in rows.items():
+        out[r] = {
+            "total_signals": n, "effective_signals": n,
+            "avg_return_pct": ret, "win_rate": 0.5,
+            "share_of_evidence": (n / total_n) if total_n else 0.0,
+            "return_weighted_share": (contribs[r] / net) if net else None,
+        }
+    return out
+
+
+def test_balanced_book_with_cancelling_returns_is_not_concentrated(tmp_path):
+    """No regime near the count threshold, but contributions nearly cancel."""
+    # 3 regimes at ~1/3 count share each; +10, -9, +1 net = +2 -> ratios blow up
+    by_regime = _by_regime({"neutral": (100, 10.0), "risk_off": (100, -9.0),
+                            "high_volatility": (100, 1.0)})
+    rw = {r: m["return_weighted_share"] for r, m in by_regime.items()}
+    assert max(abs(v) for v in rw.values()) > 1.0, "fixture must have an unbounded ratio"
+
+    r = rc.assess_regime_coverage(
+        {"resolved_signals": 300, "by_regime": by_regime})
+    assert "REGIME_CONCENTRATED" not in r["states"], (
+        "a balanced book must not read as concentrated just because its regime "
+        f"return contributions cancel (rw ratios={rw})")
+
+
+def test_genuine_count_concentration_still_fires(tmp_path):
+    by_regime = _by_regime({"neutral": (940, 0.22), "risk_off": (60, -1.2)})
+    r = rc.assess_regime_coverage(
+        {"resolved_signals": 1000, "by_regime": by_regime})
+    assert "REGIME_CONCENTRATED" in r["states"]
+
+
+def test_return_weighted_abs_share_is_bounded_and_exposed(tmp_path):
+    """A bounded companion metric the trigger can safely use."""
+    by_regime = _by_regime({"neutral": (100, 10.0), "risk_off": (100, -9.0),
+                            "high_volatility": (100, 1.0)})
+    r = rc.assess_regime_coverage(
+        {"resolved_signals": 300, "by_regime": by_regime})
+    conc = r["concentration"]
+    v = conc["return_weighted_abs_share"]
+    assert 0.0 <= v <= 1.0, f"abs-normalised share must be bounded, got {v}"
+    # signed ratio still published for backward compatibility
+    assert abs(conc["return_weighted_max_share"]) > 1.0
+
+
+def test_return_weighted_concentration_can_still_fire_when_genuinely_lopsided(tmp_path):
+    """Same-sign contributions, one regime dominating the return -> concentrated."""
+    by_regime = _by_regime({"neutral": (100, 10.0), "risk_off": (100, 0.2),
+                            "high_volatility": (100, 0.1)})
+    r = rc.assess_regime_coverage(
+        {"resolved_signals": 300, "by_regime": by_regime})
+    conc = r["concentration"]
+    assert conc["return_weighted_abs_share"] >= 0.8
+    assert "REGIME_CONCENTRATED" in r["states"]

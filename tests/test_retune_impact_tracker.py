@@ -405,3 +405,64 @@ class TestEtfSectorNormalization(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# sector_composition must persist MEMBERSHIP, not just a count (2026-08-03).
+#
+# Bucket membership is resolved live from a MUTABLE FMP profile cache
+# (_load_ticker_sector), while the artifact stored only `distinct_tickers` — a
+# count. So a day-over-day sector delta could be a pure reclassification artifact
+# and be undetectable from the artifact alone. Confirmed instance: on 2026-07-27
+# Financial Services went 4 -> 3 and Technology 9 -> 10 with no ticker entering or
+# leaving the universe, because profile_stable_RIOT.json flipped from
+# "Financial Services" to "Technology". Roughly a third of the apparent FS
+# "healing" (+0.183pp of a +0.587pp mean move) was RIOT leaving the bucket.
+# ---------------------------------------------------------------------------
+class TestSectorCompositionMembership(unittest.TestCase):
+
+    def _setup(self, root: Path, tickers: list[str], sector_map: dict) -> None:
+        (root / "data").mkdir(parents=True, exist_ok=True)
+        (root / "data" / "gauge_versions.jsonl").write_text(json.dumps(
+            {"first_seen_at": "2026-05-19T00:00:00+00:00", "fingerprint": "AAAA"}) + "\n")
+        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
+        import csv as _csv
+        cols = ["ticker", "signal_time", "outcome_return_1d", "direction_correct_1d"]
+        with (root / "outputs" / "performance" / "signal_outcomes.csv").open(
+                "w", encoding="utf-8-sig", newline="") as f:
+            w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for t in tickers:
+                w.writerow({"ticker": t, "signal_time": "2026-05-20T09:00:00",
+                            "outcome_return_1d": "1.0", "direction_correct_1d": "1"})
+
+    def test_sector_composition_persists_ticker_membership(self):
+        import portfolio_automation.retune_impact_tracker as rit
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._setup(root, ["RIOT", "XLF"], None)
+            orig = rit._load_ticker_sector
+            _m = {"RIOT": "Technology", "XLF": "Financial Services"}
+            rit._load_ticker_sector = lambda _root, ticker: _m.get(ticker, "Unknown")
+            try:
+                r = compute_outcome_attribution(root=root)
+            finally:
+                rit._load_ticker_sector = orig
+            sc = r["by_fingerprint"]["AAAA"]["sector_composition"]
+            self.assertEqual(sc["Technology"]["distinct_tickers"], 1)
+            self.assertEqual(sc["Technology"]["tickers"], ["RIOT"])
+            self.assertEqual(sc["Financial Services"]["tickers"], ["XLF"])
+
+    def test_sector_membership_is_sorted_for_stable_diffing(self):
+        import portfolio_automation.retune_impact_tracker as rit
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._setup(root, ["NVDA", "AAPL", "MSFT"], None)
+            orig = rit._load_ticker_sector
+            rit._load_ticker_sector = lambda _root, _ticker: "Technology"
+            try:
+                r = compute_outcome_attribution(root=root)
+            finally:
+                rit._load_ticker_sector = orig
+            sc = r["by_fingerprint"]["AAAA"]["sector_composition"]
+            self.assertEqual(sc["Technology"]["tickers"], ["AAPL", "MSFT", "NVDA"])

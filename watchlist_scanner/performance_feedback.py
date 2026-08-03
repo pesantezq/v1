@@ -521,6 +521,38 @@ def _regime_drawdown_pct(group: list[dict[str, Any]], return_col: str) -> float 
     return round(max_dd, 4)
 
 
+def _regime_daily_path_drawdown_pct(group: list[dict[str, Any]], return_col: str) -> float | None:
+    """Max drawdown of an EQUAL-WEIGHT-PER-DAY return path for one regime bucket.
+
+    The companion to ``_regime_drawdown_pct``, which sums every per-signal return in
+    time order and therefore treats N overlapping same-day positions as N sequential
+    unit-size trades on the same capital. That inflates the figure by roughly the
+    average signals-per-day: on 2026-08-03 the neutral bucket read 826.68 with a
+    terminal path value of +498%, where this per-day basis gives 31.59 / +10.43%.
+
+    Neither is a true portfolio equity curve (no regime-segmented equity curve exists
+    in this codebase), but averaging within a day at least keeps the path
+    capital-relative. None when fewer than 2 distinct days are present.
+    """
+    by_day: dict[str, list[float]] = {}
+    for row in group:
+        if row.get(return_col) is None:
+            continue
+        day = str(row.get("signal_time") or "")[:10]
+        if not day:
+            continue
+        by_day.setdefault(day, []).append(float(row[return_col]))
+    if len(by_day) < 2:
+        return None
+    cum = peak = max_dd = 0.0
+    for day in sorted(by_day):
+        rets = by_day[day]
+        cum += sum(rets) / len(rets)
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+    return round(max_dd, 4)
+
+
 def build_regime_performance_summary(
     rows: list[dict[str, Any]],
     *,
@@ -596,7 +628,16 @@ def build_regime_performance_summary(
             "win_rate": _success_rate(group, primary_success_col),
             "avg_return_pct": _avg_metric(group, primary_return_col),
             "excess_return_pct": excess_return_pct,
+            # NOTE ON UNITS: `drawdown_pct` is a summed SIGNAL-LEVEL path proxy, not a
+            # portfolio drawdown — it can read many multiples of the bucket's average
+            # return (826.68 vs avg_return_pct 0.223 on 2026-08-03). `drawdown_basis`
+            # names that explicitly, and `daily_path_drawdown_pct` gives the
+            # capital-relative equal-weight-per-day figure alongside it. `drawdown_pct`
+            # is kept unchanged for backward compatibility with existing consumers.
             "drawdown_pct": _regime_drawdown_pct(group, primary_return_col),
+            "drawdown_basis": "cumulative_signal_path_proxy",
+            "daily_path_drawdown_pct": _regime_daily_path_drawdown_pct(
+                group, primary_return_col),
             "hit_rate_uncertainty_pp": _wilson_halfwidth_pp(hit_rate, len(group)),
             "share_of_evidence": (
                 round(len(group) / len(resolved_rows), 4) if resolved_rows else None),

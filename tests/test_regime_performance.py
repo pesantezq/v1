@@ -195,3 +195,56 @@ class TestRegimePerformance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRegimeDrawdownBasis(unittest.TestCase):
+    """`drawdown_pct` is a SIGNAL-LEVEL summed path, not a portfolio drawdown.
+
+    _regime_drawdown_pct walks the cumulative SUM of every per-signal return in
+    time order, so N overlapping same-day positions are added as though they were
+    N sequential unit-size trades on the same capital. Live 2026-08-03: neutral
+    reported drawdown_pct 826.68 next to avg_return_pct 0.223, and the same path's
+    terminal value was +498% — prima facie not a capital-relative equity curve.
+    The math and docstring are honest; the CONTRACT is not: the field ships as a
+    bare `drawdown_pct` and regime_coverage re-exports it verbatim into an
+    artifact the daily skill consumes, so a reader either dismisses it as a bug or
+    escalates it as a catastrophe.
+    """
+
+    @staticmethod
+    def _row(regime_label, day, return_pct):
+        return {
+            "regime_label": regime_label, "regime_confidence": 0.8,
+            "regime_data_quality": "full", "conviction_band": "normal",
+            "conviction_score": 0.5, "signal_score": 0.4,
+            "normalized_allocation": 0.01, "degraded_mode": False,
+            "signal_time": f"2026-07-{day:02d}T09:00:00",
+            "outcome_return_3d": return_pct,
+            "outcome_success_3d": return_pct > 0,
+        }
+
+    def _summary(self):
+        # 3 days, 10 same-day signals each. Per-DAY moves: +1, -4, +1.
+        rows = []
+        for _ in range(10):
+            rows.append(self._row("neutral", 1, 1.0))
+            rows.append(self._row("neutral", 2, -4.0))
+            rows.append(self._row("neutral", 3, 1.0))
+        return build_regime_performance_summary(rows, primary_window_days=3)["by_regime"]["neutral"]
+
+    def test_summed_signal_path_is_labelled_as_a_proxy(self):
+        m = self._summary()
+        self.assertEqual(m["drawdown_basis"], "cumulative_signal_path_proxy")
+
+    def test_daily_path_drawdown_is_published_and_far_smaller(self):
+        m = self._summary()
+        # summed path: 10x(+1) then 10x(-4) -> peak +10, trough -30 => dd 40
+        self.assertAlmostEqual(m["drawdown_pct"], 40.0, places=2)
+        # equal-weight per-DAY path: +1, -4, +1 -> peak +1, trough -3 => dd 4
+        self.assertAlmostEqual(m["daily_path_drawdown_pct"], 4.0, places=2)
+        self.assertLess(m["daily_path_drawdown_pct"], m["drawdown_pct"])
+
+    def test_daily_path_is_none_when_too_few_days(self):
+        rows = [self._row("neutral", 1, 1.0) for _ in range(5)]
+        m = build_regime_performance_summary(rows, primary_window_days=3)["by_regime"]["neutral"]
+        self.assertIsNone(m["daily_path_drawdown_pct"])

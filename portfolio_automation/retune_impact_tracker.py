@@ -585,6 +585,14 @@ def compute_outcome_attribution(
                 "count": sec["count"],
                 "pct_of_signals": round(sec["count"] / total_count, 4),
                 "distinct_tickers": len(sec["tickers"]),
+                # Persist MEMBERSHIP, not just its size. Sector is resolved live from
+                # the mutable FMP profile cache (_load_ticker_sector), so without the
+                # member list a day-over-day sector delta is indistinguishable from a
+                # pure reclassification. Real instance 2026-07-27: Financial Services
+                # 4 -> 3 distinct_tickers with no universe change, because RIOT's
+                # cached profile flipped to "Technology" — about a third of the
+                # apparent FS recovery was that one ticker leaving the bucket.
+                "tickers": sorted(sec["tickers"]),
                 "resolved_1d": resolved,
                 "hit_rate_1d": round(sec["hits_1d"] / resolved, 4) if resolved else None,
                 "mean_return_1d": round(sec["sum_return_1d"] / resolved, 6) if resolved else None,

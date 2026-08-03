@@ -181,6 +181,20 @@ def _is_code_fence(line: str) -> bool:
     return stripped.startswith("```") or stripped.startswith("~~~")
 
 
+_HISTORICAL_DOC_DIRS = ("docs/superpowers/plans/", "docs/superpowers/specs/")
+
+
+def _is_historical_doc(rel_doc: str) -> bool:
+    """True for dated plan/spec docs, which name files they PROPOSE to create.
+
+    Such a doc is aspirational by nature: when the plan is never executed its
+    `Create:` targets are permanently missing, so a med-severity dead_ref is
+    re-reported at new line numbers on every audit forever with nothing to fix.
+    """
+    norm = rel_doc.replace("\\", "/")
+    return any(norm.startswith(d) for d in _HISTORICAL_DOC_DIRS)
+
+
 def find_dead_refs(root: str) -> list[Finding]:
     """Flag `path/to/file.py` references in docs that no longer exist on disk.
 
@@ -188,10 +202,19 @@ def find_dead_refs(root: str) -> list[Finding]:
     snippets — e.g. embedded test code in a plan doc — not real references, and
     scanning them produced recurring false-positive dead-refs (2026-07-10). Inline
     code spans in prose are still checked, so genuine references remain covered.
+
+    Refs in dated plan/spec docs (``_HISTORICAL_DOC_DIRS``) are still REPORTED but
+    downgraded to ``low`` severity, so they no longer hold the audit at
+    ok_with_warnings indefinitely. Same rationale as the 2026-07-10 fenced-block
+    skip: a plan that proposed a file which was never built is not a doc defect,
+    and treating it as one trains the operator to ignore the dimension. Live case:
+    docs/superpowers/plans/2026-07-27-weekly-etf-daily-improvement-phase1.md names
+    three modules the (never-run) plan intended to create.
     """
     findings: list[Finding] = []
     for doc_path in sorted(_glob.glob(str(Path(root) / "docs" / "**" / "*.md"), recursive=True)):
         rel_doc = str(Path(doc_path).relative_to(root))
+        historical = _is_historical_doc(rel_doc)
         in_fence = False
         for lineno, line in _iter_doc_lines(root, rel_doc):
             if _is_code_fence(line):
@@ -202,9 +225,13 @@ def find_dead_refs(root: str) -> list[Finding]:
             for m in _PY_REF_RX.finditer(line):
                 ref = m.group(1)
                 if not (Path(root) / ref).exists():
+                    detail = f"references missing file {ref}"
+                    if historical:
+                        detail += (" (historical plan/spec doc — the file was proposed, "
+                                   "not renamed; informational)")
                     findings.append(Finding(
-                        dimension="dead_ref", severity="med", doc=rel_doc,
-                        detail=f"references missing file {ref}", line=lineno,
+                        dimension="dead_ref", severity="low" if historical else "med",
+                        doc=rel_doc, detail=detail, line=lineno,
                     ))
     return findings
 
@@ -373,9 +400,12 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
         status = "coverage_gap"
     elif auto or any(f.dimension == "drift" for f in findings):
         status = "drift"
-    elif findings:
+    elif any(f.severity != "low" for f in findings):
         status = "ok_with_warnings"
     else:
+        # `low`-only findings are informational (e.g. dead refs in dated plan docs
+        # naming files the plan proposed). They stay in `findings` for visibility
+        # but must not hold the audit off `ok` forever with nothing to fix.
         status = "ok"
 
     return {

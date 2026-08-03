@@ -80,3 +80,72 @@ def test_empty_or_degraded_input_never_raises():
     # malformed buckets must not raise
     bad = {"calibration": {"buckets": "nope", "calibration_slope": -1}}
     assert propose_calibration_correction(bad)["status"] in ("insufficient", "degraded")
+
+
+# ---------------------------------------------------------------------------
+# apply_gate must not read "ready" on zero evidence (found 2026-08-03).
+#
+# apply_gate was derived from OOS maturity ALONE, and both insufficient-evidence
+# early returns passed that value straight through. Once the walk-forward window
+# matured (2026-08-01, oos_window.folds_possible -> true) the live artifact began
+# reporting apply_gate="ready" with bands=[], calibration_slope=0.0,
+# well_calibrated=null and n_samples=null — a verdict derived from ABSENT data.
+# Nothing consumes apply_gate today, which is the only reason it was inert rather
+# than harmful. Same defect family as the doc-audit range-scoped coverage gap and
+# retune_auto_apply's missing evidence gate.
+#
+# NOTE the band schema: the proposer reads `label`, `count`, `hit_rate` (percent).
+# ---------------------------------------------------------------------------
+def _band(label, count, hit_rate_pct):
+    return {"label": label, "count": count, "hit_rate": hit_rate_pct}
+
+
+def test_apply_gate_not_ready_when_there_are_no_bands():
+    r = propose_calibration_correction({
+        "calibration": {"buckets": [], "calibration_slope": 0.0},
+        "oos_window": {"folds_possible": True},
+    })
+    assert r["apply_gate"] == "insufficient_evidence", r
+    assert r["bands"] == []
+
+
+def test_apply_gate_not_ready_when_buckets_missing_entirely():
+    r = propose_calibration_correction({
+        "calibration": {"calibration_slope": 0.0},
+        "oos_window": {"folds_possible": True},
+    })
+    assert r["apply_gate"] == "insufficient_evidence"
+
+
+def test_apply_gate_not_ready_when_only_one_band_has_sample():
+    r = propose_calibration_correction({
+        "calibration": {"calibration_slope": -3.0, "buckets": [
+            _band("80-100", 50, 40.0),
+            _band("40-60", 2, 90.0),   # below min_band_n -> unusable
+        ]},
+        "oos_window": {"folds_possible": True},
+    }, min_band_n=20)
+    assert r["apply_gate"] == "insufficient_evidence"
+
+
+def test_oos_immaturity_still_blocks_even_with_real_bands():
+    r = propose_calibration_correction({
+        "calibration": {"calibration_slope": -3.0, "buckets": [
+            _band("80-100", 50, 40.0), _band("40-60", 50, 70.0),
+        ]},
+        "oos_window": {"folds_possible": False},
+    })
+    assert r["status"] == "ok", r
+    assert r["apply_gate"] == "oos_unconfirmed"
+
+
+def test_ready_still_reachable_with_mature_window_and_real_bands():
+    r = propose_calibration_correction({
+        "calibration": {"calibration_slope": -3.0, "buckets": [
+            _band("80-100", 50, 40.0), _band("40-60", 50, 70.0),
+        ]},
+        "oos_window": {"folds_possible": True},
+    })
+    assert r["status"] == "ok", r
+    assert r["apply_gate"] == "ready"
+    assert len(r["bands"]) == 2

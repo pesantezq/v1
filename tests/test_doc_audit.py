@@ -381,3 +381,47 @@ def test_run_doc_audit_does_not_duplicate_a_gap_found_both_ways(tmp_path):
         root, "deadbeef", ["portfolio_automation/market_session.py"], set(),
         open_coverage_gaps=["docs/market_session.md"])
     assert [f["doc"] for f in result["coverage_gaps"]] == ["docs/market_session.md"]
+
+
+# ---------------------------------------------------------------------------
+# Dead refs in intentionally-historical docs.
+#
+# A plan/spec under docs/superpowers/plans|specs/ is dated and aspirational by
+# nature: it names files it PROPOSES to create. When the plan is never executed
+# those refs are permanently "dead" and re-reported at their new line numbers on
+# every audit forever. Precedent for a scope carve-out: find_dead_refs already
+# skips fenced code blocks, added 2026-07-10 for exactly this false-positive
+# pressure from plan docs.
+# ---------------------------------------------------------------------------
+def test_dead_ref_in_plan_doc_is_downgraded_to_low(tmp_path):
+    _write(tmp_path, "docs/superpowers/plans/2026-07-27-some-plan.md",
+           "- Create: `portfolio_automation/never_built.py`\n")
+    findings = doc_audit.find_dead_refs(str(tmp_path))
+    assert len(findings) == 1
+    assert findings[0].severity == "low"
+    assert "historical plan/spec" in findings[0].detail
+
+
+def test_dead_ref_in_spec_doc_is_downgraded_to_low(tmp_path):
+    _write(tmp_path, "docs/superpowers/specs/2026-07-27-some-spec.md",
+           "Proposes `portfolio_automation/never_built.py`\n")
+    findings = doc_audit.find_dead_refs(str(tmp_path))
+    assert findings[0].severity == "low"
+
+
+def test_dead_ref_in_normal_doc_stays_med(tmp_path):
+    """A live reference doc making a false claim is still a real finding."""
+    _write(tmp_path, "docs/architecture.md",
+           "See `portfolio_automation/never_built.py` for details.\n")
+    findings = doc_audit.find_dead_refs(str(tmp_path))
+    assert findings[0].severity == "med"
+    assert "historical plan/spec" not in findings[0].detail
+
+
+def test_low_severity_plan_dead_refs_do_not_drive_overall_status(tmp_path):
+    """Plan-doc dead refs must not hold the audit at ok_with_warnings forever."""
+    _write(tmp_path, "docs/superpowers/plans/p.md", "`portfolio_automation/nope.py`\n")
+    r = doc_audit.run_doc_audit(str(tmp_path), "sha", [], set(), open_coverage_gaps=[])
+    assert r["overall_status"] == "ok"
+    # still reported, just not escalating
+    assert any(f["dimension"] == "dead_ref" for f in r["findings"])
