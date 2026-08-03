@@ -320,3 +320,64 @@ def test_apply_auto_fix_refuses_path_escape(tmp_path):
         assert outside.read_text() == "Runs 17 pipeline stages.\n"  # untouched
     finally:
         outside.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Regression: a coverage gap must not disappear because the git range moved on.
+#
+# find_coverage_gaps only inspects changed_files. Once last_audited_sha advanced
+# past the commit that introduced an undocumented module, the module fell out of
+# every subsequent range and the gap stopped being reported — so run_doc_audit
+# reported ok_with_warnings while the doc was still missing. The audit's own
+# state advance cleared its own RED. Observed live 2026-08-03 for
+# docs/market_session.md.
+# ---------------------------------------------------------------------------
+def test_run_doc_audit_carries_forward_unresolved_coverage_gap(tmp_path):
+    root = str(tmp_path)
+    _write(tmp_path, "portfolio_automation/market_session.py", "x = 1\n")
+    # Range is empty this run — the module was added in an earlier, already-audited commit.
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", [], set(), open_coverage_gaps=["docs/market_session.md"])
+    gaps = [f["doc"] for f in result["coverage_gaps"]]
+    assert "docs/market_session.md" in gaps
+    assert result["overall_status"] == "coverage_gap"
+
+
+def test_run_doc_audit_drops_carried_gap_once_the_doc_exists(tmp_path):
+    root = str(tmp_path)
+    _write(tmp_path, "portfolio_automation/market_session.py", "x = 1\n")
+    _write(tmp_path, "docs/market_session.md", "# market_session\n")
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", [], {"docs/market_session.md"},
+        open_coverage_gaps=["docs/market_session.md"])
+    assert result["coverage_gaps"] == []
+    assert result["overall_status"] != "coverage_gap"
+
+
+def test_run_doc_audit_drops_carried_gap_once_module_is_deleted(tmp_path):
+    """A gap for a module that no longer exists is stale, not unresolved."""
+    root = str(tmp_path)
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", [], set(), open_coverage_gaps=["docs/deleted_thing.md"])
+    assert result["coverage_gaps"] == []
+
+
+def test_run_doc_audit_exposes_open_gaps_for_persistence(tmp_path):
+    root = str(tmp_path)
+    _write(tmp_path, "portfolio_automation/market_session.py", "x = 1\n")
+    _write(tmp_path, "portfolio_automation/brand_new.py", "y = 2\n")
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", ["portfolio_automation/brand_new.py"], set(),
+        open_coverage_gaps=["docs/market_session.md"])
+    # newly discovered + carried forward, deduped, for the state file to persist
+    assert set(result["open_coverage_gaps"]) == {
+        "docs/market_session.md", "docs/brand_new.md"}
+
+
+def test_run_doc_audit_does_not_duplicate_a_gap_found_both_ways(tmp_path):
+    root = str(tmp_path)
+    _write(tmp_path, "portfolio_automation/market_session.py", "x = 1\n")
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", ["portfolio_automation/market_session.py"], set(),
+        open_coverage_gaps=["docs/market_session.md"])
+    assert [f["doc"] for f in result["coverage_gaps"]] == ["docs/market_session.md"]
