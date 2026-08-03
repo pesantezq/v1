@@ -33,11 +33,21 @@ def _write_log(base_dir: str, approvals: list[dict]) -> None:
                     "approvals": approvals}), encoding="utf-8")
 
 
-def _rec(pid: str, decision: str = "approve", *, cid: str | None = None) -> dict:
+def _rec(pid: str, decision: str = "approve", *, cid: str | None = None,
+         cid_source: str | None = PA.CANDIDATE_SOURCE_HUMAN) -> dict:
+    """A record shaped exactly as ``record_approval`` writes it.
+
+    When a candidate_id is present it carries ``candidate_id_source`` provenance,
+    because that is what a real human decision produces (2026-08-03). Pass
+    ``cid_source=None`` to simulate a migration-stamped id, which must NOT confer
+    candidate-level reach.
+    """
     r = {"proposal_id": pid, "decision": decision, "approver": "pesantez",
          "timestamp": _NOW, "notes": None, "review_date": None}
     if cid is not None:
         r["candidate_id"] = cid
+        if cid_source is not None:
+            r["candidate_id_source"] = cid_source
     return r
 
 
@@ -189,3 +199,73 @@ def test_falsy_candidate_id_on_an_audit_row_is_not_carried_by_a_wildcard(tmp_pat
             approved_ids=set(), approved_candidate_ids={"", "cand_other"},
             write_files=False)
         assert res["watchlist_applied"] == 0, falsy
+
+
+# ---------------------------------------------------------------------------
+# candidate_id provenance (added 2026-08-03).
+#
+# is_human_approver validates WHO recorded a decision, but nothing validated that
+# a record's candidate_id arrived via that same human decision. So a routine data
+# migration could stamp candidate_ids onto historical approvals and thereby grant
+# them reach over proposals the operator never saw.
+#
+# Measured that day: all 43 legacy records were proposal_id-only; backfilling them
+# from proposals_log.jsonl was fully resolvable and would have granted reach over
+# 29 candidate_ids, overlapping 6 of the 10 then-pending proposals. With both
+# production overlay flags live those 6 would have applied with no human click.
+# The backfill was proposed, approved, measured, and then NOT performed.
+# ---------------------------------------------------------------------------
+def test_human_recorded_candidate_id_is_stamped_with_provenance(tmp_path):
+    outputs = tmp_path / "outputs"
+    res = PA.record_approval("prop_a", "approve", "pesantez", _NOW,
+                             base_dir=str(outputs), candidate_id="cand_a")
+    assert res["ok"], res
+    rec = res["record"]
+    assert rec["candidate_id"] == "cand_a"
+    assert rec["candidate_id_source"] == "human_decision"
+
+
+def test_candidate_reach_requires_human_decision_provenance(tmp_path):
+    """A migration-stamped candidate_id must NOT confer approval reach."""
+    outputs = tmp_path / "outputs"
+    PA.record_approval("prop_real", "approve", "pesantez", _NOW,
+                       base_dir=str(outputs), candidate_id="cand_real")
+
+    # Simulate a backfill writing candidate_id onto a legacy proposal-id-only record.
+    log = outputs / "promotion_approvals" / "approved_proposals.json"
+    doc = json.loads(log.read_text())
+    doc["approvals"].append({
+        "proposal_id": "prop_legacy", "decision": "approve", "approver": "pesantez",
+        "timestamp": _NOW, "notes": None, "review_date": None,
+        "candidate_id": "cand_backfilled",           # no provenance stamp
+    })
+    log.write_text(json.dumps(doc))
+
+    reach = PA.approved_candidate_ids(str(outputs))
+    assert "cand_real" in reach
+    assert "cand_backfilled" not in reach, (
+        "a candidate_id without human_decision provenance must not confer reach — "
+        "that is how a migration manufactures approval")
+
+
+def test_explicit_non_human_provenance_is_also_rejected(tmp_path):
+    outputs = tmp_path / "outputs"
+    PA.record_approval("prop_x", "approve", "pesantez", _NOW,
+                       base_dir=str(outputs), candidate_id="cand_x")
+    log = outputs / "promotion_approvals" / "approved_proposals.json"
+    doc = json.loads(log.read_text())
+    doc["approvals"].append({
+        "proposal_id": "prop_y", "decision": "approve", "approver": "pesantez",
+        "timestamp": _NOW, "notes": None, "review_date": None,
+        "candidate_id": "cand_y", "candidate_id_source": "derived",
+    })
+    log.write_text(json.dumps(doc))
+    assert "cand_y" not in PA.approved_candidate_ids(str(outputs))
+
+
+def test_legacy_proposal_id_only_records_remain_effective(tmp_path):
+    """Backward compatibility: the 43 legacy records must keep working as-is."""
+    outputs = tmp_path / "outputs"
+    PA.record_approval("prop_seed", "approve", "pesantez", _NOW, base_dir=str(outputs))
+    eff = PA.effective_approvals(str(outputs))
+    assert eff.get("prop_seed") == "approve"

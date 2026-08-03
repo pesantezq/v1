@@ -21,7 +21,38 @@ from pathlib import Path
 
 from backtesting.tuning_proposals import propose_weight_changes, write_proposals
 
-_REGISTRY = "config/signal_registry.yaml"
+# A FIXTURE registry, not the live one. These tests assert exact arithmetic on a
+# signal's default_weight, so reading config/signal_registry.yaml made them fail
+# whenever an operator (or the sanctioned auto-apply path) changed a weight —
+# STRONG_MOVE_UP had drifted 0.45 -> 0.4947, so "0.45 + 0.05 == 0.50" became
+# 0.5447 and the failure was written off as pre-existing. A registry-arithmetic
+# test must own its inputs.
+_FIXTURE_WEIGHTS = {"STRONG_MOVE_UP": 0.45, "STRONG_MOVE_DOWN": 0.45, "VOLUME_SPIKE": 0.25}
+
+
+def _write_fixture_registry() -> str:
+    import tempfile
+    import textwrap
+    d = tempfile.mkdtemp(prefix="tuning_proposals_registry_")
+    path = Path(d) / "signal_registry.yaml"
+    entries = "".join(textwrap.dedent(f"""
+          - signal_id: {sid}
+            display_name: {sid.title().replace('_', ' ')}
+            category: price_action
+            source_domain: scanner
+            actionable: true
+            discovery_only: false
+            requires_corroboration: false
+            default_weight: {w}
+            confidence_floor: 0.50
+            description: fixture signal for tuning-proposal arithmetic tests
+            enabled: true
+    """) for sid, w in _FIXTURE_WEIGHTS.items())
+    path.write_text("signals:\n" + entries, encoding="utf-8")
+    return str(path)
+
+
+_REGISTRY = _write_fixture_registry()
 
 
 def _proposal_for(payload: dict, signal_id: str) -> dict:
