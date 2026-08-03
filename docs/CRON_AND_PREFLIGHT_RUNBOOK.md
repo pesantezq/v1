@@ -68,6 +68,33 @@ Behavior:
 0 7 * * 1-5 cd /opt/stockbot && bash scripts/run_daily_safe.sh >> logs/cron_daily_safe.log 2>&1
 ```
 
+### Monthly universe-membership refresh (added 2026-08-03)
+
+```cron
+30 6 1 * * /opt/stockbot/scripts/run_monthly_universe_refresh.sh
+```
+
+Forces a full S&P 500 constituent re-resolution + `full_scan` so watchlist
+**membership** stays current. Not required for recovery — the weekly path already
+self-heals whenever the cached watchlist falls below the trust floor — but
+`weekly_refresh()` only re-filters what is already cached, so without this the
+universe never gains new members while the cache looks healthy.
+
+Deliberately **not** `--run-mode monthly`: that mode also applies theme boosts to
+scanner candidates and routes email through `send_monthly_memo`, which is more
+than a membership refresh. The wrapper uses the narrowest reusable mechanism,
+`main.py --run-mode weekly --force-universe-refresh`.
+
+- **Call volume:** ≈3,700 FMP calls per full scan (~503 profile + ~503
+  key-metrics/financial-growth + ~503 quote), measured live 2026-08-03. Profiles
+  cache 7d, key-metrics 30d. Safe monthly on a flat subscription with the
+  uncapped `daily` run-mode budget; **do not shorten the cadence**.
+- **Timing:** 1st of the month, 06:30 UTC — pre-market and clear of the Monday
+  08:00 weekly / 08:30 ETF / 09:00 daily cluster.
+- **Overlap safety:** takes the same `stockbot-discovery-pulse.lock` flock as the
+  weekly run and discovery pulses, so it skips cleanly rather than overlapping.
+- Writes `outputs/policy/scanner_recovery_canary.{json,md}` for acceptance.
+
 Notes:
 
 - run from repo root so relative paths remain stable

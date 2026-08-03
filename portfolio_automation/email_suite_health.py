@@ -66,12 +66,19 @@ SUITE: dict[str, dict[str, Any]] = {
         "log": None,
         "cadence": "n/a",
         "live": False,
-        "dormant_reason": "no_delivery_path",
+        "dormant_reason": "wired_but_unconfigured_no_delivery_log",
         "dormant_detail": (
-            "Built but never wired: send_digest() has no caller, no cron entry, "
-            "no delivery artifact, and no test file (audit 2026-08-03). Activating "
-            "it is a scoped decision, not a bug fix — it would create a new "
-            "outbound email path."
+            "CORRECTION 2026-08-03 (second pass): an earlier audit note claimed this "
+            "sender had no caller. That was wrong — it IS wired into the pipeline "
+            "(main.py:2895 constructs it; send_digest at 2952/2970/3010 and "
+            "send_monthly_memo at 2990). It nevertheless never sends, for a "
+            "different reason: config.email.sender_email and recipient_email are "
+            "empty, so is_configured() is False and send_digest returns early after "
+            "logging 'Email not configured, skipping send'. Crucially there is NO "
+            "delivery-status artifact for this sender, so neither its silence nor a "
+            "future successful send is observable. That missing log is the real "
+            "debt; activation is a scoped decision (populate recipients + add "
+            "finance_digest_log.jsonl), not a bug fix."
         ),
     },
     "watchlist_digest": {

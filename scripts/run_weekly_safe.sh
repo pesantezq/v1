@@ -139,5 +139,5 @@ if len(non_fb) < MIN_TRUSTED_DATASET_SIZE:
     printf '\n-- Experiment registry review (Phase 8, sandbox, observe-only) --\n'
     python -c "import os; os.chdir('${REPO_ROOT:-.}'); from portfolio_automation.experiment_registry import read_registry; reg = read_registry('.'); from collections import Counter; c = Counter(e.get('status') for e in reg); print('experiments:', len(reg), 'by_status:', dict(c))" || printf 'experiment_registry non-fatal failure\n'
 
-    printf '\nDAILY RUN PASSED\n'
+    printf '\nWEEKLY RUN PASSED\n'
 } >> "$LOG_FILE" 2>&1

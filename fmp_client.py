@@ -596,9 +596,12 @@ class FMPClient:
                 if isinstance(data, list):
                     all_profiles.extend(data)
         except Exception as exc:
-            # FMP retired the v3 legacy API on 2026-08-31 for non-grandfathered
-            # keys, so this batched call now 403s and full_scan() lost its
-            # market-cap input entirely. stable/profile still works per symbol.
+            # FMP restricted the v3 legacy API to subscriptions predating
+            # 2025-08-31; this key does not qualify, so the batched call 403s and
+            # full_scan() lost its market-cap input entirely. (An earlier comment
+            # here said "retired on 2026-08-31" — that conflated the cutoff date
+            # with the date we observed the breakage, 2026-08-03.) stable/profile
+            # still works per symbol.
             logger.warning(
                 "get_batch_profiles_v3: legacy batch endpoint failed (%s) — "
                 "falling back to stable/profile per symbol (%d symbols)",

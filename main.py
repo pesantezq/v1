@@ -85,7 +85,9 @@ from guardrails import run_guardrail_checks
 from degraded_mode import (
     DEFAULT_STALE_DAYS,
     MIN_TRUSTED_DATASET_SIZE,
+    assess_ranking_quality,
     assess_scanner_dataset_sufficiency,
+    assess_screening_sufficiency,
     build_data_health_context,
     stale_cache_days_for_path,
     summarize_data_health,
@@ -520,6 +522,17 @@ Examples:
     )
 
     parser.add_argument(
+        '--force-universe-refresh',
+        action='store_true',
+        help=(
+            'With --run-mode weekly: force a full universe rebuild (fresh S&P 500 '
+            'constituent resolution + full_scan) even when the cached watchlist is '
+            'above the trust floor. Use this for the periodic membership-freshness '
+            'refresh instead of --run-mode monthly, which also applies theme boosts '
+            'and switches the email path.'
+        ),
+    )
+    parser.add_argument(
         '--run-mode',
         choices=['daily', 'weekly', 'monthly'],
         default='daily',
@@ -627,6 +640,7 @@ def run_portfolio_update(
     force_email: bool = False,
     skip_email: bool = False,
     run_mode: str = 'daily',
+    force_universe_refresh: bool = False,
     output_dir: Optional[Path] = None,
     logger=None,
     store=None,
@@ -637,6 +651,14 @@ def run_portfolio_update(
 
     Args:
         run_mode: 'daily' (alert-only), 'weekly' (digest), or 'monthly' (capital memo).
+        force_universe_refresh: force the weekly path to take the FULL rebuild
+            branch (fresh constituent resolution + full_scan) even when the cached
+            watchlist is above the trust floor. This is the narrow, reusable way to
+            refresh universe MEMBERSHIP periodically. `--run-mode monthly` also
+            rebuilds, but it does strictly more than intended: it applies theme
+            boosts to scanner candidates (see the monthly branch below) and routes
+            email through `send_monthly_memo` rather than the daily memo path — so
+            it is the wrong mechanism for a pure membership refresh.
         output_dir: Where to write output files. Defaults to the path derived from config.
 
     Returns a result dictionary with status and data.
@@ -854,6 +876,10 @@ def run_portfolio_update(
         _scanner_safe_mode_reasons: list[str] = []
         _scanner_stale_cache_days: int | None = None
         _scanner_latency_ms: int | None = None
+        # Screening verdict for THIS run's build; None on refresh-only runs, where
+        # it is read back from the watchlist's persisted build metadata instead.
+        _scanner_screening: dict | None = None
+        _scanner_constituents: dict | None = None
 
         # Tracks FMP + fallback state for the run-summary artifact.
         _scanner_meta: dict = {
@@ -899,6 +925,10 @@ def run_portfolio_update(
                     # Full scan: fetch profiles + metrics + quotes for all S&P 500 symbols
                     logger.info("SCANNER: Monthly full S&P 500 scan — fetching bulk data...")
                     sp500_symbols = sp500_universe.get_symbols()
+                    # Carry the constituent provenance (source / count / freshness)
+                    # forward once; downstream surfaces transport it, never recompute.
+                    if sp500_universe.last_resolution is not None:
+                        _scanner_constituents = sp500_universe.last_resolution.as_payload()
                     _scanner_sp500_symbols = list(sp500_symbols)
                     if _use_premium:
                         # v4 bulk endpoints (1 call each — requires paid FMP plan)
@@ -940,12 +970,18 @@ def run_portfolio_update(
                                 _v3_max, len(_qualifying) - _v3_max, len(_qualifying),
                             )
                         bulk_metrics = fmp.get_fundamentals_v3(_syms_for_metrics)
+                        _scanner_screening = assess_screening_sufficiency(
+                            eligible_symbols=_qualifying,
+                            requested_symbols=_syms_for_metrics,
+                            metrics_rows=bulk_metrics,
+                        )
                     batch_quotes = fmp.get_batch_quotes(sp500_symbols)
                     scanner_candidates, scanner_debug_rows = candidate_scanner.full_scan(
                         sp500_symbols, bulk_profiles, bulk_metrics, batch_quotes
                     )
                     if not dry_run:
-                        candidate_scanner.save_watchlist(scanner_candidates)
+                        candidate_scanner.save_watchlist(
+                            scanner_candidates, screening=_scanner_screening)
                     _scanner_meta['fmp_succeeded'] = True
                     _scanner_meta['watchlist_source'] = 'fmp'
                     logger.info(
@@ -965,13 +1001,22 @@ def run_portfolio_update(
                     # absorbing floor at zero that a decaying cache never reached
                     # (it sat at 3 for nine consecutive weekly runs). A floor makes
                     # the ratchet self-healing.
-                    if len(watchlist) < MIN_TRUSTED_DATASET_SIZE:
-                        logger.warning(
-                            "SCANNER: cached watchlist has %d candidates (below trust "
-                            "floor %d) — running full scan to repopulate",
-                            len(watchlist), MIN_TRUSTED_DATASET_SIZE,
-                        )
+                    if len(watchlist) < MIN_TRUSTED_DATASET_SIZE or force_universe_refresh:
+                        if force_universe_refresh:
+                            logger.info(
+                                "SCANNER: forced universe refresh — rebuilding membership "
+                                "from a fresh constituent resolution (%d cached candidates)",
+                                len(watchlist),
+                            )
+                        else:
+                            logger.warning(
+                                "SCANNER: cached watchlist has %d candidates (below trust "
+                                "floor %d) — running full scan to repopulate",
+                                len(watchlist), MIN_TRUSTED_DATASET_SIZE,
+                            )
                         sp500_symbols = sp500_universe.get_symbols()
+                        if sp500_universe.last_resolution is not None:
+                            _scanner_constituents = sp500_universe.last_resolution.as_payload()
                         _scanner_sp500_symbols = list(sp500_symbols)
                         if _use_premium:
                             bulk_profiles = fmp.get_bulk_profiles()
@@ -995,7 +1040,13 @@ def run_portfolio_update(
                                     "symbols will be admitted UNSCREENED (no fundamentals)",
                                     _v3_max, len(_qualifying) - _v3_max, len(_qualifying),
                                 )
-                            bulk_metrics = fmp.get_fundamentals_v3(_qualifying[:_v3_max])
+                            _syms_for_metrics = _qualifying[:_v3_max]
+                            bulk_metrics = fmp.get_fundamentals_v3(_syms_for_metrics)
+                            _scanner_screening = assess_screening_sufficiency(
+                                eligible_symbols=_qualifying,
+                                requested_symbols=_syms_for_metrics,
+                                metrics_rows=bulk_metrics,
+                            )
                         batch_quotes = fmp.get_batch_quotes(sp500_symbols)
                         scanner_candidates, scanner_debug_rows = candidate_scanner.full_scan(
                             sp500_symbols, bulk_profiles, bulk_metrics, batch_quotes
@@ -1007,12 +1058,20 @@ def run_portfolio_update(
                             bulk_metrics = fmp.get_bulk_key_metrics()
                         else:
                             bulk_metrics = fmp.get_fundamentals_v3(top100_symbols)
+                        # A weekly re-filter screens the CACHED set, so the
+                        # eligible universe here is the cached watchlist itself.
+                        _scanner_screening = assess_screening_sufficiency(
+                            eligible_symbols=top100_symbols,
+                            requested_symbols=top100_symbols,
+                            metrics_rows=bulk_metrics,
+                        )
                         batch_quotes = fmp.get_batch_quotes(top100_symbols)
                         scanner_candidates, scanner_debug_rows = candidate_scanner.weekly_refresh(
                             watchlist, bulk_metrics, batch_quotes
                         )
                     if not dry_run:
-                        candidate_scanner.save_watchlist(scanner_candidates)
+                        candidate_scanner.save_watchlist(
+                            scanner_candidates, screening=_scanner_screening)
                     _scanner_meta['fmp_succeeded'] = True
                     _scanner_meta['watchlist_source'] = 'fmp'
                     logger.info(
@@ -1278,6 +1337,55 @@ def run_portfolio_update(
                 logger.warning(msg)
                 result['warnings'].append(msg)
 
+            # ── Screening coverage: a SECOND, independent quality dimension ──
+            # "Enough candidate rows" and "the screen actually bound" are
+            # different questions. 100 candidates of which 24 were screened is
+            # not a screened universe. On refresh-only runs no fundamentals are
+            # fetched, so the verdict is read back from the build metadata
+            # persisted with the watchlist rather than assumed healthy.
+            if _scanner_screening is None:
+                try:
+                    _scanner_screening = candidate_scanner.load_watchlist_screening()
+                except Exception:
+                    _scanner_screening = None
+                if isinstance(_scanner_screening, dict):
+                    _scanner_screening = {**_scanner_screening, "as_of": "watchlist_build"}
+            if scanner_candidates:
+                if not isinstance(_scanner_screening, dict):
+                    # Uncertified is NOT the same as coverage 0, and must not read
+                    # as healthy. Self-clears on the next full universe rebuild.
+                    _scanner_safe_mode_reasons.append("screening_not_certified")
+                    msg = (
+                        "SCANNER SAFE MODE: screening coverage not certified for this "
+                        "watchlist (built before coverage was recorded) - speculative "
+                        "downstream allocation suppressed until the next universe rebuild"
+                    )
+                    logger.warning(msg)
+                    result['warnings'].append(msg)
+                elif not _scanner_screening.get("sufficient"):
+                    _scanner_safe_mode_reasons.append("insufficient_screening_coverage")
+                    _cov = _scanner_screening.get("screening_coverage")
+                    msg = (
+                        "SCANNER SAFE MODE: screening coverage "
+                        f"{'unknown' if _cov is None else format(_cov, '.1%')} below the "
+                        f"{_scanner_screening.get('minimum_threshold')} minimum "
+                        f"({_scanner_screening.get('fundamentals_resolved')}/"
+                        f"{_scanner_screening.get('eligible_symbols')} eligible symbols "
+                        "screened) - speculative downstream allocation suppressed"
+                    )
+                    logger.warning(msg)
+                    result['warnings'].append(msg)
+                elif _scanner_screening.get("status") == "degraded":
+                    # Usable but flagged: warn without suppressing.
+                    msg = (
+                        "SCANNER: screening coverage degraded — "
+                        f"{_scanner_screening.get('fundamentals_resolved')}/"
+                        f"{_scanner_screening.get('eligible_symbols')} eligible symbols "
+                        "screened; ranking tail may carry unscreened names"
+                    )
+                    logger.warning(msg)
+                    result['warnings'].append(msg)
+
             if _scanner_data_health.get("degraded_mode"):
                 if (
                     _scanner_stale_cache_days is not None
@@ -1320,8 +1428,19 @@ def run_portfolio_update(
             _scanner_meta.update(_scanner_data_health)
             _scanner_meta["safe_mode"] = _scanner_safe_mode
             _scanner_meta["safe_mode_reasons"] = list(_scanner_safe_mode_reasons)
+            # The two dimensions computed above, carried once so the run-summary
+            # artifact and oversight surfaces transport rather than recompute them.
+            _scanner_meta["constituent_resolution"] = _scanner_constituents
+            _scanner_meta["screening_sufficiency"] = _scanner_screening
+            # Observability only: proves the partial-screen degeneracy is gone (or
+            # visible if it returns). Never feeds score, rank, or allocation.
+            _scanner_ranking = assess_ranking_quality(scanner_candidates)
+            _scanner_meta["ranking_quality"] = _scanner_ranking
             result['scanner']['safe_mode'] = _scanner_safe_mode
             result['scanner']['safe_mode_reasons'] = list(_scanner_safe_mode_reasons)
+            result['scanner']['constituent_resolution'] = _scanner_constituents
+            result['scanner']['screening_sufficiency'] = _scanner_screening
+            result['scanner']['ranking_quality'] = _scanner_ranking
             result['scanner']['meta'] = _scanner_meta
 
         else:
@@ -1741,6 +1860,9 @@ def run_portfolio_update(
                     fallback_used=_scanner_meta.get('fallback_used', False),
                     watchlist_source=_scanner_meta.get('watchlist_source', 'none'),
                     symbols_processed=[c['symbol'] for c in scanner_candidates],
+                    constituent_resolution=_scanner_meta.get('constituent_resolution'),
+                    screening_sufficiency=_scanner_meta.get('screening_sufficiency'),
+                    ranking_quality=_scanner_meta.get('ranking_quality'),
                     scraped_intel_stats=_si_stats,
                     market_regime=(_ws_result.get("market_regime") if isinstance(_ws_result, dict) else None),
                     market_coverage=result.get("market_coverage"),
@@ -3211,6 +3333,7 @@ def main() -> int:
             force_email=args.force_email,
             skip_email=args.skip_email,
             run_mode=args.run_mode,
+            force_universe_refresh=getattr(args, 'force_universe_refresh', False),
             output_dir=output_dir,
             logger=logger,
             store=store,

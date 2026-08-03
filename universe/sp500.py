@@ -50,7 +50,7 @@ class SP500Universe:
         # None until the first resolve; callers use it to report provenance.
         self.last_resolution: Optional[ConstituentResolution] = None
 
-    def resolve(self, ttl_days: int = 7) -> ConstituentResolution:
+    def resolve(self, ttl_days: int = 7, now: str | None = None) -> ConstituentResolution:
         """Resolve constituents and record provenance.
 
         Raises ``ConstituentSourceError`` when no source yields a plausible list —
@@ -62,6 +62,7 @@ class SP500Universe:
             cache_path=self._cache_path,
             fetcher=self._fetcher,
             ttl_days=ttl_days,
+            now=now,
         )
         self.last_resolution = resolution
         return resolution

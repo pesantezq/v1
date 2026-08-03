@@ -120,10 +120,16 @@ def test_attempted_but_all_failed_is_red(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_finance_digest_is_reported_dormant_not_missing(tmp_path):
+    """Wired into main.py but unconfigured, and with NO delivery log either way.
+
+    Corrected 2026-08-03: an earlier note said "no caller". It has four call
+    sites; what it lacks is recipients and a delivery-status artifact.
+    """
     r = ESH.assess_email(tmp_path, ESH.SUITE["finance_digest"], NOW)
     assert r["status"] == "DORMANT"
     assert r["is_debt"] is True
-    assert "no_delivery_path" in r["reasons"]
+    assert "wired_but_unconfigured_no_delivery_log" in r["reasons"]
+    assert "main.py:2895" in r["detail"]
 
 
 def test_dormant_does_not_degrade_the_rollup(tmp_path):
