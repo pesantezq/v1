@@ -28,9 +28,14 @@ def _seed_applied(root):
         {"candidate_id": "c1", "decision": S.DECISION_READY, "workflow": S.WORKFLOW_WATCHLIST}]}
     cbi = {"c1": {"candidate_id": "c1", "symbol": "NVDA", "confidence": 0.9,
                   "proposal_type": S.PROPOSAL_WATCHLIST_ADD}}
+    # Supply the safety lists explicitly. Since the 2026-08-03 audit an UNSUPPLIED
+    # list fails its gate closed, so a seed that omits them would apply nothing and
+    # this veto suite would have no applied event to veto.
     AA.run_stage(root=str(root), now=NOW, sim_gov_config=sim_cfg, review_result=review,
                  candidates_by_id=cbi, base_dir=str(root / "outputs"), env={},
-                 approver=lambda p: APPROVE)
+                 approver=lambda p: APPROVE,
+                 static_symbols=set(), prohibited_symbols=set(),
+                 conflicting_symbols=set())
     ev = [e for e in AA.load_events(base_dir=str(root / "outputs"))
           if e["kind"] == AA.EVENT_APPLIED][0]
     return ev["event_id"]

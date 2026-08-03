@@ -6,6 +6,8 @@ auto-approval actor can never impersonate a human approver.
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from portfolio_automation.sim_governance import auto_approval as AA
@@ -538,3 +540,55 @@ def test_health_red_on_authority_breach_in_applied_event(tmp_path):
                      "ts": "2026-07-14T00:00:00Z"}, base_dir=base)
     h = AA.assess_health(base_dir=base, now="2026-07-14T01:00:00Z")
     assert h["status"] == "RED"
+
+
+# ---------------------------------------------------------------------------
+# An UNREADABLE event ledger must fail closed (audit finding 2026-08-03).
+#
+# load_events returns [] on OSError with no signal, which fed two fail-OPEN paths:
+#   * _applied_today -> 0, so the watchlist_daily_cap gate read "0 < cap" -> PASS
+#     however many applies had actually happened;
+#   * applied_key_exists -> False, so the already-applied short-circuit was skipped
+#     and a duplicate application for one idempotency_key became possible.
+# The sibling path solved this long ago via
+# promotion_approvals.approvals_log_unreadable() — absent log (fine) vs
+# present-but-unreadable (the authority itself is broken). This mirrors it.
+# ---------------------------------------------------------------------------
+def test_absent_event_ledger_is_not_an_error(tmp_path):
+    """No ledger yet is a legitimate 'nothing recorded', not a fault."""
+    assert AA.events_log_unreadable(base_dir=str(tmp_path / "outputs")) is None
+
+
+def _make_ledger_unreadable(outputs) -> None:
+    """Make the ledger path exist but be unreadable, for ANY uid.
+
+    chmod(0o000) is a no-op for root and this repo's test runner is root, so a
+    permissions-based fixture would silently assert nothing. A directory at the file
+    path makes read_text() raise IsADirectoryError (an OSError) regardless of uid.
+    """
+    path = pathlib.Path(AA._policy_path(AA._EVENTS_FILE, str(outputs)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()
+
+
+def test_unreadable_event_ledger_is_reported(tmp_path):
+    outputs = tmp_path / "outputs"
+    _make_ledger_unreadable(outputs)
+    reason = AA.events_log_unreadable(base_dir=str(outputs))
+    assert reason is not None
+    assert "unreadable" in reason
+
+
+def test_run_refuses_to_apply_when_ledger_is_unreadable(tmp_path):
+    """The cap and the idempotency guard both derive from this log — fail closed."""
+    outputs = tmp_path / "outputs"
+    _make_ledger_unreadable(outputs)
+    res = AA.run_auto_approval(
+        candidates=[], now="2026-08-03T00:00:00+00:00", base_dir=str(outputs),
+        config={"enabled": True, "watchlist_enabled": True, "watchlist_daily_cap": 2},
+        source_artifact_path="x", source_artifact_hash="h",
+        env={}, kill_file_exists=False,
+        static_symbols=set(), prohibited_symbols=set(), conflicting_symbols=set())
+    assert res["applied_count"] == 0
+    assert res["enabled"] is False
+    assert "ledger_unreadable" in str(res["disabled_reason"])

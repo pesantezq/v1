@@ -56,7 +56,14 @@ def _run(candidates, *, base, cfg, approver, wl, **over):
     kw = dict(candidates=candidates, now=NOW, base_dir=base, config=cfg,
               source_artifact_path="outputs/promotion_review/daily_ai_review_result.json",
               source_artifact_hash="hashA", env={}, kill_file_exists=False,
-              watchlist=wl, valid_strategy_ids=set(), approver=approver)
+              watchlist=wl, valid_strategy_ids=set(), approver=approver,
+              # Supplied EXPLICITLY as empty ("checked, nothing listed"). Since the
+              # 2026-08-03 audit an UNSUPPLIED list fails its gate closed, so these
+              # orchestrator tests must state what a real deployment states — leaving
+              # them out is what silently disarmed the gates in production. A test
+              # that pins the fail-closed behaviour lives in
+              # tests/test_auto_approval_watchlist.py.
+              static_symbols=set(), prohibited_symbols=set(), conflicting_symbols=set())
     kw.update(over)
     return AA.run_auto_approval(**kw)
 

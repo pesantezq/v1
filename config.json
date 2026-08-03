@@ -645,7 +645,7 @@
         "send_hour_local": 18,
         "timezone": "America/New_York"
       },
-      "note": "Bounded GPT auto-approval — SIMULATION ONLY. Ships INERT. It may auto-apply bounded changes to a SEPARATE simulation watchlist DB (never the production DB read by the scanner) and, when strategy_enabled+cap>0, the sandbox active strategy. It can NEVER promote to production, feed the decision engine, or impersonate human approval. live_watchlist_enabled is present for explicitness and is unsupported (must stay false). Kill-switch: config/auto_approval.DISABLED file or STOCKBOT_AUTO_APPROVAL_DISABLED=1. See docs/SIM_GOVERNANCE.md + the CLAUDE.md sanctioned exception (2026-07-14)."
+      "note": "Bounded GPT auto-approval — SIMULATION ONLY. ARMED since 2026-08-03 (operator-confirmed); the previous 'Ships INERT' wording was stale and misleading for a sanctioned mutator. It may auto-apply bounded changes to a SEPARATE simulation watchlist DB (never the production DB read by the scanner) and, when strategy_enabled+cap>0, the sandbox active strategy. It can NEVER promote to production, feed the decision engine, or impersonate human approval. live_watchlist_enabled is present for explicitness and is unsupported (must stay false). NOTE: watchlist candidates currently FAIL CLOSED because the prohibited/static/conflicting symbol lists have no source yet — run_stage exposes prohibited_symbols/conflicting_symbols as the wiring point; never re-add an empty-set default (that made two safety gates unconditional passes until the 2026-08-03 audit). Kill-switch: config/auto_approval.DISABLED file or STOCKBOT_AUTO_APPROVAL_DISABLED=1. See docs/SIM_GOVERNANCE.md + the CLAUDE.md sanctioned exception (2026-07-14)."
     },
     "approval_packet": {
       "enabled": true,
