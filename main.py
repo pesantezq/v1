@@ -85,6 +85,7 @@ from guardrails import run_guardrail_checks
 from degraded_mode import (
     DEFAULT_STALE_DAYS,
     MIN_TRUSTED_DATASET_SIZE,
+    assess_scanner_dataset_sufficiency,
     build_data_health_context,
     stale_cache_days_for_path,
     summarize_data_health,
@@ -921,6 +922,23 @@ def run_portfolio_update(
                             "SCANNER: %d symbols pass mktCap filter; fetching fundamentals for top %d...",
                             len(_qualifying), len(_syms_for_metrics),
                         )
+                        # A binding cap means the remaining symbols reach
+                        # _passes_hard_filters with NO fundamentals, and that
+                        # function treats missing rev_growth/pe/fcf_yield as
+                        # non-fatal by design — so they are admitted UNSCREENED
+                        # and tie on score, which collapses the tail of the
+                        # ranking to alphabetical order. Measured 2026-08-03 at
+                        # v3_max=100: 297 "passed" of which only ~24 were
+                        # actually screened; at full coverage: 55, all screened.
+                        # Never let that be silent again.
+                        if len(_qualifying) > _v3_max:
+                            logger.warning(
+                                "SCANNER: v3_max_symbols=%d binds — %d of %d qualifying "
+                                "symbols will be scored WITHOUT fundamentals and admitted "
+                                "unscreened; raise scanner.v3_max_symbols to restore the "
+                                "fundamental screen",
+                                _v3_max, len(_qualifying) - _v3_max, len(_qualifying),
+                            )
                         bulk_metrics = fmp.get_fundamentals_v3(_syms_for_metrics)
                     batch_quotes = fmp.get_batch_quotes(sp500_symbols)
                     scanner_candidates, scanner_debug_rows = candidate_scanner.full_scan(
@@ -938,10 +956,20 @@ def run_portfolio_update(
                 elif run_mode == 'weekly':
                     # Refresh top-k: reload watchlist + fresh metrics + fresh quotes
                     watchlist = candidate_scanner.load_watchlist()
-                    if not watchlist:
+                    # Repopulate whenever the cache is below the trust floor, not
+                    # only when it is EXACTLY empty. weekly_refresh() re-filters
+                    # cached rows and keeps survivors, so it is monotonically
+                    # non-increasing — and both observed 2026 drops were the
+                    # *transient* 200-DMA trend filter, i.e. a temporary market
+                    # condition made permanent. `if not watchlist` was an
+                    # absorbing floor at zero that a decaying cache never reached
+                    # (it sat at 3 for nine consecutive weekly runs). A floor makes
+                    # the ratchet self-healing.
+                    if len(watchlist) < MIN_TRUSTED_DATASET_SIZE:
                         logger.warning(
-                            "SCANNER: No watchlist cached — running full scan "
-                            "(run monthly mode first to pre-warm cache)"
+                            "SCANNER: cached watchlist has %d candidates (below trust "
+                            "floor %d) — running full scan to repopulate",
+                            len(watchlist), MIN_TRUSTED_DATASET_SIZE,
                         )
                         sp500_symbols = sp500_universe.get_symbols()
                         _scanner_sp500_symbols = list(sp500_symbols)
@@ -959,6 +987,14 @@ def run_portfolio_update(
                                 key=lambda s: float(_prof_map.get(s, {}).get('mktCap', 0) or 0),
                                 reverse=True,
                             )
+                            # Same unscreened-admission hazard as the monthly
+                            # branch above — see the comment there.
+                            if len(_qualifying) > _v3_max:
+                                logger.warning(
+                                    "SCANNER: v3_max_symbols=%d binds — %d of %d qualifying "
+                                    "symbols will be admitted UNSCREENED (no fundamentals)",
+                                    _v3_max, len(_qualifying) - _v3_max, len(_qualifying),
+                                )
                             bulk_metrics = fmp.get_fundamentals_v3(_qualifying[:_v3_max])
                         batch_quotes = fmp.get_batch_quotes(sp500_symbols)
                         scanner_candidates, scanner_debug_rows = candidate_scanner.full_scan(
@@ -1220,23 +1256,29 @@ def run_portfolio_update(
                     _scanner_data_health.get("degraded_reason") or "unknown",
                 )
 
-            if _scanner_data_health.get("degraded_mode"):
-                if not scanner_candidates:
-                    _scanner_safe_mode_reasons.append("empty_dataset")
+            # Dataset SUFFICIENCY is assessed unconditionally. Until 2026-08-03
+            # these two size checks were nested inside the degraded_mode branch
+            # below, which made them unreachable whenever FMP was healthy — so a
+            # 3-candidate universe raised nothing for two months because nothing
+            # had "fallen back". A thin dataset is untrustworthy regardless of how
+            # it was obtained.
+            for _reason in assess_scanner_dataset_sufficiency(len(scanner_candidates)):
+                _scanner_safe_mode_reasons.append(_reason)
+                if _reason == "empty_dataset":
                     msg = (
-                        "SCANNER SAFE MODE: degraded data produced an empty candidate set - "
+                        "SCANNER SAFE MODE: empty candidate set - "
                         "speculative downstream allocation suppressed"
                     )
-                    logger.warning(msg)
-                    result['warnings'].append(msg)
-                elif len(scanner_candidates) < MIN_TRUSTED_DATASET_SIZE:
-                    _scanner_safe_mode_reasons.append("small_dataset")
+                else:
                     msg = (
-                        f"SCANNER SAFE MODE: degraded data produced only {len(scanner_candidates)} "
-                        "candidates - speculative downstream allocation suppressed"
+                        f"SCANNER SAFE MODE: only {len(scanner_candidates)} candidates "
+                        f"(trust floor {MIN_TRUSTED_DATASET_SIZE}) - "
+                        "speculative downstream allocation suppressed"
                     )
-                    logger.warning(msg)
-                    result['warnings'].append(msg)
+                logger.warning(msg)
+                result['warnings'].append(msg)
+
+            if _scanner_data_health.get("degraded_mode"):
                 if (
                     _scanner_stale_cache_days is not None
                     and _scanner_stale_cache_days > DEFAULT_STALE_DAYS
@@ -1321,18 +1363,20 @@ def run_portfolio_update(
                 # Portfolio symbols for optional 'portfolio' group
                 _portfolio_symbols = [h.symbol for h in holdings]
 
-                # S&P 500 symbols: reuse if scanner already has them, else skip
+                # S&P 500 symbols: reuse if scanner already has them, else skip.
+                # Resolved through SP500Universe (FMP → free source → last-good
+                # cache) rather than a bare get_sp500_constituents() call, which
+                # has 403'd since FMP retired the v3 legacy API — that silently
+                # dropped the whole sp500 group from market coverage on any day
+                # the scanner did not already supply symbols.
                 _sp500_for_universe = list(_scanner_sp500_symbols)
                 if "sp500" in _mu_cfg.get("groups", []):
                     if not _sp500_for_universe:
                         try:
                             from portfolio_automation.data_budget.factory import governed_client
+                            from universe.sp500 import SP500Universe as _SP500Uni
                             _fmp_uni = governed_client("daily")
-                            _sp500_for_universe = [
-                                c["symbol"]
-                                for c in _fmp_uni.get_sp500_constituents()
-                                if c.get("symbol")
-                            ]
+                            _sp500_for_universe = _SP500Uni(_fmp_uni).get_symbols()
                         except Exception as _sp_err:
                             logger.warning(
                                 "MARKET COVERAGE: sp500 fetch failed (%s) — skipping sp500 group",

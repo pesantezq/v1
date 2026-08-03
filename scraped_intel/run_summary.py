@@ -15,7 +15,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from degraded_mode import build_data_health_context
+from degraded_mode import (
+    MIN_TRUSTED_DATASET_SIZE,
+    assess_scanner_dataset_sufficiency,
+    build_data_health_context,
+)
 
 logger = logging.getLogger("scraped_intel.run_summary")
 
@@ -59,6 +63,8 @@ def build_run_summary(
         data_latency_ms=(si.get("data_latency_ms") if isinstance(si, dict) else None),
     )
 
+    _universe_reasons = assess_scanner_dataset_sufficiency(len(fmp_syms))
+
     summary: Dict[str, Any] = {
         "timestamp": ts,
         "run_mode": run_mode,
@@ -75,6 +81,17 @@ def build_run_summary(
             "watchlist_source": watchlist_source,
             "symbols_processed": fmp_syms,
             "symbol_count": len(fmp_syms),
+            # A published count nothing judges is not monitoring. This block
+            # carried symbol_count: 3 every day from June to August 2026 while
+            # every health surface read GREEN, because sufficiency was only ever
+            # evaluated inside a degraded_mode branch that a healthy FMP never
+            # entered. The verdict now travels with the number.
+            "universe_sufficiency": {
+                "candidate_count": len(fmp_syms),
+                "trust_floor": MIN_TRUSTED_DATASET_SIZE,
+                "sufficient": not _universe_reasons,
+                "reasons": _universe_reasons,
+            },
             "data_fallback_triggered": data_health["data_fallback_triggered"],
             "data_latency_ms": data_health["data_latency_ms"],
             "fallback_depth": data_health["fallback_depth"],

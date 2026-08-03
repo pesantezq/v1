@@ -173,7 +173,7 @@
     "min_rev_growth": 0.15,
     "trend_filter_200dma": true,
     "use_premium_endpoints": false,
-    "v3_max_symbols": 100,
+    "v3_max_symbols": 600,
     "fallback_watchlist_enabled": true,
     "fallback_watchlist_symbols": [
       "NVDA",
