@@ -34,6 +34,9 @@ def build_run_summary(
     fallback_used: bool = False,
     watchlist_source: str = "none",
     symbols_processed: Optional[List[str]] = None,
+    constituent_resolution: Optional[Dict[str, Any]] = None,
+    screening_sufficiency: Optional[Dict[str, Any]] = None,
+    ranking_quality: Optional[Dict[str, Any]] = None,
     scraped_intel_stats: Optional[Dict[str, Any]] = None,
     market_regime: Optional[Dict[str, Any]] = None,
     market_coverage: Optional[Dict[str, Any]] = None,
@@ -81,11 +84,30 @@ def build_run_summary(
             "watchlist_source": watchlist_source,
             "symbols_processed": fmp_syms,
             "symbol_count": len(fmp_syms),
-            # A published count nothing judges is not monitoring. This block
-            # carried symbol_count: 3 every day from June to August 2026 while
-            # every health surface read GREEN, because sufficiency was only ever
-            # evaluated inside a degraded_mode branch that a healthy FMP never
-            # entered. The verdict now travels with the number.
+            # ── Three INDEPENDENT scanner-quality dimensions ────────────────
+            # A healthy upstream API does not imply a trustworthy dataset, and a
+            # large candidate count does not imply a screened universe. Each
+            # question is published separately so no one of them can mask another.
+            #
+            # 1. Can I resolve a plausible, CURRENT universe? Transported from
+            #    ConstituentResolution.as_payload(); None (never {} or 0) when the
+            #    run did not resolve constituents at all — a daily quote refresh
+            #    legitimately does not.
+            "constituent_resolution": constituent_resolution,
+            # 2. Did the screen actually bind? Transported from
+            #    degraded_mode.assess_screening_sufficiency, computed at build time
+            #    and persisted with the watchlist for refresh-only runs.
+            "screening_sufficiency": screening_sufficiency,
+            # Observability sibling: is the ranking differentiated, or a
+            # technically populated list with an alphabetical tail? Measurement
+            # only — it gates nothing and never touches score or rank.
+            "ranking_quality": ranking_quality,
+            # 3. Is the resulting dataset large enough to trust? A published count
+            #    nothing judges is not monitoring: this block carried
+            #    symbol_count: 3 every day from June to August 2026 while every
+            #    health surface read GREEN, because sufficiency was only ever
+            #    evaluated inside a degraded_mode branch a healthy FMP never
+            #    entered. The verdict now travels with the number.
             "universe_sufficiency": {
                 "candidate_count": len(fmp_syms),
                 "trust_floor": MIN_TRUSTED_DATASET_SIZE,

@@ -35,6 +35,100 @@ These are intentionally still present for broader-market and universe workflows.
 | `get_bulk_profiles()` | `/api/v4/profile/all` | premium | Used by premium universe/scanner flows. |
 | `get_bulk_key_metrics()` | `/api/v4/key-metrics-bulk` | premium | Used by premium broader-market scan flows. |
 
+## Scanner Data-Quality Model (added 2026-08-03)
+
+### Constituent authority chain
+
+`FMP → free public source → last-good cache → hard failure`
+
+| Stage | "Available" means | Plausibility | Freshness | Degraded behaviour |
+| --- | --- | --- | --- | --- |
+| **FMP** (`get_sp500_constituents`) | the call returns a list clearing the plausibility floor | ≥ `MIN_PLAUSIBLE_CONSTITUENTS` (400) distinct symbols | live read ⇒ `fresh` by definition | 403 on this key today, so this stage always falls through |
+| **Free public source** (`fetch_from_wikipedia`, stdlib `html.parser` + `requests`; **no new dependency**) | HTTP 200 **and** the `id="constituents"` table parses to ≥400 rows | same floor — a layout change that yields 3 rows is REJECTED, not published | live read ⇒ `fresh` | falls through to cache |
+| **Last-good cache** (`data/universe/sp500_constituents.json`) | file parses, carries a `constituents` list, clears the floor, **and** clears the freshness gate | same floor | `fresh` ≤7d · `stale` ≤30d · `expired` >30d · `unknown` if the timestamp is missing/unparseable/in the future | `fresh`/`stale` → served with `degraded=true`; `expired`/`unknown` → **refused** |
+| **Hard failure** | nothing plausible AND current | — | — | raises `ConstituentSourceError`. Caught by `main.py`'s scanner handler → static fallback watchlist → those names have no fundamentals, so screening coverage reads ~0 and the **speculative sleeve is suppressed** |
+
+Freshness is judged from the **recorded `fetched_at`**, never from file mtime — a
+touched, rsynced, or restored file would otherwise look new while its contents are
+months old. **Existence is not evidence of currency.** All six cache outcomes
+(absent / unreadable / implausible / unknown-age / stale / expired) stay
+distinguishable in the raised error.
+
+`CACHE_FRESH_MAX_DAYS = 7` deliberately equals `degraded_mode.DEFAULT_STALE_DAYS`.
+`CACHE_USABLE_MAX_DAYS = 30` is a **policy default, not a validated constant** —
+S&P 500 membership turns over a few names per quarter, and both live sources
+failing for a month is itself the incident.
+
+### Three independent scanner-quality dimensions
+
+1. **constituent validity/freshness** — `scanner.constituent_resolution`
+2. **screening coverage** — `scanner.screening_sufficiency`
+3. **resulting candidate count** — `scanner.universe_sufficiency`
+
+plus `scanner.ranking_quality` as pure observability (it gates nothing).
+
+> **A healthy upstream API does not imply a trustworthy scanner dataset.**
+> `fmp_succeeded: true` with `fallback_used: false` and 3 candidates was the live
+> state for roughly two months while every health surface read GREEN.
+
+> **A large candidate count does not imply a fully screened universe.**
+> Under `v3_max_symbols: 100`, `full_scan` emitted 100 candidates of which only
+> ~24 had fundamentals; the rest were admitted unscreened and formed an
+> alphabetical tie tail.
+
+**Screening coverage is measured by PRIMARY-FIELD PRESENCE, never by row count.**
+`get_fundamentals_v3` appends a row for every requested symbol unconditionally —
+even a bare `{'symbol': 'X'}` — so `len(bulk_metrics)` is 100% by construction.
+Coverage = (eligible symbols whose `revenueGrowth` resolved to a usable number) /
+(eligible symbols after the market-cap stage). Thresholds: `healthy ≥ 0.90`,
+`degraded ≥ 0.50`, `unsafe < 0.50` — **policy defaults**, adjustable in
+`degraded_mode.py`, not empirically optimal.
+
+Coverage is a property of the **build**, so it is persisted with the watchlist
+(`screening_sufficiency` in `top100_watchlist.json`) and read back on refresh-only
+runs, which fetch no fundamentals and therefore cannot re-measure it. An
+uncertified watchlist yields `screening_not_certified` and suppresses the sleeve
+until the next rebuild — uncertified is not the same as coverage 0, and neither is
+treated as healthy.
+
+#### Known inert guard (measured 2026-08-03, deliberately NOT fixed here)
+
+`field_resolution` reports per-field resolution counts, which surfaced that
+`peRatio` resolves for **0 of 503** eligible symbols: `stable/key-metrics` returns
+`earningsYield` (the reciprocal) and no `peRatio`/`priceEarningsRatio`, while the
+v3 fallback inside `get_fundamentals_v3` only runs when key-metrics returns
+*nothing at all* — and it returns plenty. So the **PE > 50 bubble guard in
+`_passes_hard_filters` has never bound on any symbol.** Repairing it would change
+which candidates pass (i.e. scanner behaviour), which is out of scope for a
+measurement task; it is recorded via `inert_fields` so it cannot be forgotten.
+
+### FMP-call budget for a full scan
+
+Measured live 2026-08-03: **≈3,700 calls** per full scan — ~503 `stable/profile`
++ ~503 `stable/key-metrics` (plus `stable/financial-growth` wherever key-metrics
+lacks `revenueGrowth`) + ~503 `stable/quote`. Profiles cache 7 days, key-metrics
+30 days. The `daily` run-mode budget is **uncapped** (`call_budget: 0` means
+uncapped — not zero), and FMP is a flat subscription, so a monthly cadence is
+safe. **A daily forced full scan is not** — do not shorten the cadence.
+
+### Recovery model
+
+* **Weekly self-heal.** `weekly_refresh()` is monotone (it only re-filters cached
+  rows), so the repopulate trigger is a floor, not zero: when the cached watchlist
+  drops below `MIN_TRUSTED_DATASET_SIZE` (5) the weekly run takes the full rebuild
+  branch. The old `if not watchlist:` was an absorbing floor at zero that a
+  decaying cache never reached.
+* **Monthly membership refresh.** `scripts/run_monthly_universe_refresh.sh` (1st,
+  06:30 UTC) forces a full rebuild even when the cache is healthy, because
+  self-heal only fires on decay and never discovers *new* members. It uses
+  `--run-mode weekly --force-universe-refresh` rather than `--run-mode monthly`,
+  which would additionally apply theme boosts and switch the email path.
+* **Safe mode.** Any failed mandatory guard suppresses the **speculative sleeve
+  only** (`main.py`'s `not _scanner_safe_mode` gate) via a distinct reason —
+  `empty_dataset`, `small_dataset`, `insufficient_screening_coverage`, or
+  `screening_not_certified`. The broader advisory pipeline stays operational, and
+  no decision, score, allocation, or approval semantics change.
+
 ## Scanner Screen Coverage (`scanner.v3_max_symbols`)
 
 `v3_max_symbols` caps how many mktCap-qualifying symbols get per-ticker

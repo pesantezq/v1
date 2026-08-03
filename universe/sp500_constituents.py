@@ -55,6 +55,29 @@ _HTTP_TIMEOUT_SECONDS = 20
 # The floor is what turns "the fetch returned" into "the fetch is usable".
 MIN_PLAUSIBLE_CONSTITUENTS = 400
 
+# --- Cache freshness policy -------------------------------------------------
+# Plausibility and freshness are INDEPENDENT gates. A >=400-row list can stay
+# structurally plausible while becoming materially wrong, so a last-good cache
+# must also prove it is current enough to trust.
+#
+# CACHE_FRESH_MAX_DAYS deliberately equals degraded_mode.DEFAULT_STALE_DAYS (7),
+# the repo's existing cache-staleness convention, so the scanner does not invent
+# a second freshness vocabulary.
+#
+# CACHE_USABLE_MAX_DAYS (30) is a POLICY DEFAULT, not an empirically validated
+# constant. Rationale: S&P 500 membership turns over a handful of names per
+# quarter, so a month-old list is still approximately right, while beyond that
+# the drift compounds and both live sources having failed for a month is itself
+# the real incident. Adjust here if the operator's tolerance differs — nothing
+# downstream hardcodes these numbers.
+CACHE_FRESH_MAX_DAYS = 7
+CACHE_USABLE_MAX_DAYS = 30
+
+FRESHNESS_FRESH = "fresh"
+FRESHNESS_STALE = "stale"
+FRESHNESS_EXPIRED = "expired"
+FRESHNESS_UNKNOWN = "unknown"
+
 DEFAULT_CACHE_PATH = Path("data/universe/sp500_constituents.json")
 
 
@@ -68,16 +91,88 @@ class ConstituentSourceError(RuntimeError):
 
 @dataclass(frozen=True)
 class ConstituentResolution:
-    """Resolved constituents plus the provenance needed to judge them."""
+    """Resolved constituents plus the provenance needed to judge them.
+
+    ``freshness``/``age_days``/``fetched_at`` are additive (added 2026-08-03) and
+    default to a live-read shape, so pre-existing callers that only read
+    ``rows``/``source``/``degraded`` keep working unchanged.
+    """
 
     rows: list[dict[str, Any]]
     source: str          # "fmp" | "free_scrape" | "cache"
     degraded: bool       # True when served from cache (stale, not live)
     detail: str = ""
+    freshness: str = FRESHNESS_FRESH
+    age_days: float | None = 0.0
+    fetched_at: str | None = None
 
     @property
     def symbols(self) -> list[str]:
         return sorted(str(r["symbol"]) for r in self.rows if r.get("symbol"))
+
+    @property
+    def count(self) -> int:
+        return len(self.rows)
+
+    def as_payload(self) -> dict[str, Any]:
+        """JSON-serializable provenance for transport to artifacts/oversight.
+
+        Calculated once here and carried outward — consumers must not recompute
+        freshness from a file mtime or re-derive counts from the row list.
+        """
+        return {
+            "source": self.source,
+            "count": self.count,
+            "fetched_at": self.fetched_at,
+            "age_days": self.age_days,
+            "freshness": self.freshness,
+            "degraded": self.degraded,
+            "detail": self.detail,
+            "plausibility_floor": MIN_PLAUSIBLE_CONSTITUENTS,
+            "fresh_max_days": CACHE_FRESH_MAX_DAYS,
+            "usable_max_days": CACHE_USABLE_MAX_DAYS,
+        }
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    """Parse an ISO timestamp to tz-aware UTC. Returns None when undeterminable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    # Timestamps written before tz-awareness was enforced are treated as UTC
+    # rather than rejected — they are still usable evidence of age.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def classify_cache_freshness(
+    fetched_at: Any, now: Any,
+) -> tuple[str, float | None]:
+    """Classify a cache timestamp into (freshness_state, age_days).
+
+    Returns ``(FRESHNESS_UNKNOWN, None)`` — never ``fresh``, and never age 0 —
+    when the timestamp is missing, unparseable, or in the future. An unknown age
+    must not read as current: that is how a stale universe stays trusted. A
+    future timestamp is treated as unknown rather than fresh because clock skew
+    or hand editing cannot certify currency.
+    """
+    stamp = _parse_ts(fetched_at)
+    reference = _parse_ts(now) or datetime.now(timezone.utc)
+    if stamp is None:
+        return FRESHNESS_UNKNOWN, None
+
+    age_days = (reference - stamp).total_seconds() / 86400.0
+    if age_days < 0:
+        return FRESHNESS_UNKNOWN, None
+    if age_days <= CACHE_FRESH_MAX_DAYS:
+        return FRESHNESS_FRESH, age_days
+    if age_days <= CACHE_USABLE_MAX_DAYS:
+        return FRESHNESS_STALE, age_days
+    return FRESHNESS_EXPIRED, age_days
 
 
 # ---------------------------------------------------------------------------
@@ -256,19 +351,34 @@ def write_cache(path: Path | str, rows: list[dict[str, Any]], *, source: str) ->
 def read_cache(path: Path | str) -> tuple[list[dict[str, Any]], str]:
     """Read the cached list. Returns ``([], detail)`` when unusable.
 
-    A corrupt cache is treated as absent, never as an empty universe.
+    A corrupt cache is treated as absent, never as an empty universe. Kept for
+    backward compatibility; ``read_cache_entry`` also returns the timestamp.
+    """
+    rows, detail, _ = read_cache_entry(path)
+    return rows, detail
+
+
+def read_cache_entry(path: Path | str) -> tuple[list[dict[str, Any]], str, Any]:
+    """Read the cache as ``(rows, detail, fetched_at)``.
+
+    Freshness is judged from the RECORDED ``fetched_at``, never from the file's
+    mtime — a touched, rsynced, or restored file would otherwise look new while
+    its contents are months old. Existence is not evidence of currency.
     """
     path = Path(path)
     if not path.exists():
-        return [], "cache absent"
+        return [], "cache absent", None
     try:
         payload = json.loads(path.read_text())
-    except (OSError, ValueError) as exc:
-        return [], f"cache unreadable: {exc}"
+    except (OSError, IsADirectoryError, ValueError) as exc:
+        return [], f"cache unreadable: {exc}", None
+    if not isinstance(payload, dict):
+        return [], "cache is not an object", None
     rows = payload.get("constituents")
     if not isinstance(rows, list):
-        return [], "cache missing 'constituents' list"
-    return rows, f"cached {payload.get('fetched_at') or 'unknown date'}"
+        return [], "cache missing 'constituents' list", None
+    fetched_at = payload.get("fetched_at")
+    return rows, f"cached {fetched_at or 'unknown date'}", fetched_at
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +391,7 @@ def resolve_constituents(
     cache_path: Path | str = DEFAULT_CACHE_PATH,
     fetcher: Optional[Callable[[], list[dict[str, Any]]]] = None,
     ttl_days: int = 7,
+    now: str | None = None,
 ) -> ConstituentResolution:
     """Resolve the S&P 500 membership list from the first plausible source.
 
@@ -291,9 +402,11 @@ def resolve_constituents(
     Raises ``ConstituentSourceError`` when nothing plausible is available.
     """
     fetcher = fetcher or fetch_from_wikipedia
+    stamp = now or datetime.now(timezone.utc).isoformat()
     attempts: list[str] = []
 
-    # 1. FMP — free where the subscription still covers it.
+    # 1. FMP — free where the subscription still covers it. A live read is fresh
+    #    by definition; the freshness policy gates the FALLBACK, never this.
     if client is not None:
         try:
             rows = validate_constituents(client.get_sp500_constituents(ttl_days=ttl_days))
@@ -303,7 +416,9 @@ def resolve_constituents(
             attempts.append(f"fmp: {exc}")
         else:
             _try_write_cache(cache_path, rows, "fmp")
-            return ConstituentResolution(rows, "fmp", False, "live FMP constituents")
+            return ConstituentResolution(
+                rows, "fmp", False, "live FMP constituents",
+                freshness=FRESHNESS_FRESH, age_days=0.0, fetched_at=stamp)
 
     # 2. Free public source.
     try:
@@ -314,23 +429,40 @@ def resolve_constituents(
         attempts.append(f"free_scrape: {exc}")
     else:
         _try_write_cache(cache_path, rows, "free_scrape")
-        return ConstituentResolution(rows, "free_scrape", False, "live free source")
+        return ConstituentResolution(
+            rows, "free_scrape", False, "live free source",
+            freshness=FRESHNESS_FRESH, age_days=0.0, fetched_at=stamp)
 
-    # 3. Last-good cache — usable, but a degraded read by definition.
-    cached, detail = read_cache(cache_path)
+    # 3. Last-good cache — a degraded read by definition, and now also subject to
+    #    an explicit freshness gate. Plausibility and freshness are independent:
+    #    both must pass. The six cache outcomes (absent / unreadable /
+    #    implausible / unknown-age / stale / expired) stay distinguishable in
+    #    `attempts` so the raised error names which one actually happened.
+    cached, detail, fetched_at = read_cache_entry(cache_path)
+    freshness, age_days = classify_cache_freshness(fetched_at, stamp)
     try:
         rows = validate_constituents(cached)
     except ConstituentSourceError as exc:
         attempts.append(f"cache: {exc}" if cached else f"cache: {detail}")
     else:
-        logger.warning(
-            "sp500 constituents: live sources unavailable, serving %s (%s)",
-            f"{len(rows)} cached rows", detail,
-        )
-        return ConstituentResolution(rows, "cache", True, detail)
+        if freshness == FRESHNESS_UNKNOWN:
+            attempts.append(
+                "cache: age unknown (missing/unparseable/future fetched_at) — "
+                "cannot certify currency, refusing to serve")
+        elif freshness == FRESHNESS_EXPIRED:
+            attempts.append(
+                f"cache: expired ({age_days:.1f}d > {CACHE_USABLE_MAX_DAYS}d max usable age)")
+        else:
+            note = (f"{detail}; {freshness} ({age_days:.1f}d old)")
+            logger.warning(
+                "sp500 constituents: live sources unavailable, serving %d cached rows (%s)",
+                len(rows), note)
+            return ConstituentResolution(
+                rows, "cache", True, note,
+                freshness=freshness, age_days=age_days, fetched_at=fetched_at)
 
     raise ConstituentSourceError(
-        "no plausible S&P 500 constituent source available; tried "
+        "no plausible, current S&P 500 constituent source available; tried "
         + "; ".join(attempts)
     )
 

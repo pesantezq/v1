@@ -190,7 +190,8 @@ class CandidateScanner:
     # Watchlist persistence
     # ------------------------------------------------------------------
 
-    def save_watchlist(self, candidates: List[Dict]) -> None:
+    def save_watchlist(self, candidates: List[Dict],
+                       screening: Optional[Dict] = None) -> None:
         """Persist Top-k candidates to disk for daily/weekly reuse.
 
         Destructive-overwrite guard: a refresh that yields 0 candidates must
@@ -214,6 +215,13 @@ class CandidateScanner:
             'updated_at': datetime.now().isoformat(),
             'candidates': candidates,
         }
+        # Screening coverage is a property of the BUILD, not of a later refresh:
+        # daily mode only re-quotes an existing watchlist and never fetches
+        # fundamentals, so it cannot re-measure coverage. Persisting the verdict
+        # with the dataset it describes is what lets a daily run answer "how well
+        # screened is the list I am about to use?" instead of assuming the best.
+        if screening is not None:
+            payload['screening_sufficiency'] = screening
         self._watchlist_path.write_text(
             json.dumps(payload, indent=2, ensure_ascii=False),
             encoding='utf-8',
@@ -232,6 +240,23 @@ class CandidateScanner:
         except Exception as e:
             logger.warning(f"Failed to load watchlist: {e}")
             return []
+
+    def load_watchlist_screening(self) -> Optional[Dict]:
+        """Return the screening verdict recorded when this watchlist was BUILT.
+
+        ``None`` means "not certified" — either the watchlist predates screening
+        metadata or the file is unreadable. Callers must treat that as
+        uncertified rather than as healthy; it is not the same as coverage 0.
+        """
+        if not self._watchlist_path.exists():
+            return None
+        try:
+            d = json.loads(self._watchlist_path.read_text(encoding='utf-8'))
+        except Exception as e:
+            logger.warning(f"Failed to load watchlist screening metadata: {e}")
+            return None
+        value = d.get('screening_sufficiency')
+        return value if isinstance(value, dict) else None
 
     # ------------------------------------------------------------------
     # Filter and score (public for unit testing)

@@ -8,6 +8,28 @@ verify something, it is marked **UNVERIFIED**.
 
 ---
 
+> **CORRECTION 2026-08-03 (second pass) — §0 below was partly wrong.**
+> The claim that the Finance Digest "has no caller" is **false**. It IS wired into
+> the pipeline: `main.py:62` imports `FinanceEmailDigest`, `main.py:2895`
+> constructs it, and it is invoked at `send_digest` (2952, 2970, 3010) and
+> `send_monthly_memo` (2990). That error came from a `grep … | head -10` whose
+> output was truncated before the `main.py` hit.
+>
+> The *conclusion* that it never sends still holds, for a different and more
+> mundane reason: `config.email.sender_email` and `recipient_email` are **empty**,
+> so `is_configured()` (`email_digest.py:876`, which also requires a password)
+> returns False and `send_digest` returns early after logging
+> "Email not configured, skipping send".
+>
+> What remains genuinely true and genuinely the debt: there is **no
+> delivery-status artifact** for this sender (no `finance_digest_log.jsonl`), so
+> neither its silence today nor a successful send tomorrow is observable — unlike
+> the other three senders, which all have one. `email_suite_health.py` records it
+> as `DORMANT / wired_but_unconfigured_no_delivery_log`.
+>
+> Read §0 with that substitution: "unwired" → "wired but unconfigured, and
+> unobservable".
+
 ## 0. Correction to the mission premise (read this first)
 
 The brief states: *"The system currently sends four relevant outputs."* That is
