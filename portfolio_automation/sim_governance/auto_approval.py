@@ -17,9 +17,15 @@ Non-negotiable authority invariant (enforced here, in tests, health, and docs):
     is_human_approved     == False
 
 The safety IS the gates, not a human. Fail-closed at every step; never raises from the
-orchestrator. Ships INERT (config ``enabled=false``, all sub-flags false,
-``strategy_daily_cap=0``) and hard-disabled by a kill-switch file or env var regardless
-of config.
+orchestrator. It SHIPPED inert, but is ARMED in the live config as of 2026-08-03
+(``enabled=true``, ``watchlist_enabled=true``, ``strategy_enabled=true``,
+``watchlist_daily_cap=2``, ``strategy_daily_cap=1``) — operator-confirmed intentional.
+Hard-disabled by a kill-switch file or env var regardless of config.
+
+Watchlist candidates still fail closed while the prohibited / static / conflicting
+symbol sets have no source — see ``run_stage``'s docstring. Do not "fix" that by
+restoring an empty-set default: that is precisely what made two safety gates
+unconditional passes before the 2026-08-03 audit.
 """
 from __future__ import annotations
 
@@ -243,9 +249,18 @@ def run_watchlist_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRe
     max_symbols = int(ctx.get("max_symbols", 0))
     applied_today = int(ctx.get("applied_today", 0))
     awaiting = int(ctx.get("active_awaiting_veto", 0))
-    prohibited = ctx.get("prohibited") or set()
-    static = ctx.get("static") or set()
-    conflicting = ctx.get("conflicting_symbols") or set()
+    # FAIL CLOSED on an UNSUPPLIED list. `None`/absent means "the caller never gave
+    # us this list", which is NOT the same as `set()` ("checked, nothing listed").
+    # Coercing the former to the latter made both gates below unconditional passes in
+    # the production path — run_stage accepts only static_symbols, and the live caller
+    # daily_governance_run.py:294 passes none of the three, so every candidate cleared
+    # them (verified with symbol="ENRON"). An absent safety list must mean "cannot
+    # certify this symbol", not "nothing is prohibited".
+    prohibited = ctx.get("prohibited")
+    static = ctx.get("static")
+    conflicting = ctx.get("conflicting_symbols")
+    _pro_static_supplied = prohibited is not None and static is not None
+    _conflicting_supplied = conflicting is not None
 
     return [
         GateResult("symbol_format", bool(_SYMBOL_RE.match(symbol)),
@@ -253,11 +268,16 @@ def run_watchlist_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRe
                    else "symbol is not a well-formed ticker",
                    observed_value=symbol, required_value="^[A-Z][A-Z0-9.-]{0,9}$"),
         GateResult("not_prohibited_or_static",
-                   symbol not in prohibited and symbol not in static,
-                   "symbol is neither prohibited nor static-only"
-                   if (symbol not in prohibited and symbol not in static)
-                   else "symbol is prohibited or already static-only",
-                   observed_value=symbol),
+                   _pro_static_supplied
+                   and symbol not in prohibited and symbol not in static,
+                   ("symbol is neither prohibited nor static-only"
+                    if (_pro_static_supplied
+                        and symbol not in prohibited and symbol not in static)
+                    else "prohibited/static list not supplied — cannot certify symbol"
+                    if not _pro_static_supplied
+                    else "symbol is prohibited or already static-only"),
+                   observed_value=symbol,
+                   required_value="prohibited+static lists supplied; symbol in neither"),
         GateResult("capacity_below_max", active < max_symbols,
                    "capacity headroom available" if active < max_symbols
                    else "simulation watchlist at capacity",
@@ -276,10 +296,15 @@ def run_watchlist_gates(candidate: dict, config: dict, ctx: dict) -> list[GateRe
                    else "proposal type is not eligible for simulation auto-application",
                    observed_value=c.get("proposal_type"),
                    required_value=sorted(_WATCHLIST_ELIGIBLE_TYPES)),
-        GateResult("no_conflicting_active_proposal", symbol not in conflicting,
-                   "no conflicting active proposal for this symbol"
-                   if symbol not in conflicting else "a conflicting active proposal exists",
-                   observed_value=symbol),
+        GateResult("no_conflicting_active_proposal",
+                   _conflicting_supplied and symbol not in conflicting,
+                   ("no conflicting active proposal for this symbol"
+                    if (_conflicting_supplied and symbol not in conflicting)
+                    else "conflicting-proposal list not supplied — cannot certify symbol"
+                    if not _conflicting_supplied
+                    else "a conflicting active proposal exists"),
+                   observed_value=symbol,
+                   required_value="conflicting list supplied; symbol not in it"),
         _bool_gate("feeds_decision_engine_false", c.get("feeds_decision_engine"), False,
                    "does not feed the decision engine",
                    "feeds_decision_engine must be False"),
@@ -626,6 +651,35 @@ def load_events(*, base_dir: str) -> list[dict]:
     return out
 
 
+def events_log_unreadable(*, base_dir: str) -> str | None:
+    """Reason string when the event ledger EXISTS but cannot be read; else None.
+
+    ``load_events`` degrades to ``[]`` on any OSError, which cannot distinguish two
+    very different situations:
+
+      * the ledger is ABSENT — a legitimate "nothing applied yet";
+      * the ledger is PRESENT but unreadable — the applied-history authority is gone.
+
+    That conflation is fail-OPEN twice over, because two gates are derived from this
+    log: ``_applied_today`` returns 0 (so ``watchlist_daily_cap`` reads "under cap"
+    however many applies really happened) and ``applied_key_exists`` returns False
+    (so the idempotency short-circuit is skipped and a duplicate application for one
+    idempotency_key becomes possible).
+
+    Mirrors ``promotion_approvals.approvals_log_unreadable`` — the same defect was
+    fixed on the sibling path and the pattern is deliberately kept identical.
+    """
+    from pathlib import Path
+    path = Path(_policy_path(_EVENTS_FILE, base_dir))
+    try:
+        if not path.exists():
+            return None
+        path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"unreadable_file: {exc}"
+    return None
+
+
 def applied_key_exists(key: str, *, base_dir: str) -> bool:
     """True if a successful application event already exists for this idempotency key."""
     return any(e.get("kind") == EVENT_APPLIED and e.get("idempotency_key") == key
@@ -855,9 +909,15 @@ def run_auto_approval(
     """
     env = env or {}
     valid_strategy_ids = set(valid_strategy_ids or [])
-    static_symbols = {s.upper() for s in (static_symbols or set())}
-    prohibited_symbols = {s.upper() for s in (prohibited_symbols or set())}
-    conflicting_symbols = {s.upper() for s in (conflicting_symbols or set())}
+    # Preserve None ("caller supplied no list") vs set() ("supplied, empty"). Coercing
+    # None to set() here is what silently disarmed the not_prohibited_or_static and
+    # no_conflicting_active_proposal gates in the live path — run_watchlist_gates now
+    # fails closed on an unsupplied list, which only works if the distinction survives.
+    static_symbols = None if static_symbols is None else {s.upper() for s in static_symbols}
+    prohibited_symbols = (None if prohibited_symbols is None
+                          else {s.upper() for s in prohibited_symbols})
+    conflicting_symbols = (None if conflicting_symbols is None
+                           else {s.upper() for s in conflicting_symbols})
     state = state or {}
 
     result = {
@@ -872,6 +932,17 @@ def run_auto_approval(
     cb = circuit_breaker_reason(state)
     if cb:
         result.update(enabled=False, disabled_reason="circuit_breaker", circuit_breaker_reason=cb)
+        return result
+
+    # The applied-history authority must be READABLE before anything is applied: both
+    # the daily cap (_applied_today) and the idempotency short-circuit
+    # (applied_key_exists) are derived from it, and load_events degrades to [] on any
+    # OSError — which reads as "no applies yet" and passes both. Refuse instead.
+    # Surfaced via disabled_reason (this module's signalling channel, read by the daily
+    # check) rather than a log line — the module deliberately carries no logger.
+    elu = events_log_unreadable(base_dir=base_dir)
+    if elu:
+        result.update(enabled=False, disabled_reason=f"ledger_unreadable: {elu}")
         return result
 
     # Run-level enablement (inert + side-effect-free when disabled).
@@ -1147,10 +1218,29 @@ def run_stage(*, root: str, now: str, sim_gov_config: dict, review_result: dict,
               candidates_by_id: dict, base_dir: str, env: dict | None = None,
               approver: Callable[[str], str] | None = None,
               provider: str | None = None, model: str | None = None,
-              static_symbols=None, write_files: bool = True) -> dict:
+              static_symbols=None, prohibited_symbols=None,
+              conflicting_symbols=None, write_files: bool = True) -> dict:
     """Daily-pipeline stage entry point. Inert + side-effect-free when disabled; never
     raises. Builds candidates from the day's review, resolves the SEPARATE simulation
-    watchlist DB, and runs the bounded auto-approval channel."""
+    watchlist DB, and runs the bounded auto-approval channel.
+
+    WATCHLIST CANDIDATES CURRENTLY ALWAYS FAIL CLOSED HERE, BY DESIGN (2026-08-03).
+    ``run_watchlist_gates`` requires the prohibited / static / conflicting symbol sets
+    to be SUPPLIED, and no source for them exists in the repo yet — there is no
+    prohibited-symbol registry, and this function has no ``prohibited_symbols`` /
+    ``conflicting_symbols`` parameter to thread one through. Until they are wired,
+    ``not_prohibited_or_static`` and ``no_conflicting_active_proposal`` report
+    "list not supplied — cannot certify symbol" and the candidate stays a
+    pending-human proposal.
+
+    That is deliberate. Before the audit these gates COERCED an unsupplied list to
+    ``set()`` and therefore passed every candidate, so they appeared in the audit
+    trace while providing no protection. Refusing loudly is strictly better than
+    admitting silently. To make this lane live: give each list a real source, add the
+    two parameters here, and pass them through — do NOT restore the empty-set default,
+    which would reintroduce exactly the defect that was fixed.
+
+    Strategy candidates are unaffected; their gates were already fail-closed."""
     import os
     from pathlib import Path
     try:
@@ -1179,7 +1269,14 @@ def run_stage(*, root: str, now: str, sim_gov_config: dict, review_result: dict,
             source_artifact_hash=src_hash, env=env, kill_file_exists=kill_file.exists(),
             watchlist=watchlist, valid_strategy_ids=set(),
             approver=approver, provider=provider, model=model,
-            static_symbols=static_symbols, write_files=write_files)
+            static_symbols=static_symbols,
+            # The wiring point. Production (daily_governance_run) passes neither, so
+            # watchlist candidates stay fail-closed — see this function's docstring.
+            # These exist so a real source can be threaded through without
+            # reintroducing an empty-set default.
+            prohibited_symbols=prohibited_symbols,
+            conflicting_symbols=conflicting_symbols,
+            write_files=write_files)
         return {"ok": True, **res}
     except Exception as exc:  # non-blocking: never sink the pipeline
         return {"ok": False, "error": str(exc), "applied_count": 0}

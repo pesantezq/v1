@@ -121,3 +121,82 @@ def test_rollback_conflict_when_state_changed_since_apply(wl):
     # Current state preserved (still inactive from the human change) — NOT overwritten.
     assert wl.get_symbol("NVDA")["is_active"] == 0
     assert rb.get("conflicting_fields")
+
+
+# ---------------------------------------------------------------------------
+# Unsupplied safety lists must FAIL CLOSED (audit finding 2026-08-03).
+#
+# `not_prohibited_or_static` and `no_conflicting_active_proposal` were
+# unconditional passes in the production path: run_stage accepts only
+# static_symbols (prohibited/conflicting are not even parameters), and the live
+# caller daily_governance_run.py:294 passes NONE of the three — so all three
+# defaulted to set() and both gates returned True for every candidate. Proven with
+# symbol="ENRON". A gate that cannot fail is not a gate.
+#
+# An absent list now means "cannot certify this symbol", not "nothing is
+# prohibited". Distinguishing None (not supplied) from set() (supplied, empty) is
+# the whole mechanism, so both are pinned here.
+# ---------------------------------------------------------------------------
+def _gate(gates, name):
+    for g in gates:
+        if g.gate_name == name:
+            return g
+    raise AssertionError(f"no gate named {name}")
+
+
+_CFG = {"min_confidence": 0.85, "watchlist_daily_cap": 2, "max_active_awaiting_veto": 5}
+
+
+def _gctx(**over):
+    base = {"active_count": 0, "max_symbols": 5, "applied_today": 0,
+            "active_awaiting_veto": 0,
+            "prohibited": set(), "static": set(), "conflicting_symbols": set()}
+    base.update(over)
+    return base
+
+
+def _gcand(symbol="AAPL"):
+    return {"symbol": symbol, "confidence": 0.99, "proposal_type": "watchlist_add",
+            "target_lane": "simulation", "feeds_decision_engine": False}
+
+
+def test_absent_prohibited_list_fails_the_gate():
+    g = _gate(AA.run_watchlist_gates(_gcand(), _CFG, _gctx(prohibited=None)),
+              "not_prohibited_or_static")
+    assert g.passed is False
+    assert "not supplied" in g.reason
+
+
+def test_absent_static_list_fails_the_gate():
+    g = _gate(AA.run_watchlist_gates(_gcand(), _CFG, _gctx(static=None)),
+              "not_prohibited_or_static")
+    assert g.passed is False
+
+
+def test_missing_key_entirely_fails_the_gate():
+    """The live path omits these keys rather than passing None."""
+    ctx = _gctx()
+    del ctx["prohibited"]
+    g = _gate(AA.run_watchlist_gates(_gcand(), _CFG, ctx), "not_prohibited_or_static")
+    assert g.passed is False
+
+
+def test_absent_conflicting_list_fails_its_gate():
+    g = _gate(AA.run_watchlist_gates(_gcand(), _CFG, _gctx(conflicting_symbols=None)),
+              "no_conflicting_active_proposal")
+    assert g.passed is False
+    assert "not supplied" in g.reason
+
+
+def test_supplied_empty_lists_still_admit_a_clean_symbol():
+    """set() means 'checked, nothing prohibited' — that must remain a PASS."""
+    gates = AA.run_watchlist_gates(_gcand(), _CFG, _gctx())
+    assert _gate(gates, "not_prohibited_or_static").passed is True
+    assert _gate(gates, "no_conflicting_active_proposal").passed is True
+
+
+def test_supplied_lists_still_reject_a_listed_symbol():
+    gates = AA.run_watchlist_gates(_gcand("ENRON"), _CFG, _gctx(prohibited={"ENRON"}))
+    assert _gate(gates, "not_prohibited_or_static").passed is False
+    gates = AA.run_watchlist_gates(_gcand("ENRON"), _CFG, _gctx(conflicting_symbols={"ENRON"}))
+    assert _gate(gates, "no_conflicting_active_proposal").passed is False

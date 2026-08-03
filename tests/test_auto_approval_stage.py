@@ -44,15 +44,34 @@ def test_stage_inert_when_disabled(tmp_path):
     assert AA.load_events(base_dir=str(tmp_path / "outputs")) == []
 
 
-def test_stage_applies_when_enabled(tmp_path):
+def test_stage_refuses_watchlist_while_safety_lists_are_unwired(tmp_path):
+    """The production contract since the 2026-08-03 audit.
+
+    run_stage has no prohibited_symbols / conflicting_symbols parameter and no source
+    for them exists yet, so run_watchlist_gates fails those gates closed and the
+    candidate stays a pending-human proposal. Previously the unsupplied lists were
+    coerced to set(), so both gates passed for EVERY candidate — they were in the
+    audit trace while providing no protection (verified with symbol="ENRON").
+
+    When the lists are given a real source, this test should flip back to asserting
+    applied_count == 1. It must NOT be "fixed" by restoring an empty-set default.
+    """
+    base = str(tmp_path / "outputs")
     res = AA.run_stage(
         root=str(tmp_path), now=NOW,
         sim_gov_config=_sim_cfg(enabled=True, watchlist_enabled=True),
         review_result=_review(), candidates_by_id=_cbi(),
-        base_dir=str(tmp_path / "outputs"), env={}, approver=lambda p: APPROVE)
-    assert res["ok"] is True
-    assert res["applied_count"] == 1
-    assert AA.EVENT_APPLIED in [e["kind"] for e in AA.load_events(base_dir=str(tmp_path / "outputs"))]
+        base_dir=base, env={}, approver=lambda p: APPROVE)
+    assert res["ok"] is True                      # stage still runs, non-blocking
+    assert res["applied_count"] == 0              # ...but nothing is applied
+    assert res["rejected_count"] >= 1
+    assert res["pending_fallback_count"] >= 1     # routed to the human path instead
+    kinds = [e["kind"] for e in AA.load_events(base_dir=base)]
+    assert AA.EVENT_APPLIED not in kinds
+    # the refusal names itself rather than looking like "nothing to do"
+    traces = [g.get("reason", "") for e in AA.load_events(base_dir=base)
+              for g in (e.get("gate_trace") or [])]
+    assert any("not supplied" in r for r in traces), traces
 
 
 def test_stage_never_raises_on_bad_input(tmp_path):
