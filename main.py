@@ -85,6 +85,7 @@ from guardrails import run_guardrail_checks
 from degraded_mode import (
     DEFAULT_STALE_DAYS,
     MIN_TRUSTED_DATASET_SIZE,
+    assess_factor_liveness,
     assess_ranking_quality,
     assess_scanner_dataset_sufficiency,
     assess_screening_sufficiency,
@@ -880,6 +881,10 @@ def run_portfolio_update(
         # it is read back from the watchlist's persisted build metadata instead.
         _scanner_screening: dict | None = None
         _scanner_constituents: dict | None = None
+        _scanner_liveness: dict | None = None
+        # The market-cap-eligible set, carried so factor liveness uses the same
+        # denominator as screening sufficiency rather than re-deriving one.
+        _scanner_eligible: list | None = None
 
         # Tracks FMP + fallback state for the run-summary artifact.
         _scanner_meta: dict = {
@@ -970,6 +975,7 @@ def run_portfolio_update(
                                 _v3_max, len(_qualifying) - _v3_max, len(_qualifying),
                             )
                         bulk_metrics = fmp.get_fundamentals_v3(_syms_for_metrics)
+                        _scanner_eligible = list(_qualifying)
                         _scanner_screening = assess_screening_sufficiency(
                             eligible_symbols=_qualifying,
                             requested_symbols=_syms_for_metrics,
@@ -1042,6 +1048,7 @@ def run_portfolio_update(
                                 )
                             _syms_for_metrics = _qualifying[:_v3_max]
                             bulk_metrics = fmp.get_fundamentals_v3(_syms_for_metrics)
+                            _scanner_eligible = list(_qualifying)
                             _scanner_screening = assess_screening_sufficiency(
                                 eligible_symbols=_qualifying,
                                 requested_symbols=_syms_for_metrics,
@@ -1060,6 +1067,7 @@ def run_portfolio_update(
                             bulk_metrics = fmp.get_fundamentals_v3(top100_symbols)
                         # A weekly re-filter screens the CACHED set, so the
                         # eligible universe here is the cached watchlist itself.
+                        _scanner_eligible = list(top100_symbols)
                         _scanner_screening = assess_screening_sufficiency(
                             eligible_symbols=top100_symbols,
                             requested_symbols=top100_symbols,
@@ -1436,11 +1444,30 @@ def run_portfolio_update(
             # visible if it returns). Never feeds score, rank, or allocation.
             _scanner_ranking = assess_ranking_quality(scanner_candidates)
             _scanner_meta["ranking_quality"] = _scanner_ranking
+            # Factor/filter liveness from the EXACT inputs handed to the scanner
+            # (not reconstructed from candidate rows, whose missing values have
+            # already been coerced to 0 by _build_row). Observability only.
+            try:
+                _scanner_liveness = assess_factor_liveness(
+                    eligible_symbols=_scanner_eligible or [],
+                    metrics_by_symbol={
+                        m.get('symbol'): m for m in (bulk_metrics or [])
+                        if isinstance(m, dict) and m.get('symbol')},
+                    quotes_by_symbol=batch_quotes or {},
+                    candidates=scanner_candidates,
+                    trend_filter_enabled=bool(config.scanner.get('trend_filter_200dma', True)),
+                    min_rev_growth=float(config.scanner.get('min_rev_growth', 0.15)),
+                )
+            except Exception as _fl_err:
+                logger.warning("SCANNER: factor-liveness assessment failed: %s", _fl_err)
+                _scanner_liveness = None
+            _scanner_meta["factor_liveness"] = _scanner_liveness
             result['scanner']['safe_mode'] = _scanner_safe_mode
             result['scanner']['safe_mode_reasons'] = list(_scanner_safe_mode_reasons)
             result['scanner']['constituent_resolution'] = _scanner_constituents
             result['scanner']['screening_sufficiency'] = _scanner_screening
             result['scanner']['ranking_quality'] = _scanner_ranking
+            result['scanner']['factor_liveness'] = _scanner_liveness
             result['scanner']['meta'] = _scanner_meta
 
         else:
@@ -1863,6 +1890,7 @@ def run_portfolio_update(
                     constituent_resolution=_scanner_meta.get('constituent_resolution'),
                     screening_sufficiency=_scanner_meta.get('screening_sufficiency'),
                     ranking_quality=_scanner_meta.get('ranking_quality'),
+                    factor_liveness=_scanner_meta.get('factor_liveness'),
                     scraped_intel_stats=_si_stats,
                     market_regime=(_ws_result.get("market_regime") if isinstance(_ws_result, dict) else None),
                     market_coverage=result.get("market_coverage"),

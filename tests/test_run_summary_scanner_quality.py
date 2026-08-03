@@ -131,3 +131,41 @@ def test_ranking_quality_is_published_when_supplied(tmp_path):
 
 def test_ranking_quality_absent_is_none_not_a_healthy_default(tmp_path):
     assert _build(tmp_path)["scanner"]["ranking_quality"] is None
+
+
+_LIVENESS = {
+    "observe_only": True, "status": "degraded",
+    "factors": {"pe": {"input_coverage": 0.0, "score_nonzero_count": 0,
+                       "score_variance": 0.0, "status": "inert"}},
+    "filters": {"pe_bubble_guard": {"evaluable": 0, "rejections": 0, "status": "inert"}},
+    "inert_components": ["pe", "pe_bubble_guard"], "suppresses_sleeve": False,
+    "reasons": ["inert:pe,pe_bubble_guard"],
+}
+
+
+def test_factor_liveness_is_published_as_its_own_dimension(tmp_path):
+    s = _build(tmp_path, factor_liveness=_LIVENESS)["scanner"]
+    assert s["factor_liveness"]["status"] == "degraded"
+    assert s["factor_liveness"]["factors"]["pe"]["status"] == "inert"
+
+
+def test_factor_liveness_absent_is_none_not_healthy(tmp_path):
+    assert _build(tmp_path)["scanner"]["factor_liveness"] is None
+
+
+def test_screening_healthy_and_factors_degraded_coexist(tmp_path):
+    """The exact live shape: 99.6% primary coverage AND an inert 15-point factor.
+    These must remain separately readable — collapsing them would reproduce the
+    misreading this dimension exists to prevent."""
+    s = _build(tmp_path, screening_sufficiency=_SCREENING,
+               factor_liveness=_LIVENESS)["scanner"]
+    assert s["screening_sufficiency"]["status"] == "healthy"
+    assert s["factor_liveness"]["status"] == "degraded"
+    assert s["factor_liveness"]["suppresses_sleeve"] is False
+
+
+def test_factor_liveness_persists_to_the_artifact(tmp_path):
+    import json as _j
+    _build(tmp_path, factor_liveness=_LIVENESS)
+    w = _j.loads((tmp_path / "scraped_intel_run_summary.json").read_text())
+    assert w["scanner"]["factor_liveness"]["inert_components"] == ["pe", "pe_bubble_guard"]
