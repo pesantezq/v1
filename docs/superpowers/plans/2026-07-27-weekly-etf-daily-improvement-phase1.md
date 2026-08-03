@@ -8,6 +8,27 @@
 
 **Tech Stack:** Python 3.11 (`zoneinfo`), pytest, bash (`run_daily_safe.sh`, `flock`). Spec: `docs/superpowers/specs/2026-07-27-weekly-etf-daily-improvement-design.md` (`e4284893`).
 
+> **IMPLEMENTATION STATUS — NOT IMPLEMENTED (annotated 2026-08-03, doc-audit).**
+> This is a historical plan document; it records the intent as of 2026-07-27 and is
+> preserved unchanged below. As of 2026-08-03 **none of it has been executed**:
+> 0 of its 30 steps are checked, none of the three proposed modules exist under any
+> name, `run.py` has no `--daily-observe` mode, `WEEKLY_ETF_BUNDLES_DAILY_ENABLED`
+> appears nowhere in the repo, `scripts/run_weekly_etf_daily.sh` does not exist,
+> and no `tests/test_weekly_etf_daily_*.py` / `tests/test_weekly_etf_trading_session.py`
+> exists (the only weekly-ETF tests are `tests/test_weekly_etf_bundles_phase1..8.py`
+> + `..._review_fixes.py`, all from the pre-plan Phase 1–8 build). The
+> `outputs/weekly_etf_bundles/daily/` subtree was never created.
+>
+> Per-file status is annotated inline at each `Create:` line. The three proposed
+> files below are dead references *because the plan was never run* — they are not
+> stale renames of shipped code. One related capability did land elsewhere
+> afterwards (see Task 1's annotation): the repo-level
+> `portfolio_automation/market_session.py` (Reliability Program D2, `2de39107`,
+> 2026-07-28, documented in `docs/market_session.md`) answers the
+> latest-completed-NYSE-session question at a *different layer with a different
+> signature*. A future implementer of this plan should evaluate reusing it instead
+> of building a bundle-local resolver.
+
 ## Global Constraints
 
 - Observe-only; `feeds_decision_engine=false` throughout; no `decision_engine.py`, allocation, or score-semantics changes.
@@ -23,8 +44,8 @@
 ### Task 1: Trading-session resolver (timezone guardrail — spec §6)
 
 **Files:**
-- Create: `portfolio_automation/weekly_etf_bundles/trading_session.py`
-- Test: `tests/test_weekly_etf_trading_session.py`
+- Create: `portfolio_automation/weekly_etf_bundles/trading_session.py` — **NOT IMPLEMENTED (2026-08-03).** No such file, and no equivalent under another name inside `weekly_etf_bundles/`. Closest as-built capability, built the next day for a *different* program: `portfolio_automation/market_session.py` (`latest_completed_session(ts: datetime) -> date`). It is **not a rename of this file** — it takes no `panel_dates` argument, returns a calendar `date` rather than a panel-date string, and deliberately avoids `zoneinfo` (fixed conservative 21:00 UTC close boundary) instead of using canonical `America/New_York`. Reusing it here would require reconciling those two differences.
+- Test: `tests/test_weekly_etf_trading_session.py` — **NOT IMPLEMENTED.** (`tests/test_market_session.py` covers the repo-level helper instead.)
 
 **Interfaces:**
 - Produces: `latest_completed_session(now_utc: datetime, panel_dates: list[str], *, close_hour_et: int = 16) -> str | None` — returns the YYYY-MM-DD of the most recent panel date whose ET regular-session close (16:00 ET) is at or before `now_utc`. Returns the last panel date strictly before "today-ET" when today's session has not yet closed (premarket/intraday), and `None` if `panel_dates` is empty.
@@ -205,8 +226,8 @@ git commit -m "feat(weekly-etf): resolve default as-of via latest-completed ET s
 
 **Files:**
 - Modify: `portfolio_automation/weekly_etf_bundles/run.py` (add `--daily-observe` arg; mode → `do_freeze=False`, `do_mature=True`, `do_evaluate=True`, `do_strat=True`; route writes to the daily subtree)
-- Create: `portfolio_automation/weekly_etf_bundles/daily_paths.py` (the write-allowlist + daily subtree path helper)
-- Test: `tests/test_weekly_etf_daily_lane.py`
+- Create: `portfolio_automation/weekly_etf_bundles/daily_paths.py` (the write-allowlist + daily subtree path helper) — **NOT IMPLEMENTED (2026-08-03).** No such file and no equivalent under another name; `daily_write_path` / `is_allowed` exist nowhere in the repo, and `run.py` has no `--daily-observe` argument. The `outputs/weekly_etf_bundles/daily/` subtree does not exist.
+- Test: `tests/test_weekly_etf_daily_lane.py` — **NOT IMPLEMENTED.**
 
 **Interfaces:**
 - Consumes: existing `mature_all_outcomes`, `build_scorecard`, `build_calibration`, `build_attribution`, `build_health`, `SL.run_strat_lab_comparison`.
@@ -441,8 +462,8 @@ git commit -m "feat(weekly-etf): double-gated daily aux stage with weekly-lock p
 
 **Files:**
 - Modify: `.claude/commands/daily-tool-analysis.md` (artifacts read + a body-grammar line + dispatch note)
-- Create: `portfolio_automation/weekly_etf_bundles/daily_health.py` (`assess_daily_lane(root) -> dict` — the deterministic signal the skill reads)
-- Test: `tests/test_weekly_etf_daily_health.py`
+- Create: `portfolio_automation/weekly_etf_bundles/daily_health.py` (`assess_daily_lane(root) -> dict` — the deterministic signal the skill reads) — **NOT IMPLEMENTED (2026-08-03).** No such file; `assess_daily_lane` exists nowhere in the repo. Note this is **not** a rename of the existing `portfolio_automation/weekly_etf_bundles/health.py`: that module predates this plan (added 2026-07-25 in weekly-ETF Phase 7, `5b522470`), covers the **weekly** lane, and is consumed *by* this plan as an existing input (`build_health`, cited in Task 3's "Consumes" list). `daily_health.py` was always a proposed new sibling of it.
+- Test: `tests/test_weekly_etf_daily_health.py` — **NOT IMPLEMENTED.**
 
 **Interfaces:**
 - Consumes: `outputs/weekly_etf_bundles/daily/health.json`, and the invariant fields in `daily/*.json`.
