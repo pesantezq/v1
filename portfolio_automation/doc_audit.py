@@ -279,23 +279,91 @@ def _finding_dict(f: Finding) -> dict:
     }
 
 
+def _module_for_doc(root: str, doc: str) -> str | None:
+    """Locate the source module a `docs/<stem>.md` coverage gap refers to.
+
+    Returns None when no such module exists any more — a gap for a deleted
+    module is stale, not unresolved, and must not be carried forward forever.
+    """
+    stem = Path(doc).stem
+    for d in _SOURCE_DIRS:
+        for hit in _glob.glob(f"{Path(root) / d}/**/{stem}.py", recursive=True):
+            return str(Path(hit).relative_to(Path(root)))
+    return None
+
+
+def carry_forward_coverage_gaps(root: str, open_gaps: list[str],
+                                existing_doc_paths: set[str],
+                                documented_modules: set[str]) -> list[Finding]:
+    """Re-raise still-unresolved coverage gaps carried over from prior runs.
+
+    `find_coverage_gaps` only inspects the CURRENT git range, so once
+    `last_audited_sha` advances past the commit that introduced an undocumented
+    module, the module falls out of every later range and its gap silently stops
+    being reported — the audit's own state advance clears its own RED. Observed
+    live on 2026-08-03 for `docs/market_session.md`, which had been reported that
+    same morning and was never fixed.
+
+    A carried gap is dropped only on genuine resolution: the doc now exists, the
+    module is now cited in a grouped/subsystem doc, or the module is gone.
+    """
+    findings: list[Finding] = []
+    for doc in open_gaps:
+        if doc in existing_doc_paths:
+            continue
+        module = _module_for_doc(root, doc)
+        if module is None:
+            continue
+        if module in documented_modules or Path(module).name in documented_modules:
+            continue
+        findings.append(Finding(
+            dimension="coverage", severity="med", doc=doc,
+            detail=f"module {module} has no documentation at {doc} "
+                   f"(carried forward — unresolved from an earlier audit)",
+            auto_fixable=False,
+        ))
+    return findings
+
+
 def run_doc_audit(root: str, last_audited_sha: str | None,
-                  changed_files: list[str], existing_doc_paths: set[str]) -> dict:
+                  changed_files: list[str], existing_doc_paths: set[str],
+                  open_coverage_gaps: list[str] | None = None) -> dict:
     """Assemble the full observe-only status dict. Pure over its inputs (the git
-    range is resolved by the caller and injected as changed_files)."""
+    range is resolved by the caller and injected as changed_files).
+
+    `open_coverage_gaps` is the set of unresolved coverage gaps from previous
+    runs, carried forward so a gap cannot vanish just because the git range
+    moved past it. Pass a list explicitly (tests do) or leave it None to read
+    the committed doc-audit state.
+    """
+    if open_coverage_gaps is None:
+        try:
+            from portfolio_automation.doc_audit_state import load_state
+            open_coverage_gaps = list(load_state(root).get("open_coverage_gaps") or [])
+        except Exception:
+            open_coverage_gaps = []
     findings: list[Finding] = []
     try:
         findings += find_drift(root)
         findings += find_dead_refs(root)
         findings += find_cross_doc_inconsistency(root)
-        findings += find_coverage_gaps(
-            changed_files, existing_doc_paths, collect_documented_modules(root))
+        documented = collect_documented_modules(root)
+        findings += find_coverage_gaps(changed_files, existing_doc_paths, documented)
+        seen_gap_docs = {f.doc for f in findings if f.dimension == "coverage"}
+        findings += [
+            f for f in carry_forward_coverage_gaps(
+                root, open_coverage_gaps, existing_doc_paths, documented)
+            if f.doc not in seen_gap_docs
+        ]
     except Exception as exc:  # never abort the pipeline
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "observe_only": True, "schema_version": "1", "source": "doc_audit",
             "overall_status": "error", "error": str(exc), "findings": [],
             "auto_fix_candidates": [], "coverage_gaps": [],
+            # Preserve the carried set on error — an audit that crashed must not
+            # be read as "those gaps are resolved now".
+            "open_coverage_gaps": sorted(set(open_coverage_gaps or [])),
             "disclaimer": _DISCLAIMER,
         }
 
@@ -318,6 +386,9 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
         "findings": [_finding_dict(f) for f in findings],
         "auto_fix_candidates": [_finding_dict(f) for f in auto],
         "coverage_gaps": [_finding_dict(f) for f in gaps],
+        # Persisted by write_doc_audit_status so the next run re-raises anything
+        # still unresolved, even after the git range moves past it.
+        "open_coverage_gaps": sorted({f.doc for f in gaps}),
         "auto_fixes_applied": [],
         "disclaimer": _DISCLAIMER,
     }
@@ -370,6 +441,17 @@ def write_doc_audit_status(result: dict, root: str) -> str:
     json_path = safe_write_json(
         OutputNamespace.LATEST, "doc_audit_status.json", result, base_dir=base_dir
     )
+
+    # Persist unresolved coverage gaps so the next run re-raises them even after
+    # last_audited_sha advances past the commit that introduced them.
+    try:
+        from portfolio_automation.doc_audit_state import load_state, save_state
+
+        state = load_state(root)
+        state["open_coverage_gaps"] = list(result.get("open_coverage_gaps") or [])
+        save_state(root, state)
+    except Exception:
+        pass  # observe-only: never let state bookkeeping break the audit
 
     md_lines = [
         f"# Doc Audit — {result['generated_at'][:10]}",

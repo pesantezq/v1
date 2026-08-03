@@ -7,7 +7,11 @@ from pathlib import Path
 import yaml
 
 _DEFAULTS = {"last_audited_sha": None, "last_run_at": None,
-             "apply_enabled": True, "fixes_last_run": 0}
+             "apply_enabled": True, "fixes_last_run": 0,
+             # Coverage gaps still unresolved from earlier audits. Carried across
+             # runs because find_coverage_gaps only sees the current git range,
+             # so an advancing last_audited_sha would otherwise erase them.
+             "open_coverage_gaps": []}
 
 
 def state_path(root: str) -> str:

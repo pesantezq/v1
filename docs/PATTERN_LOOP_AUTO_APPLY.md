@@ -25,6 +25,7 @@ output). Everything else in the Pattern-Loop remains observe-only.
 | G1 | kill-switch absent | `kill_switched` |
 | G2 | `oos_window.folds_possible` is true (OOS matured) | `oos_immature` |
 | G3 | ≥1 proposal with non-zero `proposed_delta` and an actionable status | `no_actionable_proposal` |
+| G3b | ≥1 proposal whose `oos_hit_rate_ci95` lies entirely **above** the 50% no-skill point | `ci_straddles_no_skill` |
 | G4 | this-month drift + Δ ≤ `max_monthly_drift` | `drift_capped` |
 | G5 | pre-apply score-invariance gate == GREEN | `score_gate_blocked` |
 | G6 | AI budget allows the approver call (real LLM path only) | `budget_exceeded` |
@@ -34,6 +35,32 @@ output). Everything else in the Pattern-Loop remains observe-only.
 | ✓ | all clear | `applied` |
 
 Any uncertainty (unparseable verdict, LLM unreachable, exception) → veto / no-op.
+
+### G3b — why the deterministic CI screen exists (added 2026-08-03)
+
+G3b is a **deterministic** evidence gate, and it is deliberately ordered before the
+GPT approver (G7) so an LLM can never be the sole defence against applying a weight
+change whose out-of-sample edge is indistinguishable from no skill.
+
+It was added because that was exactly the state the system had reached. `_build_prompt`
+*instructs* the approver to "veto if … the confidence interval straddles 50%", and until
+2026-08-03 that sentence was the **only** occurrence of the criterion anywhere in the
+repo — nothing computed it. The deterministic layer bounded MAGNITUDE (`max_abs_delta`,
+`max_monthly_drift`) while the only screen on EVIDENCE was the model. On 2026-08-01 the
+approver vetoed both live proposals with the reason *"Confidence interval straddles 50%"*
+while both CIs were strictly above 50 (`STRONG_MOVE_UP` `[52.70, 56.23]`, `VOLUME_SPIKE`
+`[56.92, 69.71]`) — a prompt echo, not a reading of the data. The outcome was safe only
+because `_parse_verdict` fails closed; a model, prompt, or temperature change flipping
+that verdict to "approve" would have been equally unfounded.
+
+Semantics: fails closed on a missing, malformed, or non-numeric CI; a lower bound exactly
+at `50.0` is rejected (that is the no-skill point itself, not evidence of an edge). In a
+mixed batch the screen is per-proposal — evidenced proposals proceed, unevidenced ones are
+dropped and reported under `rejected` in the audit entry.
+
+Note both current proposals **pass** G3b, so it is not what is holding them: the operator
+kill-switch (`config/auto_apply.DISABLED`, set 2026-08-03) is. Tracked as quant-watch entry
+`manual:auto_apply_gpt_veto_reason_is_prompt_echo`.
 
 ## Kill-switch (immediate hard-disable, regardless of `enabled`)
 

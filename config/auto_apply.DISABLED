@@ -1,0 +1,22 @@
+Disabled 2026-08-03 by operator decision (run-all-daily / pattern-loop-analysis).
+
+Reason: the OOS window matured 2026-08-01 and the deterministic gates now PASS
+both live weight proposals, so the only thing preventing a protected
+signal_registry.yaml default_weight mutation was the GPT approver's veto — and
+that veto's stated reason is a verbatim echo of the prompt's own veto-criterion
+sentence at backtesting/auto_apply.py:_build_prompt, and is FALSE on the data
+supplied:
+
+  STRONG_MOVE_UP  oos_hit_rate 54.47%  n=3042  ci95 [52.70, 56.23]
+  VOLUME_SPIKE    oos_hit_rate 63.55%  n=214   ci95 [56.92, 69.71]
+
+Both CIs are strictly ABOVE 50; neither straddles it. The phrase occurs nowhere
+else in the repo, i.e. there was no deterministic CI-vs-no-skill screen at all.
+
+Tracked as quant-watch ledger entry:
+  manual:auto_apply_gpt_veto_reason_is_prompt_echo
+
+Re-enable by deleting this file, but only after reviewing the deterministic CI
+gate added alongside it (_ci_excludes_no_skill). Note that both proposals above
+PASS that gate, so re-enabling makes them applyable on the next monthly
+recompute — that should be a deliberate decision, not a side effect.

@@ -16,10 +16,12 @@ before/after (this driver proposes, never applies — Step 5 stays inert).
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 from backtesting.fmp_backtester import FMPBacktester
 from backtesting.poc_simulation_harness import SyntheticPriceProvider
@@ -203,7 +205,20 @@ if __name__ == "__main__":
 
 class TestRunLoopOosWindow(unittest.TestCase):
     def test_run_loop_summary_includes_oos_window(self):
-        with tempfile.TemporaryDirectory() as td:
+        # Isolate LIVE operator state. This test asserts the G0 "disabled" path,
+        # so it must not depend on the operator's real config.json
+        # (backtesting.auto_apply.enabled flipped true on 2026-07-28, turning the
+        # assertion into 'oos_immature') nor on a real
+        # config/auto_apply.DISABLED file (which turns it into 'kill_switched').
+        # Both are operator decisions, not regressions in run_loop.
+        import backtesting.run_loop as rl
+        from backtesting import auto_apply as aa
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(rl, "_auto_apply_enabled", return_value=False), \
+                mock.patch.object(aa, "_KILL_SWITCH_FILE",
+                                  str(Path(td) / "no-such-kill-switch")), \
+                mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(aa._KILL_SWITCH_ENV, None)
             art = Path(td) / "watchlist_signals.json"
             _results_artifact(art, basis=["strong_move"], n=40)
             out = run_loop(signals_source=str(art), history_dir=None, live=False,

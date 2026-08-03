@@ -247,6 +247,16 @@ def compute_portfolio_growth(
 # Compute: Top Movers (held positions × 1-day price change)
 # ---------------------------------------------------------------------------
 
+def _positive_shares(holding: Any) -> bool:
+    """True when a holding row represents an actually-held position (shares > 0)."""
+    if not isinstance(holding, dict):
+        return False
+    try:
+        return float(holding.get("shares")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def compute_top_movers(
     holdings: list[dict] | None,
     watchlist_signals: dict | list | None,
@@ -268,6 +278,13 @@ def compute_top_movers(
         How many winners and how many losers to surface.
     """
     if not isinstance(holdings, list) or not holdings:
+        return {"available": False, "reason": "no_holdings"}
+
+    # A 0-share row is a target-weight placeholder, not a held position. Keeping
+    # them would inflate the "Coverage n/N held positions" denominator and let a
+    # symbol the operator does not own render as a mover.
+    holdings = [h for h in holdings if _positive_shares(h)]
+    if not holdings:
         return {"available": False, "reason": "no_holdings"}
 
     # Normalize signal list shape. The watchlist scanner emits the rows under
@@ -368,6 +385,22 @@ def compute_top_movers(
 # Compute: Decision Hit Rate (decision_outcomes.jsonl + calibration)
 # ---------------------------------------------------------------------------
 
+def _decimal_return_to_pct(raw: Any) -> float | None:
+    """Convert a ``decision_outcomes.jsonl`` ``return_pct`` to display percent.
+
+    That field is a DECIMAL FRACTION (0.09014334 == +9.01%), a convention
+    declared by ``memo_coherence.json:hit_rate.return_scale``. Scale BEFORE
+    rounding — rounding first collapses 0.09014 to 0.09 and renders "9.00%",
+    silently dropping the hundredths.
+    """
+    if raw is None:
+        return None
+    try:
+        return round(float(raw) * 100.0, 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def compute_decision_hit_rate(
     decision_outcomes: list[dict] | None,
     calibration: dict | None,
@@ -454,7 +487,7 @@ def compute_decision_hit_rate(
             {
                 "symbol": str(r.get("symbol") or ""),
                 "decision": str(r.get("decision") or ""),
-                "return_pct": (round(float(r["return_pct"]), 2) if r.get("return_pct") is not None else None),
+                "return_pct": _decimal_return_to_pct(r.get("return_pct")),
             }
             for r in correct_calls[:top_n]
         ],
@@ -462,7 +495,7 @@ def compute_decision_hit_rate(
             {
                 "symbol": str(r.get("symbol") or ""),
                 "decision": str(r.get("decision") or ""),
-                "return_pct": (round(float(r["return_pct"]), 2) if r.get("return_pct") is not None else None),
+                "return_pct": _decimal_return_to_pct(r.get("return_pct")),
             }
             for r in missed_calls[:top_n]
         ],
@@ -952,6 +985,40 @@ class EnrichmentSources:
     news_evidence: dict
 
 
+def _resolve_holdings(root: Path, config_holdings: list[dict]) -> list[dict]:
+    """Return the holdings the memo should describe.
+
+    The memo must describe the SAME book the decision run used. When
+    ``decision_holdings_source.json`` reports ``broker``, config holdings are
+    stale by construction (they carry hand-maintained share counts and
+    target-weight placeholders, and omit broker-only positions), so prefer the
+    Schwab snapshot. Falls back to config whenever the decision run itself fell
+    back, or the snapshot is missing/empty/unreadable.
+    """
+    src = _safe_load_json(root / "outputs" / "latest" / "decision_holdings_source.json") or {}
+    if str(src.get("holdings_source") or "").lower() != "broker":
+        return config_holdings
+
+    snapshot = _safe_load_json(root / "outputs" / "latest" / "schwab_positions.json") or {}
+    positions = snapshot.get("positions")
+    if not isinstance(positions, list):
+        return config_holdings
+
+    broker: list[dict] = []
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        symbol = str(p.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        try:
+            shares = float(p.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        broker.append({"symbol": symbol, "shares": shares, "source": "broker"})
+    return broker or config_holdings
+
+
 def load_enrichment_data(
     repo_root: str | Path,
     *,
@@ -975,6 +1042,7 @@ def load_enrichment_data(
     portfolio = config.get("portfolio") if isinstance(config.get("portfolio"), dict) else {}
     holdings = portfolio.get("holdings") if isinstance(portfolio.get("holdings"), list) else []
     holdings = [h for h in holdings if isinstance(h, dict)]
+    holdings = _resolve_holdings(root, holdings)
 
     return EnrichmentSources(
         db_path=root / "data" / "portfolio.db",
