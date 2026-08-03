@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from portfolio_automation.sim_governance import approval_packet
 from portfolio_automation.sim_governance import auto_approval as AA
 
 logger = logging.getLogger("stockbot.sim_governance.governance_digest")
@@ -42,12 +43,98 @@ def _within_window(applied_at: str, now: str, hours: int) -> bool:
         return True
 
 
+def _age_days(created: Any, now: str) -> int | None:
+    """Whole days between ``created`` and ``now``, or None when undeterminable.
+
+    Returns None — never 0 — for a missing/malformed timestamp. A missing
+    created_at reading as "brand new" would hide the oldest item in the operator
+    decision queue, which is the one the reader most needs to see.
+    """
+    if not created:
+        return None
+    try:
+        c = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        n = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return (n - c).days
+
+
+def _assess_status(payload: dict, packet_health: dict | None) -> tuple[str, list[str]]:
+    """GREEN / AMBER / RED over BOTH authority tiers.
+
+    Mapping follows CLAUDE.md's sim-governance oversight contract: RED on a failed
+    application or an authority-gate breach (the two things that must never read
+    GREEN), AMBER on an active awaiting-veto item, a successful rollback, a
+    rollback conflict, or a production review still waiting on a human.
+
+    ``packet_health`` is folded in rather than recomputed. Note its
+    ``packet_missing_or_unreadable`` AMBER is preserved deliberately: if the
+    production queue cannot be read, we must not assert it is empty — that would
+    be a verdict derived from absent data.
+    """
+    red: list[str] = []
+    amber: list[str] = []
+
+    if (payload.get("circuit_breaker") or {}).get("engaged"):
+        red.append("circuit_breaker_engaged")
+    if payload.get("failed_applications"):
+        red.append(f"failed_applications:{len(payload['failed_applications'])}")
+    if payload.get("authority_rejections"):
+        red.append(f"authority_rejections:{len(payload['authority_rejections'])}")
+
+    if payload.get("within_veto_window"):
+        amber.append(f"awaiting_veto:{len(payload['within_veto_window'])}")
+    if payload.get("rollbacks"):
+        amber.append(f"rollbacks:{len(payload['rollbacks'])}")
+    if payload.get("rollback_conflicts"):
+        amber.append(f"rollback_conflicts:{len(payload['rollback_conflicts'])}")
+    if payload.get("pending_human_proposals"):
+        amber.append(f"production_pending:{len(payload['pending_human_proposals'])}")
+
+    if isinstance(packet_health, dict):
+        ph_status = str(packet_health.get("status") or "").upper()
+        ph_reasons = [str(r) for r in (packet_health.get("reasons") or [])]
+        if ph_status == "RED":
+            red.extend(ph_reasons or ["packet_health_red"])
+        elif ph_status == "AMBER":
+            amber.extend(ph_reasons or ["packet_health_amber"])
+
+    if red:
+        return "RED", red + amber
+    if amber:
+        return "AMBER", amber
+    return "GREEN", []
+
+
+def _headline(payload: dict) -> str:
+    """One-line rollup. Always states both tiers so neither can be invisible."""
+    counts = payload["counts_two_tier"]
+    prod = counts["production_pending"]
+    sim = counts["sim_changes"]
+    exceptions = (payload.get("authority_rejections") or []) + \
+                 (payload.get("failed_applications") or [])
+    exc = f"{len(exceptions)} authority exception{'s' if len(exceptions) != 1 else ''}" \
+        if exceptions else "no authority exceptions"
+    return (f"GOVERNANCE — {payload['governance_status']} · "
+            f"{prod} production approval{'s' if prod != 1 else ''} pending · "
+            f"{sim} simulation change{'s' if sim != 1 else ''} · {exc}")
+
+
 def build_governance_digest(*, summary: dict, events: list[dict], now: str,
                             veto_window_hours: int = 48,
                             pending_proposals: list[dict] | None = None,
+                            packet_health: dict | None = None,
                             gui_base_url: str = "",
                             approval_page_url: str | None = None) -> dict:
-    """Build the evening digest from the ledger + summary. Pure — no I/O."""
+    """Build the evening digest from the ledger + summary. Pure — no I/O.
+
+    Summarizes BOTH authority tiers. ``pending_proposals`` carries tier-b
+    production promotions still awaiting a human (source:
+    ``approval_packet.build_operator_packet``); ``packet_health`` carries
+    ``approval_packet.assess_packet_health``. Reporting only — this builder can
+    neither approve nor mutate governance state.
+    """
     events = events or []
     summary = summary or {}
     veto_base = (gui_base_url.rstrip("/") + "/dashboard/governance/veto?event_id=") if gui_base_url \
@@ -99,33 +186,92 @@ def build_governance_digest(*, summary: dict, events: list[dict], now: str,
         "circuit_breaker": summary.get("circuit_breaker") or {"engaged": False, "reason": None},
         "counters": summary.get("counters", {}),
     }
+
+    pending = payload["pending_human_proposals"]
+    ages = [a for a in (_age_days(p.get("created_at"), now) for p in pending
+                        if isinstance(p, dict)) if a is not None]
+    stale = len([r for r in ((packet_health or {}).get("reasons") or [])
+                 if str(r).startswith("stale_pending")])
+    payload["counts_two_tier"] = {
+        "production_pending": len(pending),
+        "sim_within_veto": len(within_window),
+        # "changes" the operator could still act on or needs to know happened.
+        "sim_changes": len(auto_applied) + len(payload["human_vetoes"]) +
+                       len(payload["rollbacks"]) + len(payload["rollback_conflicts"]),
+        "oldest_pending_age_days": max(ages) if ages else None,
+        "stale_pending": stale,
+    }
+    status, reasons = _assess_status(payload, packet_health)
+    payload["governance_status"] = status
+    payload["status_reasons"] = reasons
+    payload["packet_health"] = packet_health or {}
+    payload["headline"] = _headline(payload)
+
     return {"json": payload, "html": _render_html(payload), "text": _render_text(payload),
-            "subject_date": (now or "")[:10], "approval_page_url": payload["approval_page_url"]}
+            "subject_date": (now or "")[:10], "approval_page_url": payload["approval_page_url"],
+            "governance_status": status}
+
+
+def _production_lines(p: dict) -> list[str]:
+    """Tier-b block. Rendered identically (in substance) by text and HTML.
+
+    Always emitted when something is pending, and never omitted just because the
+    simulation lane was quiet — that omission was the audit's defect 3.
+    """
+    counts = p["counts_two_tier"]
+    n = counts["production_pending"]
+    if not n:
+        return []
+    out = [f"Pending human approvals (production): {n}"]
+    age = counts["oldest_pending_age_days"]
+    out.append(f"  Oldest pending: {age} day{'s' if age != 1 else ''}"
+               if age is not None else "  Oldest pending: unknown (no created_at)")
+    if counts["stale_pending"]:
+        out.append(f"  Stale beyond threshold: {counts['stale_pending']}")
+    for item in p["pending_human_proposals"][:10]:
+        if not isinstance(item, dict):
+            continue
+        out.append(f"  • {item.get('proposal_id') or '?'} "
+                   f"{item.get('proposal_type') or item.get('workflow') or ''} "
+                   f"{item.get('symbol') or ''}".rstrip())
+    return out
 
 
 def _render_text(p: dict) -> str:
-    lines = [f"Governance Digest — {p.get('generated_at', '')[:10]}",
-             "(Simulation-lane auto-approval. Production remains human-gated.)", ""]
+    lines = [p["headline"],
+             f"Governance Digest — {p.get('generated_at', '')[:10]}",
+             "(Simulation-lane auto-approval. Production remains human-gated: this "
+             "digest reports state and cannot approve.)", ""]
+    if p["status_reasons"]:
+        lines.append(f"Why: {', '.join(p['status_reasons'])}")
+        lines.append("")
+    prod = _production_lines(p)
+    if prod:
+        lines.extend(["PRODUCTION", *prod, ""])
     if p.get("approval_page_url"):
         lines.append(f"Review & approve today's packet → {p['approval_page_url']}")
         lines.append("")
     aa = p["auto_applied"]
-    if not aa and not p["human_vetoes"] and not p["rollbacks"] and not p["rollback_conflicts"]:
+    if (not aa and not p["human_vetoes"] and not p["rollbacks"]
+            and not p["rollback_conflicts"] and not prod):
         lines.append("No auto-approval activity in this period.")
-    else:
+    elif aa:
+        # Guarded on `aa` specifically: a production-only digest must not emit an
+        # empty "Auto-applied in simulation (0):" header.
         lines.append(f"Auto-applied in simulation ({len(aa)}):")
         for i in aa:
             lines.append(f"  • {i['target_id']} [{i['event_id']}] conf={i['confidence']} "
                          f"— {i['status_label']} — {i.get('gpt_reasoning') or ''}")
     for label, key in (("Human vetoes", "human_vetoes"), ("Rolled back", "rollbacks"),
                        ("Rollback conflicts", "rollback_conflicts"),
+                       ("GPT vetoed", "gpt_vetoed"),
                        ("Failed applications", "failed_applications"),
                        ("Rejected by authority gate", "authority_rejections")):
         if p[key]:
             lines.append(f"{label}: {len(p[key])}")
     cb = p["circuit_breaker"]
     if cb.get("engaged"):
-        lines.append(f"CIRCUIT BREAKER ENGAGED: {cb.get('reason')}")
+        lines.append(f"Circuit breaker ENGAGED: {cb.get('reason')}")
     return "\n".join(lines)
 
 
@@ -134,13 +280,25 @@ def _esc(v: Any) -> str:
 
 
 def _render_html(p: dict) -> str:
-    parts = [f"<h2>Governance Digest — {_esc(p.get('generated_at', '')[:10])}</h2>",
-             "<p><em>Simulation-lane auto-approval. Production remains human-gated.</em></p>"]
+    # Status is text, never colour alone — the rollup must survive a plain-text
+    # client, a screen reader, and monochrome printing.
+    parts = [f"<p style=\"font-weight:600;\">{_esc(p['headline'])}</p>",
+             f"<h2>Governance Digest — {_esc(p.get('generated_at', '')[:10])}</h2>",
+             "<p><em>Simulation-lane auto-approval. Production remains human-gated: "
+             "this digest reports state and cannot approve.</em></p>"]
+    if p["status_reasons"]:
+        parts.append(f"<p>Why: {_esc(', '.join(p['status_reasons']))}</p>")
+    prod = _production_lines(p)
+    if prod:
+        parts.append("<h3>Production</h3><ul>")
+        parts.extend(f"<li>{_esc(line.strip().lstrip('• '))}</li>" for line in prod)
+        parts.append("</ul>")
     if p.get("approval_page_url"):
         url = _esc(p["approval_page_url"])
         parts.append(f'<p><a href="{url}">Review &amp; approve today\'s packet →</a></p>')
     aa = p["auto_applied"]
-    if not aa and not p["human_vetoes"] and not p["rollbacks"] and not p["rollback_conflicts"]:
+    if (not aa and not p["human_vetoes"] and not p["rollbacks"]
+            and not p["rollback_conflicts"] and not prod):
         parts.append("<p>No auto-approval activity in this period.</p>")
     if aa:
         parts.append("<h3>Auto-applied in simulation</h3><ul>")
@@ -157,9 +315,12 @@ def _render_html(p: dict) -> str:
     if p["authority_rejections"]:
         parts.append(f"<h3>Rejected by authority gate ({len(p['authority_rejections'])})</h3>"
                      "<p>Routed to pending human review; not auto-applied.</p>")
+    # NB: pending_human_proposals is deliberately NOT in this loop — it now has a
+    # full Production block above, rendered in BOTH formats. It previously
+    # appeared here only, which made HTML and text disagree on a critical fact.
     for label, key in (("Human vetoes", "human_vetoes"), ("Rolled back", "rollbacks"),
-                       ("GPT vetoed", "gpt_vetoed"), ("Failed applications", "failed_applications"),
-                       ("Pending human proposals", "pending_human_proposals")):
+                       ("GPT vetoed", "gpt_vetoed"),
+                       ("Failed applications", "failed_applications")):
         if p[key]:
             parts.append(f"<p>{_esc(label)}: {len(p[key])}</p>")
     cb = p["circuit_breaker"]
@@ -215,10 +376,29 @@ def _default_transport(config, message) -> None:
             smtp.send_message(message, to_addrs=rcpt)
 
 
+def build_subject(digest: dict, *, prefix: str = "") -> str:
+    """Subject conveys the human action state, not just a date.
+
+    ``Governance — 6 Production Reviews · Health AMBER · as of 2026-08-03``.
+    The previous form (``Governance Digest — <date>``) gave the reader no way to
+    tell an empty steady state from ten waiting approvals without opening it.
+    """
+    payload = digest.get("json") or {}
+    counts = payload.get("counts_two_tier") or {}
+    n = counts.get("production_pending", 0)
+    status = digest.get("governance_status") or payload.get("governance_status") or "UNKNOWN"
+    bits = [f"{n} Production Review{'s' if n != 1 else ''}", f"Health {status}"]
+    date_str = digest.get("subject_date") or ""
+    if date_str:
+        bits.append(f"as of {date_str}")
+    subject = f"Governance — {' · '.join(bits)}"
+    return f"{prefix.strip()} {subject}".strip() if prefix.strip() else subject
+
+
 def _build_message(digest: dict, config):
     from email.message import EmailMessage
     msg = EmailMessage()
-    msg["Subject"] = f"Governance Digest — {digest.get('subject_date', '')}"
+    msg["Subject"] = build_subject(digest)
     msg["From"] = config.from_addr
     msg["To"] = ", ".join(config.to_addrs)
     msg.set_content(digest.get("text") or "(no digest content)")
@@ -317,9 +497,30 @@ def run_evening_digest(root: str = ".", now: str | None = None, *, env: dict | N
         base = ap_cfg.get("deep_link_base", "")
         if base:
             approval_url = f"{base.rstrip('/')}/dashboard/governance"
+        # Tier-b: production promotions still awaiting a human. The operator
+        # approval packet already consolidates both tiers and assesses its own
+        # health; until 2026-08-03 this digest never consulted it, so
+        # pending_human_proposals was ALWAYS empty in production and the email
+        # could report "no auto-approval activity" while N approvals waited.
+        # Read-only, and degraded rather than fatal — a packet we cannot read
+        # surfaces as AMBER, never as an implied empty queue.
+        pending_proposals: list[dict] = []
+        packet_health: dict | None = None
+        try:
+            packet = approval_packet.build_operator_packet(
+                base_dir, now, deep_link_base=base,
+                veto_window_hours=int(aa_cfg.get("veto_window_hours", 48)))
+            pending_proposals = list(packet.get("tier_production") or [])
+            packet_health = approval_packet.assess_packet_health(base_dir, now)
+        except Exception as exc:
+            logger.warning("governance_digest: approval packet unavailable: %s", exc)
+            packet_health = {"status": "AMBER",
+                             "reasons": [f"approval_packet_unavailable:{exc}"], "counts": {}}
         digest = build_governance_digest(
             summary=summary, events=events, now=now,
             veto_window_hours=int(aa_cfg.get("veto_window_hours", 48)),
+            pending_proposals=pending_proposals,
+            packet_health=packet_health,
             gui_base_url=env.get("GOVERNANCE_GUI_BASE_URL", ""),
             approval_page_url=approval_url)
         return send_governance_digest(digest, now=now, base_dir=base_dir, env=env,
