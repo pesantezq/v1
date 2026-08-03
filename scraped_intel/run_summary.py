@@ -37,6 +37,7 @@ def build_run_summary(
     constituent_resolution: Optional[Dict[str, Any]] = None,
     screening_sufficiency: Optional[Dict[str, Any]] = None,
     ranking_quality: Optional[Dict[str, Any]] = None,
+    factor_liveness: Optional[Dict[str, Any]] = None,
     scraped_intel_stats: Optional[Dict[str, Any]] = None,
     market_regime: Optional[Dict[str, Any]] = None,
     market_coverage: Optional[Dict[str, Any]] = None,
@@ -102,6 +103,11 @@ def build_run_summary(
             # technically populated list with an alphabetical tail? Measurement
             # only — it gates nothing and never touches score or rank.
             "ranking_quality": ranking_quality,
+            # Factor/filter liveness: can each documented component actually
+            # influence the result? Distinct from screening coverage — 99.6%
+            # primary coverage coexisted with a 15-point factor and a hard guard
+            # both completely inert. Observability only: never suppresses.
+            "factor_liveness": factor_liveness,
             # 3. Is the resulting dataset large enough to trust? A published count
             #    nothing judges is not monitoring: this block carried
             #    symbol_count: 3 every day from June to August 2026 while every

@@ -83,6 +83,7 @@ def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> d
     ss = scanner.get("screening_sufficiency") if isinstance(scanner.get("screening_sufficiency"), dict) else None
     us = scanner.get("universe_sufficiency") if isinstance(scanner.get("universe_sufficiency"), dict) else None
     rq = scanner.get("ranking_quality") if isinstance(scanner.get("ranking_quality"), dict) else None
+    fl = scanner.get("factor_liveness") if isinstance(scanner.get("factor_liveness"), dict) else None
 
     # ── 1. Constituent resolution ──────────────────────────────────────────
     if cr is None:
@@ -165,6 +166,25 @@ def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> d
         if degenerate:
             reasons.append("degenerate_ranking")
 
+    # ── 4b. Factor/filter liveness (reported INDEPENDENTLY; never a hard fail) ──
+    # A documented component being inert is a real finding, but making it a FAIL
+    # would change production authority semantics — PE has been inert all along
+    # and the sleeve was permitted. So it degrades the canary to WARN at most.
+    if fl is None:
+        factors = {"status": NA, "inert": NA, "detail": NA}
+        reasons.append("factor_liveness_absent")
+    else:
+        inert = list(fl.get("inert_components") or [])
+        factors = {
+            "status": str(fl.get("status") or "unknown").upper(),
+            "inert": inert or "none",
+            "inert_count": len(inert),
+            "suppresses_sleeve": fl.get("suppresses_sleeve"),
+            "detail": ", ".join(fl.get("reasons") or []) or "all components live",
+        }
+        if inert:
+            reasons.append(f"inert_factors:{','.join(inert)}")
+
     # ── Downstream consequence ─────────────────────────────────────────────
     suppressed = scanner.get("safe_mode")
     suppression_reasons = list(scanner.get("safe_mode_reasons") or [])
@@ -180,7 +200,7 @@ def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> d
                  "insufficient_screening_coverage", "insufficient_dataset"}
     absent = {"constituent_resolution_absent", "screening_sufficiency_absent",
               "universe_sufficiency_absent", "ranking_quality_absent",
-              "constituent_age_unknown"}
+              "factor_liveness_absent", "constituent_age_unknown"}
     if hard_fail & set(reasons):
         overall = "FAIL"
     elif absent & set(reasons):
@@ -188,7 +208,9 @@ def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> d
         # dimension may simply not apply to this run mode (a daily quote refresh
         # resolves no constituents).
         overall = "WARN"
-    elif "degenerate_ranking" in reasons or constituent.get("freshness") == "STALE":
+    elif (any(r.startswith("inert_factors:") for r in reasons)
+          or "degenerate_ranking" in reasons
+          or constituent.get("freshness") == "STALE"):
         overall = "WARN"
     else:
         overall = "PASS"
@@ -205,6 +227,7 @@ def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> d
         "screening": screening,
         "watchlist": watchlist,
         "ranking": ranking,
+        "factors": factors,
         "downstream": downstream,
     }
 
@@ -251,6 +274,12 @@ def render_canary_text(canary: dict[str, Any]) -> str:
         f"- largest tie fraction: {r.get('largest_tie_fraction')}",
         f"- alphabetical tie tail: {r.get('alphabetical_tie_tail_count')}",
         f"- degeneracy: {r.get('degeneracy')}",
+        "",
+        "Factor/filter liveness",
+        f"- status: {(canary.get('factors') or {}).get('status')}",
+        f"- inert components: {(canary.get('factors') or {}).get('inert')}",
+        f"- detail: {(canary.get('factors') or {}).get('detail')}",
+        f"- suppresses sleeve: {(canary.get('factors') or {}).get('suppresses_sleeve', NA)}",
         "",
         "Downstream",
         f"- speculative sleeve suppressed: {d.get('speculative_sleeve_suppressed')}",

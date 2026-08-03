@@ -493,3 +493,58 @@ def apply_theme_boosts(
         boosted_count, len(candidates), max_boost, min_conf,
     )
     return candidates
+
+
+def score_breakdown(
+    metrics: Dict,
+    quote: Dict,
+    *,
+    min_rev_growth: float = 0.15,
+) -> Dict[str, float]:
+    """Per-factor point contributions, mirroring ``CandidateScanner._score``.
+
+    OBSERVABILITY ONLY. This is a read-only mirror, deliberately NOT a refactor
+    of ``_score``: production scoring is left byte-for-byte untouched, and
+    ``tests/test_factor_liveness.py::test_score_breakdown_reconciles_exactly_to_production_score``
+    pins ``min(100, sum(breakdown)) == _score(...)`` so the two cannot drift
+    apart silently.
+
+    Note the PE default: ``_score`` reads ``metrics.get('peRatio', 100) or 100``,
+    so a MISSING PE is treated as 100 and lands in the ``>50`` band worth 0
+    points. Mirrored exactly here — which is why an absent PE contributes 0 to
+    every candidate rather than being skipped.
+    """
+    out: Dict[str, float] = {}
+
+    rev_growth = float(metrics.get('revenueGrowth', 0) or 0)
+    rev_pts = 0.0
+    if rev_growth >= min_rev_growth and (0.40 - min_rev_growth) > 0:
+        rev_pts = min(30.0, max(0.0, 30.0 * (rev_growth - min_rev_growth) / (0.40 - min_rev_growth)))
+    out['revenue_growth'] = rev_pts
+
+    fcf_yield = float(metrics.get('freeCashFlowYield', 0) or 0)
+    out['fcf_yield'] = min(25.0, max(0.0, fcf_yield * 500.0))
+
+    roe = float(metrics.get('roe', 0) or 0)
+    out['roe'] = min(20.0, max(0.0, roe * 66.7))
+
+    pe = float(metrics.get('peRatio', 100) or 100)
+    if pe <= 0:
+        pe_pts = 0.0
+    elif pe <= 15:
+        pe_pts = 15.0
+    elif pe <= 25:
+        pe_pts = 12.0
+    elif pe <= 35:
+        pe_pts = 8.0
+    elif pe <= 50:
+        pe_pts = 3.0
+    else:
+        pe_pts = 0.0
+    out['pe'] = pe_pts
+
+    price = float(quote.get('price', 0) or 0)
+    price_200 = float(quote.get('priceAvg200', 0) or 0)
+    out['trend'] = 10.0 if (price_200 > 0 and price > price_200) else 0.0
+
+    return out

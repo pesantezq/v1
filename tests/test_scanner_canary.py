@@ -41,6 +41,10 @@ def _summary(**over):
             "largest_tie_fraction": 0.036, "alphabetical_tie_tail_count": 0,
             "degenerate_ranking": False,
         },
+        "factor_liveness": {
+            "status": "live", "inert_components": [], "suppresses_sleeve": False,
+            "reasons": [],
+        },
         "safe_mode": False,
         "safe_mode_reasons": [],
     }
@@ -198,3 +202,48 @@ def test_canary_is_observe_only_and_deterministic(tmp_path):
     assert a == b
     assert a["observe_only"] is True
     json.dumps(a)
+
+
+# --------------------------------------------------------------------------
+# Factor/filter liveness reported independently (never a hard FAIL)
+# --------------------------------------------------------------------------
+
+_LIVENESS_DEGRADED = {
+    "status": "degraded", "inert_components": ["pe", "pe_bubble_guard"],
+    "suppresses_sleeve": False, "reasons": ["inert:pe,pe_bubble_guard"],
+}
+
+
+def test_inert_factor_warns_but_never_fails(tmp_path):
+    """PE has been inert all along while the sleeve was permitted; making it a
+    FAIL would retroactively change production authority semantics."""
+    s = _summary(scanner={"factor_liveness": _LIVENESS_DEGRADED})
+    c = SC.build_scanner_canary(_write(tmp_path, s), now=NOW)
+    assert c["factors"]["status"] == "DEGRADED"
+    assert c["factors"]["inert"] == ["pe", "pe_bubble_guard"]
+    assert c["factors"]["suppresses_sleeve"] is False
+    assert c["overall"] == "WARN"
+    assert any(r.startswith("inert_factors:") for r in c["reasons"])
+
+
+def test_all_factors_live_keeps_overall_pass(tmp_path):
+    s = _summary(scanner={"factor_liveness": {
+        "status": "live", "inert_components": [], "suppresses_sleeve": False,
+        "reasons": []}})
+    c = SC.build_scanner_canary(_write(tmp_path, s), now=NOW)
+    assert c["factors"]["status"] == "LIVE"
+    assert c["overall"] == "PASS"
+
+
+def test_absent_liveness_is_na_and_not_pass(tmp_path):
+    c = SC.build_scanner_canary(
+        _write(tmp_path, _summary(scanner={"factor_liveness": None})), now=NOW)
+    assert c["factors"]["status"] == "n/a"
+    assert c["overall"] != "PASS"
+
+
+def test_render_includes_the_factor_block(tmp_path):
+    s = _summary(scanner={"factor_liveness": _LIVENESS_DEGRADED})
+    text = SC.render_canary_text(SC.build_scanner_canary(_write(tmp_path, s), now=NOW))
+    assert "Factor/filter liveness" in text
+    assert "pe" in text

@@ -91,6 +91,73 @@ uncertified watchlist yields `screening_not_certified` and suppresses the sleeve
 until the next rebuild — uncertified is not the same as coverage 0, and neither is
 treated as healthy.
 
+### Factor / filter liveness (added 2026-08-03)
+
+Field coverage answers "did the input arrive?"; it cannot answer "can this
+component change anything?". A fourth dimension measures that, from the exact
+metrics/quote inputs handed to `CandidateScanner` (not from candidate rows, whose
+missing values `_build_row` has already coerced to 0).
+
+A scoring factor is **LIVE** only when its input is present, its transformation
+executes, **and** its contribution VARIES across the candidate set. A constant
+contribution is `low_information`, not live. A hard filter is LIVE only when its
+input is present and the condition is actually evaluable.
+
+States: `live` · `low_information` · `degraded` · `inert` · `not_applicable` ·
+`unknown`.
+
+Measured live 2026-08-03 over 503 eligible symbols:
+
+| Component | Max pts | Input coverage | Non-zero | Variance | Status |
+| --- | --- | --- | --- | --- | --- |
+| revenue_growth | 30 | 0.996 | 91 | 42.9 | **live** |
+| fcf_yield | 25 | 0.996 | 457 | 71.2 | **live** |
+| roe | 20 | 0.996 | 443 | 47.8 | **live** |
+| **pe** | **15** | **0.000** | **0** | **0.0** | **INERT** |
+| trend | 10 | 1.000 | 344 | 21.6 | **live** |
+
+| Hard filter | Evaluable | Rejections | Status |
+| --- | --- | --- | --- |
+| rev_growth_min | 501 / 503 | 410 | live |
+| **pe_bubble_guard** | **0 / 503** | **0** | **INERT** |
+| fcf_negative_guard | 501 / 503 | 44 | live |
+| trend_200dma | 503 / 503 | 159 | live |
+
+Factor liveness **never suppresses the speculative sleeve** (`suppresses_sleeve`
+is hardcoded false). PE has been inert for the whole life of the scanner while the
+sleeve was permitted; making it a suppression would retroactively change
+production authority semantics. It is a DEGRADED observability finding.
+
+`score_breakdown()` in `scanner/candidate_scanner.py` is a **read-only mirror** of
+`_score`, not a refactor of it — production scoring is untouched, and
+`test_score_breakdown_reconciles_exactly_to_production_score` pins
+`min(100, sum(breakdown)) == _score(...)` so the two cannot drift.
+
+### PE source authority (research only)
+
+`stable/ratios` carries a **direct** PE as **`priceToEarningsRatio`** — and
+`get_ratios` is already in `STABLE_METHOD_MAP`, so **no new endpoint is needed**.
+Production misses it because `get_fundamentals_v3` reads `stable/key-metrics` and
+looks for `peRatio`/`priceEarningsRatio`, neither of which key-metrics returns.
+(Note `fmp_client`'s `get_ratios` docstring says `priceEarningsRatio`; the live
+payload spells it `priceToEarningsRatio`.)
+
+`earningsYield` is a **decimal** (AAPL 0.029). `1/earningsYield` reconciles tightly
+for profitable names — AAPL 0.04%, NVDA 0.02%, XOM 0.00%, KO 0.13% — but **not
+universally**: **BA diverged 15.07%** (87.20 direct vs 74.05 derived), INTC 7.12%.
+So derived is a labelled fallback, never an equivalent. Period is **annual**, to
+match the basis `get_fundamentals_v3` already uses; TTM diverges materially
+(NVDA 37.8 vs 31.5, PLTR 257.6 vs 130.9).
+
+**Negative earnings get their own state, never a number.** A negative PE (INTC
+≈ −615) *passes* a `pe > 50` bubble guard while meaning loss-making — strictly
+worse than expensive. `pe_resolver` returns `negative_earnings` with
+`pe_ratio: None`, and the challenger injects nothing for it, so a missing PE
+cannot become a fake `0` that `_score`'s `or 100` default would silently band.
+
+Live research coverage over 503 eligible: **471 direct · 0 derived · 30
+negative_earnings · 2 unavailable → 93.6% usable.**
+
 #### Known inert guard (measured 2026-08-03, deliberately NOT fixed here)
 
 `field_resolution` reports per-field resolution counts, which surfaced that
