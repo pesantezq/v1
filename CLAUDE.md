@@ -51,10 +51,28 @@ This repo is an advisory-only portfolio automation system. It produces analysis,
   `ready_for_production_review` is NEVER auto-promotion permission. `schemas.is_human_approver`
   is UNCHANGED and still rejects the `auto_approval` marker — this is NOT "GPT production
   auto-approval"; production stays human-gated.
-- It ships INERT (`sim_governance.auto_approval.enabled=false`, all sub-flags false,
-  `strategy_daily_cap=0`). Kill-switch: `config/auto_approval.DISABLED` file or
-  `STOCKBOT_AUTO_APPROVAL_DISABLED=1`. Fail-closed; a circuit breaker halts further applies
-  on any safety anomaly (failed rollback, corrupt ledger, invariant breach).
+- **ARMED as of the 2026-08-03 audit (operator-confirmed intentional).** It shipped inert,
+  but the live config is now `sim_governance.auto_approval.enabled=true`,
+  `watchlist_enabled=true`, `strategy_enabled=true`, `watchlist_daily_cap=2`,
+  `strategy_daily_cap=1`, `min_confidence=0.85` — with no kill-switch file and
+  `STOCKBOT_AUTO_APPROVAL_DISABLED` unset. Nothing has fired yet (`event_count=0`).
+  Do NOT describe this path as inert; the earlier "ships INERT" wording was stale and
+  actively misleading for a sanctioned mutator.
+- **Watchlist candidates nevertheless fail closed today**, by design: `run_watchlist_gates`
+  requires the prohibited / static / conflicting symbol sets to be SUPPLIED, and no source
+  for them exists yet (there is no prohibited-symbol registry). Before the audit an
+  unsupplied list was coerced to `set()`, so `not_prohibited_or_static` and
+  `no_conflicting_active_proposal` passed EVERY candidate while appearing in the audit
+  trace — verified with `symbol="ENRON"`. `run_stage` now exposes `prohibited_symbols` /
+  `conflicting_symbols` as the wiring point; giving them a real source is what makes this
+  lane live. Never re-add an empty-set default. Strategy candidates were already
+  fail-closed.
+- Kill-switch: `config/auto_approval.DISABLED` file or `STOCKBOT_AUTO_APPROVAL_DISABLED=1`.
+  Fail-closed; a circuit breaker halts further applies on any safety anomaly (failed
+  rollback, corrupt ledger, invariant breach). It also refuses outright when the append-only
+  event ledger exists but is unreadable (`disabled_reason=ledger_unreadable:…`) — both the
+  daily cap and the idempotency guard are derived from that log, so an unreadable ledger
+  previously read as "no applies yet" and passed both.
 - Reversible: every apply captures before/after state; a human veto rolls back via
   compare-and-swap (never overwriting newer work → `rollback_conflict`). Append-only ledger
   `outputs/policy/auto_approval_events.jsonl` + derived summary `outputs/policy/auto_approval_audit.json`.

@@ -296,8 +296,27 @@ watchlist-eligible candidates, runs deterministic safety gates → a GPT approve
 (approve-in-bounds / veto only) → and, if every gate clears, **auto-applies the change
 to the SIMULATION lane**: a separate watchlist DB (`data/sim_governance_watchlist.db`)
 that the production scanner never reads. It accelerates simulation experimentation; it
-does **not** touch production. Strategy auto-anchoring exists but ships disabled
-(`strategy_daily_cap=0`).
+does **not** touch production.
+
+> **Live posture (2026-08-03 audit, operator-confirmed).** This path is **ARMED**, not
+> inert: `enabled=true`, `watchlist_enabled=true`, `strategy_enabled=true`,
+> `watchlist_daily_cap=2`, `strategy_daily_cap=1`, no kill-switch file, env unset.
+> Nothing has fired yet (`event_count=0`).
+>
+> **Watchlist candidates still fail closed**, deliberately: `run_watchlist_gates` requires
+> the prohibited / static / conflicting symbol sets to be SUPPLIED and no source exists yet.
+> Until the 2026-08-03 audit an unsupplied list was coerced to `set()`, so
+> `not_prohibited_or_static` and `no_conflicting_active_proposal` passed **every** candidate
+> while still appearing in the audit trace (verified with `symbol="ENRON"`). `run_stage` now
+> exposes `prohibited_symbols` / `conflicting_symbols` as the wiring point — giving them a
+> real source is what makes this lane live. **Never re-add an empty-set default.** Strategy
+> candidates were already fail-closed.
+>
+> Auto-approval also refuses outright when the append-only event ledger exists but cannot be
+> read (`disabled_reason=ledger_unreadable:…`). Both the daily cap (`_applied_today`) and the
+> idempotency guard (`applied_key_exists`) derive from that log, and `load_events` degrades to
+> `[]` on any OSError — so an unreadable ledger previously read as "no applies yet" and passed
+> both. Mirrors `promotion_approvals.approvals_log_unreadable`.
 
 ### Authority invariant (non-negotiable)
 
@@ -338,9 +357,10 @@ and strategy both use event-aware CAS rollback, never a blind symbol-only demoti
 
 ### Config, kill-switches, wiring
 
-`config.json → sim_governance.auto_approval` (all inert by default): `enabled`,
-`watchlist_enabled`, `strategy_enabled`, `live_watchlist_enabled` (unsupported; must stay false),
-`watchlist_daily_cap=2`, `strategy_daily_cap=0`, `min_confidence=0.85`, `veto_window_hours=48`,
+`config.json → sim_governance.auto_approval` (shipped inert; **ARMED in the live config
+since 2026-08-03** — see the Live posture note above): `enabled`, `watchlist_enabled`,
+`strategy_enabled`, `live_watchlist_enabled` (unsupported; must stay false),
+`watchlist_daily_cap=2`, `strategy_daily_cap=1`, `min_confidence=0.85`, `veto_window_hours=48`,
 `max_active_awaiting_veto=5`, `sim_watchlist_db_path`, `evening_digest`.
 Kill-switch precedence (any disables): env `STOCKBOT_AUTO_APPROVAL_DISABLED` → file
 `config/auto_approval.DISABLED` → global `enabled` → component flag → component env kill.
