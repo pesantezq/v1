@@ -596,3 +596,110 @@ class TestLoaderAndBuilder:
             assert isinstance(out[key], dict)
             # Either available True or False with a reason — never an exception
             assert "available" in out[key]
+
+
+# ---------------------------------------------------------------------------
+# Regression: decision_outcomes.jsonl return_pct is a DECIMAL fraction.
+# Ledger entry manual:memo_hit_rate_decimal_x100 — the memo rendered it with a
+# '%' suffix and no x100, understating every recent call 100x.
+# ---------------------------------------------------------------------------
+class TestHitRateReturnScale:
+    def _outcome(self, symbol, return_pct, correct, now):
+        return {
+            "symbol": symbol, "decision": "BUY", "resolved": True,
+            "direction_correct": correct, "return_pct": return_pct,
+            "resolved_at": now.isoformat(),
+        }
+
+    def test_recent_correct_return_pct_converted_from_decimal_to_percent(self):
+        now = datetime.now()
+        hr = compute_decision_hit_rate(
+            [self._outcome("WDAY", 0.09014334, True, now)], {}, now=now)
+        # 0.09014334 is a decimal fraction => +9.01%, NOT +0.09%
+        assert hr["recent_correct"][0]["return_pct"] == pytest.approx(9.01)
+
+    def test_recent_missed_return_pct_converted_from_decimal_to_percent(self):
+        now = datetime.now()
+        hr = compute_decision_hit_rate(
+            [self._outcome("ADBE", -0.05895304, False, now)], {}, now=now)
+        assert hr["recent_missed"][0]["return_pct"] == pytest.approx(-5.9)
+
+    def test_rendered_md_shows_percent_scaled_return(self):
+        now = datetime.now()
+        hr = compute_decision_hit_rate(
+            [self._outcome("WDAY", 0.09014334, True, now)], {}, now=now)
+        md = "\n".join(render_hit_rate_md(hr))
+        assert "+9.01%" in md
+        assert "+0.09%" not in md
+
+    def test_precision_not_lost_by_rounding_before_scaling(self):
+        """Rounding the decimal first (0.09014 -> 0.09 -> '9.00%') loses the .01."""
+        now = datetime.now()
+        hr = compute_decision_hit_rate(
+            [self._outcome("WDAY", 0.09014334, True, now)], {}, now=now)
+        assert hr["recent_correct"][0]["return_pct"] != pytest.approx(9.00)
+
+
+# ---------------------------------------------------------------------------
+# Regression: Top Movers must use broker truth when the decision run did.
+# Ledger entry manual:memo_top_movers_stale_config_holdings.
+# ---------------------------------------------------------------------------
+class TestTopMoversZeroShareExclusion:
+    def test_zero_share_rows_excluded_from_total_held(self):
+        holdings = [
+            {"symbol": "QQQ", "shares": 7.0},
+            {"symbol": "VFH", "shares": 0.0},
+            {"symbol": "VXUS", "shares": 0.0},
+        ]
+        signals = [{"symbol": "QQQ", "price": 687.99, "price_change_pct": 0.65}]
+        movers = compute_top_movers(holdings, signals)
+        # VFH/VXUS are not held — they must not inflate the coverage denominator
+        assert movers["total_held"] == 1
+        assert movers["total_covered"] == 1
+
+    def test_zero_share_holding_never_appears_as_mover(self):
+        holdings = [{"symbol": "VFH", "shares": 0.0}]
+        signals = {"VFH": {"symbol": "VFH", "price": 100.0, "price_change_pct": 5.0}}
+        movers = compute_top_movers(holdings, signals)
+        assert movers["available"] is False
+        assert movers["reason"] == "no_holdings"
+
+
+class TestHoldingsSourceResolution:
+    def _root(self, tmp_path, *, holdings_source, broker_positions, config_holdings):
+        (tmp_path / "outputs" / "latest").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config.json").write_text(json.dumps(
+            {"portfolio": {"holdings": config_holdings}}), encoding="utf-8")
+        (tmp_path / "outputs" / "latest" / "decision_holdings_source.json").write_text(
+            json.dumps({"holdings_source": holdings_source}), encoding="utf-8")
+        (tmp_path / "outputs" / "latest" / "schwab_positions.json").write_text(
+            json.dumps({"positions": broker_positions}), encoding="utf-8")
+        return tmp_path
+
+    def test_broker_positions_win_when_decision_used_broker(self, tmp_path):
+        root = self._root(
+            tmp_path, holdings_source="broker",
+            broker_positions=[{"symbol": "QQQ", "quantity": 7.0},
+                              {"symbol": "LCID", "quantity": 50.0}],
+            config_holdings=[{"symbol": "QQQ", "shares": 6.0}])
+        src = load_enrichment_data(root)
+        by_sym = {h["symbol"]: h["shares"] for h in src.holdings}
+        assert by_sym["QQQ"] == 7.0          # broker truth, not config's 6.0
+        assert by_sym["LCID"] == 50.0        # broker-only position is visible
+
+    def test_config_used_when_decision_fell_back_to_config(self, tmp_path):
+        root = self._root(
+            tmp_path, holdings_source="config",
+            broker_positions=[{"symbol": "QQQ", "quantity": 7.0}],
+            config_holdings=[{"symbol": "QQQ", "shares": 6.0}])
+        src = load_enrichment_data(root)
+        assert {h["symbol"]: h["shares"] for h in src.holdings}["QQQ"] == 6.0
+
+    def test_config_used_when_broker_snapshot_absent(self, tmp_path):
+        (tmp_path / "outputs" / "latest").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config.json").write_text(json.dumps(
+            {"portfolio": {"holdings": [{"symbol": "QQQ", "shares": 6.0}]}}), encoding="utf-8")
+        (tmp_path / "outputs" / "latest" / "decision_holdings_source.json").write_text(
+            json.dumps({"holdings_source": "broker"}), encoding="utf-8")
+        src = load_enrichment_data(tmp_path)
+        assert {h["symbol"]: h["shares"] for h in src.holdings}["QQQ"] == 6.0
