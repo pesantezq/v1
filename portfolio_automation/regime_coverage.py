@@ -306,17 +306,40 @@ def assess_regime_coverage(
     max_rw_regime = max(rw_shares, key=lambda k: abs(rw_shares[k])) if rw_shares else None
     max_rw_share = rw_shares.get(max_rw_regime) if max_rw_regime is not None else None
 
+    # `return_weighted_share` is a SIGNED attribution ratio against the NET total, so
+    # with mixed-sign contributions it is unbounded — performance_feedback.py:625-634
+    # says so explicitly ("not a bounded probability; do not treat it as one"). Using
+    # abs() of it as a concentration trigger did treat it as one: an unbounded value
+    # compared against a threshold that is by construction <= 1.0, so a BALANCED book
+    # whose regime contributions cancel fires REGIME_CONCENTRATED for reasons that have
+    # nothing to do with concentration.
+    #
+    # Trigger on an abs-normalised share instead — |contribution| / sum|contribution| —
+    # which is genuinely bounded [0, 1] and means "how much of the total return MOVEMENT
+    # this regime accounts for". On 2026-08-03 that is neutral 499.07/654.78 = 76.2%
+    # (below threshold) while the count arm is 94.31% (above), so today's verdict is
+    # unchanged — but it is now reached for a stated, bounded reason.
+    abs_total = sum(abs(v) for v in rw_shares.values()) or None
+    rw_abs_shares = ({r: abs(v) / abs_total for r, v in rw_shares.items()}
+                     if abs_total else {})
+    max_rw_abs_regime = (max(rw_abs_shares, key=lambda k: rw_abs_shares[k])
+                         if rw_abs_shares else None)
+    max_rw_abs_share = (rw_abs_shares.get(max_rw_abs_regime)
+                        if max_rw_abs_regime is not None else None)
+
     concentrated = (
         (max_count_share is not None and max_count_share >= concentration_share_threshold)
-        or (max_rw_share is not None and abs(max_rw_share) >= concentration_share_threshold)
+        or (max_rw_abs_share is not None
+            and max_rw_abs_share >= concentration_share_threshold)
     )
     if concentrated:
         states.append(REGIME_CONCENTRATED)
-        if max_rw_share is not None:
+        if max_rw_abs_share is not None:
             reasons.append(
                 f"regime '{max_count_regime}' holds {max_count_share:.1%} of resolved "
-                f"evidence by count (return-weighted {max_rw_share:.1%} via "
-                f"'{max_rw_regime}') — any claimed edge is concentrated in one regime")
+                f"evidence by count ({max_rw_abs_share:.1%} of total return movement "
+                f"via '{max_rw_abs_regime}') — any claimed edge is concentrated in one "
+                f"regime")
         else:
             reasons.append(
                 f"regime '{max_count_regime}' holds {max_count_share:.1%} of resolved "
@@ -366,8 +389,16 @@ def assess_regime_coverage(
         },
         "concentration": {
             "max_share_regime": max_count_regime, "max_share": max_count_share,
+            # SIGNED attribution ratio vs the NET total — UNBOUNDED (can exceed 1.0 or
+            # go negative when regime contributions have mixed signs). Kept for
+            # backward compatibility and for reading direction of attribution; NOT the
+            # concentration trigger. Do not render it as a percentage of anything.
             "return_weighted_max_share_regime": max_rw_regime,
             "return_weighted_max_share": max_rw_share,
+            # Abs-normalised share of total return MOVEMENT — bounded [0, 1]. This is
+            # what the REGIME_CONCENTRATED return-weighted arm actually tests.
+            "return_weighted_abs_share_regime": max_rw_abs_regime,
+            "return_weighted_abs_share": max_rw_abs_share,
             "threshold": concentration_share_threshold,
         },
         "risk_off": _risk_off_block(risk_off_present, risk_off_effective),
