@@ -372,7 +372,7 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("BELOW", line)
             # The stale-baseline breakdown is retained as a parenthetical.
             self.assertIn("50.0%", line)
-            self.assertIn("stale baseline", line)
+            self.assertIn("unattributed baseline", line)
 
     def test_advisor_stack_retune_line_first_gauge_keeps_pre_current(self):
         # First-gauge era (no prior gauge to regress against): keep the legacy
@@ -444,7 +444,7 @@ class TestBuildVerdict(unittest.TestCase):
             self.assertIn("+2.0pp", line)
             self.assertIn("vs the prior gauge it replaced", line)
             self.assertNotIn("BELOW", line)
-            self.assertIn("stale baseline", line)
+            self.assertIn("unattributed baseline", line)
 
     def test_risk_delta_breach_promotes_to_structural_risk(self):
         with tempfile.TemporaryDirectory() as td:
@@ -586,7 +586,7 @@ class TestBuildVerdict(unittest.TestCase):
             # Advisor Stack now LEADS with the prior_delta (e.g. "-18.9pp")
             self.assertIn("-18.9pp", line)
             # it still shows the stale-baseline breakdown as a parenthetical
-            self.assertIn("stale baseline", line)
+            self.assertIn("unattributed baseline", line)
             # validated/NOT-validated word must still be present
             self.assertIn("NOT validated", line)
 

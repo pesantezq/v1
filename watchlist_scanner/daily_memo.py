@@ -689,7 +689,41 @@ def _change_items(changes: dict[str, Any]) -> list[str]:
     return ["No material changes recorded."]
 
 
-def _health_items(data_health: dict[str, Any]) -> list[str]:
+def _load_run_status() -> dict[str, Any]:
+    """Read daily_run_status so the memo can report the RUN's own state.
+
+    Best-effort: an unreadable status simply means the memo makes no claim
+    about the run, never a wrong one.
+    """
+    try:
+        return _safe_load(_pulse_root() / "outputs" / "latest" / "daily_run_status.json")
+    except Exception:
+        return {}
+
+
+def _health_items(data_health: dict[str, Any],
+                  run_status: dict[str, Any] | None = None) -> list[str]:
+    # RUN STATE (2026-08-07). ``data_health`` only knows which artifacts were
+    # present AT SUMMARY-GENERATION time; it has never seen daily_run_status.
+    # So on 2026-08-06 this section said "2 advisory artifacts not yet
+    # populated" while the run itself was ok_with_warnings with
+    # content_warn_count=1 — the run's own warning state never reached the
+    # operator. Computed FIRST so it survives the caller's [:3] cap.
+    run_items: list[str] = []
+    if isinstance(run_status, dict):
+        overall = str(run_status.get("overall_status") or "").strip()
+        warns = int(run_status.get("content_warn_count") or 0)
+        if overall and overall != "ok":
+            suffix = (f"; {warns} content-liveness warning"
+                      f"{'s' if warns != 1 else ''}") if warns else ""
+            run_items.append(
+                f"Pipeline run status: **{overall}**{suffix} "
+                "(see daily_run_status.json).")
+        elif warns:
+            run_items.append(
+                f"{warns} content-liveness warning{'s' if warns != 1 else ''} "
+                "this run (see daily_run_status.json).")
+
     degraded = bool(data_health.get("degraded_mode", False))
     data_mode = str(data_health.get("data_mode") or "").strip()
     missing_count = int(data_health.get("missing_artifact_count") or 0)
@@ -706,9 +740,11 @@ def _health_items(data_health: dict[str, Any]) -> list[str]:
         and not optional_details
         and not fallback_used
     ):
-        return []
+        # A clean data_health no longer implies a clean RUN — the run-status
+        # line must still be able to surface on its own.
+        return run_items
 
-    items: list[str] = []
+    items: list[str] = list(run_items)
     if degraded:
         items.append("Degraded mode is active; treat all memo actions as lower-certainty.")
     if data_mode and data_mode not in ("live",):
@@ -997,13 +1033,13 @@ def _build_verdict(
                             # alone.
                             if abs(delta_pp) >= 10 or is_trap:
                                 if delta_pp < 0:
-                                    # Plain underperformance even vs the stale baseline.
+                                    # Plain underperformance even vs the unattributed baseline.
                                     milestone = (
                                         f" Retune underperforming — current-fp interpretable "
                                         f"at n={cur_n} with {delta_pp:+.1f}pp lift."
                                     )
                                 else:
-                                    # Positive vs the stale baseline — but a regression
+                                    # Positive vs the unattributed baseline — but a regression
                                     # vs the prior gauge (or a negative realised mean
                                     # return) is the favorable-baseline trap. `is_trap`
                                     # is computed once above and shared with the
@@ -1026,7 +1062,7 @@ def _build_verdict(
                                             delta_phrase = (
                                                 f"current-fp {prior_delta:+.1f}pp "
                                                 f"vs the prior gauge it replaced "
-                                                f"({delta_pp:+.1f}pp vs stale baseline{mr_clause})"
+                                                f"({delta_pp:+.1f}pp vs unattributed baseline{mr_clause})"
                                             )
                                         milestone = (
                                             f" Retune {word} — {delta_phrase} at n={cur_n}."
@@ -1036,7 +1072,7 @@ def _build_verdict(
                                         # No prior gauge to compare, but mean-return is negative.
                                         milestone = (
                                             f" Retune NOT validated — current-fp {delta_pp:+.1f}pp "
-                                            f"vs stale baseline at n={cur_n} but mean-return "
+                                            f"vs unattributed baseline at n={cur_n} but mean-return "
                                             f"{cur_mr:+.2f}% negative."
                                         )
                                     else:
@@ -1226,7 +1262,7 @@ def build_daily_memo(summary: dict[str, Any]) -> str:
     a(f"  Data Health:  {health_str}")
     if data_mode not in ("unknown", "live", ""):
         a(f"  Data Mode:    {data_mode}")
-    a(f"  Generated:    {gen_display}")
+    a(f"  Data as of:   {gen_display}")
     a("")
 
     # ── TOP INSIGHT ──────────────────────────────────────────────────────────
@@ -1437,7 +1473,7 @@ def build_daily_memo(summary: dict[str, Any]) -> str:
     # ── FOOTER ───────────────────────────────────────────────────────────────
     a(_LINE)
     a("  Advisory only — no trades executed.")
-    a(f"  Generated: {gen_display}")
+    a(f"  Data as of: {gen_display}")
     a(_SEP)
 
     return "\n".join(lines)
@@ -1481,7 +1517,7 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
     a(f"**Data Health:** {health_str}  ")
     if data_mode not in ("unknown", "live", ""):
         a(f"**Data Mode:** {data_mode}  ")
-    a(f"**Generated:** {gen_display}")
+    a(f"**Data as of:** {gen_display}")
     a("")
 
     # Top Insight
@@ -1665,7 +1701,7 @@ def build_daily_memo_md(summary: dict[str, Any]) -> str:
 
     # Footer
     a("---")
-    a(f"_Advisory only — no trades executed. Generated: {gen_display}_")
+    a(f"_Advisory only — no trades executed. Data as of: {gen_display}_")
 
     return "\n".join(lines)
 
@@ -1700,14 +1736,20 @@ _CROWD_STATE_REL = ("outputs", "sandbox", "discovery", "crowd_knowledge_state.js
 _CROWD_HEALTH_REL = ("outputs", "sandbox", "discovery", "crowd_source_health.json")
 _UNIFIED_CROWD_STATUS_REL = ("outputs", "latest", "unified_crowd_intelligence_status.json")
 
-# Per-source memo label mapped to its expected/acceptable statuses.
-_CROWD_SOURCE_LABELS = (
-    ("ApeWisdom", "apewisdom"),
-    ("FMP Social Sentiment", "fmp_social_sentiment"),
-    ("Stocktwits", "stocktwits"),
-    ("Finnhub Social", "finnhub_social"),
-    ("Quiver WSB", "quiver_wsb"),
-)
+# DISPLAY NAMES ONLY — this is not the source list (2026-08-07).
+# It used to BE the list, iterated to decide which sources the memo showed, and
+# it had drifted from reality: it rendered "n/a" for stocktwits / finnhub_social
+# / quiver_wsb, none of which the artifact still emits, while bluesky, mastodon
+# and lemmy — the sources actually running — could not appear at all. The rows
+# now come from the artifact; an unknown source is title-cased rather than
+# dropped, so a new connector is visible the day it starts reporting.
+_CROWD_SOURCE_DISPLAY = {
+    "apewisdom": "ApeWisdom",
+    "fmp_social_sentiment": "FMP Social Sentiment",
+    "bluesky": "Bluesky",
+    "mastodon": "Mastodon",
+    "lemmy": "Lemmy",
+}
 
 
 def _crowd_source_health_lines(root_path: Path) -> list[str]:
@@ -1715,11 +1757,25 @@ def _crowd_source_health_lines(root_path: Path) -> list[str]:
     doc = _safe_load(root_path.joinpath(*_CROWD_HEALTH_REL))
     if not doc:
         return []
-    by_source = {r.get("source_name"): r.get("status") for r in (doc.get("records") or [])}
+    records = [r for r in (doc.get("records") or []) if isinstance(r, dict)]
+    if not records:
+        return []
+
     lines = ["Crowd Radar source health:"]
-    for label, key in _CROWD_SOURCE_LABELS:
-        lines.append(f"- {label}: {by_source.get(key, 'n/a')}")
-    return lines
+    for rec in records:
+        key = str(rec.get("source_name") or "").strip()
+        if not key:
+            continue
+        label = _CROWD_SOURCE_DISPLAY.get(key, key.replace("_", " ").title())
+        status = rec.get("status") or "n/a"
+        # A source can report ``ok`` having returned NOTHING — all four live
+        # sources did exactly that on 2026-08-06, and rendering the bare status
+        # presented healthy feeds that were in fact empty. The count is what
+        # makes "ok" meaningful (2026-08-07).
+        count = rec.get("record_count")
+        suffix = f" ({int(count)} records)" if isinstance(count, (int, float)) else ""
+        lines.append(f"- {label}: {status}{suffix}")
+    return lines if len(lines) > 1 else []
 
 
 def _unified_crowd_summary_lines(root_path: Path) -> list[str]:
@@ -2189,7 +2245,7 @@ def _advisor_stack_items(root: Path) -> list[str]:
                     else f"current-fp {prior_delta:+.1f}pp vs the prior gauge it replaced"
                 )
                 stale_paren = (
-                    f" ({cur_str} vs stale baseline {pre_str}, {delta_pp:+.1f}pp)"
+                    f" ({cur_str} vs unattributed baseline {pre_str}, {delta_pp:+.1f}pp)"
                     if delta_pp is not None else f" ({cur_str})"
                 )
                 # Peak-relative caveat, shared with the Verdict via _prior_peak:
@@ -2922,6 +2978,7 @@ def build_daily_memo(
     *,
     discovery_data: "dict[str, Any] | None" = None,
     simulation_data: "dict[str, Any] | None" = None,
+    run_status: "dict[str, Any] | None" = None,
 ) -> str:
     """
     Build a compact, decision-focused plain-text memo.
@@ -2941,7 +2998,7 @@ def build_daily_memo(
     capital_counts, capital_total = _capital_action_summary(_action_decision_rows(summary))
     risk_items = _risk_focus_items(top_rows)
     change_items = _change_items(ch)
-    health_items = _health_items(dh)
+    health_items = _health_items(dh, run_status=run_status)
 
     lines: list[str] = []
     a = lines.append
@@ -3159,7 +3216,7 @@ def build_daily_memo(
 
     a(_LINE)
     a("  Advisory only — no trades executed.")
-    a(f"  Generated: {gen_display}")
+    a(f"  Data as of: {gen_display}")
     a(_SEP)
 
     return "\n".join(lines)
@@ -3170,6 +3227,7 @@ def build_daily_memo_md(
     *,
     discovery_data: "dict[str, Any] | None" = None,
     simulation_data: "dict[str, Any] | None" = None,
+    run_status: "dict[str, Any] | None" = None,
 ) -> str:
     """
     Build a compact, decision-focused Markdown memo.
@@ -3189,7 +3247,7 @@ def build_daily_memo_md(
     capital_counts, capital_total = _capital_action_summary(_action_decision_rows(summary))
     risk_items = _risk_focus_items(top_rows)
     change_items = _change_items(ch)
-    health_items = _health_items(dh)
+    health_items = _health_items(dh, run_status=run_status)
 
     lines: list[str] = []
     a = lines.append
@@ -3197,7 +3255,7 @@ def build_daily_memo_md(
     a(f"# {get_subject(summary)}")
     a("")
     a(f"**Date:** {date_str}  ")
-    a(f"**Generated:** {gen_display}")
+    a(f"**Data as of:** {gen_display}")
     a("")
 
     freshness = _freshness_banner(summary)
@@ -3368,7 +3426,7 @@ def build_daily_memo_md(
             logger.warning("daily_memo: simulation review section (md) failed — %s", exc)
 
     a("---")
-    a(f"_Advisory only — no trades executed. Generated: {gen_display}_")
+    a(f"_Advisory only — no trades executed. Data as of: {gen_display}_")
 
     return "\n".join(lines)
 
@@ -3448,8 +3506,9 @@ def generate_daily_memo(
     except Exception as exc:
         logger.warning("daily_memo: simulation review load failed (non-fatal) — %s", exc)
 
-    memo_txt = build_daily_memo(summary, discovery_data=discovery_data, simulation_data=simulation_data)
-    memo_md  = build_daily_memo_md(summary, discovery_data=discovery_data, simulation_data=simulation_data)
+    run_status = _load_run_status()
+    memo_txt = build_daily_memo(summary, discovery_data=discovery_data, simulation_data=simulation_data, run_status=run_status)
+    memo_md  = build_daily_memo_md(summary, discovery_data=discovery_data, simulation_data=simulation_data, run_status=run_status)
 
     if write_files:
         txt_path = root_path.joinpath(*_MEMO_TXT_REL)
