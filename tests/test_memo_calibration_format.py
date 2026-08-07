@@ -66,3 +66,57 @@ class TestMemoAppendixRenderer:
         out = "\n".join(_coherence_appendix_text({"hit_rate": _hit_rate_available(None)}))
         assert "raw calibration n/a" in out
         assert "raw calibration None" not in out
+
+
+# ---------------------------------------------------------------------------
+# Crowd state counts (2026-08-07)
+# ---------------------------------------------------------------------------
+# The line rendered len() of the ticker LISTS, but memo_coherence caps those
+# lists at [:8] for display. The count therefore saturated at 8 and could never
+# exceed it: on 2026-08-06 it printed "divergent 8" against a true 11
+# (unified_crowd_intelligence_status.state_counts.divergent_attention == 11).
+# The same line already read insufficient_data from a COUNT field, so the
+# correct pattern sat three fields away.
+
+def _crowd(**over):
+    base = {
+        "available": True,
+        "cross_source_confirmed": [f"C{i}" for i in range(8)],   # capped list
+        "divergent": [f"D{i}" for i in range(8)],                # capped list
+        "insufficient_data_count": 60,
+        "social_sentiment_status": "PLAN_LOCKED",
+        "classified_state_counts": {
+            "confirmed_attention": 9,
+            "divergent_attention": 11,
+            "insufficient_data": 60,
+        },
+    }
+    base.update(over)
+    return base
+
+
+def _crowd_line(crowd):
+    out = _coherence_appendix_text({"crowd": crowd})
+    return next(l for l in out if "Crowd (sandbox" in l)
+
+
+class TestCrowdCountsNotListLengths:
+    def test_divergent_uses_the_count_not_the_capped_list(self):
+        line = _crowd_line(_crowd())
+        assert "divergent 11" in line, line
+        assert "divergent 8" not in line, line
+
+    def test_confirmed_uses_the_count_not_the_capped_list(self):
+        """Right only by luck at 2 < 8 in production; the defect is latent."""
+        line = _crowd_line(_crowd())
+        assert "confirmed 9" in line, line
+
+    def test_falls_back_to_list_length_when_counts_absent(self):
+        """Back-compat: older payloads carry no classified_state_counts."""
+        crowd = _crowd()
+        del crowd["classified_state_counts"]
+        line = _crowd_line(crowd)
+        assert "divergent 8" in line, line
+
+    def test_insufficient_data_still_reads_its_count_field(self):
+        assert "insufficient_data 60" in _crowd_line(_crowd())

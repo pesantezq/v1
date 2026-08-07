@@ -75,6 +75,53 @@ def _safe_load(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _resolved_runtime_config(root: Path) -> dict[str, Any]:
+    """Resolve config exactly as the RUN does, never a hardcoded file.
+
+    The Advisor Stack previously read ``config/base.json`` directly while the
+    pipeline resolves ``config.json`` (or ``$CONFIG_PATH``). On 2026-08-06
+    those disagreed — base.json ``ml_advisor.enabled=true`` vs config.json
+    ``false`` — so the memo reported an advisor ON that the run had OFF, and
+    that knob sits inside the gauge fingerprint.
+
+    Going through the same resolver makes divergence structurally impossible
+    rather than something two code paths have to be kept in sync about.
+    ``record_history=False``: the memo is observe-only and must not write.
+    """
+    try:
+        from config.loader import load_runtime_config_dict
+    except Exception:                                    # loader unavailable
+        return _safe_load(root.joinpath(*_CONFIG_BASE_REL))
+
+    env_path = os.environ.get("CONFIG_PATH")
+    candidate = Path(env_path) if env_path else root / "config.json"
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        cfg = load_runtime_config_dict(candidate, record_history=False)
+        return cfg if isinstance(cfg, dict) else {}
+    except Exception as exc:
+        logger.warning("daily_memo: config resolve failed (%s) — "
+                       "falling back to %s", exc, _CONFIG_BASE_REL[-1])
+        return _safe_load(root.joinpath(*_CONFIG_BASE_REL))
+
+
+def _ml_history_record_count(path: Path) -> int:
+    """Count ml_history RECORDS, not file lines.
+
+    ``data/ml_history.json`` is a pretty-printed JSON object, not JSONL, so the
+    previous ``splitlines()`` count reported 13877 for 375 actual records — a
+    37x overstatement of the ML advisor's evidence base.
+    """
+    if not path.exists():
+        return 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return 0
+    return len(payload) if isinstance(payload, (dict, list)) else 0
+
+
 def _load_discovery_approval_decisions(path: Path) -> list[dict[str, Any]]:
     """Load and validate approval decisions from JSONL; silently skips invalid/tampered records."""
     if not path.exists():
@@ -788,13 +835,57 @@ def _prior_peak(
             continue
         if best_hr is None or hr > best_hr:
             best_fp, best_hr = fp, hr
+    # BANDED (2026-08-07): the test is two-sided. A one-sided
+    # ``<= margin_pp`` fires identically at +2pp ABOVE the peak, AT the peak,
+    # and 12.7pp BELOW it — on 2026-08-06 that rendered "recovery to prior peak
+    # 68.9%" while the gauge read 56.28%. "Recovery" must mean *near* the peak,
+    # so a run further below than ``margin_pp`` is NOT a recovery; callers
+    # render the signed gap instead (they hold both hit rates already).
+    gap_pp = ((cur_hr - best_hr) * 100
+              if (cur_hr is not None and best_hr is not None) else None)
     is_recovery = bool(
-        best_hr is not None
-        and cur_hr is not None
+        gap_pp is not None
         and best_fp != prior_fp
-        and (cur_hr - best_hr) * 100 <= margin_pp
+        and -margin_pp <= gap_pp <= margin_pp
     )
     return best_hr, is_recovery
+
+
+def _peak_clause(
+    peak_hr: float | None,
+    cur_hr: float | None,
+    is_recovery: bool,
+    is_trap: bool,
+    *,
+    verdict: bool,
+    margin_pp: float = 2.0,
+) -> str:
+    """Render the peak-relative caveat, shared by the Verdict and Advisor Stack.
+
+    Three states, so the wording can never assert an arrival that did not
+    happen (the 2026-08-06 defect — "recovery to prior peak 68.9%" on a gauge
+    reading 56.28%):
+
+    * ``gap > +margin_pp``  — a genuine new high; no caveat.
+    * ``|gap| <= margin_pp`` — back at the peak; "recovery to near prior peak".
+    * ``gap < -margin_pp``  — the honest case; render the SIGNED distance.
+
+    The gap is always numeric. The old ``≈`` glyph is gone: sitting between the
+    current run and the peak, it read as "current ≈ peak".
+    """
+    if is_trap or peak_hr is None or cur_hr is None:
+        return ""
+    gap_pp = (cur_hr - peak_hr) * 100
+    peak_pct = f"{peak_hr * 100:.1f}%"
+    if is_recovery:
+        return (f" Recovery to near prior peak {peak_pct}, not a new high."
+                if verdict else
+                f" — recovery to near prior peak {peak_pct}, not a new high")
+    if gap_pp < -margin_pp:
+        return (f" Still {abs(gap_pp):.1f}pp below prior peak {peak_pct}."
+                if verdict else
+                f" — still {abs(gap_pp):.1f}pp below prior peak {peak_pct}")
+    return ""  # clearly above the peak — a new high needs no caveat
 
 
 def _build_verdict(
@@ -894,10 +985,8 @@ def _build_verdict(
                         peak_hr, is_recovery = _prior_peak(
                             by_fp, current_fp_id, pre_label, prior_fp, cur_hr
                         )
-                        recovery_clause = (
-                            f" Recovery, not a new high (≈ prior peak {peak_hr * 100:.1f}%)."
-                            if is_recovery and not is_trap and peak_hr is not None
-                            else ""
+                        recovery_clause = _peak_clause(
+                            peak_hr, cur_hr, is_recovery, is_trap, verdict=True
                         )
                         if cur_n >= 30 and cur_hr is not None and pre_hr is not None:
                             delta_pp = (cur_hr - pre_hr) * 100
@@ -1928,11 +2017,24 @@ def _portfolio_pulse_items(root: Path) -> list[str]:
         share = top_sector.get("allocation_pct")
         # Read sector_cap from allocation_engine.DEFAULT_CONFIG so the memo
         # reflects the current gauge value rather than a stale literal.
+        # DENOMINATOR (2026-08-07): ``share`` is top_sector.allocation_pct,
+        # a share of the NORMALIZED ALLOCATION BOOK
+        # (portfolio_construction.py:276 — top_sector_value / total_normalized).
+        # It was previously compared to allocation_engine's ``sector_cap``,
+        # which caps share of PORTFOLIO VALUE — a different denominator. That
+        # rendered "Financial Services 25.6% (soft target 25% — over)" on
+        # 2026-08-06 while FS held allocation_by_sector 0.06 = 6.0% against
+        # that 25% cap, i.e. ~19pp of headroom and no breach at all.
+        # The threshold that actually governs THIS basis is the producer's own
+        # top_sector_warning_threshold (0.40), the one whose breach populates
+        # portfolio_snapshot.warnings.
         cap_pct_str = "—"
         cap_val: "float | None" = None
         try:
-            from allocation_engine import DEFAULT_CONFIG as _AE_CFG
-            _cv = _AE_CFG.get("sector_cap")
+            from watchlist_scanner.portfolio_construction import (
+                DEFAULT_PORTFOLIO_CONSTRUCTION_CONFIG as _PC_CFG,
+            )
+            _cv = _PC_CFG.get("top_sector_warning_threshold")
             if isinstance(_cv, (int, float)) and _cv > 0:
                 cap_val = float(_cv)
                 cap_pct_str = f"{cap_val * 100:.0f}%"
@@ -1949,7 +2051,7 @@ def _portfolio_pulse_items(root: Path) -> list[str]:
         else:
             over_flag = ""
         items.append(
-            f"Top sector — {name} {_pct(share)} "
+            f"Top sector — {name} {_pct(share)} of allocation book "
             f"(soft target {cap_pct_str}{over_flag})"
         )
 
@@ -1971,16 +2073,10 @@ def _advisor_stack_items(root: Path) -> list[str]:
     """
     items: list[str] = []
 
-    cfg = _safe_load(root.joinpath(*_CONFIG_BASE_REL))
+    cfg = _resolved_runtime_config(root)
     ml_cfg = (cfg.get("ml_advisor") or {}) if isinstance(cfg, dict) else {}
     ml_enabled = bool(ml_cfg.get("enabled", False))
-    history = root.joinpath(*_ML_HISTORY_REL)
-    history_records = 0
-    if history.exists():
-        try:
-            history_records = sum(1 for _ in history.read_text(encoding="utf-8", errors="ignore").splitlines() if _.strip())
-        except Exception:
-            history_records = 0
+    history_records = _ml_history_record_count(root.joinpath(*_ML_HISTORY_REL))
     items.append(
         "Pattern recognition (ml_advisor): "
         f"{'ON' if ml_enabled else 'OFF'} — "
@@ -2103,11 +2199,9 @@ def _advisor_stack_items(root: Path) -> list[str]:
                 peak_hr, is_recovery = _prior_peak(
                     by_fp, current_fp, pre_label, prior_fp, cur_hr
                 )
-                recovery_clause = (
-                    f" — recovery to prior peak {peak_hr * 100:.1f}%, not a new high"
-                    if is_recovery and not is_trap and prior_delta >= 0 and peak_hr is not None
-                    else ""
-                )
+                recovery_clause = _peak_clause(
+                    peak_hr, cur_hr, is_recovery, is_trap, verdict=False
+                ) if prior_delta >= 0 else ""
                 items.append(
                     f"Retune impact: {word} — {lead}{stale_paren} at n={cur_n}{recovery_clause}"
                 )
@@ -2799,10 +2893,23 @@ def _coherence_appendix_text(mc: dict[str, Any]) -> list[str]:
             f"{format_calibration_hit_rate(hr.get('raw_calibration_hit_rate'))}."
         )
     if crowd.get("available"):
+        # COUNTS, not list lengths (2026-08-07). memo_coherence caps the ticker
+        # lists at [:8] for display, so len() saturated at 8 and could never
+        # report more — "divergent 8" against a true 11 on 2026-08-06. Read the
+        # count fields, exactly as insufficient_data already did; fall back to
+        # the list length only for payloads predating classified_state_counts.
+        _counts = crowd.get("classified_state_counts") or {}
+
+        def _state_count(count_key: str, list_key: str) -> int:
+            val = _counts.get(count_key)
+            if isinstance(val, int):
+                return val
+            return len(crowd.get(list_key) or [])
+
         out.append(
             f"  Crowd (sandbox, production-gated): cross-source confirmed "
-            f"{len(crowd.get('cross_source_confirmed') or [])}, divergent "
-            f"{len(crowd.get('divergent') or [])}, insufficient_data "
+            f"{_state_count('confirmed_attention', 'cross_source_confirmed')}, divergent "
+            f"{_state_count('divergent_attention', 'divergent')}, insufficient_data "
             f"{crowd.get('insufficient_data_count')}; social_sentiment "
             f"{crowd.get('social_sentiment_status')}. (Attention overlap is not a "
             f"classified buy state.)"

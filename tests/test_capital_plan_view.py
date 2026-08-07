@@ -511,3 +511,67 @@ def test_investor_labels():
                               is_existing_holding=False) == "WATCH"
     assert cpv.investor_label("SELL", funded=False, tranche_type=None,
                               is_existing_holding=True) == "REDUCE"
+
+
+# ---------------------------------------------------------------------------
+# Glide double-count (2026-08-07)
+# ---------------------------------------------------------------------------
+# "Incoming contributions" was sourced from
+# monthly_contribution_net_investable, which is
+#   ..._base  +  glide_slice
+# and glide_slice is excess_cash_glide_fraction x idle_excess -- a slice of
+# EXISTING idle cash already reported one line above as "Cash on hand".
+# Live 2026-08-06: cash_on_hand 2100.18, base 1000.0, glide 144.57, rendered
+# incoming 1144.57 -- $144.57 counted twice, the second time under a label
+# implying new money, while deployable_from_incoming was 0.0.
+
+def _glide_plan(base=1000.0, glide=144.57, cash_on_hand=2100.18):
+    plan = _cash_plan(cash_on_hand=cash_on_hand, deployable_cash=1578.30)
+    env = plan["monthly_capital_envelope"]
+    env["monthly_contribution_gross"] = base
+    env["monthly_contribution_net_investable"] = base + glide
+    env["monthly_contribution_net_investable_base"] = base
+    env["glide_slice"] = glide
+    env["idle_excess"] = 578.30
+    env["excess_cash_glide_fraction"] = 0.25
+    return plan
+
+
+def _incoming_amount(view):
+    return view["capital_summary"]["incoming_contributions"]["amount"]
+
+
+def test_incoming_excludes_the_glide_slice():
+    """The headline figure must be new money only, not recycled cash."""
+    view = cpv.build_capital_plan_view(
+        _coherence(), _glide_plan(), {"decisions": []})
+    assert _incoming_amount(view) == 1000.0, (
+        "incoming must be the contribution base, not base + glide")
+
+
+def test_glide_is_still_disclosed_not_silently_dropped():
+    """Excluding it from the total must not hide it from the operator."""
+    view = cpv.build_capital_plan_view(
+        _coherence(), _glide_plan(), {"decisions": []})
+    md = "\n".join(cpv.render_capital_plan_md(view, markdown=True))
+    line = next(l for l in md.splitlines() if "Incoming contributions" in l)
+    assert "$1,000" in line, line
+    assert "$1,145" not in line, line
+    assert "145" in line and "glide" in line.lower(), (
+        f"the glide must remain visible as a labelled component: {line}")
+
+
+def test_no_glide_component_renders_a_plain_figure():
+    """Absent/zero glide must not add an empty parenthetical."""
+    plan = _glide_plan(glide=0.0)
+    view = cpv.build_capital_plan_view(_coherence(), plan, {"decisions": []})
+    md = "\n".join(cpv.render_capital_plan_md(view, markdown=True))
+    line = next(l for l in md.splitlines() if "Incoming contributions" in l)
+    assert "glide" not in line.lower(), line
+
+
+def test_legacy_envelope_without_base_field_still_works():
+    """Back-compat: pre-glide envelopes carry no _base key."""
+    plan = _cash_plan(incoming=800.0)
+    view = cpv.build_capital_plan_view(_coherence(), plan, {"decisions": []})
+    assert _incoming_amount(view) == 800.0
