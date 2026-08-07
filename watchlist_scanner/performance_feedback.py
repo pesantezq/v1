@@ -760,10 +760,29 @@ def _render_regime_performance_markdown(summary: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     for regime, metrics in by_regime.items():
+        # EVIDENCE HAIRCUT (2026-08-07). The producer already computes
+        # effective_signals (day-block deflation for non-independent samples)
+        # and hit_rate_uncertainty_pp, but the markdown printed only the raw
+        # total — neutral read "2319" against an effective 1033, overstating
+        # independent evidence by 2.2x. The total stays; the haircut is the
+        # context that makes it honest.
+        _total = int(metrics.get("total_signals") or 0)
+        _eff = metrics.get("effective_signals")
+        _unc = metrics.get("hit_rate_uncertainty_pp")
+        if isinstance(_eff, (int, float)) and int(_eff) != _total:
+            _signal_line = (f"- Total signals: **{_total}** "
+                            f"(effective **{int(_eff)}** after day-block "
+                            f"deflation — overlapping forward windows)")
+        else:
+            _signal_line = f"- Total signals: **{_total}**"
         lines += [
             f"## {regime}",
             "",
-            f"- Total signals: **{int(metrics.get('total_signals') or 0)}**",
+            _signal_line,
+        ]
+        if isinstance(_unc, (int, float)):
+            lines.append(f"- Hit-rate uncertainty: **±{float(_unc):.1f}pp**")
+        lines += [
             f"- Win rate: **{float(metrics.get('win_rate') or 0.0):.1%}**" if metrics.get("win_rate") is not None else "- Win rate: n/a",
             f"- Avg return: **{float(metrics.get('avg_return_pct') or 0.0):+.2f}%**" if metrics.get("avg_return_pct") is not None else "- Avg return: n/a",
             f"- Avg signal score: **{float(metrics.get('avg_signal_score') or 0.0):.2f}**" if metrics.get("avg_signal_score") is not None else "- Avg signal score: n/a",
@@ -772,6 +791,22 @@ def _render_regime_performance_markdown(summary: dict[str, Any]) -> str:
             f"- Best conviction band: `{metrics.get('best_conviction_band') or 'n/a'}`",
             f"- Worst conviction band: `{metrics.get('worst_conviction_band') or 'n/a'}`",
             f"- Degraded data impact: {metrics.get('degraded_data_impact_note') or 'n/a'}",
+            "",
+        ]
+
+    # ABSENT REGIME (2026-08-07). by_regime only holds regimes with resolved
+    # history, so a regime with none was silently omitted. On 2026-08-06 the
+    # LIVE regime was risk_on and no risk_on bucket existed — a reader could not
+    # tell that the regime the portfolio is actually in has zero evidence behind
+    # it. Omission read as "nothing to report"; it meant "nothing is known".
+    current = summary.get("current_regime")
+    if current and current not in by_regime:
+        lines += [
+            f"## {current} (current regime)",
+            "",
+            f"- **No resolved outcomes yet for `{current}`** — the regime the "
+            f"portfolio is currently in has no historical evidence in this "
+            f"window, so nothing above describes it.",
             "",
         ]
     return "\n".join(lines)
@@ -1025,11 +1060,32 @@ def generate_signal_performance_reports(
     }
 
 
+def _resolve_current_regime(snapshot_path: str | Path) -> str | None:
+    """Read the LIVE regime label so the report can name a regime it lacks
+    evidence for.
+
+    ``by_regime`` only contains regimes with resolved history, so a regime with
+    none was silently omitted — on 2026-08-06 the live regime was ``risk_on``
+    and no such bucket existed, leaving a reader unable to tell that the regime
+    the portfolio is actually in has zero evidence behind it. Best-effort and
+    non-fatal: an unreadable snapshot simply means the report makes no claim
+    either way, never a wrong one.
+    """
+    try:
+        payload = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    label = (payload.get("market_regime") or {}).get("regime_label")
+    return str(label) if label else None
+
+
 def generate_regime_performance_reports(
     *,
     db_path: str | Path = "data/portfolio.db",
     output_dir: str | Path = "outputs/regime",
     primary_window_days: int = PRIMARY_WINDOW_DAYS,
+    current_regime: str | None = None,
+    snapshot_path: str | Path = "outputs/portfolio/portfolio_snapshot.json",
 ) -> dict[str, Any]:
     store = WatchlistStateStore(db_path)
     rows = store.list_signal_feedback(limit=10000)
@@ -1037,6 +1093,9 @@ def generate_regime_performance_reports(
         rows,
         primary_window_days=primary_window_days,
     )
+    resolved_current = current_regime or _resolve_current_regime(snapshot_path)
+    if resolved_current:
+        summary["current_regime"] = resolved_current
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "regime_performance.json"

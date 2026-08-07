@@ -173,10 +173,17 @@ def _parse_memo(raw: str) -> dict[str, list[str]]:
         # Strip fingerprint hashes from every line before storing
         line = _strip_hashes(raw_line)
 
-        if line.startswith("## "):
+        # Accept ``###`` as well as ``##`` (2026-08-07). The memo demoted its
+        # appendix sections a level so the document's structure finally matches
+        # its own "Technical diagnostics — not required for the daily decision"
+        # marker. _map_header matches on header TEXT, so the six canonical
+        # buckets are unchanged; without this, every demoted section would stop
+        # being a header and its lines would silently accumulate into whichever
+        # ``##`` section happened to precede it.
+        if line.startswith("## ") or line.startswith("### "):
             _flush()
             buffer = []
-            header_text = line[3:].strip()
+            header_text = line.lstrip("#").strip()
             current_section = _map_header(header_text)
         else:
             buffer.append(line)
