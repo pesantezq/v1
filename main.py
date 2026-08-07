@@ -875,6 +875,12 @@ def run_portfolio_update(
         scanner_sleeve_plan: list = []
         _scanner_safe_mode = False
         _scanner_safe_mode_reasons: list[str] = []
+        # Bound HERE, not only inside the weekly/monthly fetch branches, which
+        # is why every daily run raised UnboundLocalError at the factor-liveness
+        # call below and silently dark-ed the feature. ``None`` is meaningful
+        # downstream: it means "fundamentals not fetched on this cadence", as
+        # distinct from an empty result (see degraded_mode.assess_factor_liveness).
+        bulk_metrics = None
         _scanner_stale_cache_days: int | None = None
         _scanner_latency_ms: int | None = None
         # Screening verdict for THIS run's build; None on refresh-only runs, where
@@ -1450,9 +1456,13 @@ def run_portfolio_update(
             try:
                 _scanner_liveness = assess_factor_liveness(
                     eligible_symbols=_scanner_eligible or [],
-                    metrics_by_symbol={
-                        m.get('symbol'): m for m in (bulk_metrics or [])
-                        if isinstance(m, dict) and m.get('symbol')},
+                    # Pass None THROUGH when metrics were never fetched — do not
+                    # coerce to {}, which would read as "looked, found nothing"
+                    # and report every factor inert on every daily run.
+                    metrics_by_symbol=(
+                        None if bulk_metrics is None else {
+                            m.get('symbol'): m for m in bulk_metrics
+                            if isinstance(m, dict) and m.get('symbol')}),
                     quotes_by_symbol=batch_quotes or {},
                     candidates=scanner_candidates,
                     trend_filter_enabled=bool(config.scanner.get('trend_filter_200dma', True)),
@@ -1890,6 +1900,11 @@ def run_portfolio_update(
                     constituent_resolution=_scanner_meta.get('constituent_resolution'),
                     screening_sufficiency=_scanner_meta.get('screening_sufficiency'),
                     ranking_quality=_scanner_meta.get('ranking_quality'),
+                    # Without these two the sleeve-suppression decision never
+                    # reached the artifact, so the canary reported the safety
+                    # control as ABSENT on runs where it was ENGAGED.
+                    safe_mode=_scanner_meta.get('safe_mode'),
+                    safe_mode_reasons=_scanner_meta.get('safe_mode_reasons'),
                     factor_liveness=_scanner_meta.get('factor_liveness'),
                     scraped_intel_stats=_si_stats,
                     market_regime=(_ws_result.get("market_regime") if isinstance(_ws_result, dict) else None),

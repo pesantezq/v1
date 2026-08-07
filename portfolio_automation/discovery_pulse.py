@@ -174,9 +174,30 @@ def evaluate_caps(state: dict[str, Any]) -> tuple[bool, str | None]:
 
 def _refresh_monthly_openai_cost(root: Path) -> float:
     """Read current month's cumulative OpenAI spend from ai_budget tracker."""
+    # This feeds evaluate_caps' $20/mo OpenAI trip-wire, so a read failure here
+    # disables the cap entirely. It was called with `base_dir=`, a parameter
+    # load_recent_ai_usage_events has never had; the resulting TypeError was
+    # swallowed to the -1.0 sentinel and the caller kept state's 0.0 initializer,
+    # so the cap could not bind no matter what was spent (2026-08-07).
+    ledger = root / "outputs" / "policy" / "ai_usage_events.jsonl"
+    if not ledger.exists():
+        # FAIL CLOSED. An absent ledger cannot prove spend is 0 — and returning
+        # 0.0 here would let a vanished log RESET a known-high figure, quietly
+        # re-opening the cap. Mirrors promotion_approvals.approvals_log_unreadable:
+        # "nothing recorded yet" and "the record is gone" are not the same claim.
+        logger.warning(
+            "discovery_pulse: AI usage ledger absent at %s — monthly OpenAI cap "
+            "cannot be evaluated this run; keeping previous state value", ledger)
+        return -1.0
     try:
         from portfolio_automation.ai_budget import load_recent_ai_usage_events, _parse_ts
-        events = load_recent_ai_usage_events(base_dir=str(root / "outputs"))
+        events = load_recent_ai_usage_events(
+            path=str(ledger),
+            # The default keeps only the most recent 500 events. For a CAP,
+            # under-counting spend fails OPEN, so read enough to cover a busy
+            # month rather than silently truncating the figure being gated.
+            max_events=100_000,
+        )
         now = datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         monthly = sum(
@@ -185,7 +206,11 @@ def _refresh_monthly_openai_cost(root: Path) -> float:
         )
         return float(monthly)
     except Exception as exc:
-        logger.debug("discovery_pulse: ai_budget read failed (%s) — using state copy", exc)
+        # WARNING, not debug: at debug this sat below the pulse runner's level,
+        # so a dead cap left no trace in discovery_pulse_*.log for two months.
+        logger.warning(
+            "discovery_pulse: ai_budget read failed (%s) — monthly OpenAI cap "
+            "cannot be evaluated this run; keeping previous state value", exc)
         return -1.0  # sentinel: caller keeps existing state value
 
 

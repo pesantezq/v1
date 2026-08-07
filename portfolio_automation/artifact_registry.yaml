@@ -1157,6 +1157,26 @@ artifacts:
     consumer_status: diagnostic_only
     notes: next-stage Phase 11A — producer not yet shipped
 
+  scanner_recovery_canary.json:
+    path: outputs/policy/scanner_recovery_canary.json
+    label: scanner-quality acceptance canary
+    lens: market_discovery
+    role: probe
+    required: false
+    cadence: daily
+    producer: scanner_canary
+    consumers: [daily-tool-analysis]
+    severity_if_missing: info
+    consumer_status: consumed
+    notes: >
+      Deterministic acceptance view over scraped_intel_run_summary.json:scanner
+      (constituent resolution, screening sufficiency, universe sufficiency,
+      factor liveness, ranking quality). Registered 2026-08-07: it had NO
+      registry row at all, so governance could not see it go stale — and its
+      only caller was the monthly universe refresh, making it a monthly gate
+      over a daily-mutating subsystem. Now written by run_daily_safe.sh Stage
+      11b. Observe-only: gates nothing, suppresses nothing.
+
   pattern_events.jsonl:
     path: outputs/policy/pattern_events.jsonl
     label: pattern events

@@ -38,6 +38,8 @@ def build_run_summary(
     screening_sufficiency: Optional[Dict[str, Any]] = None,
     ranking_quality: Optional[Dict[str, Any]] = None,
     factor_liveness: Optional[Dict[str, Any]] = None,
+    safe_mode: Optional[bool] = None,
+    safe_mode_reasons: Optional[List[str]] = None,
     scraped_intel_stats: Optional[Dict[str, Any]] = None,
     market_regime: Optional[Dict[str, Any]] = None,
     market_coverage: Optional[Dict[str, Any]] = None,
@@ -108,6 +110,16 @@ def build_run_summary(
             # primary coverage coexisted with a 15-point factor and a hard guard
             # both completely inert. Observability only: never suppresses.
             "factor_liveness": factor_liveness,
+            # THE DOWNSTREAM CONSEQUENCE of the dimensions above: did the
+            # speculative sleeve actually get suppressed, and for which reasons?
+            # main.py has always computed this, but it had no route into the
+            # artifact, so scanner_canary read None and printed "suppressed:
+            # None / reasons: none" on runs where the sleeve WAS suppressed for
+            # two reasons. None means "the run never reported"; False means
+            # "checked, and the guards were satisfied" — the two must stay
+            # distinguishable, so this is NOT defaulted to False.
+            "safe_mode": safe_mode,
+            "safe_mode_reasons": list(safe_mode_reasons or []),
             # 3. Is the resulting dataset large enough to trust? A published count
             #    nothing judges is not monitoring: this block carried
             #    symbol_count: 3 every day from June to August 2026 while every
