@@ -1283,10 +1283,10 @@ class TestBuildDailyMemoMd:
             }
         )
         result = build_daily_memo_md(degraded)
-        assert "## System / Data Health" in result
+        assert "### System / Data Health" in result
 
         normal = build_daily_memo_md(_full_summary())
-        assert "## System / Data Health" not in normal
+        assert "### System / Data Health" not in normal
 
 
 class TestGenerateDailyMemo:

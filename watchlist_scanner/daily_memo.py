@@ -1942,7 +1942,7 @@ def _append_enrichment_md(append) -> None:
         return
 
     def _section(title: str, body_lines: list[str]) -> None:
-        append(f"## {title}")
+        append(f"### {title}")
         if body_lines:
             for line in body_lines:
                 append(line)
@@ -2415,7 +2415,7 @@ def _pattern_confirmed_section(rows: list[str], *, markdown: bool) -> list[str]:
         return []
     out: list[str] = []
     if markdown:
-        out.append("## Watch list — pattern-confirmed candidates (advisory)")
+        out.append("### Watch list — pattern-confirmed candidates (advisory)")
         out.append(f"_{_PATTERN_CONFIRMED_POOLED_CAVEAT}._")
         out.extend(f"- {line}" for line in rows)
     else:
@@ -3351,19 +3351,19 @@ def build_daily_memo_md(
         pulse_root = _pulse_root()
         pulse_items = _portfolio_pulse_items(pulse_root)
         if pulse_items:
-            a("## Portfolio Pulse")
+            a("### Portfolio Pulse")
             for item in pulse_items:
                 a(f"- {item}")
             a("")
         risk_items = _risk_delta_items(pulse_root)
         if risk_items:
-            a("## Risk Delta")
+            a("### Risk Delta")
             for item in risk_items:
                 a(f"- {item}")
             a("")
         advisor_items = _advisor_stack_items(pulse_root)
         if advisor_items:
-            a("## Advisor Stack")
+            a("### Advisor Stack")
             for item in advisor_items:
                 a(f"- {item}")
             a("")
@@ -3386,7 +3386,7 @@ def build_daily_memo_md(
         logger.warning("daily_memo: enrichment sections (md) failed — %s", exc)
 
     if health_items:
-        a("## System / Data Health")
+        a("### System / Data Health")
         for item in health_items[:3]:
             a(f"- {item}")
         a("")
@@ -3412,7 +3412,7 @@ def build_daily_memo_md(
             a(_build_discovery_section_md(discovery_data))
         except Exception as exc:
             logger.warning("daily_memo: discovery section (md) failed — %s", exc)
-            a("## Discovery Research — Sandbox Only")
+            a("### Discovery Research — Sandbox Only")
             a("")
             a("_Discovery data unavailable (loading error)._")
             a("")

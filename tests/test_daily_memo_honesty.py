@@ -147,3 +147,74 @@ class TestRendererStaysPure:
         md = build_daily_memo_md({}, run_status={
             "overall_status": "failed", "content_warn_count": 0})
         assert "failed" in md
+
+
+# --------------------------------------------------------------------------
+# Brief vs appendix (2026-08-07)
+# --------------------------------------------------------------------------
+# The memo declared "## Operator / System Appendix — Technical diagnostics, not
+# required for the daily decision" and then emitted ELEVEN MORE ## sections as
+# siblings of it. The document said where the brief ended; the structure did
+# not. Appendix sections are now ###, so the brief is the eight decision
+# sections a reader actually needs.
+
+_BRIEF_SECTIONS = {
+    "Today's Verdict", "Top Insight", "Today's Capital Plan", "What To Do Today",
+    "Deferred Recommendations", "Bottom Line", "Risk Focus", "What Changed",
+    # legacy capital headers, still emitted by the empty-summary fallback
+    "Top Decisions", "Capital Actions",
+}
+_APPENDIX_MARKER = "## Operator / System Appendix"
+
+
+def _md_h2s(md: str) -> list[str]:
+    return [l[3:].strip() for l in md.splitlines()
+            if l.startswith("## ") and not l.startswith("### ")]
+
+
+class TestBriefAppendixSplit:
+    def test_nothing_after_the_marker_is_a_top_level_section(self):
+        from watchlist_scanner.daily_memo import build_daily_memo_md
+        md = build_daily_memo_md({})
+        if _APPENDIX_MARKER not in md:
+            return  # nothing to police on an empty summary
+        tail = md.split(_APPENDIX_MARKER, 1)[1]
+        assert not _md_h2s(tail), (
+            f"appendix content must be ###, found top-level: {_md_h2s(tail)}")
+
+    def test_brief_sections_stay_top_level(self):
+        from watchlist_scanner.daily_memo import build_daily_memo_md
+        md = build_daily_memo_md({})
+        head = md.split(_APPENDIX_MARKER, 1)[0]
+        for h in _md_h2s(head):
+            assert h in _BRIEF_SECTIONS or "Appendix" in h, (
+                f"'{h}' is above the appendix marker but is not a brief section")
+
+
+class TestDashboardStillSeesDemotedSections:
+    """Heading level is load-bearing: dash_memo maps ## headers into six
+    buckets, so demoting without teaching it ### would have silently folded
+    every appendix section into whichever ## preceded it."""
+
+    def test_h3_headers_are_still_section_boundaries(self):
+        from gui_v2.data.dash_memo import _parse_memo
+        secs = _parse_memo(
+            "## Today's Verdict\n> v\n\n"
+            "### Risk Delta\n- concentration ok\n\n"
+            "### Portfolio Growth\n- up 1%\n")
+        assert "Risk Focus" in secs, "### Risk Delta must map to Risk Focus"
+        assert "Quant Notes" in secs, "### Portfolio Growth must map to Quant Notes"
+        assert any("concentration ok" in l for l in secs["Risk Focus"])
+
+    def test_h2_headers_still_work(self):
+        from gui_v2.data.dash_memo import _parse_memo
+        secs = _parse_memo("## Risk Delta\n- concentration ok\n")
+        assert "Risk Focus" in secs
+
+    def test_demoted_content_does_not_bleed_into_the_previous_section(self):
+        from gui_v2.data.dash_memo import _parse_memo
+        secs = _parse_memo(
+            "## Operator / System Appendix\n- diag line\n\n"
+            "### Portfolio Growth\n- growth line\n")
+        assert not any("growth line" in l for l in secs.get("Data Quality", [])), (
+            "growth content must not fold into the appendix bucket")
