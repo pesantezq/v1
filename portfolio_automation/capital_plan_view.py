@@ -424,9 +424,29 @@ def build_capital_plan_view(
         funded_capital = _money(None, _STATE_MISSING, "funding data unavailable")
 
     # Incoming contributions available for deployment.
-    incoming_raw = (envelope.get("monthly_contribution_net_investable")
-                    if envelope.get("monthly_contribution_net_investable") is not None
-                    else envelope.get("monthly_contribution_gross"))
+    #
+    # NEW MONEY ONLY (2026-08-07). ``monthly_contribution_net_investable`` is
+    # ``..._base + glide_slice``, and ``glide_slice`` is
+    # ``excess_cash_glide_fraction x idle_excess`` — a slice of EXISTING idle
+    # cash already reported as "Cash on hand". Sourcing the headline from it
+    # counted that cash twice, the second time under a label implying money
+    # arriving (live 2026-08-06: cash 2100.18, base 1000.00, glide 144.57,
+    # rendered 1144.57, while deployable_from_incoming was 0.00).
+    # The glide is surfaced separately as ``incoming_glide_from_cash`` so it
+    # stays visible without inflating the total.
+    _base = envelope.get("monthly_contribution_net_investable_base")
+    incoming_raw = (
+        _base if _base is not None
+        else (envelope.get("monthly_contribution_net_investable")
+              if envelope.get("monthly_contribution_net_investable") is not None
+              else envelope.get("monthly_contribution_gross"))
+    )
+    _glide = _num(envelope.get("glide_slice")) or 0.0
+    incoming_glide_from_cash = (
+        _money(_glide, _STATE_CONFIRMED,
+               "glide of existing idle cash, not new contributions")
+        if _glide > 0 else _money(None, _STATE_NOT_APPLICABLE, "no glide slice")
+    )
     if incoming_raw is None:
         if funding_available:
             incoming_contributions = _money(funding.get("deployable_from_incoming"))
@@ -602,6 +622,7 @@ def build_capital_plan_view(
         "capital_summary": {
             "cash_on_hand": cash_on_hand,
             "incoming_contributions": incoming_contributions,
+            "incoming_glide_from_cash": incoming_glide_from_cash,
             "required_reserve": required_reserve,
             "deployable_from_cash": deployable_from_cash,
             "deployable_from_incoming": deployable_from_incoming,
@@ -816,7 +837,14 @@ def render_capital_plan_md(view: dict[str, Any], *, markdown: bool = True,
     # 1. Today's Capital Plan
     h("Today's Capital Plan")
     bullet(f"Cash on hand: {_fmt_money_field(cs['cash_on_hand'])}")
-    bullet(f"Incoming contributions: {_fmt_money_field(cs['incoming_contributions'])}")
+    # The glide is a slice of EXISTING cash, so it is disclosed as a component
+    # of the line rather than summed into it (see build_capital_plan_view).
+    _glide_f = cs.get("incoming_glide_from_cash") or {}
+    _glide_amt = _glide_f.get("amount") if _glide_f.get("state") == _STATE_CONFIRMED else None
+    _glide_sfx = (f" (+{_fmt_money(_glide_amt)} glide from existing cash)"
+                  if _glide_amt else "")
+    bullet(f"Incoming contributions: "
+           f"{_fmt_money_field(cs['incoming_contributions'])}{_glide_sfx}")
     bullet(f"Required cash reserve: {_fmt_money_field(cs['required_reserve'])}")
     bullet(f"Deployable above reserve: {_fmt_money_field(cs['deployable_capital'])}")
     gross = cs["gross_recommended_capital"]

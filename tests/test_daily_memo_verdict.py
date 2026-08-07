@@ -827,6 +827,70 @@ class TestAdvisorStackFmpBudgetLine(unittest.TestCase):
             self.assertIn("100/250", fmp[0])
 
 
+class TestAdvisorStackConfigSource(unittest.TestCase):
+    """The Advisor Stack must describe the config the RUN used (2026-08-07).
+
+    It read ``config/base.json`` while the pipeline resolves ``config.json``.
+    Measured 2026-08-06: base.json had ``ml_advisor.enabled = true`` and
+    config.json had ``false``, so the memo reported an advisor ON that the run
+    had OFF — and that knob sits inside the gauge fingerprint.
+
+    Same line, second defect: the record count was ``splitlines()`` of
+    ``data/ml_history.json``, a pretty-printed JSON OBJECT rather than JSONL,
+    reporting 13877 records for an actual 375 (37x).
+    """
+
+    def _root(self, td, *, legacy_enabled, base_enabled, history):
+        import json
+        root = Path(td)
+        (root / "config").mkdir(parents=True)
+        (root / "config.json").write_text(
+            json.dumps({"ml_advisor": {"enabled": legacy_enabled}}))
+        (root / "config" / "base.json").write_text(
+            json.dumps({"ml_advisor": {"enabled": base_enabled}}))
+        (root / "data").mkdir(parents=True)
+        # pretty-printed OBJECT — many lines, few records (the live shape)
+        (root / "data" / "ml_history.json").write_text(
+            json.dumps(history, indent=2))
+        return root
+
+    def _ml_line(self, root):
+        return next(i for i in _advisor_stack_items(root)
+                    if "ml_advisor" in i)
+
+    def test_reads_the_config_the_run_resolves_not_base_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td, legacy_enabled=False, base_enabled=True,
+                              history={"AAA": [1]})
+            self.assertIn("OFF", self._ml_line(root))
+
+    def test_reports_on_when_the_resolved_config_enables_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td, legacy_enabled=True, base_enabled=False,
+                              history={"AAA": [1]})
+            self.assertIn("ON", self._ml_line(root))
+
+    def test_counts_records_not_pretty_printed_lines(self):
+        with tempfile.TemporaryDirectory() as td:
+            history = {f"SYM{i}": [{"a": 1}, {"b": 2}] for i in range(375)}
+            root = self._root(td, legacy_enabled=True, base_enabled=True,
+                              history=history)
+            line = self._ml_line(root)
+            self.assertIn("375 history records", line)
+            # the pretty-printed file is thousands of lines long
+            raw_lines = len((root / "data" / "ml_history.json")
+                            .read_text().splitlines())
+            self.assertGreater(raw_lines, 1000)
+            self.assertNotIn(str(raw_lines), line)
+
+    def test_unparseable_history_degrades_to_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = self._root(td, legacy_enabled=True, base_enabled=True,
+                              history={"AAA": [1]})
+            (root / "data" / "ml_history.json").write_text("{not json")
+            self.assertIn("0 history records", self._ml_line(root))
+
+
 class TestPriorPeakRecovery(unittest.TestCase):
     """Peak-relative caveat (2026-07-08): a large +Δ vs the directly-replaced
     gauge can be a RECOVERY toward an older, stronger gauge era rather than a
@@ -882,6 +946,60 @@ class TestPriorPeakRecovery(unittest.TestCase):
             by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.6955)
         self.assertAlmostEqual(peak_hr, 0.4737)
         self.assertFalse(is_recovery)
+
+    # ── Banded recovery (2026-08-07) ────────────────────────────────────────
+    # The original predicate was ONE-SIDED — `(cur_hr - peak_hr) <= margin_pp`
+    # fires identically at +2pp above the peak, AT the peak, and 12.7pp BELOW
+    # it. On 2026-08-06 that rendered "recovery to prior peak 68.9%" while the
+    # gauge read 56.28%, overstating it by 12.66pp on the memo's headline line.
+    # `is_recovery` now means "within +/-margin_pp of the peak"; further below
+    # earns a distinct, signed "still Xpp below" clause.
+    def test_prior_peak_no_recovery_when_far_below_peak(self):
+        """The live 2026-08-06 shape: 56.28% against a 68.94% peak."""
+        by = self._by_fp_recovery()
+        by["CURRENT"]["hit_rate_1d"] = 0.5628
+        peak_hr, is_recovery = _prior_peak(
+            by, "CURRENT", "pre_tracker_unknown", "REPLACED", 0.5628)
+        self.assertAlmostEqual(peak_hr, 0.6894)
+        self.assertFalse(
+            is_recovery,
+            "56.28% is 12.66pp BELOW the 68.94% peak — that is not a recovery")
+
+    def test_prior_peak_band_separates_near_peak_from_well_below(self):
+        """Inside the +/-2pp band is a recovery; well below it is not.
+
+        Deliberately NOT asserted at the exact -2.00pp edge: binary floats put
+        ``(0.6694 - 0.6894) * 100`` at -2.0000000000000018, so an
+        exact-boundary assertion tests IEEE-754 rather than the behaviour that
+        matters.
+        """
+        by = self._by_fp_recovery()
+        for hr, expected in ((0.6894 - 0.015, True),    # -1.5pp, inside
+                             (0.6894 - 0.025, False)):  # -2.5pp, outside
+            by["CURRENT"]["hit_rate_1d"] = hr
+            _, is_recovery = _prior_peak(
+                by, "CURRENT", "pre_tracker_unknown", "REPLACED", hr)
+            self.assertIs(is_recovery, expected, f"hit_rate {hr}")
+
+    def test_verdict_renders_signed_gap_when_far_below_peak(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            by = self._by_fp_recovery()
+            by["CURRENT"]["hit_rate_1d"] = 0.5628
+            self._write_recovery(root, by)
+            verdict = _build_verdict(
+                TestBuildVerdict()._summary(),
+                decision_rows=_decisions(("low", "portfolio")),
+                capital_counts={"SELL": 0, "SCALE": 0, "BUY": 0},
+                root=root,
+            )
+            items = _advisor_stack_items(root)
+            line = [i for i in items if "Retune" in i][0]
+            for text in (verdict, line):
+                self.assertIn("12.7pp below prior peak 68.9%", text)
+                self.assertNotIn("recovery to", text.lower())
+                # the ambiguous glyph is gone: it read as "current ~ 68.9%"
+                self.assertNotIn("≈", text)
 
     def _write_recovery(self, root, by):
         import json

@@ -2293,6 +2293,32 @@ class TestM2M3SectorFraming:
         # when under cap we don't want "— over"
         assert "— over" not in sector_line
 
+    # ── Denominator correctness (2026-08-07) ───────────────────────────────
+    # top_sector.allocation_pct is a share of the NORMALIZED ALLOCATION BOOK
+    # (portfolio_construction.py:276 — top_sector_value / total_normalized).
+    # It was being compared to allocation_engine sector_cap (0.25), which caps
+    # share of PORTFOLIO VALUE. On 2026-08-06 that rendered
+    # "Financial Services 25.6% (soft target 25% — over)" — a breach that does
+    # not exist: on the cap's own basis FS is allocation_by_sector 0.06 = 6.0%,
+    # ~19pp of headroom. The threshold governing the share-of-book basis is
+    # top_sector_warning_threshold (0.40), and it did not fire.
+    def test_share_of_book_uses_warning_threshold_not_exposure_cap(self, tmp_path):
+        """The live 2026-08-06 shape: 25.6% of book must NOT read as a breach."""
+        self._snapshot(tmp_path, sector_name="Financial Services", share=0.2563)
+        items = _portfolio_pulse_items(tmp_path)
+        line = next((i for i in items if "Financial Services" in i), None)
+        assert line is not None
+        assert "— over" not in line, f"25.6% of book is not a breach: {line}"
+        assert "40%" in line, f"must cite the share-of-book threshold: {line}"
+        assert "25%" not in line, f"must not cite the exposure cap: {line}"
+
+    def test_share_of_book_line_names_its_basis(self, tmp_path):
+        """A bare percentage with no denominator is what caused the defect."""
+        self._snapshot(tmp_path, sector_name="Technology", share=0.2563)
+        line = next(i for i in _portfolio_pulse_items(tmp_path)
+                    if "Technology" in i)
+        assert "allocation book" in line, line
+
     def test_sector_line_is_one_line(self, tmp_path):
         self._snapshot(tmp_path, sector_name="Technology", share=0.778, cap=0.35)
         items = _portfolio_pulse_items(tmp_path)
