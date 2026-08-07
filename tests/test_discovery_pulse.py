@@ -201,3 +201,104 @@ class TestCustomCaps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# The $20/mo OpenAI cap was a DEAD gate (2026-08-07)
+# ---------------------------------------------------------------------------
+# _refresh_monthly_openai_cost called load_recent_ai_usage_events(base_dir=...),
+# but that callee takes (path, max_events) and has never had a base_dir
+# parameter. The TypeError hit a bare `except` returning the -1.0 sentinel, so
+# state['openai_cost_usd_month'] never left its 0.0 initializer -- and
+# evaluate_caps gates on exactly that field against the $20.00 cap. The cap
+# therefore could not bind no matter what was spent. The failure logged at
+# logger.debug, below the pulse runner's level, so nothing appeared in the log.
+
+class TestMonthlyOpenAICostIsReadable(unittest.TestCase):
+    def _ledger(self, root, rows):
+        import json as _j
+        d = root / "outputs" / "policy"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "ai_usage_events.jsonl").write_text(
+            "\n".join(_j.dumps(r) for r in rows), encoding="utf-8")
+
+    def _row(self, ts, cost):
+        return {"timestamp": ts, "provider": "openai", "model": "gpt-4o-mini",
+                "estimated_cost_usd": cost, "purpose": "test",
+                "prompt_tokens": 1, "completion_tokens": 1}
+
+    def test_returns_real_spend_not_the_error_sentinel(self):
+        from datetime import datetime, timezone
+        from portfolio_automation.discovery_pulse import _refresh_monthly_openai_cost
+        now = datetime.now(timezone.utc)
+        this_month = now.replace(day=2, hour=12, minute=0, second=0,
+                                 microsecond=0).isoformat()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._ledger(root, [self._row(this_month, 1.25),
+                                self._row(this_month, 0.75)])
+            got = _refresh_monthly_openai_cost(root)
+        self.assertNotEqual(got, -1.0, "-1.0 is the read-failed sentinel")
+        self.assertAlmostEqual(got, 2.00, places=4)
+
+    def test_signature_mismatch_would_be_caught(self):
+        """Regression guard: the callee must accept how we call it."""
+        import inspect
+        from portfolio_automation.ai_budget import load_recent_ai_usage_events
+        params = inspect.signature(load_recent_ai_usage_events).parameters
+        self.assertIn("path", params)
+        self.assertNotIn("base_dir", params,
+                         "if base_dir is ever added, revisit discovery_pulse")
+
+    def test_prior_month_spend_is_excluded(self):
+        from datetime import datetime, timezone, timedelta
+        from portfolio_automation.discovery_pulse import _refresh_monthly_openai_cost
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month = (month_start - timedelta(days=2)).isoformat()
+        this_month = month_start.replace(day=1, hour=6).isoformat()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._ledger(root, [self._row(last_month, 99.0),
+                                self._row(this_month, 0.50)])
+            got = _refresh_monthly_openai_cost(root)
+        self.assertAlmostEqual(got, 0.50, places=4)
+
+    def test_busy_month_is_not_silently_truncated(self):
+        """A cap that undercounts spend fails OPEN — the wrong direction.
+
+        load_recent_ai_usage_events defaults to the most recent 500 events, so
+        a month with more than that would silently under-report the very spend
+        the $20 cap gates on.
+        """
+        from datetime import datetime, timezone
+        from portfolio_automation.discovery_pulse import _refresh_monthly_openai_cost
+        now = datetime.now(timezone.utc)
+        ts = now.replace(day=1, hour=1, minute=0, second=0,
+                         microsecond=0).isoformat()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._ledger(root, [self._row(ts, 0.01) for _ in range(900)])
+            got = _refresh_monthly_openai_cost(root)
+        self.assertAlmostEqual(got, 9.00, places=2)
+
+    def test_absent_ledger_fails_closed_and_keeps_prior_state(self):
+        """An absent ledger must NOT be read as proof that spend is $0.
+
+        Returning 0.0 here would let a vanished log reset a known-high figure
+        and quietly re-open the cap. The sentinel makes the caller keep its
+        previous value instead. Same distinction as
+        promotion_approvals.approvals_log_unreadable.
+        """
+        from portfolio_automation.discovery_pulse import _refresh_monthly_openai_cost
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(_refresh_monthly_openai_cost(Path(td)), -1.0)
+
+    def test_empty_ledger_is_a_real_zero(self):
+        """A ledger that EXISTS and records nothing genuinely is $0 spent."""
+        from portfolio_automation.discovery_pulse import _refresh_monthly_openai_cost
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "outputs" / "policy").mkdir(parents=True)
+            (root / "outputs" / "policy" / "ai_usage_events.jsonl").write_text("")
+            self.assertEqual(_refresh_monthly_openai_cost(root), 0.0)

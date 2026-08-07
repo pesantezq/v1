@@ -604,6 +604,30 @@ def assess_factor_liveness(
     """
     from scanner.candidate_scanner import score_breakdown
 
+    _FACTOR_KEYS = ("revenue_growth", "fcf_yield", "roe", "pe", "trend")
+    _FILTER_KEYS = ("rev_growth_min", "pe_bubble_guard",
+                    "fcf_negative_guard", "trend_200dma")
+
+    # ``None`` means the fundamentals were NEVER FETCHED on this cadence — a
+    # different claim from ``{}``, which means they were fetched and came back
+    # empty. Collapsing the two would report nine inert components on every
+    # daily run (bulk metrics are only pulled in the weekly/monthly branches),
+    # raising a permanent false alarm and burying the genuinely-inert PE factor
+    # that experiment pe_restoration_full_2026_08 tracks. "We did not look" must
+    # never render as "we looked and it is dead" (2026-08-07).
+    if metrics_by_symbol is None:
+        na_factor = {"input_coverage": None, "field_resolution": None,
+                     "eligible": None, "score_nonzero_count": None,
+                     "score_variance": None, "status": "not_assessable"}
+        return {
+            "observe_only": True, "status": "not_assessable",
+            "factors": {k: dict(na_factor) for k in _FACTOR_KEYS},
+            "filters": {k: {"evaluable": None, "rejections": None,
+                            "status": "not_assessable"} for k in _FILTER_KEYS},
+            "inert_components": [], "suppresses_sleeve": False,
+            "reasons": ["metrics_not_fetched_this_cadence"],
+        }
+
     eligible = [str(s) for s in eligible_symbols if s] \
         if isinstance(eligible_symbols, (list, tuple, set)) else []
     metrics = metrics_by_symbol if isinstance(metrics_by_symbol, dict) else {}

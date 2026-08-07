@@ -169,3 +169,58 @@ def test_factor_liveness_persists_to_the_artifact(tmp_path):
     _build(tmp_path, factor_liveness=_LIVENESS)
     w = _j.loads((tmp_path / "scraped_intel_run_summary.json").read_text())
     assert w["scanner"]["factor_liveness"]["inert_components"] == ["pe", "pe_bubble_guard"]
+
+
+# ---------------------------------------------------------------------------
+# Safe-mode could not reach the oversight surface (2026-08-07)
+# ---------------------------------------------------------------------------
+# main.py computes _scanner_safe_mode / _scanner_safe_mode_reasons and puts them
+# on _scanner_meta, but build_run_summary had no such parameters and the call
+# site passed neither -- so scraped_intel_run_summary.json carried no safe_mode
+# at all. scanner_canary.py then read None and printed
+#   "speculative sleeve suppressed: None / suppression reasons: none"
+# on a run where the sleeve WAS suppressed for two reasons. A safety control
+# that reads as ABSENT rather than ENGAGED is worse than no control: it grants
+# an assurance nobody checked.
+
+class TestSafeModeTransport:
+    def test_safe_mode_reaches_the_artifact(self, tmp_path):
+        s = _build(tmp_path, safe_mode=True,
+                   safe_mode_reasons=["small_dataset", "screening_not_certified"])
+        sc = s["scanner"]
+        assert sc["safe_mode"] is True
+        assert sc["safe_mode_reasons"] == ["small_dataset",
+                                           "screening_not_certified"]
+
+    def test_engaged_suppression_is_distinguishable_from_unknown(self, tmp_path):
+        """False (checked, clear) must not look like None (never reported)."""
+        cleared = _build(tmp_path, safe_mode=False, safe_mode_reasons=[])
+        assert cleared["scanner"]["safe_mode"] is False
+        assert cleared["scanner"]["safe_mode_reasons"] == []
+
+    def test_omitted_stays_none_for_backward_compatibility(self, tmp_path):
+        """Existing callers that pass neither must keep working."""
+        s = _build(tmp_path)
+        assert s["scanner"]["safe_mode"] is None
+        assert s["scanner"]["safe_mode_reasons"] == []
+
+    def test_reasons_are_copied_not_aliased(self, tmp_path):
+        reasons = ["small_dataset"]
+        s = _build(tmp_path, safe_mode=True, safe_mode_reasons=reasons)
+        reasons.append("mutated_after_the_fact")
+        assert s["scanner"]["safe_mode_reasons"] == ["small_dataset"]
+
+    def test_canary_reports_engaged_not_none(self, tmp_path):
+        """The end-to-end point of the fix: the canary must say ENGAGED."""
+        from portfolio_automation.scanner_canary import build_scanner_canary
+        _build(tmp_path, safe_mode=True, safe_mode_reasons=["small_dataset"])
+        summary_path = tmp_path / "scraped_intel_run_summary.json"
+        assert summary_path.exists()
+        root = tmp_path / "root"
+        (root / "outputs" / "latest").mkdir(parents=True)
+        (root / "outputs" / "latest" / "scraped_intel_run_summary.json").write_text(
+            summary_path.read_text(), encoding="utf-8")
+        canary = build_scanner_canary(root)
+        down = canary["downstream"]
+        assert down["speculative_sleeve_suppressed"] is True
+        assert "small_dataset" in down["suppression_reasons"]

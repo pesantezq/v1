@@ -247,3 +247,58 @@ def test_render_includes_the_factor_block(tmp_path):
     text = SC.render_canary_text(SC.build_scanner_canary(_write(tmp_path, s), now=NOW))
     assert "Factor/filter liveness" in text
     assert "pe" in text
+
+
+# ---------------------------------------------------------------------------
+# Registered as a daily probe (2026-08-07)
+# ---------------------------------------------------------------------------
+# scanner_recovery_canary.json had NO artifact_registry row, so governance could
+# not see it go stale, and its only caller was run_monthly_universe_refresh.sh
+# -- a monthly acceptance gate over a daily-mutating scanner. It sat at a
+# 2026-08-04 run_timestamp reading overall: FAIL while nothing escalated.
+
+class TestCanaryIsAGovernedDailyArtifact:
+    def test_assessed_at_is_always_stamped(self, tmp_path):
+        """It was optional with no default, so it was ALWAYS null in practice.
+
+        A verdict with no timestamp cannot be aged by a reader — the same
+        blind spot as discovery_pulse.last_run_at.
+        """
+        from portfolio_automation.scanner_canary import build_scanner_canary
+        c = build_scanner_canary(tmp_path)
+        assert c["assessed_at"], "assessed_at must never be null"
+
+    def test_explicit_now_still_wins(self, tmp_path):
+        from portfolio_automation.scanner_canary import build_scanner_canary
+        c = build_scanner_canary(tmp_path, now="2026-01-01T00:00:00+00:00")
+        assert c["assessed_at"] == "2026-01-01T00:00:00+00:00"
+
+    def test_registry_row_exists_and_is_valid(self):
+        from portfolio_automation.artifact_registry import (
+            load_registry, LENSES, ROLES, CADENCES, SEVERITIES,
+            CONSUMER_STATUSES, _REQUIRED_ROW_FIELDS,
+        )
+        row = (load_registry().get("artifacts") or {}).get(
+            "scanner_recovery_canary.json")
+        assert row is not None, "the canary must be governed by the registry"
+        for field in _REQUIRED_ROW_FIELDS:
+            assert field in row, f"missing required registry field: {field}"
+        assert row["lens"] in LENSES
+        assert row["role"] in ROLES
+        assert row["cadence"] in CADENCES
+        assert row["severity_if_missing"] in SEVERITIES
+        assert row["consumer_status"] in CONSUMER_STATUSES
+        assert row["cadence"] == "daily", (
+            "a monthly cadence cannot track a daily-mutating scanner")
+
+    def test_daily_pipeline_invokes_it(self):
+        """The registry row is only half the fix; something must WRITE it."""
+        from pathlib import Path
+        script = Path("scripts/run_daily_safe.sh").read_text(encoding="utf-8")
+        assert "run_scanner_canary" in script, (
+            "run_daily_safe.sh must invoke the canary")
+
+    def test_it_never_suppresses_or_gates(self, tmp_path):
+        from portfolio_automation.scanner_canary import build_scanner_canary
+        c = build_scanner_canary(tmp_path)
+        assert c["observe_only"] is True

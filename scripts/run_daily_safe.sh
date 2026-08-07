@@ -468,6 +468,15 @@ run_aux_stage "Simulation-governance daily lane" \
 run_aux_stage "Daily run status" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.daily_run_status import run_daily_run_status; r = run_daily_run_status(root='.'); print('overall:', r.get('overall_status'), 'missing_required:', r.get('required_missing_count'))"
 
+# Stage 11b — Scanner-quality acceptance canary. The deterministic acceptance
+# view over scraped_intel_run_summary.json:scanner. It was previously invoked
+# ONLY from scripts/run_monthly_universe_refresh.sh — a monthly gate grading a
+# subsystem that changes daily, so it sat at a 2026-08-04 run_timestamp while
+# reading overall: FAIL. Runs BEFORE registry governance so the freshly-written
+# artifact is in the corpus that stage scans. Observe-only, non-fatal.
+run_aux_stage "Scanner-quality acceptance canary" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.scanner_canary import run_scanner_canary; r = run_scanner_canary('.'); print('overall:', r.get('overall'), 'reasons:', ','.join(r.get('reasons') or []) or 'none')"
+
 # Stage 12 — Artifact registry governance (corpus-integrity gate). Runs LAST,
 # after every other stage has written its artifact, so its presence/staleness
 # scan sees the fresh corpus (including daily_run_status above). Observe-only:

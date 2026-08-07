@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,11 @@ def _previous_candidate_count(root: Path) -> Any:
 def build_scanner_canary(root: Path | str = ".", *, now: str | None = None) -> dict[str, Any]:
     """Assemble the acceptance canary from the published run summary."""
     root = Path(root)
+    # ``now`` was optional with no default, so every real caller left
+    # assessed_at null and a reader could not tell WHEN the verdict was formed
+    # — the same blind spot as discovery_pulse.last_run_at. Stamped here so the
+    # field is always populated; callers may still pin it for tests.
+    now = now or datetime.now(timezone.utc).isoformat()
     summary = _load(root.joinpath(*_RUN_SUMMARY_REL))
     reasons: list[str] = []
 

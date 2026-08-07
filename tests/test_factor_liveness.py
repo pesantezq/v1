@@ -253,3 +253,53 @@ def test_full_scan_output_is_identical_with_and_without_liveness_computed():
 
     after, _ = sc.full_scan(syms, profiles, metrics, quotes)
     assert [(c["symbol"], c["score"]) for c in after] == snapshot
+
+
+# ---------------------------------------------------------------------------
+# "We did not look" must not render as "we looked and it is dead" (2026-08-07)
+# ---------------------------------------------------------------------------
+# main.py:1454 read `bulk_metrics`, which is bound only in the monthly and
+# weekly branches. Every DAILY run therefore raised
+#   UnboundLocalError: cannot access local variable 'bulk_metrics'
+# (logs/daily_safe_2026-08-06.log:675), swallowed to factor_liveness = None --
+# so the whole feature was silently dark daily and the canary reported
+# factor_liveness_absent.
+#
+# The naive repair -- passing {} -- is worse than the bug: with no metrics the
+# assessor returns status "degraded" and NINE inert components, which would
+# raise a false alarm every single day and bury the genuinely-inert PE factor
+# that experiment pe_restoration_full_2026_08 is tracking. That is the same
+# defect class this batch exists to remove: a verdict derived from absent data.
+
+class TestFactorLivenessNotAssessable:
+    def test_none_metrics_reads_not_assessable_not_degraded(self):
+        r = assess_factor_liveness(
+            eligible_symbols=["AAPL", "MSFT"], metrics_by_symbol=None,
+            quotes_by_symbol={}, candidates=[])
+        assert r["status"] == "not_assessable"
+        assert r["inert_components"] == [], (
+            "absent metrics must not be reported as inert components")
+        assert "metrics_not_fetched_this_cadence" in r["reasons"]
+
+    def test_empty_dict_still_means_looked_and_found_nothing(self):
+        """{} is a real (if degenerate) observation; None is not."""
+        r = assess_factor_liveness(
+            eligible_symbols=["AAPL", "MSFT"], metrics_by_symbol={},
+            quotes_by_symbol={}, candidates=[])
+        assert r["status"] != "not_assessable"
+
+    def test_not_assessable_never_suppresses_the_sleeve(self):
+        r = assess_factor_liveness(
+            eligible_symbols=["AAPL"], metrics_by_symbol=None,
+            quotes_by_symbol={}, candidates=[])
+        assert r["suppresses_sleeve"] is False
+        assert r["observe_only"] is True
+
+    def test_not_assessable_keeps_the_component_keys(self):
+        """Consumers index into factors/filters unconditionally."""
+        r = assess_factor_liveness(
+            eligible_symbols=["AAPL"], metrics_by_symbol=None,
+            quotes_by_symbol={}, candidates=[])
+        assert set(r["factors"]) >= {"revenue_growth", "pe", "trend"}
+        assert set(r["filters"]) >= {"pe_bubble_guard", "trend_200dma"}
+        assert all(v["status"] == "not_assessable" for v in r["factors"].values())
