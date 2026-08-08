@@ -38,6 +38,9 @@ REJECTED_MISSING_BARS = "REJECTED_MISSING_BARS"
 REJECTED_SURPLUS_BARS = "REJECTED_SURPLUS_BARS"
 REJECTED_OFF_GRID = "REJECTED_OFF_GRID"
 REJECTED_CONFLICTING_DUPLICATE = "REJECTED_CONFLICTING_DUPLICATE"
+REJECTED_EXACT_DUPLICATE = "REJECTED_EXACT_DUPLICATE"
+REJECTED_IDENTITY_MISMATCH = "REJECTED_IDENTITY_MISMATCH"
+REJECTED_PROVIDER_ERROR = "REJECTED_PROVIDER_ERROR"
 REJECTED_CALENDAR_UNCERTIFIED = "REJECTED_CALENDAR_UNCERTIFIED"
 REJECTED_CLOSED_SESSION_HAS_BARS = "REJECTED_CLOSED_SESSION_HAS_BARS"
 REJECTED_MIXED_ADJUSTMENT = "REJECTED_MIXED_ADJUSTMENT"
@@ -105,6 +108,7 @@ def reconcile_session(bars: Sequence[IntradayBar], session: TradingSession, *,
     # values make the whole session unreconcilable.
     by_start: dict[datetime, IntradayBar] = {}
     conflicts: list[str] = []
+    exact_dupes: list[str] = []
     for bar in bars:
         prior = by_start.get(bar.bar_start_at)
         if prior is None:
@@ -112,6 +116,24 @@ def reconcile_session(bars: Sequence[IntradayBar], session: TradingSession, *,
         elif (prior.open, prior.high, prior.low, prior.close, prior.volume) != (
                 bar.open, bar.high, bar.low, bar.close, bar.volume):
             conflicts.append(bar.bar_start_at.isoformat())
+        else:
+            # An EXACT duplicate also rejects. It collapses in the observed SET
+            # while the underlying sequence still carries it, so a 78-bar
+            # session was producing 79 canonical rows. Research input is never
+            # silently deduplicated.
+            exact_dupes.append(bar.bar_start_at.isoformat())
+
+    # Trust the BAR, not the outer dict key: a mislabelled mapping would
+    # otherwise admit another symbol's or another day's bars under this key.
+    identity_problems: list[str] = []
+    wrong_symbol = sorted({b.symbol for b in bars if b.symbol != symbol})
+    if wrong_symbol:
+        identity_problems.append(
+            f"bars carry symbol(s) {wrong_symbol} but were requested as {symbol}")
+    wrong_tf = sorted({b.timeframe for b in bars if b.timeframe != timeframe})
+    if wrong_tf:
+        identity_problems.append(
+            f"bars carry timeframe(s) {wrong_tf} but were requested as {timeframe}")
 
     observed = set(by_start)
     expected = set(session.expected_bar_starts)
@@ -142,6 +164,14 @@ def reconcile_session(bars: Sequence[IntradayBar], session: TradingSession, *,
     elif conflicts:
         status = REJECTED_CONFLICTING_DUPLICATE
         reasons.append(f"{len(conflicts)} conflicting duplicate bar(s)")
+    elif exact_dupes:
+        status = REJECTED_EXACT_DUPLICATE
+        reasons.append(
+            f"{len(exact_dupes)} exact duplicate bar(s) — the observed SET hides "
+            f"them but the sequence would inflate the canonical dataset")
+    elif identity_problems:
+        status = REJECTED_IDENTITY_MISMATCH
+        reasons.extend(identity_problems)
     elif session.session_type == SESSION_MARKET_CLOSED and observed:
         status = REJECTED_CLOSED_SESSION_HAS_BARS
         reasons.append(
@@ -178,6 +208,27 @@ class CanonicalDataset:
     reconciliations: tuple[SessionReconciliation, ...]
     timeframe: str
     adjustment_state: str
+    request: "DatasetRequest | None" = None
+
+    def manifest_fingerprint(self) -> str:
+        """Identity of the dataset's MEANING, not just its bytes.
+
+        "Aug 1-10 with 3 rejections" and "only the 7 admitted days" can produce
+        byte-identical bars yet answer different research questions. Experiments
+        bind here; storage dedupes on the content fingerprint.
+        """
+        payload = {
+            "schema": "intraday_manifest_v1",
+            "content_fingerprint": self.fingerprint(),
+            "request": self.request.to_dict() if self.request else None,
+            "timeframe": self.timeframe,
+            "adjustment_state": self.adjustment_state,
+            "sessions": [[r.symbol, r.market_date.isoformat(), r.admission_status]
+                         for r in self.reconciliations],
+        }
+        return hashlib.sha256(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()[:32]
 
     @property
     def admitted(self) -> tuple[SessionReconciliation, ...]:
@@ -222,29 +273,102 @@ def canonical_fingerprint(bars: Iterable[IntradayBar], *, timeframe: str,
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
 
 
+@dataclass(frozen=True)
+class DatasetRequest:
+    """Authoritative statement of what was ASKED FOR.
+
+    Requested coverage is never inferred from what the provider returned. An
+    entire session that came back empty, errored, or was simply absent from the
+    result mapping must still appear in the reconciliation trail — otherwise it
+    silently disappears and the dataset looks complete while covering a
+    narrower window than requested. Observed live before this change: three
+    requested days produced two reconciliations.
+    """
+    symbols: tuple[str, ...]
+    start: date
+    end: date
+    timeframe: str = "5min"
+
+    def certified_sessions(self) -> list[tuple[str, date]]:
+        """Every (symbol, date) the calendar says should have traded."""
+        from portfolio_automation.intraday_lab.calendar import sessions_in_range
+        out = []
+        for session in sessions_in_range(self.start, self.end):
+            if session.expected_bar_count:
+                for symbol in self.symbols:
+                    out.append((symbol, session.market_date))
+        return sorted(out)
+
+    def fingerprint(self) -> str:
+        payload = {"schema": "intraday_request_v1", "symbols": sorted(self.symbols),
+                   "start": self.start.isoformat(), "end": self.end.isoformat(),
+                   "timeframe": self.timeframe}
+        return hashlib.sha256(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()[:32]
+
+    def to_dict(self) -> dict:
+        return {"symbols": sorted(self.symbols), "start": self.start.isoformat(),
+                "end": self.end.isoformat(), "timeframe": self.timeframe,
+                "request_fingerprint": self.fingerprint(),
+                "certified_session_count": len(self.certified_sessions())}
+
+
 def build_canonical_dataset(
     bars_by_date: dict[tuple[str, date], Sequence[IntradayBar]], *,
-    timeframe: str = "5min", adjustment_state: str = "split_adjusted",
+    request: "DatasetRequest | None" = None,
+    timeframe: str = "5min", adjustment_state: str | None = None,
 ) -> CanonicalDataset:
-    """Reconcile every requested session; admit only exact matches.
+    """Reconcile EVERY requested session; admit only exact matches.
 
-    Rejected sessions contribute NO bars. Their reconciliation is retained so
-    the manifest can disclose the exclusion — a dataset that silently omitted
-    them would look complete while covering a different window than requested.
+    When `request` is supplied its certified session matrix drives the loop, so
+    a session absent from `bars_by_date` still yields a reconciliation (with an
+    empty bar list → REJECTED_MISSING_BARS) instead of vanishing.
+
+    `adjustment_state` is DERIVED from the admitted bars, never taken from the
+    caller. A caller label could otherwise disagree with the data — a dataset
+    was observed labelled `split_adjusted` while containing both regimes.
     """
+    keys = request.certified_sessions() if request else sorted(bars_by_date)
+    if request:
+        timeframe = request.timeframe
+
     admitted_bars: list[IntradayBar] = []
     recs: list[SessionReconciliation] = []
-    for (symbol, market_date) in sorted(bars_by_date):
-        bars = bars_by_date[(symbol, market_date)]
+    for (symbol, market_date) in keys:
+        bars = bars_by_date.get((symbol, market_date), [])
         session = resolve_session(market_date)
         rec = reconcile_session(bars, session, symbol=symbol, timeframe=timeframe)
         recs.append(rec)
         if rec.admitted:
             admitted_bars.extend(bars)
+
+    # Cross-session adjustment integrity. Each session can be internally
+    # uniform while the DATASET mixes regimes; a return computed across that
+    # boundary is meaningless.
+    states = {b.adjustment_state for b in admitted_bars}
+    if len(states) > 1:
+        recs = [
+            SessionReconciliation(
+                symbol=r.symbol, market_date=r.market_date, timeframe=r.timeframe,
+                session_type=r.session_type, expected_count=r.expected_count,
+                observed_count=r.observed_count, missing_timestamps=(),
+                unexpected_timestamps=(), conflicting_duplicates=(),
+                admission_status=REJECTED_MIXED_ADJUSTMENT,
+                rejection_reasons=(
+                    f"dataset mixes adjustment states {sorted(states)} across "
+                    f"sessions; no session may be admitted",))
+            if r.admitted else r
+            for r in recs
+        ]
+        admitted_bars = []
+        states = set()
+
+    derived = states.pop() if len(states) == 1 else (adjustment_state or "unknown")
     return CanonicalDataset(
         bars=tuple(sorted(admitted_bars, key=lambda b: (b.symbol, b.bar_start_at))),
         reconciliations=tuple(recs), timeframe=timeframe,
-        adjustment_state=adjustment_state)
+        adjustment_state=derived, request=request)
 
 
 def dataset_manifest(ds: CanonicalDataset, *, source: str = "fmp",
@@ -261,6 +385,8 @@ def dataset_manifest(ds: CanonicalDataset, *, source: str = "fmp",
         "observe_only": True,
         "dataset_id": ds.dataset_id(),
         "dataset_fingerprint": ds.fingerprint(),
+        "manifest_fingerprint": ds.manifest_fingerprint(),
+        "request": ds.request.to_dict() if ds.request else None,
         "fingerprint_schema": FINGERPRINT_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": source,

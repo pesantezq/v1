@@ -222,10 +222,12 @@ def test_adjustment_state_is_part_of_dataset_identity():
     """Two datasets with byte-identical OHLCV but different adjustment regimes
     mean different things and must not share an identity."""
     s = C.resolve_session(NORMAL)
-    a = DS.build_canonical_dataset({("SPY", NORMAL): _bars(s)},
-                                   adjustment_state="split_adjusted")
-    b = DS.build_canonical_dataset({("SPY", NORMAL): _bars(s)},
-                                   adjustment_state="unadjusted")
+    a = DS.build_canonical_dataset({("SPY", NORMAL): _bars(s, adj="split_adjusted")})
+    b = DS.build_canonical_dataset({("SPY", NORMAL): _bars(s, adj="unadjusted")})
+    # Each dataset is internally uniform; the states differ between them. The
+    # caller label is no longer an input at all -- identity comes from the bars.
+    assert a.adjustment_state == "split_adjusted"
+    assert b.adjustment_state == "unadjusted"
     assert a.fingerprint() != b.fingerprint()
 
 
@@ -353,3 +355,150 @@ def test_no_strategy_or_execution_module_exists():
     forbidden = {"strategies.py", "simulator.py", "cost_model.py", "risk.py",
                  "trades.py", "trade_ledger.py", "walk_forward.py", "oos.py"}
     assert not {p.name for p in pkg.rglob("*.py")} & forbidden
+
+
+# ===========================================================================
+# Session 2 HARDENING — five confirmed fail-open defects.
+# Each test below reproduces a behaviour observed on b781dd28.
+# ===========================================================================
+def test_an_entirely_absent_requested_session_cannot_disappear():
+    """Observed: 3 requested days, Aug 4 missing from the mapping, only 2
+    reconciliations emitted. The window looked fully covered."""
+    req = DS.DatasetRequest(symbols=("SPY",), start=date(2026, 8, 3),
+                            end=date(2026, 8, 5))
+    ds = DS.build_canonical_dataset({
+        ("SPY", date(2026, 8, 3)): _bars(C.resolve_session(date(2026, 8, 3))),
+        ("SPY", date(2026, 8, 5)): _bars(C.resolve_session(date(2026, 8, 5))),
+    }, request=req)
+    assert len(ds.reconciliations) == 3
+    assert len(ds.admitted) == 2 and len(ds.rejected) == 1
+    gone = [r for r in ds.rejected if r.market_date == date(2026, 8, 4)]
+    assert gone and gone[0].admission_status == DS.REJECTED_MISSING_BARS
+
+
+def test_request_matrix_covers_only_certified_trading_sessions():
+    req = DS.DatasetRequest(symbols=("SPY", "AAPL"), start=date(2026, 8, 7),
+                            end=date(2026, 8, 10))   # Fri, Sat, Sun, Mon
+    dates = {d for _, d in req.certified_sessions()}
+    assert dates == {date(2026, 8, 7), date(2026, 8, 10)}
+    assert len(req.certified_sessions()) == 4        # 2 symbols x 2 sessions
+
+
+def test_identical_duplicate_no_longer_inflates_the_canonical_dataset():
+    """Observed: 78 expected, 78 unique observed, 79 canonical rows."""
+    s = C.resolve_session(NORMAL)
+    bars = _bars(s)
+    bars.append(bars[0])
+    r = DS.reconcile_session(bars, s, symbol="SPY")
+    assert r.admission_status == DS.REJECTED_EXACT_DUPLICATE
+    ds = DS.build_canonical_dataset({("SPY", NORMAL): bars})
+    assert ds.bars == ()
+
+
+def test_bar_symbol_must_match_the_request_key():
+    """The outer dict key must never be trusted over the bar itself."""
+    s = C.resolve_session(NORMAL)
+    r = DS.reconcile_session(_bars(s, symbol="AAPL"), s, symbol="SPY")
+    assert r.admission_status == DS.REJECTED_IDENTITY_MISMATCH
+
+
+def test_cross_session_mixed_adjustment_admits_nothing():
+    """Observed: dataset labelled split_adjusted while holding both regimes."""
+    a, b = C.resolve_session(NORMAL), C.resolve_session(date(2026, 8, 4))
+    bars_b = _bars(b)
+    for x in bars_b:
+        object.__setattr__(x, "adjustment_state", "unadjusted")
+    ds = DS.build_canonical_dataset({("SPY", NORMAL): _bars(a),
+                                     ("SPY", date(2026, 8, 4)): bars_b})
+    assert ds.bars == () and len(ds.admitted) == 0
+    assert all(r.admission_status == DS.REJECTED_MIXED_ADJUSTMENT
+               for r in ds.reconciliations)
+
+
+def test_dataset_adjustment_state_is_derived_not_taken_from_the_caller():
+    ds = DS.build_canonical_dataset({("SPY", NORMAL): _bars(C.resolve_session(NORMAL))},
+                                    adjustment_state="TOTALLY_WRONG")
+    assert ds.adjustment_state == "split_adjusted"
+
+
+def test_manifest_fingerprint_separates_meaning_from_bytes():
+    """Same admitted bars, different requested window = different research
+    question, so identical content must not share a manifest identity."""
+    s = C.resolve_session(NORMAL)
+    bars = {("SPY", NORMAL): _bars(s)}
+    a = DS.build_canonical_dataset(bars, request=DS.DatasetRequest(
+        symbols=("SPY",), start=NORMAL, end=NORMAL))
+    b = DS.build_canonical_dataset(bars, request=DS.DatasetRequest(
+        symbols=("SPY",), start=NORMAL, end=date(2026, 8, 5)))
+    assert a.fingerprint() == b.fingerprint()               # same bytes
+    assert a.manifest_fingerprint() != b.manifest_fingerprint()   # different meaning
+
+
+# --------------------------- feature integrity ---------------------------
+def test_feature_window_cannot_cross_symbols():
+    """Observed: a 3-bar window over SPY+AAPL produced a value labelled AAPL."""
+    s = C.resolve_session(NORMAL)
+    mixed = _bars(s, symbol="SPY")[:3] + _bars(s, symbol="AAPL")[:3]
+    with pytest.raises(F.SeriesIntegrityError):
+        F.compute_return_nbar(mixed, 4, 3, dataset_id="d", fingerprint="f")
+
+
+def test_group_series_splits_by_symbol_and_timeframe():
+    s = C.resolve_session(NORMAL)
+    groups = F.group_series(_bars(s, symbol="SPY")[:3] + _bars(s, symbol="AAPL")[:3])
+    assert set(groups) == {("SPY", "5min"), ("AAPL", "5min")}
+    assert all(len(v) == 3 for v in groups.values())
+
+
+def test_feature_window_cannot_bridge_a_rejected_session():
+    """Rejected sessions contribute no bars, so a positional window could
+    otherwise treat Monday and Wednesday as adjacent."""
+    mon = _bars(C.resolve_session(date(2026, 8, 3)))[-2:]
+    wed = _bars(C.resolve_session(date(2026, 8, 5)))[:2]
+    assert F.compute_return_nbar(mon + wed, 3, 3, dataset_id="d",
+                                 fingerprint="f") is F.FEATURE_NOT_AVAILABLE
+
+
+def test_feature_fingerprint_binds_to_the_source_dataset():
+    """Numerically identical values from different datasets must not share an
+    identity — otherwise an experiment cannot say which data produced it."""
+    s = C.resolve_session(NORMAL)
+    bars = _bars(s)
+    vals_a = [F.compute_return_nbar(bars, i, 3, dataset_id="A", fingerprint="fp_A")
+              for i in range(5, 9)]
+    vals_b = [F.compute_return_nbar(bars, i, 3, dataset_id="B", fingerprint="fp_B")
+              for i in range(5, 9)]
+    assert [v.value for v in vals_a] == [v.value for v in vals_b]
+    assert F.feature_fingerprint(vals_a) != F.feature_fingerprint(vals_b)
+
+
+def test_every_enabled_feature_has_a_real_implementation():
+    for fid in F.ENABLED_FEATURES:
+        fn = F.IMPLEMENTATIONS.get(fid)
+        assert fn and callable(getattr(F, fn, None)), f"{fid} ENABLED but unimplemented"
+
+
+def test_session_progress_is_not_advertised_as_enabled_without_code():
+    assert F.FEATURE_REGISTRY["session_progress"]["status"] == F.STATUS_NOT_IMPLEMENTED
+    assert "session_progress" not in F.ENABLED_FEATURES
+
+
+# --------------------------- status evidence ---------------------------
+def test_readiness_requires_evidence_not_assertion():
+    from portfolio_automation.intraday_lab import foundation as FD
+    blank = FD.session2_status(None)
+    assert blank["canonical_dataset_ready"] is False
+    assert blank["feature_dataset_ready"] is False
+    proven = FD.session2_status({"dataset_fingerprint": "x", "sessions_requested": 3,
+                                 "sessions_admitted": 3, "feature_fingerprint": "y",
+                                 "feature_observations": 10})
+    assert proven["canonical_dataset_ready"] is True
+    assert proven["feature_dataset_ready"] is True
+
+
+def test_strategy_validation_stays_false_under_every_evidence_state():
+    from portfolio_automation.intraday_lab import foundation as FD
+    for pilot in (None, {}, {"dataset_fingerprint": "x", "sessions_requested": 1,
+                            "sessions_admitted": 1, "feature_fingerprint": "y",
+                            "feature_observations": 5}):
+        assert FD.session2_status(pilot)["strategy_validation_allowed"] is False

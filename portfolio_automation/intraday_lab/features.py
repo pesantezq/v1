@@ -34,6 +34,7 @@ STATUS_ENABLED = "ENABLED"
 STATUS_BLOCKED_ADJUSTMENT = "BLOCKED_ADJUSTMENT_SEMANTICS"
 STATUS_BLOCKED_VOLUME = "BLOCKED_VOLUME_SEMANTICS"
 STATUS_DEFERRED = "DEFERRED"
+STATUS_NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
 
 FEATURE_NOT_AVAILABLE = None
 
@@ -109,7 +110,10 @@ FEATURE_REGISTRY: dict[str, dict] = {
         "adjustment_compatibility": "SAFE — normalized within one adjustment regime",
     },
     "session_progress": {
-        "version": "1", "lookback_bars": 1, "status": STATUS_ENABLED,
+        "version": "0", "lookback_bars": 1, "status": STATUS_NOT_IMPLEMENTED,
+        "limitations": "Registry claimed ENABLED with no compute function. "
+                       "Downgraded rather than rushed in — an ENABLED feature "
+                       "with no implementation is a false capability claim.",
         "description": "Fraction of the calendar session elapsed at bar end, 0-1.",
         "known_at_rule": "bar.known_at",
         "requires_volume": False, "requires_absolute_price": False,
@@ -162,10 +166,53 @@ FEATURE_REGISTRY: dict[str, dict] = {
     },
 }
 
+# Explicit registry -> implementation map. Without it "ENABLED" is an
+# unverifiable claim: session_progress shipped ENABLED with no compute function.
+IMPLEMENTATIONS: dict[str, str] = {
+    "return_1bar": "compute_return_nbar",
+    "return_nbar": "compute_return_nbar",
+    "realized_vol": "compute_realized_vol",
+    "normalized_range": "compute_normalized_range",
+    "range_position": "compute_range_position",
+}
+
 ENABLED_FEATURES = tuple(k for k, v in FEATURE_REGISTRY.items()
                          if v["status"] == STATUS_ENABLED)
 BLOCKED_FEATURES = tuple(k for k, v in FEATURE_REGISTRY.items()
                          if v["status"] != STATUS_ENABLED)
+
+
+class SeriesIntegrityError(ValueError):
+    """A window crossed a symbol, timeframe or session boundary."""
+
+
+def group_series(bars: Sequence[IntradayBar]) -> dict[tuple[str, str], list[IntradayBar]]:
+    """Group canonical bars into single-symbol, single-timeframe series.
+
+    Feature functions take positional windows, so an ungrouped mixed sequence
+    lets a rolling window straddle two symbols. Observed live: a 3-bar window
+    over [SPY, SPY, SPY, AAPL, AAPL, AAPL] produced a value labelled AAPL that
+    was computed partly from SPY.
+    """
+    out: dict[tuple[str, str], list[IntradayBar]] = {}
+    for b in bars:
+        out.setdefault((b.symbol, b.timeframe), []).append(b)
+    for key in out:
+        out[key].sort(key=lambda b: b.bar_start_at)
+    return out
+
+
+def _contiguous(window: Sequence[IntradayBar]) -> bool:
+    """True when every step is exactly one bar apart.
+
+    Rejected sessions contribute no bars, so a naive positional window can
+    bridge Monday->Wednesday as if adjacent. Adjacency is checked in time, not
+    by index. A window spanning a session boundary also fails, which is the
+    intended default: cross-session rolling features are DEFERRED.
+    """
+    step = window[0].duration
+    return all(window[i].bar_start_at - window[i - 1].bar_start_at == step
+               for i in range(1, len(window)))
 
 
 def _window(bars: Sequence[IntradayBar], end_index: int, lookback: int
@@ -178,7 +225,15 @@ def _window(bars: Sequence[IntradayBar], end_index: int, lookback: int
     start = end_index - lookback + 1
     if start < 0:
         return None
-    return list(bars[start:end_index + 1])
+    window = list(bars[start:end_index + 1])
+    if len({(b.symbol, b.timeframe) for b in window}) > 1:
+        raise SeriesIntegrityError(
+            "feature window spans multiple symbols/timeframes — group with "
+            "group_series() before computing features")
+    if not _contiguous(window):
+        # Explicit absence, never a silently shortened lookback.
+        return None
+    return window
 
 
 def _emit(feature_id: str, window: Sequence[IntradayBar], value: float, *,
@@ -247,9 +302,15 @@ def compute_range_position(bars: Sequence[IntradayBar], index: int, n: int, *,
 
 def feature_fingerprint(values: Sequence[FeatureValue]) -> str:
     """Deterministic identity for a feature set. Excludes computation time."""
+    # Bind to the SOURCE DATASET. Two different datasets can yield numerically
+    # identical values; without this they would share a feature identity and an
+    # experiment could not tell which data produced it.
     rows = sorted(
-        [v.feature_id, v.feature_version, v.symbol, v.event_at.isoformat(),
-         round(v.value, 12), json.dumps(v.parameters, sort_keys=True)]
+        [v.feature_id, v.feature_version, v.symbol, v.timeframe,
+         v.event_at.isoformat(), v.known_at.isoformat(),
+         v.input_window_start.isoformat(), v.input_window_end.isoformat(),
+         round(v.value, 12), json.dumps(v.parameters, sort_keys=True),
+         v.source_dataset_fingerprint]
         for v in values)
     payload = {"schema": "intraday_features_v1",
                "feature_set_version": FEATURE_SET_VERSION, "rows": rows}

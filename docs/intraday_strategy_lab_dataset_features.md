@@ -143,6 +143,38 @@ the strongest available evidence that calendar and provider agree.
 
 ---
 
+## 5b. Hardening pass — five confirmed fail-open defects
+
+All reproduced on `b781dd28` before being fixed:
+
+| Defect | Observed | Now |
+|---|---|---|
+| Requested session could vanish | 3 days requested, Aug 4 absent from the mapping → **2** reconciliations | `DatasetRequest` drives the loop; 3 reconciliations, Aug 4 `REJECTED_MISSING_BARS` |
+| Exact duplicate inflated the dataset | 78 expected, 78 unique observed, **79 canonical rows** | `REJECTED_EXACT_DUPLICATE` — research input is never silently deduplicated |
+| Cross-session mixed adjustment admitted | dataset labelled `split_adjusted` while holding both regimes | Whole dataset admits nothing; state **derived** from bars, caller label ignored |
+| Dict key trusted over the bar | AAPL bars admitted under a SPY key | `REJECTED_IDENTITY_MISMATCH` |
+| Feature window crossed symbols | 3-bar window over SPY+AAPL produced a value **labelled AAPL** | `SeriesIntegrityError`; `group_series()` required |
+
+Also fixed: `session_progress` was `ENABLED` with no implementation (now
+`NOT_IMPLEMENTED`, with an `IMPLEMENTATIONS` map and an invariant test);
+`feature_fingerprint` did not bind the source dataset (two datasets producing
+identical values shared an identity); and `session2_status` reported
+`canonical_dataset_ready: true` on `pilot=None` — readiness is now evidence-driven.
+
+### Two identities
+
+- **Content fingerprint** — admitted bars + timeframe + adjustment. For storage dedupe.
+- **Manifest fingerprint** — request + calendar + admitted/rejected sessions + content.
+  "Aug 1–10 with 3 rejections" and "only the 7 admitted days" can be byte-identical
+  yet answer different research questions. Experiments bind here.
+
+### Feature continuity
+
+Windows are validated for single symbol, single timeframe, and **exact temporal
+adjacency**. A window bridging a rejected session returns `FEATURE_NOT_AVAILABLE`
+rather than a silently shortened lookback. Cross-session rolling features are
+**DEFERRED**.
+
 ## 6. Limitations
 
 1. **Calendar coverage is the binding constraint** — 2025-01-01…2027-12-24.
@@ -154,7 +186,11 @@ the strongest available evidence that calendar and provider agree.
 4. Absolute-price features blocked (split back-adjusted).
 5. `SECTOR_CONTEXT_DEFERRED`.
 6. No bulk backfill — the pilot is deliberately small.
-7. No CLI module this session; the pipeline is library-level.
+7. **No CLI module and no persisted raw/canonical snapshots.** The pipeline is
+   library-level and in-memory; §3–§7 and §20–§23 of the hardening brief
+   (acquisition module, content-addressed raw snapshots, on-disk canonical and
+   feature snapshots, collision detection, CLI, dry-run) are **NOT built**.
+   Identity and reconciliation are complete and proven; durable storage is not.
 
 ---
 

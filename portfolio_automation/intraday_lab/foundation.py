@@ -208,6 +208,23 @@ DATASET_FEATURE_FOUNDATION_LIMITED = "DATASET_FEATURE_FOUNDATION_LIMITED"
 DATASET_FEATURE_FOUNDATION_BLOCKED = "DATASET_FEATURE_FOUNDATION_BLOCKED"
 
 
+def _canonical_ready(pilot: dict | None) -> bool:
+    """True only with actual evidence: a dataset fingerprint AND a reconciled
+    request. Absence of evidence is never readiness."""
+    if not isinstance(pilot, dict):
+        return False
+    return bool(pilot.get("dataset_fingerprint")) and \
+        pilot.get("sessions_requested") is not None and \
+        pilot.get("sessions_admitted") is not None
+
+
+def _feature_ready(pilot: dict | None) -> bool:
+    if not _canonical_ready(pilot):
+        return False
+    return bool((pilot or {}).get("feature_fingerprint")) and \
+        bool((pilot or {}).get("feature_observations"))
+
+
 def session2_status(pilot: dict | None = None) -> dict:
     """Session 2 exit status.
 
@@ -235,8 +252,11 @@ def session2_status(pilot: dict | None = None) -> dict:
         "pit_feature_engine": True,
         # Session 2 must never imply strategies may graduate, however green it is.
         "real_data_acquisition_allowed": True,
-        "canonical_dataset_ready": True,
-        "feature_dataset_ready": True,
+        # EVIDENCE-DRIVEN, not asserted. Without a verified manifest+fingerprint
+        # these were returning True on pilot=None, which is precisely the
+        # "verdict derived from absent data" failure the lab exists to avoid.
+        "canonical_dataset_ready": _canonical_ready(pilot),
+        "feature_dataset_ready": _feature_ready(pilot),
         "strategy_validation_allowed": False,
         "features_enabled": list(_feat.ENABLED_FEATURES),
         "features_blocked": {k: _feat.FEATURE_REGISTRY[k]["status"]
