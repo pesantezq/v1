@@ -48,8 +48,8 @@ Known consumers of `capital_action`: `watchlist_scanner/daily_memo.py`,
 
 ## What the gate does
 
-`reconcile_capital_authority(decision_plan, capital_plan)` is pure over its
-inputs and returns one of three statuses.
+`reconcile_capital_authority(decision_plan, capital_plan, rendered_surfaces)` is
+pure over its inputs and returns one of four statuses.
 
 | Status | Grade | Meaning |
 |---|---|---|
@@ -148,11 +148,8 @@ triages **RED** on `BLOCKED_BY_CONSISTENCY`, **AMBER** on `INSUFFICIENT_DATA`.
   editing `decision_engine._build_legacy_capital_action`, which is protected
   under CLAUDE.md → Protected Semantics. It remains available as unconstrained
   sizing context, which is the operator-approved strategy (2026-08-08).
-- It compares symbol and amount only. It does not verify that a funded action's
-  `funding_source` is itself solvent — the capital plan owns that.
-- It does not inspect rendered Markdown/HTML. A consumer that invents a dollar
-  figure not present in `decision_plan.json` would not be caught here;
-  renderer purity is a separate concern.
+- It does not verify that a funded action's `funding_source` is itself solvent —
+  the capital plan owns that.
 
 ## Tests
 
