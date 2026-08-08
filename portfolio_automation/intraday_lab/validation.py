@@ -19,11 +19,18 @@ from portfolio_automation.intraday_lab.models import (
 
 SCHEMA_VERSION = "1"
 
-# Gap classifications. HALT is intentionally absent from the automatic
-# vocabulary — OHLCV alone cannot distinguish a halt from a provider gap, and
-# guessing would manufacture evidence. Use UNKNOWN_GAP.
-GAP_MARKET_CLOSED = "MARKET_CLOSED"
-GAP_EARLY_CLOSE = "EARLY_CLOSE"
+# SESSION TYPE — what the calendar says the session WAS. Caller-supplied; never
+# inferred from the data, because a truncated normal session and a real early
+# close are indistinguishable by bar count alone.
+SESSION_REGULAR = "REGULAR"
+SESSION_EARLY_CLOSE = "EARLY_CLOSE"
+SESSION_MARKET_CLOSED = "MARKET_CLOSED"
+SESSION_UNKNOWN = "UNKNOWN"
+
+# GAP CLASSIFICATION — how complete the DATA is. A separate axis from session
+# type. HALT and EARLY_CLOSE are intentionally absent: OHLCV alone cannot
+# distinguish a halt from a provider gap, and an early close is calendar
+# knowledge, not a data shape. Guessing either would manufacture evidence.
 GAP_MISSING_BAR = "MISSING_BAR"
 GAP_PROVIDER_GAP = "PROVIDER_GAP"
 GAP_UNKNOWN = "UNKNOWN_GAP"
@@ -116,54 +123,57 @@ def canonicalize(bars: Sequence[IntradayBar]) -> list[IntradayBar]:
 # ---------------------------------------------------------------------------
 
 def profile_session(bars: Sequence[IntradayBar], *, expected_bars: int | None = None,
-                    session_label: str = "regular") -> dict:
+                    session_type: str = SESSION_UNKNOWN) -> dict:
     """Coverage/completeness profile for one symbol-session window.
 
-    `expected_bars` is supplied by the caller (from the market calendar) rather
-    than inferred, because inferring it from the observed data would make a
-    truncated session look complete — the exact failure this profile exists to
-    surface.
-    """
-    if not bars:
-        return {"schema_version": SCHEMA_VERSION, "session_label": session_label,
-                "observed_bars": 0, "expected_bars": expected_bars,
-                "missing_bars": expected_bars, "coverage_pct": 0.0,
-                "duplicate_bars": 0, "zero_volume_bars": 0,
-                "first_bar": None, "last_bar": None,
-                "gap_classification": GAP_UNKNOWN if expected_bars else GAP_MARKET_CLOSED}
+    TWO INDEPENDENT AXES, deliberately not conflated:
 
+    * ``session_type`` — what the CALENDAR says the session was (REGULAR /
+      EARLY_CLOSE / MARKET_CLOSED / UNKNOWN). Supplied by the caller.
+    * ``gap_classification`` — how complete the DATA is for that session.
+
+    An earlier version inferred ``EARLY_CLOSE`` from the shape of the missing
+    data (``observed >= expected * 0.4``). That was unsafe: a provider outage
+    that truncated the tail of a normal 78-bar session would be relabelled as an
+    exchange early close, converting a data defect into a "healthy" verdict.
+    Early-close knowledge is calendar knowledge; it can never be recovered from
+    the bar count. Both ``expected_bars`` and ``session_type`` are therefore
+    caller-supplied, and neither is inferred from observation.
+
+    An early-close session with missing bars stays ``EARLY_CLOSE`` *and*
+    incomplete — the session type must never hide a coverage gap.
+    """
     ordered = sorted(bars, key=lambda b: b.bar_start_at)
     counts = Counter(b.key() for b in bars)
     duplicates = sum(c - 1 for c in counts.values() if c > 1)
-    zero_volume = sum(1 for b in ordered if b.volume == 0)
     observed = len(counts)
 
-    gap = None
     missing = None
     coverage = None
-    if expected_bars:
+    gap = None
+    if expected_bars is not None:
         missing = max(0, expected_bars - observed)
-        coverage = round(100.0 * observed / expected_bars, 2)
-        if missing == 0:
-            gap = None
-        elif observed and observed < expected_bars:
-            # A session that starts on time but ends early is the shape of an
-            # early close; anything else we refuse to name.
-            gap = GAP_EARLY_CLOSE if observed >= expected_bars * 0.4 else GAP_UNKNOWN
-        else:
-            gap = GAP_UNKNOWN
+        coverage = 100.0 if expected_bars == 0 else round(100.0 * observed / expected_bars, 2)
+        if missing:
+            # Conservative: we can prove bars are absent, not WHY. Never infer a
+            # halt, and never infer an early close.
+            gap = GAP_MISSING_BAR
+
+    if session_type == SESSION_MARKET_CLOSED and observed == 0:
+        gap = None  # a closed market with no bars is correct, not a defect
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "session_label": session_label,
+        "session_type": session_type,
         "observed_bars": observed,
         "expected_bars": expected_bars,
         "missing_bars": missing,
         "coverage_pct": coverage,
+        "complete": (missing == 0) if missing is not None else None,
         "duplicate_bars": duplicates,
-        "zero_volume_bars": zero_volume,
-        "first_bar": ordered[0].bar_start_at.isoformat(),
-        "last_bar": ordered[-1].bar_start_at.isoformat(),
+        "zero_volume_bars": sum(1 for b in ordered if b.volume == 0),
+        "first_bar": ordered[0].bar_start_at.isoformat() if ordered else None,
+        "last_bar": ordered[-1].bar_start_at.isoformat() if ordered else None,
         "gap_classification": gap,
     }
 

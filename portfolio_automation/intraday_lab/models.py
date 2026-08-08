@@ -37,14 +37,20 @@ from typing import Any, Optional
 SCHEMA_VERSION = "1"
 
 # Supported research timeframes -> bar duration.
-# 1min is deliberately ABSENT: the configured FMP account returns HTTP 402
-# Payment Required for /stable/historical-chart/1min (probed 2026-08-08).
-# Declaring it would let later sessions request data this account cannot serve.
+#
+# ONLY 5min. Entitlement was PROVEN for 5min and DISPROVEN for 1min (HTTP 402)
+# on 2026-08-08. 15min/30min/1hour were never probed, so declaring them would
+# advertise capability that was not demonstrated — the same error class this
+# lab exists to prevent. A later session that wants them must probe first and
+# record the result in the provider assessment.
 TIMEFRAMES: dict[str, timedelta] = {
     "5min": timedelta(minutes=5),
-    "15min": timedelta(minutes=15),
-    "30min": timedelta(minutes=30),
-    "1hour": timedelta(hours=1),
+}
+
+# Probed and refused by the configured account. Kept as documentation so the
+# refusal is visible, NOT as a supported timeframe.
+NOT_ENTITLED_TIMEFRAMES: dict[str, str] = {
+    "1min": "HTTP 402 Payment Required (probed 2026-08-08)",
 }
 
 # Conservative publication delay applied on top of bar_end_at when the provider

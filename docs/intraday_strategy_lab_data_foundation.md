@@ -60,9 +60,12 @@ Derived: `bar_end_at = bar_start_at + timeframe`, `event_at = bar_start_at`,
 Validation refuses `high < low`, open/close outside `[low, high]`, negative
 volume, non-finite values, non-positive prices, and unsupported timeframes.
 
-**`1min` is deliberately absent from `TIMEFRAMES`.** Declaring a timeframe this
-account cannot serve would let a later session build research on data that
-returns 402.
+**`TIMEFRAMES` contains `5min` only.** Entitlement was proven for 5min and
+disproven for 1min (HTTP 402). `15min` / `30min` / `1hour` were **never probed**,
+so declaring them would advertise capability that was not demonstrated — the
+same error class this lab exists to prevent. A later session wanting them must
+probe first and record the result in the provider assessment. The 1min refusal
+is preserved in `NOT_ENTITLED_TIMEFRAMES` as documentation, not capability.
 
 ---
 
@@ -141,10 +144,18 @@ produces an **INVALID** result regardless of profitability.
 - **Coverage** — `profile_session` takes `expected_bars` from the caller rather
   than inferring it; inferring from observed data would make a truncated
   session look complete.
-- **Gaps** — `MARKET_CLOSED` / `EARLY_CLOSE` / `MISSING_BAR` / `PROVIDER_GAP` /
-  `UNKNOWN_GAP`. **`HALT` is deliberately not in the automatic vocabulary** —
-  OHLCV alone cannot distinguish a halt from a provider gap, and naming it
-  would manufacture evidence.
+- **Session type vs completeness are two axes and must not be conflated.**
+  `session_type` (`REGULAR` / `EARLY_CLOSE` / `MARKET_CLOSED` / `UNKNOWN`) is
+  what the *calendar* says; `gap_classification` is how complete the *data* is.
+  Both `expected_bars` and `session_type` are caller-supplied.
+- **Gaps** — `MISSING_BAR` / `PROVIDER_GAP` / `UNKNOWN_GAP`. **`HALT` and
+  `EARLY_CLOSE` are deliberately not in the automatic vocabulary.** An earlier
+  version inferred `EARLY_CLOSE` from missing-data shape
+  (`observed >= expected * 0.4`); that would relabel a provider outage which
+  truncated a normal 78-bar session as an exchange early close, turning a data
+  defect into a healthy verdict. Early-close knowledge is calendar knowledge and
+  cannot be recovered from a bar count. An early-close session with missing bars
+  stays `EARLY_CLOSE` **and** incomplete.
 - **Zero volume** — counted as a quality condition, never a crash.
 
 ---
@@ -193,8 +204,9 @@ None are integrated. Session 2+ must justify any promotion with evidence.
 5. **`known_at` uses a 60s floor**, not measured provider latency.
 6. **REGULAR_ONLY** — gap/pre-market research is out of scope without another
    sanctioned source.
-7. One probed window (2026-05-05..09) was missing a session — real coverage
-   gaps exist and must be profiled per window, not assumed away.
+7. **Session completeness must be profiled per trading session** against a
+   calendar-derived expected bar count. Every sampled window was complete —
+   which is *not* evidence that the provider has no gaps elsewhere.
 
 ---
 
@@ -209,8 +221,32 @@ Session 2 **must not** assume: 1min data, extended-hours data, dividend
 adjustment semantics, any non-price feature being PIT-safe, or that any dataset
 has been backfilled — none has.
 
-Session 2 scope is the execution simulator, cost model, risk model and trade
-ledger. Every fill it produces must satisfy `order_eligible_at >= earliest_order_time(bar)`.
+### Session 2 scope
+
+Session 2 **builds**: immutable historical 5-minute acquisition/cache; canonical
+dataset storage; dataset manifests + fingerprints; calendar-aware completeness
+validation; a PIT-safe price-derived feature engine; the feature-eligibility
+registry; intraday universe/liquidity eligibility; market and sector price
+context.
+
+Session 2 **must not build**: strategies, trade P&L, execution simulator,
+slippage, commission model, risk sizing, walk-forward, or OOS. Those are
+Sessions 3 and 4.
+
+### The invariant Session 3 inherits
+
+For a 5-minute bar:
+
+```
+bar        10:00–10:05
+bar_end    10:05
+known_at   10:06        (bar_end + the 60s conservative floor)
+```
+
+A simulator may **not** claim a fill at `10:05` — that instant precedes
+`known_at`. Every fill must satisfy
+`order_eligible_at >= earliest_order_time(bar)`. The exact fill-price policy is
+deliberately unsolved here; only the boundary is fixed.
 
 ---
 

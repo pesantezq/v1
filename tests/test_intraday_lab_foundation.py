@@ -52,7 +52,14 @@ def test_1min_is_not_a_supported_timeframe():
     """The configured account returns HTTP 402 for 1min. Declaring it would let
     a later session request data this account cannot serve."""
     assert "1min" not in M.TIMEFRAMES
-    assert "5min" in M.TIMEFRAMES
+    assert M.NOT_ENTITLED_TIMEFRAMES["1min"].startswith("HTTP 402")
+
+
+def test_only_entitlement_proven_timeframes_are_declared():
+    """15min/30min/1hour were never probed. Declaring them would advertise
+    capability that was not demonstrated -- the error class this lab exists to
+    prevent."""
+    assert set(M.TIMEFRAMES) == {"5min"}
 
 
 def test_bars_are_immutable():
@@ -189,31 +196,78 @@ def test_conflicting_duplicate_raises():
 def test_missing_bars_detected_against_supplied_expectation():
     bars = [_bar(start=datetime(2026, 8, 3, 13, 30, tzinfo=UTC) + timedelta(minutes=5 * i))
             for i in range(70)]
-    p = V.profile_session(bars, expected_bars=78)
+    p = V.profile_session(bars, expected_bars=78, session_type=V.SESSION_REGULAR)
     assert p["observed_bars"] == 70 and p["missing_bars"] == 8
     assert p["coverage_pct"] == pytest.approx(89.74, abs=0.01)
 
 
-def test_early_close_shape_is_classified_conservatively():
+def test_incomplete_regular_session_is_not_inferred_as_early_close():
+    """70/78 is a DATA defect. Inferring an early close from the bar count would
+    convert a provider outage into a healthy verdict."""
+    bars = [_bar(start=datetime(2026, 8, 3, 13, 30, tzinfo=UTC) + timedelta(minutes=5 * i))
+            for i in range(70)]
+    p = V.profile_session(bars, expected_bars=78, session_type=V.SESSION_REGULAR)
+    assert p["session_type"] == V.SESSION_REGULAR
+    assert p["missing_bars"] == 8 and p["complete"] is False
+    assert p["gap_classification"] != "EARLY_CLOSE"
+    assert p["gap_classification"] == V.GAP_MISSING_BAR
+
+
+def test_known_early_close_is_complete_when_the_calendar_says_42():
+    """The real 2025-11-28 session: 42/42 is COMPLETE, not 36 bars missing."""
     bars = [_bar(start=datetime(2025, 11, 28, 14, 30, tzinfo=UTC) + timedelta(minutes=5 * i))
-            for i in range(42)]                    # the real 2025-11-28 session
-    assert V.profile_session(bars, expected_bars=78)["gap_classification"] == V.GAP_EARLY_CLOSE
+            for i in range(42)]
+    p = V.profile_session(bars, expected_bars=42, session_type=V.SESSION_EARLY_CLOSE)
+    assert p["session_type"] == V.SESSION_EARLY_CLOSE
+    assert p["missing_bars"] == 0 and p["coverage_pct"] == 100.0
+    assert p["complete"] is True and p["gap_classification"] is None
 
 
-def test_severe_shortfall_is_unknown_not_named():
-    """OHLCV cannot distinguish a halt from a provider gap; do not guess."""
+def test_incomplete_early_close_stays_early_close_and_stays_incomplete():
+    """Session type must never hide missing data."""
+    bars = [_bar(start=datetime(2025, 11, 28, 14, 30, tzinfo=UTC) + timedelta(minutes=5 * i))
+            for i in range(40)]
+    p = V.profile_session(bars, expected_bars=42, session_type=V.SESSION_EARLY_CLOSE)
+    assert p["session_type"] == V.SESSION_EARLY_CLOSE
+    assert p["missing_bars"] == 2 and p["complete"] is False
+
+
+def test_market_closed_day_with_no_bars_is_not_a_data_failure():
+    p = V.profile_session([], expected_bars=0, session_type=V.SESSION_MARKET_CLOSED)
+    assert p["session_type"] == V.SESSION_MARKET_CLOSED
+    assert p["observed_bars"] == 0 and p["gap_classification"] is None
+    assert p["complete"] is True
+
+
+def test_severe_shortfall_is_missing_data_never_a_named_cause():
+    """OHLCV cannot prove a halt or an early close; do not guess either."""
     bars = [_bar(start=datetime(2026, 8, 3, 13, 30, tzinfo=UTC) + timedelta(minutes=5 * i))
             for i in range(5)]
-    assert V.profile_session(bars, expected_bars=78)["gap_classification"] == V.GAP_UNKNOWN
+    p = V.profile_session(bars, expected_bars=78, session_type=V.SESSION_REGULAR)
+    assert p["gap_classification"] == V.GAP_MISSING_BAR
+    assert "HALT" not in str(p) and "EARLY_CLOSE" not in str(p["gap_classification"])
+
+
+def test_may_2026_probe_window_holds_four_sessions_not_five():
+    """The Session 1 handoff called 312 bars a missing session. It is not:
+    2026-05-09 is a Saturday, so the window holds FOUR regular sessions and
+    4 x 78 == 312 is exactly complete. Derived from the calendar, not narrated."""
+    from datetime import date, timedelta as _td
+    d, end, sessions = date(2026, 5, 5), date(2026, 5, 9), 0
+    while d <= end:
+        sessions += d.weekday() < 5
+        d += _td(days=1)
+    assert sessions == 4
+    assert sessions * 78 == 312
 
 
 def test_empty_window_reports_zero_not_crash():
-    p = V.profile_session([], expected_bars=78)
+    p = V.profile_session([], expected_bars=78, session_type=V.SESSION_REGULAR)
     assert p["observed_bars"] == 0 and p["coverage_pct"] == 0.0
 
 
 def test_zero_volume_bars_are_counted_not_fatal():
-    assert V.profile_session([_bar(vol=0.0)], expected_bars=1)["zero_volume_bars"] == 1
+    assert V.profile_session([_bar(vol=0.0)], expected_bars=1, session_type=V.SESSION_REGULAR)["zero_volume_bars"] == 1
 
 
 # ===========================================================================
@@ -228,9 +282,12 @@ def test_same_dataset_same_fingerprint_regardless_of_order():
 @pytest.mark.parametrize("mutation", [
     {"c": 100.6},                                                   # changed bar
     {"symbol": "AAPL"},                                             # symbol set
-    {"tf": "15min"},                                                # timeframe
+    {"vol": 2000.0},                                                # volume
 ])
 def test_meaningful_change_alters_the_fingerprint(mutation):
+    """Timeframe is in the fingerprint payload but cannot be varied here: only
+    5min is entitlement-proven, so constructing a second timeframe would require
+    declaring capability we did not demonstrate."""
     assert V.dataset_fingerprint([_bar()]) != V.dataset_fingerprint([_bar(**mutation)])
 
 

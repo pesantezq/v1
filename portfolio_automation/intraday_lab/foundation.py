@@ -26,7 +26,10 @@ PROBE_EVIDENCE: list[dict[str, Any]] = [
      "http": 200, "bars": 390, "first": "2026-08-03 09:30:00", "last": "2026-08-07 15:55:00"},
     {"symbol": "SPY", "timeframe": "5min", "window": "2026-05-05..2026-05-09",
      "http": 200, "bars": 312, "first": "2026-05-05 09:30:00", "last": "2026-05-08 15:55:00",
-     "note": "one session absent in window — coverage gap, classified UNKNOWN_GAP"},
+     "note": "312 == 4 complete sessions x 78 bars. 2026-05-09 is a SATURDAY, so "
+             "the window holds FOUR regular sessions, not five. An earlier reading "
+             "called this a missing session; that was a calendar error, not a "
+             "coverage gap. This probe shows COMPLETE data."},
     {"symbol": "SPY", "timeframe": "5min", "window": "2025-08-04..2025-08-08",
      "http": 200, "bars": 390, "first": "2025-08-04 09:30:00", "last": "2025-08-08 15:55:00"},
     {"symbol": "SPY", "timeframe": "5min", "window": "2023-08-07..2023-08-11",
@@ -63,6 +66,12 @@ def provider_assessment() -> dict:
         "registry_key": "intraday_chart",
         "account_access": {"5min": "ENTITLED", "1min": "NOT_ENTITLED_HTTP_402"},
         "tested_timeframes": ["5min", "1min"],
+        "canonical_research_timeframe": "5min",
+        "undeclared_untested_timeframes": {
+            "15min": "NOT_PROBED — not declared in TIMEFRAMES",
+            "30min": "NOT_PROBED — not declared in TIMEFRAMES",
+            "1hour": "NOT_PROBED — not declared in TIMEFRAMES",
+        },
         "tested_symbols": ["SPY", "AAPL"],
         "observed_historical_depth": {
             "earliest_verified": "2017-08-07",
@@ -84,8 +93,10 @@ def provider_assessment() -> dict:
             "AAPL 2020-08-27 closes ~125 vs the ~500 that actually printed before "
             "the 4:1 split.",
         "rate_limit_constraints": "governed by the existing FMP budget governor",
-        "observed_quality": "full sessions on every probed window except one "
-                            "absent session in 2026-05",
+        "observed_quality": "every probed window returned complete regular "
+                            "sessions; no coverage gap was observed in the sample. "
+                            "Completeness must still be profiled per session — a "
+                            "clean sample is not proof the provider has no gaps.",
         "pit_suitability": "SUITABLE for return-based research; split adjustment "
                            "is retroactive, so rules keyed to ABSOLUTE price "
                            "levels are NOT point-in-time safe",
@@ -104,6 +115,9 @@ def foundation_status() -> dict:
         "point-in-time safe.",
         "Dividend adjustment behaviour was NOT established for intraday bars.",
         "Historical depth was spot-probed at five points, not exhaustively scanned.",
+        "Session completeness must be profiled per trading session against a "
+        "calendar-derived expected bar count. The sampled windows were complete, "
+        "which is NOT evidence that the provider has no gaps elsewhere.",
         "Provider publishes no emission timestamp, so known_at uses a documented "
         "conservative 60s floor rather than measured latency.",
         "REGULAR_ONLY: no extended-hours bars, so gap/pre-market research is out "
