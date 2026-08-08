@@ -77,13 +77,26 @@ kill-switch file `config/strategy_lab_strict_health.DISABLED`, or env
 pre-WS4 verdict exactly, bug included, for rollback only). The legacy
 top-level `status`/`reasons`/`signals` keys still resolve.
 
-**Known, intended, non-regression fact**: today's real leaderboard carries 25/26
+**Known, intended, non-regression fact**: the real leaderboard carries 25/26
 tactics with `still_works_oos: null` (never walk-forward tested — classified
-`OOS_NOT_TESTED`) and 1 tactic that is genuinely OOS-tested and passing
-(`OOS_SUPPORTED`, but ranked LAST of 26). Under the strict rollup this is
-AMBER (`statistical_sufficiency` + `ranking_credibility`), not GREEN — do not
-treat this AMBER as something to "fix" by loosening thresholds; it is the
-fix.
+`OOS_NOT_TESTED`), because walk-forward is wired to ONE hardcoded tactic. Under
+the strict rollup this is AMBER (`statistical_sufficiency` +
+`ranking_credibility`), not GREEN — do not treat this AMBER as something to
+"fix" by loosening thresholds; it is the fix.
+
+The state of that ONE tested tactic is the thing to actually read each run, and
+it has already moved once — **do not treat this paragraph as the current
+answer, check `oos_state_counts`:**
+- Up to ~2026-07-28 it was `research_momentum_rotation` at `OOS_SUPPORTED`
+  (ranked LAST of 26 — the WS3 selection-bias headline).
+- As of **2026-08-08** the same tactic reads `OOS_MIXED`: 12 folds,
+  `oos_excess_return = -0.0018` (NEGATIVE vs SPY), `one_fold_controls_result
+  = false`. Zero tactics now reach `OOS_SUPPORTED`, which is what newly trips
+  `oos_validity: no_credible_oos_test`.
+
+So the lab's only out-of-sample evidence is currently mildly negative. That is
+a real finding to report, not a fixture artifact — and it is exactly the case
+where `legacy_status` still reads GREEN.
 
 - **RED** — `looks_fresh_but_empty` (status `ok` but zero tactics scored → the lab
   ran but every tactic degraded; check `outputs/backtest/historical/*_5y.json`
