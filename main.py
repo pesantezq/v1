@@ -2944,6 +2944,22 @@ def run_portfolio_update(
                 ),
                 theme_highlights=_theme_highlights,
             )
+            # Authoritative funded state. Without it the digest fails closed to
+            # research framing — it previously emitted "Deploy $1,000 -> VFH"
+            # straight from unconstrained contribution sizing on days the capital
+            # plan had funded nothing. Never let a read failure here become an
+            # unguarded instruction: load_funding_state returns available=False.
+            try:
+                from digest_builder import load_funding_state as _load_funding
+                digest_ctx.funding_state = _load_funding('.')
+                logger.info(
+                    "Digest funding authority: available=%s funded_symbols=%d",
+                    digest_ctx.funding_state.get('available'),
+                    len(digest_ctx.funding_state.get('funded') or {}),
+                )
+            except Exception as _fund_err:
+                logger.warning("Funding state unavailable (failing closed): %s", _fund_err)
+                digest_ctx.funding_state = {"available": False, "funded": {}}
             logger.info("Digest context built successfully")
         except Exception as _ctx_err:
             logger.warning("Failed to build digest context (non-fatal): %s", _ctx_err)

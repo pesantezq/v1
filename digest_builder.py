@@ -88,6 +88,18 @@ class DigestContext:
     holdings: List[Any] = field(default_factory=list)                # Holding
     holding_rationale: Dict[str, str] = field(default_factory=dict)  # symbol → rationale
 
+    # ── Authoritative funding state ──────────────────────────────────────
+    # {"available": bool, "funded": {symbol: funded_dollars}} sourced from
+    # outputs/latest/daily_capital_plan.json — the ONLY authority for whether
+    # money is actually deployable today.
+    #
+    # The digest previously had no awareness of this at all: it emitted
+    # "Deploy $1,000 → VFH" straight from the unconstrained contribution plan,
+    # on days when the capital plan said "$0 available after pacing". Left None,
+    # the builder FAILS CLOSED to research framing — absence of funding evidence
+    # is never permission to issue a capital instruction.
+    funding_state: Optional[Dict[str, Any]] = None
+
     # ── Guardrails violations ────────────────────────────────────────────
     # Each item is a dict with keys: symbol, violation_type, current_pct, cap_pct
     guardrail_violations: List[Dict[str, Any]] = field(default_factory=list)
@@ -114,6 +126,55 @@ class DigestContext:
 # ===========================================================================
 # A.  Top 3 Actions
 # ===========================================================================
+
+def _funded_amount(funding_state: Any, symbol: str) -> Optional[float]:
+    """Dollars the capital plan actually funded for `symbol`, else None.
+
+    Returns None — never 0.0 — when the authority is absent or unavailable, so
+    callers can distinguish "authority says nothing is funded" from "we have no
+    authority". Both must fail closed, but only the first is a known state.
+    """
+    if not isinstance(funding_state, dict):
+        return None
+    if funding_state.get("available") is False:
+        return None
+    funded = funding_state.get("funded")
+    if not isinstance(funded, dict):
+        return None
+    value = funded.get(symbol)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def load_funding_state(root: str = ".") -> Dict[str, Any]:
+    """Read the authoritative funded state from the daily capital plan.
+
+    Shaped for `DigestContext.funding_state`. On any read failure this returns
+    `{"available": False}` so the digest falls back to research framing rather
+    than to an unguarded instruction.
+    """
+    import json
+    from pathlib import Path
+
+    try:
+        path = Path(root) / "outputs" / "latest" / "daily_capital_plan.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"available": False, "funded": {}, "reason": "capital_plan_unreadable"}
+    if not isinstance(data, dict) or data.get("available") is False:
+        return {"available": False, "funded": {}, "reason": "capital_plan_unavailable"}
+    funded: Dict[str, float] = {}
+    for row in data.get("funded_actions") or []:
+        if not isinstance(row, dict):
+            continue
+        symbol, amount = row.get("symbol"), row.get("funded_capital")
+        if symbol and isinstance(amount, (int, float)) and not isinstance(amount, bool):
+            funded[symbol] = funded.get(symbol, 0.0) + float(amount)
+    return {"available": True, "funded": funded,
+            "bottom_line": data.get("bottom_line"),
+            "generated_at": data.get("generated_at")}
+
 
 def build_top3_actions(ctx: DigestContext) -> List[str]:
     """
@@ -159,14 +220,28 @@ def build_top3_actions(ctx: DigestContext) -> List[str]:
         if len(actions) >= 3:
             return actions
 
-    # 3. Top contribution deployment
+    # 3. Top contribution deployment — GATED BY THE FUNDING AUTHORITY.
+    #
+    # `recommended_dollars` is unconstrained contribution sizing. It is NOT
+    # evidence that money is deployable today: pacing, the protected reserve and
+    # the cash waterfall all sit downstream of it. Only the capital plan knows
+    # what is funded, so only a funded symbol earns imperative money language,
+    # and then at the FUNDED amount rather than the requested one.
     if ctx.contribution_plan:
         top = max(ctx.contribution_plan, key=lambda c: c.recommended_dollars)
         if top.recommended_dollars > 0:
-            actions.append(
-                f"Deploy {format_currency(top.recommended_dollars)} → {top.symbol} "
-                f"(monthly contribution — {top.reason})"
-            )
+            funded = _funded_amount(ctx.funding_state, top.symbol)
+            if funded is not None and funded > 0:
+                actions.append(
+                    f"Deploy {format_currency(funded)} → {top.symbol} "
+                    f"(funded from today's capital plan — {top.reason})"
+                )
+            else:
+                actions.append(
+                    f"{top.symbol} remains the next portfolio-priority use of "
+                    f"investment capital ({top.reason}) — not funded today; "
+                    f"awaiting the next eligible contribution/pacing tranche"
+                )
         if len(actions) >= 3:
             return actions
 
