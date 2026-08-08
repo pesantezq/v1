@@ -46,6 +46,20 @@ REGISTRY: dict[str, dict] = {
         "classification": "core_stable_ok",
         "usage": "SMA20, 5d change, volume avg",
     },
+    # Intraday research bars for the Governed Intraday Strategy Lab.
+    # Registered 2026-08-08 after a read-only entitlement probe: 5min returns
+    # full regular sessions back to at least 2017; 1min returns HTTP 402
+    # Payment Required on this account and is therefore NOT declared here.
+    # Research-only: HISTORICAL namespace, never the daily scanner.
+    "intraday_chart": {
+        "endpoint":      "/stable/historical-chart/5min",
+        "per_symbol":    True,
+        "starter_safe":  True,
+        "priority":      "P3",
+        "required_daily": False,
+        "classification": "core_stable_ok",
+        "usage": "Intraday Strategy Lab research bars (5min, regular session)",
+    },
     "stock_news": {
         "endpoint":      "/stable/news/stock",
         "per_symbol":    False,
