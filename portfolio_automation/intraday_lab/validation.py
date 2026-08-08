@@ -36,8 +36,67 @@ GAP_PROVIDER_GAP = "PROVIDER_GAP"
 GAP_UNKNOWN = "UNKNOWN_GAP"
 
 
+SESSION_TYPES = frozenset({SESSION_REGULAR, SESSION_EARLY_CLOSE,
+                           SESSION_MARKET_CLOSED, SESSION_UNKNOWN})
+
+
 class DuplicateBarError(ValueError):
     """Two different bars claim the same symbol+timeframe+bar_start_at."""
+
+
+class SessionMetadataError(ValueError):
+    """Calendar metadata and observed data contradict each other.
+
+    Raised rather than returned because Session 2 will build the immutable
+    canonical dataset on top of these profiles. A contradictory session that
+    merely *reports* a bad status would still be admitted; one that raises
+    cannot be. Fail closed at the boundary, not downstream.
+    """
+
+
+def _validate_session_metadata(session_type: str, expected_bars: Any,
+                               observed: int) -> None:
+    if session_type not in SESSION_TYPES:
+        raise SessionMetadataError(
+            f"unknown session_type {session_type!r}; expected one of "
+            f"{sorted(SESSION_TYPES)}")
+
+    if expected_bars is not None:
+        if isinstance(expected_bars, bool) or not isinstance(expected_bars, int):
+            raise SessionMetadataError(
+                f"expected_bars must be None or a non-negative int, got "
+                f"{expected_bars!r}")
+        if expected_bars < 0:
+            raise SessionMetadataError(f"negative expected_bars {expected_bars}")
+
+    # A closed market cannot have traded.
+    if session_type == SESSION_MARKET_CLOSED:
+        if expected_bars not in (None, 0):
+            raise SessionMetadataError(
+                f"MARKET_CLOSED session expects 0 bars, calendar supplied "
+                f"{expected_bars}")
+        if observed > 0:
+            raise SessionMetadataError(
+                f"MARKET_CLOSED session carries {observed} observed bars — the "
+                f"calendar and the data disagree about whether the market was "
+                f"open; do not admit this session")
+
+    # A trading session that expects nothing is a calendar contradiction.
+    if session_type in (SESSION_REGULAR, SESSION_EARLY_CLOSE) and expected_bars == 0:
+        raise SessionMetadataError(
+            f"{session_type} session cannot expect 0 bars — the calendar "
+            f"expectation contradicts the session type")
+
+    # Surplus bars are never harmless. They signal extended-hours contamination,
+    # a wrong calendar expectation, a timestamp/session normalization error, or
+    # a provider change. Reporting >100% coverage as "complete" would let any of
+    # those into the canonical dataset unnoticed.
+    if expected_bars is not None and observed > expected_bars:
+        raise SessionMetadataError(
+            f"{observed} observed bars exceed the {expected_bars} the calendar "
+            f"expects for a {session_type} session — possible extended-hours "
+            f"contamination, wrong calendar expectation, timestamp "
+            f"normalization error, or duplicated source data")
 
 
 # ---------------------------------------------------------------------------
@@ -142,25 +201,36 @@ def profile_session(bars: Sequence[IntradayBar], *, expected_bars: int | None = 
 
     An early-close session with missing bars stays ``EARLY_CLOSE`` *and*
     incomplete — the session type must never hide a coverage gap.
+
+    FAILS CLOSED on contradictory metadata (``SessionMetadataError``): an
+    unknown session type, a negative/non-integer expectation, a MARKET_CLOSED
+    session that expects or carries bars, a trading session expecting zero
+    bars, or MORE observed bars than the calendar expects. Session 2 builds the
+    immutable canonical dataset from these profiles, so a contradiction must be
+    impossible to admit, not merely reported.
+
+    ``complete`` is ``None`` — not ``True`` — when no expectation was supplied.
+    Absence of a calendar expectation is not evidence of completeness.
     """
     ordered = sorted(bars, key=lambda b: b.bar_start_at)
     counts = Counter(b.key() for b in bars)
     duplicates = sum(c - 1 for c in counts.values() if c > 1)
     observed = len(counts)
 
+    _validate_session_metadata(session_type, expected_bars, observed)
+
     missing = None
     coverage = None
     gap = None
     if expected_bars is not None:
-        missing = max(0, expected_bars - observed)
+        # Surplus is impossible past _validate_session_metadata, so this
+        # subtraction can no longer mask extra bars behind max(0, ...).
+        missing = expected_bars - observed
         coverage = 100.0 if expected_bars == 0 else round(100.0 * observed / expected_bars, 2)
         if missing:
             # Conservative: we can prove bars are absent, not WHY. Never infer a
             # halt, and never infer an early close.
             gap = GAP_MISSING_BAR
-
-    if session_type == SESSION_MARKET_CLOSED and observed == 0:
-        gap = None  # a closed market with no bars is correct, not a defect
 
     return {
         "schema_version": SCHEMA_VERSION,

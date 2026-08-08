@@ -108,8 +108,9 @@ def provider_assessment() -> dict:
 
 def foundation_status() -> dict:
     limitations = [
-        "1min is NOT entitled on this account (HTTP 402); 5min is the finest "
-        "timeframe available.",
+        "1min is NOT entitled on this account (HTTP 402). 5min is the finest "
+        "VERIFIED AND DECLARED research timeframe for the configured account — "
+        "15min/30min/1hour were never probed, so nothing is claimed about them.",
         "Intraday history is SPLIT BACK-ADJUSTED. Safe for returns; any future "
         "rule keyed to absolute price levels or round-number thresholds is NOT "
         "point-in-time safe.",
@@ -122,6 +123,14 @@ def foundation_status() -> dict:
         "conservative 60s floor rather than measured latency.",
         "REGULAR_ONLY: no extended-hours bars, so gap/pre-market research is out "
         "of scope unless another source is sanctioned.",
+        "No immutable canonical dataset has been constructed yet; Session 1 "
+        "performed read-only probes only.",
+        "Non-price feature families are NOT point-in-time ready except where "
+        "explicitly classified PIT_READY.",
+        "Session 2 must derive session_type and expected_bars from the sanctioned "
+        "exchange calendar before admitting a session to the canonical dataset. "
+        "A weekday-only approximation is NOT acceptable for the production "
+        "dataset — it cannot see holidays or early closes.",
     ]
     return {
         "schema_version": SCHEMA_VERSION,

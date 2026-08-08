@@ -157,6 +157,16 @@ produces an **INVALID** result regardless of profitability.
   cannot be recovered from a bar count. An early-close session with missing bars
   stays `EARLY_CLOSE` **and** incomplete.
 - **Zero volume** — counted as a quality condition, never a crash.
+- **Contradictory calendar metadata FAILS CLOSED** (`SessionMetadataError`).
+  `profile_session` raises on an unknown `session_type`, a negative or
+  non-integer `expected_bars`, a `MARKET_CLOSED` session that expects or
+  carries bars, a trading session expecting zero bars, or **more** observed
+  bars than the calendar expects. Surplus bars are never harmless — they signal
+  extended-hours contamination, a wrong calendar expectation, a timestamp
+  normalization error, or duplicated source data. Before this, `REGULAR` 80/78
+  returned `complete=True` at 102.56% coverage.
+- **`complete` is `None`, not `True`, when no expectation was supplied.**
+  Absence of a calendar expectation is not evidence of completeness.
 
 ---
 
@@ -223,7 +233,15 @@ has been backfilled — none has.
 
 ### Session 2 scope
 
-Session 2 **builds**: immutable historical 5-minute acquisition/cache; canonical
+**Session 2 must derive `session_type` and `expected_bars` from the sanctioned
+exchange calendar** before admitting any session to the canonical dataset. A
+weekday-only approximation is **not** acceptable for the production dataset — it
+cannot see holidays or early closes, and `profile_session` now refuses the
+contradictions such an approximation produces. The real calendar adapter is
+Session 2 work; Session 1 only fixed the boundary.
+
+Session 2 **builds**: exchange-calendar-backed session expectations; immutable
+historical 5-minute acquisition/cache; canonical
 dataset storage; dataset manifests + fingerprints; calendar-aware completeness
 validation; a PIT-safe price-derived feature engine; the feature-eligibility
 registry; intraday universe/liquidity eligibility; market and sector price

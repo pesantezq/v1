@@ -360,7 +360,11 @@ def test_no_broker_execution_or_decision_plan_path_in_the_lab():
     forbidden = ("schwab", "broker", "place_order", "submit_order",
                  "decision_plan.json", "signal_registry")
     pkg = pathlib.Path("portfolio_automation/intraday_lab")
-    for path in pkg.glob("*.py"):
+    # rglob, not glob: Session 2 may add subpackages and the guard must not
+    # silently stop protecting them.
+    paths = list(pkg.rglob("*.py"))
+    assert paths, "isolation guard found no modules to scan"
+    for path in paths:
         src = path.read_text(encoding="utf-8")
         # strip the module docstring's prose disclaimers before scanning
         body = src.split('"""', 2)[-1]
@@ -371,7 +375,9 @@ def test_no_broker_execution_or_decision_plan_path_in_the_lab():
 def test_lab_imports_nothing_from_production_decision_layers():
     import pathlib
     pkg = pathlib.Path("portfolio_automation/intraday_lab")
-    for path in pkg.glob("*.py"):
+    paths = list(pkg.rglob("*.py"))
+    assert paths, "isolation guard found no modules to scan"
+    for path in paths:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.startswith(("import ", "from ")):
                 assert "decision_engine" not in line
@@ -413,3 +419,87 @@ def test_intraday_endpoint_is_registered_and_1min_is_not_declared():
     assert REGISTRY["intraday_chart"]["endpoint"] == "/stable/historical-chart/5min"
     assert REGISTRY["intraday_chart"]["required_daily"] is False
     assert not any("1min" in str(v.get("endpoint", "")) for v in REGISTRY.values())
+
+
+# ===========================================================================
+# Session-metadata fail-closed hardening.
+#
+# Before this, profile_session returned complete=True for REGULAR 80/78
+# (coverage 102.56%), for MARKET_CLOSED carrying 3 bars, and for a nonsense
+# session_type with expected_bars=-5. Session 2 builds the immutable canonical
+# dataset from these profiles, so a contradiction must be impossible to admit,
+# not merely reported.
+# ===========================================================================
+def _bars(n, start=None):
+    start = start or datetime(2026, 8, 3, 13, 30, tzinfo=UTC)
+    return [_bar(start=start + timedelta(minutes=5 * i)) for i in range(n)]
+
+
+def test_unknown_session_type_is_rejected():
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session(_bars(1), expected_bars=78, session_type="NONSENSE")
+
+
+@pytest.mark.parametrize("bad", [-5, -1, 1.5, "78", True])
+def test_invalid_expected_bars_is_rejected_not_coerced(bad):
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session(_bars(1), expected_bars=bad, session_type=V.SESSION_REGULAR)
+
+
+def test_market_closed_cannot_expect_bars():
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session([], expected_bars=78, session_type=V.SESSION_MARKET_CLOSED)
+
+
+def test_market_closed_carrying_bars_is_rejected():
+    """Calendar and data disagree about whether the market was open."""
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session(_bars(3), expected_bars=0,
+                          session_type=V.SESSION_MARKET_CLOSED)
+
+
+def test_trading_session_expecting_zero_bars_is_contradictory():
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session([], expected_bars=0, session_type=V.SESSION_REGULAR)
+
+
+def test_surplus_bars_on_a_regular_session_are_rejected():
+    """80/78 previously reported complete=True at 102.56% coverage. Surplus can
+    mean extended-hours contamination or a timestamp normalization error."""
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session(_bars(80), expected_bars=78, session_type=V.SESSION_REGULAR)
+
+
+def test_surplus_bars_on_an_early_close_are_rejected():
+    with pytest.raises(V.SessionMetadataError):
+        V.profile_session(_bars(45), expected_bars=42,
+                          session_type=V.SESSION_EARLY_CLOSE)
+
+
+def test_unknown_session_without_expectation_is_unresolved_not_complete():
+    """Absence of a calendar expectation is not evidence of completeness."""
+    p = V.profile_session(_bars(5), session_type=V.SESSION_UNKNOWN)
+    assert p["complete"] is None
+    assert p["missing_bars"] is None and p["coverage_pct"] is None
+    assert p["observed_bars"] == 5
+
+
+def test_hardening_preserves_every_valid_session_shape():
+    """The four legitimate cases must still behave exactly as before."""
+    regular_full = V.profile_session(_bars(78), expected_bars=78,
+                                     session_type=V.SESSION_REGULAR)
+    regular_short = V.profile_session(_bars(70), expected_bars=78,
+                                      session_type=V.SESSION_REGULAR)
+    early_full = V.profile_session(_bars(42), expected_bars=42,
+                                   session_type=V.SESSION_EARLY_CLOSE)
+    early_short = V.profile_session(_bars(40), expected_bars=42,
+                                    session_type=V.SESSION_EARLY_CLOSE)
+    closed = V.profile_session([], expected_bars=0,
+                               session_type=V.SESSION_MARKET_CLOSED)
+    assert regular_full["complete"] is True and regular_full["missing_bars"] == 0
+    assert regular_short["complete"] is False and regular_short["missing_bars"] == 8
+    assert regular_short["gap_classification"] == V.GAP_MISSING_BAR
+    assert early_full["complete"] is True
+    assert early_short["complete"] is False and early_short["missing_bars"] == 2
+    assert early_short["session_type"] == V.SESSION_EARLY_CLOSE
+    assert closed["complete"] is True and closed["gap_classification"] is None
