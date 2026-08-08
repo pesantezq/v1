@@ -398,6 +398,19 @@ run_aux_stage "Memo coherence reconciliation" \
 run_aux_stage "Today's Capital Plan view" \
     python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.capital_plan_view import run_capital_plan_view; v = run_capital_plan_view('.'); cs = v.get('capital_summary') or {}; print('available:', v.get('available'), 'funded:', cs.get('funded_count'), 'deferred:', cs.get('deferred_count'), 'recon:', v.get('reconciliation_status'), 'warnings:', len(v.get('funding_warnings') or []))"
 
+# Stage 9e3 — Capital-authority consistency gate (observe-only, read-only).
+# decision_plan.json renders imperative dollar instructions ("add about $1,588")
+# from sizing math alone, with no reference to cash/reserve/pacing; the capital
+# plan (9e2) applies the waterfall and may fund nothing. Both were internally
+# coherent and nothing compared them, so an investor-facing consumer could issue
+# a funded-sounding instruction the capital layer had already denied (observed
+# live 2026-08-08: six instructions totalling ~$4,890 against $0 funded).
+# Reads both, writes outputs/latest/decision_authority.json. Fails CLOSED to
+# BLOCKED_BY_CONSISTENCY; never resizes, never recomputes, never executes.
+# Must run AFTER 9e2 (needs daily_capital_plan.json) and BEFORE the memo.
+run_aux_stage "Capital-authority consistency gate" \
+    python -c "import os; os.chdir('${REPO_ROOT}'); from portfolio_automation.decision_authority import run_decision_authority, write_decision_authority; r = run_decision_authority('.'); write_decision_authority(r, '.'); print('status:', r['status'], 'conflicts:', len(r['conflicts']), 'instructed:', len(r['instructed_symbols']), 'funded:', len(r['funded_symbols']))"
+
 # Stage 10 — Daily investment memo (also triggers email if MEMO_EMAIL_ENABLED=1).
 run_aux_stage "Daily memo + email" \
     python -c "import os; os.chdir('${REPO_ROOT}'); import runpy; runpy.run_module('watchlist_scanner.daily_memo', run_name='__main__')"
