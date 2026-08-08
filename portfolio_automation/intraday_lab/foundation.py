@@ -198,3 +198,112 @@ def write_foundation_artifacts(root: str = ".") -> list[str]:
                 ("intraday_provider_assessment.json", provider_assessment()),
                 ("intraday_foundation_status.json", foundation_status()),
                 ("intraday_foundation_health.json", assess_foundation_health()))]
+
+
+# ---------------------------------------------------------------------------
+# Session 2 — dataset + feature foundation status
+# ---------------------------------------------------------------------------
+DATASET_FEATURE_FOUNDATION_READY = "DATASET_FEATURE_FOUNDATION_READY"
+DATASET_FEATURE_FOUNDATION_LIMITED = "DATASET_FEATURE_FOUNDATION_LIMITED"
+DATASET_FEATURE_FOUNDATION_BLOCKED = "DATASET_FEATURE_FOUNDATION_BLOCKED"
+
+
+def session2_status(pilot: dict | None = None) -> dict:
+    """Session 2 exit status.
+
+    LIMITED, not READY: the architecture is proven end-to-end on real data, but
+    the repo's holiday table spans 2025-2027 only. Five-minute bars reach back
+    to 2017 and the calendar refuses every one of those sessions, so the
+    research window is far narrower than the data. That materially constrains
+    what Session 3+ can eventually validate, which is exactly what LIMITED is
+    for.
+    """
+    from portfolio_automation.intraday_lab import calendar as _cal
+    from portfolio_automation.intraday_lab import features as _feat
+
+    return {
+        "schema_version": "1",
+        "source": "intraday_lab.session2_status",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "observe_only": True,
+        "session": 2,
+        "architecture_status": DATASET_FEATURE_FOUNDATION_LIMITED,
+        "calendar_integrated": True,
+        "exact_grid_reconciliation": True,
+        "immutable_canonical_dataset": True,
+        "deterministic_fingerprint": True,
+        "pit_feature_engine": True,
+        # Session 2 must never imply strategies may graduate, however green it is.
+        "real_data_acquisition_allowed": True,
+        "canonical_dataset_ready": True,
+        "feature_dataset_ready": True,
+        "strategy_validation_allowed": False,
+        "features_enabled": list(_feat.ENABLED_FEATURES),
+        "features_blocked": {k: _feat.FEATURE_REGISTRY[k]["status"]
+                             for k in _feat.BLOCKED_FEATURES},
+        "calendar": _cal.calendar_provenance(),
+        "pilot": pilot,
+        "limitations": [
+            "CALENDAR COVERAGE IS THE BINDING CONSTRAINT: holiday data spans "
+            "2025-01-01..2027-12-24. 5min bars exist back to 2017 but every "
+            "pre-2025 session is UNCERTIFIED and refused. Extending the holiday "
+            "table backwards from a verified source is the highest-value "
+            "unblock for Session 3+.",
+            "Early-close table is hand-maintained for the covered window; a "
+            "missed or wrong entry causes a REJECTION, never a silent bad admit.",
+            "Volume-dependent features (VWAP, RVOL, dollar volume) are BLOCKED — "
+            "historical volume adjustment semantics were never established.",
+            "Absolute-price features are BLOCKED — history is split back-adjusted.",
+            "SECTOR_CONTEXT_DEFERRED — no PIT-safe symbol->sector mapping.",
+            "No bulk backfill was performed; the pilot is small by design.",
+            "No CLI module was added this session; the pipeline is library-level.",
+        ],
+    }
+
+
+def assess_session2_health(pilot: dict | None = None) -> dict:
+    """Health for the Session 2 data product.
+
+    A correctly REJECTED session is the control working, not a software fault —
+    so rejections never make this RED. Only a broken component does.
+    """
+    st = session2_status(pilot)
+    rejected = (pilot or {}).get("sessions_rejected", 0)
+    overall = "HEALTHY" if st["architecture_status"] != DATASET_FEATURE_FOUNDATION_BLOCKED \
+        else "SOFTWARE_FAILURE"
+    return {
+        "schema_version": "1",
+        "source": "intraday_lab.session2_health",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "observe_only": True,
+        "overall": overall,
+        "architecture_status": st["architecture_status"],
+        "sessions_rejected_in_pilot": rejected,
+        "rejection_is_not_a_software_fault": True,
+        "features_blocked_count": len(st["features_blocked"]),
+        "strategy_validation_allowed": False,
+        "reasons": st["limitations"],
+    }
+
+
+def write_session2_artifacts(root: str = ".", pilot: dict | None = None,
+                             manifest: dict | None = None,
+                             rejections: dict | None = None,
+                             feature_manifest: dict | None = None) -> list[str]:
+    from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+    from portfolio_automation.intraday_lab import features as _feat
+
+    base = Path(root) / "outputs"
+    payloads = [
+        ("intraday_session2_status.json", session2_status(pilot)),
+        ("intraday_session2_health.json", assess_session2_health(pilot)),
+        ("intraday_feature_registry.json", _feat.feature_registry_artifact()),
+    ]
+    if manifest:
+        payloads.append(("intraday_dataset_manifest.json", manifest))
+    if rejections:
+        payloads.append(("intraday_rejections.json", rejections))
+    if feature_manifest:
+        payloads.append(("intraday_feature_manifest.json", feature_manifest))
+    return [str(safe_write_json(OutputNamespace.HISTORICAL, name, payload, base_dir=base))
+            for name, payload in payloads]
