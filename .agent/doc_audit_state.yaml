@@ -1,9 +1,6 @@
 apply_enabled: true
+coverage_gap_first_seen: {}
 fixes_last_run: 0
 last_audited_sha: 55205f56b319a63ebaac1b09ba9ecdd7882d5047
 last_run_at: '2026-08-08T17:29:04.829664+00:00'
-open_coverage_gaps:
-- docs/discovery.md
-- docs/pe_challenger.md
-- docs/pe_resolver.md
-- docs/scanner_canary.md
+open_coverage_gaps: []

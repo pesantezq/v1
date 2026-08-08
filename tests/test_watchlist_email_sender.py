@@ -409,12 +409,43 @@ def test_health_amber_when_enabled_but_no_content(tmp_path):
 
 
 def test_health_amber_on_stale_status_while_enabled(tmp_path):
+    """The run must be pinned EARLIER than the health read.
+
+    This previously left `_run` on wall-clock while asserting health at a
+    hardcoded 2026-08-05. Once real time passed that date the artifact was
+    stamped in the FUTURE relative to now_iso, age_h went negative, the
+    `age_h > max_age_hours` test could never fire, and the assertion flipped to
+    GREEN — a date time-bomb that armed itself on 2026-08-05. Pin both ends.
+    """
     _write_inputs(tmp_path, universe=_universe(2))
-    _run(tmp_path, {"WATCHLIST_EMAIL_ENABLED": "1", "EMAIL_TO": "a@b.com"})
+    _run(tmp_path, {"WATCHLIST_EMAIL_ENABLED": "1", "EMAIL_TO": "a@b.com"},
+         now_iso="2026-08-01T12:00:00+00:00")
     h = wes.assess_watchlist_email_health(base_dir=tmp_path / "outputs",
                                          now_iso="2026-08-05T16:00:00+00:00")
     assert h["status"] == "AMBER"
     assert any(r.startswith("status_stale") for r in h["reasons"])
+
+
+def test_health_flags_a_future_dated_status_instead_of_reading_it_as_fresh(tmp_path):
+    """A future stamp yields a negative age, which silently passes the staleness
+    guard. Clock skew must surface, not disable the check."""
+    _write_inputs(tmp_path, universe=_universe(2))
+    _run(tmp_path, {"WATCHLIST_EMAIL_ENABLED": "1", "EMAIL_TO": "a@b.com"},
+         now_iso="2026-08-09T12:00:00+00:00")
+    h = wes.assess_watchlist_email_health(base_dir=tmp_path / "outputs",
+                                         now_iso="2026-08-05T16:00:00+00:00")
+    assert h["status"] == "AMBER"
+    assert any(r.startswith("status_future_dated") for r in h["reasons"])
+
+
+def test_health_tolerates_sub_hour_clock_jitter(tmp_path):
+    """Benign writer/reader skew must not manufacture an AMBER."""
+    _write_inputs(tmp_path, universe=_universe(2))
+    _run(tmp_path, {"WATCHLIST_EMAIL_ENABLED": "1", "EMAIL_TO": "a@b.com"},
+         now_iso="2026-08-05T16:10:00+00:00")
+    h = wes.assess_watchlist_email_health(base_dir=tmp_path / "outputs",
+                                         now_iso="2026-08-05T16:00:00+00:00")
+    assert not any(r.startswith("status_future_dated") for r in h["reasons"])
 
 
 def test_health_never_returns_red(tmp_path, monkeypatch):

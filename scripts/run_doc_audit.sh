@@ -108,8 +108,62 @@ print(json.dumps({"fixes_applied": len(applied), "fixes": applied}, indent=2))
 PY
 
     printf '\n-- Commit auto-fixed docs (if any) --\n'
-    git add docs/ && git commit -m "docs(auto): doc-audit drift fixes $(date -u +%F)" \
-        || printf 'No doc changes to commit.\n'
+    # Commit ONLY the docs the auditor actually rewrote.
+    #
+    # The previous blanket `git add docs/` swept in whatever else happened to be
+    # dirty. Every `docs(auto): doc-audit drift fixes` commit from 2026-06-15
+    # through 2026-08-03 carried pipeline-regenerated files (STRATEGY_CATALOG.md,
+    # monthly_reports/*, ALLOCATION_POLICY.md) while `fixes_last_run` was 0 at
+    # every single state advance — i.e. the auditor claimed authorship of output
+    # it never touched. Wrong provenance on an autonomous committer. (2026-08-08)
+    FIX_COUNT=$(python3 -c "
+import json
+print(len(json.load(open('/tmp/doc_audit_applied.json'))))
+")
+    if [ "$FIX_COUNT" -gt 0 ]; then
+        python3 -c "
+import json
+seen = set()
+for f in json.load(open('/tmp/doc_audit_applied.json')):
+    if f['doc'] not in seen:
+        seen.add(f['doc'])
+        print(f['doc'])
+" > /tmp/doc_audit_fix_paths.txt
+        xargs -a /tmp/doc_audit_fix_paths.txt -r git add --
+        git commit -m "docs(auto): doc-audit drift fixes $(date -u +%F) (${FIX_COUNT} anchors)" \
+            || printf 'Auto-fix commit produced no change.\n'
+    else
+        printf 'No auto-fixes applied — nothing to commit under doc-audit provenance.\n'
+    fi
+
+    printf '\n-- Commit pipeline-generated docs (separate provenance) --\n'
+    # Generated docs are rewritten by their own producers (the daily pipeline
+    # regenerates STRATEGY_CATALOG.md at 09:45; the monthly report writer emits
+    # monthly_reports/*). Historically they reached git ONLY as a side effect of
+    # the sweep above — `docs/STRATEGY_CATALOG.md` has never been committed by
+    # anything else. Keep committing them so they don't sit dirty forever, but
+    # under a message that says what they are.
+    #
+    # Discovered dynamically from the dirty set — no hardcoded file list, so a
+    # newly-added generated doc is picked up automatically.
+    #
+    # Deliberately limited to MODIFIED TRACKED files: an untracked doc under
+    # docs/ is new authored content (e.g. a portfolio-doc-writer draft from
+    # Step 5) and must stay for human review, never be auto-committed by cron.
+    if [ -n "$(git diff --name-only -- docs/)" ]; then
+        git diff --name-only -- docs/ | sed 's/^/  /'
+        git add --update -- docs/
+        git commit -m "docs(generated): pipeline-regenerated docs $(date -u +%F)" \
+            || printf 'Generated-docs commit produced no change.\n'
+    else
+        printf 'No modified generated docs.\n'
+    fi
+
+    UNTRACKED_DOCS=$(git ls-files --others --exclude-standard -- docs/)
+    if [ -n "$UNTRACKED_DOCS" ]; then
+        printf 'Untracked docs left for human review (NOT auto-committed):\n%s\n' \
+            "$(printf '%s\n' "$UNTRACKED_DOCS" | sed 's/^/  /')"
+    fi
 
     printf '\n-- Step 6: Advance committed state --\n'
     python3 - <<'PY'

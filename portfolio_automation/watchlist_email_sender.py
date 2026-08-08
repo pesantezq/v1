@@ -749,6 +749,10 @@ def run_watchlist_email_delivery(
 # ---------------------------------------------------------------------------
 # Health (paired check — CLAUDE.md Analysis + Health Coverage Requirement)
 # ---------------------------------------------------------------------------
+# Slack for benign clock jitter between the writer and the health reader before
+# calling a status "future-dated". Well under the 30h staleness window, so the
+# two guards cannot both fire on the same artifact.
+_FUTURE_STAMP_TOLERANCE_H = 1.0
 
 def assess_watchlist_email_health(
     base_dir: str | Path = "outputs",
@@ -801,6 +805,13 @@ def assess_watchlist_email_health(
             age_h = (now - gen_dt).total_seconds() / 3600.0
             if age_h > max_age_hours:
                 reasons.append(f"status_stale:{age_h / 24.0:.1f}d")
+            elif age_h < -_FUTURE_STAMP_TOLERANCE_H:
+                # A status stamped in the future yields a NEGATIVE age, which
+                # silently satisfies `age_h > max_age_hours` and reads as fresh
+                # — the staleness guard is disabled by exactly the clock-skew
+                # (or bad-fixture) condition it should surface. Same defect
+                # class as a verdict derived from absent data. (2026-08-08)
+                reasons.append(f"status_future_dated:{-age_h / 24.0:.1f}d")
         except Exception:
             reasons.append("generated_at_unparseable")
 

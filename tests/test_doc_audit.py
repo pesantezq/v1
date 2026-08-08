@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 from portfolio_automation import doc_audit
@@ -425,3 +426,90 @@ def test_low_severity_plan_dead_refs_do_not_drive_overall_status(tmp_path):
     assert r["overall_status"] == "ok"
     # still reported, just not escalating
     assert any(f["dimension"] == "dead_ref" for f in r["findings"])
+
+
+# ---------------------------------------------------------------------------
+# Coverage-gap AGE tracking.
+#
+# carry_forward_coverage_gaps stops a gap from vanishing, but a carried gap
+# still looks identical on day 1 and day 90 — so a gap that nobody ever fixes
+# reads exactly like one raised this morning. The weekly cron cannot dispatch
+# the doc-writer (run_doc_audit.sh Steps 1-2-4-6 only), so an unfixed gap has
+# no escalating signal at all. Stamping first-seen makes the age readable by
+# the daily check. Added 2026-08-08.
+# ---------------------------------------------------------------------------
+_T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_gap_ages_stamps_first_seen_for_a_new_gap():
+    first_seen, ages, max_age = doc_audit.update_coverage_gap_ages(
+        ["docs/a.md"], {}, now=_T0)
+    assert first_seen == {"docs/a.md": _T0.isoformat()}
+    assert ages == {"docs/a.md": 0.0}
+    assert max_age == 0.0
+
+
+def test_gap_ages_preserve_first_seen_across_runs():
+    """The whole point: re-raising a gap must NOT reset its clock."""
+    first_seen, _, _ = doc_audit.update_coverage_gap_ages(["docs/a.md"], {}, now=_T0)
+    later = _T0 + timedelta(days=12, hours=6)
+    first_seen2, ages, max_age = doc_audit.update_coverage_gap_ages(
+        ["docs/a.md"], first_seen, now=later)
+    assert first_seen2 == first_seen          # clock not reset
+    assert ages["docs/a.md"] == pytest.approx(12.25)
+    assert max_age == pytest.approx(12.25)
+
+
+def test_gap_ages_drop_resolved_gaps():
+    """A gap that is no longer open must not linger in first-seen forever."""
+    stale = {"docs/gone.md": _T0.isoformat(), "docs/still.md": _T0.isoformat()}
+    first_seen, ages, _ = doc_audit.update_coverage_gap_ages(
+        ["docs/still.md"], stale, now=_T0 + timedelta(days=3))
+    assert set(first_seen) == {"docs/still.md"}
+    assert set(ages) == {"docs/still.md"}
+
+
+def test_gap_ages_max_reflects_the_oldest_gap():
+    seen = {"docs/old.md": _T0.isoformat(),
+            "docs/new.md": (_T0 + timedelta(days=9)).isoformat()}
+    _, ages, max_age = doc_audit.update_coverage_gap_ages(
+        ["docs/old.md", "docs/new.md"], seen, now=_T0 + timedelta(days=10))
+    assert ages["docs/old.md"] == pytest.approx(10.0)
+    assert ages["docs/new.md"] == pytest.approx(1.0)
+    assert max_age == pytest.approx(10.0)
+
+
+def test_gap_ages_no_open_gaps_yields_none_max():
+    first_seen, ages, max_age = doc_audit.update_coverage_gap_ages([], {}, now=_T0)
+    assert (first_seen, ages, max_age) == ({}, {}, None)
+
+
+def test_gap_ages_tolerate_a_corrupt_first_seen_timestamp():
+    """A hand-edited/garbled stamp must re-stamp, never crash the audit."""
+    first_seen, ages, max_age = doc_audit.update_coverage_gap_ages(
+        ["docs/a.md"], {"docs/a.md": "not-a-timestamp"}, now=_T0)
+    assert first_seen == {"docs/a.md": _T0.isoformat()}
+    assert max_age == 0.0
+
+
+def test_write_doc_audit_status_persists_and_exposes_gap_ages(tmp_path):
+    """End-to-end: the status artifact carries the age the daily check reads."""
+    root = str(tmp_path)
+    _write(tmp_path, "portfolio_automation/market_session.py", "x = 1\n")
+    result = doc_audit.run_doc_audit(
+        root, "deadbeef", [], set(), open_coverage_gaps=["docs/market_session.md"])
+    doc_audit.write_doc_audit_status(result, root, now=_T0)
+
+    written = json.loads(
+        (tmp_path / "outputs" / "latest" / "doc_audit_status.json").read_text())
+    assert written["coverage_gap_first_seen"] == {"docs/market_session.md": _T0.isoformat()}
+    assert written["max_coverage_gap_age_days"] == 0.0
+
+    # Second run, 20 days later: the clock kept running.
+    result2 = doc_audit.run_doc_audit(
+        root, "deadbeef", [], set(), open_coverage_gaps=["docs/market_session.md"])
+    doc_audit.write_doc_audit_status(result2, root, now=_T0 + timedelta(days=20))
+    written2 = json.loads(
+        (tmp_path / "outputs" / "latest" / "doc_audit_status.json").read_text())
+    assert written2["max_coverage_gap_age_days"] == pytest.approx(20.0)
+    assert written2["coverage_gap_ages_days"]["docs/market_session.md"] == pytest.approx(20.0)

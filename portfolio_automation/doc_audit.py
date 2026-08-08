@@ -424,6 +424,43 @@ def run_doc_audit(root: str, last_audited_sha: str | None,
     }
 
 
+def update_coverage_gap_ages(
+    open_gaps: list[str], first_seen: dict, now: datetime | None = None,
+) -> tuple[dict, dict, float | None]:
+    """Age every still-open coverage gap. Pure over its inputs.
+
+    `carry_forward_coverage_gaps` keeps a gap from vanishing, but a carried gap
+    looks identical on day 1 and day 90 — so "nobody ever fixed this" is
+    indistinguishable from "raised this morning". The weekly cron cannot close a
+    gap on its own (`scripts/run_doc_audit.sh` runs Steps 1-2-4-6; Step 5, the
+    portfolio-doc-writer dispatch, needs an interactive session), so without an
+    age there is no signal that ever escalates.
+
+    Returns `(first_seen, ages_days, max_age_days)`. First-seen stamps are
+    PRESERVED for gaps that are still open — re-raising a gap must never reset
+    its clock — and DROPPED for gaps that have been resolved, so a fixed doc
+    cannot resurface as ancient if the module is later reintroduced.
+    """
+    now = now or datetime.now(timezone.utc)
+    updated: dict[str, str] = {}
+    ages: dict[str, float] = {}
+    for doc in open_gaps:
+        stamp = (first_seen or {}).get(doc)
+        seen_at = None
+        if stamp:
+            try:
+                seen_at = datetime.fromisoformat(str(stamp))
+                if seen_at.tzinfo is None:
+                    seen_at = seen_at.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                seen_at = None  # corrupt stamp -> re-stamp, never crash
+        if seen_at is None:
+            seen_at = now
+        updated[doc] = seen_at.isoformat()
+        ages[doc] = max(0.0, (now - seen_at).total_seconds() / 86400.0)
+    return updated, ages, (max(ages.values()) if ages else None)
+
+
 def _anchor_by_name(name: str) -> Anchor | None:
     for a in ANCHOR_REGISTRY:
         if a.name == name:
@@ -458,7 +495,8 @@ def apply_auto_fix(finding: Finding, root: str) -> bool:
     return True
 
 
-def write_doc_audit_status(result: dict, root: str) -> str:
+def write_doc_audit_status(result: dict, root: str,
+                           now: datetime | None = None) -> str:
     """Write JSON + compact MD via OutputNamespace.LATEST. Returns the JSON path.
 
     Uses safe_write_json with base_dir=Path(root)/"outputs" so the file lands
@@ -466,6 +504,29 @@ def write_doc_audit_status(result: dict, root: str) -> str:
     namespace convention (LATEST.value == "latest", base_dir == "outputs").
     """
     from portfolio_automation.data_governance import OutputNamespace, safe_write_json
+
+    open_gaps = list(result.get("open_coverage_gaps") or [])
+
+    # Age the open gaps BEFORE writing, so the artifact carries the age the daily
+    # check escalates on. Reading state can fail (absent/corrupt file); degrade to
+    # "no ages" rather than losing the artifact.
+    first_seen: dict = {}
+    ages: dict = {}
+    max_age: float | None = None
+    try:
+        from portfolio_automation.doc_audit_state import load_state
+
+        prior = load_state(root).get("coverage_gap_first_seen") or {}
+        first_seen, ages, max_age = update_coverage_gap_ages(open_gaps, prior, now=now)
+    except Exception:
+        pass  # observe-only: never let state bookkeeping break the audit
+
+    result = {
+        **result,
+        "coverage_gap_first_seen": first_seen,
+        "coverage_gap_ages_days": {k: round(v, 2) for k, v in ages.items()},
+        "max_coverage_gap_age_days": (round(max_age, 2) if max_age is not None else None),
+    }
 
     base_dir = Path(root) / "outputs"
     json_path = safe_write_json(
@@ -478,7 +539,8 @@ def write_doc_audit_status(result: dict, root: str) -> str:
         from portfolio_automation.doc_audit_state import load_state, save_state
 
         state = load_state(root)
-        state["open_coverage_gaps"] = list(result.get("open_coverage_gaps") or [])
+        state["open_coverage_gaps"] = open_gaps
+        state["coverage_gap_first_seen"] = first_seen
         save_state(root, state)
     except Exception:
         pass  # observe-only: never let state bookkeeping break the audit
