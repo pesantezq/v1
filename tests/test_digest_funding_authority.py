@@ -142,3 +142,38 @@ def test_the_pre_repair_string_would_have_been_caught():
         "name": "finance_digest",
         "text": "Deploy $1,000.00 → VFH (monthly contribution — target underweight)"}])
     assert leaks and "VFH" in leaks[0]["context"]
+
+
+# ---------------------------------------------------------------------------
+# PART 2 AUDIT RESULT (2026-08-08). The previous handoff listed as a limitation:
+# "Only the Top 3 Actions path is funding-gated; other digest sections may carry
+# money language I haven't audited."
+#
+# Audited: ALL FOUR digest variants -- daily text (email_digest.py:142), daily
+# HTML (:372), monthly text (:603), monthly HTML (:769) -- call the SAME
+# build_top3_actions. The funding gate therefore reaches every digest surface.
+# This test freezes that property: a future variant that hand-rolls its own
+# action text would bypass the gate silently.
+# ---------------------------------------------------------------------------
+def test_every_digest_variant_routes_through_the_gated_builder():
+    import re
+    src = open("email_digest.py", encoding="utf-8").read()
+    call_sites = len(re.findall(r"top3\s*=\s*build_top3_actions\(", src))
+    assert call_sites >= 4, (
+        f"expected >=4 digest variants routing through the gated builder, found "
+        f"{call_sites} -- a variant may be hand-rolling action text and bypassing "
+        f"the funding gate")
+
+
+def test_digest_module_has_no_ungated_deploy_fstring():
+    """The pre-repair pattern must not reappear anywhere in the digest layer."""
+    import re
+    for module in ("digest_builder.py", "email_digest.py"):
+        src = open(module, encoding="utf-8").read()
+        # 'Deploy {...}' is only legal when fed the funded amount
+        for match in re.finditer(r'f"[^"]*Deploy \{([a-z_]+)', src):
+            assert match.group(1) == "format_currency", (
+                f"{module}: ungated Deploy f-string interpolating "
+                f"{match.group(1)!r}")
+        assert "recommended_dollars)} →" not in src, (
+            f"{module}: renders unconstrained recommended_dollars as an instruction")
