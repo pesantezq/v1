@@ -34,8 +34,30 @@ SCHEMA_VERSION = "1"
 SOURCE = "decision_authority"
 
 STATUS_CONSISTENT = "CONSISTENT"
+# The decision artifact carries unconstrained sizing, but NO investor-facing
+# surface presents it as deploy-now capital. This is the architecturally correct
+# steady state while `capital_action` remains a legacy sizing field: the number
+# exists as research/rebalance context and is never rendered as an instruction.
+# Graded GREEN, but the fact is surfaced rather than swallowed — verified
+# 2026-08-08 that daily_memo labels it "NOT a spend-today budget".
+STATUS_CONSISTENT_UNCONSTRAINED = "CONSISTENT_WITH_UNCONSTRAINED_SIZING"
 STATUS_BLOCKED = "BLOCKED_BY_CONSISTENCY"
 STATUS_INSUFFICIENT = "INSUFFICIENT_DATA"
+
+GREEN_STATUSES = frozenset({STATUS_CONSISTENT, STATUS_CONSISTENT_UNCONSTRAINED})
+
+# Funded-sounding imperative money language. A rendered investor surface matching
+# any of these for an unfunded symbol is the actual defect: the artifact holding
+# a sizing number is not, by itself, an instruction to the operator.
+_INSTRUCTION_PATTERNS = (
+    r"deploy about \$",
+    r"add about \$",
+    r"trim about \$",
+    r"deploy \$[\d,]",
+    r"buy \$[\d,]",
+    r"scale .{0,20}by \$[\d,]",
+    r"invest \$[\d,]",
+)
 
 # Decisions whose capital_action consumes DEPLOYABLE capital. SELL/TRIM release
 # capital rather than consuming it, and WAIT/HOLD/AVOID explicitly stand down —
@@ -123,7 +145,35 @@ def _funded_map(capital_plan: dict) -> dict[str, float]:
     return funded
 
 
-def reconcile_capital_authority(decision_plan: Any, capital_plan: Any) -> dict:
+def find_rendered_instructions(surfaces: Any) -> list[dict]:
+    """Funded-sounding money language found in investor-facing rendered output.
+
+    `surfaces` is an iterable of ``{"name": str, "text": str}``. This is the
+    CONSUMER boundary — the only place a number becomes an instruction to the
+    operator. Grading the raw artifact instead would mean a permanent RED for as
+    long as `capital_action` exists as a legacy sizing field, which trains the
+    operator to ignore the gate.
+    """
+    import re
+
+    found: list[dict] = []
+    for surface in surfaces or []:
+        if not isinstance(surface, dict):
+            continue
+        text = str(surface.get("text") or "")
+        for pattern in _INSTRUCTION_PATTERNS:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                start = max(0, match.start() - 60)
+                found.append({
+                    "surface": surface.get("name"),
+                    "match": text[match.start():match.end() + 20].strip(),
+                    "context": text[start:match.end() + 20].strip(),
+                })
+    return found
+
+
+def reconcile_capital_authority(decision_plan: Any, capital_plan: Any,
+                                rendered_surfaces: Any = None) -> dict:
     """Compare the two capital authorities. Pure over its inputs.
 
     Returns ``BLOCKED_BY_CONSISTENCY`` when the decision plan tells the investor
@@ -171,9 +221,32 @@ def reconcile_capital_authority(decision_plan: Any, capital_plan: Any) -> dict:
             ),
         })
 
+    # The conflicts above are ARTIFACT-level: the decision plan holds sizing the
+    # funding authority did not fund. That is expected while `capital_action` is
+    # a legacy unconstrained-sizing field, and is NOT by itself a contradiction
+    # the operator ever sees. It becomes a real defect only when an investor
+    # surface renders it as deploy-now money.
+    rendered = find_rendered_instructions(rendered_surfaces)
+    unfunded_symbols = {c["symbol"] for c in conflicts}
+    leaked = [
+        r for r in rendered
+        if not funded or any(s and s in r["context"] for s in unfunded_symbols)
+    ]
+
+    if leaked:
+        status = STATUS_BLOCKED
+    elif conflicts:
+        status = STATUS_CONSISTENT_UNCONSTRAINED
+    else:
+        status = STATUS_CONSISTENT
+
     return _envelope(
-        STATUS_BLOCKED if conflicts else STATUS_CONSISTENT,
-        conflicts=conflicts,
+        status,
+        unconstrained_sizing=conflicts,
+        rendered_instruction_leaks=leaked,
+        surfaces_checked=[s.get("name") for s in (rendered_surfaces or [])
+                          if isinstance(s, dict)],
+        conflicts=leaked if leaked else [],
         funded_symbols=sorted(funded),
         instructed_symbols=sorted(i["symbol"] for i in instructions if i["symbol"]),
         capital_plan_bottom_line=capital_plan.get("bottom_line"),
@@ -194,12 +267,32 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+# Investor-facing rendered surfaces, checked at the consumer boundary. Only
+# products a human actually reads belong here. gui/app.py (Streamlit) is retired
+# per docs/STREAMLIT_RETIREMENT.md and no gui_v2 template renders capital_actions,
+# so neither is a live surface today — verified 2026-08-08.
+INVESTOR_SURFACES = ("daily_memo.md", "daily_memo.txt", "decision_plan.md",
+                     "cash_deployment_plan.md")
+
+
+def _load_surfaces(latest: Path) -> list[dict]:
+    surfaces = []
+    for name in INVESTOR_SURFACES:
+        path = latest / name
+        try:
+            surfaces.append({"name": name, "text": path.read_text(encoding="utf-8")})
+        except Exception:
+            continue
+    return surfaces
+
+
 def run_decision_authority(root: str) -> dict:
-    """Read both live authorities from ``<root>/outputs/latest`` and reconcile."""
+    """Read both live authorities plus the rendered investor surfaces."""
     latest = Path(root) / "outputs" / "latest"
     return reconcile_capital_authority(
         _read_json(latest / "decision_plan.json"),
         _read_json(latest / "daily_capital_plan.json"),
+        rendered_surfaces=_load_surfaces(latest),
     )
 
 

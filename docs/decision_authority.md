@@ -51,11 +51,38 @@ Known consumers of `capital_action`: `watchlist_scanner/daily_memo.py`,
 `reconcile_capital_authority(decision_plan, capital_plan)` is pure over its
 inputs and returns one of three statuses.
 
-| Status | Meaning |
+| Status | Grade | Meaning |
+|---|---|---|
+| `CONSISTENT` | GREEN | No unconstrained sizing and no rendered leak. |
+| `CONSISTENT_WITH_UNCONSTRAINED_SIZING` | GREEN | The artifact carries sizing the capital plan did not fund, but **no investor surface renders it as money**. Today's expected steady state. |
+| `BLOCKED_BY_CONSISTENCY` | RED | A rendered investor surface leaked funded-sounding money language for an unfunded symbol. A renderer regression. |
+| `INSUFFICIENT_DATA` | AMBER | An authority is absent, empty, or `available: false`. |
+
+### Why the grade is taken at the CONSUMER boundary
+
+The first version of this gate graded the raw artifact and therefore returned RED
+on every run, because `capital_action` is a legacy unconstrained-sizing field
+that will keep carrying unfunded numbers for as long as it exists. A permanent
+RED is not an invariant — it trains the operator to ignore the gate.
+
+A sizing number in `decision_plan.json` is not an instruction to anyone. It
+becomes one only when an investor-facing product renders it. So the gate reads
+the rendered surfaces (`INVESTOR_SURFACES`) and grades those, while still
+reporting every unconstrained-sizing entry in the payload. **Detection is
+retained; only the grade moved.**
+
+Verified 2026-08-08 across every consumer of `capital_action`:
+
+| Consumer | Renders it as funded? |
 |---|---|
-| `CONSISTENT` | Every deploying instruction is matched by a funded action of the same size. |
-| `BLOCKED_BY_CONSISTENCY` | At least one instruction is unfunded, or funded at a materially different amount. |
-| `INSUFFICIENT_DATA` | An authority is absent, empty, or `available: false`. |
+| `watchlist_scanner/daily_memo.py` | **No** — labels the total *"NOT a spend-today budget"* and prints *"Funded today: $0"* |
+| `gui_v2/data/today.py` | Computes `capital_actions`; **no gui_v2 template renders it** |
+| `gui_operator_data.py` | Feeds `gui/app.py` only |
+| `gui/app.py` | Renders `"Total: $4,890"` — but Streamlit is **retired** (`docs/STREAMLIT_RETIREMENT.md`) |
+| Finance Digest | **Does not exist** — no module, no cron |
+
+Live result: `CONSISTENT_WITH_UNCONSTRAINED_SIZING`, 6 unconstrained symbols,
+**0 rendered leaks**.
 
 It **fails closed**. A missing or degraded capital plan yields
 `INSUFFICIENT_DATA`, never `CONSISTENT` — otherwise a broken funding authority
@@ -110,11 +137,17 @@ triages **RED** on `BLOCKED_BY_CONSISTENCY`, **AMBER** on `INSUFFICIENT_DATA`.
 
 ## Known limitations
 
-- **The gate reports; it does not repair.** Making `capital_action` funding-aware
-  means changing `decision_engine._build_legacy_capital_action`, which is
-  protected under CLAUDE.md → Protected Semantics and needs explicit operator
-  approval. Until that approval, a standing RED is the expected state and should
-  be read as *known-structural*, not re-investigated daily.
+- **Leak detection is textual.** `find_rendered_instructions` matches money
+  phrasings (`_INSTRUCTION_PATTERNS`) against rendered text. A renderer that
+  invented a novel phrasing could evade it. It is a regression tripwire on the
+  known legacy sentences, not a proof of renderer purity.
+- **`INVESTOR_SURFACES` is a fixed list.** A new investor-facing product must be
+  added to it, or it is not covered. `surfaces_checked` is reported on every run
+  so that coverage is auditable rather than assumed.
+- **`capital_action` itself is unchanged.** Making it funding-aware would mean
+  editing `decision_engine._build_legacy_capital_action`, which is protected
+  under CLAUDE.md → Protected Semantics. It remains available as unconstrained
+  sizing context, which is the operator-approved strategy (2026-08-08).
 - It compares symbol and amount only. It does not verify that a funded action's
   `funding_source` is itself solvent — the capital plan owns that.
 - It does not inspect rendered Markdown/HTML. A consumer that invents a dollar
