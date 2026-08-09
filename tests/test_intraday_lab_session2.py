@@ -619,7 +619,8 @@ def test_raw_identity_ignores_retrieval_time_but_tracks_content():
 
 def test_snapshots_live_under_historical_never_latest(tmp_path):
     ST.write_snapshot(ST.DATASETS, "fp1", {"x.json": {}}, root=str(tmp_path))
-    assert (tmp_path / "outputs" / "backtest" / "intraday" / "datasets" / "fp1").is_dir()
+    assert (tmp_path / "outputs" / "backtest" / "intraday" / "datasets" / "content"
+            / "fp1").is_dir()
     assert not (tmp_path / "outputs" / "latest").exists()
 
 
@@ -722,3 +723,128 @@ def test_tampered_snapshot_fails_verification(tmp_path):
     assert ST.verify_canonical_snapshot(fp, root=str(tmp_path))["verified"] is False
     from portfolio_automation.intraday_lab import foundation as FD
     assert FD._canonical_ready(out, str(tmp_path)) is False
+
+
+# ===========================================================================
+# PROVENANCE HARDENING — content objects vs research/acquisition events.
+#
+# Reproduced on 05f5003e: refetching identical observations an hour later
+# raised SnapshotCollisionError, because acquisition_manifest.json (carrying
+# retrieved_at) lived inside a content-addressed raw directory. The same defect
+# existed one and two levels up: canonical_bars.json serialized retrieved_at,
+# and the dataset manifest carried generated_at + per-run event ids.
+# ===========================================================================
+def _idempotent_runs(tmp_path, rows, req, times):
+    import portfolio_automation.intraday_lab.pipeline as _PL
+    orig, outs = _PL.acquire, []
+    try:
+        for t in times:
+            _PL.acquire = (lambda tt: (lambda r, f, *, root=str(tmp_path), now=None:
+                                       orig(r, f, root=root, now=tt)))(t)
+            outs.append(_PL.build_historical_research_dataset(
+                req, _fetcher({"SPY": rows}), root=str(tmp_path)))
+    finally:
+        _PL.acquire = orig
+    return outs
+
+
+def test_identical_refetch_reuses_content_and_records_two_events(tmp_path):
+    """The headline regression: same observations, different retrieval time."""
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    a, b = _idempotent_runs(
+        tmp_path, _rows(C.resolve_session(NORMAL)), req,
+        [datetime(2026, 8, 8, 10, 0, tzinfo=UTC),
+         datetime(2026, 8, 8, 11, 0, tzinfo=UTC)])
+
+    assert a["raw_content_fingerprints"] == b["raw_content_fingerprints"]
+    assert a["dataset_fingerprint"] == b["dataset_fingerprint"]
+    assert a["manifest_fingerprint"] == b["manifest_fingerprint"]
+    assert a["feature_fingerprint"] == b["feature_fingerprint"]
+    # ...but the retrievals remain individually auditable
+    assert a["acquisition_event_ids"] != b["acquisition_event_ids"]
+    root = ST.intraday_root(str(tmp_path))
+    assert len(list((root / "raw" / "content").iterdir())) == 1
+    assert len(list((root / "raw" / "events").iterdir())) == 2
+    assert b["canonical_verification"]["verified"] is True
+    assert b["feature_verification"]["verified"] is True
+
+
+def test_two_requests_sharing_canonical_content_both_persist(tmp_path):
+    """One canonical content object, two research manifests, no collision."""
+    rows = _rows(C.resolve_session(NORMAL))
+    a = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": rows}), root=str(tmp_path))
+    b = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=date(2026, 8, 4)),
+        _fetcher({"SPY": rows}), root=str(tmp_path))
+    assert a["dataset_fingerprint"] == b["dataset_fingerprint"]
+    assert a["manifest_fingerprint"] != b["manifest_fingerprint"]
+    root = ST.intraday_root(str(tmp_path))
+    assert len(list((root / "datasets" / "content").iterdir())) == 1
+    assert len(list((root / "datasets" / "manifests").iterdir())) == 2
+
+
+def test_provider_error_is_not_reported_as_missing_market_data(tmp_path):
+    def boom(symbol, start, end):
+        raise RuntimeError("provider exploded")
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        boom, root=str(tmp_path))
+    statuses = {r["admission_status"] for r in out["rejections"]["rejections"]}
+    assert statuses == {DS.REJECTED_PROVIDER_ERROR}
+    assert out["acquisitions"][0]["provider_status"] == "PROVIDER_ERROR"
+    assert out["acquisitions"][0]["raw_payload_hash"] is None
+    assert out["acquisitions"][0]["acquisition_event_id"]
+
+
+def test_empty_successful_response_is_distinct_from_provider_failure(tmp_path):
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": []}), root=str(tmp_path))
+    assert out["acquisitions"][0]["provider_status"] == "NO_DATA"
+    statuses = {r["admission_status"] for r in out["rejections"]["rejections"]}
+    assert statuses == {DS.REJECTED_MISSING_BARS}      # market data absent, not an outage
+
+
+def test_raw_content_verification_detects_tampering(tmp_path):
+    import json as _json
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    fp = out["raw_content_fingerprints"][0]
+    assert ST.verify_raw_content(fp, root=str(tmp_path))["verified"] is True
+    path = ST.intraday_root(str(tmp_path)) / "raw" / "content" / fp / "payload.json"
+    rows = _json.loads(path.read_text())
+    rows[0]["close"] = 12345.0
+    path.write_text(_json.dumps(rows, separators=(",", ":"), sort_keys=True))
+    assert ST.verify_raw_content(fp, root=str(tmp_path))["verified"] is False
+
+
+def test_feature_tampering_flips_readiness_false(tmp_path):
+    import json as _json
+    from portfolio_automation.intraday_lab import foundation as FD
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    assert FD._feature_ready(out, str(tmp_path)) is True
+    fp = out["feature_fingerprint"]
+    path = ST.intraday_root(str(tmp_path)) / "features" / "content" / fp / "features.json"
+    rows = _json.loads(path.read_text())
+    rows[0]["value"] = 9.99
+    path.write_text(_json.dumps(rows, separators=(",", ":"), sort_keys=True))
+    assert ST.verify_feature_snapshot(fp, root=str(tmp_path))["verified"] is False
+    assert FD._feature_ready(out, str(tmp_path)) is False
+
+
+def test_volatile_keys_never_enter_an_immutable_content_object(tmp_path):
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    root = ST.intraday_root(str(tmp_path))
+    for kind, fp in (("datasets/content", out["dataset_fingerprint"]),
+                     ("features/content", out["feature_fingerprint"]),
+                     ("raw/content", out["raw_content_fingerprints"][0])):
+        for f in (root / kind / fp).iterdir():
+            text = f.read_text()
+            assert "retrieved_at" not in text and "generated_at" not in text, f

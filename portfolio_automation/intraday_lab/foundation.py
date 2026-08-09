@@ -225,7 +225,14 @@ def _canonical_ready(pilot: dict | None, root: str = ".") -> bool:
         from portfolio_automation.intraday_lab import storage as _st
         if not _st.snapshot_exists(_st.DATASETS, fp, root=root):
             return False
-        if _st.read_snapshot(_st.DATASETS, fp, "request_manifest.json", root=root) is None:
+        # Provenance graph: canonical content must verify AND the research
+        # manifest that references it must exist.
+        mfp = pilot.get("manifest_fingerprint")
+        if not mfp or not _st.snapshot_exists(_st.DATASET_MANIFESTS, mfp, root=root):
+            return False
+        rm = _st.read_snapshot(_st.DATASET_MANIFESTS, mfp, "request_manifest.json",
+                               root=root)
+        if not rm or rm.get("canonical_content_fingerprint") != fp:
             return False
         return bool(_st.verify_canonical_snapshot(fp, root=root).get("verified"))
     except Exception:
@@ -242,9 +249,10 @@ def _feature_ready(pilot: dict | None, root: str = ".") -> bool:
         from portfolio_automation.intraday_lab import storage as _st
         if not _st.snapshot_exists(_st.FEATURES, fp, root=root):
             return False
-        man = _st.read_snapshot(_st.FEATURES, fp, "feature_manifest.json", root=root)
-        return bool(man) and man.get("source_dataset_fingerprint") == \
-            (pilot or {}).get("dataset_fingerprint")
+        v = _st.verify_feature_snapshot(fp, root=root)
+        return bool(v.get("verified")) and \
+            v.get("source_dataset_fingerprint") == (pilot or {}).get("dataset_fingerprint") and \
+            v.get("source_dataset_manifest_fingerprint") == (pilot or {}).get("manifest_fingerprint")
     except Exception:
         return False
 

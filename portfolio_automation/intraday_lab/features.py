@@ -315,23 +315,29 @@ def compute_range_position(bars: Sequence[IntradayBar], index: int, n: int, *,
                  manifest_fingerprint=manifest_fingerprint)
 
 
+def feature_fingerprint_from_rows(rows: Sequence[dict]) -> str:
+    """Recompute a feature identity from PERSISTED rows (verification path)."""
+    payload = {"schema": "intraday_features_v1",
+               "feature_set_version": FEATURE_SET_VERSION,
+               "rows": sorted(
+                   [r["feature_id"], r["feature_version"], r["symbol"], r["timeframe"],
+                    r["event_at"], r["known_at"], r["input_window_start"],
+                    r["input_window_end"], round(float(r["value"]), 12),
+                    json.dumps(r["parameters"], sort_keys=True),
+                    r["source_dataset_fingerprint"],
+                    r.get("source_dataset_manifest_fingerprint", "")]
+                   for r in rows)}
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:32]
+
+
 def feature_fingerprint(values: Sequence[FeatureValue]) -> str:
     """Deterministic identity for a feature set. Excludes computation time."""
     # Bind to the SOURCE DATASET. Two different datasets can yield numerically
     # identical values; without this they would share a feature identity and an
     # experiment could not tell which data produced it.
-    rows = sorted(
-        [v.feature_id, v.feature_version, v.symbol, v.timeframe,
-         v.event_at.isoformat(), v.known_at.isoformat(),
-         v.input_window_start.isoformat(), v.input_window_end.isoformat(),
-         round(v.value, 12), json.dumps(v.parameters, sort_keys=True),
-         v.source_dataset_fingerprint, v.source_dataset_manifest_fingerprint]
-        for v in values)
-    payload = {"schema": "intraday_features_v1",
-               "feature_set_version": FEATURE_SET_VERSION, "rows": rows}
-    return hashlib.sha256(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    ).hexdigest()[:32]
+    return feature_fingerprint_from_rows([v.to_dict() for v in values])
 
 
 def feature_manifest(values: Sequence[FeatureValue], *, dataset_id: str,

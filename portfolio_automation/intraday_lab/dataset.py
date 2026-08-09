@@ -397,6 +397,7 @@ def build_canonical_dataset(
     bars_by_date: dict[tuple[str, date], Sequence[IntradayBar]], *,
     request: "DatasetRequest | None" = None,
     timeframe: str = "5min", adjustment_state: str | None = None,
+    provider_failures: set[str] | None = None,
 ) -> CanonicalDataset:
     """Reconcile EVERY requested session; admit only exact matches.
 
@@ -436,6 +437,21 @@ def build_canonical_dataset(
                     f"the authorized request matrix — query or normalization drift",)))
             continue
         rec = reconcile_session(bars, session, symbol=symbol, timeframe=timeframe)
+        # A provider outage is NOT a market-data defect. Collapsing it into
+        # REJECTED_MISSING_BARS would blame the market for our own failed call
+        # and destroy the causal trail.
+        if (provider_failures and symbol in provider_failures
+                and rec.admission_status == REJECTED_MISSING_BARS):
+            rec = SessionReconciliation(
+                symbol=rec.symbol, market_date=rec.market_date,
+                timeframe=rec.timeframe, session_type=rec.session_type,
+                expected_count=rec.expected_count, observed_count=rec.observed_count,
+                missing_timestamps=rec.missing_timestamps,
+                unexpected_timestamps=(), conflicting_duplicates=(),
+                admission_status=REJECTED_PROVIDER_ERROR,
+                rejection_reasons=(
+                    f"acquisition failed for {symbol}; no provider response to "
+                    f"reconcile — distinct from the market having no data",))
         recs.append(rec)
         if rec.admitted:
             admitted_bars.extend(bars)

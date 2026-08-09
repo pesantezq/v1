@@ -27,9 +27,20 @@ from typing import Any, Sequence
 
 SCHEMA_VERSION = "1"
 
-RAW = "raw"
-DATASETS = "datasets"
-FEATURES = "features"
+# CONTENT objects are keyed by what the data IS. EVENT objects record when and
+# why a retrieval/build happened. Mixing them is what produced the false
+# collision: an acquisition_manifest carrying retrieved_at lived inside a
+# content-addressed raw directory, so refetching identical observations an hour
+# later raised SnapshotCollisionError. Content dedupes; events accumulate.
+RAW = "raw/content"
+RAW_EVENTS = "raw/events"
+DATASETS = "datasets/content"
+DATASET_MANIFESTS = "datasets/manifests"
+DATASET_EVENTS = "datasets/events"
+FEATURES = "features/content"
+FEATURE_EVENTS = "features/events"
+
+CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})
 
 
 class SnapshotCollisionError(RuntimeError):
@@ -71,10 +82,19 @@ def write_snapshot(kind: str, identity: str, files: dict[str, Any], *,
                    root: str = ".") -> Path:
     """Write an immutable snapshot directory, or verify-and-reuse an existing one.
 
+    DIRECTORY-ATOMIC: all files are written into a temporary directory and then
+    renamed into place, so a crash mid-write cannot leave a half-valid snapshot
+    that later verifies as real.
+
     Raises SnapshotCollisionError when the identity exists with different
-    content.
+    content. Only files belonging to this identity are compared — event objects
+    live in their own namespace precisely so their timestamps cannot look like
+    corruption of a content object.
     """
-    target = intraday_root(root) / kind / identity
+    if kind in CONTENT_KINDS or kind == DATASET_MANIFESTS:
+        files = {k: strip_volatile(v) for k, v in files.items()}
+    base = intraday_root(root) / kind
+    target = base / identity
     if target.exists():
         for name, payload in files.items():
             existing = target / name
@@ -88,9 +108,56 @@ def write_snapshot(kind: str, identity: str, files: dict[str, Any], *,
                     f"{name}. The fingerprint no longer describes the data; "
                     f"refusing to overwrite an immutable snapshot")
         return target        # identical -> reuse
-    for name, payload in files.items():
-        _atomic_write(target / name, _canonical_json(payload))
+
+    base.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=str(base), prefix=".staging-"))
+    try:
+        for name, payload in files.items():
+            _atomic_write(staging / name, _canonical_json(payload))
+        try:
+            os.rename(str(staging), str(target))
+        except OSError:
+            # Another process won the race; fall back to verify-and-reuse.
+            import shutil
+            shutil.rmtree(staging, ignore_errors=True)
+            return write_snapshot(kind, identity, files, root=root)
+    except BaseException:
+        import shutil
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return target
+
+
+def verify_raw_content(identity: str, *, root: str = ".") -> dict:
+    """Recompute raw identity from persisted observations."""
+    payload = read_snapshot(RAW, identity, "payload.json", root=root)
+    man = read_snapshot(RAW, identity, "content_manifest.json", root=root)
+    if payload is None or man is None:
+        return {"verified": False, "reason": "missing payload or content_manifest"}
+    recomputed = raw_payload_hash(payload, symbol=man.get("symbol"),
+                                  timeframe=man.get("timeframe"))
+    ok = recomputed == identity == man.get("raw_content_fingerprint")
+    return {"verified": ok, "recomputed": recomputed, "identity": identity,
+            "reason": None if ok else "persisted payload does not hash to its identity"}
+
+
+def verify_feature_snapshot(identity: str, *, root: str = ".") -> dict:
+    """Recompute the feature fingerprint from persisted feature bytes."""
+    from portfolio_automation.intraday_lab import features as _F
+
+    rows = read_snapshot(FEATURES, identity, "features.json", root=root)
+    man = read_snapshot(FEATURES, identity, "feature_content_manifest.json", root=root)
+    if rows is None or man is None:
+        return {"verified": False, "reason": "missing features or content manifest"}
+    recomputed = _F.feature_fingerprint_from_rows(rows)
+    ok = recomputed == identity == man.get("feature_fingerprint")
+    return {
+        "verified": ok, "recomputed": recomputed, "identity": identity,
+        "source_dataset_fingerprint": man.get("source_dataset_fingerprint"),
+        "source_dataset_manifest_fingerprint": man.get("source_dataset_manifest_fingerprint"),
+        "observation_count": len(rows),
+        "reason": None if ok else "persisted features do not hash to their identity",
+    }
 
 
 def read_snapshot(kind: str, identity: str, name: str, *, root: str = ".") -> Any:
@@ -107,8 +174,35 @@ def snapshot_exists(kind: str, identity: str, *, root: str = ".") -> bool:
     return (intraday_root(root) / kind / identity).is_dir()
 
 
+# Fields that DEFINE canonical content. `retrieved_at` is deliberately absent:
+# it lives in the acquisition event. Serializing it into the content object was
+# the same defect one level down -- identical observations refetched later
+# produced byte-different canonical_bars.json under an identical fingerprint,
+# so the second legitimate run raised a false SnapshotCollisionError.
+CANONICAL_BAR_FIELDS = ("symbol", "timeframe", "bar_start_at", "bar_end_at",
+                        "known_at", "open", "high", "low", "close", "volume",
+                        "source", "source_endpoint", "adjustment_state")
+
+
+# Volatile keys are stripped from every persisted immutable object. They are
+# real audit facts, but they belong to EVENTS. Left inside a content-addressed
+# object they make each rerun look like corruption of the previous one.
+VOLATILE_KEYS = frozenset({"generated_at", "retrieved_at", "created_at"})
+
+
+def strip_volatile(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        return {k: strip_volatile(v) for k, v in payload.items()
+                if k not in VOLATILE_KEYS}
+    if isinstance(payload, list):
+        return [strip_volatile(v) for v in payload]
+    return payload
+
+
 def bars_to_rows(bars: Sequence[Any]) -> list[dict]:
-    return [b.to_dict() for b in bars]
+    """Content-only serialization of canonical bars."""
+    return [{k: v for k, v in b.to_dict().items() if k in CANONICAL_BAR_FIELDS}
+            for b in bars]
 
 
 def verify_canonical_snapshot(identity: str, *, root: str = ".") -> dict:
@@ -119,9 +213,9 @@ def verify_canonical_snapshot(identity: str, *, root: str = ".") -> dict:
     inferred from the filename.
     """
     bars = read_snapshot(DATASETS, identity, "canonical_bars.json", root=root)
-    manifest = read_snapshot(DATASETS, identity, "dataset_manifest.json", root=root)
+    manifest = read_snapshot(DATASETS, identity, "content_manifest.json", root=root)
     if bars is None or manifest is None:
-        return {"verified": False, "reason": "missing canonical_bars or manifest"}
+        return {"verified": False, "reason": "missing canonical_bars or content_manifest"}
 
     recomputed = content_hash({
         "schema": "intraday_canonical_v2",

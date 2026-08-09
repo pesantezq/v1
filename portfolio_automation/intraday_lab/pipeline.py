@@ -99,13 +99,41 @@ def acquire(request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[An
                     bars_by_date.setdefault((symbol, d), []).append(b)
             except Exception as exc:
                 record["normalization_status"] = f"FAILED: {type(exc).__name__}"
-            ST.write_snapshot(ST.RAW, payload_hash,
-                              {"payload.json": rows, "acquisition_manifest.json": record},
-                              root=root)
-            record["raw_snapshot_path"] = f"outputs/backtest/intraday/raw/{payload_hash}"
+            # CONTENT object: observations only. No retrieved_at, no request id
+            # -- those would make an identical refetch look like corruption.
+            ST.write_snapshot(ST.RAW, payload_hash, {
+                "payload.json": rows,
+                "content_manifest.json": {
+                    "schema_version": SCHEMA_VERSION,
+                    "provider": "fmp",
+                    "endpoint": record["endpoint"],
+                    "symbol": symbol,
+                    "timeframe": request.timeframe,
+                    "row_count": len(rows),
+                    "raw_content_fingerprint": payload_hash,
+                },
+            }, root=root)
+            record["raw_content_path"] = f"outputs/backtest/intraday/raw/content/{payload_hash}"
+
+        # EVENT object: one per provider call, keyed by the call itself. Two
+        # fetches of identical data at different times => one content object,
+        # two events. That is the desired outcome, not a collision.
+        event_id = ST.content_hash({
+            "request_fingerprint": request.fingerprint(), "symbol": symbol,
+            "requested_start": request.start.isoformat(),
+            "requested_end": request.end.isoformat(),
+            "retrieved_at": record["retrieved_at"],
+            "provider_status": status, "raw_content_fingerprint": payload_hash,
+        })
+        record["acquisition_event_id"] = event_id
+        ST.write_snapshot(ST.RAW_EVENTS, event_id,
+                          {"acquisition_event.json": record}, root=root)
         acquisitions.append(record)
 
-    return {"acquisitions": acquisitions, "bars_by_date": bars_by_date}
+    failures = {a["symbol"] for a in acquisitions
+                if a["provider_status"] in ("PROVIDER_ERROR", "DATA_UNAVAILABLE")}
+    return {"acquisitions": acquisitions, "bars_by_date": bars_by_date,
+            "provider_failures": failures}
 
 
 def build_features(ds: CanonicalDataset, *, lookback: int = 3) -> list[F.FeatureValue]:
@@ -132,19 +160,60 @@ def build_historical_research_dataset(
         return plan_request(request)
 
     acq = acquire(request, fetcher, root=root)
-    ds = build_canonical_dataset(acq["bars_by_date"], request=request)
+    ds = build_canonical_dataset(acq["bars_by_date"], request=request,
+                                 provider_failures=acq["provider_failures"])
 
     manifest = dataset_manifest(ds)
     rejects = rejection_report(ds)
     content_fp, manifest_fp = ds.fingerprint(), ds.manifest_fingerprint()
 
+    # CONTENT: canonical bars only, deduplicated across research requests.
     ST.write_snapshot(ST.DATASETS, content_fp, {
         "canonical_bars.json": ST.bars_to_rows(ds.bars),
+        "content_manifest.json": {
+            "schema_version": SCHEMA_VERSION,
+            "dataset_fingerprint": content_fp,
+            "timeframe": ds.timeframe,
+            "adjustment_state": ds.adjustment_state,
+            "bar_count": len(ds.bars),
+        },
+    }, root=root)
+
+    # MANIFEST: the research interpretation. Two requests producing identical
+    # bars share the content object above but keep separate manifests here.
+    ST.write_snapshot(ST.DATASET_MANIFESTS, manifest_fp, {
         "dataset_manifest.json": manifest,
         "reconciliation.json": [r.detail() for r in ds.reconciliations],
-        "request_manifest.json": {**request.to_dict(),
-                                  "acquisitions": acq["acquisitions"]},
+        "request_manifest.json": {
+            **request.to_dict(),
+            "calendar_fingerprint": calendar_fingerprint(),
+            "canonical_content_fingerprint": content_fp,
+            "manifest_fingerprint": manifest_fp,
+            # Raw CONTENT fingerprints are stable across reruns and belong to
+            # the manifest. Acquisition EVENT ids legitimately differ per run
+            # (same observations, two fetches) and live in the build event below
+            # -- keeping them here made an idempotent rerun look like corruption.
+            "raw_content_fingerprints": sorted(
+                {a["raw_payload_hash"] for a in acq["acquisitions"]
+                 if a.get("raw_payload_hash")}),
+        },
     }, root=root)
+
+    # DATASET BUILD EVENT: per-run provenance, deliberately outside the
+    # content-addressed manifest object.
+    ST.write_snapshot(ST.DATASET_EVENTS, ST.content_hash({
+        "manifest_fingerprint": manifest_fp,
+        "acquisition_event_ids": [a.get("acquisition_event_id")
+                                  for a in acq["acquisitions"]],
+    }), {"build_event.json": {
+        "schema_version": SCHEMA_VERSION,
+        "manifest_fingerprint": manifest_fp,
+        "canonical_content_fingerprint": content_fp,
+        "request_fingerprint": request.fingerprint(),
+        "acquisition_event_ids": [a.get("acquisition_event_id")
+                                  for a in acq["acquisitions"]],
+        "acquisitions": acq["acquisitions"],
+    }}, root=root)
 
     values = build_features(ds, lookback=lookback)
     feature_fp = F.feature_fingerprint(values)
@@ -153,8 +222,21 @@ def build_historical_research_dataset(
                                    manifest_fingerprint=manifest_fp)
     ST.write_snapshot(ST.FEATURES, feature_fp, {
         "features.json": [v.to_dict() for v in values],
-        "feature_manifest.json": fmanifest,
+        # generated_at stays OUT of the content object; it would make every
+        # rebuild look like a collision.
+        "feature_content_manifest.json": {
+            "schema_version": SCHEMA_VERSION,
+            "feature_fingerprint": feature_fp,
+            "feature_set_version": F.FEATURE_SET_VERSION,
+            "source_dataset_fingerprint": content_fp,
+            "source_dataset_manifest_fingerprint": manifest_fp,
+            "observation_count": len(values),
+            "features_enabled": list(F.ENABLED_FEATURES),
+        },
     }, root=root)
+    ST.write_snapshot(ST.FEATURE_EVENTS, ST.content_hash(
+        {"feature_fingerprint": feature_fp, "generated_at": fmanifest["generated_at"]}),
+        {"build_event.json": fmanifest}, root=root)
 
     verification = ST.verify_canonical_snapshot(content_fp, root=root)
     return {
@@ -172,10 +254,14 @@ def build_historical_research_dataset(
         "dataset_fingerprint": content_fp,
         "manifest_fingerprint": manifest_fp,
         "adjustment_state": ds.adjustment_state,
-        "canonical_snapshot_path": f"outputs/backtest/intraday/datasets/{content_fp}",
+        "acquisition_event_ids": [a.get("acquisition_event_id") for a in acq["acquisitions"]],
+        "raw_content_fingerprints": [a.get("raw_payload_hash") for a in acq["acquisitions"]],
+        "canonical_snapshot_path": f"outputs/backtest/intraday/datasets/content/{content_fp}",
+        "dataset_manifest_path": f"outputs/backtest/intraday/datasets/manifests/{manifest_fp}",
         "feature_observations": len(values),
         "feature_fingerprint": feature_fp,
-        "feature_snapshot_path": f"outputs/backtest/intraday/features/{feature_fp}",
+        "feature_snapshot_path": f"outputs/backtest/intraday/features/content/{feature_fp}",
+        "feature_verification": ST.verify_feature_snapshot(feature_fp, root=root),
         "canonical_verification": verification,
         "rejections": rejects,
         "strategy_validation_allowed": False,
