@@ -1,30 +1,67 @@
 # Intraday Strategy Lab — Dataset & Features (Session 2)
 
-**Status: `DATASET_FEATURE_FOUNDATION_LIMITED`** · research-only · no production path.
+**Status: `DATASET_FEATURE_FOUNDATION_READY`** · research-only · no production path.
 
-The full chain is proven end-to-end on real market data. The status is LIMITED —
-not READY — for one reason: **calendar coverage, not data availability.**
+The status is **computed, not asserted** — `foundation.session2_graduation()`
+runs 25 checks against the live code and the persisted corpus, and READY means
+all 25 passed. It was previously hardcoded to LIMITED with a hand-written
+justification, which could not follow the evidence in either direction.
+
+`strategy_validation_allowed` remains **`false`**. Graduating the DATA does not
+graduate the strategy layer.
 
 ---
 
 ## 1. Calendar contract
 
-Built on repo-native `portfolio_automation.market_session` (no new dependency —
-`exchange_calendars` / `pandas_market_calendars` are not installed and adding a
-market-data dependency is an operator decision).
+Sessions come from **`exchange_calendars`** (Apache-2.0) using its `XNYS`
+calendar. It was chosen over `pandas_market_calendars` because the latter
+*depends on* it — a strict superset, so this is the smaller maintained
+dependency that satisfies the contract.
 
 | | |
 |---|---|
 | Exchange / timezone | `XNYS` / `America/New_York` → UTC |
+| Certified window | **2017-01-01 … 2027-06-30** (2,636 sessions, 22 early closes) |
 | Regular session | 09:30–16:00 ET → **78** 5-min bar starts, 09:30…15:55 |
 | Early close | 09:30–13:00 ET → **42** bar starts, 09:30…12:55 |
 | Holiday / weekend | `MARKET_CLOSED`, 0 expected bars |
-| **Outside coverage** | **`UNCERTIFIED` — refused** |
+| **Outside the window** | **`UNCERTIFIED` — refused** |
 
-Grids are computed from calendar open/close, never hardcoded per date, so DST is
-handled by the zone (summer 13:30Z open, winter 14:30Z).
+Grids are computed from the calendar's open/close, never hardcoded per date, so
+DST is handled by the zone (summer 13:30Z open, winter 14:30Z) and **session
+type is derived from the actual close time** — an early close is simply a
+session closing before 16:00 ET, so a newly announced half-day arrives with the
+calendar data rather than an edit to this repo.
 
-### Two gaps in the underlying data, both handled by failing closed
+The certified window's upper bound is a **fixed constant, not the library's own
+`last_session`**, which advances with the wall clock — deriving from it would
+mint a new calendar identity, and therefore new research meaning, every day.
+
+### Calendar identity = schedule meaning, not package version
+
+`calendar_identity()` hashes a digest of the actual certified schedule (every
+session with its open and close) plus exchange, timezone, backend and semantics
+version. The dependency's version string is disclosed separately and is
+deliberately **not** in the identity:
+
+* an upgrade that changes a historical session changes the digest → **new
+  calendar era**, so research meaning can never be rewritten silently;
+* an upgrade that changes nothing leaves the digest identical → no spurious era
+  churn, and archived manifests stay remintable.
+
+Certified against real NYSE history in
+`tests/test_intraday_lab_calendar_certification.py` (69 cases): holidays across
+years, the 2018 and 2025 national days of mourning, Juneteenth's 2022 start
+year, early closes 2017–2025, both DST transitions in four separate years, and
+exact timestamp grids.
+
+### Fallback, and why it is not silent
+
+If `exchange_calendars` is unavailable the module falls back to the repo-native
+table and its narrow window. The **backend in force is part of the calendar
+identity**, so a dataset built without the authoritative calendar is a different
+research object, not a lookalike.
 
 1. **`market_session` carries no early-close data** — its own docstring says
    *"no early-close half-days"*. Session 1 proved early closes are real in the
@@ -177,19 +214,27 @@ rather than a silently shortened lookback. Cross-session rolling features are
 
 ## 6. Limitations
 
-1. **Calendar coverage is the binding constraint** — 2025-01-01…2027-12-24.
-   Bars exist back to 2017; every earlier session is refused. Extending the
-   holiday table from a verified source is the highest-value unblock.
-2. Early-close table is hand-maintained; an error causes a rejection, never a
-   silent bad admit.
-3. Volume-dependent features blocked (semantics unproven).
-4. Absolute-price features blocked (split back-adjusted).
-5. `SECTOR_CONTEXT_DEFERRED`.
-6. No bulk backfill — the pilot is deliberately small.
-7. **No CLI module.** The durable pipeline is library-level
+1. **Market-wide trading halts are not admissible — and this is a selection
+   bias.** The calendar predicts a full grid; a halt removes bars that never
+   printed, so the exact-grid rule rejects the session. Proven in the pilot:
+   2020-03-09 and 2020-03-12 lost exactly the Level-1 circuit-breaker windows
+   (09:35–09:40 and 09:40–09:45 ET) for **both** symbols, which is what
+   identifies it as market-wide rather than a per-symbol data gap. Rejecting is
+   the safe direction, but it removes the most volatile days in modern history
+   from the research universe. Session 3 must account for this explicitly.
+2. Volume-dependent features blocked (semantics unproven).
+3. Absolute-price features blocked (split back-adjusted).
+4. `SECTOR_CONTEXT_DEFERRED`.
+5. Only **5min** is entitled; 1min returns HTTP 402 on this account.
+6. Certified window ends **2027-06-30** by design (see §1).
+7. No bulk backfill — the pilot is bounded by design.
+8. **No CLI module.** The durable pipeline is library-level
    (`pipeline.build_historical_research_dataset`) with a `dry_run` mode; the
    operator CLI wrapper is still deferred.
-8. Cross-session rolling features remain **DEFERRED**.
+9. Cross-session rolling features remain **DEFERRED**.
+10. Manifests written before `calendar_identity` was persisted can only be
+    re-migrated while their calendar remains reproducible; afterwards they
+    resolve from migration lineage instead (see §8).
 
 ## 5c. Durability & provenance (completion pass)
 
@@ -241,11 +286,146 @@ request + pipeline.
 
 ## 7. Session 3 preconditions
 
-Session 3 **may assume**: exact calendar reconciliation, immutable canonical
-datasets with deterministic fingerprints, PIT-safe price features with full
-provenance, and fail-closed admission.
+Session 3 **may assume**: exact calendar reconciliation certified to 2017,
+immutable canonical datasets with deterministic PIT-complete fingerprints,
+PIT-safe price features with full provenance, and fail-closed admission.
 
-Session 3 **must not assume**: pre-2025 history, any volume-derived feature,
-absolute-price features, sector context, or that `strategy_validation_allowed`
-has changed — it remains **`false`**, and no Session 2 artifact implies
-otherwise.
+Session 3 **must not assume**: any volume-derived feature, absolute-price
+features, sector context, admissibility of halted sessions, or that
+`strategy_validation_allowed` has changed — it remains **`false`**, and no
+Session 2 artifact implies otherwise.
+
+The machine-readable contract is `foundation.session3_input_contract()`. It is
+**gated**: while Session 2 is LIMITED it returns `SESSION_3_NO_GO` with the
+exact blockers and **no contract body at all**, because a contract published
+beside a LIMITED foundation reads as permission.
+
+### The temporal invariant Session 3 inherits
+
+> A 5-minute bar covering **10:00–10:05** has **`known_at` = 10:06**.
+> A strategy consuming that completed bar may **not** claim a 10:05 fill.
+> `decision_time >= known_at`, and `fill_time >= decision_time`.
+> `known_at` is never derived from `retrieved_at`.
+
+`known_at` is part of canonical identity, so a dataset that moves knowability
+earlier is a **different research object**, not the same one tuned.
+
+---
+
+## 8. Identity eras and migration
+
+An immutable object is content-addressed: its directory name *is* a hash of its
+content. So **changing the hash function retroactively re-labels every existing
+object as corrupt.** That happened on 2026-08-09 — raw identity gained
+`provider`/`endpoint` and canonical identity gained `bar_end_at`/`known_at`, and
+the verifier reported five byte-perfect objects with the tampering reason.
+
+The dangerous consequence is not the false alarm; it is **desensitisation**.
+Once half the corpus permanently reports tampering, that message stops meaning
+anything and a genuine tampering event hides in the noise.
+
+Identity changes are therefore **eras**, and two questions are kept apart:
+
+| Question | Answered by |
+|---|---|
+| **Integrity** — does it verify under the schema that *minted* it? | `verified` |
+| **Research eligibility** — does it satisfy today's contract? | `current_era` |
+
+Neither is allowed to imply the other. `_canonical_ready` requires **both**.
+
+### Verification states (`identity.py`)
+
+| State | Meaning |
+|---|---|
+| `VERIFIED_CURRENT` | integrity OK under the era in force today — the only state eligible for research |
+| `VERIFIED_LEGACY_MIGRATABLE` | OK under an older era; current identity computable from the same bytes |
+| `VERIFIED_LEGACY_ARCHIVAL` | OK under an older era, but a field today's identity protects was never stored — permanently archival |
+| `UNSUPPORTED_IDENTITY_SCHEMA` | declares an era this build does not implement → fail closed |
+| `AMBIGUOUS_IDENTITY_SCHEMA` | more than one era reproduces the identity → fail closed |
+| `INTEGRITY_FAILURE` | no supported era reproduces it — **the only state that means tampering** |
+
+The registry is **closed**, not "try every hash forever". An object that
+*declares* its era is verified under that era **alone** — probing past a
+declaration would let a forger pick whichever historical function validates
+their bytes. Probing is reserved for objects written before declarations
+existed, and demands a *unique* match.
+
+### Migration (`migration.py`)
+
+```
+legacy object → verify under its OWN era → confirm current-required fields exist
+→ compute current identity FROM THE PERSISTED BYTES → write NEW current-era
+object → write immutable lineage
+```
+
+Four rules, enforced rather than documented:
+
+1. **Never refetch to migrate.** Vendors restate and re-adjust; a refetch would
+   substitute today's data for archived evidence and call it the same dataset.
+2. **Never rewrite, rename or delete the legacy object.** Verified in test by
+   byte-comparing every legacy file before and after.
+3. **Content equivalence is proved**, not assumed.
+4. **Calendar meaning is held constant** — migration replays the legacy manifest
+   identity first and refuses if it cannot, so migrating after a calendar change
+   fails closed instead of silently reinterpreting archived research.
+
+Features are **reminted, never relabelled**: values stay numerically identical
+while the fingerprint *changes*, because feature identity binds to the source
+dataset. Both halves are asserted.
+
+`migration.active_corpus()` computes — from evidence, not a curated list —
+which manifest graphs Session 3 may consume. **Archival manifests are retained
+and verifiable, and are never silently reused.**
+
+---
+
+## 9. Governed provider identity
+
+`acquire()` previously took a bare callable and stamped the resulting evidence
+with a hardcoded `provider="fmp"`. Since provider and endpoint are now part of
+raw identity, that assumption would **mis-address the immutable object**.
+
+A provider is now an object that knows what it is (`providers.py`):
+
+* `GovernedFMPIntradayProvider` — opens no sockets of its own; delegates to
+  `FMPClient.get_json`, inheriting cache-first reads, the daily budget guard,
+  the rate limiter and the call ledger. The endpoint comes from
+  `fmp_endpoint_registry`, so an unregistered timeframe **cannot be fetched**
+  (interpolating `/stable/historical-chart/{tf}` would happily produce the 1min
+  path this account is not entitled to).
+* `FakeIntradayProvider` — declares its own identity, so fixture-produced
+  evidence is addressed as a fake.
+* `CallableIntradayProvider` — a bare callable is adapted only as
+  `callable:unspecified`, never assumed to be FMP.
+
+A budget refusal is `PROVIDER_BUDGET_REFUSED`, distinct from `NO_DATA`: **our**
+refusal to call must never be recorded as the market having no data.
+
+### Failure causality
+
+| Condition | Acquisition | Reconciliation |
+|---|---|---|
+| provider raised | `PROVIDER_ERROR` | `REJECTED_PROVIDER_ERROR` |
+| HTTP success, empty rows | `NO_DATA` | `REJECTED_MISSING_BARS` |
+| rows returned, parse failed | `OK` + `normalization_status=FAILED` | `REJECTED_NORMALIZATION_ERROR` |
+
+Four causes, four distinct states, pinned as a table so a refactor cannot
+quietly merge two of them. Raw evidence is preserved even when normalization
+fails — otherwise a provider schema change would be invisible.
+
+---
+
+## 10. Graduation gate
+
+`foundation.session2_graduation()` splits its checks deliberately:
+
+* **measured (25)** — proven by running the real function over the real corpus.
+* **test_enforced (8)** — invariants a runtime status function *cannot honestly
+  self-certify* (tamper cascades, adversarial legacy handling). They are named
+  with their enforcing tests so the claim is traceable, and are **not** counted
+  as measured evidence.
+
+Asserting "tamper detection works" without running a tamper would be exactly the
+verdict-from-absent-data failure this lab exists to prevent. A gate that raises
+is also a failure mode, so every probe degrades to a named blocker rather than
+an exception.

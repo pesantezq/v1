@@ -1,30 +1,61 @@
 """Exchange calendar → exact expected 5-minute session grids. Research-only.
 
-Built on the repo-native `portfolio_automation.market_session` holiday data
-rather than a new dependency (`exchange_calendars` / `pandas_market_calendars`
-are not installed, and adding a market-data dependency is an operator decision).
+AUTHORITATIVE SOURCE
+====================
 
-TWO GAPS IN THE UNDERLYING DATA, both handled by failing closed:
+Sessions come from `exchange_calendars` (Apache-2.0), the maintained successor
+to Quantopian's `trading_calendars`, using its XNYS calendar. It was chosen over
+`pandas_market_calendars` because the latter DEPENDS ON this package — it is a
+strict superset, so `exchange_calendars` is the smaller maintained dependency
+that satisfies the contract.
 
-1. `market_session` carries NO early-close data — its own docstring says
-   "no early-close half-days". Session 1 proved early closes are real in the
-   provider feed (2025-11-28 returned 42 bars ending 12:55), so this module
-   adds an explicit early-close table.
+It replaces a hand-maintained holiday table that spanned 2025-2027 only, which
+made every session before 2025 UNCERTIFIED and therefore unusable for research.
+Hand-maintaining nine years of holidays and early closes would be a standing
+correctness liability; the observed schedule (2017-2026: all opens 09:30 ET,
+closes only 16:00 or 13:00, 20 early closes) matches this module's REGULAR /
+EARLY_CLOSE model exactly.
 
-2. `NYSE_HOLIDAYS` spans 2025-01-01 … 2027-12-24 ONLY. Five-minute bars are
-   available back to 2017, but a session whose holiday status cannot be
-   verified must never be admitted — expecting 78 bars on a day that was
-   actually a holiday is exactly the silent corruption this lab exists to
-   prevent. Outside the certified window `resolve_session` returns
-   ``UNCERTIFIED`` and the dataset builder refuses it.
+Session TYPE is derived from the calendar's actual close time, never from a
+hardcoded date list. An early close is simply a session closing before 16:00 ET,
+so a newly announced half-day is handled by upgrading the calendar data rather
+than by editing this file.
 
-Both failure directions are safe. A missed early close yields expected=78 vs
+FAIL CLOSED, IN BOTH DIRECTIONS
+===============================
+
+If `exchange_calendars` is unavailable the module falls back to the repo-native
+`portfolio_automation.market_session` table and its narrow window. That is NOT
+silent: the backend in force is part of the CALENDAR IDENTITY, so a dataset built
+without the authoritative calendar is a different research object, not a
+lookalike. Outside the certified window `resolve_session` returns UNCERTIFIED and
+the dataset builder refuses the session — an unverifiable expectation must never
+admit data.
+
+Both error directions remain safe. A missed early close yields expected=78 vs
 observed=42 → rejected. A wrongly-declared early close yields expected=42 vs
-observed=78 → surplus → rejected by the Session 1 hardening. Neither can admit
-a corrupt session.
+observed=78 → surplus → rejected. Neither can admit a corrupt session.
+
+CALENDAR IDENTITY = SCHEDULE MEANING, NOT PACKAGE VERSION
+=========================================================
+
+`calendar_identity()` hashes a digest of the ACTUAL certified schedule (every
+session date with its open and close), plus the exchange, timezone, backend and
+semantics version. The dependency's version string is deliberately NOT in the
+identity, and is disclosed separately instead:
+
+* an upgrade that changes a historical session CHANGES the digest, and therefore
+  mints a new calendar era — research meaning can never be rewritten silently;
+* an upgrade that changes nothing leaves the digest identical, so archived
+  research does not churn through spurious eras for a no-op bump.
+
+Version-in-identity would get the second case wrong, and would make every
+archived manifest un-remintable after any routine dependency update.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterator
@@ -37,8 +68,12 @@ from portfolio_automation.intraday_lab.validation import (
     SESSION_REGULAR, SESSION_EARLY_CLOSE, SESSION_MARKET_CLOSED,
 )
 
-SCHEMA_VERSION = "1"
-CALENDAR_SOURCE = "portfolio_automation.market_session + intraday_lab early-close table"
+SCHEMA_VERSION = "2"
+
+# Bumped when the MEANING of a session changes (grid derivation, session typing,
+# open/close semantics) — independently of the calendar data itself.
+CALENDAR_SEMANTICS_VERSION = "intraday_calendar_semantics_v2"
+
 EXCHANGE = "XNYS"
 EXCHANGE_TZ = ZoneInfo("America/New_York")
 
@@ -46,23 +81,31 @@ REGULAR_OPEN = time(9, 30)
 REGULAR_CLOSE = time(16, 0)
 EARLY_CLOSE_TIME = time(13, 0)
 
-# A session outside the holiday data's span cannot be certified.
 SESSION_UNCERTIFIED = "UNCERTIFIED"
 
-# Earliest date the repo's holiday data covers. Derived, not hardcoded, so it
-# tracks the underlying table automatically if it is ever extended backwards.
-HOLIDAY_COVERAGE_FROM: date = min(NYSE_HOLIDAYS)
+BACKEND_EXCHANGE_CALENDARS = "exchange_calendars:XNYS"
+BACKEND_REPO_NATIVE = "portfolio_automation.market_session + intraday_lab early-close table"
 
-# NYSE 13:00 ET early closes within the certified window. Deliberately limited
-# to dates inside the holiday-coverage span — an early-close entry outside it
-# would imply a certainty the holiday data itself does not provide.
+try:                                            # authoritative source
+    import exchange_calendars as _xcals
+    _XCALS_VERSION = getattr(_xcals, "__version__", "unknown")
+except Exception:                               # pragma: no cover - env dependent
+    _xcals = None
+    _XCALS_VERSION = None
+
+# The certified research window. FIXED constants, deliberately NOT derived from
+# the library's own bounds: `exchange_calendars` advances `last_session` with the
+# wall clock (today + 1 year), so deriving from it would silently mint a new
+# calendar identity — and therefore new research meaning — every single day.
+# Widening this window is an explicit, reviewable edit that mints a new era.
+CERTIFIED_FROM: date = date(2017, 1, 1)
+CERTIFIED_THROUGH: date = date(2027, 6, 30)
+
+# Repo-native fallback data, retained for the no-dependency path.
+HOLIDAY_COVERAGE_FROM: date = min(NYSE_HOLIDAYS)
 EARLY_CLOSES: frozenset[date] = frozenset({
-    date(2025, 7, 3),      # July 4 falls Friday
-    date(2025, 11, 28),    # day after Thanksgiving — PROVEN by the Session 1 probe
-    date(2025, 12, 24),    # Christmas Eve
-    date(2026, 11, 27),    # day after Thanksgiving
-    date(2026, 12, 24),    # Christmas Eve
-    date(2027, 11, 26),    # day after Thanksgiving
+    date(2025, 7, 3), date(2025, 11, 28), date(2025, 12, 24),
+    date(2026, 11, 27), date(2026, 12, 24), date(2027, 11, 26),
 })
 
 
@@ -100,9 +143,40 @@ class TradingSession:
         }
 
 
+def _calendar():
+    """The XNYS calendar object, or None when the dependency is absent."""
+    if _xcals is None:
+        return None
+    global _CAL
+    try:
+        return _CAL
+    except NameError:
+        pass
+    try:
+        _CAL = _xcals.get_calendar("XNYS")
+    except Exception:                           # pragma: no cover - env dependent
+        _CAL = None
+    return _CAL
+
+
+def backend() -> str:
+    return BACKEND_EXCHANGE_CALENDARS if _calendar() is not None else BACKEND_REPO_NATIVE
+
+
+CALENDAR_SOURCE = BACKEND_EXCHANGE_CALENDARS if _xcals is not None else BACKEND_REPO_NATIVE
+
+
+def coverage() -> tuple[date, date]:
+    """The window this build can actually certify."""
+    cal = _calendar()
+    if cal is None:
+        return HOLIDAY_COVERAGE_FROM, HOLIDAY_COVERAGE_THROUGH
+    return CERTIFIED_FROM, CERTIFIED_THROUGH
+
+
 def is_certified(d: date) -> bool:
-    """True when the holiday data actually covers this date."""
-    return HOLIDAY_COVERAGE_FROM <= d <= HOLIDAY_COVERAGE_THROUGH
+    lo, hi = coverage()
+    return lo <= d <= hi
 
 
 def _grid(open_et: datetime, close_et: datetime, minutes: int) -> tuple[datetime, ...]:
@@ -120,36 +194,62 @@ def _grid(open_et: datetime, close_et: datetime, minutes: int) -> tuple[datetime
     return tuple(out)
 
 
-def resolve_session(d: date, *, timeframe_minutes: int = 5) -> TradingSession:
-    """Resolve one market date to its session type and exact expected grid."""
-    def _session(stype: str, open_t: time | None, close_t: time | None,
-                 certified: bool) -> TradingSession:
-        if open_t is None or close_t is None:
-            o = c = None
-            grid: tuple[datetime, ...] = ()
-        else:
-            o = datetime.combine(d, open_t, tzinfo=EXCHANGE_TZ)
-            c = datetime.combine(d, close_t, tzinfo=EXCHANGE_TZ)
-            grid = _grid(o, c, timeframe_minutes)
-        return TradingSession(
-            market_date=d, exchange=EXCHANGE, session_type=stype,
-            market_open=o.astimezone(timezone.utc) if o else None,
-            market_close=c.astimezone(timezone.utc) if c else None,
-            expected_bar_starts=grid, timezone=str(EXCHANGE_TZ),
-            calendar_source=CALENDAR_SOURCE, certified=certified)
+def _session(d: date, stype: str, open_dt: datetime | None, close_dt: datetime | None,
+             certified: bool, minutes: int) -> TradingSession:
+    grid = _grid(open_dt, close_dt, minutes) if open_dt and close_dt else ()
+    return TradingSession(
+        market_date=d, exchange=EXCHANGE, session_type=stype,
+        market_open=open_dt.astimezone(timezone.utc) if open_dt else None,
+        market_close=close_dt.astimezone(timezone.utc) if close_dt else None,
+        expected_bar_starts=grid, timezone=str(EXCHANGE_TZ),
+        calendar_source=backend(), certified=certified)
+
+
+def _resolve_authoritative(d: date, minutes: int) -> TradingSession:
+    import pandas as pd
+
+    cal = _calendar()
+    ts = pd.Timestamp(d)
+    if not cal.is_session(ts):
+        return _session(d, SESSION_MARKET_CLOSED, None, None, True, minutes)
+    open_dt = cal.session_open(ts).to_pydatetime()
+    close_dt = cal.session_close(ts).to_pydatetime()
+    # Session TYPE follows the actual close, so an early close needs no table.
+    close_et = close_dt.astimezone(EXCHANGE_TZ).time()
+    stype = SESSION_REGULAR if close_et >= REGULAR_CLOSE else SESSION_EARLY_CLOSE
+    return _session(d, stype, open_dt, close_dt, True, minutes)
+
+
+def _resolve_repo_native(d: date, minutes: int) -> TradingSession:
+    def mk(stype, open_t, close_t, certified):
+        o = datetime.combine(d, open_t, tzinfo=EXCHANGE_TZ) if open_t else None
+        c = datetime.combine(d, close_t, tzinfo=EXCHANGE_TZ) if close_t else None
+        return _session(d, stype, o, c, certified, minutes)
 
     if not is_certified(d):
-        # Weekends are unambiguous even without holiday data; everything else
-        # outside the window is genuinely unknown and must not be admitted.
         if d.weekday() >= 5:
-            return _session(SESSION_MARKET_CLOSED, None, None, False)
-        return _session(SESSION_UNCERTIFIED, None, None, False)
-
+            return mk(SESSION_MARKET_CLOSED, None, None, False)
+        return mk(SESSION_UNCERTIFIED, None, None, False)
     if not is_trading_day(d):
-        return _session(SESSION_MARKET_CLOSED, None, None, True)
+        return mk(SESSION_MARKET_CLOSED, None, None, True)
     if d in EARLY_CLOSES:
-        return _session(SESSION_EARLY_CLOSE, REGULAR_OPEN, EARLY_CLOSE_TIME, True)
-    return _session(SESSION_REGULAR, REGULAR_OPEN, REGULAR_CLOSE, True)
+        return mk(SESSION_EARLY_CLOSE, REGULAR_OPEN, EARLY_CLOSE_TIME, True)
+    return mk(SESSION_REGULAR, REGULAR_OPEN, REGULAR_CLOSE, True)
+
+
+def resolve_session(d: date, *, timeframe_minutes: int = 5) -> TradingSession:
+    """Resolve one market date to its session type and exact expected grid."""
+    if _calendar() is not None:
+        if not is_certified(d):
+            # Weekends are unambiguous even outside the window; a weekday is
+            # genuinely unknown there and must not be admitted.
+            if d.weekday() >= 5:
+                return _session(d, SESSION_MARKET_CLOSED, None, None, False,
+                                timeframe_minutes)
+            return _session(d, SESSION_UNCERTIFIED, None, None, False,
+                            timeframe_minutes)
+        return _resolve_authoritative(d, timeframe_minutes)
+    return _resolve_repo_native(d, timeframe_minutes)
 
 
 def sessions_in_range(start: date, end: date, *,
@@ -160,21 +260,93 @@ def sessions_in_range(start: date, end: date, *,
         d += timedelta(days=1)
 
 
-def calendar_provenance() -> dict:
+def trading_sessions(start: date, end: date) -> list[date]:
+    """Certified trading dates in range. Empty outside the certified window."""
+    return [s.market_date for s in sessions_in_range(start, end)
+            if s.session_type in (SESSION_REGULAR, SESSION_EARLY_CLOSE)]
+
+
+# ── Calendar identity ──────────────────────────────────────────────────────
+_DIGEST_CACHE: dict[str, dict] = {}
+
+
+def _schedule_digest() -> dict:
+    """Hash the certified schedule itself: every session with its open + close.
+
+    This — not the package version — is what research meaning depends on. Cached
+    because the window spans thousands of sessions and the identity is consulted
+    on every pipeline run.
+    """
+    key = f"{backend()}|{CERTIFIED_FROM}|{CERTIFIED_THROUGH}"
+    if key in _DIGEST_CACHE:
+        return _DIGEST_CACHE[key]
+
+    lo, hi = coverage()
+    rows, early = [], 0
+    cal = _calendar()
+    if cal is not None:
+        import pandas as pd
+
+        sch = cal.schedule.loc[str(lo):str(hi)]
+        for idx, row in zip(sch.index, sch.itertuples()):
+            o = row.open.tz_convert(EXCHANGE_TZ)
+            c = row.close.tz_convert(EXCHANGE_TZ)
+            rows.append([idx.date().isoformat(), o.strftime("%H:%M"), c.strftime("%H:%M")])
+            if c.hour < REGULAR_CLOSE.hour:
+                early += 1
+    else:
+        for s in sessions_in_range(lo, hi):
+            if s.session_type not in (SESSION_REGULAR, SESSION_EARLY_CLOSE):
+                continue
+            o = s.market_open.astimezone(EXCHANGE_TZ)
+            c = s.market_close.astimezone(EXCHANGE_TZ)
+            rows.append([s.market_date.isoformat(), o.strftime("%H:%M"), c.strftime("%H:%M")])
+            if c.hour < REGULAR_CLOSE.hour:
+                early += 1
+
+    digest = hashlib.sha256(
+        json.dumps(rows, separators=(",", ":")).encode()).hexdigest()[:32]
+    out = {"schedule_digest": digest, "session_count": len(rows),
+           "early_close_count": early}
+    _DIGEST_CACHE[key] = out
+    return out
+
+
+def calendar_identity() -> dict:
+    """Deterministic calendar MEANING. Hashed into every dataset manifest."""
+    lo, hi = coverage()
+    d = _schedule_digest()
     return {
-        "schema_version": SCHEMA_VERSION,
         "exchange": EXCHANGE,
         "timezone": str(EXCHANGE_TZ),
-        "source": CALENDAR_SOURCE,
-        "holiday_coverage_from": HOLIDAY_COVERAGE_FROM.isoformat(),
-        "holiday_coverage_through": HOLIDAY_COVERAGE_THROUGH.isoformat(),
-        "holiday_count": len(NYSE_HOLIDAYS),
-        "early_close_count": len(EARLY_CLOSES),
-        "early_close_time_et": EARLY_CLOSE_TIME.isoformat(),
-        "limitation": (
-            "Holiday data spans 2025-2027 only. Five-minute bars exist back to "
-            "2017, but sessions before the coverage window are UNCERTIFIED and "
-            "are refused by the dataset builder — an unverifiable expectation "
-            "must never admit a session."
+        "backend": backend(),
+        "semantics_version": CALENDAR_SEMANTICS_VERSION,
+        "coverage_from": lo.isoformat(),
+        "coverage_through": hi.isoformat(),
+        "session_count": d["session_count"],
+        "early_close_count": d["early_close_count"],
+        "schedule_digest": d["schedule_digest"],
+        "regular_open_et": REGULAR_OPEN.isoformat(),
+        "regular_close_et": REGULAR_CLOSE.isoformat(),
+    }
+
+
+def calendar_provenance() -> dict:
+    """Identity plus disclosures that are NOT part of research meaning."""
+    lo, hi = coverage()
+    authoritative = _calendar() is not None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        **calendar_identity(),
+        # Disclosure only. Deliberately outside the identity: a dependency bump
+        # that changes no session must not mint a new research era, and one that
+        # does change a session is already caught by schedule_digest.
+        "implementation_version": _XCALS_VERSION,
+        "authoritative": authoritative,
+        "limitation": None if authoritative else (
+            f"exchange_calendars is not installed; falling back to the "
+            f"repo-native holiday table covering {lo} to {hi} only. Sessions "
+            f"outside that window are UNCERTIFIED and are refused by the "
+            f"dataset builder."
         ),
     }

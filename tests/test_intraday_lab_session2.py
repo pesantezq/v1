@@ -61,18 +61,25 @@ def test_dst_summer_and_winter_grids_differ_in_utc():
     assert C.resolve_session(date(2026, 11, 30)).expected_bar_count == 78
 
 
-def test_dates_outside_holiday_coverage_are_uncertified():
-    """5min bars exist back to 2017 but the holiday table starts 2025-01-01.
-    An unverifiable expectation must never certify a session."""
-    s = C.resolve_session(date(2023, 8, 7))
+def test_dates_outside_the_certified_window_are_uncertified():
+    """The certified window widened to 2017 with an authoritative calendar, but
+    the RULE is unchanged: an unverifiable expectation must never certify a
+    session. Only the boundary moved."""
+    s = C.resolve_session(date(2010, 1, 4))          # before CERTIFIED_FROM
     assert s.session_type == C.SESSION_UNCERTIFIED and s.certified is False
     assert C.resolve_session(NORMAL).certified is True
+    assert C.resolve_session(date(2017, 1, 3)).certified is True
 
 
-def test_calendar_provenance_discloses_the_coverage_limitation():
+def test_calendar_provenance_discloses_coverage_and_backend():
     p = C.calendar_provenance()
-    assert p["holiday_coverage_from"] == "2025-01-01"
-    assert "UNCERTIFIED" in p["limitation"]
+    assert p["coverage_from"] == "2017-01-01"
+    assert p["exchange"] == "XNYS"
+    if p["authoritative"]:
+        assert p["limitation"] is None
+        assert p["backend"] == C.BACKEND_EXCHANGE_CALENDARS
+    else:                                            # no-dependency fallback
+        assert "UNCERTIFIED" in p["limitation"]
 
 
 # ===========================================================================
@@ -131,7 +138,7 @@ def test_conflicting_duplicate_is_rejected():
 
 
 def test_uncertified_session_is_rejected_even_with_perfect_looking_data():
-    s = C.resolve_session(date(2023, 8, 7))
+    s = C.resolve_session(date(2010, 1, 4))
     r = DS.reconcile_session([], s, symbol="SPY")
     assert r.admission_status == DS.REJECTED_CALENDAR_UNCERTIFIED
 
@@ -185,7 +192,7 @@ def test_rejection_report_never_repairs_anything():
 
 def test_manifest_records_calendar_provenance_and_limitations():
     m = DS.dataset_manifest(_dataset())
-    assert m["calendar"]["holiday_coverage_from"] == "2025-01-01"
+    assert m["calendar"]["coverage_from"] == "2017-01-01"
     assert any("Rejected sessions" in s for s in m["limitations"])
 
 
@@ -514,6 +521,7 @@ def test_strategy_validation_stays_false_under_every_evidence_state():
 # ===========================================================================
 from portfolio_automation.intraday_lab import storage as ST      # noqa: E402
 from portfolio_automation.intraday_lab import pipeline as PL      # noqa: E402
+from portfolio_automation.intraday_lab import models as M         # noqa: E402
 
 
 def _rows(session, n=None):
@@ -534,8 +542,8 @@ def _fetcher(mapping):
 
 # --------------------------- request accounting ---------------------------
 def test_uncertified_requested_date_still_produces_a_record():
-    req = DS.DatasetRequest(symbols=("SPY",), start=date(2023, 8, 7),
-                            end=date(2023, 8, 7))
+    req = DS.DatasetRequest(symbols=("SPY",), start=date(2010, 1, 4),
+                            end=date(2010, 1, 4))
     assert len(req.resolved_items()) == 1
     ds = DS.build_canonical_dataset({}, request=req)
     assert len(ds.reconciliations) == 1
@@ -572,10 +580,26 @@ def test_manifest_identity_changes_when_calendar_semantics_change(monkeypatch):
     before = DS.build_canonical_dataset(bars, request=req)
     content_before, manifest_before = before.fingerprint(), before.manifest_fingerprint()
 
-    monkeypatch.setattr(C, "EARLY_CLOSES", frozenset(C.EARLY_CLOSES | {date(2026, 7, 3)}))
+    # Simulate the real §25 risk: a calendar-data upgrade that changes a
+    # HISTORICAL session. The bars are untouched, but they now answer a
+    # different research question, so manifest identity must move.
+    base = C._schedule_digest()
+    monkeypatch.setattr(C, "_schedule_digest",
+                        lambda: {**base, "schedule_digest": "a-different-schedule",
+                                 "early_close_count": base["early_close_count"] + 1})
     after = DS.build_canonical_dataset(bars, request=req)
     assert after.fingerprint() == content_before            # bytes unchanged
     assert after.manifest_fingerprint() != manifest_before  # meaning changed
+
+
+def test_a_dependency_version_bump_alone_does_not_change_calendar_identity():
+    """§25: identity tracks SCHEDULE meaning, not the package version. A no-op
+    upgrade must not mint a spurious research era (which would also make every
+    archived manifest un-remintable)."""
+    ident = C.calendar_identity()
+    assert "implementation_version" not in ident
+    assert C.calendar_provenance()["implementation_version"] == C._XCALS_VERSION
+    assert "schedule_digest" in ident
 
 
 # --------------------------- adjustment authority ---------------------------
@@ -848,3 +872,148 @@ def test_volatile_keys_never_enter_an_immutable_content_object(tmp_path):
         for f in (root / kind / fp).iterdir():
             text = f.read_text()
             assert "retrieved_at" not in text and "generated_at" not in text, f
+
+
+# ===========================================================================
+# FINAL PROVENANCE SEMANTICS — PIT identity, source identity, causality, graph.
+# ===========================================================================
+def _pit_bar(delay_s, **kw):
+    from datetime import timedelta as _td
+    return M.IntradayBar(symbol="SPY", timeframe="5min",
+                         bar_start_at=datetime(2026, 8, 3, 13, 30, tzinfo=UTC),
+                         open=100, high=101, low=99, close=100.5, volume=1000,
+                         adjustment_state="split_adjusted",
+                         publication_delay=_td(seconds=delay_s), **kw)
+
+
+def test_known_at_is_part_of_canonical_identity():
+    """The critical PIT test. Two datasets identical in OHLCV and bar_start_at
+    but where B publishes 60s EARLIER are not research-equivalent: B confers a
+    look-ahead advantage. v2 gave them one identity."""
+    a = _pit_bar(60)
+    b = _pit_bar(0)
+    assert a.known_at != b.known_at
+    fa = DS.canonical_fingerprint([a], timeframe="5min", adjustment_state="split_adjusted")
+    fb = DS.canonical_fingerprint([b], timeframe="5min", adjustment_state="split_adjusted")
+    assert fa != fb
+
+
+def test_bar_end_at_is_part_of_canonical_identity():
+    """bar_end_at derives from timeframe, so a different timeframe on the same
+    start instant must also change identity."""
+    from datetime import timedelta as _td
+    a = _pit_bar(60)
+    original = dict(M.TIMEFRAMES)
+    try:
+        M.TIMEFRAMES["15min"] = _td(minutes=15)
+        b = M.IntradayBar(symbol="SPY", timeframe="15min",
+                          bar_start_at=a.bar_start_at, open=100, high=101, low=99,
+                          close=100.5, volume=1000, adjustment_state="split_adjusted")
+        assert a.bar_end_at != b.bar_end_at
+        assert DS.canonical_fingerprint([a], timeframe="5min",
+                                        adjustment_state="split_adjusted") != \
+               DS.canonical_fingerprint([b], timeframe="15min",
+                                        adjustment_state="split_adjusted")
+    finally:
+        M.TIMEFRAMES.clear()
+        M.TIMEFRAMES.update(original)
+
+
+def test_raw_identity_includes_source_semantics():
+    """The content_manifest already recorded provider+endpoint, so identity had
+    to cover them or two sources would collide on one hash while storing
+    different manifests — identity narrower than its own content."""
+    rows = [{"date": "2026-08-03 09:30:00", "open": 1, "high": 2, "low": 0.5,
+             "close": 1.5, "volume": 10}]
+    a = ST.raw_payload_hash(rows, symbol="SPY", timeframe="5min",
+                            provider="fmp", endpoint="/stable/historical-chart/5min")
+    b = ST.raw_payload_hash(rows, symbol="SPY", timeframe="5min",
+                            provider="other", endpoint="/stable/historical-chart/5min")
+    c = ST.raw_payload_hash(rows, symbol="SPY", timeframe="5min",
+                            provider="fmp", endpoint="/v3/other-endpoint")
+    assert a != b and a != c
+
+
+def test_normalization_failure_has_its_own_causal_state(tmp_path):
+    """Provider answered; WE could not parse it. Reporting missing market data
+    would hide a provider schema change entirely."""
+    bad = [{"date": "not-a-timestamp", "open": 1, "high": 2, "low": 0.5,
+            "close": 1.5, "volume": 10}]
+    out = PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": bad}), root=str(tmp_path))
+    acq = out["acquisitions"][0]
+    assert acq["provider_status"] == "OK"
+    assert acq["normalization_status"].startswith("FAILED")
+    assert acq["raw_payload_hash"]                      # raw evidence preserved
+    statuses = {r["admission_status"] for r in out["rejections"]["rejections"]}
+    assert statuses == {DS.REJECTED_NORMALIZATION_ERROR}
+    assert DS.REJECTED_MISSING_BARS not in statuses
+    assert DS.REJECTED_PROVIDER_ERROR not in statuses
+
+
+def _built(tmp_path):
+    return PL.build_historical_research_dataset(
+        DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL),
+        _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+
+
+def test_valid_provenance_graph_verifies(tmp_path):
+    out = _built(tmp_path)
+    v = ST.verify_dataset_provenance(out["manifest_fingerprint"], root=str(tmp_path))
+    assert v["verified"] is True
+    assert v["canonical_content_fingerprint"] == out["dataset_fingerprint"]
+    assert v["reconciled_items"] == 1 and v["raw_verified"]
+
+
+def _tamper(path, mutate):
+    import json as _json
+    data = _json.loads(path.read_text())
+    mutate(data)
+    path.write_text(_json.dumps(data, separators=(",", ":"), sort_keys=True))
+
+
+def test_raw_tampering_flips_dataset_readiness_false(tmp_path):
+    """Proves readiness actually walks the chain rather than checking one file."""
+    from portfolio_automation.intraday_lab import foundation as FD
+    out = _built(tmp_path)
+    assert FD._canonical_ready(out, str(tmp_path)) is True
+    raw_fp = out["raw_content_fingerprints"][0]
+    _tamper(ST.intraday_root(str(tmp_path)) / "raw" / "content" / raw_fp / "payload.json",
+            lambda d: d.__setitem__(0, {**d[0], "close": 4242.0}))
+    assert ST.verify_dataset_provenance(out["manifest_fingerprint"],
+                                        root=str(tmp_path))["verified"] is False
+    assert FD._canonical_ready(out, str(tmp_path)) is False
+    assert FD._feature_ready(out, str(tmp_path)) is False
+
+
+@pytest.mark.parametrize("field,value", [
+    ("request_fingerprint", "tampered"),
+    ("calendar_fingerprint", ""),
+    ("canonical_content_fingerprint", "somethingelse"),
+])
+def test_manifest_tampering_flips_readiness_false(tmp_path, field, value):
+    from portfolio_automation.intraday_lab import foundation as FD
+    out = _built(tmp_path)
+    path = (ST.intraday_root(str(tmp_path)) / "datasets" / "manifests"
+            / out["manifest_fingerprint"] / "request_manifest.json")
+    _tamper(path, lambda d: d.__setitem__(field, value))
+    assert ST.verify_dataset_provenance(out["manifest_fingerprint"],
+                                        root=str(tmp_path))["verified"] is False
+    assert FD._canonical_ready(out, str(tmp_path)) is False
+
+
+def test_a_disappeared_reconciliation_record_fails_verification(tmp_path):
+    out = _built(tmp_path)
+    path = (ST.intraday_root(str(tmp_path)) / "datasets" / "manifests"
+            / out["manifest_fingerprint"] / "reconciliation.json")
+    path.write_text("[]")
+    v = ST.verify_dataset_provenance(out["manifest_fingerprint"], root=str(tmp_path))
+    assert v["verified"] is False and "disappeared" in v["reason"]
+
+
+def test_acquisition_event_verifies_and_references_raw(tmp_path):
+    out = _built(tmp_path)
+    v = ST.verify_acquisition_event(out["acquisition_event_ids"][0], root=str(tmp_path))
+    assert v["verified"] is True
+    assert v["raw_content_fingerprint"] == out["raw_content_fingerprints"][0]

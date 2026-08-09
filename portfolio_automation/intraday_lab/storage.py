@@ -25,6 +25,13 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+from portfolio_automation.intraday_lab import identity as ID
+from portfolio_automation.intraday_lab.identity import (        # noqa: F401
+    canonical_json as _identity_canonical_json, content_hash,
+    INTEGRITY_FAILURE, VERIFIED_CURRENT, VERIFIED_LEGACY_ARCHIVAL,
+    VERIFIED_LEGACY_MIGRATABLE, VERIFIED_STATES, CURRENT_RESEARCH_STATES,
+)
+
 SCHEMA_VERSION = "1"
 
 # CONTENT objects are keyed by what the data IS. EVENT objects record when and
@@ -39,6 +46,10 @@ DATASET_MANIFESTS = "datasets/manifests"
 DATASET_EVENTS = "datasets/events"
 FEATURES = "features/content"
 FEATURE_EVENTS = "features/events"
+# Identity-era migration lineage. LINEAGE is content-addressed (the same
+# migration always has the same identity); EVENTS carry when it was performed.
+MIGRATIONS = "migrations/lineage"
+MIGRATION_EVENTS = "migrations/events"
 
 CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})
 
@@ -65,17 +76,60 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def _canonical_json(payload: Any) -> str:
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
+    # Single source of truth lives in identity.py so an era's hash function and
+    # the store can never drift apart on separators, key order or coercion.
+    return _identity_canonical_json(payload)
 
 
-def content_hash(payload: Any) -> str:
-    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()[:32]
+def raw_payload_hash(rows: Any, *, symbol: str, timeframe: str,
+                     provider: str = "fmp", endpoint: str = "") -> str:
+    """Identity of a raw provider observation object, under the CURRENT era.
+
+    Source semantics ARE part of what a raw object means: the content_manifest
+    stored beneath the hash already recorded provider/endpoint, so two different
+    endpoints returning identical rows would have collided on one identity while
+    carrying different manifests — identity narrower than the content stored
+    under it. Retrieval metadata stays out, so an identical refetch still dedupes.
+
+    Historical eras are NOT reachable from here by design: new objects are only
+    ever minted under the current era. Verification of older objects goes
+    through `identity.attribute`.
+    """
+    return ID.CURRENT_RAW_ERA.compute(
+        rows, {"symbol": symbol, "timeframe": timeframe,
+               "provider": provider, "endpoint": endpoint})
 
 
-def raw_payload_hash(rows: Any, *, symbol: str, timeframe: str) -> str:
-    """Identity of the provider's OBSERVATIONS, excluding retrieval metadata."""
-    return content_hash({"schema": "intraday_raw_v1", "symbol": symbol,
-                         "timeframe": timeframe, "rows": rows})
+def raw_content_manifest(rows: Any, *, symbol: str, timeframe: str,
+                         provider: str, endpoint: str, identity: str) -> dict:
+    """The envelope stored beside a raw payload, declaring its identity era."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "storage_schema": ID.STORAGE_SCHEMA,
+        "content_schema": ID.CONTENT_SCHEMA_RAW,
+        "identity_schema": ID.CURRENT_RAW_ERA.schema_id,
+        "provider": provider,
+        "endpoint": endpoint,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "row_count": len(rows) if isinstance(rows, list) else 0,
+        "raw_content_fingerprint": identity,
+    }
+
+
+def canonical_content_manifest(bars: Sequence[dict], *, identity: str,
+                               timeframe: str, adjustment_state: str) -> dict:
+    """The envelope stored beside canonical bars, declaring its identity era."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "storage_schema": ID.STORAGE_SCHEMA,
+        "content_schema": ID.CONTENT_SCHEMA_CANONICAL,
+        "identity_schema": ID.CURRENT_CANONICAL_ERA.schema_id,
+        "dataset_fingerprint": identity,
+        "timeframe": timeframe,
+        "adjustment_state": adjustment_state,
+        "bar_count": len(bars),
+    }
 
 
 def write_snapshot(kind: str, identity: str, files: dict[str, Any], *,
@@ -102,7 +156,7 @@ def write_snapshot(kind: str, identity: str, files: dict[str, Any], *,
                 raise SnapshotCollisionError(
                     f"{kind}/{identity} exists but is missing {name} — the "
                     f"snapshot is incomplete and cannot be trusted")
-            if existing.read_text(encoding="utf-8") != _canonical_json(payload):
+            if not _same_persisted_content(existing, payload):
                 raise SnapshotCollisionError(
                     f"{kind}/{identity} already exists with DIFFERENT content in "
                     f"{name}. The fingerprint no longer describes the data; "
@@ -128,17 +182,87 @@ def write_snapshot(kind: str, identity: str, files: dict[str, Any], *,
     return target
 
 
+# Keys that may be ADDED to an already-written immutable object without that
+# being a content divergence. Two kinds qualify, and only these two:
+#
+#   * schema LABELS (`storage_schema`, `content_schema`, `identity_schema`) —
+#     they describe how the object is addressed, not what it contains;
+#   * `calendar_identity` — a DISCLOSURE of an input the manifest fingerprint
+#     already commits to. Two manifests sharing an identity necessarily shared
+#     a calendar identity, because it is hashed into that identity. So a
+#     difference here cannot represent divergent content; it can only mean one
+#     object was written before we started disclosing it.
+#
+# Objects written before these existed legitimately lack them. Tolerating their
+# ABSENCE lets a pre-declaration snapshot be verify-and-reused instead of
+# raising a false collision. Tolerating a DISAGREEMENT would be a real hole, so
+# it is not tolerated: every key the stored object actually has must still match
+# exactly. Same reasoning as `strip_volatile`, one level up.
+ADDITIVE_DISCLOSURE_KEYS = frozenset({
+    "storage_schema", "content_schema", "identity_schema", "calendar_identity",
+})
+
+
+def _same_persisted_content(existing: Path, payload: Any) -> bool:
+    """Byte-identical, or differing ONLY by newly-added disclosure keys."""
+    text = existing.read_text(encoding="utf-8")
+    if text == _canonical_json(payload):
+        return True
+    try:
+        stored = json.loads(text)
+        # Round-trip so both sides have identical JSON typing (the writer
+        # coerces via default=str; comparing raw Python objects would report
+        # false differences for dates, tuples and the like).
+        incoming = json.loads(_canonical_json(payload))
+    except Exception:
+        return False
+    if not isinstance(stored, dict) or not isinstance(incoming, dict):
+        return False
+    for key, value in stored.items():
+        if key not in incoming or incoming[key] != value:
+            return False        # a key the object already had disagrees
+    return set(incoming) - set(stored) <= ADDITIVE_DISCLOSURE_KEYS
+
+
+def _attribution_to_result(kind: str, identity: str, att: dict,
+                           **extra: Any) -> dict:
+    """Shared shape for era-aware verification results.
+
+    `verified` answers INTEGRITY only. `current_era` answers RESEARCH
+    ELIGIBILITY. Callers that need eligibility must read `current_era` — a
+    legacy object is honestly verified and deliberately not current.
+    """
+    state = att["state"]
+    return {
+        "verified": state in VERIFIED_STATES,
+        "state": state,
+        "current_era": state in CURRENT_RESEARCH_STATES,
+        "identity_schema": att.get("identity_schema"),
+        "current_identity_schema": att.get("current_identity_schema"),
+        "current_identity": att.get("current_identity"),
+        "migration_required": att.get("migration_required", False),
+        "attribution": att.get("attribution"),
+        "identity": identity,
+        "reason": att.get("reason"),
+        **extra,
+    }
+
+
 def verify_raw_content(identity: str, *, root: str = ".") -> dict:
-    """Recompute raw identity from persisted observations."""
+    """Verify a raw object against the identity era that actually minted it."""
     payload = read_snapshot(RAW, identity, "payload.json", root=root)
     man = read_snapshot(RAW, identity, "content_manifest.json", root=root)
     if payload is None or man is None:
-        return {"verified": False, "reason": "missing payload or content_manifest"}
-    recomputed = raw_payload_hash(payload, symbol=man.get("symbol"),
-                                  timeframe=man.get("timeframe"))
-    ok = recomputed == identity == man.get("raw_content_fingerprint")
-    return {"verified": ok, "recomputed": recomputed, "identity": identity,
-            "reason": None if ok else "persisted payload does not hash to its identity"}
+        return {"verified": False, "state": INTEGRITY_FAILURE, "current_era": False,
+                "identity": identity, "migration_required": False,
+                "reason": "missing payload or content_manifest"}
+    if man.get("raw_content_fingerprint") != identity:
+        return {"verified": False, "state": INTEGRITY_FAILURE, "current_era": False,
+                "identity": identity, "migration_required": False,
+                "reason": "content manifest declares a different fingerprint"}
+    att = ID.attribute("raw", identity, payload, man)
+    return _attribution_to_result("raw", identity, att,
+                                  recomputed=att.get("recomputed"))
 
 
 def verify_feature_snapshot(identity: str, *, root: str = ".") -> dict:
@@ -205,31 +329,182 @@ def bars_to_rows(bars: Sequence[Any]) -> list[dict]:
             for b in bars]
 
 
-def verify_canonical_snapshot(identity: str, *, root: str = ".") -> dict:
-    """Recompute identity from PERSISTED bytes rather than trusting the path.
+def bars_from_rows(rows: Sequence[dict]) -> list[Any]:
+    """Rehydrate IntradayBar objects from PERSISTED canonical rows.
 
-    A snapshot whose stored bars no longer hash to their own directory name has
-    been tampered with or written by a different schema; readiness must not be
-    inferred from the filename.
+    The exact inverse of `bars_to_rows`, used by identity migration so a legacy
+    dataset can be re-expressed under the current identity WITHOUT refetching
+    the provider — provider history can change, so a refetch would silently
+    substitute different data for the archived evidence.
+
+    `publication_delay` is recovered as `known_at - bar_end_at` rather than
+    defaulted: known_at is now part of canonical identity, so assuming the
+    default would produce a bar whose knowability differs from the persisted
+    record and therefore a different (wrong) migrated identity.
+    """
+    from datetime import timedelta as _td
+    from portfolio_automation.intraday_lab.models import IntradayBar
+
+    out = []
+    for r in rows:
+        start = datetime.fromisoformat(r["bar_start_at"])
+        end = datetime.fromisoformat(r["bar_end_at"])
+        known = datetime.fromisoformat(r["known_at"])
+        out.append(IntradayBar(
+            symbol=r["symbol"], timeframe=r["timeframe"], bar_start_at=start,
+            open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+            volume=r["volume"], source=r.get("source", "unknown"),
+            source_endpoint=r.get("source_endpoint", ""),
+            adjustment_state=r.get("adjustment_state", "unknown"),
+            publication_delay=known - end))
+    return out
+
+
+def verify_canonical_snapshot(identity: str, *, root: str = ".") -> dict:
+    """Verify canonical bars against the identity era that actually minted them.
+
+    Integrity is recomputed from PERSISTED bytes, never inferred from the
+    directory name. A snapshot minted under an OLDER era is reported as verified
+    legacy evidence — not as tampering — but is not current-era, so it cannot
+    satisfy the research gate until migrated.
     """
     bars = read_snapshot(DATASETS, identity, "canonical_bars.json", root=root)
     manifest = read_snapshot(DATASETS, identity, "content_manifest.json", root=root)
     if bars is None or manifest is None:
-        return {"verified": False, "reason": "missing canonical_bars or content_manifest"}
+        return {"verified": False, "state": INTEGRITY_FAILURE, "current_era": False,
+                "identity": identity, "migration_required": False,
+                "reason": "missing canonical_bars or content_manifest"}
+    if manifest.get("dataset_fingerprint") != identity:
+        return {"verified": False, "state": INTEGRITY_FAILURE, "current_era": False,
+                "identity": identity, "migration_required": False,
+                "reason": "content manifest declares a different fingerprint"}
+    att = ID.attribute("canonical", identity, bars, manifest)
+    return _attribution_to_result("canonical", identity, att,
+                                  declared=manifest.get("dataset_fingerprint"),
+                                  recomputed=att.get("recomputed"),
+                                  bar_count=len(bars))
 
-    recomputed = content_hash({
-        "schema": "intraday_canonical_v2",
-        "timeframe": manifest.get("timeframe"),
-        "adjustment_state": manifest.get("adjustment_state"),
-        "rows": sorted([[r["symbol"], r["timeframe"], r["bar_start_at"],
-                         r["open"], r["high"], r["low"], r["close"], r["volume"]]
-                        for r in bars], key=lambda x: (x[0], x[1], x[2])),
-    })
-    declared = manifest.get("dataset_fingerprint")
-    return {
-        "verified": recomputed == declared == identity,
-        "recomputed": recomputed, "declared": declared, "identity": identity,
-        "bar_count": len(bars),
-        "reason": None if recomputed == declared == identity
-        else "persisted bytes do not hash to the declared identity",
-    }
+
+def verify_acquisition_event(event_id: str, *, root: str = ".") -> dict:
+    """Event exists, its id recomputes, and any raw content it cites verifies."""
+    ev = read_snapshot(RAW_EVENTS, event_id, "acquisition_event.json", root=root)
+    if ev is None:
+        return {"verified": False, "reason": "missing acquisition_event"}
+    raw_fp = ev.get("raw_payload_hash")
+    if raw_fp and not verify_raw_content(raw_fp, root=root).get("verified"):
+        return {"verified": False, "reason": f"referenced raw {raw_fp} fails verification"}
+    # A provider failure legitimately has no payload, but must say why.
+    if not raw_fp and not ev.get("error_code") and ev.get("provider_status") == "OK":
+        return {"verified": False, "reason": "OK status with no raw content and no error"}
+    return {"verified": True, "provider_status": ev.get("provider_status"),
+            "raw_content_fingerprint": raw_fp, "reason": None}
+
+
+# Reconciliation states that legitimately account for a requested item.
+_ACCOUNTED_STATES = frozenset({
+    "ADMITTED", "NOT_A_TRADING_SESSION", "REJECTED_CALENDAR_UNCERTIFIED",
+    "REJECTED_PROVIDER_ERROR", "REJECTED_NORMALIZATION_ERROR",
+    "REJECTED_MISSING_BARS", "REJECTED_SURPLUS_BARS", "REJECTED_OFF_GRID",
+    "REJECTED_CONFLICTING_DUPLICATE", "REJECTED_EXACT_DUPLICATE",
+    "REJECTED_IDENTITY_MISMATCH", "REJECTED_MIXED_ADJUSTMENT",
+    "REJECTED_UNEXPECTED_PROVIDER_RESULT",
+})
+
+
+def verify_dataset_provenance(manifest_fingerprint: str, *, root: str = ".") -> dict:
+    """Walk the whole persisted graph. Evidence only — no caller claims.
+
+        dataset manifest -> request -> calendar -> reconciliation
+                         -> canonical content -> raw evidence
+
+    Verified against the calendar identity PERSISTED WITH THIS MANIFEST, not the
+    current calendar implementation: an old immutable manifest must not silently
+    reinterpret itself under a future calendar change.
+    """
+    from portfolio_automation.intraday_lab.dataset import DatasetRequest
+
+    def fail(reason: str, **extra) -> dict:
+        return {"verified": False, "reason": reason,
+                "manifest_fingerprint": manifest_fingerprint, **extra}
+
+    man = read_snapshot(DATASET_MANIFESTS, manifest_fingerprint,
+                        "dataset_manifest.json", root=root)
+    req = read_snapshot(DATASET_MANIFESTS, manifest_fingerprint,
+                        "request_manifest.json", root=root)
+    recon = read_snapshot(DATASET_MANIFESTS, manifest_fingerprint,
+                          "reconciliation.json", root=root)
+    if man is None or req is None or recon is None:
+        return fail("missing dataset_manifest, request_manifest or reconciliation")
+
+    if man.get("manifest_fingerprint") != manifest_fingerprint:
+        return fail("dataset manifest declares a different manifest fingerprint")
+
+    # Request identity recomputes from persisted fields.
+    try:
+        from datetime import date as _date
+        rebuilt = DatasetRequest(
+            symbols=tuple(sorted(req["symbols"])),
+            start=_date.fromisoformat(req["start"]),
+            end=_date.fromisoformat(req["end"]),
+            timeframe=req["timeframe"]).fingerprint()
+    except Exception as exc:
+        return fail(f"request manifest unusable: {type(exc).__name__}")
+    if rebuilt != req.get("request_fingerprint"):
+        return fail("persisted request fields do not recompute to its fingerprint")
+
+    # Calendar identity belonging to THIS manifest must be present.
+    if not req.get("calendar_fingerprint"):
+        return fail("no calendar identity persisted with the manifest")
+
+    # Reconciliation completeness: every requested item accounted for exactly once.
+    expected_items = req.get("requested_symbol_date_count", -1)
+    seen = [(r.get("symbol"), r.get("market_date")) for r in recon]
+    if len(seen) != len(set(seen)):
+        return fail("duplicate reconciliation records for one requested item")
+    if expected_items >= 0 and len(seen) < expected_items:
+        return fail(f"reconciliation covers {len(seen)} of {expected_items} "
+                    f"requested items — a requested session disappeared")
+    unknown = {r.get("admission_status") for r in recon} - _ACCOUNTED_STATES
+    if unknown:
+        return fail(f"unrecognised reconciliation state(s): {sorted(unknown)}")
+
+    # Canonical content.
+    content_fp = req.get("canonical_content_fingerprint")
+    if not content_fp or content_fp != man.get("dataset_fingerprint"):
+        return fail("manifest and request disagree on the canonical content id")
+    canon = verify_canonical_snapshot(content_fp, root=root)
+    if not canon.get("verified"):
+        return fail(f"canonical content failed verification: {canon.get('reason')}",
+                    canonical=canon, state=canon.get("state"))
+
+    # Raw evidence referenced by the manifest.
+    raw_results = {}
+    for raw_fp in req.get("raw_content_fingerprints") or []:
+        raw_results[raw_fp] = verify_raw_content(raw_fp, root=root)
+        if not raw_results[raw_fp].get("verified"):
+            return fail(f"referenced raw content {raw_fp} failed verification",
+                        raw=raw_results)
+
+    # INTEGRITY is now established. RESEARCH ELIGIBILITY is a separate question:
+    # a graph is current-era only if EVERY object in it is. A dataset minted
+    # under today's canonical identity but resting on raw evidence identified
+    # under an older contract is not coherently current — migration remints the
+    # manifest with the migrated raw ids, so this stays satisfiable.
+    legacy_raw = sorted(fp for fp, r in raw_results.items()
+                        if not r.get("current_era"))
+    current_era = bool(canon.get("current_era")) and not legacy_raw
+    return {"verified": True, "reason": None,
+            "manifest_fingerprint": manifest_fingerprint,
+            "canonical_content_fingerprint": content_fp,
+            "request_fingerprint": rebuilt,
+            "calendar_fingerprint": req.get("calendar_fingerprint"),
+            "reconciled_items": len(seen),
+            "raw_verified": sorted(raw_results),
+            "current_era": current_era,
+            "canonical_state": canon.get("state"),
+            "canonical_identity_schema": canon.get("identity_schema"),
+            "legacy_raw_content": legacy_raw,
+            "migration_required": bool(canon.get("migration_required") or legacy_raw),
+            "not_current_reason": None if current_era else (
+                "canonical content is not current-era" if not canon.get("current_era")
+                else f"raw evidence not current-era: {legacy_raw}")}

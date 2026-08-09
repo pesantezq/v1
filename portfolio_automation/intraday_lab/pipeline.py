@@ -14,11 +14,12 @@ from datetime import date, datetime, timezone
 from typing import Any, Callable, Sequence
 
 from portfolio_automation.intraday_lab import features as F
+from portfolio_automation.intraday_lab import providers as PR
 from portfolio_automation.intraday_lab import storage as ST
 from portfolio_automation.intraday_lab.data import normalize_fmp_rows, fetch_status
 from portfolio_automation.intraday_lab.dataset import (
     DatasetRequest, CanonicalDataset, build_canonical_dataset, dataset_manifest,
-    rejection_report, calendar_fingerprint,
+    rejection_report, calendar_fingerprint, _calendar_identity,
 )
 
 SCHEMA_VERSION = "1"
@@ -41,40 +42,62 @@ def plan_request(request: DatasetRequest) -> dict:
     }
 
 
-def acquire(request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[Any, int]],
+def acquire(request: DatasetRequest, source: Any,
             *, root: str = ".", now: datetime | None = None) -> dict:
-    """Fetch through a supplied sanctioned fetcher and persist raw evidence.
+    """Fetch through a governed provider and persist raw evidence.
 
-    `fetcher(symbol, start, end) -> (rows, http_status)` is injected so the
-    pipeline is testable without network and so the caller supplies the
-    repo-governed client rather than this module opening its own connection.
+    `source` is an `IntradayProvider` — an object that KNOWS its own identity.
+    A bare `fetcher(symbol, start, end)` callable is still accepted and adapted,
+    but it is labelled `callable:unspecified` rather than being assumed to be
+    FMP: provider + endpoint are part of raw identity now, so stamping an
+    unverified claim there would mis-address the immutable evidence.
 
     A provider error or empty response is recorded, never raised away: the
     requested session must survive into the reconciliation trail.
     """
     now = now or datetime.now(timezone.utc)
+    provider = PR.coerce_provider(source, timeframe=request.timeframe)
+    provider_name = provider.provider_id
     symbols = sorted({s for s, _ in request.certified_sessions()})
     acquisitions: list[dict] = []
     bars_by_date: dict[tuple[str, date], list] = {}
 
+    try:
+        endpoint = provider.endpoint_for(request.timeframe)
+        endpoint_error = None
+    except Exception as exc:
+        # An unentitled/unregistered timeframe must not silently become a data
+        # gap. Every requested symbol is recorded as a provider error instead.
+        endpoint = f"/unresolved/{request.timeframe}"
+        endpoint_error = f"{type(exc).__name__}: {str(exc)[:160]}"
+
     for symbol in symbols:
         rows, http = None, None
-        error = None
-        try:
-            rows, http = fetcher(symbol, request.start.isoformat(),
-                                 request.end.isoformat())
-        except Exception as exc:                      # provider failure is evidence
-            error = f"{type(exc).__name__}: {str(exc)[:160]}"
+        error = endpoint_error
+        error_code = "PROVIDER_ENDPOINT_UNRESOLVED" if endpoint_error else None
+        if endpoint_error is None:
+            try:
+                rows, http = provider.fetch(symbol, request.start.isoformat(),
+                                            request.end.isoformat(),
+                                            request.timeframe)
+            except PR.ProviderBudgetRefusal as exc:   # our refusal, not their silence
+                error = f"{type(exc).__name__}: {str(exc)[:160]}"
+                error_code = "PROVIDER_BUDGET_REFUSED"
+            except Exception as exc:                  # provider failure is evidence
+                error = f"{type(exc).__name__}: {str(exc)[:160]}"
+                error_code = "PROVIDER_EXCEPTION"
 
         status = fetch_status(rows, http_status=http) if error is None else "PROVIDER_ERROR"
         payload_hash = (ST.raw_payload_hash(rows, symbol=symbol,
-                                            timeframe=request.timeframe)
+                                            timeframe=request.timeframe,
+                                            provider=provider_name,
+                                            endpoint=endpoint)
                         if isinstance(rows, list) else None)
         record = {
             "schema_version": SCHEMA_VERSION,
             "request_fingerprint": request.fingerprint(),
-            "provider": "fmp",
-            "endpoint": f"/stable/historical-chart/{request.timeframe}",
+            "provider": provider_name,
+            "endpoint": endpoint,
             "symbol": symbol, "timeframe": request.timeframe,
             "requested_start": request.start.isoformat(),
             "requested_end": request.end.isoformat(),
@@ -82,9 +105,10 @@ def acquire(request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[An
             "provider_status": status, "http_status": http,
             "row_count": len(rows) if isinstance(rows, list) else 0,
             "raw_payload_hash": payload_hash,
-            "error_code": None if error is None else "PROVIDER_EXCEPTION",
+            "error_code": error_code,
             "error_message_safe": error,
             "normalization_status": "PENDING",
+            "provider_provenance": provider.provenance(),
         }
 
         if isinstance(rows, list) and rows:
@@ -103,15 +127,10 @@ def acquire(request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[An
             # -- those would make an identical refetch look like corruption.
             ST.write_snapshot(ST.RAW, payload_hash, {
                 "payload.json": rows,
-                "content_manifest.json": {
-                    "schema_version": SCHEMA_VERSION,
-                    "provider": "fmp",
-                    "endpoint": record["endpoint"],
-                    "symbol": symbol,
-                    "timeframe": request.timeframe,
-                    "row_count": len(rows),
-                    "raw_content_fingerprint": payload_hash,
-                },
+                "content_manifest.json": ST.raw_content_manifest(
+                    rows, symbol=symbol, timeframe=request.timeframe,
+                    provider=provider_name, endpoint=endpoint,
+                    identity=payload_hash),
             }, root=root)
             record["raw_content_path"] = f"outputs/backtest/intraday/raw/content/{payload_hash}"
 
@@ -132,51 +151,67 @@ def acquire(request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[An
 
     failures = {a["symbol"] for a in acquisitions
                 if a["provider_status"] in ("PROVIDER_ERROR", "DATA_UNAVAILABLE")}
+    norm_failures = {a["symbol"] for a in acquisitions
+                     if str(a.get("normalization_status", "")).startswith("FAILED")}
     return {"acquisitions": acquisitions, "bars_by_date": bars_by_date,
-            "provider_failures": failures}
+            "provider_failures": failures, "normalization_failures": norm_failures,
+            "provider_provenance": provider.provenance()}
 
 
-def build_features(ds: CanonicalDataset, *, lookback: int = 3) -> list[F.FeatureValue]:
-    """Derive features with provenance taken FROM the dataset, not from args."""
+def features_from_bars(bars: Sequence[Any], *, dataset_id: str, fingerprint: str,
+                       manifest_fingerprint: str,
+                       lookback: int = 3) -> list[F.FeatureValue]:
+    """The feature derivation algorithm, as a pure function of bars + identity.
+
+    Extracted so identity migration REMINTS features with exactly this code
+    rather than a parallel implementation. Feature identity binds to the source
+    dataset, so a migrated dataset must produce numerically identical values
+    under a different feature fingerprint — provable only if both paths share
+    one algorithm.
+    """
     out: list[F.FeatureValue] = []
-    did, content_fp = ds.dataset_id(), ds.fingerprint()
-    manifest_fp = ds.manifest_fingerprint()
-    for (_symbol, _tf), series in F.group_series(ds.bars).items():
+    for (_symbol, _tf), series in F.group_series(bars).items():
         for i in range(len(series)):
-            v = F.compute_return_nbar(series, i, lookback, dataset_id=did,
-                                      fingerprint=content_fp,
-                                      manifest_fingerprint=manifest_fp)
+            v = F.compute_return_nbar(series, i, lookback, dataset_id=dataset_id,
+                                      fingerprint=fingerprint,
+                                      manifest_fingerprint=manifest_fingerprint)
             if v:
                 out.append(v)
     return out
 
 
+def build_features(ds: CanonicalDataset, *, lookback: int = 3) -> list[F.FeatureValue]:
+    """Derive features with provenance taken FROM the dataset, not from args."""
+    return features_from_bars(ds.bars, dataset_id=ds.dataset_id(),
+                              fingerprint=ds.fingerprint(),
+                              manifest_fingerprint=ds.manifest_fingerprint(),
+                              lookback=lookback)
+
+
 def build_historical_research_dataset(
-    request: DatasetRequest, fetcher: Callable[[str, str, str], tuple[Any, int]],
+    request: DatasetRequest, source: Any,
     *, root: str = ".", dry_run: bool = False, lookback: int = 3,
 ) -> dict:
     """The full governed chain. Returns identities and artifact paths."""
     if dry_run:
         return plan_request(request)
 
-    acq = acquire(request, fetcher, root=root)
+    acq = acquire(request, source, root=root)
     ds = build_canonical_dataset(acq["bars_by_date"], request=request,
-                                 provider_failures=acq["provider_failures"])
+                                 provider_failures=acq["provider_failures"],
+                                 normalization_failures=acq["normalization_failures"])
 
     manifest = dataset_manifest(ds)
     rejects = rejection_report(ds)
     content_fp, manifest_fp = ds.fingerprint(), ds.manifest_fingerprint()
 
     # CONTENT: canonical bars only, deduplicated across research requests.
+    canonical_rows = ST.bars_to_rows(ds.bars)
     ST.write_snapshot(ST.DATASETS, content_fp, {
-        "canonical_bars.json": ST.bars_to_rows(ds.bars),
-        "content_manifest.json": {
-            "schema_version": SCHEMA_VERSION,
-            "dataset_fingerprint": content_fp,
-            "timeframe": ds.timeframe,
-            "adjustment_state": ds.adjustment_state,
-            "bar_count": len(ds.bars),
-        },
+        "canonical_bars.json": canonical_rows,
+        "content_manifest.json": ST.canonical_content_manifest(
+            canonical_rows, identity=content_fp, timeframe=ds.timeframe,
+            adjustment_state=ds.adjustment_state),
     }, root=root)
 
     # MANIFEST: the research interpretation. Two requests producing identical
@@ -187,6 +222,13 @@ def build_historical_research_dataset(
         "request_manifest.json": {
             **request.to_dict(),
             "calendar_fingerprint": calendar_fingerprint(),
+            # The full calendar IDENTITY, not just its hash. The manifest
+            # fingerprint is computed over this object, so without it a later
+            # remint could only reproduce the manifest by consulting the LIVE
+            # calendar — which silently reinterprets archived research the first
+            # time the calendar changes. Persisting it keeps an old manifest
+            # reproducible under the semantics it was actually built with.
+            "calendar_identity": _calendar_identity(),
             "canonical_content_fingerprint": content_fp,
             "manifest_fingerprint": manifest_fp,
             # Raw CONTENT fingerprints are stable across reruns and belong to
@@ -255,7 +297,11 @@ def build_historical_research_dataset(
         "manifest_fingerprint": manifest_fp,
         "adjustment_state": ds.adjustment_state,
         "acquisition_event_ids": [a.get("acquisition_event_id") for a in acq["acquisitions"]],
-        "raw_content_fingerprints": [a.get("raw_payload_hash") for a in acq["acquisitions"]],
+        # Only real raw evidence. A provider failure has no payload, so a None
+        # here would be indexed by callers as if it were a content id.
+        "raw_content_fingerprints": [a["raw_payload_hash"] for a in acq["acquisitions"]
+                                     if a.get("raw_payload_hash")],
+        "provider_provenance": acq.get("provider_provenance"),
         "canonical_snapshot_path": f"outputs/backtest/intraday/datasets/content/{content_fp}",
         "dataset_manifest_path": f"outputs/backtest/intraday/datasets/manifests/{manifest_fp}",
         "feature_observations": len(values),
@@ -263,6 +309,7 @@ def build_historical_research_dataset(
         "feature_snapshot_path": f"outputs/backtest/intraday/features/content/{feature_fp}",
         "feature_verification": ST.verify_feature_snapshot(feature_fp, root=root),
         "canonical_verification": verification,
+        "provenance_verification": ST.verify_dataset_provenance(manifest_fp, root=root),
         "rejections": rejects,
         "strategy_validation_allowed": False,
     }

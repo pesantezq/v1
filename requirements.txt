@@ -42,3 +42,12 @@ markdown>=3.5,<4.0
 # crowd_radar.finbert.allow_download=true or model is pre-cached)
 torch>=2.0.0
 transformers>=4.30.0
+
+# Authoritative NYSE (XNYS) exchange calendar for the Intraday Strategy Lab
+# (research-only, HISTORICAL namespace). Apache-2.0. Chosen over
+# pandas_market_calendars because that package DEPENDS ON this one — a strict
+# superset — so this is the smaller maintained dependency that satisfies the
+# contract. Replaces a hand-maintained 2025-2027 holiday table; the lab falls
+# back to that table if this is absent, and records the backend in the calendar
+# identity so a fallback dataset is never mistaken for an authoritative one.
+exchange_calendars>=4.13,<5

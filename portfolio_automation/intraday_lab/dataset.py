@@ -31,7 +31,13 @@ from portfolio_automation.intraday_lab.validation import (
 )
 
 SCHEMA_VERSION = "2"
-FINGERPRINT_SCHEMA = "intraday_canonical_v2"
+# v3 (2026-08-09): adds bar_end_at and known_at. v2 hashed only OHLCV +
+# bar_start_at, so two datasets whose bars became knowable at DIFFERENT times
+# shared one identity. A dataset that publishes a bar 60s earlier confers a
+# look-ahead advantage and is NOT research-equivalent -- verified before the
+# change. Temporal knowability is the core PIT contract; it must be part of
+# canonical identity, not metadata beside it.
+FINGERPRINT_SCHEMA = "intraday_canonical_v3"
 
 ADMITTED = "ADMITTED"
 REJECTED_MISSING_BARS = "REJECTED_MISSING_BARS"
@@ -42,6 +48,7 @@ REJECTED_EXACT_DUPLICATE = "REJECTED_EXACT_DUPLICATE"
 REJECTED_IDENTITY_MISMATCH = "REJECTED_IDENTITY_MISMATCH"
 REJECTED_PROVIDER_ERROR = "REJECTED_PROVIDER_ERROR"
 REJECTED_UNEXPECTED_PROVIDER_RESULT = "REJECTED_UNEXPECTED_PROVIDER_RESULT"
+REJECTED_NORMALIZATION_ERROR = "REJECTED_NORMALIZATION_ERROR"
 NOT_A_TRADING_SESSION = "NOT_A_TRADING_SESSION"
 
 # How the calendar resolved a REQUESTED date. Distinct from admission: a
@@ -63,24 +70,42 @@ def _calendar_identity() -> dict:
     Transient generation timestamps are excluded.
     """
     from portfolio_automation.intraday_lab import calendar as _cal
-    return {
-        "exchange": _cal.EXCHANGE,
-        "timezone": str(_cal.EXCHANGE_TZ),
-        "source": _cal.CALENDAR_SOURCE,
-        "schema_version": _cal.SCHEMA_VERSION,
-        "coverage_from": _cal.HOLIDAY_COVERAGE_FROM.isoformat(),
-        "coverage_through": _cal.HOLIDAY_COVERAGE_THROUGH.isoformat(),
-        "holiday_table": sorted(d.isoformat() for d in _cal.NYSE_HOLIDAYS),
-        "early_close_table": sorted(d.isoformat() for d in _cal.EARLY_CLOSES),
-        "early_close_time_et": _cal.EARLY_CLOSE_TIME.isoformat(),
-        "regular_open_et": _cal.REGULAR_OPEN.isoformat(),
-        "regular_close_et": _cal.REGULAR_CLOSE.isoformat(),
-    }
+    # Delegated so there is ONE definition of calendar meaning. Enumerating the
+    # holiday/early-close tables here worked only while they were hand-written;
+    # an authoritative calendar spans thousands of sessions, so identity is now
+    # a digest of the schedule itself (see calendar.calendar_identity).
+    return _cal.calendar_identity()
 
 
 def calendar_fingerprint() -> str:
     return hashlib.sha256(
         json.dumps(_calendar_identity(), separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:32]
+
+
+def manifest_fingerprint_from_parts(*, content_fingerprint: str,
+                                    request: dict | None, calendar: dict,
+                                    timeframe: str, adjustment_state: str,
+                                    sessions: list) -> str:
+    """The manifest identity algorithm, as a pure function of its parts.
+
+    Extracted so that reminting a manifest during identity migration uses THE
+    SAME algorithm as minting one, rather than a hand-rolled copy that could
+    drift. `calendar` is a parameter, not a lookup: a remint must reproduce the
+    calendar meaning the original manifest was built under, never silently
+    reinterpret an archived manifest under a newer calendar.
+    """
+    payload = {
+        "schema": "intraday_manifest_v1",
+        "content_fingerprint": content_fingerprint,
+        "request": request,
+        "calendar": calendar,
+        "timeframe": timeframe,
+        "adjustment_state": adjustment_state,
+        "sessions": sessions,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()[:32]
 
 
@@ -258,19 +283,14 @@ class CanonicalDataset:
         byte-identical bars yet answer different research questions. Experiments
         bind here; storage dedupes on the content fingerprint.
         """
-        payload = {
-            "schema": "intraday_manifest_v1",
-            "content_fingerprint": self.fingerprint(),
-            "request": self.request.to_dict() if self.request else None,
-            "calendar": _calendar_identity(),
-            "timeframe": self.timeframe,
-            "adjustment_state": self.adjustment_state,
-            "sessions": [[r.symbol, r.market_date.isoformat(), r.admission_status]
-                         for r in self.reconciliations],
-        }
-        return hashlib.sha256(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-        ).hexdigest()[:32]
+        return manifest_fingerprint_from_parts(
+            content_fingerprint=self.fingerprint(),
+            request=self.request.to_dict() if self.request else None,
+            calendar=_calendar_identity(),
+            timeframe=self.timeframe,
+            adjustment_state=self.adjustment_state,
+            sessions=[[r.symbol, r.market_date.isoformat(), r.admission_status]
+                      for r in self.reconciliations])
 
     @property
     def admitted(self) -> tuple[SessionReconciliation, ...]:
@@ -313,8 +333,16 @@ def canonical_fingerprint(bars: Iterable[IntradayBar], *, timeframe: str,
     reproduce the fingerprint, or every experiment is irreproducible by
     construction.
     """
+    # `source` / `source_endpoint` are deliberately EXCLUDED from canonical
+    # identity: they describe where observations came from, not what they mean
+    # for research. Two providers reporting the identical bar with identical
+    # knowability yield the same canonical research object. Source semantics are
+    # not lost -- they are part of RAW content identity (storage.raw_payload_hash)
+    # and of the acquisition event, so a source change still changes an
+    # authoritative upstream identity and is fully auditable.
     rows = sorted(
         ([b.symbol, b.timeframe, b.bar_start_at.isoformat(),
+          b.bar_end_at.isoformat(), b.known_at.isoformat(),
           b.open, b.high, b.low, b.close, b.volume] for b in bars),
         key=lambda r: (r[0], r[1], r[2]))
     payload = {"schema": FINGERPRINT_SCHEMA, "timeframe": timeframe,
@@ -398,6 +426,7 @@ def build_canonical_dataset(
     request: "DatasetRequest | None" = None,
     timeframe: str = "5min", adjustment_state: str | None = None,
     provider_failures: set[str] | None = None,
+    normalization_failures: set[str] | None = None,
 ) -> CanonicalDataset:
     """Reconcile EVERY requested session; admit only exact matches.
 
@@ -440,7 +469,22 @@ def build_canonical_dataset(
         # A provider outage is NOT a market-data defect. Collapsing it into
         # REJECTED_MISSING_BARS would blame the market for our own failed call
         # and destroy the causal trail.
-        if (provider_failures and symbol in provider_failures
+        if (normalization_failures and symbol in normalization_failures
+                and rec.admission_status == REJECTED_MISSING_BARS):
+            # The provider answered; WE could not interpret it. Reporting this
+            # as missing market data would blame the market for our own schema
+            # break, and would hide a provider-format change entirely.
+            rec = SessionReconciliation(
+                symbol=rec.symbol, market_date=rec.market_date,
+                timeframe=rec.timeframe, session_type=rec.session_type,
+                expected_count=rec.expected_count, observed_count=rec.observed_count,
+                missing_timestamps=rec.missing_timestamps,
+                unexpected_timestamps=(), conflicting_duplicates=(),
+                admission_status=REJECTED_NORMALIZATION_ERROR,
+                rejection_reasons=(
+                    f"provider returned rows for {symbol} but normalization "
+                    f"failed — response schema drift, not absent market data",))
+        elif (provider_failures and symbol in provider_failures
                 and rec.admission_status == REJECTED_MISSING_BARS):
             rec = SessionReconciliation(
                 symbol=rec.symbol, market_date=rec.market_date,
