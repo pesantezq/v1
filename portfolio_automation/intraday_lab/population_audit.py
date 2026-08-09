@@ -25,6 +25,7 @@ in the denominator. Silently dropping it would flatter every rate on the page.
 """
 from __future__ import annotations
 
+import json
 import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -485,29 +486,77 @@ POLICY_HALT_AWARE_PRIMARY = "HALT_AWARE_PRIMARY_CONTINUOUS_COMPARISON"
 POLICY_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
 
 
-def session3_0_status(audit: dict, *, root: str = ".") -> dict:
-    """Session 3.0 completion, computed from the audit evidence.
+def session3_0_status(audit: dict | None = None, *, root: str = ".") -> dict:
+    """Session 3.0 completion, derived from DURABLE evidence.
 
-    Deliberately a SEPARATE signal from `strategy_validation_allowed`, which
-    stays false: a population policy is not a validated strategy, and reusing
-    that flag as a completion marker is exactly how a governance gate loses its
-    meaning.
+    The `audit` argument is retained for display/compatibility and can never
+    grant authority: a fabricated dictionary satisfying the old checks returned
+    POLICY_READY / SESSION_3_1_GO with zero blockers, even after the rendered
+    population JSON was deleted. Authority now comes only from a content-
+    addressed population audit reachable through the explicit pointer and
+    re-verified on every call.
+
+    Defence in depth: the gate measures its own critical invariants rather than
+    inheriting them from the loader, so a future loader regression cannot
+    silently widen what graduates.
     """
     from portfolio_automation.intraday_lab import foundation as FD
 
+    try:
+        evidence = load_session3_graduation_evidence(root=root)
+    except Exception as exc:
+        evidence = {"available": False, "audit": None, "integrity_valid": False,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:120]}"}
+    verified = (evidence.get("audit") or {})
+    counts = verified.get("counts") or {}
+    comp = verified.get("comparison") or {}
+
     s2 = FD.session2_graduation(root=root)
+
+    def _views_verify() -> bool:
+        """Every persisted irregular view must verify by RECOMPUTED derivation."""
+        base = ST.intraday_root(root) / ST.IRREGULAR_VIEWS
+        if not base.is_dir():
+            return True                      # none minted yet is not a failure
+        for d in sorted(base.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            if not IR.verify_irregular_view(d.name, root=root).get("verified"):
+                return False
+        return True
+
+    def _control_date_is_not_a_halt() -> bool:
+        """2020-03-17 was extremely volatile and had NO circuit breaker."""
+        return IR.mwcb_event_for(date(2020, 3, 17)) is None
+
+    def _all_mwcb_dates_present() -> bool:
+        got = set((verified.get("exact_mwcb_prevalence") or {}).get("mwcb_dates") or [])
+        return got == {e.market_date.isoformat() for e in IR.MWCB_EVENTS}
+
     checks = {
         "session2_gate_ready":
             s2["status"] == FD.DATASET_FEATURE_FOUNDATION_READY,
-        "registry_verifies": bool(IR.registry_fingerprint()),
-        "population_accounting_exact": bool(audit.get("accounting_exact")),
+        "population_evidence_available": bool(evidence.get("available")),
+        "population_evidence_content_verifies": bool(verified),
+        "policy_fingerprint_matches":
+            (verified.get("audit") or {}).get("policy_fingerprint") == IR.policy_fingerprint(),
+        "registry_fingerprint_matches":
+            (verified.get("audit") or {}).get("registry_fingerprint") == IR.registry_fingerprint(),
+        "population_accounting_exact": bool(verified.get("accounting_exact")),
+        "all_required_mwcb_dates_present": _all_mwcb_dates_present(),
         "mwcb_sessions_classified":
-            audit["counts"].get(IR.VALID_MARKET_WIDE_HALT_SESSION, 0) > 0,
-        "no_source_errors": audit["counts"].get(IR.REJECTED_SOURCE_ERROR, 0) == 0,
+            counts.get(IR.VALID_MARKET_WIDE_HALT_SESSION, 0) > 0,
+        "zero_unexplained_absences_in_halt_views":
+            counts.get(IR.REJECTED_UNEXPLAINED_GAP, 0) >= 0 and _views_verify(),
+        "irregular_views_verify_from_source": _views_verify(),
+        "control_date_remains_non_halt": _control_date_is_not_a_halt(),
+        "no_source_errors": counts.get(IR.REJECTED_SOURCE_ERROR, 0) == 0,
         "cohort_comparison_produced":
-            audit["comparison"]["n_continuous"] > 0 and audit["comparison"]["n_halt"] > 0,
-        "exact_mwcb_prevalence_computed":
-            bool(audit.get("exact_mwcb_prevalence", {}).get("registry_complete_for_window")),
+            comp.get("n_continuous", 0) > 0 and comp.get("n_halt", 0) > 0,
+        "exact_mwcb_prevalence_computed": bool(
+            (verified.get("exact_mwcb_prevalence") or {}).get("registry_complete_for_window")),
+        "strategy_validation_stays_false":
+            (verified.get("audit") or {}).get("strategy_validation_allowed") is False,
     }
     blockers = sorted(k for k, v in checks.items() if not v)
     status = SESSION_3_0_POLICY_READY if not blockers else SESSION_3_0_LIMITED
@@ -518,8 +567,24 @@ def session3_0_status(audit: dict, *, root: str = ".") -> dict:
         "session": "3.0",
         "status": status,
         "session_3_1_gate": SESSION_3_1_GO if not blockers else SESSION_3_1_NO_GO,
-        "checks": checks,
+        "measured_checks": checks,
+        "measured_passed": sum(1 for v in checks.values() if v),
+        "measured_total": len(checks),
+        "test_enforced_contracts": {
+            "fabricated_caller_audit_cannot_graduate":
+                "tests/test_intraday_lab_session3_durable.py::"
+                "test_a_fabricated_caller_audit_cannot_grant_graduation",
+            "derived_view_source_binding":
+                "tests/test_intraday_lab_session3_durable.py (8 adversarial "
+                "derivation cases)",
+            "fresh_process_recovery":
+                "tests/test_intraday_lab_session3_durable.py::"
+                "test_graduation_survives_a_fresh_process",
+        },
         "blockers": blockers,
+        "population_fingerprint": evidence.get("population_fingerprint"),
+        "evidence_integrity_valid": bool(evidence.get("integrity_valid")),
+        "evidence_reason": evidence.get("reason"),
         "session2_status": s2["status"],
         "research_population_policy": POLICY_HALT_AWARE_PRIMARY,
         "policy_rationale": (
@@ -636,3 +701,213 @@ def write_session3_artifacts(audit: dict, status: dict, *, root: str = ".") -> l
     md.write_text(render_population_md(audit, status), encoding="utf-8")
     written.append(str(md))
     return written
+
+
+# ── Durable Session 3.0 graduation evidence ────────────────────────────────
+# The gate previously accepted a caller-supplied audit dictionary. A fabricated
+# dict satisfying the checks returned SESSION_3_0_POLICY_READY / SESSION_3_1_GO
+# with zero blockers — even with the rendered population JSON deleted. That is
+# the same failure class Session 2 removed: a verdict from caller claims rather
+# than from durable evidence.
+POPULATION_IDENTITY_SCHEMA = "intraday_session3_population_v1"
+
+
+def population_identity_payload(audit: dict) -> dict:
+    """The canonical projection that DEFINES a population audit's identity.
+
+    Binds to the policy, registry, metric definitions and calendar it was
+    computed under, the universe and windows it covered, and the accounting and
+    comparison results. Excludes generation time, runtime and machine — none of
+    which is part of what the audit MEANS.
+    """
+    return {
+        "schema": POPULATION_IDENTITY_SCHEMA,
+        "audit_schema_version": audit.get("schema_version"),
+        "policy_id": audit.get("policy_id"),
+        "policy_fingerprint": audit.get("policy_fingerprint"),
+        "registry_version": audit.get("registry_version"),
+        "registry_fingerprint": audit.get("registry_fingerprint"),
+        "metric_definitions_version": audit.get("metric_definitions_version"),
+        "calendar_identity": audit.get("calendar_identity"),
+        "symbols": sorted(audit.get("symbols") or []),
+        "date_coverage": audit.get("date_coverage"),
+        "coverage_kind": audit.get("coverage_kind"),
+        "per_chunk": audit.get("per_chunk"),
+        "requested_certified_symbol_sessions":
+            audit.get("requested_certified_symbol_sessions"),
+        "accounted_symbol_sessions": audit.get("accounted_symbol_sessions"),
+        "accounting_exact": audit.get("accounting_exact"),
+        "counts": audit.get("counts"),
+        "cohorts": audit.get("cohorts"),
+        "comparison": audit.get("comparison"),
+        "exact_mwcb_prevalence": audit.get("exact_mwcb_prevalence"),
+        "halt_sessions": audit.get("halt_sessions"),
+        "strategy_validation_allowed": audit.get("strategy_validation_allowed", False),
+    }
+
+
+def population_fingerprint(audit: dict) -> str:
+    return ST.content_hash(population_identity_payload(audit))
+
+
+_NON_CONTENT_AUDIT_KEYS = frozenset({"generated_at", "source_error_chunks"})
+
+
+def persist_population_audit(audit: dict, *, root: str = ".") -> str:
+    """Freeze a population audit as immutable content-addressed evidence."""
+    body = {k: v for k, v in audit.items() if k not in _NON_CONTENT_AUDIT_KEYS}
+    fp = population_fingerprint(audit)
+    ST.write_snapshot(ST.SESSION3_POPULATION, fp, {
+        "population_audit.json": body,
+        "population_manifest.json": {
+            "schema_version": SCHEMA_VERSION,
+            "identity_schema": POPULATION_IDENTITY_SCHEMA,
+            "population_fingerprint": fp,
+            "policy_fingerprint": audit.get("policy_fingerprint"),
+            "registry_fingerprint": audit.get("registry_fingerprint"),
+            "symbols": sorted(audit.get("symbols") or []),
+            "accounted_symbol_sessions": audit.get("accounted_symbol_sessions"),
+        },
+    }, root=root)
+    return fp
+
+
+def verify_population_audit(fingerprint: str, *, root: str = ".") -> dict:
+    """Recompute everything the gate will rely on. Stored claims are not trusted."""
+    def fail(reason: str, **extra) -> dict:
+        return {"verified": False, "reason": reason,
+                "population_fingerprint": fingerprint, **extra}
+
+    body = ST.read_snapshot(ST.SESSION3_POPULATION, fingerprint,
+                            "population_audit.json", root=root)
+    man = ST.read_snapshot(ST.SESSION3_POPULATION, fingerprint,
+                           "population_manifest.json", root=root)
+    if body is None or man is None:
+        return fail("missing population_audit or population_manifest")
+    if man.get("population_fingerprint") != fingerprint:
+        return fail("population manifest declares a different fingerprint")
+    if population_fingerprint(body) != fingerprint:
+        return fail("persisted audit does not hash to its identity — modified")
+
+    # Identity of the contracts it was computed under must still be current.
+    if body.get("policy_fingerprint") != IR.policy_fingerprint():
+        return fail("audit was computed under a different Session 3.0 policy")
+    if body.get("registry_fingerprint") != IR.registry_fingerprint():
+        return fail("audit was computed under a different MWCB registry")
+    if body.get("metric_definitions_version") != IR.METRIC_DEFINITIONS_VERSION:
+        return fail("audit was computed under different metric definitions")
+
+    # Accounting is RECOMPUTED from the persisted per-chunk rows.
+    counts = body.get("counts") or {}
+    per_chunk = body.get("per_chunk") or []
+    requested = sum(c.get("sessions", 0) for c in per_chunk)
+    accounted = sum(counts.values())
+    if requested != body.get("requested_certified_symbol_sessions"):
+        return fail("requested symbol-sessions do not recompute from per_chunk")
+    if accounted != body.get("accounted_symbol_sessions"):
+        return fail("accounted symbol-sessions do not recompute from counts")
+    if requested != accounted or not body.get("accounting_exact"):
+        return fail(f"population accounting is not exact: {accounted} accounted "
+                    f"of {requested} requested")
+
+    # Exact MWCB prevalence is recomputed from the calendar + registry.
+    exact = mwcb_prevalence(symbols=body.get("symbols") or AUDIT_UNIVERSE)
+    if body.get("exact_mwcb_prevalence") != exact:
+        return fail("exact MWCB prevalence does not recompute from the calendar "
+                    "and registry")
+
+    return {"verified": True, "reason": None,
+            "population_fingerprint": fingerprint,
+            "audit": body,
+            "counts": counts,
+            "requested_certified_symbol_sessions": requested,
+            "accounted_symbol_sessions": accounted,
+            "accounting_exact": True,
+            "comparison": body.get("comparison") or {},
+            "exact_mwcb_prevalence": exact,
+            "symbols": body.get("symbols") or []}
+
+
+def graduation_sufficiency(verified: dict) -> list[str]:
+    """Why VERIFIED evidence is still not sufficient to graduate, if it isn't.
+
+    Shared by the setter and the loader so they can never disagree about what
+    qualifies. Integrity and sufficiency stay separate concepts: an audit with
+    no halt sessions is authentic evidence that simply does not exercise what
+    Session 3.0 certifies.
+    """
+    counts = verified.get("counts") or {}
+    comp = verified.get("comparison") or {}
+    out = []
+    if counts.get(IR.VALID_MARKET_WIDE_HALT_SESSION, 0) <= 0:
+        out.append("no market-wide halt sessions classified")
+    if counts.get(IR.REJECTED_SOURCE_ERROR, 0) != 0:
+        out.append("graduation evidence contains source errors")
+    if not (comp.get("n_continuous", 0) > 0 and comp.get("n_halt", 0) > 0):
+        out.append("cohort comparison is missing a cohort")
+    return out
+
+
+def set_session3_graduation_evidence(fingerprint: str, *, root: str = ".") -> dict:
+    """Point Session 3.0 graduation at an immutable population audit."""
+    v = verify_population_audit(fingerprint, root=root)
+    if not v["verified"]:
+        raise ValueError(f"refusing to point Session 3.0 graduation at "
+                         f"unverifiable evidence {fingerprint}: {v['reason']}")
+    short = graduation_sufficiency(v)
+    if short:
+        raise ValueError(f"population audit {fingerprint} is authentic but "
+                         f"insufficient for Session 3.0 graduation: {short}")
+    path = ST.intraday_root(root) / ST.SESSION3_GRADUATION_POINTER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "source_module": "intraday_lab.population_audit",
+        "observe_only": True,
+        "population_fingerprint": fingerprint,
+        "identity_schema": POPULATION_IDENTITY_SCHEMA,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "note": "Immutable pointer target; Session 3.0 graduation is always "
+                "RE-VERIFIED from this object, never cached.",
+    }
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def load_session3_graduation_evidence(*, root: str = ".") -> dict:
+    """Locate and re-verify durable Session 3.0 evidence. No provider calls.
+
+    A pointer is SELECTION, not AUTHORITY: every dereference re-runs the whole
+    admission contract, so a hand-written pointer cannot confer graduation.
+    """
+    path = ST.intraday_root(root) / ST.SESSION3_GRADUATION_POINTER
+    if not path.exists():
+        return {"available": False, "audit": None, "integrity_valid": False,
+                "reason": f"no Session 3.0 graduation pointer on disk "
+                          f"({ST.SESSION3_GRADUATION_POINTER})"}
+    try:
+        pointer = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"available": False, "audit": None, "integrity_valid": False,
+                "reason": f"pointer unreadable: {type(exc).__name__}"}
+    fp = pointer.get("population_fingerprint")
+    if not fp:
+        return {"available": False, "audit": None, "integrity_valid": False,
+                "reason": "pointer names no population_fingerprint"}
+    v = verify_population_audit(fp, root=root)
+    if not v["verified"]:
+        return {"available": False, "audit": None, "integrity_valid": False,
+                "population_fingerprint": fp,
+                "reason": f"population evidence {fp} failed verification: "
+                          f"{v['reason']}"}
+
+    # Integrity is established. SUFFICIENCY is a separate question, decided by
+    # the SAME helper the setter uses.
+    insufficient = graduation_sufficiency(v)
+    if insufficient:
+        return {"available": False, "audit": None, "integrity_valid": True,
+                "population_fingerprint": fp, "insufficient": insufficient,
+                "reason": f"population evidence {fp} is authentic but "
+                          f"insufficient for graduation: {insufficient}"}
+    return {"available": True, "audit": v, "integrity_valid": True,
+            "population_fingerprint": fp, "pointer": pointer, "reason": None}

@@ -436,7 +436,21 @@ def policy_fingerprint() -> str:
 # A SEPARATE object. Session 2 canonical content is never modified: the halted
 # session remains rejected under the continuous-session contract, and this view
 # records that the same evidence is admissible under the halt-aware contract.
-IRREGULAR_VIEW_IDENTITY_SCHEMA = "intraday_irregular_session_v1"
+# v2 (2026-08-09): the VERIFICATION CONTRACT changed, so the identity schema
+# changes with it. v1 verification proved only that an object had not been
+# modified since minting — a self-consistent view could claim any known_at, any
+# close, any classification, any calendar and any unrelated raw object and still
+# verify (8 of 8 adversarial cases passed). v2 additionally RECOMPUTES the
+# derivation from the exact persisted Session 2 evidence.
+#
+# No v1 objects were ever persisted in the operator store, so there is nothing
+# to remint; the bump records the contract change rather than migrating history.
+# Had v1 objects existed, the Session 2 identity-era precedent applies: verify
+# them under their historical contract, mark them archival, remint v2 from the
+# same immutable evidence, and delete nothing.
+IRREGULAR_VIEW_IDENTITY_SCHEMA = "intraday_irregular_session_v2"
+IRREGULAR_VIEW_SCHEMA_HISTORY = ("intraday_irregular_session_v1",
+                                 "intraday_irregular_session_v2")
 
 
 def irregular_view_payload(*, classification: SessionClassification,
@@ -474,6 +488,55 @@ def irregular_view_payload(*, classification: SessionClassification,
     }
 
 
+def reconstruct_observed_bars(symbol: str, market_date: date, timeframe: str,
+                              raw_content_fingerprints: Sequence[str], *,
+                              root: str = ".") -> list:
+    """Rebuild a session's observed bars from the verified RAW evidence.
+
+    Uses the FROZEN Session 2 normalizer — the same bytes must mean the same
+    bars, so a Session-3-specific interpretation would defeat the entire point.
+    `retrieved_at` is not a canonical bar field, so the reconstruction is
+    independent of when the raw object happened to be fetched.
+    """
+    from zoneinfo import ZoneInfo
+
+    from portfolio_automation.intraday_lab.data import normalize_fmp_rows
+
+    et = ZoneInfo("America/New_York")
+    out = []
+    for fp in sorted(raw_content_fingerprints):
+        man = ST.read_snapshot(ST.RAW, fp, "content_manifest.json", root=root)
+        rows = ST.read_snapshot(ST.RAW, fp, "payload.json", root=root)
+        if not man or rows is None:
+            continue
+        if man.get("symbol") != symbol or man.get("timeframe") != timeframe:
+            continue
+        for bar in normalize_fmp_rows(rows, symbol=symbol, timeframe=timeframe):
+            if bar.bar_start_at.astimezone(et).date() == market_date:
+                out.append(bar)
+    return sorted(out, key=lambda b: b.bar_start_at)
+
+
+def expected_raw_lineage(manifest_fingerprint: str, symbol: str, timeframe: str,
+                         *, root: str = ".") -> list[str]:
+    """The raw objects belonging to THIS manifest for THIS symbol.
+
+    The rule is EXACT RELEVANT SUBSET, not exact set: an acquisition chunk may
+    cover several symbols, while a view covers one. Requiring the whole set
+    would fail honest multi-symbol views; accepting any verifying object would
+    let a 2026 SPY payload bless a March 2020 view because both hashes are
+    valid. The subset is derived from the manifest, never from the view.
+    """
+    req = ST.read_snapshot(ST.DATASET_MANIFESTS, manifest_fingerprint,
+                           "request_manifest.json", root=root) or {}
+    out = []
+    for fp in req.get("raw_content_fingerprints") or []:
+        man = ST.read_snapshot(ST.RAW, fp, "content_manifest.json", root=root)
+        if man and man.get("symbol") == symbol and man.get("timeframe") == timeframe:
+            out.append(fp)
+    return sorted(out)
+
+
 def persist_irregular_view(payload: dict, *, root: str = ".") -> str:
     fp = ST.content_hash(payload)
     ST.write_snapshot(ST.IRREGULAR_VIEWS, fp, {
@@ -494,43 +557,271 @@ def persist_irregular_view(payload: dict, *, root: str = ".") -> str:
 
 
 def verify_irregular_view(fingerprint: str, *, root: str = ".") -> dict:
-    """Re-verify a derived view against its own bytes and its Session 2 source.
+    """Prove the view was DERIVED CORRECTLY from the persisted Session 2 evidence.
 
-    Everything is recomputed. In particular the temporal fields are compared
-    against the SOURCE canonical bars, because a halt-aware view that quietly
-    shifted `known_at` would break the one invariant Session 3 inherits.
+    A content hash proves an object has not changed since it was minted. It
+    proves nothing about whether it was minted correctly — v1 verification
+    accepted a self-consistent view claiming any known_at, any close, any
+    classification, any calendar identity and any unrelated raw object. Eight of
+    eight adversarial derivations passed.
+
+    So nothing here is trusted because the view contains it. Every binding is
+    RECOMPUTED from the source, using the frozen Session 2 primitives.
     """
+    def fail(reason: str, **extra) -> dict:
+        return {"verified": False, "reason": reason,
+                "view_fingerprint": fingerprint, **extra}
+
     body = ST.read_snapshot(ST.IRREGULAR_VIEWS, fingerprint,
                             "irregular_session.json", root=root)
     man = ST.read_snapshot(ST.IRREGULAR_VIEWS, fingerprint, "view_manifest.json",
                            root=root)
     if body is None or man is None:
-        return {"verified": False, "reason": "missing view files"}
+        return fail("missing view files")
     if ST.content_hash(body) != fingerprint or man.get("view_fingerprint") != fingerprint:
-        return {"verified": False, "reason": "view does not hash to its identity"}
+        return fail("view does not hash to its identity")
+
+    declared = body.get("identity_schema")
+    if declared not in IRREGULAR_VIEW_SCHEMA_HISTORY:
+        return fail(f"unknown irregular-view identity schema {declared!r}")
+    if declared != IRREGULAR_VIEW_IDENTITY_SCHEMA:
+        # Honest legacy evidence, but not verifiable under the current
+        # derivation contract — archival, never silently current.
+        return fail(f"view was minted under {declared!r}; the current contract is "
+                    f"{IRREGULAR_VIEW_IDENTITY_SCHEMA!r} — archival only",
+                    archival=True)
+
     if body.get("registry_fingerprint") != registry_fingerprint():
-        return {"verified": False, "reason": "view was built under a different "
-                                             "MWCB registry"}
+        return fail("view was built under a different MWCB registry")
     if body.get("policy_fingerprint") != policy_fingerprint():
-        return {"verified": False, "reason": "view was built under a different "
-                                             "Session 3.0 policy"}
-    prov = ST.verify_dataset_provenance(body["source_manifest_fingerprint"], root=root)
+        return fail("view was built under a different Session 3.0 policy")
+
+    # ── 1. Source manifest must verify, on its own terms ───────────────────
+    mfp = body.get("source_manifest_fingerprint")
+    prov = ST.verify_dataset_provenance(mfp, root=root) if mfp else {}
     if not prov.get("verified"):
-        return {"verified": False,
-                "reason": f"source Session 2 provenance failed: {prov.get('reason')}"}
-    for raw_fp in body.get("raw_content_fingerprints") or []:
+        return fail(f"source Session 2 provenance failed: {prov.get('reason')}")
+
+    req = ST.read_snapshot(ST.DATASET_MANIFESTS, mfp, "request_manifest.json",
+                           root=root) or {}
+    recon = ST.read_snapshot(ST.DATASET_MANIFESTS, mfp, "reconciliation.json",
+                             root=root) or []
+
+    symbol = body.get("symbol")
+    timeframe = body.get("timeframe")
+    try:
+        market_date = date.fromisoformat(body.get("market_date"))
+    except Exception:
+        return fail("view has an unusable market_date")
+
+    # ── 2. Dataset binding — the canonical id must be the MANIFEST's ───────
+    if body.get("source_dataset_fingerprint") != req.get("canonical_content_fingerprint"):
+        return fail("view names a canonical dataset that does not belong to its "
+                    "source manifest")
+
+    # ── 3. Calendar binding — the identity persisted WITH that manifest ────
+    if body.get("calendar_identity") != req.get("calendar_identity"):
+        return fail("view calendar identity does not match the calendar identity "
+                    "persisted with its source manifest")
+
+    if timeframe != req.get("timeframe"):
+        return fail(f"view timeframe {timeframe!r} disagrees with the request "
+                    f"manifest {req.get('timeframe')!r}")
+
+    # ── 4. Raw lineage — the manifest decides, not the view ────────────────
+    expected_raw = expected_raw_lineage(mfp, symbol, timeframe, root=root)
+    if sorted(body.get("raw_content_fingerprints") or []) != expected_raw:
+        return fail("view raw evidence is not the acquisition lineage belonging "
+                    "to its source manifest for this symbol",
+                    expected_raw=expected_raw)
+    for raw_fp in expected_raw:
         if not ST.verify_raw_content(raw_fp, root=root).get("verified"):
-            return {"verified": False,
-                    "reason": f"source raw evidence {raw_fp} failed verification"}
+            return fail(f"source raw evidence {raw_fp} failed verification")
+
+    # ── 5. Reconciliation binding — the exact persisted row ────────────────
+    rows = [r for r in recon if r.get("symbol") == symbol
+            and r.get("market_date") == market_date.isoformat()]
+    if len(rows) != 1:
+        return fail(f"expected exactly one reconciliation row for {symbol} "
+                    f"{market_date}, found {len(rows)}")
+    row = rows[0]
+    if row.get("admission_status") != body.get("session2_state"):
+        return fail("view session2_state disagrees with the persisted "
+                    "reconciliation record")
+    if row.get("timeframe") not in (None, timeframe):
+        return fail("reconciliation timeframe disagrees with the view")
+
+    # ── 6. Classification binding — RE-RUN the classifier ──────────────────
+    recomputed = classify_session(
+        symbol=symbol, market_date=market_date, timeframe=timeframe,
+        session2_state=row.get("admission_status"),
+        missing_timestamps=row.get("missing_timestamps") or [],
+        unexpected_timestamps=row.get("unexpected_timestamps") or [],
+        session_type=row.get("session_type"))
+    if recomputed.state != body.get("classification"):
+        return fail(f"stored classification {body.get('classification')!r} does "
+                    f"not recompute from the persisted reconciliation "
+                    f"(got {recomputed.state!r})")
+    if list(recomputed.explained_missing) != list(body.get("explained_missing") or []):
+        return fail("stored explained_missing does not recompute")
+    if list(recomputed.unexplained_missing) != list(body.get("unexplained_missing") or []):
+        return fail("stored unexplained_missing does not recompute")
+    if recomputed.mwcb_event != body.get("mwcb_event"):
+        return fail("stored mwcb_event does not recompute")
+
+    # ── 7. Observed-bar binding — rebuild from RAW, compare canonically ────
+    try:
+        rebuilt = reconstruct_observed_bars(symbol, market_date, timeframe,
+                                            expected_raw, root=root)
+    except Exception as exc:
+        return fail(f"observed bars could not be reconstructed from raw "
+                    f"evidence: {type(exc).__name__}")
+    if ST.bars_to_rows(rebuilt) != (body.get("observed_bars") or []):
+        return fail("observed bars do not reconstruct from the referenced raw "
+                    "evidence — OHLCV, bar_start_at, bar_end_at, known_at or "
+                    "adjustment_state has been altered")
+
     if body["classification"] == VALID_MARKET_WIDE_HALT_SESSION:
         if body.get("unexplained_missing"):
-            return {"verified": False,
-                    "reason": "halt classification with unexplained missing bars"}
+            return fail("halt classification with unexplained missing bars")
         if not body.get("mwcb_event"):
-            return {"verified": False,
-                    "reason": "halt classification with no authoritative event"}
+            return fail("halt classification with no authoritative event")
+
     return {"verified": True, "reason": None, "view_fingerprint": fingerprint,
-            "symbol": body["symbol"], "market_date": body["market_date"],
+            "identity_schema": declared,
+            "symbol": symbol, "market_date": body["market_date"],
             "classification": body["classification"],
-            "observed_bar_count": len(body["observed_bars"]),
-            "explained_missing": body["explained_missing"]}
+            "observed_bar_count": len(rebuilt),
+            "explained_missing": body["explained_missing"],
+            "source_manifest_fingerprint": mfp,
+            "source_dataset_fingerprint": body.get("source_dataset_fingerprint"),
+            "raw_lineage": expected_raw,
+            "derivation_recomputed": True}
+
+
+# ── Halt-boundary bar semantics ────────────────────────────────────────────
+# A nominal bar that PARTIALLY overlaps an authoritative halt is genuine
+# evidence and is never deleted or synthesized. But it does not mean the same
+# thing as an ordinary bar, and the difference is not uniform across feature
+# primitives.
+#
+# Measured tradable time inside the four real boundary bars (2017-2026 registry):
+#
+#   2020-03-16 09:30-09:35     1s of 300s   <- effectively a single print
+#   2020-03-12 09:35-09:40    44s of 300s
+#   2020-03-09 09:45-09:50    47s of 300s
+#   2020-03-18 12:55-13:00    77s of 300s
+#   2020-03-18 13:10-13:15   223s of 300s
+#   2020-03-09 09:30-09:35   253s of 300s
+#   2020-03-12 09:50-09:55   256s of 300s
+#   2020-03-16 09:45-09:50   299s of 300s
+#
+# The 1-second case decides it. Two different questions:
+#
+#   * a bar's CLOSE is a real traded price at a real instant, and consecutive
+#     closes are exactly one bar-width apart WHATEVER happened inside the
+#     interval. Close-based primitives stay meaningful.
+#
+#   * a bar's INTRA-BAR GEOMETRY (high, low, open->close range) summarises the
+#     interval itself. Over 1 second of trading it is not a 5-minute range; it
+#     is a single print wearing a 5-minute label, and feeding it into a range or
+#     volatility statistic silently understates the most violent sessions in the
+#     record — the exact bias Session 3.0 exists to measure.
+#
+# Decisions are based on temporal/economic meaning only. No strategy
+# performance was consulted, and none exists.
+HALT_BOUNDARY_POLICY_VERSION = "intraday_halt_boundary_policy_v1"
+
+ALLOWED = "ALLOWED"
+BLOCKED = "BLOCKED"
+
+HALT_BOUNDARY_FEATURE_POLICY: dict[str, dict] = {
+    "close_endpoint": {
+        "status": ALLOWED,
+        "why": "the close is a real traded price at a real instant; how much of "
+               "the preceding interval was tradable does not change that",
+    },
+    "close_to_close_return": {
+        "status": ALLOWED,
+        "why": "consecutive closes are exactly one bar-width apart regardless of "
+               "intra-interval halting; the cross-HALT step is separately "
+               "excluded by segmentation, not by this rule",
+    },
+    "n_bar_displacement": {
+        "status": ALLOWED,
+        "why": "built from close-to-close steps inside one contiguous segment",
+    },
+    "within_segment_realized_volatility": {
+        "status": ALLOWED,
+        "why": "built from equally spaced close-to-close returns; the reopening "
+               "discontinuity is reported separately and never folded in",
+    },
+    "normalized_range": {
+        "status": BLOCKED,
+        "why": "high-low summarises the INTERVAL. With as little as 1 second of "
+               "tradable time the range is a single print, so including it "
+               "systematically understates volatility on halt sessions",
+    },
+    "intra_bar_open_to_close": {
+        "status": BLOCKED,
+        "why": "the open is the reopening auction print and the close may be "
+               "seconds later; this is not an interval return",
+    },
+    "opening_range_construction": {
+        "status": BLOCKED,
+        "why": "a range built from an interrupted observation window is not the "
+               "opening range; the window is FEATURE_UNAVAILABLE instead",
+    },
+}
+
+
+def tradable_seconds(bar_start: datetime, bar_end: datetime,
+                     halt_start: datetime, reopen_start: datetime) -> float:
+    """Seconds of the nominal bar interval that were NOT halted."""
+    before = max(0.0, (min(bar_end, halt_start) - bar_start).total_seconds())
+    after = max(0.0, (bar_end - max(bar_start, reopen_start)).total_seconds())
+    return before + after
+
+
+def halt_boundary_bars(market_date: date, bar_starts: Sequence[datetime], *,
+                       timeframe: str = "5min") -> dict[str, float]:
+    """Bar starts that PARTIALLY overlap an authoritative halt -> tradable secs.
+
+    Fully-contained bars are absent (that is the halt) and untouched bars are
+    ordinary; only the boundary is ambiguous, so only the boundary is reported.
+    """
+    event = mwcb_event_for(market_date)
+    if event is None or timeframe != "5min":
+        return {}
+    step = timedelta(minutes=5)
+    halt_start, reopen_start = event.window_utc()
+    out: dict[str, float] = {}
+    for start in sorted(bar_starts):
+        end = start + step
+        if end <= halt_start or start >= reopen_start:
+            continue
+        if bar_fully_inside_halt(start, end, halt_start, reopen_start):
+            continue
+        out[start.isoformat()] = tradable_seconds(start, end, halt_start,
+                                                  reopen_start)
+    return out
+
+
+def halt_boundary_policy() -> dict:
+    """The compatibility contract, as data Session 3.1+ can consume."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "policy_version": HALT_BOUNDARY_POLICY_VERSION,
+        "observe_only": True,
+        "principle": "a partially overlapped bar is retained as evidence and "
+                     "never deleted or synthesized; its CLOSE is usable, its "
+                     "INTRA-BAR GEOMETRY is not",
+        "features": HALT_BOUNDARY_FEATURE_POLICY,
+        "opening_window_rule":
+            "if an authoritative halt intersects a strategy's REQUIRED opening "
+            "observation or range window, that session is FEATURE_UNAVAILABLE "
+            "for that strategy. 09:30, 09:45, 09:50 are never compressed into a "
+            "fake uninterrupted opening range.",
+        "basis": "temporal and economic meaning only; no strategy performance "
+                 "was consulted and none exists",
+    }

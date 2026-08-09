@@ -65,6 +65,12 @@ GRADUATION_POINTER = "graduation/pointer.json"
 # content is never modified, so a halted session stays rejected under the
 # continuous contract while this records its halt-aware admissibility.
 IRREGULAR_VIEWS = "session3/irregular/content"
+# Session 3.0 population evidence. Content-addressed for the same reason
+# Session 2's pilot is: a graduation verdict derived from a caller's dictionary
+# does not survive a process exit, and a rendered report is a convenience, not
+# authority.
+SESSION3_POPULATION = "session3/population/content"
+SESSION3_GRADUATION_POINTER = "session3/graduation/pointer.json"
 
 CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})
 

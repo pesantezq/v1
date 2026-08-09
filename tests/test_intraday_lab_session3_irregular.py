@@ -428,15 +428,23 @@ def test_session3_never_enables_strategy_validation():
     st = PA.session3_0_status(audit, root=".")
     assert st["strategy_validation_allowed"] is False
     assert st["status"] in (PA.SESSION_3_0_POLICY_READY, PA.SESSION_3_0_LIMITED)
+    # The caller dict must not be able to move the verdict either way.
+    assert PA.session3_0_status(root=".")["status"] == st["status"]
 
 
-def test_session3_status_is_not_the_strategy_flag():
+def test_session3_status_is_not_the_strategy_flag(tmp_path):
     """Reusing strategy_validation_allowed as a completion marker is how a
-    governance gate loses its meaning."""
+    governance gate loses its meaning.
+
+    Scoped to an EMPTY root. The caller audit argument is now powerless by
+    design, so leaving root defaulted made this read the operator's real
+    (valid) evidence and fail for the right reason at the wrong target — the
+    test must supply the absence it claims to be testing.
+    """
     assert PA.SESSION_3_0_POLICY_READY != "strategy_validation_allowed"
     audit = {"accounting_exact": False, "counts": {}, "comparison":
              {"n_continuous": 0, "n_halt": 0}, "exact_mwcb_prevalence": {}}
-    st = PA.session3_0_status(audit, root=".")
+    st = PA.session3_0_status(audit, root=str(tmp_path))
     assert st["status"] == PA.SESSION_3_0_LIMITED
     assert st["session_3_1_gate"] == PA.SESSION_3_1_NO_GO
     assert st["blockers"]

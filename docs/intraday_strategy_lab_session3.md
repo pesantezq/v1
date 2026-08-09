@@ -174,6 +174,78 @@ significance is claimed.
 
 ---
 
+## 8b. Durable evidence and derivation proof (foundation hardening)
+
+Review of the committed foundation found two invariants weaker than the
+architecture claimed. Both were reproduced before being fixed.
+
+**A — graduation was caller-authoritative.** `session3_0_status(audit_dict)`
+returned `SESSION_3_0_POLICY_READY` / `SESSION_3_1_GO` with **zero blockers**
+from a fabricated dictionary, and still did so after the rendered population
+JSON was deleted. A rendered report is a convenience; it is not authority.
+
+Now: the audit is content-addressed under
+`session3/population/content/<fp>/`, selected by an explicit pointer at
+`session3/graduation/pointer.json`, and **re-verified on every call** —
+accounting recomputed from the persisted per-chunk rows, exact MWCB prevalence
+recomputed from the calendar and registry, policy and registry fingerprints
+re-matched. The `audit` argument is retained for display and **cannot move the
+verdict**. A pointer is selection, not authority.
+
+**B — verification proved nothing about derivation.** A content hash proves an
+object has not changed since minting; it does not prove it was minted
+correctly. **Eight of eight** self-consistent-but-wrong views passed the old
+verifier — faked `known_at`, faked close, faked `bar_end_at`, faked dataset
+fingerprint, faked calendar identity, emptied `explained_missing`, downgraded
+classification, and an unrelated valid raw object swapped in.
+
+`verify_irregular_view` now **recomputes** the derivation: manifest binding,
+canonical-dataset binding, calendar binding, raw lineage (the *manifest*
+decides, as the exact relevant subset for that symbol), the exact reconciliation
+row, a **re-run of `classify_session`**, and observed bars rebuilt from the raw
+evidence through the **frozen Session 2 normalizer** and compared canonically —
+proving OHLCV, `bar_start_at`, `bar_end_at`, `known_at` and `adjustment_state`
+are unchanged. All eight bypasses now fail; the honest view still verifies.
+
+The identity schema moved to `intraday_irregular_session_v2` because the
+verification contract changed. No v1 objects were ever persisted, so nothing
+required reminting; a v1-schema object is reported **archival**, never silently
+current.
+
+---
+
+## 8c. Halt-boundary bar semantics
+
+A nominal bar that *partially* overlaps a halt is genuine evidence — never
+deleted, never synthesized. Measured tradable time inside the eight real
+boundary bars ranges from **1 second** (2020-03-16 09:30) to 299 seconds.
+
+The 1-second case decides the policy. A bar's **close** is a real traded price
+at a real instant, and consecutive closes are exactly one bar-width apart
+whatever happened inside. A bar's **intra-bar geometry** summarises the interval
+itself, and over 1 second of trading it is a single print wearing a 5-minute
+label.
+
+| Primitive | Partial halt-boundary bar | Why |
+|---|---|---|
+| close endpoint | **ALLOWED** | a real traded price at a real instant |
+| close-to-close return | **ALLOWED** | closes are one bar-width apart regardless of intra-interval halting |
+| N-bar displacement | **ALLOWED** | built from close-to-close steps inside one segment |
+| within-segment realized vol | **ALLOWED** | equally spaced closes; the reopening jump is reported separately |
+| normalized_range | **BLOCKED** | high-low over 1s is not a 5-minute range; including it understates the most violent sessions |
+| intra-bar open→close | **BLOCKED** | the open is the reopening auction print, the close may be seconds later |
+| opening-range construction | **BLOCKED** | an interrupted window is not the opening range |
+
+Decisions rest on temporal and economic meaning only. No strategy performance
+was consulted, and none exists.
+
+**Opening-window rule.** If an authoritative halt intersects a strategy's
+*required* opening observation or range window, that session is
+`FEATURE_UNAVAILABLE` for that strategy. `09:30, 09:45, 09:50` are never
+compressed into a fake uninterrupted opening range.
+
+---
+
 ## 9. Policy decision
 
 **`HALT_AWARE_PRIMARY_CONTINUOUS_COMPARISON`**
