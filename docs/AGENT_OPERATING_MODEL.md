@@ -1,5 +1,32 @@
 # Agent Operating Model
 
+> **2026-08-09 authority reconciliation (NORTHSTAR_0A).** The machine-readable
+> authority policy **`config/agent_policy.yaml`** (plus
+> `.agent/project_state.yaml`) is now authoritative for role/environment
+> authority; this document explains it. Two statements below are **historical
+> (superseded)** and are kept because the operating-model transition is
+> meaningful history:
+>
+> 1. *"Claude does NOT run on the VPS — all VPS validation is performed
+>    manually by the user."* — true for the pre-2026-05 operating model.
+>    **Current rule:** Claude Code runs on the operator laptop AND the
+>    production VPS; VPS authority is declared by `.claude/settings.json` per
+>    `docs/CLAUDE_VPS_MODES.md` (`dev_on_vps` while hardening,
+>    `read_only_ops` end state). Validation results are claimed only from the
+>    environment that actually ran them; laptop sessions still return VPS
+>    commands for manual execution.
+> 2. The role list below covers the GPT/Claude/Codex/user collaboration split.
+>    The Northstar program adds AI **worker** role classes (Prime,
+>    TradingAgents, FinRobot, local LLM workers, Evidence Auditor, Quant
+>    Router, the StratLab certification plane, memo/product workers, Claude
+>    Code Builder/Reviewer, human operator) — defined normatively in
+>    `config/agent_policy.yaml` and summarized in
+>    `docs/NORTHSTAR_REDESIGN.md` §6. AI research workers run in the home
+>    Agent Lab on frozen/sanitized production exports, not on the VPS. No AI
+>    role holds production-promotion or real portfolio-action authority; the
+>    human operator is the only role that does (the future certified Capital
+>    & Risk Engine owns the authoritative ADVISORY allocation determination).
+
 ## Purpose
 
 This document defines how Claude, Codex, GPT, and the user collaborate on the

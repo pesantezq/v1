@@ -133,6 +133,9 @@ def main() -> int:
     print(f"  No auto-trade: {str(state.get('no_auto_trading', False)).lower()}")
     print(f"  AI role:       {state.get('ai_role', '—')}")
 
+    program = state.get("program")
+    if program:
+        print(f"\n  Program:       {program}")
     print(f"\n  Current phase: {state.get('current_phase', '—')}")
     print(f"  Current step:  {state.get('current_step', '—')}")
 
@@ -166,7 +169,15 @@ def main() -> int:
             if role in role_split:
                 print(f"    {role}: {', '.join(str(r) for r in role_split[role][:2])}{'...' if len(role_split[role]) > 2 else ''}")
 
-    print("\n  VPS note: Claude runs locally. Return VPS commands for manual user execution.")
+    # 2026-08-09 authority reconciliation: Claude runs on the operator laptop
+    # AND the production VPS (mode per docs/CLAUDE_VPS_MODES.md +
+    # config/agent_policy.yaml). Report validation results only from the
+    # environment that actually ran them.
+    print("\n  Environments:  Claude runs on the operator laptop AND the production VPS")
+    print("                 (VPS mode per .claude/settings.json — docs/CLAUDE_VPS_MODES.md;")
+    print("                 authority model: config/agent_policy.yaml).")
+    print("                 Validation results are claimed only where they actually ran;")
+    print("                 laptop sessions return VPS commands for manual execution.")
 
     print("\n" + "=" * 60)
     print("  Files: .agent/project_state.yaml | .agent/phase_status.yaml")

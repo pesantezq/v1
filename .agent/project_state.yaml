@@ -1,7 +1,24 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-07-18 (2026-07 monthly-tool-analysis run logged: AMBER;
+# Last updated: 2026-08-09 PM (PHASE 0A CLOSED — gate
+# NORTHSTAR_GOVERNANCE_FOUNDATION_READY achieved; GPT issued SESSION_CLOSED —
+# NORTHSTAR_PHASE_0A. Both milestones complete: authority reconciliation
+# (1794a164 after 3 GPT-reviewed hardening passes) + CI foundation
+# (northstar-ci run 31338193791 GREEN: governance + hermetic regression,
+# 10,241 passed). current_phase -> northstar_phase_0b, current_step ->
+# northstar_0b_canonical_contracts. Prime-free Local R&D direction recorded
+# (Prime superseded as orchestrator — see northstar_program notes). Prior
+# header below.)
+# Prior: 2026-08-09 (STOCKBOT_NORTHSTAR_REDESIGN program opened —
+# operator-approved governing goal made authoritative. current_phase/step moved
+# to northstar_phase_0a / northstar_0a_authority_roadmap_reconciliation;
+# observe_and_iterate closed as SOLE top-level objective and recorded in
+# completed_steps (production observation CONTINUES as a parallel workstream).
+# New: program key, northstar_program block, config/agent_policy.yaml authority
+# policy, deployment_context reconciled to the two-environment model. See
+# docs/NORTHSTAR_REDESIGN.md.)
+# Prior: 2026-07-18 (2026-07 monthly-tool-analysis run logged: AMBER;
 # top concern = quant_feedback.py:104 non-existent-path bug -> SQG Phase 5 blind
 # 0/907 for 18d -> RESOLVED same day (cb7b2eae, pushed): 82 resolved/ok, verified
 # live on dashboard; next_official_step unchanged = observe_and_iterate; see
@@ -22,8 +39,12 @@ ai_role: context_explanation_validation_orchestration_only
 # Phase / Step tracking
 # ---------------------------------------------------------------------------
 
-current_phase: post_phase_0_governance
-current_step: observe_and_iterate  # 2026-07-13: was gui_operator_cockpit_redesign (Streamlit gui/app.py) — superseded by gui_v2 (retired per docs/STREAMLIT_RETIREMENT.md; gui_v2 4-phase program complete 2026-07-09). Aligns current_step with next_official_step + project_status.
+# Program tracking (added 2026-08-09). The Strategic Goal → Program → Phase →
+# Milestone → Deliverable hierarchy is defined in docs/NORTHSTAR_REDESIGN.md.
+program: stockbot_northstar_redesign
+
+current_phase: northstar_phase_0b  # 2026-08-09 PM: was northstar_phase_0a (COMPLETE — gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY; see completed_steps + phase_status.yaml). Prior: post_phase_0_governance (2026-05-20 → 2026-08-09)
+current_step: northstar_0b_canonical_contracts  # 2026-08-09 PM: was northstar_0a_authority_roadmap_reconciliation (complete). Prior history: observe_and_iterate (2026-07-13 note preserved: was gui_operator_cockpit_redesign — superseded by gui_v2 per docs/STREAMLIT_RETIREMENT.md)
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -101,10 +122,32 @@ completed_steps:
   - research_backed_strategy_lab_built_and_enabled  # 2026-06-12 — Research-Backed Strategy Lab on top of portfolio_sim (built under /goal). Academic strategy families as tactics (Markowitz mean-variance, Fama-French factor tilt, Jegadeesh-Titman momentum, Antonacci dual-momentum, risk-parity-lite, 60/40, Moreira-Muir vol-managed, Black-Litterman) + suite tactics = ~24 strategies ranked by master strategy_score (after-cost-ish risk-adjusted excess vs SPY minus overfit/turnover/tax/concentration/leverage). Walk-forward OOS validation -> overfit penalty; Fama-French factor attribution (offline, degrades). Modules: research_library, strategy_score, walk_forward, factor_data, factor_attribution, run_strategy_lab, strategy_lab_health. ENABLED for production (config portfolio_sim.enabled=true + strategy_lab.enabled=true), weekly run_weekly_safe.sh stage, 5 registry rows, preflight. Health: strategy_lab_health assessor + /strategy-lab-analysis skill + monthly-tool-analysis. GUI: Strategy Lab master leaderboard. ~42 tests; full suite 7315 pass / 3 pre-existing. Live run: 24 tactics, coverage_complete, health AMBER (momentum failed OOS + factor data uncached — both correctly flagged). Deferred (documented): regime sims, crowd event studies, ensemble, cost/tax model. Docs: docs/RESEARCH_STRATEGY_LAB.md + spec + plan. next_official_step unchanged.
   - fmp_budget_governor  # 2026-06-15 — Budget-Aware FMP Data Orchestrator (built under /goal, subagent-driven). Single guarded FMP access layer portfolio_automation/data_budget/ wrapping fmp_client (keeps DiskCache/CallCounter/endpoint-registry): token bucket (240/min, 300 burst), monthly 20GB bandwidth guard, per-run-mode budgets (gui_refresh/daily/weekly_review/monthly/discovery/historical_replay), per-call SQLite usage ledger (data/fmp_budget.db: api_usage_ledger + symbol_data_policy), run-mode-routed single factory chokepoint (all ~7 call sites migrated; AST guard test forbids direct FMPClient construction). Additive fmp_client response-byte capture + get_quote_short. 3 observe-only artifacts (fmp_usage/fmp_cache/data_budget_status, Stage 7d2) + GUI System panel + /daily-tool-analysis health line 6m. Ships ENABLED with kill-switch (config data_budget.enabled / STOCKBOT_FMP_GOVERNOR_DISABLED / config/fmp_governor.DISABLED -> reverts to direct fmp_client). Governor is budget authority; inner client uncapped to avoid double-cap. Observe-only; never feeds decision_plan. Docs: spec + plan + OUTPUT_ARTIFACT_CONTRACTS + PIPELINE_RUNBOOK + 3 registry rows. next_official_step unchanged (observe_and_iterate).
 
+  - observe_and_iterate_as_sole_top_level_objective  # 2026-05-20 → 2026-08-09 — the observe-and-iterate window did its job: 70+ shipped steps hardened, outcome history accumulated (n=154 resolved on the current gauge era), monthly analyses logged, reliability program merged. CLOSED as the SOLE top-level objective by the STOCKBOT_NORTHSTAR_REDESIGN program (operator-approved 2026-08-09); production observation/outcome collection CONTINUES as northstar parallel workstream 2 (see northstar_program.parallel_workstreams). History: phase_status.yaml observe_and_iterate block (now superseded-as-sole-objective) + docs/monthly_reports/.
+  - northstar_0a_authority_roadmap_reconciliation  # 2026-08-09 — Phase 0A milestone 1: program made authoritative; config/agent_policy.yaml (v1.0.0, 12 roles + 2 operational authority domains) + agent_policy.py resolvers; 3 GPT-reviewed hardening passes (Agent Lab boundary, real_portfolio_action term, quant_router/stratlab split, runtime accuracy, environment gating, execution/governance decoupling). Final SHA 1794a164.
+  - northstar_0a_ci_foundation  # 2026-08-09 — Phase 0A milestone 2: .github/workflows/northstar-ci.yml (validation-only, contents:read, no secrets/VPS/production). Remote GREEN evidence: run 31338193791 @ 3fa43377 — Northstar governance SUCCESS + Hermetic regression tests SUCCESS (10,241 passed / 1 skipped / 10 classified-deselected / 7 subtests). Gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY achieved; GPT SESSION_CLOSED — NORTHSTAR_PHASE_0A.
+
 next_official_step:
-  primary: observe_and_iterate  # All shipped code paths now need real-world outcome history to tune against; no new modules planned
+  primary: northstar_0b_canonical_contracts  # NORTHSTAR_PHASE_0B_CANONICAL_CONTRACTS — define stable, validated, point-in-time-capable domain contracts that decouple producers from consumers BEFORE building the new intelligence engines. Contract families expected: EvidenceRef, EvidenceSnapshot, DataSourceDescriptor, FeatureRecord, PredictionTask, PredictionRecord, ResearchTask, WorkerResult, ResearchClaim, ExperimentSpec, ExperimentResult, CapitalProposal, ExitProposal, OutcomeRecord, StrategyPassport. Requirements: deterministic identity/versioning; provenance (producer/source/model/code version); point-in-time timestamps (observed/published/known/retrieved + effective period); immutability/replay (experiments identify consumed evidence + contract versions); additive schema evolution; separation of concerns (a PredictionRecord can never become a CapitalProposal; a CapitalProposal cannot mutate its PredictionRecord; ExitProposals attributable separately; WorkerResult is evidence/candidate material, never production truth); EXTENSIBLE DATA SOURCES (external sources — FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial data — are replaceable Evidence Plane inputs with source/dataset/record identity, provenance, snapshot/hash, schema/version, rights metadata; NEVER dependencies embedded in Prediction, Capital & Risk, Exit, StratLab, or AI workers). Contracts only — no engine/runtime/source integration in 0B.
   secondary: []
+  prior_primary: northstar_0a_ci_foundation  # completed 2026-08-09 (remote GREEN run 31338193791); before that observe_and_iterate (2026-05-20 → 2026-08-09; observation continues as a parallel workstream)
   note: >
+    2026-08-09 — STOCKBOT_NORTHSTAR_REDESIGN opened (docs/NORTHSTAR_REDESIGN.md).
+    Governing goal: continually improve the ability to estimate investment
+    outcomes; retain improvements only on demonstrated incremental predictive
+    value; predictions are never portfolio actions; an independently governed
+    capital-allocation and risk-management system decides capital; prediction /
+    allocation / exit / end-to-end quality attributed separately; improvements
+    earn, retain, or lose influence according to evidence; commercialization
+    stays downstream of research and cannot weaken evidence standards,
+    governance, risk controls, or production boundaries.
+
+    Milestone 1 (authority/roadmap reconciliation) is implemented on branch
+    feature/northstar-0a-authority. Milestone 2 (CI foundation) is the next
+    authorized step. Do NOT mark northstar_phase_0a complete while CI is
+    outstanding. Future phases (0B..11) are defined, NOT started.
+
+    The prior observe_and_iterate note is preserved below for history.
+  prior_note_2026_05_20: >
     The system is feature-complete for the operator's single-user, advisory-only
     scope. The work shipped 2026-05-18..20 (tactical gauge retune + structural
     cap widening + 6 new observability modules + 11 additional safe-wrapper
@@ -140,7 +183,91 @@ next_official_step:
       - Compiled Tailwind (cosmetic; CDN is fine)
       - Slack integration for notify_status (today: email only)
 
-project_status: observe_and_iterate
+project_status: northstar_redesign_phase_0a_active  # 2026-08-09: was observe_and_iterate (2026-05-20 → 2026-08-09); observation continues as a parallel workstream under the program
+
+# ---------------------------------------------------------------------------
+# STOCKBOT_NORTHSTAR_REDESIGN — program state (added 2026-08-09)
+# Full charter: docs/NORTHSTAR_REDESIGN.md. Per-phase status detail:
+# .agent/phase_status.yaml:stockbot_northstar_redesign. Authority model:
+# config/agent_policy.yaml (machine-readable; prose docs explain it).
+# ---------------------------------------------------------------------------
+
+northstar_program:
+  name: stockbot_northstar_redesign
+  status: active
+  opened: 2026-08-09
+  charter: docs/NORTHSTAR_REDESIGN.md
+  authority_policy: config/agent_policy.yaml
+  gates_achieved:
+    - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09 — Phase 0A closed (GPT: SESSION_CLOSED — NORTHSTAR_PHASE_0A); evidence: authority model @ 1794a164 + northstar-ci run 31338193791 GREEN @ 3fa43377
+  # Local R&D direction (recorded at 0A→0B handoff, operator/GPT-set):
+  # StockBot R&D Control Plane → Secure Sandbox → Generic Workers →
+  # Local Models / Trusted Tools. PRIME IS SUPERSEDED as orchestrator in the
+  # target architecture — do not reintroduce it. The `prime` role block in
+  # config/agent_policy.yaml remains a defined-never-integrated contract for
+  # historical continuity; retiring/renaming it is a Phase 0B/5 policy-sync
+  # backlog item, NOT an active orchestrator plan.
+  rd_direction: prime_free_local_rd_plane
+  governing_goal_summary: >
+    Continually improve the ability to estimate investment outcomes; retain
+    improvements only on demonstrated incremental predictive value. Predictions
+    are never portfolio actions. An independently governed capital-allocation
+    and risk-management system decides whether/when/how demonstrated insights
+    deserve capital. Prediction, allocation, exit, and end-to-end quality are
+    attributed separately (PIT backtests, frozen live-shadow evidence, resolved
+    outcomes, counterfactual simulations, realized results). Influence is
+    earned, retained, or lost according to evidence. Commercial reuse stays
+    downstream of research and cannot weaken evidence standards, governance,
+    risk controls, or production boundaries.
+  phases:  # statuses mirror phase_status.yaml; NO future phase is implemented
+    northstar_phase_0a: {name: "Architecture, Authority & CI Foundation", status: complete}  # 2026-08-09; gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY
+    northstar_phase_0b: {name: "Canonical Evidence, Prediction & Worker Contracts", status: active}  # 2026-08-09 PM
+    northstar_phase_0c: {name: "Point-in-Time EvidenceGateway & Research Store", status: not_started}
+    northstar_phase_0d: {name: "Certification, Champion/Challenger & Incremental-Value Foundation", status: not_started}
+    northstar_phase_1: {name: "Prediction Engine v2", status: not_started}
+    northstar_phase_2: {name: "Capital & Risk Engine v2", status: not_started}
+    northstar_phase_3: {name: "Exit & Replacement Engine v2", status: not_started}
+    northstar_phase_4: {name: "Evidence-Weighted Influence Engine", status: not_started}
+    northstar_phase_5: {name: "Governed AI Worker Runtime", status: not_started}
+    northstar_phase_6: {name: "Finance Worker / research loop / worker expansion (6+; Prime-free — supersedes the earlier Prime + Local Worker naming)", status: not_started}
+    northstar_phase_7: {name: "TradingAgents Certification & Shadow Integration (worker expansion, conditional)", status: not_started}
+    northstar_phase_8: {name: "FinRobot / Additional Specialists (conditional on demonstrated need)", status: not_started}
+    northstar_phase_9: {name: "Strategy & Product Factory", status: not_started}
+    northstar_phase_10: {name: "End-to-End Shadow Certification", status: not_started}
+    northstar_phase_11: {name: "Human-Gated Production Advisory Migration", status: not_started}
+  critical_path:
+    - northstar_authority          # 0A milestone 1 — this step
+    - ci_foundation                # 0A milestone 2 — next
+    - canonical_contracts          # 0B (AI WORKER CONTRACTS begin here, contract-first)
+    - pit_evidence_gateway         # 0C
+    - certification_champion_challenger  # 0D
+    - prediction_capital_exit_shadow_engines  # 1-3
+    - influence_engine             # 4
+    - ai_worker_admission_integration  # 5-8 (runtime integration AFTER evidence/certification foundations)
+    - product_factory              # 9
+    - end_to_end_shadow_certification  # 10
+    - human_gated_production_advisory_migration  # 11
+  parallel_workstreams:  # may continue; may NOT silently redefine northstar contracts
+    - intraday_lab_via_its_own_gates            # PR #10 / Session 3.x lineage
+    - production_observation_and_outcome_collection  # observe_and_iterate mission continues here
+    - agent_export_review_integration_decision  # feature/agent-production-export, preserved unmerged
+    - explicitly_authorized_engineering_hardening
+  reused_foundations:  # preserve, do not rebuild — see charter §7 for the full annotated list
+    - data_governance_output_namespaces
+    - run_mode_governance
+    - artifact_registry_and_validator
+    - historical_replay
+    - outcome_tracking_and_append_only_event_stores
+    - simulation_governance_two_lane
+    - strategy_lab_and_walk_forward_and_factor_attribution
+    - portfolio_sim_shadow_portfolios_and_strategy_catalog
+    - opportunity_radar
+    - decision_engine_as_protected_incumbent
+    - allocation_risk_exit_advisors
+    - intraday_lab_immutable_evidence_preregistration_patterns
+    - ai_budget_and_llm_adapters
+    - agent_orchestration_and_claude_agents_and_operator_control
+    - agent_export_preserved_not_integrated  # branch feature/agent-production-export @ 66ecc281; NOT merged
 
 # ---------------------------------------------------------------------------
 # Observed-state log — last tool-analysis runs (informational; no scope change)
@@ -525,6 +652,14 @@ output_namespace_policy:
 # ---------------------------------------------------------------------------
 
 role_split:
+  # 2026-08-09: collaboration duties only. The normative role/environment
+  # AUTHORITY model (incl. AI worker classes: prime, trading_agents, finrobot,
+  # local_llm_worker, evidence_auditor, quant_router, stratlab_certification,
+  # memo_product_worker, claude_code_builder, claude_code_reviewer,
+  # human_operator; research workers run in the home_agent_lab environment on
+  # frozen/sanitized exports, never on the VPS) lives in
+  # config/agent_policy.yaml and is authoritative.
+  authority_policy: config/agent_policy.yaml
   gpt:
     - architecture_design
     - roadmap_control
@@ -557,10 +692,22 @@ role_split:
 # ---------------------------------------------------------------------------
 
 deployment_context:
-  claude_runs_locally: true
-  claude_does_not_run_on_vps: true
-  vps_validation_is_manual: true
-  vps_commands_must_be_returned_for_user_to_run: true
+  # 2026-08-09 authority reconciliation (NORTHSTAR_0A): Claude Code runs in TWO
+  # environments — the operator laptop AND the production VPS. VPS session
+  # authority is declared by .claude/settings.json per docs/CLAUDE_VPS_MODES.md
+  # (dev_on_vps while hardening; read_only_ops end state) and modeled in
+  # config/agent_policy.yaml. Validation reporting rule: tests run where Claude
+  # runs are real; when Claude runs on the laptop, VPS commands are returned
+  # for manual execution and must not be claimed as VPS results.
+  # HISTORY (pre-2026-05 operating model, superseded — kept for the meaningful
+  # transition): claude_runs_locally=true, claude_does_not_run_on_vps=true,
+  # vps_validation_is_manual=true.
+  claude_environments: [operator_laptop, production_vps]
+  vps_mode_declaration: .claude/settings.json  # per docs/CLAUDE_VPS_MODES.md; runtime-local, untracked
+  vps_modes: [dev_on_vps, read_only_ops]
+  authority_policy: config/agent_policy.yaml
+  validation_claims_rule: report_results_only_from_the_environment_that_ran_them
+  vps_commands_returned_for_user_when_claude_runs_on_laptop: true
   production_environment: linux_vps_with_systemd_timer
   virtualenv_required: true
   python_version: "3.11+"

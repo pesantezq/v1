@@ -161,7 +161,13 @@ The VPS validation commands are in the Claude final report and in
 
 ## VPS Validation Process
 
-Claude does not run on the VPS. All production validation is manual.
+> **Historical (superseded 2026-08-09, NORTHSTAR_0A):** "Claude does not run
+> on the VPS. All production validation is manual." — that was the
+> pre-2026-05 model. **Current rule** (per `CLAUDE.md`,
+> `docs/CLAUDE_VPS_MODES.md`, `config/agent_policy.yaml`): Claude Code also
+> runs on the production VPS; when it does, validation executed there is
+> real. The manual process below still applies whenever Claude runs on the
+> operator laptop.
 
 1. Copy the VPS validation commands from Claude's final report.
 2. SSH into the VPS.
