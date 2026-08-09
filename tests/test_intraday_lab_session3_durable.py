@@ -429,3 +429,238 @@ def test_session3_foundation_never_enables_strategy_validation(tmp_path):
     assert st["strategy_validation_allowed"] is False
     assert IR.policy_provenance()["strategy_validation_allowed"] is False
     assert IR.halt_boundary_policy()["observe_only"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SESSION 3F.1 — population aggregates must REBUILD from child evidence
+#
+# A content hash proves an audit has not changed. It does not prove it was
+# derived. A wholly fabricated but internally coherent immutable audit —
+# current policy, current registry, correct exact prevalence, arithmetic that
+# adds up, and a claim of 100 market-wide halt sessions against a registry
+# holding exactly four MWCB dates — verified, was accepted by the setter, and
+# graduated with ZERO blockers.
+# ═══════════════════════════════════════════════════════════════════════════
+def _fabricated_immutable_audit():
+    """Internally perfect, derived from nothing."""
+    return {
+        "schema_version": "1",
+        "policy_id": IR.POLICY_ID,
+        "policy_fingerprint": IR.policy_fingerprint(),
+        "registry_version": IR.MWCB_REGISTRY_VERSION,
+        "registry_fingerprint": IR.registry_fingerprint(),
+        "metric_definitions_version": IR.METRIC_DEFINITIONS_VERSION,
+        "calendar_identity": _calendar_identity(),
+        "symbols": ["AAPL", "SPY"],
+        "date_coverage": {"start": "2017-01-01", "end": "2026-08-07"},
+        "coverage_kind": "STRATIFIED_SAMPLE",
+        "per_chunk": [{"symbol": "SPY", "year": 2020, "status": "OK", "sessions": 500}],
+        "requested_certified_symbol_sessions": 500,
+        "accounted_symbol_sessions": 500,
+        "accounting_exact": True,
+        "counts": {IR.VALID_CONTINUOUS_SESSION: 400,
+                   IR.VALID_MARKET_WIDE_HALT_SESSION: 100,
+                   IR.REJECTED_UNEXPLAINED_GAP: 0,
+                   IR.REJECTED_SOURCE_ERROR: 0,
+                   IR.REJECTED_OTHER_DATA_DEFECT: 0},
+        "cohorts": {IR.COHORT_CONTINUOUS_ONLY: 400, IR.COHORT_HALT_AWARE: 500},
+        "comparison": {"n_continuous": 400, "n_halt": 100, "metrics": {},
+                       "discontinuity_returns": [], "halt_minutes": [],
+                       "note": "invented"},
+        "halt_sessions": [],
+        "exact_mwcb_prevalence": PA.mwcb_prevalence(),
+        "strategy_validation_allowed": False,
+    }
+
+
+@authoritative
+def test_a_fabricated_immutable_audit_cannot_graduate(tmp_path):
+    """Distinct from the caller-dictionary bypass: this one IS persisted,
+    content-addressed and internally coherent. Only reconstruction catches it."""
+    root = str(tmp_path)
+    _freeze_session2(root)
+    fake = _fabricated_immutable_audit()
+    fp = PA.persist_population_audit(fake, root=root)
+    assert PA.population_fingerprint(fake) == fp        # genuinely self-consistent
+
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is False
+    assert "child evidence" in v["reason"]
+    with pytest.raises(ValueError):
+        PA.set_session3_graduation_evidence(fp, root=root)
+    st = PA.session3_0_status(root=root)
+    assert st["session_3_1_gate"] == PA.SESSION_3_1_NO_GO
+
+
+@authoritative
+def test_an_honestly_generated_population_audit_verifies(tmp_path):
+    audit, fp, root = _freeze_population(tmp_path)
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is True, v.get("reason")
+    assert v["generated_from_chunks"], "aggregates must name their child evidence"
+    for cfp in v["generated_from_chunks"]:
+        assert PA.verify_population_chunk(cfp, root=root)["verified"] is True
+
+
+def _remint_with_mutated_child(root, audit, mutate):
+    """Mint a NEW self-consistent child + parent. Both hash correctly."""
+    cfp = audit["generated_from_chunks"][0]
+    child = ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, cfp,
+                             "chunk_evidence.json", root=root)
+    bad_child = json.loads(json.dumps(child))
+    mutate(bad_child)
+    new_cfp = PA.persist_population_chunk(bad_child, root=root)
+    new_audit = json.loads(json.dumps(audit))
+    new_audit["generated_from_chunks"] = sorted(
+        [f for f in audit["generated_from_chunks"] if f != cfp] + [new_cfp])
+    for row in new_audit.get("per_chunk", []):
+        if row.get("chunk_fingerprint") == cfp:
+            row["chunk_fingerprint"] = new_cfp
+    return PA.persist_population_audit(new_audit, root=root), new_cfp
+
+
+@authoritative
+def test_a_mutated_child_classification_breaks_the_parent(tmp_path):
+    audit, _, root = _freeze_population(tmp_path)
+
+    def flip(child):
+        s = child["sessions"][0]
+        s["session3_classification"] = (
+            IR.REJECTED_UNEXPLAINED_GAP
+            if s["session3_classification"] == IR.VALID_CONTINUOUS_SESSION
+            else IR.VALID_CONTINUOUS_SESSION)
+
+    fp, cfp = _remint_with_mutated_child(root, audit, flip)
+    assert PA.verify_population_chunk(cfp, root=root)["verified"] is False
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is False and "child" in v["reason"]
+
+
+@authoritative
+def test_a_fabricated_session_metric_breaks_the_parent(tmp_path):
+    audit, _, root = _freeze_population(tmp_path)
+
+    def fake_metric(child):
+        for s in child["sessions"]:
+            if s.get("metrics"):
+                s["metrics"]["range_pct"] = 0.99
+                return
+        pytest.skip("no metric-bearing session in this chunk")
+
+    fp, cfp = _remint_with_mutated_child(root, audit, fake_metric)
+    assert PA.verify_population_chunk(cfp, root=root)["verified"] is False
+    assert PA.verify_population_audit(fp, root=root)["verified"] is False
+
+
+@authoritative
+def test_a_halt_session_bound_to_the_wrong_view_is_rejected(tmp_path):
+    """A perfectly valid March 2020 view attached to a different symbol/date
+    must not satisfy the binding."""
+    audit, _, root = _freeze_population(tmp_path)
+    views = []
+    for cfp in audit["generated_from_chunks"]:
+        child = ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, cfp,
+                                 "chunk_evidence.json", root=root)
+        views.extend(child.get("used_irregular_views") or [])
+    assert len(views) >= 2, "need two halt views to cross-wire them"
+
+    target = next(cfp for cfp in audit["generated_from_chunks"]
+                  if (ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, cfp,
+                                       "chunk_evidence.json", root=root)
+                      .get("used_irregular_views")))
+    child = ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, target,
+                             "chunk_evidence.json", root=root)
+    bad = json.loads(json.dumps(child))
+    mine = set(bad["used_irregular_views"])
+    foreign = next(v for v in views if v not in mine)
+    for s in bad["sessions"]:
+        if s.get("irregular_view_fingerprint"):
+            s["irregular_view_fingerprint"] = foreign
+            break
+    bad["used_irregular_views"] = sorted(
+        (mine - {child["sessions"][0].get("irregular_view_fingerprint")}) | {foreign})
+    cfp = PA.persist_population_chunk(bad, root=root)
+    v = PA.verify_population_chunk(cfp, root=root)
+    assert v["verified"] is False
+
+
+@authoritative
+def test_a_missing_child_fails_closed(tmp_path):
+    audit, fp, root = _freeze_population(tmp_path)
+    cfp = audit["generated_from_chunks"][0]
+    shutil.rmtree(ST.intraday_root(root) / ST.SESSION3_POPULATION_CHUNKS / cfp)
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is False and cfp in v["reason"]
+    assert PA.session3_0_status(root=root)["session_3_1_gate"] == PA.SESSION_3_1_NO_GO
+
+
+@authoritative
+def test_an_undeclared_extra_child_is_rejected(tmp_path):
+    """generated_from_chunks and per_chunk must agree about what is summarised."""
+    audit, _, root = _freeze_population(tmp_path)
+    extra = json.loads(json.dumps(audit))
+    extra["generated_from_chunks"] = sorted(
+        audit["generated_from_chunks"] + ["e" * 32])
+    fp = PA.persist_population_audit(extra, root=root)
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is False
+    assert "disagree" in v["reason"] or "failed verification" in v["reason"]
+
+
+@authoritative
+def test_population_verification_never_refetches(tmp_path, monkeypatch):
+    _, fp, root = _freeze_population(tmp_path)
+
+    def _explode(*a, **k):
+        raise AssertionError("population verification must not touch the provider")
+
+    monkeypatch.setattr(PL, "acquire", _explode)
+    monkeypatch.setattr(PL, "build_historical_research_dataset", _explode)
+    from portfolio_automation.intraday_lab import pilot as PI
+    monkeypatch.setattr(PI, "governed_fmp_provider", _explode)
+    assert PA.verify_population_audit(fp, root=root)["verified"] is True
+    assert PA.load_session3_graduation_evidence(root=root)["available"] is True
+
+
+def test_population_identity_schema_bumped_and_history_preserved():
+    assert PA.POPULATION_IDENTITY_SCHEMA == "intraday_session3_population_v2"
+    assert "intraday_session3_population_v1" in PA.POPULATION_SCHEMA_HISTORY
+
+
+@authoritative
+def test_a_v1_population_audit_is_archival_not_silently_current(tmp_path):
+    audit, _, root = _freeze_population(tmp_path)
+    fp = PA.persist_population_audit(audit, root=root)
+    man_path = (ST.intraday_root(root) / ST.SESSION3_POPULATION / fp
+                / "population_manifest.json")
+    man = json.loads(man_path.read_text())
+    man["identity_schema"] = "intraday_session3_population_v1"
+    man_path.write_text(json.dumps(man, separators=(",", ":"), sort_keys=True))
+    v = PA.verify_population_audit(fp, root=root)
+    assert v["verified"] is False
+    assert v.get("archival") is True
+
+
+@authoritative
+def test_the_graduated_halt_view_check_is_not_vacuous(tmp_path):
+    """The predecessor was `counts.get(...) >= 0`, which could not fail.
+
+    The real invariant: every graduated halt session must have a BOUND view
+    that verifies. Unexplained-gap sessions may legitimately exist in the
+    population and must not be banned globally.
+    """
+    _, _, root = _freeze_population(tmp_path)
+    st = PA.session3_0_status(root=root)
+    assert st["measured_checks"]["graduated_halt_views_bound_and_verified"] is True
+    assert "zero_unexplained_absences_in_halt_views" not in st["measured_checks"]
+
+    # Break one bound view; the check must fall.
+    ev = PA.load_session3_graduation_evidence(root=root)
+    vfp = (ev["audit"].get("irregular_views") or [None])[0]
+    assert vfp, "graduation evidence must bind halt views"
+    path = ST.intraday_root(root) / ST.IRREGULAR_VIEWS / vfp / "irregular_session.json"
+    data = json.loads(path.read_text())
+    data["observed_bars"][0]["close"] = 4242.0
+    path.write_text(json.dumps(data, separators=(",", ":"), sort_keys=True))
+    st2 = PA.session3_0_status(root=root)
+    assert st2["session_3_1_gate"] == PA.SESSION_3_1_NO_GO

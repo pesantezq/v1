@@ -70,6 +70,9 @@ IRREGULAR_VIEWS = "session3/irregular/content"
 # does not survive a process exit, and a rendered report is a convenience, not
 # authority.
 SESSION3_POPULATION = "session3/population/content"
+# Immutable per-symbol-window CHILD evidence. The population audit summarises
+# these; without them its aggregates are unfalsifiable arithmetic.
+SESSION3_POPULATION_CHUNKS = "session3/population/chunks/content"
 SESSION3_GRADUATION_POINTER = "session3/graduation/pointer.json"
 
 CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})

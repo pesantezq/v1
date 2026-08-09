@@ -212,6 +212,55 @@ verification contract changed. No v1 objects were ever persisted, so nothing
 required reminting; a v1-schema object is reported **archival**, never silently
 current.
 
+### Population provenance — aggregates rebuild from child evidence
+
+One layer remained unfalsifiable after the first hardening pass. The
+`PopulationAudit` was content-addressed and internally consistent, but nothing
+bound its aggregates to per-session evidence. A **wholly fabricated immutable
+audit** — current policy and registry, correct exact prevalence, arithmetic that
+added up, and a claim of **100 market-wide halt sessions against a registry
+holding exactly four MWCB dates** — verified, was accepted by the setter, and
+graduated with zero blockers.
+
+The audit now summarises immutable child objects under
+`session3/population/chunks/content/<fp>/`, and verification **rebuilds** every
+aggregate from them:
+
+| Claim | Rebuilt from |
+|---|---|
+| population counts | per-session classifications, each re-run through `classify_session` |
+| cohort counts | recomputed metric collections |
+| halt-session list | child evidence |
+| cohort comparison | `compare_cohorts` re-run on rebuilt metrics |
+| requested / accounted | child session counts |
+| symbol universe | children actually present |
+| exact MWCB prevalence | calendar + registry (unchanged) |
+
+Each child independently proves: the requested window is its manifest's, raw
+lineage belongs to that manifest, Session 2 states match the persisted
+reconciliation, Session 3 classifications recompute, halt sessions bind to a
+**verifying v2 irregular view for that exact symbol and date**, and metrics
+recompute from bars reconstructed through the frozen normalizer. No provider
+call is possible during verification.
+
+Minimal provenance vocabulary, deliberately concrete:
+
+```
+PopulationAudit  generated_from -> PopulationChunk
+PopulationChunk  used           -> Session 2 manifest / raw content
+PopulationChunk  used           -> IrregularView   (halt sessions only)
+```
+
+Population identity moved to `intraday_session3_population_v2`; a v1 object is
+reported **archival**, never silently reinterpreted.
+
+One gate check was also vacuous: `counts.get(REJECTED_UNEXPLAINED_GAP, 0) >= 0`
+could not fail, and the view scan treated *no views* as success. Replaced by the
+real invariant — **every graduated halt session must have a bound view that
+verifies from source with zero unexplained intervals**. A global
+"no unexplained gaps anywhere" rule would be wrong: such sessions legitimately
+exist in the sampled population and are simply excluded from both cohorts.
+
 ---
 
 ## 8c. Halt-boundary bar semantics

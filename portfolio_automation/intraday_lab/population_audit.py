@@ -297,6 +297,18 @@ def audit_chunk(symbol: str, year: int, start: date, end: date, provider, *,
         normalization_failures=acq["normalization_failures"])
 
     classifications, metrics = [], []
+    session_records: list[dict] = []
+    view_fps: list[str] = []
+    mfp = None
+    try:
+        built = PL.build_historical_research_dataset(request, provider, root=root)
+        mfp = built["manifest_fingerprint"]
+    except Exception as exc:
+        return {"symbol": symbol, "year": year, "status": "SOURCE_ERROR",
+                "error": f"manifest persistence failed: {type(exc).__name__}",
+                "classifications": [], "metrics": []}
+    expected_raw = IR.expected_raw_lineage(mfp, symbol, request.timeframe, root=root)
+
     for rec in ds.reconciliations:
         session = CAL.resolve_session(rec.market_date)
         if session.session_type not in (CAL.SESSION_REGULAR, CAL.SESSION_EARLY_CLOSE):
@@ -308,14 +320,53 @@ def audit_chunk(symbol: str, year: int, start: date, end: date, provider, *,
             unexpected_timestamps=rec.unexpected_timestamps,
             session_type=session.session_type)
         classifications.append(c)
+        record = {
+            "market_date": rec.market_date.isoformat(),
+            "session2_state": rec.admission_status,
+            "session3_classification": c.state,
+            "explained_missing": list(c.explained_missing),
+            "unexplained_missing": list(c.unexplained_missing),
+        }
         if c.in_halt_aware_cohort:
-            bars = acq["bars_by_date"].get((symbol, rec.market_date), [])
+            # Metrics are computed from the SOURCE-reconstructed bars so the
+            # verifier can recompute the identical numbers without a refetch.
+            bars = IR.reconstruct_observed_bars(symbol, rec.market_date,
+                                                request.timeframe, expected_raw,
+                                                root=root)
             m = session_metrics(symbol, rec.market_date, bars, c.state,
                                 event=c.mwcb_event)
             if m:
                 metrics.append(m)
+                record["metrics"] = m.to_dict()
+        if c.state == IR.VALID_MARKET_WIDE_HALT_SESSION:
+            payload = IR.irregular_view_payload(
+                classification=c, source_manifest_fingerprint=mfp,
+                source_dataset_fingerprint=built["dataset_fingerprint"],
+                raw_content_fingerprints=expected_raw,
+                calendar_identity=_calendar_identity(),
+                bars=IR.reconstruct_observed_bars(symbol, rec.market_date,
+                                                  request.timeframe, expected_raw,
+                                                  root=root))
+            vfp = IR.persist_irregular_view(payload, root=root)
+            record["irregular_view_fingerprint"] = vfp
+            view_fps.append(vfp)
+        session_records.append(record)
+
+    chunk = {
+        "schema_version": SCHEMA_VERSION,
+        "policy_fingerprint": IR.policy_fingerprint(),
+        "registry_fingerprint": IR.registry_fingerprint(),
+        "metric_definitions_version": IR.METRIC_DEFINITIONS_VERSION,
+        "symbol": symbol, "start": start.isoformat(), "end": end.isoformat(),
+        "timeframe": request.timeframe,
+        "used_session2_manifest": mfp,
+        "used_raw_content": expected_raw,
+        "used_irregular_views": sorted(view_fps),
+        "sessions": session_records,
+    }
     return {"symbol": symbol, "year": year, "status": "OK",
             "classifications": classifications, "metrics": metrics,
+            "chunk_fingerprint": persist_population_chunk(chunk, root=root),
             "provider_calls": len(acq["acquisitions"])}
 
 
@@ -351,7 +402,7 @@ def run_population_audit(provider, *, symbols=AUDIT_UNIVERSE, root: str = ".",
     if not head["fits"]:
         raise RuntimeError(head["reason"])
 
-    per_chunk, all_class, all_metrics = [], [], []
+    per_chunk, all_class, all_metrics, chunk_fps = [], [], [], []
     source_error_years = []
     calls = 0
     for symbol in sorted(symbols):
@@ -380,8 +431,11 @@ def run_population_audit(provider, *, symbols=AUDIT_UNIVERSE, root: str = ".",
             all_class.extend(out["classifications"])
             all_metrics.extend(out["metrics"])
             counts = _count_states(out["classifications"])
+            chunk_fps.append(out["chunk_fingerprint"])
             per_chunk.append({"symbol": symbol, "year": year, "status": "OK",
-                              "sessions": len(out["classifications"]), **counts})
+                              "sessions": len(out["classifications"]),
+                              "chunk_fingerprint": out["chunk_fingerprint"],
+                              **counts})
 
     counts = _count_states(all_class)
     requested = sum(c["sessions"] for c in per_chunk)
@@ -406,6 +460,8 @@ def run_population_audit(provider, *, symbols=AUDIT_UNIVERSE, root: str = ".",
                           "end": chunks[-1][2].isoformat()},
         "provider_calls": calls,
         "coverage_kind": "STRATIFIED_SAMPLE",
+        # PopulationAudit generated_from -> PopulationChunk
+        "generated_from_chunks": sorted(chunk_fps),
         "coverage_note": (
             "The continuous cohort is a deterministic stratified sample "
             f"({SAMPLE_WINDOW_SESSIONS}-session windows, fixed anchors), NOT a "
@@ -513,15 +569,32 @@ def session3_0_status(audit: dict | None = None, *, root: str = ".") -> dict:
 
     s2 = FD.session2_graduation(root=root)
 
-    def _views_verify() -> bool:
-        """Every persisted irregular view must verify by RECOMPUTED derivation."""
-        base = ST.intraday_root(root) / ST.IRREGULAR_VIEWS
-        if not base.is_dir():
-            return True                      # none minted yet is not a failure
-        for d in sorted(base.iterdir()):
-            if not d.is_dir() or d.name.startswith("."):
-                continue
-            if not IR.verify_irregular_view(d.name, root=root).get("verified"):
+    def _graduated_halt_views_bound_and_verified() -> bool:
+        """The REAL invariant, replacing a vacuous `count >= 0` comparison.
+
+        Every graduated VALID_MARKET_WIDE_HALT_SESSION must have a bound
+        irregular view that verifies from source AND claims zero unexplained
+        intervals. A global "no unexplained gaps anywhere" test would be wrong:
+        unexplained-gap sessions may legitimately exist in the sampled
+        population — they are simply excluded from both cohorts.
+
+        Scanning every view on disk and treating an empty directory as success
+        was also wrong: it passes when the very views the audit depends on are
+        missing. The referenced views are what must exist.
+        """
+        halt_claimed = counts.get(IR.VALID_MARKET_WIDE_HALT_SESSION, 0)
+        views = verified.get("irregular_views") or []
+        if halt_claimed <= 0:
+            return not views                 # nothing claimed, nothing required
+        if len(views) != halt_claimed:
+            return False                     # a claim with no bound evidence
+        for vfp in views:
+            v = IR.verify_irregular_view(vfp, root=root)
+            if not v.get("verified"):
+                return False
+            body = ST.read_snapshot(ST.IRREGULAR_VIEWS, vfp,
+                                    "irregular_session.json", root=root) or {}
+            if body.get("unexplained_missing"):
                 return False
         return True
 
@@ -546,9 +619,10 @@ def session3_0_status(audit: dict | None = None, *, root: str = ".") -> dict:
         "all_required_mwcb_dates_present": _all_mwcb_dates_present(),
         "mwcb_sessions_classified":
             counts.get(IR.VALID_MARKET_WIDE_HALT_SESSION, 0) > 0,
-        "zero_unexplained_absences_in_halt_views":
-            counts.get(IR.REJECTED_UNEXPLAINED_GAP, 0) >= 0 and _views_verify(),
-        "irregular_views_verify_from_source": _views_verify(),
+        "graduated_halt_views_bound_and_verified":
+            _graduated_halt_views_bound_and_verified(),
+        "aggregates_rebuilt_from_child_evidence":
+            bool(verified.get("generated_from_chunks")),
         "control_date_remains_non_halt": _control_date_is_not_a_halt(),
         "no_source_errors": counts.get(IR.REJECTED_SOURCE_ERROR, 0) == 0,
         "cohort_comparison_produced":
@@ -709,7 +783,15 @@ def write_session3_artifacts(audit: dict, status: dict, *, root: str = ".") -> l
 # with zero blockers — even with the rendered population JSON deleted. That is
 # the same failure class Session 2 removed: a verdict from caller claims rather
 # than from durable evidence.
-POPULATION_IDENTITY_SCHEMA = "intraday_session3_population_v1"
+# v2 (2026-08-09): identity now binds the CHILD evidence fingerprints. Under v1
+# the aggregates were unfalsifiable — a fabricated audit claiming 100 halt
+# sessions (against a registry with exactly four MWCB dates) verified, was
+# accepted by the setter and graduated with zero blockers. v1 objects are
+# preserved and reported archival under their historical contract, never
+# silently reinterpreted, following the Session 2 identity-era precedent.
+POPULATION_IDENTITY_SCHEMA = "intraday_session3_population_v2"
+POPULATION_SCHEMA_HISTORY = ("intraday_session3_population_v1",
+                             "intraday_session3_population_v2")
 
 
 def population_identity_payload(audit: dict) -> dict:
@@ -722,6 +804,8 @@ def population_identity_payload(audit: dict) -> dict:
     """
     return {
         "schema": POPULATION_IDENTITY_SCHEMA,
+        # The child evidence IS part of what the audit means.
+        "generated_from_chunks": sorted(audit.get("generated_from_chunks") or []),
         "audit_schema_version": audit.get("schema_version"),
         "policy_id": audit.get("policy_id"),
         "policy_fingerprint": audit.get("policy_fingerprint"),
@@ -788,6 +872,13 @@ def verify_population_audit(fingerprint: str, *, root: str = ".") -> dict:
         return fail("population manifest declares a different fingerprint")
     if population_fingerprint(body) != fingerprint:
         return fail("persisted audit does not hash to its identity — modified")
+    declared = man.get("identity_schema")
+    if declared not in POPULATION_SCHEMA_HISTORY:
+        return fail(f"unknown population identity schema {declared!r}")
+    if declared != POPULATION_IDENTITY_SCHEMA:
+        return fail(f"audit was minted under {declared!r}; the current contract "
+                    f"is {POPULATION_IDENTITY_SCHEMA!r} — archival only",
+                    archival=True)
 
     # Identity of the contracts it was computed under must still be current.
     if body.get("policy_fingerprint") != IR.policy_fingerprint():
@@ -797,11 +888,47 @@ def verify_population_audit(fingerprint: str, *, root: str = ".") -> dict:
     if body.get("metric_definitions_version") != IR.METRIC_DEFINITIONS_VERSION:
         return fail("audit was computed under different metric definitions")
 
-    # Accounting is RECOMPUTED from the persisted per-chunk rows.
+    # ── Aggregates are REBUILT from the immutable child evidence ──────────
+    # Internal arithmetic consistency is not evidence of derivation: the whole
+    # point of v2 is that the numbers must come from somewhere verifiable.
+    chunk_fps = sorted(body.get("generated_from_chunks") or [])
+    if not chunk_fps:
+        return fail("audit references no population child evidence, so its "
+                    "aggregates cannot be reconstructed")
+
+    declared_chunks = sorted({c.get("chunk_fingerprint")
+                              for c in (body.get("per_chunk") or [])
+                              if c.get("chunk_fingerprint")})
+    if declared_chunks and declared_chunks != chunk_fps:
+        return fail("per_chunk rows and generated_from_chunks disagree about "
+                    "which child evidence this audit summarises")
+
+    rebuilt_counts: dict[str, int] = {}
+    rebuilt_metrics, rebuilt_views, rebuilt_sessions = [], [], 0
+    symbols_seen, chunk_results = set(), {}
+    for cfp in chunk_fps:
+        cv = verify_population_chunk(cfp, root=root)
+        chunk_results[cfp] = cv.get("verified")
+        if not cv["verified"]:
+            return fail(f"population child {cfp} failed verification: "
+                        f"{cv['reason']}", chunks=chunk_results)
+        for k, v in cv["counts"].items():
+            rebuilt_counts[k] = rebuilt_counts.get(k, 0) + v
+        rebuilt_metrics.extend(cv["metrics"])
+        rebuilt_views.extend(cv["irregular_views"])
+        rebuilt_sessions += cv["session_count"]
+        symbols_seen.add(cv["symbol"])
+
     counts = body.get("counts") or {}
-    per_chunk = body.get("per_chunk") or []
-    requested = sum(c.get("sessions", 0) for c in per_chunk)
+    if {k: v for k, v in counts.items() if v} != {k: v for k, v in rebuilt_counts.items() if v}:
+        return fail(f"stored population counts do not rebuild from child "
+                    f"evidence (stored {counts}, rebuilt {rebuilt_counts})")
+
+    requested = sum(c.get("sessions", 0) for c in body.get("per_chunk") or [])
     accounted = sum(counts.values())
+    if requested != rebuilt_sessions:
+        return fail(f"per_chunk session counts ({requested}) do not match the "
+                    f"child evidence ({rebuilt_sessions})")
     if requested != body.get("requested_certified_symbol_sessions"):
         return fail("requested symbol-sessions do not recompute from per_chunk")
     if accounted != body.get("accounted_symbol_sessions"):
@@ -809,6 +936,27 @@ def verify_population_audit(fingerprint: str, *, root: str = ".") -> dict:
     if requested != accounted or not body.get("accounting_exact"):
         return fail(f"population accounting is not exact: {accounted} accounted "
                     f"of {requested} requested")
+
+    if sorted(body.get("symbols") or []) != sorted(symbols_seen):
+        return fail("audit symbol universe does not match its child evidence")
+
+    # Cohorts, halt-session list and the cohort comparison all rebuild.
+    cont = [m for m in rebuilt_metrics if m["state"] == IR.VALID_CONTINUOUS_SESSION]
+    halt = [m for m in rebuilt_metrics if m["state"] == IR.VALID_MARKET_WIDE_HALT_SESSION]
+    if body.get("cohorts") != {IR.COHORT_CONTINUOUS_ONLY: len(cont),
+                               IR.COHORT_HALT_AWARE: len(cont) + len(halt)}:
+        return fail("stored cohort counts do not rebuild from child evidence")
+    if sorted(body.get("halt_sessions") or [], key=lambda m: (m["symbol"], m["market_date"])) != \
+            sorted(halt, key=lambda m: (m["symbol"], m["market_date"])):
+        return fail("stored halt-session list does not rebuild from child evidence")
+
+    rebuilt_cmp = compare_cohorts(
+        [SessionMetrics(**{k: v for k, v in m.items() if k != "market_date"},
+                        market_date=date.fromisoformat(m["market_date"])) for m in cont],
+        [SessionMetrics(**{k: v for k, v in m.items() if k != "market_date"},
+                        market_date=date.fromisoformat(m["market_date"])) for m in halt])
+    if body.get("comparison") != rebuilt_cmp:
+        return fail("stored cohort comparison does not rebuild from child evidence")
 
     # Exact MWCB prevalence is recomputed from the calendar + registry.
     exact = mwcb_prevalence(symbols=body.get("symbols") or AUDIT_UNIVERSE)
@@ -824,6 +972,8 @@ def verify_population_audit(fingerprint: str, *, root: str = ".") -> dict:
             "accounted_symbol_sessions": accounted,
             "accounting_exact": True,
             "comparison": body.get("comparison") or {},
+            "generated_from_chunks": chunk_fps,
+            "irregular_views": sorted(rebuilt_views),
             "exact_mwcb_prevalence": exact,
             "symbols": body.get("symbols") or []}
 
@@ -911,3 +1061,185 @@ def load_session3_graduation_evidence(*, root: str = ".") -> dict:
                           f"insufficient for graduation: {insufficient}"}
     return {"available": True, "audit": v, "integrity_valid": True,
             "population_fingerprint": fp, "pointer": pointer, "reason": None}
+
+
+# ── Immutable population CHILD evidence ────────────────────────────────────
+# A content hash proves an audit has not changed. It does not prove the audit
+# was DERIVED. A wholly fabricated audit claiming 100 market-wide halt sessions
+# — against a registry containing exactly four MWCB dates — verified, was
+# accepted by the setter, and graduated with zero blockers, because nothing
+# bound its aggregates to per-session evidence.
+#
+# So the audit now summarises immutable CHILD objects, and verification REBUILDS
+# every aggregate from them.
+#
+# Minimal provenance vocabulary, deliberately concrete rather than a generic
+# parent-reference framework:
+#
+#   PopulationAudit  generated_from ->  PopulationChunk
+#   PopulationChunk  used           ->  Session 2 manifest / raw content
+#   PopulationChunk  used           ->  IrregularView   (halt sessions only)
+CHUNK_IDENTITY_SCHEMA = "intraday_session3_population_chunk_v1"
+
+
+def chunk_identity_payload(chunk: dict) -> dict:
+    """What DEFINES a population chunk. Excludes generation time."""
+    return {
+        "schema": CHUNK_IDENTITY_SCHEMA,
+        "policy_fingerprint": chunk.get("policy_fingerprint"),
+        "registry_fingerprint": chunk.get("registry_fingerprint"),
+        "metric_definitions_version": chunk.get("metric_definitions_version"),
+        "symbol": chunk.get("symbol"),
+        "start": chunk.get("start"),
+        "end": chunk.get("end"),
+        "timeframe": chunk.get("timeframe"),
+        "used_session2_manifest": chunk.get("used_session2_manifest"),
+        "used_raw_content": sorted(chunk.get("used_raw_content") or []),
+        "used_irregular_views": sorted(chunk.get("used_irregular_views") or []),
+        "sessions": chunk.get("sessions"),
+    }
+
+
+def chunk_fingerprint(chunk: dict) -> str:
+    return ST.content_hash(chunk_identity_payload(chunk))
+
+
+def persist_population_chunk(chunk: dict, *, root: str = ".") -> str:
+    fp = chunk_fingerprint(chunk)
+    ST.write_snapshot(ST.SESSION3_POPULATION_CHUNKS, fp, {
+        "chunk_evidence.json": chunk,
+        "chunk_manifest.json": {
+            "schema_version": SCHEMA_VERSION,
+            "identity_schema": CHUNK_IDENTITY_SCHEMA,
+            "chunk_fingerprint": fp,
+            "symbol": chunk.get("symbol"),
+            "start": chunk.get("start"), "end": chunk.get("end"),
+            "session_count": len(chunk.get("sessions") or []),
+            "used_session2_manifest": chunk.get("used_session2_manifest"),
+        },
+    }, root=root)
+    return fp
+
+
+def verify_population_chunk(fingerprint: str, *, root: str = ".") -> dict:
+    """Recompute a chunk's every claim from persisted Session 2 evidence.
+
+    Reuses the frozen classifier, the frozen normalizer and the same metric
+    function the audit used — a second implementation of any of them would let
+    the same inputs mean two different things.
+    """
+    def fail(reason: str, **extra) -> dict:
+        return {"verified": False, "reason": reason,
+                "chunk_fingerprint": fingerprint, **extra}
+
+    body = ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, fingerprint,
+                            "chunk_evidence.json", root=root)
+    man = ST.read_snapshot(ST.SESSION3_POPULATION_CHUNKS, fingerprint,
+                           "chunk_manifest.json", root=root)
+    if body is None or man is None:
+        return fail("missing chunk evidence or manifest")
+    if man.get("chunk_fingerprint") != fingerprint:
+        return fail("chunk manifest declares a different fingerprint")
+    if chunk_fingerprint(body) != fingerprint:
+        return fail("chunk does not hash to its identity — modified")
+    if body.get("policy_fingerprint") != IR.policy_fingerprint():
+        return fail("chunk built under a different Session 3.0 policy")
+    if body.get("registry_fingerprint") != IR.registry_fingerprint():
+        return fail("chunk built under a different MWCB registry")
+    if body.get("metric_definitions_version") != IR.METRIC_DEFINITIONS_VERSION:
+        return fail("chunk built under different metric definitions")
+
+    symbol = body.get("symbol")
+    timeframe = body.get("timeframe")
+    mfp = body.get("used_session2_manifest")
+    prov = ST.verify_dataset_provenance(mfp, root=root) if mfp else {}
+    if not prov.get("verified"):
+        return fail(f"source Session 2 manifest failed: {prov.get('reason')}")
+
+    req = ST.read_snapshot(ST.DATASET_MANIFESTS, mfp, "request_manifest.json",
+                           root=root) or {}
+    recon = ST.read_snapshot(ST.DATASET_MANIFESTS, mfp, "reconciliation.json",
+                             root=root) or []
+
+    # The requested window must be the one the manifest actually covers.
+    if (req.get("start"), req.get("end")) != (body.get("start"), body.get("end")):
+        return fail("chunk window does not match its source request manifest")
+    if symbol not in (req.get("symbols") or []):
+        return fail("chunk symbol is not in its source request manifest")
+    if timeframe != req.get("timeframe"):
+        return fail("chunk timeframe disagrees with its source request manifest")
+
+    # Raw lineage is decided by the MANIFEST, never by the chunk.
+    expected_raw = IR.expected_raw_lineage(mfp, symbol, timeframe, root=root)
+    if sorted(body.get("used_raw_content") or []) != expected_raw:
+        return fail("chunk raw evidence is not the acquisition lineage for this "
+                    "symbol", expected_raw=expected_raw)
+
+    by_date = {(r.get("symbol"), r.get("market_date")): r for r in recon}
+    rebuilt_counts: dict[str, int] = {}
+    rebuilt_metrics, rebuilt_views = [], []
+    for rec in body.get("sessions") or []:
+        md = rec.get("market_date")
+        row = by_date.get((symbol, md))
+        if row is None:
+            return fail(f"no persisted reconciliation row for {symbol} {md}")
+        if row.get("admission_status") != rec.get("session2_state"):
+            return fail(f"{symbol} {md}: session2_state does not match the "
+                        f"persisted reconciliation record")
+        session = CAL.resolve_session(date.fromisoformat(md))
+        recomputed = IR.classify_session(
+            symbol=symbol, market_date=date.fromisoformat(md), timeframe=timeframe,
+            session2_state=row.get("admission_status"),
+            missing_timestamps=row.get("missing_timestamps") or [],
+            unexpected_timestamps=row.get("unexpected_timestamps") or [],
+            session_type=session.session_type)
+        if recomputed.state != rec.get("session3_classification"):
+            return fail(f"{symbol} {md}: classification does not recompute "
+                        f"(stored {rec.get('session3_classification')!r}, "
+                        f"recomputed {recomputed.state!r})")
+        if list(recomputed.explained_missing) != list(rec.get("explained_missing") or []):
+            return fail(f"{symbol} {md}: explained_missing does not recompute")
+        if list(recomputed.unexplained_missing) != list(rec.get("unexplained_missing") or []):
+            return fail(f"{symbol} {md}: unexplained_missing does not recompute")
+        rebuilt_counts[recomputed.state] = rebuilt_counts.get(recomputed.state, 0) + 1
+
+        # Halt sessions must bind to a verifying irregular view for THIS
+        # symbol/date. A valid view for another session must not qualify.
+        if recomputed.state == IR.VALID_MARKET_WIDE_HALT_SESSION:
+            vfp = rec.get("irregular_view_fingerprint")
+            if not vfp:
+                return fail(f"{symbol} {md}: halt session has no bound irregular view")
+            vv = IR.verify_irregular_view(vfp, root=root)
+            if not vv.get("verified"):
+                return fail(f"{symbol} {md}: bound irregular view {vfp} failed "
+                            f"verification: {vv.get('reason')}")
+            if vv.get("symbol") != symbol or vv.get("market_date") != md:
+                return fail(f"{symbol} {md}: bound irregular view describes "
+                            f"{vv.get('symbol')} {vv.get('market_date')}")
+            rebuilt_views.append(vfp)
+            if recomputed.unexplained_missing:
+                return fail(f"{symbol} {md}: graduated halt session has "
+                            f"unexplained missing intervals")
+
+        # Metrics must recompute from the bars reconstructed from RAW evidence.
+        stored_metrics = rec.get("metrics")
+        if stored_metrics is not None:
+            bars = IR.reconstruct_observed_bars(symbol, date.fromisoformat(md),
+                                                timeframe, expected_raw, root=root)
+            m = session_metrics(symbol, date.fromisoformat(md), bars, recomputed.state)
+            if m is None or m.to_dict() != stored_metrics:
+                return fail(f"{symbol} {md}: session metrics do not recompute "
+                            f"from the source bars")
+            rebuilt_metrics.append(stored_metrics)
+
+    if sorted(body.get("used_irregular_views") or []) != sorted(rebuilt_views):
+        return fail("chunk irregular-view references do not match the halt "
+                    "sessions it actually contains")
+
+    return {"verified": True, "reason": None, "chunk_fingerprint": fingerprint,
+            "symbol": symbol, "start": body.get("start"), "end": body.get("end"),
+            "counts": rebuilt_counts,
+            "session_count": len(body.get("sessions") or []),
+            "metrics": rebuilt_metrics,
+            "irregular_views": sorted(rebuilt_views),
+            "used_session2_manifest": mfp}
