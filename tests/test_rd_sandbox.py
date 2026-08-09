@@ -336,6 +336,90 @@ def test_cancel_running_job(env):
         assert proc.poll() is not None  # process was killed
 
 
+# --- hostile result-file ingestion (P0.7): the reader must not be a confused
+#     deputy for a worker-controlled output/ path -------------------------------
+def test_read_result_safe_rejects_symlink(tmp_path):
+    secret = tmp_path / "secret"; secret.write_text("TOPSECRET")
+    link = tmp_path / "result.json"
+    os.symlink(secret, link)  # worker plants a symlink to a file it must not read
+    assert sbx._read_result_safe(link, 1 << 20) is None
+
+
+def test_read_result_safe_rejects_fifo(tmp_path):
+    fifo = tmp_path / "result.json"
+    os.mkfifo(fifo)  # a FIFO would block a naive reader forever
+    assert sbx._read_result_safe(fifo, 1 << 20) is None
+
+
+def test_read_result_safe_rejects_directory(tmp_path):
+    d = tmp_path / "result.json"; d.mkdir()
+    assert sbx._read_result_safe(d, 1 << 20) is None
+
+
+def test_read_result_safe_rejects_oversize(tmp_path):
+    f = tmp_path / "result.json"; f.write_bytes(b"x" * 4096)
+    assert sbx._read_result_safe(f, 1024) is None
+
+
+def test_read_result_safe_reads_regular_file(tmp_path):
+    f = tmp_path / "result.json"; f.write_bytes(b'{"ok":1}')
+    assert sbx._read_result_safe(f, 1 << 20) == b'{"ok":1}'
+
+
+def test_symlinked_result_maps_to_failed_validation(env):
+    # A worker that replaces result.json with a symlink to a host file must NOT
+    # cause the trusted runner to read that host file — the job fails validation.
+    db, jobs_root = env
+    secret = Path(jobs_root) / "host_secret.txt"
+    secret.write_text('{"schema_version":"1"}')  # even valid-looking JSON must not be followed
+    worker = textwrap.dedent(f"""
+        import os
+        out = os.environ['RD_OUTPUT_DIR']
+        os.symlink({str(secret)!r}, os.path.join(out, 'result.json'))
+    """)
+    with reg.connect(db) as conn:
+        job = _make_queued_job(conn)
+        final = sbx.run_job(conn, job, worker_argv=_worker_argv(worker),
+                            jobs_root=jobs_root, now_fn=_clock())
+        assert final.status is JobStatus.FAILED_VALIDATION
+
+
+# --- env sanitization (P1.3): the worker runs with a clean, explicit env; the
+#     runner never leaks its own process environment (e.g. secrets) ------------
+def test_worker_env_does_not_inherit_parent_secrets(env, monkeypatch):
+    db, jobs_root = env
+    monkeypatch.setenv("FAKE_AWS_SECRET_ACCESS_KEY", "should-not-leak-123")
+    monkeypatch.setenv("FAKE_PRIME_TOKEN", "nope")
+    worker = textwrap.dedent("""
+        import os, json, hashlib
+        inp=os.environ['RD_INPUT_DIR']; out=os.environ['RD_OUTPUT_DIR']; ws=os.environ['RD_WORKSPACE_DIR']
+        open(os.path.join(ws,'env_keys.txt'),'w').write('\\n'.join(sorted(os.environ.keys())))
+        man=json.load(open(os.path.join(inp,'manifest.json')))
+        payload={'k': sorted(os.environ.keys())}
+        canon=json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+        env={'schema_version':'1','job_id':os.environ['RD_JOB_ID'],'worker_id':'test-worker',
+             'worker_version':'0.0.1','started_at':'t','completed_at':'t','exit_code':0,
+             'input_manifest_hash':man['manifest_hash'],
+             'result_payload_hash':'sha256:'+hashlib.sha256(canon.encode()).hexdigest(),'payload':payload}
+        open(os.path.join(out,'result.json'),'w').write(json.dumps(env))
+    """)
+    with reg.connect(db) as conn:
+        job = _make_queued_job(conn)
+        final = sbx.run_job(conn, job, worker_argv=_worker_argv(worker),
+                            jobs_root=jobs_root, now_fn=_clock())
+        assert final.status is JobStatus.SUCCEEDED
+        keys = (Path(jobs_root)/job.job_id/"workspace"/"env_keys.txt").read_text().splitlines()
+        assert "FAKE_AWS_SECRET_ACCESS_KEY" not in keys
+        assert "FAKE_PRIME_TOKEN" not in keys
+        # The runner-supplied allowlist is present...
+        assert {"PATH","HOME","RD_JOB_ID","RD_INPUT_DIR","RD_WORKSPACE_DIR",
+                "RD_OUTPUT_DIR","RD_NETWORK_PROFILE"} <= set(keys)
+        # ...and nothing secret-shaped leaked from the parent process. (Python may
+        # add LC_CTYPE itself via PEP 538 locale coercion; that is not inheritance.)
+        assert not [k for k in keys if any(t in k.upper()
+                    for t in ("SECRET","TOKEN","PASSWORD","AWS","PRIME","API_KEY"))]
+
+
 # --- manifest integrity -----------------------------------------------------
 def test_manifest_hash_deterministic_excludes_created_at(env):
     db, jobs_root = env

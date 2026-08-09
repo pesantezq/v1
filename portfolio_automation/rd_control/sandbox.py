@@ -167,6 +167,58 @@ _REQUIRED_RESULT_FIELDS = (
 _TRAVERSAL_MARKERS = ("../", "..\\", "/etc/", "/srv/stockbot-shadow", "/mnt/c", "/mnt/d")
 
 
+def _read_result_safe(path: Path, max_bytes: int) -> bytes | None:
+    """Read a worker-produced result file without becoming a confused deputy.
+
+    The worker fully controls output/, so the result path is HOSTILE input. A
+    naive read (Path.read_bytes) would happily follow a symlink the worker
+    planted at result.json to /etc/shadow, block forever on a FIFO, or exhaust
+    memory on a huge/sparse file. We defend technically, not by trust:
+
+    * O_NOFOLLOW  -> refuse if the final component is a symlink (ELOOP).
+    * O_NONBLOCK  -> a FIFO/device opens without blocking; we then reject it.
+    * fstat + S_ISREG -> only a *regular* file is acceptable (no dir/FIFO/dev).
+    * bounded read of max_bytes+1 -> oversize is detected and rejected, and the
+      trusted process never allocates more than the cap.
+
+    Returns the bytes on success, or None on any anomaly (caller -> FAILED_VALIDATION).
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None  # symlink target, FIFO, socket, device, or directory
+        if st.st_size > max_bytes:
+            return None  # oversize by stat; refuse before reading
+        # Clear O_NONBLOCK so the bounded read behaves normally on a regular file.
+        try:
+            import fcntl
+
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+        except (ImportError, OSError):
+            pass
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1  # read one extra byte to detect growth past cap
+        while remaining > 0:
+            chunk = os.read(fd, min(1 << 20, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            return None  # grew past the cap between stat and read (TOCTOU)
+        return data
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
 @dataclass
 class ValidationOutcome:
     ok: bool
@@ -389,12 +441,11 @@ def run_job(
                     error_class="worker_nonzero_exit", error_message=f"exit {ex.exit_code}")
 
     # --- collect + validate result (exit 0 does NOT imply success) ---
+    # Treat the result path as HOSTILE: the worker controls output/. Do not follow
+    # symlinks, require a regular file, and bound the read so a symlink/FIFO/dir/
+    # huge-file cannot make the trusted reader a confused deputy (P0.7).
     result_path = dirs.output / RESULT_FILENAME
-    raw: bytes | None
-    try:
-        raw = result_path.read_bytes()
-    except OSError:
-        raw = None
+    raw = _read_result_safe(result_path, max_output_bytes)
     # RESULT_RECEIVED regardless (the worker exited 0); the trusted validator,
     # not the exit code, decides success.
     reg.transition(conn, job.job_id, JobStatus.RESULT_RECEIVED, at=now_fn(),
