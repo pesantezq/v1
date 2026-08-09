@@ -1905,3 +1905,37 @@ artifacts:
     severity_if_missing: info
     consumer_status: consumed
     notes: Weekly ETF email send/dry-run/duplicate-suppressed receipt (content hash, recipients, reason). Default inert (email gated OFF).
+
+  # ── Agent Lab export lane (added 2026-08-09) ──────────────────────────────
+  # Two authoritative producers only. The artifacts COPIED into a snapshot are
+  # deliberately NOT re-registered here: they stay owned by their original
+  # producers, and the snapshot manifest joins provenance FROM this registry.
+  # Registering the copies would fork the source of truth for who produces what.
+  # Cadence is on_demand until the run_daily_safe.sh Stage 15 integration is
+  # separately approved — see docs/STOCKBOT_AGENT_EXPORT.md.
+
+  agent_export/latest.json:
+    path: outputs/agent_export/latest.json
+    label: agent export latest-snapshot pointer
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: agent_export.builder
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Pointer (never a copy) to the newest frozen Agent Lab snapshot — snapshot_id, snapshot_sha256, production_git_sha, run_id, health status. The snapshot directories it names are immutable; this pointer is the only mutable element of the export lane. Absent until the first export runs.
+
+  agent_export_health.json:
+    path: outputs/policy/agent_export_health.json
+    label: agent export health
+    lens: developer
+    role: probe
+    required: false
+    cadence: on_demand
+    producer: agent_export.health
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: GREEN/AMBER/RED health for the export lane (snapshot age, hash + schema validation, required-artifact coverage, secret-boundary breaches). RED means verifiable corruption; AMBER covers no-snapshot-yet or stale. Becomes cadence=daily with a daily-tool-analysis consumer when Stage 15 integration is approved.

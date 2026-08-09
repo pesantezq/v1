@@ -60,6 +60,14 @@ class OutputNamespace(str, Enum):
     # outcomes, scorecard/calibration, and health for the curated ETF baskets.
     # Never feeds decision_plan.json or the production decision engine.
     WEEKLY_ETF_BUNDLES  = "weekly_etf_bundles"
+    # ── Agent Lab export lane (added 2026-08-09) ───────────────────────────
+    # AGENT_EXPORT holds frozen, hash-verified, read-only snapshots of a
+    # COMPLETED production run, built for offline analysis by the Agent Lab.
+    # It is a pure downstream sink: nothing in the pipeline reads from it, and
+    # the exporter only ever COPIES from an explicit allowlist of already-public
+    # artifact namespaces. It never feeds the decision engine and grants no
+    # production mutation authority. See docs/STOCKBOT_AGENT_EXPORT.md.
+    AGENT_EXPORT        = "agent_export"
 
 
 class DataGovernanceError(Exception):
@@ -93,6 +101,7 @@ _NAMESPACE_SUBDIR: dict[OutputNamespace, str] = {
     OutputNamespace.PROMOTION_REVIEW:    "promotion_review",
     OutputNamespace.PROMOTION_APPROVALS: "promotion_approvals",
     OutputNamespace.WEEKLY_ETF_BUNDLES:  "weekly_etf_bundles",
+    OutputNamespace.AGENT_EXPORT:        "agent_export",
 }
 
 # Namespaces that include user_id as a path segment
@@ -385,5 +394,13 @@ def get_policies(base_dir: Path | str = "outputs") -> dict[OutputNamespace, Outp
             description="Standalone observe-only weekly ETF bundle watchlist: "
                         "analysis, frozen predictions, matured outcomes, scorecard, "
                         "calibration, and health — never feeds the decision engine",
+        ),
+        OutputNamespace.AGENT_EXPORT: OutputPathPolicy(
+            namespace=OutputNamespace.AGENT_EXPORT,
+            root=base / "agent_export",
+            description="Frozen, hash-verified, read-only snapshots of a completed "
+                        "production run for offline Agent Lab analysis — a pure "
+                        "downstream sink; no pipeline stage reads from it and it "
+                        "grants no production mutation authority",
         ),
     }
