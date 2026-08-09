@@ -491,19 +491,27 @@ def test_session_progress_is_not_advertised_as_enabled_without_code():
 
 
 # --------------------------- status evidence ---------------------------
-def test_readiness_requires_evidence_not_assertion():
+def test_readiness_requires_evidence_not_assertion(tmp_path):
     """Superseded premise: this once accepted metadata fields as proof. Since
     readiness is recomputed from persisted bytes, asserted-only metadata must
     now read FALSE. The positive case needs a real snapshot and lives in
-    test_readiness_is_recomputed_from_persisted_bytes_not_metadata."""
+    test_readiness_is_recomputed_from_persisted_bytes_not_metadata.
+
+    Scoped to an EMPTY root. Readiness is now derived from durable graduation
+    evidence, so leaving the root defaulted made this read the operator's real
+    corpus and pass for the wrong reason — the test must supply the absence it
+    claims to be testing.
+    """
     from portfolio_automation.intraday_lab import foundation as FD
-    blank = FD.session2_status(None)
+    blank = FD.session2_status(None, root=str(tmp_path))
     assert blank["canonical_dataset_ready"] is False
     assert blank["feature_dataset_ready"] is False
+    assert blank["graduation_evidence_ready"] is False
     asserted_only = FD.session2_status({"dataset_fingerprint": "x",
                                         "sessions_reconciled": 3,
                                         "feature_fingerprint": "y",
-                                        "feature_observations": 10})
+                                        "feature_observations": 10},
+                                       root=str(tmp_path))
     assert asserted_only["canonical_dataset_ready"] is False
     assert asserted_only["feature_dataset_ready"] is False
 

@@ -64,8 +64,10 @@ class _WindowProvider:
 
 def _freeze(tmp_path, windows=None):
     """Produce durable graduation evidence and point the gate at it."""
+    # The FULL protocol window set: a smaller pilot is now correctly refused as
+    # graduation evidence, which is the point of the protocol.
     out = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
-                       windows=windows or PI.PILOT_WINDOWS[-2:])
+                       windows=windows or PI.PILOT_WINDOWS)
     C.persist_certified_schedule(root=str(tmp_path))
     fp = PI.persist_pilot(out, root=str(tmp_path))
     PI.set_graduation_evidence(fp, root=str(tmp_path))
@@ -133,10 +135,12 @@ def test_verdict_is_recovered_in_a_genuinely_fresh_process(tmp_path):
 def test_evidence_is_located_by_explicit_pointer_not_by_mtime(tmp_path):
     """Selecting evidence by 'newest directory' would make the verdict depend on
     filesystem incidentals rather than an explicit, reviewable decision."""
-    _, first = _freeze(tmp_path, windows=PI.PILOT_WINDOWS[-1:])
-    # A second, NEWER pilot object exists but is not pointed at.
-    second_out = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
-                              windows=PI.PILOT_WINDOWS[-2:])
+    _, first = _freeze(tmp_path)
+    # A second, NEWER, equally valid graduation pilot exists but is not pointed
+    # at. Both satisfy the protocol, so recency is the only thing separating them.
+    extra = PI.PILOT_WINDOWS + (
+        PI.PilotWindow("extra-2019", date(2019, 5, 6), date(2019, 5, 8), "extra"),)
+    second_out = PI.run_pilot(_WindowProvider(), root=str(tmp_path), windows=extra)
     second = PI.persist_pilot(second_out, root=str(tmp_path))
     assert second != first
 
@@ -336,3 +340,304 @@ def test_the_source_probe_actually_detects_an_enabling_assignment(tmp_path, monk
     g2 = FD.session2_graduation(root=str(tmp_path))
     assert g2["measured_checks"][
         "strategy_validation_never_enabled_in_source"]["pass"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEATURE EVIDENCE — "DATASET_FEATURE_FOUNDATION_READY" must mean both halves
+#
+# The gate previously verified datasets and ignored features, so a pilot's
+# feature snapshot could be DELETED outright and graduation stayed READY while
+# still calling itself DATASET_FEATURE_FOUNDATION_READY.
+# ═══════════════════════════════════════════════════════════════════════════
+def _feature_dir(tmp_path, pilot, i=0):
+    return (ST.intraday_root(str(tmp_path)) / "features" / "content"
+            / pilot["windows"][i]["feature_fingerprint"])
+
+
+@authoritative
+def test_deleting_a_pilot_feature_snapshot_breaks_graduation(tmp_path):
+    pilot, fp = _freeze(tmp_path)
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_READY
+    import shutil
+    shutil.rmtree(_feature_dir(tmp_path, pilot))
+
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["verified"] is False and "feature" in v["reason"]
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED
+    assert FD.session3_input_contract(root=str(tmp_path))["session_3_gate"] == \
+        FD.SESSION_3_NO_GO
+
+
+@authoritative
+def test_tampering_feature_content_breaks_graduation(tmp_path):
+    pilot, fp = _freeze(tmp_path)
+    _tamper(_feature_dir(tmp_path, pilot) / "features.json",
+            lambda d: d.__setitem__(0, {**d[0], "value": 42.0}))
+    assert PI.verify_historical_pilot(fp, root=str(tmp_path))["verified"] is False
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED
+
+
+@authoritative
+@pytest.mark.parametrize("field", ["source_dataset_fingerprint",
+                                   "source_dataset_manifest_fingerprint"])
+def test_feature_bound_to_the_wrong_source_breaks_graduation(tmp_path, field):
+    """Feature identity binds to its source; a feature pointing elsewhere would
+    let an experiment attribute results to data that did not produce them."""
+    pilot, fp = _freeze(tmp_path)
+    _tamper(_feature_dir(tmp_path, pilot) / "feature_content_manifest.json",
+            lambda d: d.__setitem__(field, "z" * 32))
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["verified"] is False
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED
+
+
+@authoritative
+def test_feature_observation_count_is_verified_not_trusted(tmp_path):
+    """The pilot's stored count is a claim; the verified snapshot is evidence."""
+    pilot, fp = _freeze(tmp_path)
+    path = ST.intraday_root(str(tmp_path)) / ST.PILOTS / fp / "pilot.json"
+    _tamper(path, lambda d: d["windows"][0].__setitem__("feature_observations", 1))
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["verified"] is False
+
+
+@authoritative
+def test_verified_pilot_reports_per_window_feature_evidence(tmp_path):
+    _, fp = _freeze(tmp_path)
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["all_windows_features_verified"] is True
+    for w in v["window_verification"]:
+        assert w["dataset_provenance_verified"] and w["dataset_current_era"]
+        assert w["feature_verified"]
+        assert w["feature_dataset_binding_verified"]
+        assert w["feature_manifest_binding_verified"]
+        assert w["feature_observation_count_verified"]
+        assert w["acquisition_events"] > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GRADUATION PROTOCOL — a valid pilot is not automatically graduation evidence
+# ═══════════════════════════════════════════════════════════════════════════
+@authoritative
+def test_an_underpowered_pilot_is_valid_but_cannot_graduate(tmp_path):
+    """One normal 2026 week is a sound research object and a terrible standard.
+    Integrity and sufficiency are reported separately so neither lies."""
+    small = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
+                         windows=PI.PILOT_WINDOWS[-1:])
+    C.persist_certified_schedule(root=str(tmp_path))
+    fp = PI.persist_pilot(small, root=str(tmp_path))
+
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["pilot_integrity_valid"] is True          # not corrupt
+    assert v["graduation_protocol_satisfied"] is False  # not sufficient
+    assert any("missing required window" in f
+               for f in v["graduation_protocol"]["failures"])
+
+    with pytest.raises(ValueError, match="does NOT satisfy"):
+        PI.set_graduation_evidence(fp, root=str(tmp_path))
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED
+
+
+@authoritative
+def test_wrong_symbols_cannot_graduate(tmp_path):
+    out = PI.run_pilot(_WindowProvider(), root=str(tmp_path), symbols=("SPY",))
+    C.persist_certified_schedule(root=str(tmp_path))
+    fp = PI.persist_pilot(out, root=str(tmp_path))
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["graduation_protocol_satisfied"] is False
+    assert any("AAPL" in f for f in v["graduation_protocol"]["failures"])
+    with pytest.raises(ValueError):
+        PI.set_graduation_evidence(fp, root=str(tmp_path))
+
+
+@authoritative
+def test_a_shifted_required_window_cannot_graduate(tmp_path):
+    """Right label, wrong dates — the regime the window exists to exercise."""
+    from dataclasses import replace
+    shifted = tuple(
+        replace(w, start=date(2026, 8, 10), end=date(2026, 8, 14))
+        if w.label == "2026-normal" else w
+        for w in PI.PILOT_WINDOWS)
+    out = PI.run_pilot(_WindowProvider(), root=str(tmp_path), windows=shifted)
+    C.persist_certified_schedule(root=str(tmp_path))
+    fp = PI.persist_pilot(out, root=str(tmp_path))
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["graduation_protocol_satisfied"] is False
+    assert any("2026-normal" in f for f in v["graduation_protocol"]["failures"])
+
+
+@authoritative
+def test_extra_windows_are_allowed_required_subset_of_observed(tmp_path):
+    """Documented policy: more adversarial evidence must never be a regression."""
+    extra = PI.PILOT_WINDOWS + (
+        PI.PilotWindow("extra-2019", date(2019, 5, 6), date(2019, 5, 8), "extra"),)
+    out = PI.run_pilot(_WindowProvider(), root=str(tmp_path), windows=extra)
+    C.persist_certified_schedule(root=str(tmp_path))
+    fp = PI.persist_pilot(out, root=str(tmp_path))
+    v = PI.verify_historical_pilot(fp, root=str(tmp_path))
+    assert v["graduation_protocol_satisfied"] is True
+    assert v["graduation_protocol"]["extra_window_policy"] == \
+        "required_subset_of_observed"
+    PI.set_graduation_evidence(fp, root=str(tmp_path))       # must be accepted
+
+
+def test_protocol_is_part_of_pilot_identity():
+    """Same results under a different protocol must not share an identity, or a
+    generic pilot could be relabelled as graduation evidence after the fact."""
+    base = {"symbols": ["AAPL", "SPY"], "windows": [], "calendar_identity": {},
+            "graduation_protocol_id": PI.GRADUATION_PROTOCOL_ID,
+            "strategy_validation_allowed": False}
+    other = {**base, "graduation_protocol_id": "SOMETHING_ELSE"}
+    assert PI.pilot_fingerprint(base) != PI.pilot_fingerprint(other)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STATUS CONSISTENCY
+# ═══════════════════════════════════════════════════════════════════════════
+@authoritative
+def test_status_never_reports_ready_with_false_readiness_fields(tmp_path):
+    """The exact contradiction that existed: READY beside feature_dataset_ready
+    = False, because the fields read a caller argument that was absent."""
+    _freeze(tmp_path)
+    st = FD.session2_status(root=str(tmp_path))
+    assert st["architecture_status"] == FD.DATASET_FEATURE_FOUNDATION_READY
+    assert st["canonical_dataset_ready"] is True
+    assert st["feature_dataset_ready"] is True
+    assert st["graduation_evidence_ready"] is True
+    assert st["graduation_protocol_satisfied"] is True
+
+
+@authoritative
+def test_status_and_graduation_agree_in_a_fresh_process(tmp_path):
+    _freeze(tmp_path)
+    script = textwrap.dedent("""
+        import json, sys
+        sys.path.insert(0, sys.argv[1])
+        from portfolio_automation.intraday_lab import foundation as FD
+        st = FD.session2_status(root=sys.argv[2])
+        g = FD.session2_graduation(root=sys.argv[2])
+        c = FD.session3_input_contract(root=sys.argv[2])
+        print(json.dumps({"status": st["architecture_status"],
+                          "canonical": st["canonical_dataset_ready"],
+                          "features": st["feature_dataset_ready"],
+                          "grad": g["status"], "gate": c["session_3_gate"]}))
+    """)
+    proc = subprocess.run([sys.executable, "-c", script, REPO, str(tmp_path)],
+                          capture_output=True, text=True, timeout=300, cwd=REPO)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["status"] == out["grad"] == FD.DATASET_FEATURE_FOUNDATION_READY
+    assert out["canonical"] is True and out["features"] is True
+    assert out["gate"] == FD.SESSION_3_GO
+
+
+@authoritative
+def test_status_readiness_falls_with_the_evidence(tmp_path):
+    pilot, fp = _freeze(tmp_path)
+    import shutil
+    shutil.rmtree(_feature_dir(tmp_path, pilot))
+    st = FD.session2_status(root=str(tmp_path))
+    assert st["architecture_status"] == FD.DATASET_FEATURE_FOUNDATION_LIMITED
+    assert st["feature_dataset_ready"] is False
+    assert st["canonical_dataset_ready"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EVENT IDENTITY — the verifier claimed recomputation it never performed
+# ═══════════════════════════════════════════════════════════════════════════
+@authoritative
+def test_acquisition_event_identity_actually_recomputes(tmp_path):
+    _freeze(tmp_path)
+    base = ST.intraday_root(str(tmp_path)) / ST.RAW_EVENTS
+    ids = [d.name for d in base.iterdir() if d.is_dir()]
+    assert ids
+    for eid in ids:
+        v = ST.verify_acquisition_event(eid, root=str(tmp_path))
+        assert v["verified"] is True and v["recomputed"] == eid
+
+
+@authoritative
+@pytest.mark.parametrize("field,value", [
+    ("symbol", "TAMPERED"),
+    ("retrieved_at", "2001-01-01T00:00:00+00:00"),
+    ("provider_status", "OK_BUT_NOT_REALLY"),
+    ("raw_payload_hash", "q" * 32),
+    ("request_fingerprint", "q" * 32),
+])
+def test_tampering_an_identity_field_breaks_the_acquisition_event(tmp_path, field, value):
+    _freeze(tmp_path)
+    base = ST.intraday_root(str(tmp_path)) / ST.RAW_EVENTS
+    eid = sorted(d.name for d in base.iterdir() if d.is_dir())[0]
+    _tamper(base / eid / "acquisition_event.json", lambda d: d.__setitem__(field, value))
+    v = ST.verify_acquisition_event(eid, root=str(tmp_path))
+    assert v["verified"] is False
+    assert "recompute" in v["reason"] or "raw" in v["reason"]
+
+
+@authoritative
+def test_tampering_a_non_identity_disclosure_does_not_break_the_event(tmp_path):
+    """`row_count` is disclosure, not identity — the contract is explicit about
+    which fields define a retrieval, and widening it silently would make an
+    idempotent refetch look like corruption."""
+    _freeze(tmp_path)
+    base = ST.intraday_root(str(tmp_path)) / ST.RAW_EVENTS
+    eid = sorted(d.name for d in base.iterdir() if d.is_dir())[0]
+    _tamper(base / eid / "acquisition_event.json",
+            lambda d: d.__setitem__("error_message_safe", "annotated later"))
+    assert ST.verify_acquisition_event(eid, root=str(tmp_path))["verified"] is True
+
+
+@authoritative
+def test_build_event_identity_actually_recomputes(tmp_path):
+    _freeze(tmp_path)
+    base = ST.intraday_root(str(tmp_path)) / ST.DATASET_EVENTS
+    ids = [d.name for d in base.iterdir() if d.is_dir()]
+    assert ids
+    for bid in ids:
+        assert ST.verify_build_event(bid, root=str(tmp_path))["verified"] is True
+
+
+@authoritative
+def test_tampering_a_build_event_identity_field_is_detected(tmp_path):
+    _freeze(tmp_path)
+    base = ST.intraday_root(str(tmp_path)) / ST.DATASET_EVENTS
+    bid = sorted(d.name for d in base.iterdir() if d.is_dir())[0]
+    _tamper(base / bid / "build_event.json",
+            lambda d: d.__setitem__("acquisition_event_ids", []))
+    v = ST.verify_build_event(bid, root=str(tmp_path))
+    assert v["verified"] is False and "recompute" in v["reason"]
+
+
+@authoritative
+def test_a_current_manifest_without_acquisition_evidence_cannot_graduate(tmp_path):
+    """Vacuous truth was passing: 'no build event found' returned verified=True.
+    A current graduation manifest claims governed real-data acquisition."""
+    pilot, fp = _freeze(tmp_path)
+    mfp = pilot["windows"][0]["manifest_fingerprint"]
+    base = ST.intraday_root(str(tmp_path)) / ST.DATASET_EVENTS
+    import shutil
+    removed = 0
+    for d in list(base.iterdir()):
+        ev = ST.read_snapshot(ST.DATASET_EVENTS, d.name, "build_event.json",
+                              root=str(tmp_path))
+        if ev and ev.get("manifest_fingerprint") == mfp:
+            shutil.rmtree(d)
+            removed += 1
+    assert removed
+
+    strict = ST.verify_manifest_acquisitions(mfp, root=str(tmp_path),
+                                             require_evidence=True)
+    assert strict["verified"] is False and "build event" in strict["reason"]
+    # Legacy archival objects keep the historical contract.
+    lenient = ST.verify_manifest_acquisitions(mfp, root=str(tmp_path),
+                                              require_evidence=False)
+    assert lenient["verified"] is True
+
+    assert PI.verify_historical_pilot(fp, root=str(tmp_path))["verified"] is False
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED

@@ -177,7 +177,7 @@ def test_graduation_falls_back_to_limited_when_the_pilot_regresses(tmp_path):
 @authoritative
 def test_graduation_fails_when_a_corpus_object_is_tampered(tmp_path):
     """Evidence-driven means the gate must react to the CORPUS, not just flags."""
-    pilot, _ = _freeze(tmp_path, windows=PI.PILOT_WINDOWS[-1:])
+    pilot, _ = _freeze(tmp_path)
     assert FD.session2_graduation(root=str(tmp_path))["blockers"] == []
     fp = pilot["windows"][0]["dataset_fingerprint"]
     path = (ST.intraday_root(str(tmp_path)) / "datasets" / "content" / fp

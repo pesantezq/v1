@@ -137,13 +137,9 @@ def acquire(request: DatasetRequest, source: Any,
         # EVENT object: one per provider call, keyed by the call itself. Two
         # fetches of identical data at different times => one content object,
         # two events. That is the desired outcome, not a collision.
-        event_id = ST.content_hash({
-            "request_fingerprint": request.fingerprint(), "symbol": symbol,
-            "requested_start": request.start.isoformat(),
-            "requested_end": request.end.isoformat(),
-            "retrieved_at": record["retrieved_at"],
-            "provider_status": status, "raw_content_fingerprint": payload_hash,
-        })
+        # Minted through the SHARED projection so the verifier recomputes it
+        # with the identical algorithm rather than a parallel copy.
+        event_id = ST.acquisition_event_identity(record)
         record["acquisition_event_id"] = event_id
         ST.write_snapshot(ST.RAW_EVENTS, event_id,
                           {"acquisition_event.json": record}, root=root)
@@ -243,17 +239,15 @@ def build_historical_research_dataset(
 
     # DATASET BUILD EVENT: per-run provenance, deliberately outside the
     # content-addressed manifest object.
-    ST.write_snapshot(ST.DATASET_EVENTS, ST.content_hash({
-        "manifest_fingerprint": manifest_fp,
-        "acquisition_event_ids": [a.get("acquisition_event_id")
-                                  for a in acq["acquisitions"]],
-    }), {"build_event.json": {
+    _acq_ids = [a.get("acquisition_event_id") for a in acq["acquisitions"]]
+    ST.write_snapshot(ST.DATASET_EVENTS,
+                      ST.build_event_identity(manifest_fp, _acq_ids),
+                      {"build_event.json": {
         "schema_version": SCHEMA_VERSION,
         "manifest_fingerprint": manifest_fp,
         "canonical_content_fingerprint": content_fp,
         "request_fingerprint": request.fingerprint(),
-        "acquisition_event_ids": [a.get("acquisition_event_id")
-                                  for a in acq["acquisitions"]],
+        "acquisition_event_ids": _acq_ids,
         "acquisitions": acq["acquisitions"],
     }}, root=root)
 

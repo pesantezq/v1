@@ -783,6 +783,41 @@ def session2_graduation(pilot: dict | None = None, root: str = ".") -> dict:
     }
 
 
+def _durable_readiness(grad: dict, *, root: str = ".") -> dict:
+    """Readiness fields, from the durable graduation evidence — one source only.
+
+    The public field names are kept for compatibility, and richer aggregates are
+    added beside them. The invariant this enforces is simple and was previously
+    violated: READY must never be reported alongside
+    `feature_dataset_ready = false` for the same corpus.
+    """
+    from portfolio_automation.intraday_lab import pilot as _pi
+
+    try:
+        ev = _pi.load_graduation_evidence(root=root)
+    except Exception:
+        ev = {"available": False, "pilot": None}
+    verified = ev.get("pilot") or {}
+    ready = bool(ev.get("available"))
+    datasets_ready = ready and bool(verified.get("all_windows_current_era"))
+    features_ready = ready and bool(verified.get("all_windows_features_verified"))
+    return {
+        "graduation_evidence_ready": ready,
+        "graduation_evidence_fingerprint": ev.get("pilot_fingerprint"),
+        "graduation_protocol_satisfied": bool(
+            verified.get("graduation_protocol_satisfied")),
+        "pilot_dataset_graphs_ready": datasets_ready,
+        "pilot_feature_graphs_ready": features_ready,
+        "active_corpus_ready": bool(
+            grad.get("measured_checks", {}).get(
+                "provenance_graph_verifies", {}).get("pass")),
+        # Compatibility aliases — same evidence, older names.
+        "canonical_dataset_ready": datasets_ready,
+        "feature_dataset_ready": features_ready,
+        "window_verification": verified.get("window_verification") or [],
+    }
+
+
 def session2_status(pilot: dict | None = None, root: str = ".") -> dict:
     """Session 2 exit status.
 
@@ -814,8 +849,12 @@ def session2_status(pilot: dict | None = None, root: str = ".") -> dict:
         # EVIDENCE-DRIVEN, not asserted. Without a verified manifest+fingerprint
         # these were returning True on pilot=None, which is precisely the
         # "verdict derived from absent data" failure the lab exists to avoid.
-        "canonical_dataset_ready": _canonical_ready(pilot),
-        "feature_dataset_ready": _feature_ready(pilot),
+        # Derived from the SAME durable evidence the verdict uses. These
+        # previously called _canonical_ready(pilot)/_feature_ready(pilot) with
+        # whatever the caller passed, so in a fresh process (pilot=None) they
+        # reported False while architecture_status reported READY — one artifact
+        # contradicting itself about the same corpus.
+        **_durable_readiness(grad, root=root),
         "strategy_validation_allowed": False,
         "features_enabled": list(_feat.ENABLED_FEATURES),
         "features_blocked": {k: _feat.FEATURE_REGISTRY[k]["status"]

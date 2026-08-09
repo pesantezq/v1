@@ -190,6 +190,10 @@ def run_pilot(provider, *, symbols=DEFAULT_SYMBOLS, root: str = ".",
         "observe_only": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "symbols": list(sorted(symbols)),
+        # Stamped unconditionally; whether it is JUSTIFIED is decided by
+        # check_graduation_protocol against the windows actually run. Claiming
+        # the protocol does not confer it.
+        "graduation_protocol_id": GRADUATION_PROTOCOL_ID,
         # The calendar the pilot ran under, so its evidence stays interpretable
         # after a calendar upgrade instead of silently re-reading today's.
         "calendar_identity": _calendar_identity(),
@@ -228,6 +232,34 @@ INTRADAY_RESEARCH_RUN_MODE = "intraday_research"
 # always re-derived from it.
 
 PILOT_IDENTITY_SCHEMA = "intraday_pilot_v1"
+
+# ── The graduation protocol ────────────────────────────────────────────────
+# A generic "valid pilot" is not graduation evidence. Without this, an operator
+# could point graduation at a perfectly valid but far weaker pilot — one normal
+# 2026 week — and it would verify, silently discarding the historical regimes
+# Session 2 exists to certify. The protocol freezes the minimum evidence that
+# must have been EXERCISED; it deliberately does not freeze the RESULTS, which
+# stay measured (admissions and bar counts are outcomes, not requirements).
+GRADUATION_PROTOCOL_ID = "INTRADAY_GRADUATION_PILOT_V1"
+GRADUATION_REQUIRED_TIMEFRAME = "5min"
+GRADUATION_REQUIRED_SYMBOLS: frozenset[str] = frozenset({"SPY", "AAPL"})
+GRADUATION_REQUIRED_WINDOWS: dict[str, tuple[str, str]] = {
+    "2017-independence": ("2017-07-03", "2017-07-07"),
+    "2020-covid-vol":    ("2020-03-09", "2020-03-13"),
+    "2020-covid-halts":  ("2020-03-16", "2020-03-18"),
+    "2022-juneteenth":   ("2022-06-17", "2022-06-23"),
+    "2023-fall-dst":     ("2023-11-01", "2023-11-06"),
+    "2024-thanksgiving": ("2024-11-27", "2024-12-02"),
+    "2025-thanksgiving": ("2025-11-26", "2025-12-01"),
+    "2026-normal":       ("2026-08-03", "2026-08-07"),
+}
+
+# EXTRA-WINDOW POLICY: required ⊆ observed. A future pilot may ADD adversarial
+# windows without minting a new protocol, because more evidence never weakens
+# the standard. Required coverage can only ever shrink by an explicit, reviewable
+# edit here — which, because the protocol id is part of pilot identity, also
+# invalidates every pilot minted under the old one.
+GRADUATION_EXTRA_WINDOW_POLICY = "required_subset_of_observed"
 
 # Keys excluded from the persisted pilot object: they describe the world at the
 # moment the pilot ran, not what the pilot IS. `active_corpus` in particular
@@ -268,10 +300,63 @@ def pilot_identity_payload(pilot: dict) -> dict:
     return {
         "schema": PILOT_IDENTITY_SCHEMA,
         "pilot_schema_version": SCHEMA_VERSION,
+        # The protocol is part of research MEANING: the same results gathered
+        # under a different (or absent) protocol are different evidence, so they
+        # must not share an identity. Without this, a generic pilot could be
+        # relabelled as graduation evidence after the fact.
+        "graduation_protocol_id": pilot.get("graduation_protocol_id"),
         "symbols": sorted(pilot.get("symbols") or []),
         "calendar_identity": pilot.get("calendar_identity"),
         "windows": windows,
         "strategy_validation_allowed": pilot.get("strategy_validation_allowed", False),
+    }
+
+
+def check_graduation_protocol(pilot: dict) -> dict:
+    """Does this pilot exercise the minimum Session 2 certification scope?
+
+    Deliberately SEPARATE from integrity. A smaller pilot can be a perfectly
+    valid research object and still not be graduation evidence; calling it
+    corrupt would be false, and calling it sufficient would be worse.
+    """
+    failures: list[str] = []
+    if pilot.get("graduation_protocol_id") != GRADUATION_PROTOCOL_ID:
+        failures.append(
+            f"pilot declares protocol {pilot.get('graduation_protocol_id')!r}, "
+            f"required {GRADUATION_PROTOCOL_ID!r}")
+    symbols = set(pilot.get("symbols") or [])
+    missing_syms = GRADUATION_REQUIRED_SYMBOLS - symbols
+    if missing_syms:
+        failures.append(f"missing required symbol(s): {sorted(missing_syms)}")
+
+    observed = {w.get("label"): w for w in pilot.get("windows") or []}
+    for label, (start, end) in sorted(GRADUATION_REQUIRED_WINDOWS.items()):
+        w = observed.get(label)
+        if w is None:
+            failures.append(f"missing required window {label!r} ({start}..{end})")
+            continue
+        if (w.get("start"), w.get("end")) != (start, end):
+            failures.append(
+                f"window {label!r} covers {w.get('start')}..{w.get('end')}, "
+                f"required {start}..{end}")
+        wsyms = set(w.get("symbols") or [])
+        if GRADUATION_REQUIRED_SYMBOLS - wsyms:
+            failures.append(f"window {label!r} omits required symbol(s): "
+                            f"{sorted(GRADUATION_REQUIRED_SYMBOLS - wsyms)}")
+        tf = (w.get("provider_provenance") or {}).get("timeframe")
+        if tf not in (None, GRADUATION_REQUIRED_TIMEFRAME):
+            failures.append(f"window {label!r} timeframe {tf!r} is not "
+                            f"{GRADUATION_REQUIRED_TIMEFRAME!r}")
+    return {
+        "satisfied": not failures,
+        "protocol_id": GRADUATION_PROTOCOL_ID,
+        "required_timeframe": GRADUATION_REQUIRED_TIMEFRAME,
+        "required_symbols": sorted(GRADUATION_REQUIRED_SYMBOLS),
+        "required_windows": {k: list(v) for k, v in
+                             sorted(GRADUATION_REQUIRED_WINDOWS.items())},
+        "extra_window_policy": GRADUATION_EXTRA_WINDOW_POLICY,
+        "observed_window_count": len(observed),
+        "failures": failures,
     }
 
 
@@ -367,40 +452,97 @@ def verify_historical_pilot(fingerprint: str, *, root: str = ".") -> dict:
                         f"{w.get('sessions_reconciled')} of "
                         f"{w.get('requested_symbol_dates')} requested items")
 
-    # Every referenced graph must still verify AND be current-era.
-    graphs = {}
+    # Every referenced graph must still verify AND be current-era — and so must
+    # every referenced FEATURE object. Verifying only datasets while claiming
+    # DATASET_FEATURE_FOUNDATION_READY meant a pilot-referenced feature snapshot
+    # could be deleted outright and graduation stayed READY.
+    graphs, window_reports = {}, []
     for w in windows:
+        label = w.get("label")
         mfp = w.get("manifest_fingerprint")
         if not mfp:
-            return fail(f"window {w.get('label')} references no dataset manifest")
+            return fail(f"window {label} references no dataset manifest")
         v = ST.verify_dataset_provenance(mfp, root=root)
         graphs[mfp] = {"verified": v.get("verified"),
                        "current_era": v.get("current_era")}
         if not v.get("verified"):
-            return fail(f"window {w.get('label')} manifest {mfp} failed "
-                        f"provenance verification: {v.get('reason')}", graphs=graphs)
+            return fail(f"window {label} manifest {mfp} failed provenance "
+                        f"verification: {v.get('reason')}", graphs=graphs)
         if not v.get("current_era"):
-            return fail(f"window {w.get('label')} manifest {mfp} is not "
-                        f"current-era: {v.get('not_current_reason')}", graphs=graphs)
+            return fail(f"window {label} manifest {mfp} is not current-era: "
+                        f"{v.get('not_current_reason')}", graphs=graphs)
         if v.get("canonical_content_fingerprint") != w.get("dataset_fingerprint"):
-            return fail(f"window {w.get('label')} names a dataset its manifest "
+            return fail(f"window {label} names a dataset its manifest "
                         f"does not reference")
+
+        # Acquisition lineage. Strict here: a current graduation manifest claims
+        # governed real-data acquisition, so absent build/acquisition evidence
+        # must fail rather than pass by vacuous truth.
+        acq = ST.verify_manifest_acquisitions(mfp, root=root, require_evidence=True)
+        if not acq["verified"]:
+            return fail(f"window {label} acquisition lineage failed: {acq['reason']}")
+
+        ffp = w.get("feature_fingerprint")
+        if not ffp:
+            return fail(f"window {label} references no feature snapshot")
+        fv = ST.verify_feature_snapshot(ffp, root=root)
+        if not fv.get("verified"):
+            return fail(f"window {label} feature snapshot {ffp} failed "
+                        f"verification: {fv.get('reason')}")
+        if fv.get("source_dataset_fingerprint") != w.get("dataset_fingerprint"):
+            return fail(f"window {label} feature {ffp} binds to dataset "
+                        f"{fv.get('source_dataset_fingerprint')}, not the "
+                        f"window's {w.get('dataset_fingerprint')}")
+        if fv.get("source_dataset_manifest_fingerprint") != mfp:
+            return fail(f"window {label} feature {ffp} binds to manifest "
+                        f"{fv.get('source_dataset_manifest_fingerprint')}, not "
+                        f"the window's {mfp}")
+        # The stored count is a claim; the verified object is the evidence.
+        if fv.get("observation_count") != w.get("feature_observations"):
+            return fail(f"window {label} claims {w.get('feature_observations')} "
+                        f"feature observations but the verified snapshot holds "
+                        f"{fv.get('observation_count')}")
+
+        window_reports.append({
+            "label": label,
+            "dataset_fingerprint": w.get("dataset_fingerprint"),
+            "manifest_fingerprint": mfp,
+            "feature_fingerprint": ffp,
+            "dataset_provenance_verified": True,
+            "dataset_current_era": True,
+            "acquisition_evidence_verified": True,
+            "acquisition_events": acq["acquisitions"],
+            "feature_verified": True,
+            "feature_dataset_binding_verified": True,
+            "feature_manifest_binding_verified": True,
+            "feature_observation_count_verified": True,
+            "feature_observations": fv.get("observation_count"),
+        })
 
     if body.get("strategy_validation_allowed") is not False:
         return fail("pilot does not assert strategy_validation_allowed=false")
 
+    protocol = check_graduation_protocol(body)
     return {
+        # INTEGRITY. A structurally sound pilot — true even for a pilot too
+        # small to graduate, which is why the two are reported separately.
         "verified": True, "reason": None,
+        "pilot_integrity_valid": True,
+        "graduation_protocol_satisfied": protocol["satisfied"],
+        "graduation_protocol": protocol,
         "pilot_fingerprint": fingerprint,
+        "graduation_protocol_id": body.get("graduation_protocol_id"),
         "totals": totals,
         "window_count": len(windows),
         "symbols": sorted(body.get("symbols") or []),
         "manifest_fingerprints": sorted(graphs),
         "graphs": graphs,
+        "window_verification": window_reports,
         "calendar_identity": body.get("calendar_identity"),
         "every_requested_session_accounted_for": True,
         "all_windows_provenance_verified": True,
         "all_windows_current_era": True,
+        "all_windows_features_verified": True,
         "windows": windows,
         "strategy_validation_allowed": False,
     }
@@ -418,6 +560,15 @@ def set_graduation_evidence(fingerprint: str, *, root: str = ".") -> dict:
     if not v["verified"]:
         raise ValueError(f"refusing to point graduation at unverifiable pilot "
                          f"{fingerprint}: {v['reason']}")
+    if not v.get("graduation_protocol_satisfied"):
+        # Integrity and sufficiency are different questions. This pilot may be a
+        # perfectly sound research object; it simply does not exercise the
+        # evidence Session 2 certifies, and pointing graduation at it would
+        # silently lower the standard.
+        raise ValueError(
+            f"pilot {fingerprint} is structurally valid but does NOT satisfy "
+            f"{GRADUATION_PROTOCOL_ID}: "
+            f"{v['graduation_protocol']['failures']}")
     path = ST.intraday_root(root) / ST.GRADUATION_POINTER
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

@@ -213,6 +213,20 @@ ADDITIVE_DISCLOSURE_KEYS = frozenset({
     "storage_schema", "content_schema", "identity_schema", "calendar_identity",
 })
 
+# Keys whose VALUE may legitimately differ between two writes of the same
+# identity, because they are prose REGENERATED from current code state rather
+# than facts about the stored data. `limitations` is the only one: it restates
+# the calendar coverage and admission rules in force at build time, so improving
+# that wording changed the bytes of manifests whose data was identical, and the
+# collision guard correctly refused the rerun.
+#
+# Deliberately narrow. The guard exists to catch "same identity, different
+# DATA", and prose about the build environment is not data — it is the same
+# reasoning as `strip_volatile`, one level up. The cleaner long-term home for
+# derived disclosure is outside the content object entirely; that is a storage
+# change, not a gate-integrity fix, so it is left as a follow-up.
+DERIVED_DISCLOSURE_KEYS = frozenset({"limitations"})
+
 
 def _same_persisted_content(existing: Path, payload: Any) -> bool:
     """Byte-identical, or differing ONLY by newly-added disclosure keys."""
@@ -230,9 +244,12 @@ def _same_persisted_content(existing: Path, payload: Any) -> bool:
     if not isinstance(stored, dict) or not isinstance(incoming, dict):
         return False
     for key, value in stored.items():
+        if key in DERIVED_DISCLOSURE_KEYS:
+            continue            # regenerated prose, not a fact about the data
         if key not in incoming or incoming[key] != value:
             return False        # a key the object already had disagrees
-    return set(incoming) - set(stored) <= ADDITIVE_DISCLOSURE_KEYS
+    return set(incoming) - set(stored) <= (ADDITIVE_DISCLOSURE_KEYS
+                                           | DERIVED_DISCLOSURE_KEYS)
 
 
 def _attribution_to_result(kind: str, identity: str, att: dict,
@@ -396,19 +413,83 @@ def verify_canonical_snapshot(identity: str, *, root: str = ".") -> dict:
                                   bar_count=len(bars))
 
 
+# ── Event identity projections ─────────────────────────────────────────────
+# ONE definition per event kind, used at mint time AND at verify time. They
+# were previously inlined at the write site only, so `verify_acquisition_event`
+# claimed in its docstring that "its id recomputes" while never recomputing
+# anything — a verifier documented as stronger than it was. Sharing the
+# projection makes the two impossible to drift apart.
+#
+# `retrieved_at` IS part of acquisition-event identity: an event records one
+# retrieval, so two fetches of identical observations are two events (and one
+# content object). That is the opposite of the CONTENT rule, deliberately.
+
+def acquisition_event_identity(record: dict) -> str:
+    """Identity of one provider call, from the fields that define the call."""
+    return content_hash({
+        "request_fingerprint": record.get("request_fingerprint"),
+        "symbol": record.get("symbol"),
+        "requested_start": record.get("requested_start"),
+        "requested_end": record.get("requested_end"),
+        "retrieved_at": record.get("retrieved_at"),
+        "provider_status": record.get("provider_status"),
+        "raw_content_fingerprint": record.get("raw_payload_hash"),
+    })
+
+
+def build_event_identity(manifest_fingerprint: str,
+                         acquisition_event_ids: Sequence[str]) -> str:
+    """Identity of one dataset build: which manifest, from which retrievals."""
+    return content_hash({
+        "manifest_fingerprint": manifest_fingerprint,
+        "acquisition_event_ids": list(acquisition_event_ids),
+    })
+
+
 def verify_acquisition_event(event_id: str, *, root: str = ".") -> dict:
-    """Event exists, its id recomputes, and any raw content it cites verifies."""
+    """Recompute the event identity, then check its causal state and evidence."""
     ev = read_snapshot(RAW_EVENTS, event_id, "acquisition_event.json", root=root)
     if ev is None:
-        return {"verified": False, "reason": "missing acquisition_event"}
+        return {"verified": False, "identity": event_id,
+                "reason": "missing acquisition_event"}
+    recomputed = acquisition_event_identity(ev)
+    if recomputed != event_id:
+        return {"verified": False, "identity": event_id, "recomputed": recomputed,
+                "reason": "acquisition event does not recompute to its identity — "
+                          "an identity-defining field was modified"}
+    if ev.get("acquisition_event_id") not in (None, event_id):
+        return {"verified": False, "identity": event_id,
+                "reason": "acquisition event declares a different id"}
     raw_fp = ev.get("raw_payload_hash")
     if raw_fp and not verify_raw_content(raw_fp, root=root).get("verified"):
-        return {"verified": False, "reason": f"referenced raw {raw_fp} fails verification"}
+        return {"verified": False, "identity": event_id,
+                "reason": f"referenced raw {raw_fp} fails verification"}
     # A provider failure legitimately has no payload, but must say why.
     if not raw_fp and not ev.get("error_code") and ev.get("provider_status") == "OK":
-        return {"verified": False, "reason": "OK status with no raw content and no error"}
-    return {"verified": True, "provider_status": ev.get("provider_status"),
+        return {"verified": False, "identity": event_id,
+                "reason": "OK status with no raw content and no error"}
+    return {"verified": True, "identity": event_id, "recomputed": recomputed,
+            "provider_status": ev.get("provider_status"),
+            "error_code": ev.get("error_code"),
             "raw_content_fingerprint": raw_fp, "reason": None}
+
+
+def verify_build_event(event_id: str, *, root: str = ".") -> dict:
+    """Recompute a dataset build event's identity from its own fields."""
+    ev = read_snapshot(DATASET_EVENTS, event_id, "build_event.json", root=root)
+    if ev is None:
+        return {"verified": False, "identity": event_id,
+                "reason": "missing build_event"}
+    recomputed = build_event_identity(ev.get("manifest_fingerprint"),
+                                      ev.get("acquisition_event_ids") or [])
+    if recomputed != event_id:
+        return {"verified": False, "identity": event_id, "recomputed": recomputed,
+                "reason": "build event does not recompute to its identity — an "
+                          "identity-defining field was modified"}
+    return {"verified": True, "identity": event_id, "recomputed": recomputed,
+            "manifest_fingerprint": ev.get("manifest_fingerprint"),
+            "acquisition_event_ids": ev.get("acquisition_event_ids") or [],
+            "reason": None}
 
 
 # Reconciliation states that legitimately account for a requested item.
@@ -422,36 +503,57 @@ _ACCOUNTED_STATES = frozenset({
 })
 
 
-def verify_manifest_acquisitions(manifest_fingerprint: str, *,
-                                 root: str = ".") -> dict:
-    """Verify the acquisition events behind a manifest's build.
+def verify_manifest_acquisitions(manifest_fingerprint: str, *, root: str = ".",
+                                 require_evidence: bool = False) -> dict:
+    """Verify the build and acquisition events behind a manifest.
 
     Acquisition event ids deliberately stay OUT of dataset identity — they
     legitimately differ between two runs that fetched identical observations,
     and folding them in once made an idempotent rerun look like corruption.
     They are still evidence, so they are verified through the per-run BUILD
     EVENT that references them rather than through the manifest's identity.
+
+    `require_evidence` encodes the one place context legitimately changes the
+    standard. A CURRENT graduation manifest claims governed real-data
+    acquisition, so "no build event found" must fail — otherwise a manifest with
+    no acquisition lineage at all would pass by vacuous truth. LEGACY archival
+    objects predate build events entirely and must not be failed for missing
+    infrastructure that did not exist when they were written.
     """
     base = intraday_root(root) / DATASET_EVENTS
-    if not base.is_dir():
-        return {"verified": True, "events": 0, "acquisitions": 0,
-                "reason": "no build events recorded"}
-    checked, bad = 0, []
-    for d in sorted(base.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        ev = read_snapshot(DATASET_EVENTS, d.name, "build_event.json", root=root)
-        if not ev or ev.get("manifest_fingerprint") != manifest_fingerprint:
-            continue
-        for aid in ev.get("acquisition_event_ids") or []:
-            if not aid:
+    events, checked, bad = [], 0, []
+    if base.is_dir():
+        for d in sorted(base.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
                 continue
-            checked += 1
-            v = verify_acquisition_event(aid, root=root)
-            if not v.get("verified"):
-                bad.append({"acquisition_event_id": aid, "reason": v.get("reason")})
-    return {"verified": not bad, "acquisitions": checked, "failures": bad,
-            "reason": None if not bad else f"{len(bad)} acquisition event(s) failed"}
+            ev = read_snapshot(DATASET_EVENTS, d.name, "build_event.json", root=root)
+            if not ev or ev.get("manifest_fingerprint") != manifest_fingerprint:
+                continue
+            bv = verify_build_event(d.name, root=root)
+            events.append(d.name)
+            if not bv.get("verified"):
+                bad.append({"build_event_id": d.name, "reason": bv.get("reason")})
+                continue
+            for aid in bv["acquisition_event_ids"]:
+                if not aid:
+                    continue
+                checked += 1
+                v = verify_acquisition_event(aid, root=root)
+                if not v.get("verified"):
+                    bad.append({"acquisition_event_id": aid, "reason": v.get("reason")})
+
+    reason = None
+    if bad:
+        reason = f"{len(bad)} event(s) failed verification"
+    elif require_evidence and not events:
+        reason = ("no dataset build event references this manifest, so its "
+                  "acquisition lineage cannot be verified — a current "
+                  "graduation manifest must carry real acquisition evidence")
+    elif require_evidence and checked == 0:
+        reason = ("build event(s) present but reference no acquisition events, "
+                  "so no provider call is evidenced for this manifest")
+    return {"verified": reason is None, "build_events": events,
+            "acquisitions": checked, "failures": bad, "reason": reason}
 
 
 def _requested_matrix(req: dict) -> set[tuple[str, str]] | None:

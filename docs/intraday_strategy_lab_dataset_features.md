@@ -480,6 +480,50 @@ file mtime — that would make the verdict depend on filesystem incidentals rath
 than a reviewable decision. A missing pointer is reported as a governance fact;
 it never triggers provider calls to re-manufacture evidence.
 
+**Features are verified, not assumed.** `DATASET_FEATURE_FOUNDATION_READY` names
+both halves, but the gate once verified only datasets — a pilot's feature
+snapshot could be deleted outright and graduation stayed READY. Every window now
+verifies its feature snapshot, its binding to that window's dataset *and*
+manifest, and its observation count against the verified object rather than the
+pilot's stored claim.
+
+### The graduation protocol
+
+A valid pilot is not automatically graduation evidence. Without a protocol an
+operator could point graduation at one normal 2026 week — structurally perfect,
+and silently discarding every historical regime Session 2 exists to certify.
+
+`INTRADAY_GRADUATION_PILOT_V1` freezes the minimum evidence that must be
+**exercised**: 5min, `SPY` + `AAPL`, and eight required windows with exact date
+ranges (2017 independence · 2020 covid-vol · 2020 covid-halts · 2022 juneteenth ·
+2023 fall-DST · 2024 thanksgiving · 2025 thanksgiving · 2026 normal). It does
+*not* freeze results — admissions and bar counts stay measured outcomes.
+
+Extra-window policy is **`required ⊆ observed`**: a future pilot may add
+adversarial windows without minting a new protocol, because more evidence never
+weakens the standard. Required coverage can only shrink by an explicit edit,
+which — since the protocol id is part of pilot identity — also invalidates every
+pilot minted under the old one.
+
+Integrity and sufficiency are reported **separately** (`pilot_integrity_valid`
+vs `graduation_protocol_satisfied`), so a smaller pilot is refused as evidence
+without being libelled as corrupt.
+
+### Event identity
+
+`verify_acquisition_event` documented that it recomputed the event id and never
+did. Acquisition and build event identities now come from **shared pure
+projections** used at both mint and verify time, so the two cannot drift.
+Acquisition ids stay out of *dataset* identity (they legitimately differ between
+two runs of identical observations), and `retrieved_at` is deliberately part of
+*event* identity — the opposite of the content rule, because an event records one
+retrieval.
+
+Acquisition lineage is checked **contextually**: a current graduation manifest
+must carry a matching build event and at least one acquisition event, because
+"no build event found" previously passed by vacuous truth. Legacy archival
+objects predate that infrastructure and keep the historical contract.
+
 The certified schedule is archived under
 `calendar/content/<schedule-digest>/schedule.json`. The digest is the one
 already embedded in every dataset manifest's calendar identity, so **no new
