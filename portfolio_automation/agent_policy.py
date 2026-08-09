@@ -110,6 +110,23 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
     if not isinstance(environments, dict) or not environments:
         errors.append("environments block is required and non-empty")
         environments = {}
+    for env_name, env in environments.items():
+        if not isinstance(env, dict):
+            errors.append(f"environment {env_name} must be a mapping")
+            continue
+        # Fail-closed contract: the action-authority capability must be an
+        # explicit boolean on every environment — never implicit.
+        if not isinstance(env.get("real_portfolio_action_allowed"), bool):
+            errors.append(
+                f"environment {env_name} must declare real_portfolio_action_allowed as a boolean"
+            )
+    # Hard environment invariants: the research lab and read-only ops mode can
+    # NEVER be action-authority environments, for any role incl. the human.
+    for locked_env in ("home_agent_lab", "vps_read_only_ops"):
+        if locked_env in environments and environments[locked_env].get("real_portfolio_action_allowed") is not False:
+            errors.append(f"{locked_env}.real_portfolio_action_allowed must be false (permanent invariant)")
+    if "home_agent_lab" in environments and environments["home_agent_lab"].get("production_mutation_allowed") is not False:
+        errors.append("home_agent_lab.production_mutation_allowed must be false (permanent invariant)")
 
     roles = policy.get("roles")
     if not isinstance(roles, dict):
@@ -176,7 +193,10 @@ def resolve_authority(role: str, environment: str, policy: dict[str, Any] | None
         "production_authority": bool(role_block.get("production_authority", False))
         and bool(env_block.get("production_mutation_allowed", False))
         and permitted,
-        "real_portfolio_action_authority": bool(role_block.get("real_portfolio_action_authority", False)) and permitted,
+        "real_portfolio_action_authority": _gate(
+            role_block.get("real_portfolio_action_authority", False),
+            "real_portfolio_action_allowed",
+        ),
         "git_write_authority": _gate(role_block.get("git_write_authority", False), "git_write_allowed"),
         "review_required": role_block.get("review_required"),
         "protected_boundaries": list(pol.get("global_invariants", {}).get("protected_boundaries", [])),

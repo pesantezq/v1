@@ -79,6 +79,13 @@ environments:
     code_write_allowed: true
     git_write_allowed: true
     production_mutation_allowed: false      # laptop cannot touch the VPS runtime
+    # Real portfolio-action authorization takes effect through the
+    # production/control plane (the VPS-served governance GUI writing approval
+    # records via promotion_approvals.record_approval — docs/SIM_GOVERNANCE.md).
+    # The laptop is a dev environment that cannot touch the VPS runtime, so an
+    # authorization cannot take effect FROM here; the operator's browser talks
+    # to the VPS, and the VPS is the environment that acts.
+    real_portfolio_action_allowed: false
     validation_claims: local_only           # VPS results must never be claimed from here
 
   vps_dev_on_vps:
@@ -89,6 +96,11 @@ environments:
     code_write_allowed: true
     git_write_allowed: true
     production_mutation_allowed: true        # merge + service restart when durably authorized
+    # The production/control environment: the ONLY environment in which the
+    # human operator's real portfolio-action / production-promotion authority
+    # takes effect (human-gated approval workflows live here). AI roles still
+    # never receive it — the role grant is human-only.
+    real_portfolio_action_allowed: true
     validation_claims: real                  # tests run here are real production-host results
 
   vps_read_only_ops:
@@ -98,6 +110,7 @@ environments:
     code_write_allowed: false
     git_write_allowed: false
     production_mutation_allowed: false
+    real_portfolio_action_allowed: false  # read-only ops mode cannot authorize capital action
     validation_claims: real
 
   home_agent_lab:
@@ -116,6 +129,7 @@ environments:
     code_write_allowed: true           # local research artifacts only
     git_write_allowed: false
     production_mutation_allowed: false # NEVER a production authority environment
+    real_portfolio_action_allowed: false  # INVARIANT (validator-enforced): the lab can never authorize a real portfolio action, for ANY role incl. the human operator
     validation_claims: local_only      # lab results are research evidence, not production-host results
 
 # ----------------------------------------------------------------------------
@@ -408,7 +422,7 @@ roles:
       - scope_decisions
       - production_promotion_approval
       - roadmap_approval
-      - capital_and_risk_final_authority
+      - real_portfolio_action_final_authority  # whether an advisory proposal becomes a real portfolio action; any future real capital action (advisory allocation LOGIC stays with the future certified Capital & Risk Engine)
       - kill_switch_operation
     prohibited_responsibilities: []
     production_authority: true

@@ -201,6 +201,22 @@ from owning the authoritative *advisory* allocation determination
 portfolio actions; StockBot remains advisory-only; no broker execution
 exists.
 
+Real portfolio-action authority is additionally **environment-gated**
+(`real_portfolio_action_allowed`): it resolves true only when the role holds
+the grant AND is permitted in the environment AND the environment permits
+action authority. Concretely: `vps_dev_on_vps` (the production/control plane,
+where the human-gated approval workflows — `promotion_approvals.record_approval`
+via the VPS-served governance GUI — take effect) is the **only** action-capable
+environment; `operator_laptop` (dev environment that cannot touch the VPS
+runtime; the operator's browser talks to the VPS, and the VPS is what acts),
+`vps_read_only_ops` (read-only ops cannot authorize capital action), and
+`home_agent_lab` are all `false` — the lab and read-only values are
+**permanent validator-enforced invariants**. Even `human_operator`, who holds
+the global action grant, resolves to `real_portfolio_action_authority: false`
+inside the lab. The human's narrow responsibility term is
+`real_portfolio_action_final_authority` (the former
+`capital_and_risk_final_authority` wording was removed as ambiguous).
+
 ## 7. Reused foundations (preserve, do not rebuild)
 
 The redesign builds ON these existing systems. None of them is being replaced

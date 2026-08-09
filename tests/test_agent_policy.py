@@ -225,11 +225,28 @@ def test_research_workers_not_permitted_on_vps_dev(policy):
         assert resolved["git_write_authority"] is False
 
 
-def test_home_agent_lab_never_grants_production_authority_to_anyone(policy):
+def test_home_agent_lab_never_grants_production_or_action_authority_to_anyone(policy):
+    # EVERY role — explicitly including human_operator, who holds the global
+    # real portfolio-action grant — resolves to NO production and NO real
+    # portfolio-action authority inside the lab. (This test fails against
+    # commit 59d99503, where the resolver did not environment-gate the
+    # action grant and human/home_agent_lab resolved True.)
     for name in policy["roles"]:
         resolved = resolve_authority(name, "home_agent_lab", policy)
         assert resolved["production_authority"] is False, (
             f"{name}: home_agent_lab must never be a production authority environment"
+        )
+        assert resolved["real_portfolio_action_authority"] is False, (
+            f"{name}: home_agent_lab must never be a real portfolio-action authority environment"
+        )
+
+
+def test_read_only_ops_never_grants_production_or_action_authority_to_anyone(policy):
+    for name in policy["roles"]:
+        resolved = resolve_authority(name, "vps_read_only_ops", policy)
+        assert resolved["production_authority"] is False
+        assert resolved["real_portfolio_action_authority"] is False, (
+            f"{name}: read-only ops mode cannot authorize capital action"
         )
 
 
@@ -304,3 +321,71 @@ def test_validator_rejects_ai_role_with_real_portfolio_action_authority(policy):
     bad["roles"]["trading_agents"]["real_portfolio_action_authority"] = True
     errors = validate_policy(bad)
     assert any("trading_agents" in e and "real_portfolio_action_authority" in e for e in errors)
+
+
+# ── Real portfolio-action environment gating (final 0A hardening) ──────────
+
+
+def test_human_action_authority_resolves_true_only_in_control_plane(policy):
+    # Positive case: the hardening must NOT strip human authority everywhere —
+    # it resolves True exactly in the production/control environment where the
+    # human-gated approval workflows take effect (record_approval on the VPS).
+    control = resolve_authority("human_operator", "vps_dev_on_vps", policy)
+    assert control["real_portfolio_action_authority"] is True
+    assert control["production_authority"] is True
+    # ...and False everywhere else, including environments the human is
+    # permitted in.
+    for env in ("operator_laptop", "vps_read_only_ops", "home_agent_lab"):
+        resolved = resolve_authority("human_operator", env, policy)
+        assert resolved["real_portfolio_action_authority"] is False, (
+            f"human action authority must not resolve true in {env}"
+        )
+
+
+def test_every_environment_declares_action_capability_explicitly(policy):
+    for env_name, env in policy["environments"].items():
+        assert isinstance(env.get("real_portfolio_action_allowed"), bool), (
+            f"{env_name} must declare real_portfolio_action_allowed explicitly (fail closed)"
+        )
+    assert policy["environments"]["vps_dev_on_vps"]["real_portfolio_action_allowed"] is True
+    assert policy["environments"]["operator_laptop"]["real_portfolio_action_allowed"] is False
+    assert policy["environments"]["vps_read_only_ops"]["real_portfolio_action_allowed"] is False
+    assert policy["environments"]["home_agent_lab"]["real_portfolio_action_allowed"] is False
+
+
+def test_validator_rejects_action_authoritative_agent_lab(policy):
+    import copy
+
+    bad = copy.deepcopy(policy)
+    bad["environments"]["home_agent_lab"]["real_portfolio_action_allowed"] = True
+    errors = validate_policy(bad)
+    assert any("home_agent_lab.real_portfolio_action_allowed" in e for e in errors)
+
+
+def test_validator_rejects_action_authoritative_read_only_ops(policy):
+    import copy
+
+    bad = copy.deepcopy(policy)
+    bad["environments"]["vps_read_only_ops"]["real_portfolio_action_allowed"] = True
+    errors = validate_policy(bad)
+    assert any("vps_read_only_ops.real_portfolio_action_allowed" in e for e in errors)
+
+
+def test_validator_rejects_environment_missing_action_capability(policy):
+    import copy
+
+    bad = copy.deepcopy(policy)
+    del bad["environments"]["operator_laptop"]["real_portfolio_action_allowed"]
+    errors = validate_policy(bad)
+    assert any(
+        "operator_laptop" in e and "real_portfolio_action_allowed" in e for e in errors
+    )
+
+
+def test_human_responsibility_term_is_unambiguous(policy):
+    # capital_and_risk_final_authority was ambiguous (advisory allocation logic
+    # belongs to the future certified Capital & Risk Engine). The human role
+    # carries the narrow real-action term instead.
+    allowed = policy["roles"]["human_operator"]["allowed_responsibilities"]
+    assert "real_portfolio_action_final_authority" in allowed
+    assert "capital_and_risk_final_authority" not in allowed
