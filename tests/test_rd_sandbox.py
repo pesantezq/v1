@@ -420,6 +420,43 @@ def test_worker_env_does_not_inherit_parent_secrets(env, monkeypatch):
                     for t in ("SECRET","TOKEN","PASSWORD","AWS","PRIME","API_KEY"))]
 
 
+# --- systemd unit-name safety (transient-service containment) ---------------
+def test_systemd_unit_for_matches_sandbox_run_convention():
+    assert sbx.systemd_unit_for("job-deadbeef0badf00d") == "rdsbx-job-job-deadbeef0badf00d.service"
+
+
+@pytest.mark.parametrize("bad", [
+    "job; rm -rf /",          # shell metacharacters
+    "job $(reboot)",          # command substitution
+    "../../etc",              # path traversal
+    "-p",                     # would look like a systemctl option
+    "job\nrm",                # newline injection
+    "job id",                 # space
+    "",                       # empty
+])
+def test_systemd_unit_for_rejects_hostile_job_id(bad):
+    with pytest.raises(sbx.SandboxError):
+        sbx.systemd_unit_for(bad)
+
+
+def test_cancel_without_unit_uses_process_group(env):
+    # Backend-agnostic (hermetic) cancel path is unchanged: no systemd unit, the
+    # worker shares the client's process group and is killed by killpg.
+    import subprocess as sp, time
+    db, jobs_root = env
+    with reg.connect(db) as conn:
+        job = _make_queued_job(conn, job_id="job-cancel2")
+        for st in (JobStatus.ADMITTED, JobStatus.RUNNING):
+            reg.transition(conn, job.job_id, st, at=T0)
+        d = sbx.materialize_job(jobs_root, job.job_id)
+        proc = sp.Popen(["sleep", "300"], start_new_session=True)
+        (d.runner / "pid.json").write_text(json.dumps({"pid": proc.pid, "pgid": proc.pid, "started_at": T0}))
+        final = sbx.cancel_job(conn, job.job_id, jobs_root=jobs_root, now_fn=_clock())
+        assert final.status is JobStatus.CANCELLED
+        time.sleep(0.5)
+        assert proc.poll() is not None
+
+
 # --- manifest integrity -----------------------------------------------------
 def test_manifest_hash_deterministic_excludes_created_at(env):
     db, jobs_root = env

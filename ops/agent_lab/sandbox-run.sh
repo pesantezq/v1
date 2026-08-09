@@ -13,6 +13,13 @@
 #              then ONLY this job's workspace/ + output/ are bound back writable
 #              and input/ read-only. (ProtectSystem=strict makes the rest of the
 #              host tree read-only.) Sibling jobs are invisible + unreachable.
+#   A5/A6      private, size-bounded /dev/shm: a fresh per-service tmpfs is
+#              mounted over /dev/shm (size=64M,mode=1777 like a real /dev/shm),
+#              so /dev/shm is NOT the shared host tmpfs -> no cross-job scratch,
+#              no cross-job persistence, and an explicit 64M size cap (nosuid,
+#              nodev). This is the authoritative /dev/shm bound; MemoryMax does
+#              NOT bound shared-tmpfs pages. (Separate A5/A6 fix, added while
+#              recertifying the R2/R3 timeout/cancel containment repair.)
 #   P0.3       complete process-tree containment: the worker is a systemd
 #              service cgroup with KillMode=control-group, so setsid/double-fork
 #              descendants are reaped when the service stops or is killed.
@@ -43,6 +50,7 @@ exec systemd-run --quiet --pipe --wait --collect --unit="$UNIT" \
   -p ProtectKernelTunables=yes -p ProtectKernelModules=yes -p ProtectControlGroups=yes \
   -p RestrictSUIDSGID=yes -p LockPersonality=yes -p RestrictRealtime=yes \
   -p TemporaryFileSystem="$JOB_ROOT" \
+  -p TemporaryFileSystem="/dev/shm:rw,nosuid,nodev,size=64M,mode=1777" \
   -p BindReadOnlyPaths="$RD_INPUT_DIR" \
   -p BindPaths="$RD_WORKSPACE_DIR" \
   -p BindPaths="$RD_OUTPUT_DIR" \

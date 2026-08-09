@@ -27,11 +27,16 @@ was changed out-of-band and must be re-inspected before certification is trusted
 The trusted runner (`portfolio_automation/rd_control/sandbox.py`, Agent-Lab
 backend) launches each worker as a transient systemd **service** — `systemd-run
 --wait --pipe` with: `User=rd-worker`, `NetworkNamespacePath=/run/netns/rdsbx-offline`,
-`ProtectHome`, `PrivateTmp`, `ProtectSystem=strict`, `InaccessiblePaths=<jobs root>`,
-`BindReadOnlyPaths=<job input>`, `BindPaths=<job workspace/output>`,
+`ProtectHome`, `PrivateTmp`, `ProtectSystem=strict`, `TemporaryFileSystem=<jobs root>`
+(masks sibling jobs), `BindReadOnlyPaths=<job input>`, `BindPaths=<job workspace/output>`,
 `NoNewPrivileges=yes`, `TasksMax`, `MemoryMax`, `CPUQuota`, and an explicit
-`--setenv` allowlist. Cancellation/timeout `systemctl kill -s SIGKILL` the unit,
-which terminates the whole cgroup (setsid/double-fork cannot escape).
+`--setenv` allowlist. On timeout and on operator cancel the runner
+(`run_job`/`cancel_job` with `contain_via_unit=True`) `systemctl kill -s
+SIGKILL`s the transient unit's whole cgroup and **verifies it is empty/dead
+before** transitioning to `TIMED_OUT`/`CANCELLED` (setsid/double-fork and
+`SIGTERM`-ignoring descendants cannot escape); it fails closed to
+`FAILED_SANDBOX` if the cgroup cannot be proven cleared. Killing the
+`systemd-run` client alone is not treated as worker termination.
 
 ## Not version-controlled here
 Secrets, machine credentials, Prime session state, the SQLite registry, and the

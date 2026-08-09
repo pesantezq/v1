@@ -59,16 +59,50 @@ committed source. This binds the git commit to the enforced boundary and survive
 `output/` (writable) and `input/` (read-only). `ProtectSystem=strict` makes the
 rest of the host tree read-only; `ProtectHome=yes`, `PrivateTmp=yes`. Result:
 every sibling job is invisible and unreachable, and the host is unwritable.
+
+**Private scratch (`/tmp`, `/dev/shm`):** `PrivateTmp=yes` gives each job its own
+`/tmp` + `/var/tmp`. A second per-service tmpfs is mounted over **`/dev/shm`**
+(`TemporaryFileSystem=/dev/shm:rw,nosuid,nodev,size=64M,mode=1777`) so `/dev/shm` is **not**
+the shared host tmpfs — no cross-job scratch, no cross-job persistence, and an
+**explicit 64 MiB size cap** (`nosuid`,`nodev`). This size cap — not `MemoryMax`
+— is the authoritative `/dev/shm` bound: shared-tmpfs pages are not charged to
+the job's memory cgroup, so without this a job could write far beyond `MemoryMax`
+into a host-shared `/dev/shm`. (Verified: pre-fix a later job read an earlier
+job's `/dev/shm` marker and a 256 MiB write survived `MemoryMax=64M`; post-fix
+both are denied.)
 Denied to the worker: the registry DB, other jobs, system config, network-policy
 files, the human home, Windows drives, and — via the dedicated unprivileged
 `rd-worker` user — the Prime runtime user's credentials.
 
-## Process containment (cgroup)
-The worker is a systemd service cgroup with `KillMode=control-group`. A worker
-that `setsid`/double-forks a daemon cannot escape cgroup membership, so the
-descendant is reaped when the service stops or is killed — verified live (a
-`setsid` daemon was dead the instant the service exited) and by `systemctl kill`
-on the whole unit. `--collect` removes the transient unit afterward.
+## Process containment (cgroup) — including timeout & cancel
+The worker runs as a transient systemd **service** `rdsbx-job-<job_id>` with
+`KillMode=control-group`, so a worker that `setsid`/double-forks (even one that
+ignores `SIGTERM`) cannot escape cgroup membership. Three termination paths are
+enforced by the trusted runner, all targeting the **service cgroup**, not the
+`systemd-run` client:
+
+* **Normal exit** — systemd reaps the whole cgroup when the main process exits.
+* **Timeout** — the runner (`run_job(contain_via_unit=True)`) SIGKILLs the
+  service cgroup (`systemctl kill --signal=SIGKILL rdsbx-job-<job_id>.service`),
+  then **verifies** the cgroup is inactive with zero PIDs within a bounded
+  interval **before** transitioning to `TIMED_OUT`. If the boundary cannot be
+  proven empty it **fails closed** to `FAILED_SANDBOX` — the runner never
+  reports `TIMED_OUT` with survivors.
+* **Cancel** — `cancel_job(contain_via_unit=True)` performs the same
+  cgroup-SIGKILL + bounded verification before transitioning to `CANCELLED`,
+  and likewise fails closed to `FAILED_SANDBOX` if survivors remain.
+
+The unit name is derived from the job id through a strict allowlist
+(`systemd_unit_for`) and passed to `systemctl` as an argv element (never a
+shell), so a hostile job id can neither inject shell syntax nor be parsed as a
+`systemctl` option. Killing the `systemd-run` client alone is **not** treated as
+worker termination. `--collect` removes the transient unit afterward.
+
+Verified live (adversarial worker: fork → `setsid` → double-fork →
+`SIGTERM`-ignoring daemon): both timeout and cancel end with the daemon dead and
+`cgroup_pids=0`, cleanup latency ~0.7 s; normal success is unaffected. (An
+optional independent `RuntimeMaxSec`, env `RDSBX_RUNTIME_MAX_SEC`, provides a
+second systemd-enforced timeout.)
 
 ## Resource caps
 `TasksMax=64`, `MemoryMax=2G`, `CPUQuota=200%`, plus an optional independent

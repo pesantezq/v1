@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -288,6 +289,10 @@ class ExecResult:
     stderr: bytes
     started_at: str
     completed_at: str
+    # None  -> no systemd unit to contain (hermetic/subprocess backend);
+    # True  -> the worker's transient-service cgroup was verified empty/dead;
+    # False -> containment could NOT be established (fail closed).
+    contained: bool | None = None
 
 
 def _run_worker_process(
@@ -299,10 +304,17 @@ def _run_worker_process(
     max_output_bytes: int,
     now_fn: Callable[[], str],
     pidfile: Path | None = None,
+    unit_name: str | None = None,
 ) -> ExecResult:
     """Run *argv* in its own session (process group), bounded by time and output.
-    On timeout the entire process group is terminated (SIGTERM then SIGKILL) so
-    no grandchildren survive."""
+
+    On timeout the worker's execution boundary is terminated. In the systemd
+    backend (``unit_name`` set) the worker runs in an independent transient-
+    service cgroup, so we SIGKILL that *cgroup* (KillMode=control-group) and
+    verify it is empty before returning — killing the systemd-run *client* alone
+    would leave setsid/double-fork descendants alive. In the hermetic backend
+    (no unit) the worker shares the client's process group, so the group kill
+    already contains the whole tree."""
     started = now_fn()
     proc = subprocess.Popen(
         argv, cwd=str(cwd), env=env,
@@ -316,10 +328,15 @@ def _run_worker_process(
         except OSError:
             pass
     timed_out = False
+    contained: bool | None = None
     try:
         out, err = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
+        # Terminate the authoritative job cgroup FIRST (systemd backend), then
+        # the client; a timeout is terminal so SIGKILL is used immediately.
+        if unit_name is not None:
+            contained = _kill_unit_and_verify(unit_name)
         _terminate_group(proc.pid)
         try:
             out, err = proc.communicate(timeout=10)
@@ -332,6 +349,7 @@ def _run_worker_process(
         stderr=(err or b"")[:max_output_bytes],
         started_at=started,
         completed_at=now_fn(),
+        contained=contained,
     )
 
 
@@ -347,6 +365,66 @@ def _terminate_group(pid: int) -> None:
             os.killpg(os.getpgid(pid), 0)  # still alive?
         except OSError:
             return
+
+
+# --- transient-service cgroup termination (systemd backend) -----------------
+# The worker runs as a systemd transient SERVICE named rdsbx-job-<job_id> (set
+# by sandbox-run's --unit). Killing the systemd-run *client* does NOT stop that
+# service, so timeout/cancel must terminate the *service cgroup* directly.
+# KillMode=control-group makes `systemctl kill` reap the whole tree.
+_JOB_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,199}\Z")
+
+
+def systemd_unit_for(job_id: str) -> str:
+    """Deterministic transient-unit name for *job_id*, matching sandbox-run.
+
+    The job_id is validated against a strict allowlist and never interpolated
+    into a shell (callers use argv-based subprocess), so a hostile job_id can
+    neither inject shell syntax nor be parsed as a systemctl option (the fixed
+    ``rdsbx-job-`` prefix guarantees the argument never begins with ``-``)."""
+    if not _JOB_ID_RE.match(job_id):
+        raise SandboxError(f"unsafe job_id for systemd unit name: {job_id!r}")
+    return f"rdsbx-job-{job_id}.service"
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess:
+    """Run systemctl with an argv list (never a shell). Returns the result;
+    a missing systemctl surfaces as returncode 127 so callers fail closed."""
+    try:
+        return subprocess.run(["systemctl", *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args, 127, "", "systemctl not found")
+
+
+def _unit_cgroup_proc_count(unit: str) -> int:
+    """Number of live PIDs in the unit's cgroup; 0 if the cgroup is gone."""
+    path = f"/sys/fs/cgroup/system.slice/{unit}/cgroup.procs"
+    try:
+        with open(path, encoding="ascii") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0  # cgroup directory removed -> no processes
+
+
+def _wait_unit_cleared(unit: str, timeout_s: float) -> bool:
+    """Poll (bounded) until the unit is inactive AND its cgroup holds no PIDs.
+    Returns True only when the job execution boundary is provably empty/dead."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        active = _systemctl("is-active", unit).stdout.strip()
+        procs = _unit_cgroup_proc_count(unit)
+        if active not in ("active", "activating", "deactivating") and procs == 0:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
+def _kill_unit_and_verify(unit: str, timeout_s: float = 5.0) -> bool:
+    """SIGKILL the whole service cgroup and verify it is empty/dead. Idempotent
+    and race-safe: an already-exited/unknown unit simply verifies as cleared."""
+    _systemctl("kill", "--signal=SIGKILL", unit)
+    return _wait_unit_cleared(unit, timeout_s)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +446,7 @@ def run_job(
     allowed_paths: Sequence[str] = (),
     worker_uid: int | None = None,
     worker_gid: int | None = None,
+    contain_via_unit: bool = False,
 ) -> JobRecord:
     """Execute *job* (which must be in QUEUED) end to end and return the final
     record. All authoritative status changes go through Phase 0A CAS transitions;
@@ -375,7 +454,14 @@ def run_job(
 
     ``jail_wrapper`` is prepended to ``worker_argv`` (e.g. the netns/runuser
     prefix). Empty in hermetic tests. The worker is expected to write its result
-    envelope to ``output/result.json`` (path passed via env RD_OUTPUT_DIR)."""
+    envelope to ``output/result.json`` (path passed via env RD_OUTPUT_DIR).
+
+    ``contain_via_unit`` selects the systemd backend's termination path: the
+    worker runs as transient service ``rdsbx-job-<job_id>`` (see sandbox-run),
+    and on timeout the runner SIGKILLs that service cgroup and verifies it is
+    empty. If containment cannot be established the job fails closed to
+    FAILED_SANDBOX rather than reporting TIMED_OUT with survivors."""
+    unit_name = systemd_unit_for(job.job_id) if contain_via_unit else None
     # --- admit + enter RUNNING first, so a setup failure maps legally to
     # FAILED_SANDBOX (a RUNNING-only edge in the Phase 0A machine). RUNNING here
     # means "the runner owns the job and is building/executing its sandbox". ---
@@ -426,13 +512,20 @@ def run_job(
         ex = _run_worker_process(
             argv, cwd=dirs.workspace, env=env, timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes, now_fn=now_fn,
-            pidfile=dirs.runner / "pid.json",
+            pidfile=dirs.runner / "pid.json", unit_name=unit_name,
         )
     except FileNotFoundError:
         return _cas(conn, job.job_id, JobStatus.FAILED_SANDBOX, now_fn(),
                     reason="worker exec failed", actor="sandbox")
 
     if ex.timed_out:
+        # Fail closed: never report TIMED_OUT while the worker cgroup may still
+        # hold live descendants.
+        if ex.contained is False:
+            return _cas(conn, job.job_id, JobStatus.FAILED_SANDBOX, now_fn(),
+                        reason="timeout containment failed", actor="sandbox",
+                        error_class="containment_failed",
+                        error_message=f"worker cgroup {unit_name} not cleared after timeout")
         return _cas(conn, job.job_id, JobStatus.TIMED_OUT, now_fn(),
                     reason=f"timeout after {timeout_seconds}s", actor="sandbox")
     if ex.exit_code != 0:
@@ -473,14 +566,32 @@ def _cas(conn, job_or_id, to_status: JobStatus, at: str, *, reason=None, actor="
     return reg.transition(conn, job_id, to_status, at=at, reason=reason, actor=actor, **updates)
 
 
-def cancel_job(conn, job_id: str, *, jobs_root: str | Path, now_fn: Callable[[], str]) -> JobRecord:
-    """Operator cancellation: kill the worker process group (if any) then CAS to
-    CANCELLED (legal from RUNNING). Safe if the process is already gone."""
+def cancel_job(conn, job_id: str, *, jobs_root: str | Path, now_fn: Callable[[], str],
+               contain_via_unit: bool = False) -> JobRecord:
+    """Operator cancellation. Terminate the worker's execution boundary, verify
+    it is empty, then CAS to CANCELLED (legal from RUNNING). Safe if the process
+    is already gone.
+
+    In the systemd backend (``contain_via_unit``) the worker lives in the
+    transient-service cgroup ``rdsbx-job-<job_id>``; killing the systemd-run
+    client alone does not stop it, so we SIGKILL the service cgroup and confirm
+    it is cleared. If containment cannot be established we fail closed to
+    FAILED_SANDBOX instead of falsely reporting CANCELLED with survivors."""
+    cleared = True
+    if contain_via_unit:
+        cleared = _kill_unit_and_verify(systemd_unit_for(job_id))
+    # Also terminate the client process group (unblocks a waiting runner; the
+    # sole containment mechanism in the hermetic/subprocess backend).
     pidfile = Path(jobs_root) / job_id / _RUNNER_DIR / "pid.json"
     try:
         info = json.loads(pidfile.read_text())
         _terminate_group(int(info["pid"]))
     except Exception:
         pass
+    if not cleared:
+        return _cas(conn, job_id, JobStatus.FAILED_SANDBOX, now_fn(),
+                    reason="cancel containment failed", actor="operator",
+                    error_class="containment_failed",
+                    error_message=f"worker cgroup rdsbx-job-{job_id}.service not cleared on cancel")
     return reg.transition(conn, job_id, JobStatus.CANCELLED, at=now_fn(),
                           reason="operator cancel", actor="operator")
