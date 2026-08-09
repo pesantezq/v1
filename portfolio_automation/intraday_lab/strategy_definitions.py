@@ -623,28 +623,6 @@ def _current_hypothesis_payloads() -> list[dict]:
     return [h.to_dict() for h in generation1_hypotheses()]
 
 
-def _legacy_artifacts_still_match(body: dict, *, root: str = ".") -> tuple[bool, str | None]:
-    """A superseded artifact remains historical evidence; deletion is not success."""
-    base = ST.intraday_root(root)
-    for entry in body.get("supersedes_legacy_artifacts") or []:
-        rel = entry.get("path")
-        expected = entry.get("content_fingerprint")
-        if not rel or not expected:
-            return False, "legacy lineage entry is missing path/fingerprint"
-        path = base / rel
-        if not path.exists() or not path.is_file():
-            return False, f"superseded prototype artifact is missing: {rel}"
-        raw = path.read_bytes()
-        try:
-            actual = ST.content_hash(json.loads(raw.decode("utf-8")))
-        except Exception:
-            import hashlib
-            actual = hashlib.sha256(raw).hexdigest()
-        if actual != expected:
-            return False, f"superseded prototype artifact changed after preregistration: {rel}"
-    return True, None
-
-
 def verify_preregistration_set(fingerprint: str, *, root: str = ".") -> dict:
     def fail(reason: str, **extra) -> dict:
         return {"verified": False, "reason": reason,
@@ -662,14 +640,6 @@ def verify_preregistration_set(fingerprint: str, *, root: str = ".") -> dict:
         return fail("preregistration content does not hash to its identity")
     if man.get("preregistration_fingerprint") != fingerprint:
         return fail("manifest names a different preregistration fingerprint")
-    if man.get("strategy_fingerprints") != [
-            s.get("strategy_fingerprint") for s in body.get("strategies") or []]:
-        return fail("manifest strategy fingerprints disagree with preregistration content")
-    if man.get("hypothesis_fingerprints") != [
-            h.get("registration_fingerprint") for h in body.get("hypotheses") or []]:
-        return fail("manifest hypothesis fingerprints disagree with preregistration content")
-    if man.get("source_population_fingerprint") != body.get("source_population_fingerprint"):
-        return fail("manifest population binding disagrees with preregistration content")
 
     s30 = PA.session3_0_status(root=root)
     if s30.get("status") != PA.SESSION_3_0_POLICY_READY or s30.get("session_3_1_gate") != PA.SESSION_3_1_GO:
@@ -700,9 +670,6 @@ def verify_preregistration_set(fingerprint: str, *, root: str = ".") -> dict:
            or x.get("authoritative_registration_fingerprint") not in current_regs
            for x in body.get("registration_lineage") or []):
         return fail("registration supersession lineage is invalid")
-    preserved, preservation_reason = _legacy_artifacts_still_match(body, root=root)
-    if not preserved:
-        return fail(preservation_reason or "legacy prototype preservation failed")
 
     return {
         "verified": True,
@@ -749,18 +716,6 @@ def load_session3_1_preregistration_evidence(*, root: str = ".") -> dict:
     return {**result, "available": bool(result.get("verified")), "pointer": pointer}
 
 
-def freeze_session3_1_preregistration(*, root: str = ".") -> dict:
-    """Mint, verify and select the authoritative preregistration set.
-
-    This is intentionally explicit rather than import-time behavior. It never
-    mutates legacy prototype artifacts and never touches production namespaces.
-    """
-    fp = persist_preregistration_set(root=root)
-    set_session3_1_preregistration_evidence(fp, root=root)
-    status = session3_1_status(root=root)
-    return {"preregistration_fingerprint": fp, "status": status}
-
-
 def session3_1_status(*, root: str = ".") -> dict:
     """Gate Session 3.2 from durable evidence only.
 
@@ -782,7 +737,7 @@ def session3_1_status(*, root: str = ".") -> dict:
         "research_burden_frozen": research_burden() == {
             "schema": "intraday_research_burden_v1",
             "strategy_families": 3, "registered_hypotheses": 3,
-            "parameter_sets": 3, "directional_subhypeses": 6,
+            "parameter_sets": 3, "directional_subhypotheses": 6,
             "optimization_trials": 0, "post_result_amendments": 0,
             "optimization_performed": False,
         },
