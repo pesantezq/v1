@@ -61,6 +61,10 @@ CALENDARS = "calendar/content"
 # The single mutable pointer in the store: which pilot is the graduation
 # evidence. It names an immutable object and never copies one.
 GRADUATION_POINTER = "graduation/pointer.json"
+# Session 3.0 derived research views. A SEPARATE namespace: Session 2 canonical
+# content is never modified, so a halted session stays rejected under the
+# continuous contract while this records its halt-aware admissibility.
+IRREGULAR_VIEWS = "session3/irregular/content"
 
 CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})
 
