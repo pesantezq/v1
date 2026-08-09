@@ -236,6 +236,50 @@ action authority through `research_plane`. The human's narrow responsibility
 term is `real_portfolio_action_final_authority` (the former
 `capital_and_risk_final_authority` wording was removed as ambiguous).
 
+## 6b. CI foundation (Phase 0A milestone 2)
+
+Status: **implemented on `feature/northstar-0a-ci`; remote_run_pending** —
+Phase 0A stays `active` until the remote GitHub Actions run is inspected
+green and GPT closes the phase. Do not treat the existence of the YAML as an
+operational CI claim.
+
+Workflow: `.github/workflows/northstar-ci.yml` (`northstar-ci`).
+
+- **When it runs:** `push` to `main` and `feature/northstar-**`,
+  `pull_request` targeting `main`, and manual `workflow_dispatch`. Superseded
+  runs for the same non-main ref are cancelled. No scheduled runs.
+- **Runner/deps:** GitHub-hosted `ubuntu-latest`, Python 3.12, plain
+  `pip install -r requirements.txt pytest` (pytest is a test-only addition;
+  no uv/poetry). `permissions: contents: read` — CI has **no write path**.
+- **Job `northstar-governance` (required, hermetic):** compile of the policy
+  and context modules → `scripts/agent_context_check.py` →
+  `tests/test_agent_policy.py` (authority model: AI roles can never gain
+  promotion/action authority, Agent Lab + read-only + research-plane
+  invariants, execution/governance decoupling, capital-authority model,
+  Quant Router vs StratLab, runtime-status accuracy) →
+  `tests/test_northstar_authority.py` + `tests/test_agent_context_check.py`
+  (program/phase/step correctness, future phases not falsely complete,
+  observe-and-iterate history preserved) → `tests/test_doc_audit.py` →
+  `tests/test_operator_control.py`.
+- **Job `tests` (broad hermetic regression):** the repository's declared
+  full-suite command (`.agent/project_state.yaml:required_test_policy`) with
+  its two pre-existing declared exclusions (`tests/test_gui_api_health.py`,
+  `tests/test_gui_insight_cards.py`) plus 5 deselected test IDs that
+  validate **live production runtime state** (the artifact-registry corpus
+  check, 3 GUI routes rendered against live `outputs/latest` artifacts, the
+  live sandbox active-strategy anchor). Classification evidence 2026-08-09:
+  the full 10,252-test suite was run in a bare worktree — 10,246 passed and
+  exactly those 5 failed; each of the 5 then passed against the live VPS
+  corpus, proving they are live-artifact-dependent, not regressions. They
+  remain VPS-side validation. `tests/conftest.py` guards the protected
+  scoring registry during the run.
+- **Deliberately NOT in CI:** the production pipeline, anything requiring
+  `.env`/credentials/FMP/broker/network, live `outputs/` artifacts,
+  production databases, cron/systemd behavior, VPS SSH, Agent Export against
+  production. Those validations require **real VPS evidence** and remain
+  operator/VPS-side (`scripts/preflight.sh`, `run_daily_safe.sh`, the
+  daily/weekly analysis skills).
+
 ## 7. Reused foundations (preserve, do not rebuild)
 
 The redesign builds ON these existing systems. None of them is being replaced
