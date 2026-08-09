@@ -312,7 +312,26 @@ def pilot_identity_payload(pilot: dict) -> dict:
     }
 
 
-def check_graduation_protocol(pilot: dict) -> dict:
+def _verified_window_timeframe(window: dict, *, root: str) -> str | None:
+    """The timeframe a window's dataset was actually REQUESTED at.
+
+    Read from the persisted request manifest inside the verified research
+    graph, not from `provider_provenance`. Provider provenance describes
+    ACQUISITION and is optional — the governed FMP provider does not even emit
+    a `timeframe` key — so the previous check read `None` on every real window
+    and passed vacuously. The dataset request is what defines research meaning.
+    """
+    mfp = window.get("manifest_fingerprint")
+    if not mfp:
+        return None
+    req = ST.read_snapshot(ST.DATASET_MANIFESTS, mfp, "request_manifest.json",
+                           root=root)
+    if not isinstance(req, dict):
+        return None
+    return req.get("timeframe")
+
+
+def check_graduation_protocol(pilot: dict, *, root: str = ".") -> dict:
     """Does this pilot exercise the minimum Session 2 certification scope?
 
     Deliberately SEPARATE from integrity. A smaller pilot can be a perfectly
@@ -343,10 +362,16 @@ def check_graduation_protocol(pilot: dict) -> dict:
         if GRADUATION_REQUIRED_SYMBOLS - wsyms:
             failures.append(f"window {label!r} omits required symbol(s): "
                             f"{sorted(GRADUATION_REQUIRED_SYMBOLS - wsyms)}")
-        tf = (w.get("provider_provenance") or {}).get("timeframe")
-        if tf not in (None, GRADUATION_REQUIRED_TIMEFRAME):
-            failures.append(f"window {label!r} timeframe {tf!r} is not "
-                            f"{GRADUATION_REQUIRED_TIMEFRAME!r}")
+        # PROVEN from the verified graph, and absence is a FAILURE. Treating a
+        # missing timeframe as equivalent to 5min is how a protocol claim
+        # becomes decorative.
+        tf = _verified_window_timeframe(w, root=root)
+        if tf is None:
+            failures.append(f"window {label!r} has no verifiable request "
+                            f"timeframe in its dataset manifest")
+        elif tf != GRADUATION_REQUIRED_TIMEFRAME:
+            failures.append(f"window {label!r} was requested at {tf!r}, "
+                            f"required {GRADUATION_REQUIRED_TIMEFRAME!r}")
     return {
         "satisfied": not failures,
         "protocol_id": GRADUATION_PROTOCOL_ID,
@@ -522,7 +547,7 @@ def verify_historical_pilot(fingerprint: str, *, root: str = ".") -> dict:
     if body.get("strategy_validation_allowed") is not False:
         return fail("pilot does not assert strategy_validation_allowed=false")
 
-    protocol = check_graduation_protocol(body)
+    protocol = check_graduation_protocol(body, root=root)
     return {
         # INTEGRITY. A structurally sound pilot — true even for a pilot too
         # small to graduate, which is why the two are reported separately.
@@ -609,9 +634,32 @@ def load_graduation_evidence(*, root: str = ".") -> dict:
     v = verify_historical_pilot(fp, root=root)
     if not v["verified"]:
         return {"available": False, "pilot": None, "pilot_fingerprint": fp,
+                "pilot_integrity_valid": False,
+                "graduation_protocol_satisfied": False,
                 "reason": f"graduation evidence {fp} failed verification: "
                           f"{v['reason']}"}
+    # A POINTER IS SELECTION, NOT AUTHORITY.
+    #
+    # The pointer is deliberately the one mutable element of the store, so the
+    # gate must never assume it was written by the approved setter. An operator
+    # or an interrupted process can point it at any pilot; `set_graduation_
+    # evidence` refused an insufficient one, but this READ path did not, and a
+    # hand-written pointer to a one-window pilot produced READY / SESSION_3_GO.
+    # Every dereference therefore re-enforces the same admission contract.
+    if not v.get("graduation_protocol_satisfied"):
+        return {"available": False, "pilot": None, "pilot_fingerprint": fp,
+                # Not corrupt — sound research evidence that is simply not
+                # sufficient. Conflating the two would be its own falsehood.
+                "pilot_integrity_valid": True,
+                "graduation_protocol_satisfied": False,
+                "graduation_protocol": v.get("graduation_protocol"),
+                "reason": f"pilot {fp} is valid research evidence but does not "
+                          f"satisfy the graduation protocol "
+                          f"{GRADUATION_PROTOCOL_ID}: "
+                          f"{(v.get('graduation_protocol') or {}).get('failures')}"}
     return {"available": True, "pilot": v, "pilot_fingerprint": fp,
+            "pilot_integrity_valid": True,
+            "graduation_protocol_satisfied": True,
             "pointer": pointer, "reason": None}
 
 

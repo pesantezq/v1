@@ -688,6 +688,18 @@ def session2_graduation(pilot: dict | None = None, root: str = ".") -> dict:
           "pointer, so this verdict survives a restart"
           + ("" if evidence.get("available") else f" — {evidence.get('reason')}"))
 
+    # Defence in depth. The loader already refuses evidence that fails the
+    # protocol, but the central gate should STATE and MEASURE its own admission
+    # condition rather than inherit it from a collaborator — otherwise a future
+    # loader regression silently widens what counts as graduation evidence.
+    check("graduation_protocol_satisfied",
+          lambda: (evidence.get("graduation_protocol_satisfied") is True
+                   and (evidence.get("pilot") or {}).get(
+                       "graduation_protocol_satisfied") is True),
+          f"the durable evidence exercises {_pi.GRADUATION_PROTOCOL_ID} — "
+          f"required symbols, windows and 5min timeframe, proven from the "
+          f"verified research graph")
+
     # ── governance ─────────────────────────────────────────────────────────
     def _no_module_enables_strategy_validation() -> bool:
         """Read the source. The previous probe was `x is not None and True`.

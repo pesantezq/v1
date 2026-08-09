@@ -509,6 +509,28 @@ Integrity and sufficiency are reported **separately** (`pilot_integrity_valid`
 vs `graduation_protocol_satisfied`), so a smaller pilot is refused as evidence
 without being libelled as corrupt.
 
+The required **5min timeframe is proven from the verified request manifest**, not
+from `provider_provenance`. Provider provenance describes *acquisition* and is
+optional — the governed FMP provider emits no `timeframe` key at all, so the
+original check read `None` on every real window and passed vacuously. A missing
+timeframe is now a failure, not an assumed match.
+
+### A pointer is selection, not authority
+
+`graduation/pointer.json` is deliberately mutable, so the gate must never assume
+it was written by the approved setter. `set_graduation_evidence()` refused an
+insufficient pilot — but the READ path did not, and a hand-written pointer to a
+one-window pilot produced `READY` / `SESSION_3_GO`. Every dereference now
+re-enforces the same admission contract:
+
+```
+pointer → immutable pilot → integrity → graduation protocol → available
+```
+
+The gate ALSO measures `graduation_protocol_satisfied` itself rather than
+inheriting it from the loader, so a future loader regression cannot silently
+widen what counts as graduation evidence.
+
 ### Event identity
 
 `verify_acquisition_event` documented that it recomputed the event id and never

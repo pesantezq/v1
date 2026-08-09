@@ -641,3 +641,154 @@ def test_a_current_manifest_without_acquisition_evidence_cannot_graduate(tmp_pat
     assert PI.verify_historical_pilot(fp, root=str(tmp_path))["verified"] is False
     assert FD.session2_graduation(root=str(tmp_path))["status"] == \
         FD.DATASET_FEATURE_FOUNDATION_LIMITED
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POINTER SEMANTICS — a pointer is SELECTION, not AUTHORITY
+#
+# `graduation/pointer.json` is deliberately mutable, so the gate must never
+# assume it was written by the approved setter. set_graduation_evidence()
+# refused an insufficient pilot; the READ path did not, and a hand-written
+# pointer to a one-window pilot produced READY / SESSION_3_GO. Every
+# dereference now re-enforces the same admission contract.
+# ═══════════════════════════════════════════════════════════════════════════
+def _write_pointer_directly(tmp_path, fingerprint):
+    """Bypass set_graduation_evidence entirely — that is the whole point."""
+    path = ST.intraday_root(str(tmp_path)) / ST.GRADUATION_POINTER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema_version": "1",
+                                "pilot_fingerprint": fingerprint}))
+
+
+@authoritative
+def test_a_hand_written_pointer_cannot_bypass_the_protocol(tmp_path):
+    _freeze(tmp_path)                                   # full, valid evidence
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_READY
+
+    small = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
+                         windows=PI.PILOT_WINDOWS[-1:])
+    small_fp = PI.persist_pilot(small, root=str(tmp_path))
+    v = PI.verify_historical_pilot(small_fp, root=str(tmp_path))
+    assert v["pilot_integrity_valid"] is True           # authentic research object
+    assert v["graduation_protocol_satisfied"] is False  # but not sufficient
+
+    _write_pointer_directly(tmp_path, small_fp)
+
+    ev = PI.load_graduation_evidence(root=str(tmp_path))
+    assert ev["available"] is False
+    assert ev["pilot_integrity_valid"] is True          # NOT called corrupt
+    assert ev["graduation_protocol_satisfied"] is False
+    assert "graduation protocol" in ev["reason"]
+
+    g = FD.session2_graduation(root=str(tmp_path))
+    st = FD.session2_status(root=str(tmp_path))
+    c = FD.session3_input_contract(root=str(tmp_path))
+    assert g["status"] == FD.DATASET_FEATURE_FOUNDATION_LIMITED
+    assert "graduation_protocol_satisfied" in g["blockers"]
+    assert st["architecture_status"] == FD.DATASET_FEATURE_FOUNDATION_LIMITED
+    assert st["graduation_evidence_ready"] is False
+    assert st["graduation_protocol_satisfied"] is False
+    assert st["canonical_dataset_ready"] is False
+    assert st["feature_dataset_ready"] is False
+    assert c["session_3_gate"] == FD.SESSION_3_NO_GO
+    assert c["contract"] is None
+
+
+@authoritative
+def test_a_hand_written_pointer_to_full_evidence_still_graduates(tmp_path):
+    """The enforcement must gate on SUFFICIENCY, not on provenance of the write."""
+    _, full_fp = _freeze(tmp_path)
+    _write_pointer_directly(tmp_path, full_fp)
+    ev = PI.load_graduation_evidence(root=str(tmp_path))
+    assert ev["available"] is True
+    assert ev["graduation_protocol_satisfied"] is True
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_READY
+    assert FD.session3_input_contract(root=str(tmp_path))["session_3_gate"] == \
+        FD.SESSION_3_GO
+
+
+@authoritative
+def test_the_gate_measures_protocol_itself_not_only_via_the_loader(tmp_path):
+    """Defence in depth: the central gate states its own admission condition,
+    so a future loader regression cannot silently widen what graduates."""
+    _freeze(tmp_path)
+    g = FD.session2_graduation(root=str(tmp_path))
+    assert g["measured_checks"]["graduation_protocol_satisfied"]["pass"] is True
+    assert PI.GRADUATION_PROTOCOL_ID in \
+        g["measured_checks"]["graduation_protocol_satisfied"]["note"]
+
+
+@authoritative
+def test_pointer_bypass_survives_a_fresh_process(tmp_path):
+    _freeze(tmp_path)
+    small_fp = PI.persist_pilot(
+        PI.run_pilot(_WindowProvider(), root=str(tmp_path),
+                     windows=PI.PILOT_WINDOWS[-1:]), root=str(tmp_path))
+    _write_pointer_directly(tmp_path, small_fp)
+    script = textwrap.dedent("""
+        import json, sys
+        sys.path.insert(0, sys.argv[1])
+        from portfolio_automation.intraday_lab import foundation as FD
+        g = FD.session2_graduation(root=sys.argv[2])
+        c = FD.session3_input_contract(root=sys.argv[2])
+        print(json.dumps({"status": g["status"], "gate": c["session_3_gate"],
+                          "contract": c["contract"] is not None}))
+    """)
+    proc = subprocess.run([sys.executable, "-c", script, REPO, str(tmp_path)],
+                          capture_output=True, text=True, timeout=300, cwd=REPO)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["status"] == FD.DATASET_FEATURE_FOUNDATION_LIMITED
+    assert out["gate"] == FD.SESSION_3_NO_GO and out["contract"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REQUIRED TIMEFRAME MUST BE PROVEN, NOT ASSUMED
+#
+# The check read `provider_provenance.timeframe` and accepted None. The
+# governed FMP provider does not emit that key at all, so it read None on every
+# real window and passed vacuously — a protocol claim proving nothing.
+# ═══════════════════════════════════════════════════════════════════════════
+@authoritative
+def test_timeframe_is_proven_from_the_verified_request_manifest(tmp_path):
+    pilot, fp = _freeze(tmp_path)
+    for w in pilot["windows"]:
+        assert PI._verified_window_timeframe(w, root=str(tmp_path)) == "5min"
+        # The optional acquisition metadata is NOT the authority.
+        assert (w.get("provider_provenance") or {}).get("timeframe") is None
+    assert PI.verify_historical_pilot(fp, root=str(tmp_path))[
+        "graduation_protocol_satisfied"] is True
+
+
+@authoritative
+def test_a_missing_request_timeframe_fails_the_protocol(tmp_path):
+    """Absence must fail. Treating a missing timeframe as equivalent to 5min is
+    how a protocol claim becomes decorative."""
+    pilot, fp = _freeze(tmp_path)
+    mfp = pilot["windows"][0]["manifest_fingerprint"]
+    _tamper(ST.intraday_root(str(tmp_path)) / "datasets" / "manifests" / mfp
+            / "request_manifest.json", lambda d: d.pop("timeframe", None))
+    p = PI.check_graduation_protocol(
+        ST.read_snapshot(ST.PILOTS, fp, "pilot.json", root=str(tmp_path)),
+        root=str(tmp_path))
+    assert p["satisfied"] is False
+    assert any("no verifiable request timeframe" in f for f in p["failures"])
+
+
+@authoritative
+def test_a_wrong_request_timeframe_fails_the_protocol(tmp_path):
+    pilot, fp = _freeze(tmp_path)
+    mfp = pilot["windows"][0]["manifest_fingerprint"]
+    _tamper(ST.intraday_root(str(tmp_path)) / "datasets" / "manifests" / mfp
+            / "request_manifest.json", lambda d: d.__setitem__("timeframe", "15min"))
+    p = PI.check_graduation_protocol(
+        ST.read_snapshot(ST.PILOTS, fp, "pilot.json", root=str(tmp_path)),
+        root=str(tmp_path))
+    assert p["satisfied"] is False
+    assert any("15min" in f for f in p["failures"])
+    # And the whole gate follows, because manifest tampering also breaks
+    # provenance — the protocol failure is defence in depth, not the only guard.
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
+        FD.DATASET_FEATURE_FOUNDATION_LIMITED
