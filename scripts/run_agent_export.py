@@ -3,7 +3,8 @@
 run_agent_export.py — local CLI for the Agent Production Export subsystem.
 
 Builds / validates an immutable agent snapshot from local StockBot artifacts.
-Local development tool ONLY. It does NOT run the daily pipeline, invoke Prime,
+Local development tool ONLY. It does NOT run the daily pipeline, invoke any
+agent framework (Prime was superseded — see docs/adr/0001-prime-superseded.md),
 SSH, upload, call external AI, send email, or call broker APIs.
 
 Examples:

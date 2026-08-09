@@ -1,7 +1,8 @@
 # StockBot Agent Production Export
 
 Status: **implemented, inert** (not wired into the daily cron). Local development
-only. No network transport, no Hetzner integration, no Prime invocation, no
+only. No network transport, no Hetzner integration, no agent-framework
+invocation (Prime superseded — see `docs/adr/0001-prime-superseded.md`), no
 production invocation, no production behaviour change.
 
 Module: `portfolio_automation/agent_export.py`
@@ -11,7 +12,8 @@ Tests: `tests/test_agent_export.py`
 ## Purpose
 
 Freeze an allowlisted, sanitized, hash-verified, immutable snapshot of a
-completed StockBot run so a future Agent Lab / Prime consumer can be handed a
+completed StockBot run so a future Agent Lab / StockBot R&D Control Plane
+consumer can be handed a
 **deterministic, trustworthy, read-only** production-state input. This subsystem
 builds and validates snapshots; transport is a later phase.
 
@@ -175,7 +177,8 @@ GREEN (current valid snapshot) / AMBER (none yet, stale, or optional gap) / RED
 - **No network transport** — building only; secure copy to the home lab is a
   later phase.
 - **No Hetzner integration** — nothing reads or writes production.
-- **No Prime execution** — Prime is not invoked.
+- **No agent-framework execution** — no external agent runtime is invoked (Prime
+  was superseded; see `docs/adr/0001-prime-superseded.md`).
 - **No production invocation** — the exporter never runs the pipeline.
 - **Not wired into the daily cron** — see the pipeline hook below; it ships OFF.
 

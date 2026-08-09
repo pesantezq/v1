@@ -4,11 +4,13 @@ Agent Production Export — deterministic, sanitized, immutable snapshots.
 Purpose
 -------
 Freeze an allowlisted subset of a completed StockBot run into an immutable,
-hash-verified, self-describing snapshot that a future Agent Lab / Prime consumer
-can trust as a read-only production-state input. This module implements ONLY the
-export/build/validation side. There is NO network transport, NO Hetzner
-integration, NO Prime invocation, and NO production behaviour change: it reads
-existing artifacts and writes a new snapshot tree plus a health artifact.
+hash-verified, self-describing snapshot that a future Agent Lab / StockBot R&D
+Control Plane consumer can trust as a read-only production-state input. This
+module implements ONLY the export/build/validation side. There is NO network
+transport, NO Hetzner integration, NO agent-framework invocation (Prime was
+superseded — see docs/adr/0001-prime-superseded.md), and NO production behaviour
+change: it reads existing artifacts and writes a new snapshot tree plus a health
+artifact.
 
 Trust model
 -----------
