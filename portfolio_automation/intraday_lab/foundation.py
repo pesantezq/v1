@@ -208,21 +208,45 @@ DATASET_FEATURE_FOUNDATION_LIMITED = "DATASET_FEATURE_FOUNDATION_LIMITED"
 DATASET_FEATURE_FOUNDATION_BLOCKED = "DATASET_FEATURE_FOUNDATION_BLOCKED"
 
 
-def _canonical_ready(pilot: dict | None) -> bool:
-    """True only with actual evidence: a dataset fingerprint AND a reconciled
-    request. Absence of evidence is never readiness."""
+def _canonical_ready(pilot: dict | None, root: str = ".") -> bool:
+    """Readiness is RECOMPUTED from persisted bytes, never asserted.
+
+    Metadata claiming a fingerprint proves nothing: the snapshot must exist and
+    its stored bars must still hash to their own directory name. Trusting the
+    metadata would be the same "verdict from absent data" failure this lab
+    exists to prevent.
+    """
     if not isinstance(pilot, dict):
         return False
-    return bool(pilot.get("dataset_fingerprint")) and \
-        pilot.get("sessions_requested") is not None and \
-        pilot.get("sessions_admitted") is not None
-
-
-def _feature_ready(pilot: dict | None) -> bool:
-    if not _canonical_ready(pilot):
+    fp = pilot.get("dataset_fingerprint")
+    if not fp or pilot.get("sessions_reconciled") is None:
         return False
-    return bool((pilot or {}).get("feature_fingerprint")) and \
-        bool((pilot or {}).get("feature_observations"))
+    try:
+        from portfolio_automation.intraday_lab import storage as _st
+        if not _st.snapshot_exists(_st.DATASETS, fp, root=root):
+            return False
+        if _st.read_snapshot(_st.DATASETS, fp, "request_manifest.json", root=root) is None:
+            return False
+        return bool(_st.verify_canonical_snapshot(fp, root=root).get("verified"))
+    except Exception:
+        return False
+
+
+def _feature_ready(pilot: dict | None, root: str = ".") -> bool:
+    if not _canonical_ready(pilot, root):
+        return False
+    fp = (pilot or {}).get("feature_fingerprint")
+    if not fp:
+        return False
+    try:
+        from portfolio_automation.intraday_lab import storage as _st
+        if not _st.snapshot_exists(_st.FEATURES, fp, root=root):
+            return False
+        man = _st.read_snapshot(_st.FEATURES, fp, "feature_manifest.json", root=root)
+        return bool(man) and man.get("source_dataset_fingerprint") == \
+            (pilot or {}).get("dataset_fingerprint")
+    except Exception:
+        return False
 
 
 def session2_status(pilot: dict | None = None) -> dict:

@@ -485,15 +485,20 @@ def test_session_progress_is_not_advertised_as_enabled_without_code():
 
 # --------------------------- status evidence ---------------------------
 def test_readiness_requires_evidence_not_assertion():
+    """Superseded premise: this once accepted metadata fields as proof. Since
+    readiness is recomputed from persisted bytes, asserted-only metadata must
+    now read FALSE. The positive case needs a real snapshot and lives in
+    test_readiness_is_recomputed_from_persisted_bytes_not_metadata."""
     from portfolio_automation.intraday_lab import foundation as FD
     blank = FD.session2_status(None)
     assert blank["canonical_dataset_ready"] is False
     assert blank["feature_dataset_ready"] is False
-    proven = FD.session2_status({"dataset_fingerprint": "x", "sessions_requested": 3,
-                                 "sessions_admitted": 3, "feature_fingerprint": "y",
-                                 "feature_observations": 10})
-    assert proven["canonical_dataset_ready"] is True
-    assert proven["feature_dataset_ready"] is True
+    asserted_only = FD.session2_status({"dataset_fingerprint": "x",
+                                        "sessions_reconciled": 3,
+                                        "feature_fingerprint": "y",
+                                        "feature_observations": 10})
+    assert asserted_only["canonical_dataset_ready"] is False
+    assert asserted_only["feature_dataset_ready"] is False
 
 
 def test_strategy_validation_stays_false_under_every_evidence_state():
@@ -502,3 +507,218 @@ def test_strategy_validation_stays_false_under_every_evidence_state():
                             "sessions_admitted": 1, "feature_fingerprint": "y",
                             "feature_observations": 5}):
         assert FD.session2_status(pilot)["strategy_validation_allowed"] is False
+
+
+# ===========================================================================
+# Session 2 COMPLETION — durable acquisition, immutable snapshots, provenance
+# ===========================================================================
+from portfolio_automation.intraday_lab import storage as ST      # noqa: E402
+from portfolio_automation.intraday_lab import pipeline as PL      # noqa: E402
+
+
+def _rows(session, n=None):
+    """Provider-shaped rows (naive ET strings) for a session."""
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    starts = session.expected_bar_starts[:n] if n else session.expected_bar_starts
+    return [{"date": t.astimezone(et).strftime("%Y-%m-%d %H:%M:%S"),
+             "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5,
+             "volume": 1000} for t in starts]
+
+
+def _fetcher(mapping):
+    def f(symbol, start, end):
+        return mapping.get(symbol, []), 200
+    return f
+
+
+# --------------------------- request accounting ---------------------------
+def test_uncertified_requested_date_still_produces_a_record():
+    req = DS.DatasetRequest(symbols=("SPY",), start=date(2023, 8, 7),
+                            end=date(2023, 8, 7))
+    assert len(req.resolved_items()) == 1
+    ds = DS.build_canonical_dataset({}, request=req)
+    assert len(ds.reconciliations) == 1
+    assert ds.reconciliations[0].admission_status == DS.REJECTED_CALENDAR_UNCERTIFIED
+
+
+def test_requested_closed_date_is_accounted_but_not_a_rejection():
+    req = DS.DatasetRequest(symbols=("SPY",), start=date(2026, 8, 8),
+                            end=date(2026, 8, 8))          # Saturday
+    summary = req.calendar_resolution_summary()
+    assert summary["requested_symbol_date_count"] == 1
+    assert summary["closed_dates"] == 1 and summary["provider_calls_planned"] == 0
+    ds = DS.build_canonical_dataset({}, request=req)
+    assert ds.reconciliations[0].admission_status == DS.NOT_A_TRADING_SESSION
+    assert ds.rejected == ()
+
+
+def test_unexpected_provider_result_cannot_be_silently_ignored():
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    rogue = ("AAPL", NORMAL)
+    ds = DS.build_canonical_dataset(
+        {("SPY", NORMAL): _bars(C.resolve_session(NORMAL)),
+         rogue: _bars(C.resolve_session(NORMAL), symbol="AAPL")}, request=req)
+    statuses = {(r.symbol, r.admission_status) for r in ds.reconciliations}
+    assert ("AAPL", DS.REJECTED_UNEXPECTED_PROVIDER_RESULT) in statuses
+
+
+# --------------------------- calendar identity ---------------------------
+def test_manifest_identity_changes_when_calendar_semantics_change(monkeypatch):
+    """Same bars, different calendar meaning = different research question."""
+    s = C.resolve_session(NORMAL)
+    bars = {("SPY", NORMAL): _bars(s)}
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    before = DS.build_canonical_dataset(bars, request=req)
+    content_before, manifest_before = before.fingerprint(), before.manifest_fingerprint()
+
+    monkeypatch.setattr(C, "EARLY_CLOSES", frozenset(C.EARLY_CLOSES | {date(2026, 7, 3)}))
+    after = DS.build_canonical_dataset(bars, request=req)
+    assert after.fingerprint() == content_before            # bytes unchanged
+    assert after.manifest_fingerprint() != manifest_before  # meaning changed
+
+
+# --------------------------- adjustment authority ---------------------------
+def test_caller_cannot_supply_adjustment_state_at_all():
+    ds = DS.build_canonical_dataset({("SPY", NORMAL): _bars(C.resolve_session(NORMAL))},
+                                    adjustment_state="LIES")
+    assert ds.adjustment_state == "split_adjusted"
+
+
+def test_empty_dataset_adjustment_is_not_applicable_not_a_guess():
+    ds = DS.build_canonical_dataset({}, request=DS.DatasetRequest(
+        symbols=("SPY",), start=date(2026, 8, 8), end=date(2026, 8, 8)))
+    assert ds.adjustment_state == "NOT_APPLICABLE"
+
+
+# --------------------------- immutable storage ---------------------------
+def test_identical_snapshot_is_verified_and_reused(tmp_path):
+    files = {"payload.json": [{"a": 1}]}
+    a = ST.write_snapshot(ST.RAW, "abc123", files, root=str(tmp_path))
+    b = ST.write_snapshot(ST.RAW, "abc123", files, root=str(tmp_path))
+    assert a == b and a.is_dir()
+
+
+def test_same_identity_different_bytes_is_a_hard_failure(tmp_path):
+    """Overwriting would invalidate every experiment bound to that identity."""
+    ST.write_snapshot(ST.RAW, "abc123", {"payload.json": [{"a": 1}]}, root=str(tmp_path))
+    with pytest.raises(ST.SnapshotCollisionError):
+        ST.write_snapshot(ST.RAW, "abc123", {"payload.json": [{"a": 2}]},
+                          root=str(tmp_path))
+
+
+def test_raw_identity_ignores_retrieval_time_but_tracks_content():
+    rows = [{"date": "2026-08-03 09:30:00", "open": 1, "high": 2, "low": 0.5,
+             "close": 1.5, "volume": 10}]
+    h1 = ST.raw_payload_hash(rows, symbol="SPY", timeframe="5min")
+    h2 = ST.raw_payload_hash(rows, symbol="SPY", timeframe="5min")
+    changed = ST.raw_payload_hash(rows + [dict(rows[0], close=9)],
+                                  symbol="SPY", timeframe="5min")
+    assert h1 == h2 and h1 != changed
+
+
+def test_snapshots_live_under_historical_never_latest(tmp_path):
+    ST.write_snapshot(ST.DATASETS, "fp1", {"x.json": {}}, root=str(tmp_path))
+    assert (tmp_path / "outputs" / "backtest" / "intraday" / "datasets" / "fp1").is_dir()
+    assert not (tmp_path / "outputs" / "latest").exists()
+
+
+# --------------------------- end-to-end pipeline ---------------------------
+def test_pipeline_persists_and_verifies_canonical_identity(tmp_path):
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    out = PL.build_historical_research_dataset(
+        req, _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    assert out["sessions_admitted"] == 1 and out["bars_admitted"] == 78
+    assert out["canonical_verification"]["verified"] is True
+    assert out["strategy_validation_allowed"] is False
+    assert ST.snapshot_exists(ST.DATASETS, out["dataset_fingerprint"], root=str(tmp_path))
+    assert ST.snapshot_exists(ST.FEATURES, out["feature_fingerprint"], root=str(tmp_path))
+
+
+def test_pipeline_keeps_a_missing_middle_session_visible(tmp_path):
+    """3 requested trading days, provider omits the middle one entirely."""
+    s3, s5 = C.resolve_session(date(2026, 8, 3)), C.resolve_session(date(2026, 8, 5))
+    req = DS.DatasetRequest(symbols=("SPY",), start=date(2026, 8, 3),
+                            end=date(2026, 8, 5))
+    out = PL.build_historical_research_dataset(
+        req, _fetcher({"SPY": _rows(s3) + _rows(s5)}), root=str(tmp_path))
+    assert out["expected_trading_sessions"] == 3
+    assert out["sessions_admitted"] == 2 and out["sessions_rejected"] == 1
+
+
+def test_pipeline_records_a_provider_error_without_losing_the_session(tmp_path):
+    def boom(symbol, start, end):
+        raise RuntimeError("provider exploded")
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    out = PL.build_historical_research_dataset(req, boom, root=str(tmp_path))
+    assert out["acquisitions"][0]["provider_status"] == "PROVIDER_ERROR"
+    assert "provider exploded" in out["acquisitions"][0]["error_message_safe"]
+    assert out["sessions_reconciled"] == 1 and out["sessions_rejected"] == 1
+
+
+def test_dry_run_writes_nothing(tmp_path):
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    out = PL.build_historical_research_dataset(
+        req, _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}),
+        root=str(tmp_path), dry_run=True)
+    assert out["dry_run"] is True and out["writes"] == []
+    assert not (tmp_path / "outputs").exists()
+
+
+def test_durable_feature_build_cannot_misbind_provenance(tmp_path):
+    """build_features derives identity from the dataset object, so no caller can
+    pair bars from one dataset with the identity of another."""
+    import inspect
+    sig = inspect.signature(PL.build_features)
+    assert "dataset_id" not in sig.parameters
+    assert "fingerprint" not in sig.parameters
+    ds = DS.build_canonical_dataset({("SPY", NORMAL): _bars(C.resolve_session(NORMAL))})
+    vals = PL.build_features(ds)
+    assert vals and all(v.source_dataset_fingerprint == ds.fingerprint() for v in vals)
+    assert all(v.source_dataset_manifest_fingerprint == ds.manifest_fingerprint()
+               for v in vals)
+
+
+def test_feature_identity_changes_with_manifest_identity_alone():
+    """Same bars, same values, different research meaning -> different identity."""
+    s = C.resolve_session(NORMAL)
+    bars = {("SPY", NORMAL): _bars(s)}
+    a = DS.build_canonical_dataset(bars, request=DS.DatasetRequest(
+        symbols=("SPY",), start=NORMAL, end=NORMAL))
+    b = DS.build_canonical_dataset(bars, request=DS.DatasetRequest(
+        symbols=("SPY",), start=NORMAL, end=date(2026, 8, 5)))
+    va, vb = PL.build_features(a), PL.build_features(b)
+    assert [v.value for v in va] == [v.value for v in vb]
+    assert a.fingerprint() == b.fingerprint()
+    assert F.feature_fingerprint(va) != F.feature_fingerprint(vb)
+
+
+def test_readiness_is_recomputed_from_persisted_bytes_not_metadata(tmp_path):
+    """Fabricated metadata must not make the data product look ready."""
+    from portfolio_automation.intraday_lab import foundation as FD
+    fake = {"dataset_fingerprint": "deadbeef", "sessions_reconciled": 3,
+            "feature_fingerprint": "nope", "feature_observations": 99}
+    assert FD._canonical_ready(fake, str(tmp_path)) is False
+    assert FD._feature_ready(fake, str(tmp_path)) is False
+
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    out = PL.build_historical_research_dataset(
+        req, _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    assert FD._canonical_ready(out, str(tmp_path)) is True
+    assert FD._feature_ready(out, str(tmp_path)) is True
+
+
+def test_tampered_snapshot_fails_verification(tmp_path):
+    """A snapshot whose stored bars no longer hash to their directory name."""
+    import json as _json
+    req = DS.DatasetRequest(symbols=("SPY",), start=NORMAL, end=NORMAL)
+    out = PL.build_historical_research_dataset(
+        req, _fetcher({"SPY": _rows(C.resolve_session(NORMAL))}), root=str(tmp_path))
+    fp = out["dataset_fingerprint"]
+    path = ST.intraday_root(str(tmp_path)) / ST.DATASETS / fp / "canonical_bars.json"
+    rows = _json.loads(path.read_text())
+    rows[0]["close"] = 999.99
+    path.write_text(_json.dumps(rows, separators=(",", ":"), sort_keys=True))
+    assert ST.verify_canonical_snapshot(fp, root=str(tmp_path))["verified"] is False
+    from portfolio_automation.intraday_lab import foundation as FD
+    assert FD._canonical_ready(out, str(tmp_path)) is False

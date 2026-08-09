@@ -186,11 +186,56 @@ rather than a silently shortened lookback. Cross-session rolling features are
 4. Absolute-price features blocked (split back-adjusted).
 5. `SECTOR_CONTEXT_DEFERRED`.
 6. No bulk backfill — the pilot is deliberately small.
-7. **No CLI module and no persisted raw/canonical snapshots.** The pipeline is
-   library-level and in-memory; §3–§7 and §20–§23 of the hardening brief
-   (acquisition module, content-addressed raw snapshots, on-disk canonical and
-   feature snapshots, collision detection, CLI, dry-run) are **NOT built**.
-   Identity and reconciliation are complete and proven; durable storage is not.
+7. **No CLI module.** The durable pipeline is library-level
+   (`pipeline.build_historical_research_dataset`) with a `dry_run` mode; the
+   operator CLI wrapper is still deferred.
+8. Cross-session rolling features remain **DEFERRED**.
+
+## 5c. Durability & provenance (completion pass)
+
+The chain is now end-to-end and durable:
+
+```
+DatasetRequest → acquire() → immutable RAW snapshot → normalize → calendar
+  → exact reconciliation → immutable CANONICAL snapshot → build_features()
+  → immutable FEATURE snapshot
+```
+
+**Request accounting is total.** `resolved_items()` returns every requested
+symbol×date with a calendar status — `EXPECTED_TRADING_SESSION`,
+`MARKET_CLOSED`, or `CALENDAR_UNCERTIFIED`. A requested 2023 weekday and a
+requested Saturday both previously vanished from the record entirely; both now
+persist. A requested closed date is `NOT_A_TRADING_SESSION` — accounted for, but
+not counted as a rejection. Provider results outside the authorized matrix are
+`REJECTED_UNEXPECTED_PROVIDER_RESULT` rather than silently ignored.
+
+**Immutable snapshots** (`storage.py`) are content-addressed under
+`outputs/backtest/intraday/{raw,datasets,features}/<identity>/`. Identical
+content is verified and reused; the same identity with different bytes is a
+`SnapshotCollisionError`, never an overwrite — a silently replaced dataset would
+invalidate every experiment bound to it with no trace. `retrieved_at` is outside
+the raw content hash, so refetching the same observations reuses one identity.
+
+**Calendar semantics are in the manifest identity.** `calendar_fingerprint()`
+hashes exchange, timezone, source, coverage bounds, the holiday table, the
+early-close table and the grid times. Same bars under a changed calendar → same
+content fingerprint, **different** manifest fingerprint.
+
+**Adjustment state is never caller-supplied** — derived from admitted bars, or
+`NOT_APPLICABLE` when none were admitted.
+
+**Features bind to both identities** (`source_dataset_fingerprint` and
+`source_dataset_manifest_fingerprint`), and `pipeline.build_features(dataset)`
+takes the dataset object, so no caller can pair bars from A with the identity of
+B. A test asserts the signature exposes no `dataset_id`/`fingerprint` argument.
+
+**Readiness is recomputed from persisted bytes.** `_canonical_ready` requires
+the snapshot to exist, a request manifest to be present, and the stored bars to
+re-hash to their own directory name. Fabricated metadata reads FALSE, and a
+tampered snapshot fails verification — both under test.
+
+Snapshots are gitignored: content-addressed and reproducible from the committed
+request + pipeline.
 
 ---
 

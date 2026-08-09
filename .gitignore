@@ -62,3 +62,8 @@ outputs/operator_control/
 
 # Cadence-suite scheduling state (VPS-local runtime; run-all-daily auto-chain clock)
 .agent/suite_run_state.json
+
+# Intraday Lab immutable research snapshots (raw provider payloads, canonical
+# bars, feature values). Content-addressed and reproducible from the committed
+# request + pipeline; large market data does not belong in git.
+outputs/backtest/intraday/

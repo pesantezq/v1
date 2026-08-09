@@ -41,9 +41,47 @@ REJECTED_CONFLICTING_DUPLICATE = "REJECTED_CONFLICTING_DUPLICATE"
 REJECTED_EXACT_DUPLICATE = "REJECTED_EXACT_DUPLICATE"
 REJECTED_IDENTITY_MISMATCH = "REJECTED_IDENTITY_MISMATCH"
 REJECTED_PROVIDER_ERROR = "REJECTED_PROVIDER_ERROR"
+REJECTED_UNEXPECTED_PROVIDER_RESULT = "REJECTED_UNEXPECTED_PROVIDER_RESULT"
+NOT_A_TRADING_SESSION = "NOT_A_TRADING_SESSION"
+
+# How the calendar resolved a REQUESTED date. Distinct from admission: a
+# requested Saturday is correctly not-a-session, which is not a rejection.
+CAL_EXPECTED_TRADING_SESSION = "EXPECTED_TRADING_SESSION"
+CAL_MARKET_CLOSED = "MARKET_CLOSED"
+CAL_UNCERTIFIED = "CALENDAR_UNCERTIFIED"
 REJECTED_CALENDAR_UNCERTIFIED = "REJECTED_CALENDAR_UNCERTIFIED"
 REJECTED_CLOSED_SESSION_HAS_BARS = "REJECTED_CLOSED_SESSION_HAS_BARS"
 REJECTED_MIXED_ADJUSTMENT = "REJECTED_MIXED_ADJUSTMENT"
+
+
+def _calendar_identity() -> dict:
+    """Deterministic calendar semantics for the manifest hash.
+
+    The manifest fingerprint must change when calendar MEANING changes, even if
+    the admitted bars are byte-identical: the same bars interpreted under a
+    different holiday/early-close table answer a different research question.
+    Transient generation timestamps are excluded.
+    """
+    from portfolio_automation.intraday_lab import calendar as _cal
+    return {
+        "exchange": _cal.EXCHANGE,
+        "timezone": str(_cal.EXCHANGE_TZ),
+        "source": _cal.CALENDAR_SOURCE,
+        "schema_version": _cal.SCHEMA_VERSION,
+        "coverage_from": _cal.HOLIDAY_COVERAGE_FROM.isoformat(),
+        "coverage_through": _cal.HOLIDAY_COVERAGE_THROUGH.isoformat(),
+        "holiday_table": sorted(d.isoformat() for d in _cal.NYSE_HOLIDAYS),
+        "early_close_table": sorted(d.isoformat() for d in _cal.EARLY_CLOSES),
+        "early_close_time_et": _cal.EARLY_CLOSE_TIME.isoformat(),
+        "regular_open_et": _cal.REGULAR_OPEN.isoformat(),
+        "regular_close_et": _cal.REGULAR_CLOSE.isoformat(),
+    }
+
+
+def calendar_fingerprint() -> str:
+    return hashlib.sha256(
+        json.dumps(_calendar_identity(), separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()[:32]
 
 
 @dataclass(frozen=True)
@@ -172,6 +210,9 @@ def reconcile_session(bars: Sequence[IntradayBar], session: TradingSession, *,
     elif identity_problems:
         status = REJECTED_IDENTITY_MISMATCH
         reasons.extend(identity_problems)
+    elif session.session_type == SESSION_MARKET_CLOSED and not observed:
+        # Correctly not a trading session; no provider call was owed.
+        status = NOT_A_TRADING_SESSION
     elif session.session_type == SESSION_MARKET_CLOSED and observed:
         status = REJECTED_CLOSED_SESSION_HAS_BARS
         reasons.append(
@@ -221,6 +262,7 @@ class CanonicalDataset:
             "schema": "intraday_manifest_v1",
             "content_fingerprint": self.fingerprint(),
             "request": self.request.to_dict() if self.request else None,
+            "calendar": _calendar_identity(),
             "timeframe": self.timeframe,
             "adjustment_state": self.adjustment_state,
             "sessions": [[r.symbol, r.market_date.isoformat(), r.admission_status]
@@ -236,7 +278,15 @@ class CanonicalDataset:
 
     @property
     def rejected(self) -> tuple[SessionReconciliation, ...]:
-        return tuple(r for r in self.reconciliations if not r.admitted)
+        """Genuine rejections. A requested non-trading date is accounted for but
+        is not a failure — it is the calendar answering correctly."""
+        return tuple(r for r in self.reconciliations
+                     if not r.admitted and r.admission_status != NOT_A_TRADING_SESSION)
+
+    @property
+    def not_trading(self) -> tuple[SessionReconciliation, ...]:
+        return tuple(r for r in self.reconciliations
+                     if r.admission_status == NOT_A_TRADING_SESSION)
 
     @property
     def symbols(self) -> list[str]:
@@ -289,15 +339,44 @@ class DatasetRequest:
     end: date
     timeframe: str = "5min"
 
-    def certified_sessions(self) -> list[tuple[str, date]]:
-        """Every (symbol, date) the calendar says should have traded."""
-        from portfolio_automation.intraday_lab.calendar import sessions_in_range
+    def resolved_items(self) -> list[tuple[str, date, str]]:
+        """EVERY requested (symbol, date) with its calendar resolution.
+
+        Nothing is filtered out. An earlier version kept only dates with
+        expected bars, so a requested 2023 weekday (UNCERTIFIED) or a requested
+        Saturday (CLOSED) vanished from the request record entirely — the
+        manifest could not show that they had been asked for at all.
+        """
+        from portfolio_automation.intraday_lab.calendar import (
+            sessions_in_range, SESSION_UNCERTIFIED,
+        )
         out = []
         for session in sessions_in_range(self.start, self.end):
-            if session.expected_bar_count:
-                for symbol in self.symbols:
-                    out.append((symbol, session.market_date))
+            if session.session_type == SESSION_UNCERTIFIED:
+                status = CAL_UNCERTIFIED
+            elif session.expected_bar_count:
+                status = CAL_EXPECTED_TRADING_SESSION
+            else:
+                status = CAL_MARKET_CLOSED
+            for symbol in self.symbols:
+                out.append((symbol, session.market_date, status))
         return sorted(out)
+
+    def certified_sessions(self) -> list[tuple[str, date]]:
+        """Only the (symbol, date) pairs that require a provider call."""
+        return [(s, d) for s, d, st in self.resolved_items()
+                if st == CAL_EXPECTED_TRADING_SESSION]
+
+    def calendar_resolution_summary(self) -> dict:
+        items = self.resolved_items()
+        return {
+            "requested_symbol_date_count": len(items),
+            "expected_trading_sessions": sum(1 for *_, s in items
+                                             if s == CAL_EXPECTED_TRADING_SESSION),
+            "closed_dates": sum(1 for *_, s in items if s == CAL_MARKET_CLOSED),
+            "uncertified_dates": sum(1 for *_, s in items if s == CAL_UNCERTIFIED),
+            "provider_calls_planned": len(self.certified_sessions()),
+        }
 
     def fingerprint(self) -> str:
         payload = {"schema": "intraday_request_v1", "symbols": sorted(self.symbols),
@@ -311,7 +390,7 @@ class DatasetRequest:
         return {"symbols": sorted(self.symbols), "start": self.start.isoformat(),
                 "end": self.end.isoformat(), "timeframe": self.timeframe,
                 "request_fingerprint": self.fingerprint(),
-                "certified_session_count": len(self.certified_sessions())}
+                **self.calendar_resolution_summary()}
 
 
 def build_canonical_dataset(
@@ -329,15 +408,33 @@ def build_canonical_dataset(
     caller. A caller label could otherwise disagree with the data — a dataset
     was observed labelled `split_adjusted` while containing both regimes.
     """
-    keys = request.certified_sessions() if request else sorted(bars_by_date)
     if request:
         timeframe = request.timeframe
+        keys = [(sym, d) for sym, d, _ in request.resolved_items()]
+        # Provider results outside the authorized request matrix are drift, not
+        # a bonus. They must surface rather than be quietly ignored.
+        keys = keys + sorted(set(bars_by_date) - set(keys))
+    else:
+        keys = sorted(bars_by_date)
+    unauthorized = (set(bars_by_date) - {(s, d) for s, d, _ in request.resolved_items()}
+                    if request else set())
 
     admitted_bars: list[IntradayBar] = []
     recs: list[SessionReconciliation] = []
     for (symbol, market_date) in keys:
         bars = bars_by_date.get((symbol, market_date), [])
         session = resolve_session(market_date)
+        if (symbol, market_date) in unauthorized:
+            recs.append(SessionReconciliation(
+                symbol=symbol, market_date=market_date, timeframe=timeframe,
+                session_type=session.session_type, expected_count=0,
+                observed_count=len(bars), missing_timestamps=(),
+                unexpected_timestamps=(), conflicting_duplicates=(),
+                admission_status=REJECTED_UNEXPECTED_PROVIDER_RESULT,
+                rejection_reasons=(
+                    f"provider returned {symbol} {market_date} which is outside "
+                    f"the authorized request matrix — query or normalization drift",)))
+            continue
         rec = reconcile_session(bars, session, symbol=symbol, timeframe=timeframe)
         recs.append(rec)
         if rec.admitted:
@@ -364,7 +461,8 @@ def build_canonical_dataset(
         admitted_bars = []
         states = set()
 
-    derived = states.pop() if len(states) == 1 else (adjustment_state or "unknown")
+    # Caller has NO authority over canonical adjustment identity.
+    derived = states.pop() if len(states) == 1 else "NOT_APPLICABLE"
     return CanonicalDataset(
         bars=tuple(sorted(admitted_bars, key=lambda b: (b.symbol, b.bar_start_at))),
         reconciliations=tuple(recs), timeframe=timeframe,
@@ -398,6 +496,8 @@ def dataset_manifest(ds: CanonicalDataset, *, source: str = "fmp",
         "market_date_end": max(dates).isoformat() if dates else None,
         "raw_snapshot_hash": raw_snapshot_hash,
         "calendar": calendar_provenance(),
+        "calendar_fingerprint": calendar_fingerprint(),
+        "not_trading_count": len(ds.not_trading),
         "session_count_requested": len(ds.reconciliations),
         "session_count_admitted": len(ds.admitted),
         "session_count_rejected": len(ds.rejected),

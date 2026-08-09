@@ -54,6 +54,10 @@ class FeatureValue:
     input_window_start: datetime
     input_window_end: datetime
     parameters: dict[str, Any]
+    # Content identity says WHICH BYTES; manifest identity says WHICH RESEARCH
+    # QUESTION. "Aug 1-10 with 3 rejections" and "only the 7 admitted days" can
+    # be byte-identical yet mean different things, so features bind to both.
+    source_dataset_manifest_fingerprint: str = ""
 
     def is_known_at(self, decision_time: datetime) -> bool:
         if decision_time.tzinfo is None:
@@ -67,6 +71,7 @@ class FeatureValue:
             "event_at": self.event_at.isoformat(), "known_at": self.known_at.isoformat(),
             "source_dataset_id": self.source_dataset_id,
             "source_dataset_fingerprint": self.source_dataset_fingerprint,
+            "source_dataset_manifest_fingerprint": self.source_dataset_manifest_fingerprint,
             "input_window_start": self.input_window_start.isoformat(),
             "input_window_end": self.input_window_end.isoformat(),
             "parameters": self.parameters,
@@ -237,7 +242,8 @@ def _window(bars: Sequence[IntradayBar], end_index: int, lookback: int
 
 
 def _emit(feature_id: str, window: Sequence[IntradayBar], value: float, *,
-          dataset_id: str, fingerprint: str, parameters: dict) -> FeatureValue:
+          dataset_id: str, fingerprint: str, parameters: dict,
+          manifest_fingerprint: str = "") -> FeatureValue:
     newest = max(window, key=lambda b: b.known_at)
     return FeatureValue(
         feature_id=feature_id,
@@ -247,23 +253,27 @@ def _emit(feature_id: str, window: Sequence[IntradayBar], value: float, *,
         # The core invariant: never earlier than the newest input.
         known_at=newest.known_at,
         source_dataset_id=dataset_id, source_dataset_fingerprint=fingerprint,
+        source_dataset_manifest_fingerprint=manifest_fingerprint,
         input_window_start=window[0].bar_start_at,
         input_window_end=window[-1].bar_start_at, parameters=parameters)
 
 
 def compute_return_nbar(bars: Sequence[IntradayBar], index: int, n: int, *,
-                        dataset_id: str, fingerprint: str) -> FeatureValue | None:
+                        dataset_id: str, fingerprint: str,
+                        manifest_fingerprint: str = "") -> FeatureValue | None:
     window = _window(bars, index, n + 1)
     if window is None or window[0].close == 0:
         return FEATURE_NOT_AVAILABLE
     value = (window[-1].close / window[0].close) - 1.0
     fid = "return_1bar" if n == 1 else "return_nbar"
     return _emit(fid, window, value, dataset_id=dataset_id,
-                 fingerprint=fingerprint, parameters={"n": n})
+                 fingerprint=fingerprint, parameters={"n": n},
+                 manifest_fingerprint=manifest_fingerprint)
 
 
 def compute_realized_vol(bars: Sequence[IntradayBar], index: int, n: int, *,
-                         dataset_id: str, fingerprint: str) -> FeatureValue | None:
+                         dataset_id: str, fingerprint: str,
+                        manifest_fingerprint: str = "") -> FeatureValue | None:
     window = _window(bars, index, n + 1)
     if window is None:
         return FEATURE_NOT_AVAILABLE
@@ -274,21 +284,25 @@ def compute_realized_vol(bars: Sequence[IntradayBar], index: int, n: int, *,
     mean = sum(rets) / len(rets)
     var = sum((r - mean) ** 2 for r in rets) / len(rets)
     return _emit("realized_vol", window, var ** 0.5, dataset_id=dataset_id,
-                 fingerprint=fingerprint, parameters={"n": n})
+                 fingerprint=fingerprint, parameters={"n": n},
+                 manifest_fingerprint=manifest_fingerprint)
 
 
 def compute_normalized_range(bars: Sequence[IntradayBar], index: int, *,
-                             dataset_id: str, fingerprint: str) -> FeatureValue | None:
+                             dataset_id: str, fingerprint: str,
+                        manifest_fingerprint: str = "") -> FeatureValue | None:
     window = _window(bars, index, 1)
     if window is None or window[-1].close == 0:
         return FEATURE_NOT_AVAILABLE
     bar = window[-1]
     return _emit("normalized_range", window, (bar.high - bar.low) / bar.close,
-                 dataset_id=dataset_id, fingerprint=fingerprint, parameters={})
+                 dataset_id=dataset_id, fingerprint=fingerprint, parameters={},
+                 manifest_fingerprint=manifest_fingerprint)
 
 
 def compute_range_position(bars: Sequence[IntradayBar], index: int, n: int, *,
-                           dataset_id: str, fingerprint: str) -> FeatureValue | None:
+                           dataset_id: str, fingerprint: str,
+                        manifest_fingerprint: str = "") -> FeatureValue | None:
     window = _window(bars, index, n)
     if window is None:
         return FEATURE_NOT_AVAILABLE
@@ -297,7 +311,8 @@ def compute_range_position(bars: Sequence[IntradayBar], index: int, n: int, *,
     if hi == lo:
         return FEATURE_NOT_AVAILABLE
     return _emit("range_position", window, (window[-1].close - lo) / (hi - lo),
-                 dataset_id=dataset_id, fingerprint=fingerprint, parameters={"n": n})
+                 dataset_id=dataset_id, fingerprint=fingerprint, parameters={"n": n},
+                 manifest_fingerprint=manifest_fingerprint)
 
 
 def feature_fingerprint(values: Sequence[FeatureValue]) -> str:
@@ -310,7 +325,7 @@ def feature_fingerprint(values: Sequence[FeatureValue]) -> str:
          v.event_at.isoformat(), v.known_at.isoformat(),
          v.input_window_start.isoformat(), v.input_window_end.isoformat(),
          round(v.value, 12), json.dumps(v.parameters, sort_keys=True),
-         v.source_dataset_fingerprint]
+         v.source_dataset_fingerprint, v.source_dataset_manifest_fingerprint]
         for v in values)
     payload = {"schema": "intraday_features_v1",
                "feature_set_version": FEATURE_SET_VERSION, "rows": rows}
@@ -320,7 +335,8 @@ def feature_fingerprint(values: Sequence[FeatureValue]) -> str:
 
 
 def feature_manifest(values: Sequence[FeatureValue], *, dataset_id: str,
-                     dataset_fingerprint: str) -> dict:
+                     dataset_fingerprint: str,
+                     manifest_fingerprint: str = "") -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "source_module": "intraday_lab.features",
@@ -331,6 +347,7 @@ def feature_manifest(values: Sequence[FeatureValue], *, dataset_id: str,
         "feature_fingerprint": feature_fingerprint(values),
         "source_dataset_id": dataset_id,
         "source_dataset_fingerprint": dataset_fingerprint,
+        "source_dataset_manifest_fingerprint": manifest_fingerprint,
         "features_enabled": list(ENABLED_FEATURES),
         "features_blocked": {k: FEATURE_REGISTRY[k]["status"] for k in BLOCKED_FEATURES},
         "symbol_count": len({v.symbol for v in values}),
