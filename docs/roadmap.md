@@ -1,5 +1,36 @@
 # Roadmap
 
+## Strategic Goal — StockBot Northstar Redesign (opened 2026-08-09, ACTIVE)
+
+The roadmap is now organized as **Strategic Goal → Program → Phase → Milestone
+→ Deliverable**. The authoritative machine-readable state is
+`.agent/project_state.yaml` (program / current phase / current step /
+next_official_step) and `.agent/phase_status.yaml`
+(`stockbot_northstar_redesign` block); the full program charter — governing
+North Star statement, all phases (0A–11) with objectives / dependencies /
+unlocks / exit gates / statuses, the target architectural planes, AI worker
+role classes, critical path, and parallel workstreams — is
+**`docs/NORTHSTAR_REDESIGN.md`**. The agent authority model is
+**`config/agent_policy.yaml`**.
+
+Current position:
+
+- **Program:** `stockbot_northstar_redesign` — ACTIVE
+- **Phase:** `northstar_phase_0a` (Architecture, Authority & CI Foundation) —
+  ACTIVE, **not complete** (CI milestone outstanding)
+- **Step:** `northstar_0a_authority_roadmap_reconciliation` — implemented,
+  awaiting GPT closure
+- **Next:** `northstar_0a_ci_foundation`
+- Phases 0B–11 are defined, **not started**. No future phase is implemented.
+
+The `observe_and_iterate` objective that headed this roadmap 2026-05-20 →
+2026-08-09 is superseded **as the sole top-level objective**; production
+observation and outcome collection continue as a program parallel workstream.
+Everything below this section is the historical, reverse-chronological project
+journal and remains accurate history — it is deliberately not rewritten.
+
+---
+
 ## Crowd Radar multi-source (no-extra-cost) — built (2026-06-14)
 
 - Dev-doc-audited, entitlement-probed multi-source connector lane under

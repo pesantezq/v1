@@ -2,7 +2,17 @@
 
 This repo is an advisory-only portfolio automation system. It produces analysis, recommendations, and operator artifacts; it does not execute trades.
 
+## North Star & Current Program (2026-08-09)
+- Governing goal + program charter: `docs/NORTHSTAR_REDESIGN.md`
+  (program `stockbot_northstar_redesign`; operator-approved 2026-08-09).
+- Machine-readable state: `.agent/project_state.yaml` (program / phase / step /
+  `next_official_step`) — unchanged as the roadmap authority.
+- Machine-readable agent authority: `config/agent_policy.yaml` — role/environment
+  authority model; prose docs explain it and never override it. No AI role holds
+  production or investment authority; the human operator is the only role that does.
+
 ## Read First
+- `docs/NORTHSTAR_REDESIGN.md`
 - `docs/ARCHITECTURE.md`
 - `docs/decision_engine.md`
 - `docs/gui_decision_center.md`

@@ -3,6 +3,11 @@
 This file is the primary Codex entry point for the Portfolio Automation System.
 Read this before any code change, documentation update, or review task.
 
+> **2026-08-09 (NORTHSTAR_0A):** the governing program is
+> `stockbot_northstar_redesign` (`docs/NORTHSTAR_REDESIGN.md`). Role/environment
+> authority is defined machine-readably in `config/agent_policy.yaml`; this
+> document's role description remains valid and is subordinate to that policy.
+
 ---
 
 ## Project Overview

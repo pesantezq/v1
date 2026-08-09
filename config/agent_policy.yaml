@@ -1,0 +1,338 @@
+# ============================================================================
+# StockBot Agent Authority Policy — machine-readable source of truth
+# ============================================================================
+# Added 2026-08-09 by NORTHSTAR_0A_AUTHORITY_ROADMAP_RECONCILIATION.
+#
+# This file, together with .agent/project_state.yaml, is the AUTHORITATIVE
+# statement of who (which agent role, in which environment) may do what.
+# Prose documents (CLAUDE.md, AGENTS.md, docs/AGENT_OPERATING_MODEL.md,
+# docs/AI_COLLABORATION_RUNBOOK.md) EXPLAIN this policy; where older prose
+# contradicts it, this policy wins.
+#
+# Scope discipline: this is a small role/environment authority model, not an
+# IAM system. It models responsibility categories and hard boundaries; it does
+# NOT encode individual shell commands (tool-level permissions stay in
+# .claude/settings.json per docs/CLAUDE_VPS_MODES.md).
+#
+# Runtime behavior does NOT depend on this file yet. The only consumer is the
+# tiny read-only validator portfolio_automation/agent_policy.py (proves the
+# document parses and resolves deterministically) and its tests. Enforcement
+# wiring is future, explicitly-authorized work.
+#
+# Deterministic resolution rule (implemented in agent_policy.resolve_authority):
+#   effective authority = the role block, constrained by the environment block.
+#   * Absence of a grant is a DENIAL (fail closed).
+#   * A prohibition always wins over a grant.
+#   * Unknown role or environment names raise — no fuzzy matching.
+
+policy_version: "1.0.0"
+policy_name: stockbot_agent_authority_policy
+updated: "2026-08-09"
+program: stockbot_northstar_redesign
+
+# ----------------------------------------------------------------------------
+# Global invariants — hold for every role in every environment.
+# ----------------------------------------------------------------------------
+global_invariants:
+  advisory_only: true
+  no_auto_trading: true
+  no_broker_execution: true
+  # Production-advisory promotion is a HUMAN decision. No AI role can hold it,
+  # inherit it, or be represented as holding it.
+  production_approval_roles: [human_operator]
+  ai_workers_cannot_be_production_approvers: true
+  # No AI role holds investment authority (the authority to decide that the
+  # system's predictions become capital, or to change investment behavior).
+  investment_authority_roles: [human_operator]
+  # Commercial reuse is downstream of research and cannot weaken evidence
+  # standards, governance, risk controls, or production boundaries.
+  commercialization_downstream_of_research: true
+  protected_boundaries:
+    - decision_engine_and_score_semantics   # signal/confidence/effective/conviction/final_rank/recommendation scores
+    - decision_plan_json_is_decision_source_of_truth
+    - production_loaders_apply_only_human_approved_proposals
+    - simulation_writes_only_sandbox_and_simulation_namespaces
+    - output_namespace_policy                # portfolio_automation/data_governance.py
+    - fmp_registry_compliance
+    - sanctioned_mutating_paths_stay_narrow  # backtesting/auto_apply.py + sim_governance only
+
+# ----------------------------------------------------------------------------
+# Environments — where an agent session runs and what the environment permits.
+# ----------------------------------------------------------------------------
+environments:
+  operator_laptop:
+    description: Primary dev environment (Windows). Full write access.
+    code_write_allowed: true
+    git_write_allowed: true
+    production_mutation_allowed: false      # laptop cannot touch the VPS runtime
+    validation_claims: local_only           # VPS results must never be claimed from here
+
+  vps_dev_on_vps:
+    description: >-
+      Production VPS treated as a second dev environment while hardening
+      (docs/CLAUDE_VPS_MODES.md mode 1). Declared by .claude/settings.json
+      _mode=dev_on_vps on the VPS.
+    code_write_allowed: true
+    git_write_allowed: true
+    production_mutation_allowed: true        # merge + service restart when durably authorized
+    validation_claims: real                  # tests run here are real production-host results
+
+  vps_read_only_ops:
+    description: >-
+      Target end-state ops mode (docs/CLAUDE_VPS_MODES.md mode 2). Read state,
+      run validation, report. Declared by .claude/settings.json _mode=read_only_ops.
+    code_write_allowed: false
+    git_write_allowed: false
+    production_mutation_allowed: false
+    validation_claims: real
+
+# ----------------------------------------------------------------------------
+# Roles.
+#
+# runtime_status values:
+#   active_today          — the role operates in the current system
+#   defined_not_integrated — authority is defined NOW (contract-first), but the
+#                            worker itself is NOT built/integrated yet; runtime
+#                            integration happens in its named Northstar phase.
+#
+# Every role: production_authority + investment_authority are hard booleans;
+# false means the role can never approve production promotion / never decide
+# that insights receive capital, in any environment.
+# ----------------------------------------------------------------------------
+roles:
+
+  prime:
+    description: AI research orchestrator (Northstar Phase 6).
+    runtime_status: defined_not_integrated
+    environments: [vps_dev_on_vps]           # research plane runs where the data lives
+    allowed_responsibilities:
+      - classify_research_tasks
+      - build_investigation_plans
+      - delegate_to_research_workers
+      - reconcile_evidence
+      - identify_disagreements
+      - route_quantitative_claims_to_stratlab
+      - synthesize_supported_findings
+      - abstain
+    prohibited_responsibilities:
+      - allocate_capital_authoritatively
+      - approve_production
+      - bypass_stratlab_for_quantitative_certification
+      - modify_predictions_or_scores
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: stratlab_certification_for_quantitative_claims
+    protected_boundaries: [all_global]
+
+  trading_agents:
+    description: Broad market/company hypothesis + research worker (Northstar Phase 7).
+    runtime_status: defined_not_integrated
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - market_and_company_research
+      - hypothesis_generation
+      - evidence_gathering
+    prohibited_responsibilities:
+      - capital_allocation
+      - production_approval
+      - writing_production_artifacts
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: research_only_until_separately_certified
+    protected_boundaries: [all_global]
+
+  finrobot:
+    description: >-
+      CONDITIONAL specialist for deep fundamentals/valuation (Northstar
+      Phase 8). Not required infrastructure; admitted only on demonstrated need.
+    runtime_status: defined_not_integrated
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - deep_fundamentals_research
+      - valuation_analysis
+    prohibited_responsibilities:
+      - capital_allocation
+      - production_approval
+      - writing_production_artifacts
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: conditional_admission_on_demonstrated_need
+    protected_boundaries: [all_global]
+
+  local_llm_worker:
+    description: Routine extraction, classification, summarization, tagging.
+    runtime_status: defined_not_integrated
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - extraction
+      - classification
+      - summarization
+      - tagging
+    prohibited_responsibilities:
+      - capital_allocation
+      - production_approval
+      - authoring_investment_hypotheses_as_authoritative
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: capability_specific_authority_only
+    protected_boundaries: [all_global]
+
+  evidence_auditor:
+    description: Claim / source / timing / entity verification role.
+    runtime_status: defined_not_integrated
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - claim_verification
+      - source_verification
+      - timing_and_point_in_time_verification
+      - entity_resolution_verification
+    prohibited_responsibilities:
+      - capital_allocation
+      - production_approval
+      - altering_the_evidence_it_audits
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: none_but_findings_are_advisory
+    protected_boundaries: [all_global]
+
+  quant_router_stratlab:
+    description: >-
+      Quantitative truth/evaluation boundary. Quantitative claims become
+      certified evidence ONLY through this plane (Strategy Lab lineage).
+    runtime_status: active_today             # Strategy Lab / walk-forward exist
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - quantitative_evaluation
+      - certification_of_incremental_value
+      - champion_challenger_adjudication
+    prohibited_responsibilities:
+      - capital_allocation
+      - production_approval
+      - modifying_predictions
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: deterministic_reproducible_evaluation
+    protected_boundaries: [all_global]
+
+  memo_product_worker:
+    description: Communicates validated research (memos, digests, product artifacts).
+    runtime_status: active_today             # memo/digest layer exists
+    environments: [vps_dev_on_vps]
+    allowed_responsibilities:
+      - render_validated_research
+      - communicate_findings
+      - product_artifact_generation
+    prohibited_responsibilities:
+      - altering_underlying_authoritative_results
+      - capital_allocation
+      - production_approval
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: renderers_must_stay_pure
+    protected_boundaries: [all_global]
+
+  claude_code_builder:
+    description: Implements authorized engineering tasks (this agent).
+    runtime_status: active_today
+    environments: [operator_laptop, vps_dev_on_vps]
+    allowed_responsibilities:
+      - feature_implementation
+      - module_and_test_creation
+      - local_code_changes
+      - observe_only_integration
+      - final_report_generation
+    prohibited_responsibilities:
+      - investment_decisions
+      - production_promotion_approval
+      - changing_protected_score_semantics_without_explicit_approval
+      - broker_or_execution_integration
+    production_authority: false
+    investment_authority: false
+    git_write_authority: true                # branch/commit/push; merge only when durably authorized
+    review_required: operator_or_reviewer_before_production_merge
+    protected_boundaries: [all_global]
+
+  claude_code_reviewer:
+    description: >-
+      Independent review agents (architecture, tests, governance, quant
+      assumptions, scope) — .claude/agents/* review roles.
+    runtime_status: active_today
+    environments: [operator_laptop, vps_dev_on_vps]
+    allowed_responsibilities:
+      - architecture_review
+      - test_review
+      - governance_review
+      - quant_assumption_review
+      - scope_review
+    prohibited_responsibilities:
+      - merging
+      - production_promotion_approval
+      - implementing_changes_it_reviews
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: none_reviews_are_advisory
+    protected_boundaries: [all_global]
+
+  gpt_architect:
+    description: Architecture lead / scope gatekeeper / roadmap control (docs/AGENT_OPERATING_MODEL.md).
+    runtime_status: active_today
+    environments: [operator_laptop]           # planning role; not a VPS session
+    allowed_responsibilities:
+      - architecture_design
+      - roadmap_control
+      - task_packet_creation
+      - scope_gatekeeping
+    prohibited_responsibilities:
+      - writing_production_code
+      - production_promotion_approval
+      - investment_decisions
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: operator_approves_scope
+    protected_boundaries: [all_global]
+
+  codex_docs_agent:
+    description: Documentation updates + post-feature code review (AGENTS.md).
+    runtime_status: active_today
+    environments: [operator_laptop]
+    allowed_responsibilities:
+      - documentation_updates
+      - regression_review
+      - changelog_maintenance
+    prohibited_responsibilities:
+      - implementing_features
+      - production_promotion_approval
+      - investment_decisions
+    production_authority: false
+    investment_authority: false
+    git_write_authority: false
+    review_required: none_docs_only
+    protected_boundaries: [all_global]
+
+  human_operator:
+    description: >-
+      The operator. Controls scope, production-advisory promotion, and final
+      authority. The ONLY role with production or investment authority.
+    runtime_status: active_today
+    environments: [operator_laptop, vps_dev_on_vps, vps_read_only_ops]
+    allowed_responsibilities:
+      - scope_decisions
+      - production_promotion_approval
+      - roadmap_approval
+      - capital_and_risk_final_authority
+      - kill_switch_operation
+    prohibited_responsibilities: []
+    production_authority: true
+    investment_authority: true
+    git_write_authority: true
+    review_required: none
+    protected_boundaries: [all_global]

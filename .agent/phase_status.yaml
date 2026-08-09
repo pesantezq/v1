@@ -1,17 +1,97 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-07-01 (2026-06 monthly-tool-analysis run logged — AMBER;
-# next step unchanged = observe_and_iterate. See observe_and_iterate block below,
-# .agent/project_state.yaml:last_monthly_analysis + june_2026_shipped,
-# docs/monthly_reports/2026-06.md. Prior: 2026-06-01 inaugural monthly run.)
+# Last updated: 2026-08-09 (STOCKBOT_NORTHSTAR_REDESIGN program opened — new
+# stockbot_northstar_redesign block below is the CURRENT top-level roadmap
+# objective; observe_and_iterate superseded as SOLE objective (its observation
+# mission continues as a program parallel workstream). See
+# docs/NORTHSTAR_REDESIGN.md + .agent/project_state.yaml:northstar_program.
+# Prior: 2026-07-01 (2026-06 monthly-tool-analysis run logged — AMBER).)
 
 # ---------------------------------------------------------------------------
-# Observe-and-iterate phase status (current)
+# STOCKBOT_NORTHSTAR_REDESIGN (current program, opened 2026-08-09)
+# Charter: docs/NORTHSTAR_REDESIGN.md. Authority: config/agent_policy.yaml.
+# Statuses: complete | active | ready | blocked | waiting_for_evidence |
+#           deferred | not_started | superseded
+# NO future phase below is implemented. Phase 0A is NOT complete while its
+# CI milestone is outstanding.
+# ---------------------------------------------------------------------------
+
+stockbot_northstar_redesign:
+  status: active
+  opened: 2026-08-09
+  charter: docs/NORTHSTAR_REDESIGN.md
+  phases:
+    northstar_phase_0a:
+      name: "Architecture, Authority & CI Foundation"
+      status: active   # NOT complete — milestone 2 (CI) is still outstanding
+      milestones:
+        northstar_0a_authority_roadmap_reconciliation:
+          status: complete   # implemented 2026-08-09 on feature/northstar-0a-authority; GPT closure pending
+          deliverables:
+            - docs/NORTHSTAR_REDESIGN.md
+            - config/agent_policy.yaml
+            - portfolio_automation/agent_policy.py
+            - .agent/project_state.yaml northstar_program block + reconciled deployment_context
+            - tests/test_agent_policy.py + tests/test_northstar_authority.py
+        northstar_0a_ci_foundation:
+          status: ready      # next authorized step (project_state.yaml:next_official_step)
+          deliverables:
+            - GitHub Actions CI proving parseability, authority invariants, protected boundaries
+    northstar_phase_0b:
+      name: "Canonical Evidence, Prediction & Worker Contracts"
+      status: not_started
+      note: AI worker CONTRACTS are authored here (contract-first); worker runtimes wait for phases 5-7
+    northstar_phase_0c:
+      name: "Point-in-Time EvidenceGateway & Research Store"
+      status: not_started
+    northstar_phase_0d:
+      name: "Certification, Champion/Challenger & Incremental-Value Foundation"
+      status: not_started
+    northstar_phase_1:
+      name: "Prediction Engine v2"
+      status: not_started
+    northstar_phase_2:
+      name: "Capital & Risk Engine v2"
+      status: not_started
+    northstar_phase_3:
+      name: "Exit & Replacement Engine v2"
+      status: not_started
+    northstar_phase_4:
+      name: "Evidence-Weighted Influence Engine"
+      status: not_started
+    northstar_phase_5:
+      name: "AI Worker Runtime Foundation"
+      status: not_started
+    northstar_phase_6:
+      name: "Prime + Local Worker"
+      status: not_started
+    northstar_phase_7:
+      name: "TradingAgents Certification & Shadow Integration"
+      status: not_started
+    northstar_phase_8:
+      name: "FinRobot / Additional Specialists"
+      status: not_started
+      note: conditional on demonstrated need — not required infrastructure
+    northstar_phase_9:
+      name: "Strategy & Product Factory"
+      status: not_started
+    northstar_phase_10:
+      name: "End-to-End Shadow Certification"
+      status: not_started
+    northstar_phase_11:
+      name: "Human-Gated Production Advisory Migration"
+      status: not_started
+
+# ---------------------------------------------------------------------------
+# Observe-and-iterate phase status (2026-05-20 → 2026-08-09; superseded as the
+# SOLE top-level objective by stockbot_northstar_redesign. The observation /
+# outcome-collection mission itself CONTINUES as a program parallel workstream.
+# Block preserved unchanged below for history.)
 # ---------------------------------------------------------------------------
 
 observe_and_iterate:
-  status: active
-  next_official_step_unchanged: true
+  status: superseded  # 2026-08-09: as sole top-level objective, by stockbot_northstar_redesign; observation continues as parallel workstream (was: active)
+  next_official_step_unchanged: false  # 2026-08-09: next_official_step is now northstar_0a_ci_foundation (was: true)
   last_monthly_analysis:
     date: 2026-07-01
     verdict: AMBER

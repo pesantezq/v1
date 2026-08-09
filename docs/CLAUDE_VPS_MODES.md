@@ -12,6 +12,18 @@ This repo runs Claude Code in two environments:
 The current production VPS mode is **dev_on_vps**. The end-state mode is
 **read_only_ops**.
 
+> **Live-status note (2026-08-09 inspection, NORTHSTAR_0A):** the VPS
+> currently has **no** `/opt/stockbot/.claude/settings.json` — only a stale
+> `.claude/settings.local.json` — so **neither mode is formally declared**
+> and the effective behavior is default permission-prompting (de-facto
+> dev_on_vps). The expected declaration is the `dev_on_vps` JSON block below
+> written to `/opt/stockbot/.claude/settings.json`. Because that file is
+> intentionally untracked/runtime-local (see "What NOT to do"), **writing it
+> is a separate, explicit operator step on the VPS** — no feature branch can
+> or should activate it. The machine-readable role/environment authority
+> model is `config/agent_policy.yaml`; this doc remains the source for the
+> tool-permission JSON of each mode.
+
 This doc holds the full `.claude/settings.json` content for each mode plus
 the rationale for every allow / deny pattern. To swap, replace the entire
 contents of `.claude/settings.json` on the VPS with the matching block

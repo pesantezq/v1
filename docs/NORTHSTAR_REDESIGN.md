@@ -1,0 +1,241 @@
+# StockBot Northstar Redesign — Program Charter
+
+Status: **ACTIVE** (program `stockbot_northstar_redesign`, opened 2026-08-09)
+Authoritative machine-readable state: `.agent/project_state.yaml` (program /
+phase / step) + `.agent/phase_status.yaml` (per-phase status) +
+`config/agent_policy.yaml` (agent authority).
+This document explains that state; where prose and machine-readable state
+disagree, the machine-readable state wins.
+
+---
+
+## 1. Governing North Star (operator-approved)
+
+> StockBot continually seeks to improve its ability to estimate investment
+> outcomes and retains improvements only when they demonstrate incremental
+> predictive value. Predictions are never portfolio actions. An independently
+> governed capital-allocation and risk-management system determines whether,
+> when, and how demonstrated investment insights deserve capital. Prediction
+> quality, allocation quality, exit quality, and end-to-end portfolio
+> performance are evaluated separately through controlled attribution using
+> point-in-time backtests, frozen live-shadow evidence, resolved outcomes,
+> counterfactual simulations, and realized portfolio results. Improvements
+> earn, retain, or lose influence according to evidence. Proven research
+> capabilities may be reused to create watchlists, ETF and basket strategies,
+> investor intelligence, software, data products, and other intellectual
+> property, provided commercialization remains downstream of the research
+> process and cannot weaken StockBot's evidence standards, governance, risk
+> controls, or production boundaries.
+
+This goal supersedes `observe_and_iterate` as the **sole** top-level roadmap
+objective. It does not erase it: the observe-and-iterate phase (2026-05-20 →
+2026-08-09) produced the outcome history, governance layers, and health
+tooling this program builds on, and **production observation/outcome
+collection continues** as a parallel workstream (§8).
+
+## 2. Roadmap hierarchy
+
+```
+Strategic Goal   the North Star statement above
+  → Program      stockbot_northstar_redesign
+    → Phase      northstar_phase_0a … northstar_phase_11
+      → Milestone  named, gated steps inside a phase
+        → Deliverable  concrete artifacts (docs, contracts, code, tests)
+```
+
+Status vocabulary (extends the repo's existing lowercase enum — `complete`,
+`active`, `deferred`, `superseded` — do not invent competing vocabularies):
+
+`complete` · `active` · `ready` · `blocked` · `waiting_for_evidence` ·
+`deferred` · `not_started` · `superseded`
+
+## 3. Phases
+
+Statuses below mirror `.agent/phase_status.yaml:stockbot_northstar_redesign`.
+**No future phase is implemented; nothing below Phase 0A milestone 1 has
+started.**
+
+### Foundation
+
+| Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
+|---|---|---|---|---|---|---|
+| 0A | Architecture, Authority & CI Foundation | **active** | Make the North Star authoritative; one coherent authority model; CI that proves invariants on every change | topology stabilization (done 2026-08-09) | every later phase | authority reconciled (milestone 1, **complete**) AND CI foundation live (milestone 2, **ready**, next) |
+| 0B | Canonical Evidence, Prediction & Worker Contracts | not_started | Define the canonical PredictionRecord / evidence / AI-worker contracts (schemas, not runtimes) | 0A | 0C, 0D, worker admission later | contracts reviewed + versioned + test-covered |
+| 0C | Point-in-Time EvidenceGateway & Research Store | not_started | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
+| 0D | Certification, Champion/Challenger & Incremental-Value Foundation | not_started | The mechanism that decides whether anything (predictor, allocator, exit method, AI worker, strategy) demonstrates incremental value | 0B, 0C | Phases 1–8 admission | reproducible certification verdicts with controlled attribution |
+
+### Core intelligence
+
+| Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
+|---|---|---|---|---|---|---|
+| 1 | Prediction Engine v2 | not_started | Estimates future investment outcomes; never allocates capital | 0C, 0D | 2, 3, 4 | shadow predictions certified for incremental predictive value |
+| 2 | Capital & Risk Engine v2 | not_started | Independently governed decision of whether/when/how demonstrated insights deserve capital; must not modify predictions | 0D, 1 (shadow) | 3, 4, 10 | shadow allocations certified separately from prediction quality |
+| 3 | Exit & Replacement Engine v2 | not_started | Continuation / trim / exit / replacement evaluated independently | 0D, 1–2 shadow | 4, 10 | exit quality attributed separately |
+| 4 | Evidence-Weighted Influence Engine | not_started | Governed mechanism by which improvements earn, retain, lose, or are denied influence. **Not implemented in this session or any 0x phase.** | 0D, 1–3 | 10, 11 | influence changes are evidence-derived, bounded, reversible, audited |
+
+### AI research plane
+
+| Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
+|---|---|---|---|---|---|---|
+| 5 | AI Worker Runtime Foundation | not_started | Runtime plumbing for AI workers under `config/agent_policy.yaml` authority (budgets, adapters, sandboxing) | 0B (worker contracts) | 6–8 | workers run only inside declared authority |
+| 6 | Prime + Local Worker | not_started | Research orchestrator + cheap local workers | 5, 0D | 7, 8 | Prime output routed through StratLab for quantitative claims |
+| 7 | TradingAgents Certification & Shadow Integration | not_started | Broad research worker admitted research-only, then certified | 5, 6, 0D | richer hypothesis flow | certification evidence of incremental value |
+| 8 | FinRobot / Additional Specialists | not_started (**conditional**) | Deep fundamentals/valuation specialists — only on demonstrated need | 7 evidence | deeper fundamental coverage | demonstrated need + certification |
+
+**Contract-first nuance:** AI **worker contracts** are authored in the early
+contract phases (0B), and worker **authority** is already modeled now in
+`config/agent_policy.yaml` (roles carry `runtime_status:
+defined_not_integrated`). Actual Prime/TradingAgents **runtime integration**
+happens in Phases 5–7, after the evidence/certification foundations exist.
+
+### Downstream reuse
+
+| Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
+|---|---|---|---|---|---|---|
+| 9 | Strategy & Product Factory | not_started | Watchlists, ETF/basket strategies, investor intelligence, software/data products from validated research | 0D + certified upstream | commercialization | products consume certified research; cannot alter evidence, passports, confidence, or promotion standards |
+| 10 | End-to-End Shadow Certification | not_started | Whole-chain (predict → allocate → exit) certified in shadow with controlled attribution | 1–4 | 11 | end-to-end shadow evidence meets gates |
+| 11 | Human-Gated Production Advisory Migration | not_started | Migrate production advisory to the certified chain, human-gated, reversible | 10 | new production baseline | human approval; old chain retained as fallback |
+
+## 4. Critical path
+
+```
+Northstar authority (0A m1, complete)
+  → CI foundation (0A m2, next)
+  → canonical contracts (0B)
+  → PIT EvidenceGateway (0C)
+  → certification / Champion-Challenger (0D)
+  → Prediction + Capital + Exit shadow engines (1–3)
+  → Influence Engine (4)
+  → AI worker admission/integration (5–8; contracts drafted back in 0B)
+  → downstream Product Factory (9)
+  → end-to-end shadow certification (10)
+  → human-gated production-advisory migration (11)
+```
+
+## 5. Target architectural separation (planes)
+
+These are **design boundaries made authoritative now**; the runtimes arrive in
+their named phases. Today's production system remains the incumbent
+(docs/ARCHITECTURE.md) and is untouched by this phase.
+
+| Plane | Responsibility | Hard boundary |
+|---|---|---|
+| **Evidence Plane** | Point-in-time, identity-bound, provenance-aware information (0C generalizes Intraday Lab's preregistration / identity-era / frozen-evidence patterns) | no lookahead; provenance mandatory; evidence is immutable once frozen |
+| **Prediction Engine** | Estimates future investment outcomes | **does not allocate capital**; predictions are never portfolio actions |
+| **Capital & Risk Engine** | Whether / when / how demonstrated insights deserve capital; independently governed | **must not modify predictions** |
+| **Exit & Replacement Engine** | Continuation, trimming, exit, replacement — evaluated independently | attributed separately from entry quality |
+| **StratLab / Certification Plane** | Decides whether predictors, allocators, exit methods, AI workers, and strategies demonstrate **incremental** value | the only path by which quantitative claims become certified evidence |
+| **Influence Engine** (future, Phase 4) | Governed mechanism by which demonstrated improvements earn / retain / lose / are denied influence | evidence-derived only; bounded; reversible; audited. **Not implemented.** |
+| **AI Worker Plane** | Research, investigate, extract, challenge, explain, synthesize, propose experiments | **no direct capital authority; no production approval authority** (`config/agent_policy.yaml`) |
+| **Product Factory** (future, Phase 9) | Downstream consumer of validated research | commercial attractiveness cannot change research evidence, Strategy Passports, confidence, or promotion standards |
+| **Human / Production Governance** | Final production-advisory promotion boundary | unchanged; **no broker/trade execution is introduced anywhere in this program** |
+
+## 6. AI worker role classes
+
+Defined normatively in `config/agent_policy.yaml` (schema `policy_version
+1.0.0`; validated by `portfolio_automation/agent_policy.py` +
+`tests/test_agent_policy.py`). Summary:
+
+| Role | May | May not | Runtime today |
+|---|---|---|---|
+| **Prime** | classify research tasks, build investigation plans, delegate, reconcile evidence, identify disagreements, route quantitative claims to StratLab, synthesize supported findings, abstain | allocate capital authoritatively; approve production; bypass StratLab where quantitative certification is required | defined, not integrated |
+| **TradingAgents** | market/company hypothesis + research | anything beyond research until separately certified | defined, not integrated |
+| **FinRobot** | deep fundamentals/valuation (conditional specialist) | be treated as required infrastructure | defined, not integrated, conditional |
+| **Local/cheap LLM workers** | extraction, classification, summarization, tagging | exceed capability-specific authority | defined, not integrated |
+| **Evidence Auditor** | claim/source/timing/entity verification | alter the evidence it audits | defined, not integrated |
+| **Quant Router / StratLab** | quantitative truth/evaluation boundary | allocate capital; approve production | active (Strategy Lab lineage) |
+| **Memo/Product workers** | communicate validated research | alter underlying authoritative results | active (memo/digest layer) |
+| **Claude Code Builder** | authorized engineering tasks | investment authority of any kind | active (this agent) |
+| **Claude Code Reviewer(s)** | independent architecture/test/governance/quant/scope review | merge or promotion authority | active (`.claude/agents/`) |
+| **Human/operator** | scope, production promotion, final authority | — | active; **the only role with production or investment authority** |
+
+## 7. Reused foundations (preserve, do not rebuild)
+
+The redesign builds ON these existing systems. None of them is being replaced
+by this phase; engines that eventually supersede an incumbent do so only
+through the certification path (0D → 10 → 11).
+
+- **Governance/evidence:** `portfolio_automation/data_governance.py`
+  (OutputNamespace), run-mode governance, `artifact_registry.yaml` +
+  validator, historical replay, outcome tracking
+  (`decision_outcome_tracker.py`, `outputs/policy/*.jsonl` append-only event
+  stores), simulation governance (`sim_governance/`, two-lane, human-gated).
+- **Research/quant:** Strategy Lab, `portfolio_sim/` (backtests, shadow
+  portfolios, projections), walk-forward evaluation, factor attribution,
+  Strategy Catalog discipline, **Intraday Lab's immutable
+  evidence/preregistration/identity-era patterns** (the template for the
+  Evidence Plane).
+- **Portfolio management (protected incumbent):** the current Decision Engine
+  (`decision_engine.py` — protected semantics, unchanged), allocation/risk/
+  exit advisors (`exit_advisor.py`, `risk_delta_advisor.py`,
+  `correlation_risk_advisor.py`, kelly/scenario advisors), shadow portfolios,
+  opportunity radar (`opportunity_scoring.py`).
+- **AI/agent infrastructure:** `agent/llm_adapters.py`,
+  `portfolio_automation/ai_budget.py`, `.agent/` orchestration state,
+  `.claude/agents/` + `.claude/commands/`, operator-control/work-order
+  infrastructure (`operator_control/`, worker readiness).
+- **Adjacent, preserved but NOT integrated:** Agent Export
+  (`feature/agent-production-export`, commit `66ecc281`) — a frozen
+  production-snapshot export lane, preserved on its own branch 2026-08-09.
+  **Not merged, not production-integrated**; its review/integration decision
+  is an independent track (§8).
+
+## 8. Parallel workstreams (non-blocking, non-redefining)
+
+These continue without blocking Northstar foundation work — but none of them
+may silently redefine Northstar contracts; contract changes route through this
+program's phases:
+
+1. **Intraday Lab** — proceeds through its own existing gates (PR #10 /
+   Session 3.x lineage).
+2. **Production observation / outcome collection** — the daily pipeline keeps
+   accumulating resolved-outcome history (the observe-and-iterate mission
+   continues here).
+3. **Agent Export review/integration decision** — independent; branch stays
+   preserved until explicitly reviewed.
+4. **Engineering hardening** — where explicitly authorized by the operator.
+
+## 9. Authority model & VPS-mode status (reconciled 2026-08-09)
+
+**One clear current rule:** Claude Code runs in TWO environments — the
+operator laptop and the production VPS — and the VPS session's authority is
+whatever `.claude/settings.json` declares per `docs/CLAUDE_VPS_MODES.md`
+(`dev_on_vps` while hardening, `read_only_ops` as end state).
+`config/agent_policy.yaml` is the machine-readable role/environment authority
+model; prose documents explain it. Older statements that "Claude does not run
+on the VPS / VPS validation is manual" describe the pre-2026-05 operating
+model and are **superseded** (kept in their documents as marked historical
+context — the transition itself is meaningful history).
+
+**Accurately documented live discrepancy (NOT changed by this session):** as
+of the 2026-08-09 inspection the VPS has **no** `.claude/settings.json` — only
+a stale `.claude/settings.local.json` — so neither documented mode is formally
+declared and the effective behavior is default permission-prompting (de-facto
+dev_on_vps). The expected declaration is the `dev_on_vps` JSON block from
+`docs/CLAUDE_VPS_MODES.md` written to `/opt/stockbot/.claude/settings.json`.
+That file is intentionally untracked/runtime-local (per that doc), so
+**activation is a separate, explicit operational step by the operator** — this
+feature branch does not and cannot change live VPS permissions.
+
+## 10. Out of scope for Phase 0A milestone 1 (this session)
+
+Not implemented here (deliberately): GitHub Actions/CI (milestone 2, next),
+PredictionRecord code, EvidenceGateway, DuckDB, SEC integration, Strategy
+Passport runtime, Champion/Challenger runtime, Prediction/Capital/Exit Engine
+v2, Influence Engine, Prime/TradingAgents/FinRobot runtimes, LLM runtime
+changes, Agent Export merge/integration, UI changes, production scheduling
+changes, Streamlit retirement cleanup, swap changes, branch/worktree/stash
+cleanup, broker execution, auto-trading, score-semantic changes, Decision
+Engine changes, allocation changes, production configuration changes.
+
+## 11. Operational follow-ups (known, deferred — not this program's phase 0A)
+
+- Draft PR #10 remains open/unmerged (Intraday gates decide).
+- `feature/agent-production-export` remains separately preserved, unmerged.
+- No CI exists yet (Phase 0A milestone 2 — the next authorized step).
+- Generated tracked runtime artifacts may remain dirty in `/opt/stockbot`.
+- Dual cron/systemd daily scheduling remains unresolved.
+- Streamlit service remains active despite retirement docs.
+- The VPS has no swap.
+- Old local branches/worktrees/stashes remain (deliberately untouched).
+- Live `.claude/settings.json` mode declaration is an explicit operator step (§9).
