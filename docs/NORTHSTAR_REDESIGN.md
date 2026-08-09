@@ -201,20 +201,39 @@ from owning the authoritative *advisory* allocation determination
 portfolio actions; StockBot remains advisory-only; no broker execution
 exists.
 
-Real portfolio-action authority is additionally **environment-gated**
-(`real_portfolio_action_allowed`): it resolves true only when the role holds
-the grant AND is permitted in the environment AND the environment permits
-action authority. Concretely: `vps_dev_on_vps` (the production/control plane,
-where the human-gated approval workflows — `promotion_approvals.record_approval`
-via the VPS-served governance GUI — take effect) is the **only** action-capable
-environment; `operator_laptop` (dev environment that cannot touch the VPS
-runtime; the operator's browser talks to the VPS, and the VPS is what acts),
-`vps_read_only_ops` (read-only ops cannot authorize capital action), and
-`home_agent_lab` are all `false` — the lab and read-only values are
-**permanent validator-enforced invariants**. Even `human_operator`, who holds
-the global action grant, resolves to `real_portfolio_action_authority: false`
-inside the lab. The human's narrow responsibility term is
-`real_portfolio_action_final_authority` (the former
+**Execution environments and governance authority are independent concepts**
+in the policy, resolved by two mechanically distinct resolvers:
+
+- **Execution environments** (`environments:` — `operator_laptop`,
+  `vps_dev_on_vps`, `vps_read_only_ops`, `home_agent_lab`) answer *"what can
+  this agent/tooling session do from here?"*: code writes, git writes,
+  production filesystem/service mutation (`production_mutation_allowed` —
+  agent/tool execution capability, **not** human production-approval
+  authority), validation-claim type, worker placement. `dev_on_vps` vs
+  `read_only_ops` is a Claude execution-permission distinction
+  (`docs/CLAUDE_VPS_MODES.md`). Resolved by `resolve_authority(role, environment)`.
+- **Operational authority domains** (`operational_authority_domains:`) answer
+  *"in what operational domain can this role exercise governance authority?"*:
+  - `production_control_plane` — where production-advisory promotion
+    (`promotion_approvals.record_approval`, `docs/SIM_GOVERNANCE.md`), real
+    portfolio-action final authority, and kill-switch/final governance take
+    effect. Membership is restricted to `human_operator`
+    (validator-enforced).
+  - `research_plane` — the home Agent Lab's operational domain; permanently
+    non-production (validator-enforced: it can never confer promotion or
+    action authority on any role).
+
+  Resolved by `resolve_operational_authority(role, domain)`: authority = role
+  grant AND domain membership AND domain capability — absence of any of the
+  three is denial, fail closed.
+
+**Consequence:** switching Claude's VPS session from `dev_on_vps` to
+`read_only_ops` changes Claude's execution permissions only — it cannot
+revoke or alter the human operator's production-control authority, which
+resolves through `production_control_plane` regardless of Claude's mode. Even
+`human_operator`, who holds the global action grant, gets no promotion or
+action authority through `research_plane`. The human's narrow responsibility
+term is `real_portfolio_action_final_authority` (the former
 `capital_and_risk_final_authority` wording was removed as ambiguous).
 
 ## 7. Reused foundations (preserve, do not rebuild)

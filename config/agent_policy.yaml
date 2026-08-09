@@ -71,7 +71,21 @@ global_invariants:
     - sanctioned_mutating_paths_stay_narrow  # backtesting/auto_apply.py + sim_governance only
 
 # ----------------------------------------------------------------------------
-# Environments — where an agent session runs and what the environment permits.
+# EXECUTION ENVIRONMENTS — where an agent/tooling SESSION runs and what that
+# session's tooling may do there (code writes, git writes, production
+# filesystem/service mutation, validation-claim type, worker placement).
+#
+# vps_dev_on_vps vs vps_read_only_ops is a CLAUDE/AGENT execution-permission
+# distinction (docs/CLAUDE_VPS_MODES.md). Execution environments answer "what
+# can this session do from here?" — they NEVER answer "may this role govern
+# production?". Operational governance authority (production promotion, real
+# portfolio action) lives in operational_authority_domains below, so switching
+# Claude from dev_on_vps to read_only_ops changes Claude's execution
+# permissions ONLY and cannot revoke human governance authority.
+#
+# production_mutation_allowed describes agent/tool execution capability (may a
+# session mutate the production filesystem/services from here). It is NOT
+# human production-approval authority.
 # ----------------------------------------------------------------------------
 environments:
   operator_laptop:
@@ -79,13 +93,6 @@ environments:
     code_write_allowed: true
     git_write_allowed: true
     production_mutation_allowed: false      # laptop cannot touch the VPS runtime
-    # Real portfolio-action authorization takes effect through the
-    # production/control plane (the VPS-served governance GUI writing approval
-    # records via promotion_approvals.record_approval — docs/SIM_GOVERNANCE.md).
-    # The laptop is a dev environment that cannot touch the VPS runtime, so an
-    # authorization cannot take effect FROM here; the operator's browser talks
-    # to the VPS, and the VPS is the environment that acts.
-    real_portfolio_action_allowed: false
     validation_claims: local_only           # VPS results must never be claimed from here
 
   vps_dev_on_vps:
@@ -96,11 +103,6 @@ environments:
     code_write_allowed: true
     git_write_allowed: true
     production_mutation_allowed: true        # merge + service restart when durably authorized
-    # The production/control environment: the ONLY environment in which the
-    # human operator's real portfolio-action / production-promotion authority
-    # takes effect (human-gated approval workflows live here). AI roles still
-    # never receive it — the role grant is human-only.
-    real_portfolio_action_allowed: true
     validation_claims: real                  # tests run here are real production-host results
 
   vps_read_only_ops:
@@ -110,7 +112,6 @@ environments:
     code_write_allowed: false
     git_write_allowed: false
     production_mutation_allowed: false
-    real_portfolio_action_allowed: false  # read-only ops mode cannot authorize capital action
     validation_claims: real
 
   home_agent_lab:
@@ -129,8 +130,37 @@ environments:
     code_write_allowed: true           # local research artifacts only
     git_write_allowed: false
     production_mutation_allowed: false # NEVER a production authority environment
-    real_portfolio_action_allowed: false  # INVARIANT (validator-enforced): the lab can never authorize a real portfolio action, for ANY role incl. the human operator
     validation_claims: local_only      # lab results are research evidence, not production-host results
+
+# ----------------------------------------------------------------------------
+# OPERATIONAL AUTHORITY DOMAINS — in what operational domain a ROLE can
+# exercise GOVERNANCE authority. Independent of execution environments: the
+# production control plane exists (and the human operator's authority in it
+# holds) regardless of whether Claude's VPS session is currently dev_on_vps or
+# read_only_ops. Resolved by agent_policy.resolve_operational_authority(role,
+# domain): authority = role grant AND role domain membership AND domain
+# capability — absence of any of the three is denial (fail closed).
+# ----------------------------------------------------------------------------
+operational_authority_domains:
+  production_control_plane:
+    description: >-
+      The human-gated production/control governance domain: where
+      production-advisory promotion approval (promotion_approvals.record_approval,
+      docs/SIM_GOVERNANCE.md), real portfolio-action final authority, and
+      kill-switch/final governance take effect. Membership is restricted to
+      human_operator (validator-enforced) — no AI role may be a member even
+      though the domain itself carries these capabilities.
+    production_promotion_allowed: true
+    real_portfolio_action_allowed: true
+
+  research_plane:
+    description: >-
+      The non-production research domain (the home Agent Lab's operational
+      domain). Research, evidence, certification, and product work happen
+      here; it can NEVER confer production-promotion or real portfolio-action
+      authority on any role (permanent validator-enforced invariant).
+    production_promotion_allowed: false
+    real_portfolio_action_allowed: false
 
 # ----------------------------------------------------------------------------
 # Roles.
@@ -142,10 +172,13 @@ environments:
 #                            integration happens in its named Northstar phase.
 #
 # Every role: production_authority + real_portfolio_action_authority are hard
-# booleans; false means the role can never approve production promotion /
-# never turn an advisory proposal into a real portfolio action, in any
-# environment. (Advisory allocation LOGIC ownership is a separate concept —
-# see global_invariants.capital_authority_model.)
+# boolean ROLE GRANTS; false means the role can never approve production
+# promotion / never turn an advisory proposal into a real portfolio action, in
+# any environment or domain. A grant only takes effect through
+# resolve_operational_authority when the role is also a MEMBER of an
+# operational_authority_domain that carries the capability. (Advisory
+# allocation LOGIC ownership is a separate concept — see
+# global_invariants.capital_authority_model.)
 #
 # Some roles carry existing_subsystem: the deterministic subsystem that exists
 # today and will be REUSED — its existence does not make the named future AI
@@ -158,6 +191,7 @@ roles:
     description: AI research orchestrator (Northstar Phase 6).
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]           # analyzes frozen/sanitized exports, never the live server
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - classify_research_tasks
       - build_investigation_plans
@@ -182,6 +216,7 @@ roles:
     description: Broad market/company hypothesis + research worker (Northstar Phase 7).
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - market_and_company_research
       - hypothesis_generation
@@ -202,6 +237,7 @@ roles:
       Phase 8). Not required infrastructure; admitted only on demonstrated need.
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - deep_fundamentals_research
       - valuation_analysis
@@ -219,6 +255,7 @@ roles:
     description: Routine extraction, classification, summarization, tagging.
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - extraction
       - classification
@@ -238,6 +275,7 @@ roles:
     description: Claim / source / timing / entity verification role.
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - claim_verification
       - source_verification
@@ -260,6 +298,7 @@ roles:
       only — it holds NO certification authority of its own.
     runtime_status: defined_not_integrated
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - classify_quantitative_validation_need
       - construct_and_submit_validation_requests
@@ -289,6 +328,7 @@ roles:
       this plane's foundation — their existence does not mean the Northstar
       certification system is implemented.
     environments: [vps_dev_on_vps, home_agent_lab]  # deterministic evaluation runs where the evidence lives: today's Strategy Lab on the VPS; certification of lab research claims in the lab
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - deterministic_reproducible_quantitative_evaluation
       - controlled_experiment_evaluation
@@ -315,6 +355,7 @@ roles:
       exists today as a deterministic REUSABLE subsystem — it is not this AI
       worker and its existence does not make this role active.
     environments: [home_agent_lab]
+    operational_authority_domains: [research_plane]  # research governance domain only — can never confer production/action authority
     allowed_responsibilities:
       - render_validated_research
       - communicate_findings
@@ -333,6 +374,7 @@ roles:
     description: Implements authorized engineering tasks (this agent).
     runtime_status: active_today
     environments: [operator_laptop, vps_dev_on_vps]
+    operational_authority_domains: []  # no governance domain — engineering/planning role with zero operational governance authority
     allowed_responsibilities:
       - feature_implementation
       - module_and_test_creation
@@ -356,6 +398,7 @@ roles:
       assumptions, scope) — .claude/agents/* review roles.
     runtime_status: active_today
     environments: [operator_laptop, vps_dev_on_vps]
+    operational_authority_domains: []  # no governance domain — engineering/planning role with zero operational governance authority
     allowed_responsibilities:
       - architecture_review
       - test_review
@@ -376,6 +419,7 @@ roles:
     description: Architecture lead / scope gatekeeper / roadmap control (docs/AGENT_OPERATING_MODEL.md).
     runtime_status: active_today
     environments: [operator_laptop]           # planning role; not a VPS session
+    operational_authority_domains: []  # no governance domain — engineering/planning role with zero operational governance authority
     allowed_responsibilities:
       - architecture_design
       - roadmap_control
@@ -395,6 +439,7 @@ roles:
     description: Documentation updates + post-feature code review (AGENTS.md).
     runtime_status: active_today
     environments: [operator_laptop]
+    operational_authority_domains: []  # no governance domain — engineering/planning role with zero operational governance authority
     allowed_responsibilities:
       - documentation_updates
       - regression_review
@@ -418,6 +463,7 @@ roles:
       global_invariants.capital_authority_model).
     runtime_status: active_today
     environments: [operator_laptop, vps_dev_on_vps, vps_read_only_ops, home_agent_lab]
+    operational_authority_domains: [production_control_plane]  # the ONLY role permitted in the production control plane
     allowed_responsibilities:
       - scope_decisions
       - production_promotion_approval

@@ -2,14 +2,25 @@
 
 Source of truth: ``config/agent_policy.yaml`` (see the header comments there).
 This module exists ONLY to prove the policy parses and to give tests (and,
-later, explicitly-authorized enforcement work) one deterministic resolution
-path. It never writes anything, never touches outputs/, and is not wired into
-any pipeline stage.
+later, explicitly-authorized enforcement work) deterministic resolution paths.
+It never writes anything, never touches outputs/, and is not wired into any
+pipeline stage.
 
-Resolution is deterministic and fail-closed:
+Two mechanically distinct resolvers, mirroring the policy's two concepts:
 
-* unknown role or environment names raise ``AgentPolicyError`` — no fuzzy match
-* absence of a grant is a denial
+* ``resolve_authority(role, environment)`` — EXECUTION authority: what an
+  agent/tooling session may do from an execution environment (code/git
+  writes, worker placement, validation claims). Claude's VPS mode
+  (dev_on_vps vs read_only_ops) lives here and ONLY here.
+* ``resolve_operational_authority(role, domain)`` — OPERATIONAL GOVERNANCE
+  authority: production promotion + real portfolio action, resolved through
+  operational_authority_domains. Independent of execution mode — switching
+  Claude to read_only_ops cannot revoke human governance authority.
+
+Both are deterministic and fail-closed:
+
+* unknown role/environment/domain names raise ``AgentPolicyError``
+* absence of a grant (or of domain membership) is a denial
 * a prohibition always wins over a grant
 """
 from __future__ import annotations
@@ -31,10 +42,14 @@ REQUIRED_ROLE_FIELDS = (
     "prohibited_responsibilities",
     "production_authority",
     "real_portfolio_action_authority",
+    "operational_authority_domains",
     "git_write_authority",
     "review_required",
     "protected_boundaries",
 )
+
+#: Operational authority domains the policy must model.
+REQUIRED_DOMAINS = ("production_control_plane", "research_plane")
 
 #: Roles the policy must model (Northstar Phase 0A contract).
 REQUIRED_ROLES = (
@@ -114,19 +129,38 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
         if not isinstance(env, dict):
             errors.append(f"environment {env_name} must be a mapping")
             continue
-        # Fail-closed contract: the action-authority capability must be an
-        # explicit boolean on every environment — never implicit.
-        if not isinstance(env.get("real_portfolio_action_allowed"), bool):
+        # Execution environments describe agent/tool session capability ONLY.
+        # Governance capabilities live in operational_authority_domains — an
+        # environment declaring one would reintroduce the execution/governance
+        # coupling this schema forbids (two competing mechanisms).
+        if "real_portfolio_action_allowed" in env or "production_promotion_allowed" in env:
             errors.append(
-                f"environment {env_name} must declare real_portfolio_action_allowed as a boolean"
+                f"environment {env_name} must not declare governance capabilities "
+                "(they belong in operational_authority_domains)"
             )
-    # Hard environment invariants: the research lab and read-only ops mode can
-    # NEVER be action-authority environments, for any role incl. the human.
-    for locked_env in ("home_agent_lab", "vps_read_only_ops"):
-        if locked_env in environments and environments[locked_env].get("real_portfolio_action_allowed") is not False:
-            errors.append(f"{locked_env}.real_portfolio_action_allowed must be false (permanent invariant)")
     if "home_agent_lab" in environments and environments["home_agent_lab"].get("production_mutation_allowed") is not False:
         errors.append("home_agent_lab.production_mutation_allowed must be false (permanent invariant)")
+
+    domains = policy.get("operational_authority_domains")
+    if not isinstance(domains, dict):
+        errors.append("operational_authority_domains block is required")
+        domains = {}
+    for required in REQUIRED_DOMAINS:
+        if required not in domains:
+            errors.append(f"required operational authority domain missing: {required}")
+    for dom_name, dom in domains.items():
+        if not isinstance(dom, dict):
+            errors.append(f"domain {dom_name} must be a mapping")
+            continue
+        for cap in ("production_promotion_allowed", "real_portfolio_action_allowed"):
+            if not isinstance(dom.get(cap), bool):
+                errors.append(f"domain {dom_name} must declare {cap} as a boolean")
+    # Permanent invariant: the research plane can never become an
+    # action/production-authority domain.
+    if "research_plane" in domains:
+        rp = domains["research_plane"]
+        if rp.get("production_promotion_allowed") is not False or rp.get("real_portfolio_action_allowed") is not False:
+            errors.append("research_plane must be permanently non-production (both capabilities false)")
 
     roles = policy.get("roles")
     if not isinstance(roles, dict):
@@ -149,6 +183,18 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
         for env in role.get("environments", []):
             if env not in environments:
                 errors.append(f"role {name} references unknown environment: {env}")
+        role_domains = role.get("operational_authority_domains", [])
+        if not isinstance(role_domains, list):
+            errors.append(f"role {name} operational_authority_domains must be a list")
+            role_domains = []
+        for dom in role_domains:
+            if dom not in domains:
+                errors.append(f"role {name} references unknown operational authority domain: {dom}")
+        # Only the human operator may be a member of the production control
+        # plane — an AI role must not acquire governance authority merely
+        # because the domain itself carries it.
+        if name != "human_operator" and "production_control_plane" in role_domains:
+            errors.append(f"role {name} must not be a member of production_control_plane")
         # Authority invariants — only the human operator may hold these.
         if name != "human_operator":
             if role.get("production_authority") is not False:
@@ -160,7 +206,13 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
 
 
 def resolve_authority(role: str, environment: str, policy: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Deterministically resolve a role's effective authority in an environment.
+    """Deterministically resolve a role's effective EXECUTION authority in an
+    execution environment (what a session may do from there).
+
+    Governance authority (production promotion, real portfolio action) is NOT
+    part of this resolution — use :func:`resolve_operational_authority`; an
+    execution mode like read_only_ops constrains Claude's tooling, never the
+    human operator's governance authority.
 
     Fail-closed: unknown role/environment raises; a role not listed for the
     environment resolves with ``permitted_in_environment: False`` and every
@@ -190,14 +242,47 @@ def resolve_authority(role: str, environment: str, policy: dict[str, Any] | None
         "runtime_status": role_block.get("runtime_status"),
         "allowed_responsibilities": list(role_block.get("allowed_responsibilities", [])) if permitted else [],
         "prohibited_responsibilities": list(role_block.get("prohibited_responsibilities", [])),
-        "production_authority": bool(role_block.get("production_authority", False))
-        and bool(env_block.get("production_mutation_allowed", False))
-        and permitted,
-        "real_portfolio_action_authority": _gate(
-            role_block.get("real_portfolio_action_authority", False),
-            "real_portfolio_action_allowed",
-        ),
+        "code_write_authority": permitted and bool(env_block.get("code_write_allowed", False)),
         "git_write_authority": _gate(role_block.get("git_write_authority", False), "git_write_allowed"),
+        "production_mutation_capability": bool(env_block.get("production_mutation_allowed", False)) and permitted,
+        "validation_claims": env_block.get("validation_claims"),
         "review_required": role_block.get("review_required"),
         "protected_boundaries": list(pol.get("global_invariants", {}).get("protected_boundaries", [])),
+    }
+
+
+def resolve_operational_authority(role: str, domain: str, policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Deterministically resolve a role's OPERATIONAL GOVERNANCE authority in an
+    operational authority domain.
+
+    ``true`` requires ALL of: the role grant, role membership in the domain,
+    and the domain capability. Unknown role/domain raises; absence of any
+    element is denial (fail closed). Independent of execution environments —
+    Claude's VPS mode cannot change what this returns.
+    """
+    pol = policy if policy is not None else load_policy()
+    roles = pol.get("roles", {})
+    domains = pol.get("operational_authority_domains", {})
+    if role not in roles:
+        raise AgentPolicyError(f"unknown role: {role}")
+    if domain not in domains:
+        raise AgentPolicyError(f"unknown operational authority domain: {domain}")
+
+    role_block = roles[role]
+    dom_block = domains[domain]
+    member = domain in role_block.get("operational_authority_domains", [])
+
+    def _grant(role_field: str, dom_cap: str) -> bool:
+        return (
+            bool(role_block.get(role_field, False))
+            and member
+            and bool(dom_block.get(dom_cap, False))
+        )
+
+    return {
+        "role": role,
+        "domain": domain,
+        "member_of_domain": member,
+        "production_promotion_authority": _grant("production_authority", "production_promotion_allowed"),
+        "real_portfolio_action_authority": _grant("real_portfolio_action_authority", "real_portfolio_action_allowed"),
     }

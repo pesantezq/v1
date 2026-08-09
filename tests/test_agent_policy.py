@@ -18,11 +18,13 @@ from __future__ import annotations
 import pytest
 
 from portfolio_automation.agent_policy import (
+    REQUIRED_DOMAINS,
     REQUIRED_ROLE_FIELDS,
     REQUIRED_ROLES,
     AgentPolicyError,
     load_policy,
     resolve_authority,
+    resolve_operational_authority,
     validate_policy,
 )
 
@@ -143,21 +145,34 @@ def test_resolve_unknown_environment_fails_closed(policy):
 
 
 def test_resolve_prime_never_gains_authority_anywhere(policy):
+    # Execution plane: no git writes from any environment.
     for env in policy["environments"]:
         resolved = resolve_authority("prime", env, policy)
-        assert resolved["production_authority"] is False
-        assert resolved["real_portfolio_action_authority"] is False
         assert resolved["git_write_authority"] is False
+    # Governance plane: no promotion/action authority in any domain.
+    for domain in policy["operational_authority_domains"]:
+        op = resolve_operational_authority("prime", domain, policy)
+        assert op["production_promotion_authority"] is False
+        assert op["real_portfolio_action_authority"] is False
 
 
 def test_resolve_builder_write_gated_by_environment(policy):
+    # Execution-mode independence, builder side: dev_on_vps and read_only_ops
+    # differ in execution/write capability as intended...
     dev = resolve_authority("claude_code_builder", "vps_dev_on_vps", policy)
     ro = resolve_authority("claude_code_builder", "vps_read_only_ops", policy)
     assert dev["git_write_authority"] is True
-    # read_only_ops denies git writes even though the role holds the grant
+    assert dev["code_write_authority"] is True
+    assert dev["production_mutation_capability"] is True
+    # read_only_ops denies all writes even though the role holds the git grant
     assert ro["git_write_authority"] is False
-    # real portfolio-action authority is false regardless of environment
-    assert dev["real_portfolio_action_authority"] is False and ro["real_portfolio_action_authority"] is False
+    assert ro["code_write_authority"] is False
+    assert ro["production_mutation_capability"] is False
+    # ...but in BOTH modes the builder holds zero governance authority.
+    for domain in policy["operational_authority_domains"]:
+        op = resolve_operational_authority("claude_code_builder", domain, policy)
+        assert op["production_promotion_authority"] is False
+        assert op["real_portfolio_action_authority"] is False
 
 
 def test_resolve_role_not_permitted_in_environment_loses_grants(policy):
@@ -206,10 +221,10 @@ def test_research_workers_permitted_in_home_agent_lab(policy):
     for name in RESEARCH_WORKERS:
         resolved = resolve_authority(name, "home_agent_lab", policy)
         assert resolved["permitted_in_environment"] is True, f"{name} belongs in the lab"
-        # ...but the lab grants no production/action/git authority to anyone.
-        assert resolved["production_authority"] is False
-        assert resolved["real_portfolio_action_authority"] is False
+        # ...with research execution capability only: no git writes, no
+        # production mutation capability.
         assert resolved["git_write_authority"] is False
+        assert resolved["production_mutation_capability"] is False
 
 
 def test_research_workers_not_permitted_on_vps_dev(policy):
@@ -225,28 +240,28 @@ def test_research_workers_not_permitted_on_vps_dev(policy):
         assert resolved["git_write_authority"] is False
 
 
-def test_home_agent_lab_never_grants_production_or_action_authority_to_anyone(policy):
-    # EVERY role — explicitly including human_operator, who holds the global
-    # real portfolio-action grant — resolves to NO production and NO real
-    # portfolio-action authority inside the lab. (This test fails against
-    # commit 59d99503, where the resolver did not environment-gate the
-    # action grant and human/home_agent_lab resolved True.)
+def test_home_agent_lab_grants_no_write_or_mutation_capability(policy):
+    # Execution plane: the lab gives NO role git-write or production-mutation
+    # capability — research artifacts only.
     for name in policy["roles"]:
         resolved = resolve_authority(name, "home_agent_lab", policy)
-        assert resolved["production_authority"] is False, (
-            f"{name}: home_agent_lab must never be a production authority environment"
-        )
-        assert resolved["real_portfolio_action_authority"] is False, (
-            f"{name}: home_agent_lab must never be a real portfolio-action authority environment"
+        assert resolved["git_write_authority"] is False
+        assert resolved["production_mutation_capability"] is False, (
+            f"{name}: home_agent_lab must never carry production mutation capability"
         )
 
 
-def test_read_only_ops_never_grants_production_or_action_authority_to_anyone(policy):
+def test_research_plane_grants_no_governance_authority_to_anyone(policy):
+    # Governance plane: the research domain confers promotion/action authority
+    # on NO role — explicitly including human_operator, who holds the global
+    # grants but is not a research_plane member.
     for name in policy["roles"]:
-        resolved = resolve_authority(name, "vps_read_only_ops", policy)
-        assert resolved["production_authority"] is False
-        assert resolved["real_portfolio_action_authority"] is False, (
-            f"{name}: read-only ops mode cannot authorize capital action"
+        op = resolve_operational_authority(name, "research_plane", policy)
+        assert op["production_promotion_authority"] is False, (
+            f"{name}: research_plane must never confer production promotion"
+        )
+        assert op["real_portfolio_action_authority"] is False, (
+            f"{name}: research_plane must never confer real portfolio action"
         )
 
 
@@ -323,63 +338,115 @@ def test_validator_rejects_ai_role_with_real_portfolio_action_authority(policy):
     assert any("trading_agents" in e and "real_portfolio_action_authority" in e for e in errors)
 
 
-# ── Real portfolio-action environment gating (final 0A hardening) ──────────
+# ── Operational authority domains (final 0A model correction) ──────────────
+# Execution environments (Claude/tool modes) and operational governance
+# authority are now mechanically independent concepts.
 
 
-def test_human_action_authority_resolves_true_only_in_control_plane(policy):
-    # Positive case: the hardening must NOT strip human authority everywhere —
-    # it resolves True exactly in the production/control environment where the
-    # human-gated approval workflows take effect (record_approval on the VPS).
-    control = resolve_authority("human_operator", "vps_dev_on_vps", policy)
-    assert control["real_portfolio_action_authority"] is True
-    assert control["production_authority"] is True
-    # ...and False everywhere else, including environments the human is
-    # permitted in.
-    for env in ("operator_laptop", "vps_read_only_ops", "home_agent_lab"):
-        resolved = resolve_authority("human_operator", env, policy)
-        assert resolved["real_portfolio_action_authority"] is False, (
-            f"human action authority must not resolve true in {env}"
-        )
+def test_required_domains_exist_with_correct_capabilities(policy):
+    domains = policy["operational_authority_domains"]
+    for name in REQUIRED_DOMAINS:
+        assert name in domains
+    assert domains["production_control_plane"]["production_promotion_allowed"] is True
+    assert domains["production_control_plane"]["real_portfolio_action_allowed"] is True
+    assert domains["research_plane"]["production_promotion_allowed"] is False
+    assert domains["research_plane"]["real_portfolio_action_allowed"] is False
 
 
-def test_every_environment_declares_action_capability_explicitly(policy):
+def test_environments_carry_no_governance_capabilities(policy):
+    # The 887b4e90-era coupling (env-level real_portfolio_action_allowed) must
+    # be gone — execution environments describe tooling capability only, and
+    # the validator forbids reintroducing governance fields on them.
     for env_name, env in policy["environments"].items():
-        assert isinstance(env.get("real_portfolio_action_allowed"), bool), (
-            f"{env_name} must declare real_portfolio_action_allowed explicitly (fail closed)"
-        )
-    assert policy["environments"]["vps_dev_on_vps"]["real_portfolio_action_allowed"] is True
-    assert policy["environments"]["operator_laptop"]["real_portfolio_action_allowed"] is False
-    assert policy["environments"]["vps_read_only_ops"]["real_portfolio_action_allowed"] is False
-    assert policy["environments"]["home_agent_lab"]["real_portfolio_action_allowed"] is False
+        assert "real_portfolio_action_allowed" not in env, env_name
+        assert "production_promotion_allowed" not in env, env_name
 
 
-def test_validator_rejects_action_authoritative_agent_lab(policy):
+def test_human_authority_resolves_through_production_control_plane(policy):
+    op = resolve_operational_authority("human_operator", "production_control_plane", policy)
+    assert op["member_of_domain"] is True
+    assert op["production_promotion_authority"] is True
+    assert op["real_portfolio_action_authority"] is True
+
+
+def test_human_authority_independent_of_claude_vps_mode(policy):
+    # THE key regression test: switching Claude between dev_on_vps and
+    # read_only_ops changes Claude's execution permissions ONLY. The human
+    # operator's governance authority resolves through the production control
+    # plane and must be IDENTICAL regardless of Claude's mode — making
+    # "Claude becomes read-only → human loses production authority"
+    # impossible to reintroduce.
+    dev = resolve_authority("claude_code_builder", "vps_dev_on_vps", policy)
+    ro = resolve_authority("claude_code_builder", "vps_read_only_ops", policy)
+    assert dev["git_write_authority"] != ro["git_write_authority"]  # modes really differ
+
+    human_before = resolve_operational_authority("human_operator", "production_control_plane", policy)
+    human_after = resolve_operational_authority("human_operator", "production_control_plane", policy)
+    assert human_before == human_after
+    assert human_before["production_promotion_authority"] is True
+    assert human_before["real_portfolio_action_authority"] is True
+    # Mechanical independence: the governance resolver never reads execution
+    # environments, so no environment name is even a valid domain input.
+    with pytest.raises(AgentPolicyError):
+        resolve_operational_authority("human_operator", "vps_read_only_ops", policy)
+
+
+def test_no_ai_role_gains_authority_from_production_domain(policy):
+    # An AI worker resolving against the production domain must not inherit
+    # the domain's capabilities: not a member, no role grant, no authority.
+    for name in policy["roles"]:
+        if name == "human_operator":
+            continue
+        op = resolve_operational_authority(name, "production_control_plane", policy)
+        assert op["member_of_domain"] is False, f"{name} must not be a production_control_plane member"
+        assert op["production_promotion_authority"] is False, name
+        assert op["real_portfolio_action_authority"] is False, name
+
+
+def test_unknown_domain_fails_closed(policy):
+    with pytest.raises(AgentPolicyError):
+        resolve_operational_authority("human_operator", "nonexistent_domain", policy)
+
+
+def test_validator_rejects_ai_membership_in_production_control_plane(policy):
     import copy
 
     bad = copy.deepcopy(policy)
-    bad["environments"]["home_agent_lab"]["real_portfolio_action_allowed"] = True
+    bad["roles"]["prime"]["operational_authority_domains"] = ["production_control_plane"]
     errors = validate_policy(bad)
-    assert any("home_agent_lab.real_portfolio_action_allowed" in e for e in errors)
+    assert any("prime" in e and "production_control_plane" in e for e in errors)
 
 
-def test_validator_rejects_action_authoritative_read_only_ops(policy):
+def test_validator_rejects_action_authoritative_research_plane(policy):
     import copy
 
     bad = copy.deepcopy(policy)
-    bad["environments"]["vps_read_only_ops"]["real_portfolio_action_allowed"] = True
+    bad["operational_authority_domains"]["research_plane"]["real_portfolio_action_allowed"] = True
     errors = validate_policy(bad)
-    assert any("vps_read_only_ops.real_portfolio_action_allowed" in e for e in errors)
+    assert any("research_plane" in e for e in errors)
 
 
-def test_validator_rejects_environment_missing_action_capability(policy):
+def test_validator_rejects_environment_declaring_governance_capability(policy):
     import copy
 
     bad = copy.deepcopy(policy)
-    del bad["environments"]["operator_laptop"]["real_portfolio_action_allowed"]
+    bad["environments"]["vps_dev_on_vps"]["real_portfolio_action_allowed"] = True
     errors = validate_policy(bad)
-    assert any(
-        "operator_laptop" in e and "real_portfolio_action_allowed" in e for e in errors
-    )
+    assert any("vps_dev_on_vps" in e and "governance" in e for e in errors)
+
+
+def test_validator_rejects_missing_domain_structure(policy):
+    import copy
+
+    bad = copy.deepcopy(policy)
+    del bad["operational_authority_domains"]
+    errors = validate_policy(bad)
+    assert any("operational_authority_domains" in e for e in errors)
+
+    bad2 = copy.deepcopy(policy)
+    del bad2["operational_authority_domains"]["production_control_plane"]["production_promotion_allowed"]
+    errors2 = validate_policy(bad2)
+    assert any("production_control_plane" in e and "production_promotion_allowed" in e for e in errors2)
 
 
 def test_human_responsibility_term_is_unambiguous(policy):
