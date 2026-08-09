@@ -21,7 +21,7 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -50,6 +50,17 @@ FEATURE_EVENTS = "features/events"
 # migration always has the same identity); EVENTS carry when it was performed.
 MIGRATIONS = "migrations/lineage"
 MIGRATION_EVENTS = "migrations/events"
+# Bounded historical pilot evidence. Content-addressed, so a graduation verdict
+# can be re-derived from disk after any restart instead of living in a caller's
+# in-memory dictionary.
+PILOTS = "pilot/content"
+PILOT_EVENTS = "pilot/events"
+# The certified exchange schedule a dataset was built under, archived so the
+# calendar's MEANING survives a dependency upgrade rather than only its digest.
+CALENDARS = "calendar/content"
+# The single mutable pointer in the store: which pilot is the graduation
+# evidence. It names an immutable object and never copies one.
+GRADUATION_POINTER = "graduation/pointer.json"
 
 CONTENT_KINDS = frozenset({RAW, DATASETS, FEATURES})
 
@@ -411,6 +422,93 @@ _ACCOUNTED_STATES = frozenset({
 })
 
 
+def verify_manifest_acquisitions(manifest_fingerprint: str, *,
+                                 root: str = ".") -> dict:
+    """Verify the acquisition events behind a manifest's build.
+
+    Acquisition event ids deliberately stay OUT of dataset identity — they
+    legitimately differ between two runs that fetched identical observations,
+    and folding them in once made an idempotent rerun look like corruption.
+    They are still evidence, so they are verified through the per-run BUILD
+    EVENT that references them rather than through the manifest's identity.
+    """
+    base = intraday_root(root) / DATASET_EVENTS
+    if not base.is_dir():
+        return {"verified": True, "events": 0, "acquisitions": 0,
+                "reason": "no build events recorded"}
+    checked, bad = 0, []
+    for d in sorted(base.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        ev = read_snapshot(DATASET_EVENTS, d.name, "build_event.json", root=root)
+        if not ev or ev.get("manifest_fingerprint") != manifest_fingerprint:
+            continue
+        for aid in ev.get("acquisition_event_ids") or []:
+            if not aid:
+                continue
+            checked += 1
+            v = verify_acquisition_event(aid, root=root)
+            if not v.get("verified"):
+                bad.append({"acquisition_event_id": aid, "reason": v.get("reason")})
+    return {"verified": not bad, "acquisitions": checked, "failures": bad,
+            "reason": None if not bad else f"{len(bad)} acquisition event(s) failed"}
+
+
+def _requested_matrix(req: dict) -> set[tuple[str, str]] | None:
+    """The exact (symbol, market_date) matrix a request asked for.
+
+    Deliberately CALENDAR-INDEPENDENT: it is the cartesian product of the
+    requested symbols and every calendar date in [start, end]. Weekends,
+    holidays and uncertified dates are all recorded as accounting states rather
+    than dropped, so the matrix does not depend on any exchange calendar — which
+    is what lets an archived manifest be checked without consulting today's.
+    """
+    try:
+        symbols = list(req["symbols"])
+        start = date.fromisoformat(req["start"])
+        end = date.fromisoformat(req["end"])
+    except Exception:
+        return None
+    if not symbols or end < start:
+        return None
+    out: set[tuple[str, str]] = set()
+    d = start
+    while d <= end:
+        for s in symbols:
+            out.add((s, d.isoformat()))
+        d += timedelta(days=1)
+    return out
+
+
+def _reconciliation_coherent(recs: list, req: dict) -> str | None:
+    """Field-level agreement between reconciliation records and the request.
+
+    Returns a failure reason, or None. Deliberately does NOT re-resolve sessions
+    through the live calendar: an archived manifest must be checkable under the
+    semantics it was built with, not today's.
+    """
+    symbols = set(req.get("symbols") or [])
+    timeframe = req.get("timeframe")
+    try:
+        start = date.fromisoformat(req["start"])
+        end = date.fromisoformat(req["end"])
+    except Exception:
+        return "request manifest has unusable start/end dates"
+    for r in recs:
+        if r.get("symbol") not in symbols:
+            return f"reconciliation names symbol {r.get('symbol')!r}, not in the request"
+        try:
+            d = date.fromisoformat(r.get("market_date"))
+        except Exception:
+            return f"reconciliation has an unusable market_date {r.get('market_date')!r}"
+        if not (start <= d <= end):
+            return f"reconciliation date {d} lies outside the requested range"
+        if timeframe and r.get("timeframe") not in (None, timeframe):
+            return (f"reconciliation timeframe {r.get('timeframe')!r} disagrees "
+                    f"with the requested {timeframe!r}")
+    return None
+
+
 def verify_dataset_provenance(manifest_fingerprint: str, *, root: str = ".") -> dict:
     """Walk the whole persisted graph. Evidence only — no caller claims.
 
@@ -452,21 +550,95 @@ def verify_dataset_provenance(manifest_fingerprint: str, *, root: str = ".") -> 
     if rebuilt != req.get("request_fingerprint"):
         return fail("persisted request fields do not recompute to its fingerprint")
 
-    # Calendar identity belonging to THIS manifest must be present.
+    # Calendar identity belonging to THIS manifest.
     if not req.get("calendar_fingerprint"):
         return fail("no calendar identity persisted with the manifest")
+    cal_identity = req.get("calendar_identity")
+    if isinstance(cal_identity, dict) and cal_identity:
+        from portfolio_automation.intraday_lab.dataset import calendar_fingerprint_of
+        if calendar_fingerprint_of(cal_identity) != req["calendar_fingerprint"]:
+            return fail("persisted calendar_identity does not hash to the "
+                        "calendar_fingerprint stored beside it")
 
-    # Reconciliation completeness: every requested item accounted for exactly once.
-    expected_items = req.get("requested_symbol_date_count", -1)
-    seen = [(r.get("symbol"), r.get("market_date")) for r in recon]
-    if len(seen) != len(set(seen)):
-        return fail("duplicate reconciliation records for one requested item")
-    if expected_items >= 0 and len(seen) < expected_items:
-        return fail(f"reconciliation covers {len(seen)} of {expected_items} "
-                    f"requested items — a requested session disappeared")
+    # Reconciliation must equal the requested matrix EXACTLY — not merely cover
+    # it. The matrix is the cartesian product of requested symbols and every
+    # date in [start, end], which is CALENDAR-INDEPENDENT: weekends, holidays
+    # and uncertified dates are all recorded as accounting states, so a count
+    # comparison could be satisfied by the wrong items.
     unknown = {r.get("admission_status") for r in recon} - _ACCOUNTED_STATES
     if unknown:
         return fail(f"unrecognised reconciliation state(s): {sorted(unknown)}")
+
+    requested = _requested_matrix(req)
+    if requested is None:
+        return fail("request manifest lacks the fields needed to reconstruct "
+                    "the requested symbol-date matrix")
+    # The persisted count is no longer what verification RELIES on, but it is
+    # still a claim the manifest makes. Leaving it unchecked would make it a
+    # field no consumer validates — the debt pattern that lets a stored number
+    # drift away from the data it describes.
+    declared_count = req.get("requested_symbol_date_count")
+    if declared_count is not None and declared_count != len(requested):
+        return fail(f"request manifest declares {declared_count} requested "
+                    f"symbol-dates but its own symbols/date-range imply "
+                    f"{len(requested)}")
+
+    # Records for results OUTSIDE the authorized matrix are accounted separately
+    # and must never be counted as requested coverage — otherwise a provider
+    # returning an unrequested symbol could paper over a genuinely missing one.
+    requested_recs = [r for r in recon
+                      if r.get("admission_status") != "REJECTED_UNEXPECTED_PROVIDER_RESULT"]
+    unexpected_recs = [r for r in recon
+                       if r.get("admission_status") == "REJECTED_UNEXPECTED_PROVIDER_RESULT"]
+
+    seen = [(r.get("symbol"), r.get("market_date")) for r in requested_recs]
+    if len(seen) != len(set(seen)):
+        dupes = sorted({s for s in seen if seen.count(s) > 1})
+        return fail(f"duplicate reconciliation records for requested item(s): {dupes}")
+    seen_set = set(seen)
+    missing = sorted(requested - seen_set)
+    extra = sorted(seen_set - requested)
+    if missing:
+        return fail(f"{len(missing)} requested symbol-date(s) have no "
+                    f"reconciliation record — a requested session disappeared: "
+                    f"{missing[:5]}")
+    if extra:
+        return fail(f"{len(extra)} reconciliation record(s) are not in the "
+                    f"requested matrix: {extra[:5]}")
+    intruder = sorted({(r.get("symbol"), r.get("market_date"))
+                       for r in unexpected_recs} & requested)
+    if intruder:
+        return fail(f"unexpected-provider record(s) claim requested items: {intruder[:5]}")
+
+    # Field-level coherence against the request itself.
+    coherence = _reconciliation_coherent(requested_recs, req)
+    if coherence:
+        return fail(coherence)
+
+    # Manifest identity must RECOMPUTE from persisted semantics, not merely
+    # match its own directory name. Requires the calendar identity that this
+    # manifest was built under — never the live calendar, which would let a
+    # calendar change silently reinterpret archived research.
+    manifest_recomputed = None
+    if isinstance(cal_identity, dict) and cal_identity:
+        from portfolio_automation.intraday_lab.dataset import (
+            manifest_fingerprint_from_parts,
+        )
+        try:
+            manifest_recomputed = manifest_fingerprint_from_parts(
+                content_fingerprint=req.get("canonical_content_fingerprint"),
+                request=man.get("request"), calendar=cal_identity,
+                timeframe=man.get("timeframe"),
+                adjustment_state=man.get("adjustment_state"),
+                sessions=[[r.get("symbol"), r.get("market_date"),
+                           r.get("admission_status")] for r in recon])
+        except Exception as exc:
+            return fail(f"manifest identity could not be recomputed: "
+                        f"{type(exc).__name__}")
+        if manifest_recomputed != manifest_fingerprint:
+            return fail("persisted manifest semantics do not recompute to the "
+                        "manifest identity — the manifest has been modified",
+                        manifest_recomputed=manifest_recomputed)
 
     # Canonical content.
     content_fp = req.get("canonical_content_fingerprint")
@@ -492,19 +664,37 @@ def verify_dataset_provenance(manifest_fingerprint: str, *, root: str = ".") -> 
     # manifest with the migrated raw ids, so this stays satisfiable.
     legacy_raw = sorted(fp for fp, r in raw_results.items()
                         if not r.get("current_era"))
-    current_era = bool(canon.get("current_era")) and not legacy_raw
+    # A manifest whose identity cannot be RECOMPUTED from its own persisted
+    # semantics is intact evidence but cannot prove what it means without
+    # consulting the live calendar. That is exactly the reinterpretation the
+    # persisted calendar identity exists to prevent, so it is honest legacy
+    # evidence — never silently current.
+    not_current = None
+    if not canon.get("current_era"):
+        not_current = "canonical content is not current-era"
+    elif legacy_raw:
+        not_current = f"raw evidence not current-era: {legacy_raw}"
+    elif manifest_recomputed is None:
+        not_current = ("no calendar_identity persisted with this manifest, so its "
+                       "identity cannot be recomputed from its own evidence — "
+                       "archival only")
+    current_era = not_current is None
     return {"verified": True, "reason": None,
             "manifest_fingerprint": manifest_fingerprint,
+            "manifest_recomputed": manifest_recomputed,
+            "manifest_identity_recomputed": manifest_recomputed is not None,
             "canonical_content_fingerprint": content_fp,
             "request_fingerprint": rebuilt,
             "calendar_fingerprint": req.get("calendar_fingerprint"),
+            "calendar_identity_verified": bool(
+                isinstance(cal_identity, dict) and cal_identity),
+            "requested_items": len(requested),
             "reconciled_items": len(seen),
+            "unexpected_provider_records": len(unexpected_recs),
             "raw_verified": sorted(raw_results),
             "current_era": current_era,
             "canonical_state": canon.get("state"),
             "canonical_identity_schema": canon.get("identity_schema"),
             "legacy_raw_content": legacy_raw,
             "migration_required": bool(canon.get("migration_required") or legacy_raw),
-            "not_current_reason": None if current_era else (
-                "canonical content is not current-era" if not canon.get("current_era")
-                else f"raw evidence not current-era: {legacy_raw}")}
+            "not_current_reason": not_current}

@@ -3,9 +3,13 @@
 **Status: `DATASET_FEATURE_FOUNDATION_READY`** · research-only · no production path.
 
 The status is **computed, not asserted** — `foundation.session2_graduation()`
-runs 25 checks against the live code and the persisted corpus, and READY means
-all 25 passed. It was previously hardcoded to LIMITED with a hand-written
+runs 29 checks against the live code and the persisted corpus, and READY means
+all 29 passed. It was previously hardcoded to LIMITED with a hand-written
 justification, which could not follow the evidence in either direction.
+
+Crucially the verdict is now **durable**: it is re-derived from persisted
+immutable evidence on every call, so it survives a process exit or a reboot
+(see §11). It previously lived in the caller's memory.
 
 `strategy_validation_allowed` remains **`false`**. Graduating the DATA does not
 graduate the strategy layer.
@@ -107,10 +111,11 @@ omitted it would look complete while covering a different window than requested.
 
 ## 3. Dataset identity
 
-`canonical_fingerprint` (schema `intraday_canonical_v2`) covers symbol,
-timeframe, bar start, OHLCV, **and `adjustment_state`** — v2's addition. Two
-datasets with byte-identical OHLCV but different adjustment regimes mean
-different things and must not share an identity.
+`canonical_fingerprint` (current schema **`intraday_canonical_v3`**) covers
+symbol, timeframe, `bar_start_at`, **`bar_end_at`**, **`known_at`**, OHLCV and
+`adjustment_state`. Two datasets with byte-identical OHLCV but different
+adjustment regimes — or different *knowability* — mean different things and must
+not share an identity. Historical eras and migration are described in §8.
 
 `retrieved_at` remains excluded: re-fetching identical history must reproduce
 the fingerprint, or every experiment is irreproducible by construction.
@@ -166,9 +171,11 @@ exists for any blocked feature.
 |---|---|
 | Provider | FMP `/stable/historical-chart/5min` (registered) |
 | Symbols | SPY (broad market), AAPL (liquid equity) |
-| Dates | 2026-08-03…07 + 2025-11-28 (early close) |
-| Sessions requested / admitted / rejected | **11 / 11 / 0** |
-| Bars admitted | **822** |
+| Dates | 8 bounded windows spanning 2017 → 2026 (see `pilot.PILOT_WINDOWS`) |
+| Symbol-dates requested / reconciled | **86 / 86** — every one accounted for |
+| Sessions admitted / rejected / not-trading | **54 / 8 / 24** |
+| Bars admitted / feature observations | **3,996 / 3,834** |
+| Rejections | all `REJECTED_MISSING_BARS`, all on the four 2020 circuit-breaker days |
 | `dataset_fingerprint` | `d3d74e6b187b0bea32ba193cacb8dbaf` |
 | Feature observations | 819 |
 | `feature_fingerprint` | `38ed9d02ebad46d5a758cafc581806cd` |
@@ -216,12 +223,17 @@ rather than a silently shortened lookback. Cross-session rolling features are
 
 1. **Market-wide trading halts are not admissible — and this is a selection
    bias.** The calendar predicts a full grid; a halt removes bars that never
-   printed, so the exact-grid rule rejects the session. Proven in the pilot:
-   2020-03-09 and 2020-03-12 lost exactly the Level-1 circuit-breaker windows
-   (09:35–09:40 and 09:40–09:45 ET) for **both** symbols, which is what
-   identifies it as market-wide rather than a per-symbol data gap. Rejecting is
-   the safe direction, but it removes the most volatile days in modern history
-   from the research universe. Session 3 must account for this explicitly.
+   printed, so the exact-grid rule rejects the session. The pilot covers all
+   four 2020 circuit-breaker days (03-09, 03-12, 03-16, 03-18) and rejects
+   exactly those, admitting 03-17 in between. Both symbols lose *identical*
+   intervals, which is strong evidence of a market-wide interruption — but
+   OHLCV alone cannot establish causation and no authoritative halt feed is
+   wired into this repo, so the deterministic status stays
+   `REJECTED_MISSING_BARS` and `consistent_with_market_wide_halt` is carried
+   only as **contextual interpretation**. Rejecting is the safe direction, but
+   it removes the most volatile days in modern history from the research
+   universe. **Session 3 owns the halt-treatment policy and must quantify this
+   bias before evaluating any strategy.**
 2. Volume-dependent features blocked (semantics unproven).
 3. Absolute-price features blocked (split back-adjusted).
 4. `SECTOR_CONTEXT_DEFERRED`.
@@ -419,7 +431,7 @@ fails — otherwise a provider schema change would be invisible.
 
 `foundation.session2_graduation()` splits its checks deliberately:
 
-* **measured (25)** — proven by running the real function over the real corpus.
+* **measured (29)** — proven by running the real function over the real corpus.
 * **test_enforced (8)** — invariants a runtime status function *cannot honestly
   self-certify* (tamper cascades, adversarial legacy handling). They are named
   with their enforcing tests so the claim is traceable, and are **not** counted
@@ -429,3 +441,61 @@ Asserting "tamper detection works" without running a tamper would be exactly the
 verdict-from-absent-data failure this lab exists to prevent. A gate that raises
 is also a failure mode, so every probe degrades to a named blocker rather than
 an exception.
+
+One measured check was previously a placeholder:
+`strategy_validation_still_false` was `x is not None and True`, an expression
+that could not fail and therefore measured nothing while inflating the passing
+count. It is now an **AST scan** for any assignment that would enable the flag
+— parsed rather than text-matched, because the first replacement matched its own
+explanatory prose. A test plants an enabling module and asserts the probe fails,
+so the check cannot silently become vacuous again.
+
+---
+
+## 11. Durable graduation
+
+The verdict used to live in the caller's memory. The artifact on disk said
+`READY` while a fresh process recomputed `LIMITED` — graduation did not survive
+a process exit, let alone a reboot. A gate that evaporates is worse than one
+that fails, because the stale artifact keeps asserting the opposite.
+
+Graduation is now **always derived from persisted evidence**:
+
+```
+graduation/pointer.json        the ONE mutable element; names an immutable object
+        │
+        ▼
+pilot/content/<pilot-fp>/      immutable, content-addressed
+    pilot.json                 window results, symbols, calendar identity
+    pilot_manifest.json        declared identity + referenced manifests
+        │
+        ▼  verify_historical_pilot() — recomputes, never trusts
+    totals recomputed from window rows
+    every referenced manifest graph verified AND current-era
+    every requested symbol-date accounted for
+```
+
+Evidence is located by an **explicit pointer**, never by "newest directory" or
+file mtime — that would make the verdict depend on filesystem incidentals rather
+than a reviewable decision. A missing pointer is reported as a governance fact;
+it never triggers provider calls to re-manufacture evidence.
+
+The certified schedule is archived under
+`calendar/content/<schedule-digest>/schedule.json`. The digest is the one
+already embedded in every dataset manifest's calendar identity, so **no new
+identity was introduced and existing manifests already point at it** — a digest
+proves a calendar changed, but only the archive says what the old one *said*.
+
+Provenance verification now also **recomputes** rather than accepts:
+
+| Was | Now |
+|---|---|
+| manifest file says its id == directory name | id **recomputed** from persisted request + calendar identity + session matrix |
+| `calendar_fingerprint` field exists | persisted `calendar_identity` must **hash to** that fingerprint |
+| reconciliations ≥ expected count | reconciliation set **exactly equals** the requested matrix — no missing, extra or duplicate |
+
+The requested matrix is reconstructed as symbols × every date in range, which is
+calendar-*independent*, so an archived manifest is checkable without consulting
+today's calendar. Manifests written before `calendar_identity` was persisted
+cannot recompute their own meaning and are therefore **archival, not current** —
+honest legacy evidence, never silently admitted.

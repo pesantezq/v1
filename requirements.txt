@@ -50,4 +50,12 @@ transformers>=4.30.0
 # contract. Replaces a hand-maintained 2025-2027 holiday table; the lab falls
 # back to that table if this is absent, and records the backend in the calendar
 # identity so a fallback dataset is never mistaken for an authoritative one.
+#
+# A COMPATIBLE RANGE is deliberate rather than an exact pin: the certified
+# schedule itself is archived immutably under the digest every dataset manifest
+# already references (calendar/content/<digest>/schedule.json), so research
+# meaning is reconstructible from persisted evidence rather than from this
+# version string. A version bump that changes a historical session changes the
+# digest and mints a new calendar era; one that changes nothing is a no-op.
+# Pin exactly ONLY if the archived-schedule object is ever removed.
 exchange_calendars>=4.13,<5

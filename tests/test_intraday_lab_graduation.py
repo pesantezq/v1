@@ -30,6 +30,20 @@ authoritative = pytest.mark.skipif(
     C._calendar() is None, reason="exchange_calendars not installed")
 
 
+def _freeze(tmp_path, windows=None):
+    """Run a pilot AND make it durable evidence — the only thing graduation reads.
+
+    Passing an in-memory pilot is no longer sufficient by design: a verdict that
+    cannot survive a process exit is the defect this closure fixed.
+    """
+    out = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
+                       windows=windows or PI.PILOT_WINDOWS)
+    C.persist_certified_schedule(root=str(tmp_path))
+    fp = PI.persist_pilot(out, root=str(tmp_path))
+    PI.set_graduation_evidence(fp, root=str(tmp_path))
+    return out, fp
+
+
 def _rows(session):
     out = []
     for i, ts in enumerate(session.expected_bar_starts):
@@ -142,8 +156,8 @@ def test_graduation_is_limited_without_a_pilot(tmp_path):
 
 @authoritative
 def test_graduation_reaches_ready_on_complete_evidence(tmp_path):
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    g = FD.session2_graduation(pilot, root=str(tmp_path))
+    _freeze(tmp_path)
+    g = FD.session2_graduation(root=str(tmp_path))
     assert g["blockers"] == [], g["blockers"]
     assert g["status"] == FD.DATASET_FEATURE_FOUNDATION_READY
     assert g["measured_passed"] == g["measured_total"]
@@ -151,8 +165,8 @@ def test_graduation_reaches_ready_on_complete_evidence(tmp_path):
 
 @authoritative
 def test_graduation_falls_back_to_limited_when_the_pilot_regresses(tmp_path):
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    assert FD.session2_graduation(pilot, root=str(tmp_path))["status"] == \
+    pilot, _ = _freeze(tmp_path)
+    assert FD.session2_graduation(root=str(tmp_path))["status"] == \
         FD.DATASET_FEATURE_FOUNDATION_READY
     broken = {**pilot, "every_requested_session_accounted_for": False}
     g = FD.session2_graduation(broken, root=str(tmp_path))
@@ -163,9 +177,8 @@ def test_graduation_falls_back_to_limited_when_the_pilot_regresses(tmp_path):
 @authoritative
 def test_graduation_fails_when_a_corpus_object_is_tampered(tmp_path):
     """Evidence-driven means the gate must react to the CORPUS, not just flags."""
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path),
-                         windows=PI.PILOT_WINDOWS[-1:])
-    assert FD.session2_graduation(pilot, root=str(tmp_path))["blockers"] == []
+    pilot, _ = _freeze(tmp_path, windows=PI.PILOT_WINDOWS[-1:])
+    assert FD.session2_graduation(root=str(tmp_path))["blockers"] == []
     fp = pilot["windows"][0]["dataset_fingerprint"]
     path = (ST.intraday_root(str(tmp_path)) / "datasets" / "content" / fp
             / "canonical_bars.json")
@@ -174,7 +187,7 @@ def test_graduation_fails_when_a_corpus_object_is_tampered(tmp_path):
     rows[0] = {**rows[0], "close": 4242.0}
     path.write_text(_json.dumps(rows, separators=(",", ":"), sort_keys=True))
 
-    g = FD.session2_graduation(pilot, root=str(tmp_path))
+    g = FD.session2_graduation(root=str(tmp_path))
     assert g["status"] == FD.DATASET_FEATURE_FOUNDATION_LIMITED
     assert "legacy_objects_verify_or_fail_honestly" in g["blockers"]
 
@@ -209,8 +222,8 @@ def test_graduation_never_crashes_on_a_broken_probe(monkeypatch, tmp_path):
 
 @authoritative
 def test_session2_status_follows_the_computed_verdict(tmp_path):
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    st = FD.session2_status(pilot)
+    _freeze(tmp_path)
+    st = FD.session2_status(root=str(tmp_path))
     assert st["architecture_status"] == st["graduation"]["status"]
     assert st["strategy_validation_allowed"] is False
 
@@ -227,8 +240,8 @@ def test_no_contract_is_published_while_session_2_is_limited(tmp_path):
 
 @authoritative
 def test_contract_is_published_on_go_and_states_the_temporal_invariant(tmp_path):
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    c = FD.session3_input_contract(pilot, root=str(tmp_path))
+    _freeze(tmp_path)
+    c = FD.session3_input_contract(root=str(tmp_path))
     assert c["session_3_gate"] == FD.SESSION_3_GO
     body = c["contract"]
     t = body["temporal_contract"]
@@ -239,8 +252,8 @@ def test_contract_is_published_on_go_and_states_the_temporal_invariant(tmp_path)
 
 @authoritative
 def test_contract_restricts_session_3_to_current_era_objects(tmp_path):
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    c = FD.session3_input_contract(pilot, root=str(tmp_path))["contract"]
+    _freeze(tmp_path)
+    c = FD.session3_input_contract(root=str(tmp_path))["contract"]
     ident = c["identity_contract"]
     corpus = MG.active_corpus(root=str(tmp_path))
     assert ident["active_manifests"] == [a["manifest_fingerprint"]
@@ -252,8 +265,8 @@ def test_contract_restricts_session_3_to_current_era_objects(tmp_path):
 def test_contract_discloses_the_halted_session_selection_bias(tmp_path):
     """The pilot proved halted sessions are rejected. A contract that omitted
     that would hand Session 3 a silently biased universe."""
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    c = FD.session3_input_contract(pilot, root=str(tmp_path))["contract"]
+    _freeze(tmp_path)
+    c = FD.session3_input_contract(root=str(tmp_path))["contract"]
     note = c["admission_contract"]["known_exclusion"]
     assert "halt" in note.lower() and "bias" in note.lower()
     assert c["adjustment_contract"]["absolute_price_features"].startswith("BLOCKED")
@@ -263,11 +276,11 @@ def test_contract_discloses_the_halted_session_selection_bias(tmp_path):
 @authoritative
 def test_graduating_the_data_does_not_graduate_strategies(tmp_path):
     """SESSION_3_GO is permission to START, never permission to validate."""
-    pilot = PI.run_pilot(_WindowProvider(), root=str(tmp_path))
-    c = FD.session3_input_contract(pilot, root=str(tmp_path))
+    _freeze(tmp_path)
+    c = FD.session3_input_contract(root=str(tmp_path))
     assert c["session_3_gate"] == FD.SESSION_3_GO
     assert c["strategy_validation_allowed"] is False
-    assert FD.session2_graduation(pilot, root=str(tmp_path))[
+    assert FD.session2_graduation(root=str(tmp_path))[
         "strategy_validation_allowed"] is False
 
 
@@ -284,14 +297,35 @@ def test_the_lab_run_mode_can_never_be_silently_skipped():
 
     mode = PI.INTRADAY_RESEARCH_RUN_MODE
     sched = RunModeScheduler(DEFAULT_RUN_MODES)
-    # should_skip requires priority == "low"
+    # REGISTERED, not relying on the unknown-mode fallback: depending on the
+    # default for absent keys is an accident, not a policy.
+    assert mode in DEFAULT_RUN_MODES, "intraday_research must be explicitly registered"
+    assert DEFAULT_RUN_MODES[mode]["call_budget"] > 0, "budget must be intentional"
+    assert not DEFAULT_RUN_MODES[mode].get("cache_only")
+    # Bandwidth-guard skip fires only for low priority — unreachable here.
     assert sched.priority(mode) != "low"
     assert sched.should_skip(mode, bandwidth_exhausted=True) is False
-    # over_run_budget requires a positive call budget
-    assert sched.over_run_budget(mode, calls_so_far=10**6) is False
-    # and the mode historical_replay WOULD have been skippable — proving the
-    # choice above is load-bearing rather than incidental.
+    # historical_replay WOULD have been skippable, proving the choice is
+    # load-bearing rather than incidental.
     assert sched.should_skip("historical_replay", bandwidth_exhausted=True) is True
+
+    # The run-budget skip IS reachable now that the budget is real, so the
+    # pilot pre-flights: it refuses to start rather than let the governor skip
+    # mid-run and have those skips recorded as absent market data.
+    head = PI.budget_headroom(PI.DEFAULT_SYMBOLS, PI.PILOT_WINDOWS)
+    assert head["fits"] is True
+    assert head["planned_calls"] < head["call_budget"]
+    assert sched.over_run_budget(mode, calls_so_far=head["planned_calls"]) is False
+
+
+def test_pilot_refuses_to_start_when_it_would_exceed_its_budget():
+    """A governor skip returns [] and becomes REJECTED_MISSING_BARS in immutable
+    evidence. Refusing up front is the only way that stays impossible."""
+    many = PI.PILOT_WINDOWS * 10
+    head = PI.budget_headroom(PI.DEFAULT_SYMBOLS, many)
+    assert head["fits"] is False
+    with pytest.raises(RuntimeError, match="budget"):
+        PI.run_pilot(_WindowProvider(), windows=many, root=".")
 
 
 def test_the_lab_never_constructs_an_ungoverned_fmp_client():

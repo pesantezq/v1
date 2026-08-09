@@ -77,10 +77,22 @@ def _calendar_identity() -> dict:
     return _cal.calendar_identity()
 
 
-def calendar_fingerprint() -> str:
+def calendar_fingerprint_of(identity: dict) -> str:
+    """Fingerprint of a GIVEN calendar identity.
+
+    Split out from `calendar_fingerprint()` so verification can recompute the
+    fingerprint of the identity PERSISTED WITH A MANIFEST, rather than the one
+    the live calendar happens to produce today. Checking only that a
+    `calendar_fingerprint` field exists proves nothing about whether it
+    describes the identity stored beside it.
+    """
     return hashlib.sha256(
-        json.dumps(_calendar_identity(), separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(identity, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()[:32]
+
+
+def calendar_fingerprint() -> str:
+    return calendar_fingerprint_of(_calendar_identity())
 
 
 def manifest_fingerprint_from_parts(*, content_fingerprint: str,
@@ -566,13 +578,30 @@ def dataset_manifest(ds: CanonicalDataset, *, source: str = "fmp",
         "first_bar_at": ds.bars[0].bar_start_at.isoformat() if ds.bars else None,
         "last_bar_at": ds.bars[-1].bar_start_at.isoformat() if ds.bars else None,
         "admitted_sessions": [r.summary() for r in ds.admitted],
+        # GENERATED from the calendar API, never hand-written. The previous
+        # hardcoded "Calendar certifies 2025-2027 only" survived the move to an
+        # authoritative 2017+ calendar and was still being written into fresh
+        # manifests — a machine-readable artifact asserting a limitation that no
+        # longer existed. Prose that restates a value the code already exposes
+        # will drift again; deriving it means it cannot.
         "limitations": [
             "Rejected sessions contribute no bars; the requested window is NOT "
             "necessarily fully covered — read session_count_rejected.",
             "Split back-adjusted: absolute-price features are not PIT-safe.",
-            "Calendar certifies 2025-2027 only; earlier sessions are refused.",
+            _calendar_coverage_limitation(),
+            "Market-wide trading halts remove bars that never printed, so a "
+            "halted session fails exact-grid admission and is REJECTED.",
         ],
     }
+
+
+def _calendar_coverage_limitation() -> str:
+    from portfolio_automation.intraday_lab import calendar as _cal
+
+    lo, hi = _cal.coverage()
+    return (f"Calendar certifies {lo.isoformat()}..{hi.isoformat()} "
+            f"({_cal.backend()}); sessions outside that window are UNCERTIFIED "
+            f"and refused.")
 
 
 def rejection_report(ds: CanonicalDataset) -> dict:

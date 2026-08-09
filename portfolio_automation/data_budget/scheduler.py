@@ -12,6 +12,28 @@ DEFAULT_RUN_MODES: dict[str, dict[str, Any]] = {
     # the existing paid FMP Starter allowance (300/min, 20GB/mo) — no extra cost.
     "discovery":         {"call_budget": 650,  "priority": "low"},
     "historical_replay": {"call_budget": 0,    "priority": "low", "cache_only": True},
+    # Intraday Strategy Lab research (HISTORICAL namespace, on-demand only).
+    #
+    # budget 40  — the bounded pilot issues ONE call per symbol per window
+    #              (8 windows x 2 symbols = 16), and responses are cached for
+    #              24h. 40 leaves room for a re-run without licensing a
+    #              backfill; a bulk download should have to raise this
+    #              deliberately rather than inherit an uncapped default.
+    # priority   — deliberately NOT "low". `should_skip` fires only for low
+    #              priority, and a skipped call returns [] which the lab's
+    #              fetch_status classifies as NO_DATA and then writes into
+    #              IMMUTABLE research evidence as REJECTED_MISSING_BARS. That
+    #              would record OUR refusal as absent market data, permanently.
+    #              Research yielding to production is desirable, but not at the
+    #              cost of corrupting the provenance record.
+    # cache_only — false: the lab must be able to acquire history it has never
+    #              seen. Repeat runs are served from cache by the inner client.
+    #
+    # Registered explicitly because the lab previously relied on the
+    # UNKNOWN-mode fallback to get these semantics. Depending on the default
+    # for absent keys is not a policy; it is an accident that any change to the
+    # fallback would silently rewrite.
+    "intraday_research": {"call_budget": 40,   "priority": "medium"},
 }
 
 

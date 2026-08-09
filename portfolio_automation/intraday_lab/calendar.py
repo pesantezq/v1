@@ -331,6 +331,104 @@ def calendar_identity() -> dict:
     }
 
 
+def certified_schedule_rows() -> list[dict]:
+    """The full certified schedule, one row per session.
+
+    `session_type` is DERIVED from the close time, exactly as `resolve_session`
+    derives it, so the archived rows carry no independent claim that could drift
+    away from the open/close they sit beside.
+    """
+    lo, hi = coverage()
+    out = []
+    cal = _calendar()
+    if cal is not None:
+        sch = cal.schedule.loc[str(lo):str(hi)]
+        for idx, row in zip(sch.index, sch.itertuples()):
+            o = row.open.tz_convert(EXCHANGE_TZ)
+            c = row.close.tz_convert(EXCHANGE_TZ)
+            out.append({"market_date": idx.date().isoformat(),
+                        "open_et": o.strftime("%H:%M"), "close_et": c.strftime("%H:%M"),
+                        "session_type": (SESSION_REGULAR if c.hour >= REGULAR_CLOSE.hour
+                                         else SESSION_EARLY_CLOSE)})
+    else:
+        for s in sessions_in_range(lo, hi):
+            if s.session_type not in (SESSION_REGULAR, SESSION_EARLY_CLOSE):
+                continue
+            o = s.market_open.astimezone(EXCHANGE_TZ)
+            c = s.market_close.astimezone(EXCHANGE_TZ)
+            out.append({"market_date": s.market_date.isoformat(),
+                        "open_et": o.strftime("%H:%M"), "close_et": c.strftime("%H:%M"),
+                        "session_type": s.session_type})
+    return out
+
+
+def _digest_of_rows(rows: list[dict]) -> str:
+    """The digest projection: exactly the triples `_schedule_digest` hashes."""
+    payload = [[r["market_date"], r["open_et"], r["close_et"]] for r in rows]
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":")).encode()).hexdigest()[:32]
+
+
+def persist_certified_schedule(*, root: str = ".") -> str:
+    """Archive the certified schedule as an immutable content object.
+
+    A digest detects that a calendar changed; it cannot tell you what the old
+    calendar SAID. Research meaning depends on the schedule itself, so the
+    schedule is archived under the digest that already appears in every dataset
+    manifest's calendar identity — no new identity is introduced, and existing
+    manifests therefore already point at this object.
+    """
+    from portfolio_automation.intraday_lab import storage as _st
+
+    rows = certified_schedule_rows()
+    digest = _digest_of_rows(rows)
+    lo, hi = coverage()
+    _st.write_snapshot(_st.CALENDARS, digest, {
+        "schedule.json": rows,
+        "calendar_manifest.json": {
+            "schema_version": SCHEMA_VERSION,
+            "identity_schema": CALENDAR_SEMANTICS_VERSION,
+            "schedule_digest": digest,
+            "exchange": EXCHANGE,
+            "timezone": str(EXCHANGE_TZ),
+            "backend": backend(),
+            "coverage_from": lo.isoformat(),
+            "coverage_through": hi.isoformat(),
+            "session_count": len(rows),
+            "early_close_count": sum(1 for r in rows
+                                     if r["session_type"] == SESSION_EARLY_CLOSE),
+            # Disclosure, not identity — see the module docstring.
+            "implementation_version": _XCALS_VERSION,
+        },
+    }, root=root)
+    return digest
+
+
+def verify_certified_schedule(digest: str, *, root: str = ".") -> dict:
+    """Recompute the digest from the ARCHIVED rows, never from the live calendar."""
+    from portfolio_automation.intraday_lab import storage as _st
+
+    rows = _st.read_snapshot(_st.CALENDARS, digest, "schedule.json", root=root)
+    man = _st.read_snapshot(_st.CALENDARS, digest, "calendar_manifest.json", root=root)
+    if rows is None or man is None:
+        return {"verified": False, "reason": "missing schedule.json or calendar_manifest"}
+    recomputed = _digest_of_rows(rows)
+    if recomputed != digest or man.get("schedule_digest") != digest:
+        return {"verified": False, "recomputed": recomputed, "identity": digest,
+                "reason": "archived schedule does not hash to its identity"}
+    bad = [r["market_date"] for r in rows
+           if r["session_type"] != (SESSION_REGULAR if r["close_et"] >= "16:00"
+                                    else SESSION_EARLY_CLOSE)]
+    if bad:
+        return {"verified": False, "identity": digest,
+                "reason": f"session_type disagrees with close time on {bad[:3]}"}
+    return {"verified": True, "identity": digest, "reason": None,
+            "session_count": len(rows),
+            "coverage_from": man.get("coverage_from"),
+            "coverage_through": man.get("coverage_through"),
+            "backend": man.get("backend")}
+
+
 def calendar_provenance() -> dict:
     """Identity plus disclosures that are NOT part of research meaning."""
     lo, hi = coverage()
