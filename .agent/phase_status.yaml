@@ -48,8 +48,19 @@ stockbot_northstar_redesign:
             - GitHub action/Node deprecation warnings
     northstar_phase_0b:
       name: "Canonical Evidence, Prediction & Worker Contracts"
-      status: active   # 2026-08-09 PM — current step: northstar_0b_canonical_contracts
+      status: active   # NOT complete — milestones 2+ outstanding
       step: northstar_0b_canonical_contracts
+      milestones:
+        northstar_0b_contract_architecture_and_evidence_kernel:
+          status: complete   # 2026-08-09 — docs/NORTHSTAR_CONTRACTS.md (full 15-family architecture spec) + evidence kernel implemented: portfolio_automation/northstar/ (canonical strict serializer + sha256 identity, PointInTime with no-fabricated-time discipline, Provenance, DataSourceDescriptor, EvidenceSnapshot + revision chains, EvidenceRef, FeatureRecord). 32 focused tests (tests/test_northstar_evidence_kernel.py). Contracts only — no engines, adapters, wiring, or vendor integrations.
+          deliverables:
+            - docs/NORTHSTAR_CONTRACTS.md
+            - portfolio_automation/northstar/ (canonical, pit, provenance, serde, sources, evidence, features)
+            - tests/test_northstar_evidence_kernel.py
+        northstar_0b_prediction_research_experiment_contracts:
+          status: ready      # next 0B milestone — PredictionTask/PredictionRecord + ResearchTask/WorkerResult/ResearchClaim (specified in docs/NORTHSTAR_CONTRACTS.md §6)
+        northstar_0b_decision_outcome_passport_contracts:
+          status: not_started  # ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport
       purpose: >-
         Define stable, validated, point-in-time-capable domain contracts that
         decouple producers from consumers before building the new
