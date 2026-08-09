@@ -264,15 +264,23 @@ Workflow: `.github/workflows/northstar-ci.yml` (`northstar-ci`).
 - **Job `tests` (broad hermetic regression):** the repository's declared
   full-suite command (`.agent/project_state.yaml:required_test_policy`) with
   its two pre-existing declared exclusions (`tests/test_gui_api_health.py`,
-  `tests/test_gui_insight_cards.py`) plus 5 deselected test IDs that
-  validate **live production runtime state** (the artifact-registry corpus
-  check, 3 GUI routes rendered against live `outputs/latest` artifacts, the
-  live sandbox active-strategy anchor). Classification evidence 2026-08-09:
-  the full 10,252-test suite was run in a bare worktree — 10,246 passed and
-  exactly those 5 failed; each of the 5 then passed against the live VPS
-  corpus, proving they are live-artifact-dependent, not regressions. They
-  remain VPS-side validation. `tests/conftest.py` guards the protected
-  scoring registry during the run.
+  `tests/test_gui_insight_cards.py`) plus 10 deselected test IDs in two
+  documented non-hermetic classes (all keep running in the VPS-side full
+  suite):
+  1. **Live-runtime-artifact validation (5)** — the artifact-registry corpus
+     check, 3 GUI routes rendered against live `outputs/latest` artifacts,
+     the live sandbox active-strategy anchor. Evidence: the full 10,252-test
+     suite run in a bare worktree passed 10,246 with exactly these 5
+     failing; all 5 then passed against the live VPS corpus.
+  2. **Production-host assumptions (5)** — exposed by remote run
+     31336323571: `test_broker_overlay` (4) hardcodes the absolute path
+     `/opt/stockbot/config.json`; one operator-worker test requires a
+     `claude` binary on PATH. Hermetic rewrites are a follow-up
+     qualification, not a CI weakening.
+
+  The job also sets a standard CI git identity (hosted runners have none;
+  `test_worker_workspace`'s clone-isolation test makes real commits).
+  `tests/conftest.py` guards the protected scoring registry during the run.
 - **Deliberately NOT in CI:** the production pipeline, anything requiring
   `.env`/credentials/FMP/broker/network, live `outputs/` artifacts,
   production databases, cron/systemd behavior, VPS SSH, Agent Export against
