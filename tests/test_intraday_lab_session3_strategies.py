@@ -265,6 +265,144 @@ def test_preregistration_content_is_immutable_and_pointer_is_not_authority(tmp_p
     assert "preregistration_evidence_verifies" in st["blockers"]
 
 
+def _write_legacy(tmp_path, payload: dict, name="strategy_registry.json") -> "object":
+    """A pre-foundation prototype artifact, exactly as the 05:18 prototype left it."""
+    base = ST.intraday_root(str(tmp_path)) / "session3"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / name
+    path.write_bytes(json.dumps(payload, sort_keys=True).encode())
+    return path
+
+
+def _legacy_payload() -> dict:
+    return {"strategies": [{"strategy_id": "OPENING_RANGE_BEHAVIOR_V1",
+                            "strategy_fingerprint": "legacy-orb-fingerprint"}]}
+
+
+# ── A. the certification entrypoint exists and composes the flow ─────────────
+def test_freeze_helper_persists_verifies_and_selects_the_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    _write_legacy(tmp_path, _legacy_payload())
+
+    result = SD.freeze_session3_1_preregistration(root=str(tmp_path))
+
+    fp = result["preregistration_fingerprint"]
+    assert fp
+    assert result["verified"] is True
+    # The pointer on disk names exactly the object that was persisted+verified.
+    pointer = json.loads(
+        (ST.intraday_root(str(tmp_path)) / SD.PREREGISTRATION_POINTER).read_text())
+    assert pointer["preregistration_fingerprint"] == fp
+    # The gate is not invented by the wrapper; it comes from session3_1_status.
+    assert result["status"] == SD.HYPOTHESIS_PREREGISTRATION_READY
+    assert result["session_3_2_gate"] == SD.SESSION_3_2_GO
+    assert result["session_3_1_status"] == SD.session3_1_status(root=str(tmp_path))
+    assert result["strategy_validation_allowed"] is False
+
+
+# ── B. the entrypoint fails closed instead of selecting a bad pointer ────────
+def test_freeze_helper_refuses_to_select_a_pointer_when_verification_fails(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    # A REAL verification failure: the live definitions no longer match what was
+    # persisted, which is exactly what verify_preregistration_set exists to catch.
+    mutated = [dict(d, strategy_id="TAMPERED_V1") for d in SD._current_strategy_payloads()]
+    monkeypatch.setattr(SD, "_current_strategy_payloads", lambda: mutated)
+
+    with pytest.raises(ValueError):
+        SD.freeze_session3_1_preregistration(root=str(tmp_path))
+
+    assert not (ST.intraday_root(str(tmp_path)) / SD.PREREGISTRATION_POINTER).exists()
+    st = SD.session3_1_status(root=str(tmp_path))
+    assert st["session_3_2_gate"] == SD.SESSION_3_2_NO_GO
+
+
+# ── C/D. the superseded prototype must still be there, and unchanged ─────────
+def test_deleting_a_superseded_legacy_artifact_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    legacy = _write_legacy(tmp_path, _legacy_payload())
+    fp = SD.freeze_session3_1_preregistration(root=str(tmp_path))["preregistration_fingerprint"]
+    assert SD.verify_preregistration_set(fp, root=str(tmp_path))["verified"] is True
+
+    legacy.unlink()
+
+    v = SD.verify_preregistration_set(fp, root=str(tmp_path))
+    assert v["verified"] is False
+    assert "legacy" in (v["reason"] or "").lower()
+    st = SD.session3_1_status(root=str(tmp_path))
+    assert st["session_3_2_gate"] == SD.SESSION_3_2_NO_GO
+    assert "preregistration_evidence_verifies" in st["blockers"]
+
+
+def test_mutating_a_superseded_legacy_artifact_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    legacy = _write_legacy(tmp_path, _legacy_payload())
+    fp = SD.freeze_session3_1_preregistration(root=str(tmp_path))["preregistration_fingerprint"]
+    assert SD.verify_preregistration_set(fp, root=str(tmp_path))["verified"] is True
+
+    # Rewriting history so it matches the new world is exactly what must not pass.
+    legacy.write_bytes(json.dumps({"strategies": [{
+        "strategy_id": "OPENING_RANGE_BEHAVIOR_V1",
+        "strategy_fingerprint": "rewritten-to-look-authoritative",
+    }]}, sort_keys=True).encode())
+
+    v = SD.verify_preregistration_set(fp, root=str(tmp_path))
+    assert v["verified"] is False
+    assert "legacy" in (v["reason"] or "").lower()
+    assert SD.session3_1_status(root=str(tmp_path))["session_3_2_gate"] == SD.SESSION_3_2_NO_GO
+
+
+# ── E. the frozen contract hashes MEANING, not byte formatting ───────────────
+def test_reformatted_but_semantically_identical_legacy_json_still_verifies(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    legacy = _write_legacy(tmp_path, _legacy_payload())
+    fp = SD.freeze_session3_1_preregistration(root=str(tmp_path))["preregistration_fingerprint"]
+
+    # Same JSON meaning, different bytes: reordered keys, indentation, trailing newline.
+    legacy.write_text(json.dumps(_legacy_payload(), indent=4, sort_keys=False) + "\n")
+    assert legacy.read_bytes() != json.dumps(_legacy_payload(), sort_keys=True).encode()
+
+    v = SD.verify_preregistration_set(fp, root=str(tmp_path))
+    assert v["verified"] is True, v.get("reason")
+    assert SD.session3_1_status(root=str(tmp_path))["session_3_2_gate"] == SD.SESSION_3_2_GO
+
+
+def test_non_json_legacy_artifact_is_fingerprinted_by_raw_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    legacy = _write_legacy(tmp_path, _legacy_payload())
+    legacy.write_bytes(b"{not valid json at all")
+    fp = SD.freeze_session3_1_preregistration(root=str(tmp_path))["preregistration_fingerprint"]
+    assert SD.verify_preregistration_set(fp, root=str(tmp_path))["verified"] is True
+
+    legacy.write_bytes(b"{not valid json at all!")
+    assert SD.verify_preregistration_set(fp, root=str(tmp_path))["verified"] is False
+
+
+# ── F. immutable evidence may not read outside the Intraday historical tree ──
+@pytest.mark.parametrize("escaping", ["../../escape.json", "/etc/passwd"])
+def test_legacy_path_escaping_the_intraday_root_fails_closed(
+        tmp_path, monkeypatch, escaping):
+    monkeypatch.setattr(PA, "session3_0_status", lambda *, root=".": _green_session3_0())
+    # Mint a CORRECTLY-HASHED preregistration whose legacy record points outside
+    # the tree, so verification must reject on containment, not on a hash mismatch.
+    monkeypatch.setattr(SD, "legacy_prototype_lineage", lambda root=".": [{
+        "path": escaping,
+        "content_fingerprint": "whatever",
+        "status": SD.DRAFT_PRE_FOUNDATION,
+        "authority": SD.NON_AUTHORITATIVE,
+        "relation": "superseded_by_this_authoritative_preregistration_set",
+        "declared_strategy_refs": [],
+        "preserved": True,
+    }])
+    fp = SD.persist_preregistration_set(root=str(tmp_path))
+
+    v = SD.verify_preregistration_set(fp, root=str(tmp_path))
+    assert v["verified"] is False
+    assert v["reason"] and "path" in v["reason"].lower()
+    assert SD.session3_1_status(root=str(tmp_path))["session_3_2_gate"] == SD.SESSION_3_2_NO_GO
+
+
 def test_no_performance_execution_or_production_authority_fields():
     forbidden = {
         "pnl", "sharpe", "fill_price", "execution_cost", "position_size",

@@ -152,7 +152,22 @@ Recognized old strategy IDs are mapped explicitly to their final registration:
 - `SHORT_HORIZON_MEAN_REVERSION_V1`
   -> `SHORT_HORIZON_MEAN_REVERSION_V1`
 
-The old bytes remain preserved.
+The old bytes remain preserved — and that preservation is **re-verified, not
+asserted**. Every superseded artifact named by the immutable preregistration is
+re-read from the exact path the evidence records, and its fingerprint is
+recomputed on each verification. A deleted, modified, unreadable, or
+out-of-tree artifact fails the gate closed.
+
+The fingerprint contract hashes **meaning, not formatting**: an artifact that
+parses as JSON is hashed from its parsed payload, so reindenting or reordering
+keys is not corruption; anything unparseable falls back to its raw bytes.
+Discovery and verification share one helper so the two can never drift into
+disagreeing about what "unchanged" means.
+
+Paths recorded in preregistration evidence are relative to the Intraday root and
+must resolve inside it. Verification refuses absolute paths and any path that
+escapes the tree, so tampered evidence cannot turn a gate check into an
+arbitrary file read.
 
 ## Research burden
 
@@ -184,9 +199,30 @@ Session 4 may not count only winners.
 5. population and halt policy fingerprints still match;
 6. parameter/feature/primitive versions still match;
 7. the frozen research-burden record matches;
-8. `strategy_validation_allowed` remains false.
+8. every superseded legacy artifact still exists, still resolves inside the
+   Intraday root, and still reproduces its recorded fingerprint;
+9. `strategy_validation_allowed` remains false.
 
 A pointer is selection, not authority.
+
+## Certification
+
+Minting is a single narrow entrypoint that composes the steps in their only safe
+order. It owns no authority: the gate it reports is whatever `session3_1_status`
+derives from durable evidence.
+
+```python
+from portfolio_automation.intraday_lab.strategy_definitions import (
+    freeze_session3_1_preregistration,
+)
+
+result = freeze_session3_1_preregistration(root=".")
+```
+
+It fails closed. A pointer is installed only after the persisted object has
+verified, so a refused certification leaves no selection behind that could be
+mistaken for a successful one. It raises rather than returning a degraded
+success when Session 3.0 is not ready or the persisted set does not verify.
 
 ## Next session
 

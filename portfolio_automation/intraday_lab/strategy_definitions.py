@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -495,20 +496,50 @@ def _legacy_strategy_refs(value: Any) -> tuple[tuple[str, str | None], ...]:
     return tuple(sorted(found))
 
 
+def _legacy_artifact_fingerprint(path: Path) -> tuple[str, Any]:
+    """The frozen fingerprint contract for one superseded prototype artifact.
+
+    Parsed JSON is hashed by MEANING, so reformatting an old artifact is not
+    corruption; anything unparseable falls back to its raw bytes. Discovery and
+    verification MUST call this same function — two implementations would
+    eventually disagree about what "unchanged" means, and the disagreement would
+    surface as either a false corruption alarm or a silent tamper window.
+
+    Returns (fingerprint, parsed_payload_or_None).
+    """
+    raw = path.read_bytes()
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return hashlib.sha256(raw).hexdigest(), None
+    return ST.content_hash(payload), payload
+
+
+def _resolve_legacy_path(base: Path, relative: Any) -> Path | None:
+    """Resolve a preregistered legacy path, refusing anything outside the tree.
+
+    Immutable evidence names the artifact to re-read, so a tampered or malformed
+    record must not be able to turn verification into an arbitrary file read.
+    Scoped deliberately to this evidence contract, not a general path framework.
+    """
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        return None
+    root = base.resolve()
+    candidate = (root / relative).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
+    return candidate
+
+
 def legacy_prototype_lineage(root: str = ".") -> list[dict]:
     """Describe old prototype artifacts without modifying or deleting them."""
     out = []
     base = ST.intraday_root(root)
     for path in _legacy_candidates(root):
-        raw = path.read_bytes()
+        fp, payload = _legacy_artifact_fingerprint(path)
         refs: tuple[tuple[str, str | None], ...] = ()
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-            fp = ST.content_hash(payload)
+        if payload is not None:
             refs = _legacy_strategy_refs(payload)
-        except Exception:
-            import hashlib
-            fp = hashlib.sha256(raw).hexdigest()
         out.append({
             "path": str(path.relative_to(base)),
             "content_fingerprint": fp,
@@ -663,6 +694,31 @@ def verify_preregistration_set(fingerprint: str, *, root: str = ".") -> dict:
     if any(x.get("status") != DRAFT_PRE_FOUNDATION or x.get("authority") != NON_AUTHORITATIVE
            for x in body.get("supersedes_legacy_artifacts") or []):
         return fail("legacy prototype lineage is not explicitly non-authoritative")
+
+    # Each superseded prototype must STILL be on disk and still mean what it meant
+    # when it was preregistered. Recording that an artifact was preserved is not
+    # evidence that it was: only re-reading the exact path the immutable evidence
+    # names, and recomputing its fingerprint, can show that. Discovering whatever
+    # happens to be on disk now would answer a different question.
+    base = ST.intraday_root(root)
+    legacy_verified = 0
+    for record in body.get("supersedes_legacy_artifacts") or []:
+        rel = record.get("path")
+        resolved = _resolve_legacy_path(base, rel)
+        if resolved is None:
+            return fail(f"legacy artifact path escapes the Intraday root: {rel!r}")
+        if not resolved.is_file():
+            return fail(f"superseded legacy artifact is missing: {rel}")
+        try:
+            current_fp, _ = _legacy_artifact_fingerprint(resolved)
+        except OSError as exc:
+            return fail(f"superseded legacy artifact is unreadable: {rel} "
+                        f"({type(exc).__name__})")
+        if current_fp != record.get("content_fingerprint"):
+            return fail(f"superseded legacy artifact changed since "
+                        f"preregistration: {rel}")
+        legacy_verified += 1
+
     current_regs = {h.fingerprint for h in generation1_hypotheses()}
     if any(x.get("relation") != "supersedes"
            or x.get("legacy_status") != DRAFT_PRE_FOUNDATION
@@ -679,6 +735,7 @@ def verify_preregistration_set(fingerprint: str, *, root: str = ".") -> dict:
         "strategy_fingerprints": [s["strategy_fingerprint"] for s in body["strategies"]],
         "hypothesis_fingerprints": [h["registration_fingerprint"] for h in body["hypotheses"]],
         "legacy_artifacts_superseded": len(body.get("supersedes_legacy_artifacts") or []),
+        "legacy_artifacts_reverified": legacy_verified,
     }
 
 
@@ -714,6 +771,48 @@ def load_session3_1_preregistration_evidence(*, root: str = ".") -> dict:
                 "reason": "preregistration pointer names no fingerprint"}
     result = verify_preregistration_set(fp, root=root)
     return {**result, "available": bool(result.get("verified")), "pointer": pointer}
+
+
+def freeze_session3_1_preregistration(*, root: str = ".") -> dict:
+    """Mint the authoritative Session 3.1D preregistration, or refuse outright.
+
+    Composes the existing operations in their only safe order. It deliberately
+    owns no authority of its own: the gate it reports is whatever
+    ``session3_1_status`` derives from durable evidence, never a claim this
+    function makes. A pointer is installed only after the persisted object has
+    verified, so a failed certification leaves no selection behind to be mistaken
+    for one that succeeded.
+    """
+    s30 = PA.session3_0_status(root=root)
+    if (s30.get("status") != PA.SESSION_3_0_POLICY_READY
+            or s30.get("session_3_1_gate") != PA.SESSION_3_1_GO):
+        raise ValueError(f"refusing to preregister: Session 3.0 durable gate is "
+                         f"not ready: {s30.get('blockers')}")
+
+    fingerprint = persist_preregistration_set(root=root)
+    verified = verify_preregistration_set(fingerprint, root=root)
+    if not verified.get("verified"):
+        raise ValueError(f"refusing to select preregistration {fingerprint}: "
+                         f"{verified.get('reason')}")
+
+    pointer = set_session3_1_preregistration_evidence(fingerprint, root=root)
+    status = session3_1_status(root=root)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "session": "3.1D",
+        "preregistration_fingerprint": fingerprint,
+        "verified": True,
+        "pointer": pointer,
+        "session_3_1_status": status,
+        "status": status["status"],
+        "session_3_2_gate": status["session_3_2_gate"],
+        "source_population_fingerprint": verified.get("source_population_fingerprint"),
+        "strategy_fingerprints": verified.get("strategy_fingerprints"),
+        "hypothesis_fingerprints": verified.get("hypothesis_fingerprints"),
+        "legacy_artifacts_superseded": verified.get("legacy_artifacts_superseded"),
+        "legacy_artifacts_reverified": verified.get("legacy_artifacts_reverified"),
+        "strategy_validation_allowed": False,
+    }
 
 
 def session3_1_status(*, root: str = ".") -> dict:
