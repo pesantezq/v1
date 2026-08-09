@@ -13,15 +13,20 @@ role classes, critical path, and parallel workstreams — is
 **`docs/NORTHSTAR_REDESIGN.md`**. The agent authority model is
 **`config/agent_policy.yaml`**.
 
-Current position:
+Current position (2026-08-09 PM):
 
-- **Program:** `stockbot_northstar_redesign` — ACTIVE
-- **Phase:** `northstar_phase_0a` (Architecture, Authority & CI Foundation) —
-  ACTIVE, **not complete** (CI milestone outstanding)
-- **Step:** `northstar_0a_authority_roadmap_reconciliation` — implemented,
-  awaiting GPT closure
-- **Next:** `northstar_0a_ci_foundation`
-- Phases 0B–11 are defined, **not started**. No future phase is implemented.
+- **Program:** `stockbot_northstar_redesign` — ACTIVE; gate achieved:
+  `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`
+- **Phase 0A** (Architecture, Authority & CI Foundation) — **COMPLETE**
+  (authority @ `1794a164`; remote CI GREEN run `31338193791` @ `3fa43377`;
+  GPT `SESSION_CLOSED — NORTHSTAR_PHASE_0A`)
+- **Phase:** `northstar_phase_0b` (Canonical Evidence, Prediction & Worker
+  Contracts) — **ACTIVE**
+- **Step / Next:** `northstar_0b_canonical_contracts` — contracts only; no
+  engines, runtimes, or data-source integrations
+- Phases 0C–11 are defined, **not started**. No future phase is implemented.
+  AI worker runtimes follow the **Prime-free Local R&D direction** (Prime is
+  superseded as orchestrator).
 
 The `observe_and_iterate` objective that headed this roadmap 2026-05-20 →
 2026-08-09 is superseded **as the sole top-level objective**; production

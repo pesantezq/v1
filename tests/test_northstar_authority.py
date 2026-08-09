@@ -22,7 +22,6 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 FUTURE_PHASES = [
-    "northstar_phase_0b",
     "northstar_phase_0c",
     "northstar_phase_0d",
     "northstar_phase_1",
@@ -77,12 +76,14 @@ def test_program_is_northstar(state):
 
 
 def test_current_phase_and_step(state):
-    assert state["current_phase"] == "northstar_phase_0a"
-    assert state["current_step"] == "northstar_0a_authority_roadmap_reconciliation"
+    # 2026-08-09 PM: Phase 0A closed (gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY);
+    # Phase 0B (canonical contracts) is active.
+    assert state["current_phase"] == "northstar_phase_0b"
+    assert state["current_step"] == "northstar_0b_canonical_contracts"
 
 
-def test_next_official_step_is_ci_foundation(state):
-    assert state["next_official_step"]["primary"] == "northstar_0a_ci_foundation"
+def test_next_official_step_is_canonical_contracts(state):
+    assert state["next_official_step"]["primary"] == "northstar_0b_canonical_contracts"
 
 
 # ── Req 3: agent_context_check reports the new state ───────────────────────
@@ -99,9 +100,8 @@ def test_agent_context_check_reports_program_phase_step():
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "stockbot_northstar_redesign" in out
-    assert "northstar_phase_0a" in out
-    assert "northstar_0a_authority_roadmap_reconciliation" in out
-    assert "northstar_0a_ci_foundation" in out
+    assert "northstar_phase_0b" in out
+    assert "northstar_0b_canonical_contracts" in out
     # The stale claim must be gone from the summary.
     assert "Claude runs locally. Return VPS commands" not in out
 
@@ -115,16 +115,34 @@ def test_no_future_phase_marked_complete_in_project_state(state):
         assert phases[name]["status"] == "not_started", (
             f"{name} must be not_started — future phases are not implemented"
         )
-    assert phases["northstar_phase_0a"]["status"] == "active"
+    assert phases["northstar_phase_0a"]["status"] == "complete"
+    assert phases["northstar_phase_0b"]["status"] == "active"
 
 
-def test_phase_0a_not_marked_complete_while_ci_outstanding(phase):
+def test_phase_0a_complete_with_gate_and_both_milestones(phase):
+    # Phase 0A closed 2026-08-09 with remote CI evidence (northstar-ci run
+    # 31338193791 GREEN) and GPT SESSION_CLOSED.
     program = phase["stockbot_northstar_redesign"]
     p0a = program["phases"]["northstar_phase_0a"]
-    assert p0a["status"] == "active", "Phase 0A must stay active until CI lands"
+    assert p0a["status"] == "complete"
+    assert p0a["gate"] == "NORTHSTAR_GOVERNANCE_FOUNDATION_READY"
+    assert "NORTHSTAR_GOVERNANCE_FOUNDATION_READY" in program["gates_achieved"]
     milestones = p0a["milestones"]
     assert milestones["northstar_0a_authority_roadmap_reconciliation"]["status"] == "complete"
-    assert milestones["northstar_0a_ci_foundation"]["status"] == "ready"
+    assert milestones["northstar_0a_ci_foundation"]["status"] == "complete"
+
+
+def test_phase_0b_active_contracts_only(phase):
+    p0b = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0b"]
+    assert p0b["status"] == "active"
+    assert p0b["step"] == "northstar_0b_canonical_contracts"
+    # The handoff records extensible replaceable data sources as an Evidence
+    # Plane requirement — never vendor schemas embedded in the engines.
+    reqs = " ".join(p0b["requirements"])
+    assert "replaceable data sources" in reqs
+    assert "point-in-time" in reqs
+    # Contract-first: no engine/runtime/source integration in 0B.
+    assert "Contracts only" in p0b["purpose"]
 
 
 def test_no_future_phase_marked_complete_in_phase_status(phase):

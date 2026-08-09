@@ -1,7 +1,16 @@
 # Agent Orchestration — Project State
 # Machine-readable source of truth for Claude, Codex, and GPT context.
 # Update this file whenever a step is completed or scope changes.
-# Last updated: 2026-08-09 (STOCKBOT_NORTHSTAR_REDESIGN program opened —
+# Last updated: 2026-08-09 PM (PHASE 0A CLOSED — gate
+# NORTHSTAR_GOVERNANCE_FOUNDATION_READY achieved; GPT issued SESSION_CLOSED —
+# NORTHSTAR_PHASE_0A. Both milestones complete: authority reconciliation
+# (1794a164 after 3 GPT-reviewed hardening passes) + CI foundation
+# (northstar-ci run 31338193791 GREEN: governance + hermetic regression,
+# 10,241 passed). current_phase -> northstar_phase_0b, current_step ->
+# northstar_0b_canonical_contracts. Prime-free Local R&D direction recorded
+# (Prime superseded as orchestrator — see northstar_program notes). Prior
+# header below.)
+# Prior: 2026-08-09 (STOCKBOT_NORTHSTAR_REDESIGN program opened —
 # operator-approved governing goal made authoritative. current_phase/step moved
 # to northstar_phase_0a / northstar_0a_authority_roadmap_reconciliation;
 # observe_and_iterate closed as SOLE top-level objective and recorded in
@@ -34,8 +43,8 @@ ai_role: context_explanation_validation_orchestration_only
 # Milestone → Deliverable hierarchy is defined in docs/NORTHSTAR_REDESIGN.md.
 program: stockbot_northstar_redesign
 
-current_phase: northstar_phase_0a  # 2026-08-09: was post_phase_0_governance (2026-05-20 → 2026-08-09, closed with the observe_and_iterate step below — history preserved in completed_steps + phase_status.yaml)
-current_step: northstar_0a_authority_roadmap_reconciliation  # 2026-08-09: was observe_and_iterate (2026-07-13 note preserved: was gui_operator_cockpit_redesign — superseded by gui_v2 per docs/STREAMLIT_RETIREMENT.md; gui_v2 4-phase program complete 2026-07-09)
+current_phase: northstar_phase_0b  # 2026-08-09 PM: was northstar_phase_0a (COMPLETE — gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY; see completed_steps + phase_status.yaml). Prior: post_phase_0_governance (2026-05-20 → 2026-08-09)
+current_step: northstar_0b_canonical_contracts  # 2026-08-09 PM: was northstar_0a_authority_roadmap_reconciliation (complete). Prior history: observe_and_iterate (2026-07-13 note preserved: was gui_operator_cockpit_redesign — superseded by gui_v2 per docs/STREAMLIT_RETIREMENT.md)
 
 completed_steps:
   - phase_0_user_id_schema_migration
@@ -114,11 +123,13 @@ completed_steps:
   - fmp_budget_governor  # 2026-06-15 — Budget-Aware FMP Data Orchestrator (built under /goal, subagent-driven). Single guarded FMP access layer portfolio_automation/data_budget/ wrapping fmp_client (keeps DiskCache/CallCounter/endpoint-registry): token bucket (240/min, 300 burst), monthly 20GB bandwidth guard, per-run-mode budgets (gui_refresh/daily/weekly_review/monthly/discovery/historical_replay), per-call SQLite usage ledger (data/fmp_budget.db: api_usage_ledger + symbol_data_policy), run-mode-routed single factory chokepoint (all ~7 call sites migrated; AST guard test forbids direct FMPClient construction). Additive fmp_client response-byte capture + get_quote_short. 3 observe-only artifacts (fmp_usage/fmp_cache/data_budget_status, Stage 7d2) + GUI System panel + /daily-tool-analysis health line 6m. Ships ENABLED with kill-switch (config data_budget.enabled / STOCKBOT_FMP_GOVERNOR_DISABLED / config/fmp_governor.DISABLED -> reverts to direct fmp_client). Governor is budget authority; inner client uncapped to avoid double-cap. Observe-only; never feeds decision_plan. Docs: spec + plan + OUTPUT_ARTIFACT_CONTRACTS + PIPELINE_RUNBOOK + 3 registry rows. next_official_step unchanged (observe_and_iterate).
 
   - observe_and_iterate_as_sole_top_level_objective  # 2026-05-20 → 2026-08-09 — the observe-and-iterate window did its job: 70+ shipped steps hardened, outcome history accumulated (n=154 resolved on the current gauge era), monthly analyses logged, reliability program merged. CLOSED as the SOLE top-level objective by the STOCKBOT_NORTHSTAR_REDESIGN program (operator-approved 2026-08-09); production observation/outcome collection CONTINUES as northstar parallel workstream 2 (see northstar_program.parallel_workstreams). History: phase_status.yaml observe_and_iterate block (now superseded-as-sole-objective) + docs/monthly_reports/.
+  - northstar_0a_authority_roadmap_reconciliation  # 2026-08-09 — Phase 0A milestone 1: program made authoritative; config/agent_policy.yaml (v1.0.0, 12 roles + 2 operational authority domains) + agent_policy.py resolvers; 3 GPT-reviewed hardening passes (Agent Lab boundary, real_portfolio_action term, quant_router/stratlab split, runtime accuracy, environment gating, execution/governance decoupling). Final SHA 1794a164.
+  - northstar_0a_ci_foundation  # 2026-08-09 — Phase 0A milestone 2: .github/workflows/northstar-ci.yml (validation-only, contents:read, no secrets/VPS/production). Remote GREEN evidence: run 31338193791 @ 3fa43377 — Northstar governance SUCCESS + Hermetic regression tests SUCCESS (10,241 passed / 1 skipped / 10 classified-deselected / 7 subtests). Gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY achieved; GPT SESSION_CLOSED — NORTHSTAR_PHASE_0A.
 
 next_official_step:
-  primary: northstar_0a_ci_foundation  # Phase 0A milestone 2 — CI that proves parseability + authority invariants + protected boundaries on every change. Authorized to start after GPT closes milestone 1 (northstar_0a_authority_roadmap_reconciliation). Phase 0A overall stays ACTIVE (NOT complete) until CI lands.
+  primary: northstar_0b_canonical_contracts  # NORTHSTAR_PHASE_0B_CANONICAL_CONTRACTS — define stable, validated, point-in-time-capable domain contracts that decouple producers from consumers BEFORE building the new intelligence engines. Contract families expected: EvidenceRef, EvidenceSnapshot, DataSourceDescriptor, FeatureRecord, PredictionTask, PredictionRecord, ResearchTask, WorkerResult, ResearchClaim, ExperimentSpec, ExperimentResult, CapitalProposal, ExitProposal, OutcomeRecord, StrategyPassport. Requirements: deterministic identity/versioning; provenance (producer/source/model/code version); point-in-time timestamps (observed/published/known/retrieved + effective period); immutability/replay (experiments identify consumed evidence + contract versions); additive schema evolution; separation of concerns (a PredictionRecord can never become a CapitalProposal; a CapitalProposal cannot mutate its PredictionRecord; ExitProposals attributable separately; WorkerResult is evidence/candidate material, never production truth); EXTENSIBLE DATA SOURCES (external sources — FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial data — are replaceable Evidence Plane inputs with source/dataset/record identity, provenance, snapshot/hash, schema/version, rights metadata; NEVER dependencies embedded in Prediction, Capital & Risk, Exit, StratLab, or AI workers). Contracts only — no engine/runtime/source integration in 0B.
   secondary: []
-  prior_primary: observe_and_iterate  # held 2026-05-20 → 2026-08-09; superseded as SOLE objective by the northstar program — observation itself continues as a parallel workstream
+  prior_primary: northstar_0a_ci_foundation  # completed 2026-08-09 (remote GREEN run 31338193791); before that observe_and_iterate (2026-05-20 → 2026-08-09; observation continues as a parallel workstream)
   note: >
     2026-08-09 — STOCKBOT_NORTHSTAR_REDESIGN opened (docs/NORTHSTAR_REDESIGN.md).
     Governing goal: continually improve the ability to estimate investment
@@ -187,6 +198,16 @@ northstar_program:
   opened: 2026-08-09
   charter: docs/NORTHSTAR_REDESIGN.md
   authority_policy: config/agent_policy.yaml
+  gates_achieved:
+    - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09 — Phase 0A closed (GPT: SESSION_CLOSED — NORTHSTAR_PHASE_0A); evidence: authority model @ 1794a164 + northstar-ci run 31338193791 GREEN @ 3fa43377
+  # Local R&D direction (recorded at 0A→0B handoff, operator/GPT-set):
+  # StockBot R&D Control Plane → Secure Sandbox → Generic Workers →
+  # Local Models / Trusted Tools. PRIME IS SUPERSEDED as orchestrator in the
+  # target architecture — do not reintroduce it. The `prime` role block in
+  # config/agent_policy.yaml remains a defined-never-integrated contract for
+  # historical continuity; retiring/renaming it is a Phase 0B/5 policy-sync
+  # backlog item, NOT an active orchestrator plan.
+  rd_direction: prime_free_local_rd_plane
   governing_goal_summary: >
     Continually improve the ability to estimate investment outcomes; retain
     improvements only on demonstrated incremental predictive value. Predictions
@@ -199,17 +220,17 @@ northstar_program:
     downstream of research and cannot weaken evidence standards, governance,
     risk controls, or production boundaries.
   phases:  # statuses mirror phase_status.yaml; NO future phase is implemented
-    northstar_phase_0a: {name: "Architecture, Authority & CI Foundation", status: active}
-    northstar_phase_0b: {name: "Canonical Evidence, Prediction & Worker Contracts", status: not_started}
+    northstar_phase_0a: {name: "Architecture, Authority & CI Foundation", status: complete}  # 2026-08-09; gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY
+    northstar_phase_0b: {name: "Canonical Evidence, Prediction & Worker Contracts", status: active}  # 2026-08-09 PM
     northstar_phase_0c: {name: "Point-in-Time EvidenceGateway & Research Store", status: not_started}
     northstar_phase_0d: {name: "Certification, Champion/Challenger & Incremental-Value Foundation", status: not_started}
     northstar_phase_1: {name: "Prediction Engine v2", status: not_started}
     northstar_phase_2: {name: "Capital & Risk Engine v2", status: not_started}
     northstar_phase_3: {name: "Exit & Replacement Engine v2", status: not_started}
     northstar_phase_4: {name: "Evidence-Weighted Influence Engine", status: not_started}
-    northstar_phase_5: {name: "AI Worker Runtime Foundation", status: not_started}
-    northstar_phase_6: {name: "Prime + Local Worker", status: not_started}
-    northstar_phase_7: {name: "TradingAgents Certification & Shadow Integration", status: not_started}
+    northstar_phase_5: {name: "Governed AI Worker Runtime", status: not_started}
+    northstar_phase_6: {name: "Finance Worker / research loop / worker expansion (6+; Prime-free — supersedes the earlier Prime + Local Worker naming)", status: not_started}
+    northstar_phase_7: {name: "TradingAgents Certification & Shadow Integration (worker expansion, conditional)", status: not_started}
     northstar_phase_8: {name: "FinRobot / Additional Specialists (conditional on demonstrated need)", status: not_started}
     northstar_phase_9: {name: "Strategy & Product Factory", status: not_started}
     northstar_phase_10: {name: "End-to-End Shadow Certification", status: not_started}

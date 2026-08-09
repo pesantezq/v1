@@ -1,6 +1,10 @@
 # StockBot Northstar Redesign — Program Charter
 
-Status: **ACTIVE** (program `stockbot_northstar_redesign`, opened 2026-08-09)
+Status: **ACTIVE** (program `stockbot_northstar_redesign`, opened 2026-08-09).
+**Phase 0A: COMPLETE** (2026-08-09; gate `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`
+— GPT `SESSION_CLOSED — NORTHSTAR_PHASE_0A`; authority model @ `1794a164`,
+remote CI GREEN run `31338193791` @ `3fa43377`). **Phase 0B: ACTIVE** (step
+`northstar_0b_canonical_contracts`).
 Authoritative machine-readable state: `.agent/project_state.yaml` (program /
 phase / step) + `.agent/phase_status.yaml` (per-phase status) +
 `config/agent_policy.yaml` (agent authority).
@@ -52,15 +56,15 @@ Status vocabulary (extends the repo's existing lowercase enum — `complete`,
 ## 3. Phases
 
 Statuses below mirror `.agent/phase_status.yaml:stockbot_northstar_redesign`.
-**No future phase is implemented; nothing below Phase 0A milestone 1 has
-started.**
+**Phase 0A is complete; Phase 0B (contracts only) is active; no phase below
+0B is implemented or started.**
 
 ### Foundation
 
 | Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
 |---|---|---|---|---|---|---|
-| 0A | Architecture, Authority & CI Foundation | **active** | Make the North Star authoritative; one coherent authority model; CI that proves invariants on every change | topology stabilization (done 2026-08-09) | every later phase | authority reconciled (milestone 1, **complete**) AND CI foundation live (milestone 2, **ready**, next) |
-| 0B | Canonical Evidence, Prediction & Worker Contracts | not_started | Define the canonical PredictionRecord / evidence / AI-worker contracts (schemas, not runtimes) | 0A | 0C, 0D, worker admission later | contracts reviewed + versioned + test-covered |
+| 0A | Architecture, Authority & CI Foundation | **complete** (gate `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`, 2026-08-09) | Make the North Star authoritative; one coherent authority model; CI that proves invariants on every change | topology stabilization (done 2026-08-09) | every later phase | ACHIEVED: authority reconciled (`1794a164`, 3 hardening passes) AND CI green remotely (run `31338193791`) |
+| 0B | Canonical Evidence, Prediction & Worker Contracts | **active** | Define the canonical PredictionRecord / evidence / AI-worker contracts (schemas, not runtimes) — incl. **replaceable data-source extensibility**: external sources (FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial data) are Evidence Plane inputs with source/dataset/record identity, provenance, PIT timestamps, snapshot/hash, schema/version, rights metadata — never vendor schemas embedded in the engines or workers | 0A | 0C, 0D, worker admission later | contracts reviewed + versioned + test-covered |
 | 0C | Point-in-Time EvidenceGateway & Research Store | not_started | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
 | 0D | Certification, Champion/Challenger & Incremental-Value Foundation | not_started | The mechanism that decides whether anything (predictor, allocator, exit method, AI worker, strategy) demonstrates incremental value | 0B, 0C | Phases 1–8 admission | reproducible certification verdicts with controlled attribution |
 
@@ -77,16 +81,20 @@ started.**
 
 | Phase | Name | Status | Objective | Depends on | Unlocks | Exit gate |
 |---|---|---|---|---|---|---|
-| 5 | AI Worker Runtime Foundation | not_started | Runtime plumbing for AI workers under `config/agent_policy.yaml` authority (budgets, adapters, sandboxing) | 0B (worker contracts) | 6–8 | workers run only inside declared authority |
-| 6 | Prime + Local Worker | not_started | Research orchestrator + cheap local workers | 5, 0D | 7, 8 | Prime output routed through StratLab for quantitative claims |
+| 5 | Governed AI Worker Runtime | not_started | Runtime plumbing for AI workers under `config/agent_policy.yaml` authority (budgets, adapters, sandboxing) — **Prime-free Local R&D direction**: R&D Control Plane → Secure Sandbox → Generic Workers → Local Models / Trusted Tools | 0B (worker contracts) | 6–8 | workers run only inside declared authority |
+| 6 | Finance Worker / research loop / worker expansion (6+) | not_started | Finance research worker + generic-worker loop. **Prime is superseded as orchestrator** (earlier "Prime + Local Worker" naming); the `prime` policy role stays defined-never-integrated for historical continuity until a 0B/5 policy sync retires it | 5, 0D | 7, 8 | worker output routed through StratLab for quantitative claims |
 | 7 | TradingAgents Certification & Shadow Integration | not_started | Broad research worker admitted research-only, then certified | 5, 6, 0D | richer hypothesis flow | certification evidence of incremental value |
 | 8 | FinRobot / Additional Specialists | not_started (**conditional**) | Deep fundamentals/valuation specialists — only on demonstrated need | 7 evidence | deeper fundamental coverage | demonstrated need + certification |
 
 **Contract-first nuance:** AI **worker contracts** are authored in the early
 contract phases (0B), and worker **authority** is already modeled now in
 `config/agent_policy.yaml` (roles carry `runtime_status:
-defined_not_integrated`). Actual Prime/TradingAgents **runtime integration**
-happens in Phases 5–7, after the evidence/certification foundations exist.
+defined_not_integrated`). Governed worker **runtime integration** happens in
+Phases 5+ under the **Prime-free Local R&D direction** (R&D Control Plane →
+Secure Sandbox → Generic Workers → Local Models / Trusted Tools), after the
+evidence/certification foundations exist. Prime is superseded as
+orchestrator and must not be reintroduced; its policy role block remains a
+defined-never-integrated historical contract pending a 0B/5 policy sync.
 
 ### Downstream reuse
 
@@ -100,8 +108,8 @@ happens in Phases 5–7, after the evidence/certification foundations exist.
 
 ```
 Northstar authority (0A m1, complete)
-  → CI foundation (0A m2, next)
-  → canonical contracts (0B)
+  → CI foundation (0A m2, complete — Phase 0A CLOSED, gate achieved)
+  → canonical contracts (0B — ACTIVE, current step)
   → PIT EvidenceGateway (0C)
   → certification / Champion-Challenger (0D)
   → Prediction + Capital + Exit shadow engines (1–3)
@@ -238,10 +246,12 @@ term is `real_portfolio_action_final_authority` (the former
 
 ## 6b. CI foundation (Phase 0A milestone 2)
 
-Status: **implemented on `feature/northstar-0a-ci`; remote_run_pending** —
-Phase 0A stays `active` until the remote GitHub Actions run is inspected
-green and GPT closes the phase. Do not treat the existence of the YAML as an
-operational CI claim.
+Status: **remote_run_green** — run `31338193791` @ `3fa43377`
+(`Northstar governance`: SUCCESS; `Hermetic regression tests`: SUCCESS —
+10,241 passed / 1 skipped / 10 classified-deselected / 7 subtests). Phase 0A
+closed on this evidence (GPT `SESSION_CLOSED`). Documented backlog (none
+block 0B): make the 10 classified non-hermetic test IDs hermetic; torch/CUDA
+wheel weight; action/Node deprecation warnings.
 
 Workflow: `.github/workflows/northstar-ci.yml` (`northstar-ci`).
 
