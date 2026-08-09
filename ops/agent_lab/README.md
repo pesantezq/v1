@@ -39,5 +39,7 @@ before** transitioning to `TIMED_OUT`/`CANCELLED` (setsid/double-fork and
 `systemd-run` client alone is not treated as worker termination.
 
 ## Not version-controlled here
-Secrets, machine credentials, Prime session state, the SQLite registry, and the
-`rd-worker`/`stockbot-agent` accounts (created out-of-band).
+Secrets, machine credentials, the SQLite registry, and the `rd-worker` account
+(created out-of-band). The Prime agent framework and its session/credential state
+were removed as a runtime dependency in Phase 0C (see
+`docs/adr/0001-prime-superseded.md`); the sandbox needs no agent framework.

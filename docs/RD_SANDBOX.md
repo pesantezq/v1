@@ -4,7 +4,10 @@ Framework-neutral execution boundary for future StockBot workers. The trusted
 R&D control plane materializes a bounded job, runs an **untrusted** worker inside
 a technically-enforced sandbox, captures a job-local result, validates it
 deterministically, and drives the Phase 0A registry lifecycle via CAS. Additive;
-no production behaviour change; built alongside Prime (Prime not removed).
+no production behaviour change. Originally built alongside the Prime agent
+framework; **Prime was removed as a runtime dependency in Phase 0C** (see
+`docs/adr/0001-prime-superseded.md`) — the control plane and sandbox are
+framework-independent and require no agent framework to operate.
 
 This document reflects the **Phase 0B Hardening Closure**: the sandbox is now a
 systemd transient **service** (not a bare `runuser`), so mount isolation, cgroup
@@ -72,7 +75,8 @@ job's `/dev/shm` marker and a 256 MiB write survived `MemoryMax=64M`; post-fix
 both are denied.)
 Denied to the worker: the registry DB, other jobs, system config, network-policy
 files, the human home, Windows drives, and — via the dedicated unprivileged
-`rd-worker` user — the Prime runtime user's credentials.
+`rd-worker` user — any other local account's credentials (including those of the
+former Prime runtime account, removed in Phase 0C).
 
 ## Process containment (cgroup) — including timeout & cancel
 The worker runs as a transient systemd **service** `rdsbx-job-<job_id>` with
@@ -137,8 +141,9 @@ endpoints to local Ollama and returns **403** for model management:
 - ALLOWED: `POST /api/generate|chat|embed|embeddings`, `GET /api/version|tags|ps`.
 - DENIED (403): `pull`, `push`, `create`, `copy`, `delete`.
 
-This forwards straight to `127.0.0.1:11434` and is **independent of any Prime-era
-bridge** (no `socat`, no `tinyproxy`, no `agentjail`).
+This forwards straight to `127.0.0.1:11434` with **no** `socat` bridge,
+`tinyproxy`, or `agentjail` netns. (The Prime-era egress stack that once provided
+those was removed in Phase 0C; the generic path never depended on it.)
 
 ## Hostile result-file ingestion
 `output/` is worker-controlled, so `result.json` is hostile input. The trusted
@@ -166,12 +171,14 @@ attempt to declare an authoritative status, or a non-regular/symlinked result
 file.
 
 ## One-command certification
-`ops/agent_lab` + the cert harness run end to end: deploy → `VERIFY_OK` → stop
-Prime egress services → run 10 adversarial jobs through the real runner → restore
-Prime. The live suite (with Prime **stopped**) passed 10/10: E2E real inference,
-cross-job read denied, setsid-daemon reaped, TasksMax enforced, `NoNewPrivs`/caps,
-env sanitized, Ollama inference-only (mgmt 403), no egress (v4/v6/raw-ollama),
-hostile symlink rejected, systemd runtime timeout.
+`ops/agent_lab` + the cert harness run end to end: deploy → `VERIFY_OK` → run 10
+adversarial jobs through the real runner. The live suite passed 10/10: E2E real
+inference, cross-job read denied, setsid-daemon reaped, TasksMax enforced,
+`NoNewPrivs`/caps, env sanitized, Ollama inference-only (mgmt 403), no egress
+(v4/v6/raw-ollama), hostile symlink rejected, systemd runtime timeout. (During
+Phase 0B this was run with the Prime egress services stopped to prove
+independence; in Phase 0C Prime was removed entirely, so that independence is now
+inherent.)
 
 ## Recovery
 Runner/worker death, WSL shutdown, GamingMode, reboot, partial result: a job left
