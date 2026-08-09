@@ -18,11 +18,14 @@
 > 2. The role list below covers the GPT/Claude/Codex/user collaboration split.
 >    The Northstar program adds AI **worker** role classes (Prime,
 >    TradingAgents, FinRobot, local LLM workers, Evidence Auditor, Quant
->    Router/StratLab, memo/product workers, Claude Code Builder/Reviewer,
->    human operator) — defined normatively in `config/agent_policy.yaml` and
->    summarized in `docs/NORTHSTAR_REDESIGN.md` §6. No AI role holds
->    production or investment authority; the human operator is the only role
->    that does.
+>    Router, the StratLab certification plane, memo/product workers, Claude
+>    Code Builder/Reviewer, human operator) — defined normatively in
+>    `config/agent_policy.yaml` and summarized in
+>    `docs/NORTHSTAR_REDESIGN.md` §6. AI research workers run in the home
+>    Agent Lab on frozen/sanitized production exports, not on the VPS. No AI
+>    role holds production-promotion or real portfolio-action authority; the
+>    human operator is the only role that does (the future certified Capital
+>    & Risk Engine owns the authoritative ADVISORY allocation determination).
 
 ## Purpose
 

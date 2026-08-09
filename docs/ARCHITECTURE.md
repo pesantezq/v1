@@ -20,7 +20,7 @@ migration (Phases 0D → 10 → 11).
 | Exit & Replacement Engine | continuation / trim / exit / replacement, evaluated independently | attributed separately from entry quality |
 | StratLab / Certification Plane | decides incremental value of predictors, allocators, exit methods, AI workers, strategies | sole path from quantitative claim to certified evidence |
 | Influence Engine (future) | governed earn/retain/lose/deny influence for demonstrated improvements | evidence-derived, bounded, reversible, audited — **not implemented** |
-| AI Worker Plane | research / investigate / extract / challenge / explain / synthesize / propose experiments | no direct capital authority; no production approval authority (`config/agent_policy.yaml`) |
+| AI Worker Plane | research / investigate / extract / challenge / explain / synthesize / propose experiments — runs in the home Agent Lab on frozen/sanitized production exports, not on the VPS | no direct capital authority; no production approval authority; no broad `/opt/stockbot` access (`config/agent_policy.yaml`) |
 | Product Factory (future) | downstream consumer of validated research | commercial attractiveness cannot change research evidence, Strategy Passports, confidence, or promotion standards |
 | Human / Production Governance | final production-advisory promotion boundary | unchanged; no broker/trade execution is introduced |
 

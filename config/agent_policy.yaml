@@ -41,9 +41,23 @@ global_invariants:
   # inherit it, or be represented as holding it.
   production_approval_roles: [human_operator]
   ai_workers_cannot_be_production_approvers: true
-  # No AI role holds investment authority (the authority to decide that the
-  # system's predictions become capital, or to change investment behavior).
-  investment_authority_roles: [human_operator]
+  # REAL portfolio-action authority — deciding that an advisory proposal
+  # becomes a real portfolio action, approving production-advisory promotion,
+  # any future real capital action, kill-switch/final governance. HUMAN ONLY.
+  # This is deliberately NARROWER than "who owns allocation logic": the future
+  # certified Capital & Risk Engine (Phase 2, after 0D certification) owns the
+  # authoritative ADVISORY determination of whether/when/how demonstrated
+  # insights deserve capital — that is advisory logic ownership, not real
+  # portfolio-action authority, and nothing in this policy forbids it.
+  real_portfolio_action_roles: [human_operator]
+  capital_authority_model:
+    # Capital & Risk Engine: future authoritative advisory allocator after
+    # certification. Human/operator: production promotion + real
+    # portfolio-action authority. AI research workers: neither.
+    advisory_capital_allocation_owner: capital_risk_engine_v2_after_certification  # Phase 2 runtime, NOT implemented; NOT an AI worker; subject to deterministic risk + governance constraints; must not modify predictions
+    real_portfolio_action_owner: human_operator
+    ai_research_workers: neither
+    prediction_engine_note: predictions_are_never_portfolio_actions
   # Commercial reuse is downstream of research and cannot weaken evidence
   # standards, governance, risk controls, or production boundaries.
   commercialization_downstream_of_research: true
@@ -86,6 +100,24 @@ environments:
     production_mutation_allowed: false
     validation_claims: real
 
+  home_agent_lab:
+    description: >-
+      Home Agent Lab — the AI research/development plane, physically separate
+      from the production VPS (the VPS stays the cheap production/control
+      plane; heavy AI/research workloads run here). Consumes frozen,
+      sanitized, hash-verified production evidence via the Agent Export lane
+      (docs/STOCKBOT_AGENT_EXPORT.md; adjacent implementation preserved
+      unmerged on feature/agent-production-export @ 66ecc281) — workers
+      analyze the snapshot, NOT the server, and never receive broad
+      /opt/stockbot access. No production mutation, no production approval,
+      no real portfolio-action authority. Local research artifacts are
+      allowed; model/tool use is bounded by each worker's capability grants
+      and by future certification (Phases 5-8).
+    code_write_allowed: true           # local research artifacts only
+    git_write_allowed: false
+    production_mutation_allowed: false # NEVER a production authority environment
+    validation_claims: local_only      # lab results are research evidence, not production-host results
+
 # ----------------------------------------------------------------------------
 # Roles.
 #
@@ -95,16 +127,23 @@ environments:
 #                            worker itself is NOT built/integrated yet; runtime
 #                            integration happens in its named Northstar phase.
 #
-# Every role: production_authority + investment_authority are hard booleans;
-# false means the role can never approve production promotion / never decide
-# that insights receive capital, in any environment.
+# Every role: production_authority + real_portfolio_action_authority are hard
+# booleans; false means the role can never approve production promotion /
+# never turn an advisory proposal into a real portfolio action, in any
+# environment. (Advisory allocation LOGIC ownership is a separate concept —
+# see global_invariants.capital_authority_model.)
+#
+# Some roles carry existing_subsystem: the deterministic subsystem that exists
+# today and will be REUSED — its existence does not make the named future AI
+# worker "active"; the worker itself stays defined_not_integrated until its
+# phase delivers a runtime satisfying this exact contract.
 # ----------------------------------------------------------------------------
 roles:
 
   prime:
     description: AI research orchestrator (Northstar Phase 6).
     runtime_status: defined_not_integrated
-    environments: [vps_dev_on_vps]           # research plane runs where the data lives
+    environments: [home_agent_lab]           # analyzes frozen/sanitized exports, never the live server
     allowed_responsibilities:
       - classify_research_tasks
       - build_investigation_plans
@@ -120,7 +159,7 @@ roles:
       - bypass_stratlab_for_quantitative_certification
       - modify_predictions_or_scores
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: stratlab_certification_for_quantitative_claims
     protected_boundaries: [all_global]
@@ -128,7 +167,7 @@ roles:
   trading_agents:
     description: Broad market/company hypothesis + research worker (Northstar Phase 7).
     runtime_status: defined_not_integrated
-    environments: [vps_dev_on_vps]
+    environments: [home_agent_lab]
     allowed_responsibilities:
       - market_and_company_research
       - hypothesis_generation
@@ -138,7 +177,7 @@ roles:
       - production_approval
       - writing_production_artifacts
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: research_only_until_separately_certified
     protected_boundaries: [all_global]
@@ -148,7 +187,7 @@ roles:
       CONDITIONAL specialist for deep fundamentals/valuation (Northstar
       Phase 8). Not required infrastructure; admitted only on demonstrated need.
     runtime_status: defined_not_integrated
-    environments: [vps_dev_on_vps]
+    environments: [home_agent_lab]
     allowed_responsibilities:
       - deep_fundamentals_research
       - valuation_analysis
@@ -157,7 +196,7 @@ roles:
       - production_approval
       - writing_production_artifacts
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: conditional_admission_on_demonstrated_need
     protected_boundaries: [all_global]
@@ -165,7 +204,7 @@ roles:
   local_llm_worker:
     description: Routine extraction, classification, summarization, tagging.
     runtime_status: defined_not_integrated
-    environments: [vps_dev_on_vps]
+    environments: [home_agent_lab]
     allowed_responsibilities:
       - extraction
       - classification
@@ -176,7 +215,7 @@ roles:
       - production_approval
       - authoring_investment_hypotheses_as_authoritative
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: capability_specific_authority_only
     protected_boundaries: [all_global]
@@ -184,7 +223,7 @@ roles:
   evidence_auditor:
     description: Claim / source / timing / entity verification role.
     runtime_status: defined_not_integrated
-    environments: [vps_dev_on_vps]
+    environments: [home_agent_lab]
     allowed_responsibilities:
       - claim_verification
       - source_verification
@@ -195,35 +234,73 @@ roles:
       - production_approval
       - altering_the_evidence_it_audits
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: none_but_findings_are_advisory
     protected_boundaries: [all_global]
 
-  quant_router_stratlab:
+  quant_router:
     description: >-
-      Quantitative truth/evaluation boundary. Quantitative claims become
-      certified evidence ONLY through this plane (Strategy Lab lineage).
-    runtime_status: active_today             # Strategy Lab / walk-forward exist
-    environments: [vps_dev_on_vps]
+      AI worker that RECOGNIZES a claim/question requires quantitative
+      validation and routes it to the StratLab certification plane. Routing
+      only — it holds NO certification authority of its own.
+    runtime_status: defined_not_integrated
+    environments: [home_agent_lab]
     allowed_responsibilities:
-      - quantitative_evaluation
-      - certification_of_incremental_value
-      - champion_challenger_adjudication
+      - classify_quantitative_validation_need
+      - construct_and_submit_validation_requests
+      - attach_relevant_evidence_and_context
     prohibited_responsibilities:
+      - certify_quantitative_truth
+      - issue_incremental_value_verdicts
       - capital_allocation
       - production_approval
-      - modifying_predictions
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
+    git_write_authority: false
+    review_required: all_verdicts_come_from_stratlab_certification
+    protected_boundaries: [all_global]
+
+  stratlab_certification:
+    description: >-
+      The StratLab / Certification Plane — the scientific/quantitative
+      evaluation AUTHORITY, not an AI worker. Quantitative claims become
+      certified evidence ONLY through this plane. The full Northstar
+      certification framework (Champion/Challenger, incremental-value gates)
+      arrives in Phase 0D and is NOT implemented yet.
+    runtime_status: defined_not_integrated   # the Phase 0D certification system does not exist yet
+    existing_subsystem: >-
+      Strategy Lab / walk-forward / factor attribution (portfolio_sim) exist
+      today as deterministic evaluation infrastructure and will be REUSED as
+      this plane's foundation — their existence does not mean the Northstar
+      certification system is implemented.
+    environments: [vps_dev_on_vps, home_agent_lab]  # deterministic evaluation runs where the evidence lives: today's Strategy Lab on the VPS; certification of lab research claims in the lab
+    allowed_responsibilities:
+      - deterministic_reproducible_quantitative_evaluation
+      - controlled_experiment_evaluation
+      - issue_certification_evidence
+      - champion_challenger_adjudication_under_0d_framework
+    prohibited_responsibilities:
+      - capital_allocation
+      - modifying_predictions
+      - production_approval
+      - causing_real_portfolio_actions
+    production_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: deterministic_reproducible_evaluation
     protected_boundaries: [all_global]
 
   memo_product_worker:
-    description: Communicates validated research (memos, digests, product artifacts).
-    runtime_status: active_today             # memo/digest layer exists
-    environments: [vps_dev_on_vps]
+    description: >-
+      Future named AI Product/Memo Worker — communicates validated research
+      (memos, digests, product artifacts) in the research plane.
+    runtime_status: defined_not_integrated   # no runtime satisfies this exact AI-worker contract today
+    existing_subsystem: >-
+      The production memo/digest layer (daily_memo, digest_builder, renderers)
+      exists today as a deterministic REUSABLE subsystem — it is not this AI
+      worker and its existence does not make this role active.
+    environments: [home_agent_lab]
     allowed_responsibilities:
       - render_validated_research
       - communicate_findings
@@ -233,7 +310,7 @@ roles:
       - capital_allocation
       - production_approval
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: renderers_must_stay_pure
     protected_boundaries: [all_global]
@@ -254,7 +331,7 @@ roles:
       - changing_protected_score_semantics_without_explicit_approval
       - broker_or_execution_integration
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: true                # branch/commit/push; merge only when durably authorized
     review_required: operator_or_reviewer_before_production_merge
     protected_boundaries: [all_global]
@@ -276,7 +353,7 @@ roles:
       - production_promotion_approval
       - implementing_changes_it_reviews
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: none_reviews_are_advisory
     protected_boundaries: [all_global]
@@ -295,7 +372,7 @@ roles:
       - production_promotion_approval
       - investment_decisions
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: operator_approves_scope
     protected_boundaries: [all_global]
@@ -313,7 +390,7 @@ roles:
       - production_promotion_approval
       - investment_decisions
     production_authority: false
-    investment_authority: false
+    real_portfolio_action_authority: false
     git_write_authority: false
     review_required: none_docs_only
     protected_boundaries: [all_global]
@@ -321,9 +398,12 @@ roles:
   human_operator:
     description: >-
       The operator. Controls scope, production-advisory promotion, and final
-      authority. The ONLY role with production or investment authority.
+      authority. The ONLY role with production-promotion or real
+      portfolio-action authority (advisory allocation LOGIC ownership belongs
+      to the future certified Capital & Risk Engine — see
+      global_invariants.capital_authority_model).
     runtime_status: active_today
-    environments: [operator_laptop, vps_dev_on_vps, vps_read_only_ops]
+    environments: [operator_laptop, vps_dev_on_vps, vps_read_only_ops, home_agent_lab]
     allowed_responsibilities:
       - scope_decisions
       - production_promotion_approval
@@ -332,7 +412,7 @@ roles:
       - kill_switch_operation
     prohibited_responsibilities: []
     production_authority: true
-    investment_authority: true
+    real_portfolio_action_authority: true
     git_write_authority: true
     review_required: none
     protected_boundaries: [all_global]

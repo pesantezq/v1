@@ -9,7 +9,11 @@ This repo is an advisory-only portfolio automation system. It produces analysis,
   `next_official_step`) — unchanged as the roadmap authority.
 - Machine-readable agent authority: `config/agent_policy.yaml` — role/environment
   authority model; prose docs explain it and never override it. No AI role holds
-  production or investment authority; the human operator is the only role that does.
+  production-promotion or real portfolio-action authority; the human operator is
+  the only role that does. (Advisory allocation LOGIC belongs to the future
+  certified Capital & Risk Engine — see the charter's capital-authority model.)
+  AI research workers (Prime, TradingAgents, etc.) run in the home Agent Lab on
+  frozen/sanitized exports — never with broad access to this production checkout.
 
 ## Read First
 - `docs/NORTHSTAR_REDESIGN.md`

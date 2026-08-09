@@ -126,7 +126,7 @@ their named phases. Today's production system remains the incumbent
 | **Exit & Replacement Engine** | Continuation, trimming, exit, replacement — evaluated independently | attributed separately from entry quality |
 | **StratLab / Certification Plane** | Decides whether predictors, allocators, exit methods, AI workers, and strategies demonstrate **incremental** value | the only path by which quantitative claims become certified evidence |
 | **Influence Engine** (future, Phase 4) | Governed mechanism by which demonstrated improvements earn / retain / lose / are denied influence | evidence-derived only; bounded; reversible; audited. **Not implemented.** |
-| **AI Worker Plane** | Research, investigate, extract, challenge, explain, synthesize, propose experiments | **no direct capital authority; no production approval authority** (`config/agent_policy.yaml`) |
+| **AI Worker Plane** | Research, investigate, extract, challenge, explain, synthesize, propose experiments — runs in the **home Agent Lab** on frozen/sanitized/hash-verified production exports (the VPS stays the cheap production/control plane) | **no direct capital authority; no production approval authority; no broad `/opt/stockbot` access** (`config/agent_policy.yaml`) |
 | **Product Factory** (future, Phase 9) | Downstream consumer of validated research | commercial attractiveness cannot change research evidence, Strategy Passports, confidence, or promotion standards |
 | **Human / Production Governance** | Final production-advisory promotion boundary | unchanged; **no broker/trade execution is introduced anywhere in this program** |
 
@@ -136,18 +136,70 @@ Defined normatively in `config/agent_policy.yaml` (schema `policy_version
 1.0.0`; validated by `portfolio_automation/agent_policy.py` +
 `tests/test_agent_policy.py`). Summary:
 
-| Role | May | May not | Runtime today |
-|---|---|---|---|
-| **Prime** | classify research tasks, build investigation plans, delegate, reconcile evidence, identify disagreements, route quantitative claims to StratLab, synthesize supported findings, abstain | allocate capital authoritatively; approve production; bypass StratLab where quantitative certification is required | defined, not integrated |
-| **TradingAgents** | market/company hypothesis + research | anything beyond research until separately certified | defined, not integrated |
-| **FinRobot** | deep fundamentals/valuation (conditional specialist) | be treated as required infrastructure | defined, not integrated, conditional |
-| **Local/cheap LLM workers** | extraction, classification, summarization, tagging | exceed capability-specific authority | defined, not integrated |
-| **Evidence Auditor** | claim/source/timing/entity verification | alter the evidence it audits | defined, not integrated |
-| **Quant Router / StratLab** | quantitative truth/evaluation boundary | allocate capital; approve production | active (Strategy Lab lineage) |
-| **Memo/Product workers** | communicate validated research | alter underlying authoritative results | active (memo/digest layer) |
-| **Claude Code Builder** | authorized engineering tasks | investment authority of any kind | active (this agent) |
-| **Claude Code Reviewer(s)** | independent architecture/test/governance/quant/scope review | merge or promotion authority | active (`.claude/agents/`) |
-| **Human/operator** | scope, production promotion, final authority | — | active; **the only role with production or investment authority** |
+| Role | Environment | May | May not | Runtime today |
+|---|---|---|---|---|
+| **Prime** | home Agent Lab | classify research tasks, build investigation plans, delegate, reconcile evidence, identify disagreements, route quantitative claims to StratLab, synthesize supported findings, abstain | allocate capital authoritatively; approve production; bypass StratLab where quantitative certification is required | defined, not integrated |
+| **TradingAgents** | home Agent Lab | market/company hypothesis + research | anything beyond research until separately certified | defined, not integrated |
+| **FinRobot** | home Agent Lab | deep fundamentals/valuation (conditional specialist) | be treated as required infrastructure | defined, not integrated, conditional |
+| **Local/cheap LLM workers** | home Agent Lab | extraction, classification, summarization, tagging | exceed capability-specific authority | defined, not integrated |
+| **Evidence Auditor** | home Agent Lab | claim/source/timing/entity verification | alter the evidence it audits | defined, not integrated |
+| **Quant Router** | home Agent Lab | recognize a claim needs quantitative validation; construct/submit the validation request; attach evidence/context | certify quantitative truth; issue incremental-value verdicts; allocate capital; approve production | defined, not integrated |
+| **StratLab / Certification Plane** | VPS + lab | deterministic/reproducible quantitative evaluation; controlled-experiment evaluation; issue certification evidence; Champion/Challenger adjudication under the future 0D framework | allocate capital; modify predictions; approve production; cause real portfolio actions | **plane, not an AI worker**; defined, not integrated (existing Strategy Lab / walk-forward subsystem is reused foundation, not the 0D certification system) |
+| **Memo/Product workers** | home Agent Lab | communicate validated research | alter underlying authoritative results | defined, not integrated (the production memo/digest layer is a deterministic reusable subsystem, not this AI worker) |
+| **Claude Code Builder** | laptop + VPS | authorized engineering tasks | real portfolio-action authority of any kind | active (this agent) |
+| **Claude Code Reviewer(s)** | laptop + VPS | independent architecture/test/governance/quant/scope review | merge or promotion authority | active (`.claude/agents/`) |
+| **Human/operator** | all | scope, production promotion, final authority | — | active; **the only role with production-promotion or real portfolio-action authority** |
+
+### The Agent Lab execution boundary
+
+```text
+Production StockBot / VPS  (cheap production/control plane)
+        |
+        | sanitized, frozen, hash-verified export
+        | (Agent Export lane — docs/STOCKBOT_AGENT_EXPORT.md,
+        |  preserved unmerged on feature/agent-production-export @ 66ecc281)
+        v
+Home Agent Lab  (heavy AI/research workloads)
+        +-- Prime
+        +-- local LLM workers
+        +-- TradingAgents
+        +-- FinRobot (when justified)
+        +-- evidence/research workers (Evidence Auditor, Quant Router, memo/product)
+```
+
+Research workers analyze the **snapshot, not the server**: they consume
+frozen/sanitized production evidence and never receive broad `/opt/stockbot`
+access. `resolve_authority(<research worker>, "vps_dev_on_vps")` fails closed
+(`permitted_in_environment: false`) — a session running on the VPS does not
+make a research worker permitted there. The home Agent Lab is never a
+production authority environment.
+
+### Capital authority — advisory determination vs real portfolio action
+
+```text
+Capital & Risk Engine:
+  future authoritative advisory allocator after certification
+  (Phase 2 + 0D; owns whether/when/how demonstrated insights deserve
+   capital, subject to deterministic risk and governance constraints;
+   NOT real-world execution authority; NOT an AI worker; must not
+   modify predictions; not implemented in Phase 0A)
+
+Human/operator:
+  production promotion + real portfolio-action authority
+  (whether an advisory proposal becomes a real portfolio action;
+   any future real capital action; kill-switch/final governance)
+
+AI research workers:
+  neither
+```
+
+The policy field `real_portfolio_action_authority` encodes the second concept
+only — it is deliberately narrower than "who owns allocation logic", so it
+cannot be misread as forbidding the future certified Capital & Risk Engine
+from owning the authoritative *advisory* allocation determination
+(`global_invariants.capital_authority_model`). Predictions are never
+portfolio actions; StockBot remains advisory-only; no broker execution
+exists.
 
 ## 7. Reused foundations (preserve, do not rebuild)
 

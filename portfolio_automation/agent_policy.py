@@ -30,7 +30,7 @@ REQUIRED_ROLE_FIELDS = (
     "allowed_responsibilities",
     "prohibited_responsibilities",
     "production_authority",
-    "investment_authority",
+    "real_portfolio_action_authority",
     "git_write_authority",
     "review_required",
     "protected_boundaries",
@@ -43,7 +43,8 @@ REQUIRED_ROLES = (
     "finrobot",
     "local_llm_worker",
     "evidence_auditor",
-    "quant_router_stratlab",
+    "quant_router",
+    "stratlab_certification",
     "memo_product_worker",
     "claude_code_builder",
     "claude_code_reviewer",
@@ -88,8 +89,20 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
             errors.append(f"global_invariants.{flag} must be true")
     if invariants.get("production_approval_roles") != ["human_operator"]:
         errors.append("production_approval_roles must be exactly [human_operator]")
-    if invariants.get("investment_authority_roles") != ["human_operator"]:
-        errors.append("investment_authority_roles must be exactly [human_operator]")
+    if invariants.get("real_portfolio_action_roles") != ["human_operator"]:
+        errors.append("real_portfolio_action_roles must be exactly [human_operator]")
+    cam = invariants.get("capital_authority_model")
+    if not isinstance(cam, dict):
+        errors.append("capital_authority_model block is required")
+    else:
+        # The policy must explicitly distinguish future Capital & Risk ADVISORY
+        # allocation ownership from human-only REAL portfolio-action authority.
+        if cam.get("advisory_capital_allocation_owner") != "capital_risk_engine_v2_after_certification":
+            errors.append("capital_authority_model.advisory_capital_allocation_owner must name the future certified Capital & Risk Engine")
+        if cam.get("real_portfolio_action_owner") != "human_operator":
+            errors.append("capital_authority_model.real_portfolio_action_owner must be human_operator")
+        if cam.get("ai_research_workers") != "neither":
+            errors.append("capital_authority_model.ai_research_workers must be 'neither'")
     if invariants.get("ai_workers_cannot_be_production_approvers") is not True:
         errors.append("ai_workers_cannot_be_production_approvers must be true")
 
@@ -123,8 +136,8 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
         if name != "human_operator":
             if role.get("production_authority") is not False:
                 errors.append(f"role {name} must have production_authority: false")
-            if role.get("investment_authority") is not False:
-                errors.append(f"role {name} must have investment_authority: false")
+            if role.get("real_portfolio_action_authority") is not False:
+                errors.append(f"role {name} must have real_portfolio_action_authority: false")
 
     return errors
 
@@ -163,7 +176,7 @@ def resolve_authority(role: str, environment: str, policy: dict[str, Any] | None
         "production_authority": bool(role_block.get("production_authority", False))
         and bool(env_block.get("production_mutation_allowed", False))
         and permitted,
-        "investment_authority": bool(role_block.get("investment_authority", False)) and permitted,
+        "real_portfolio_action_authority": bool(role_block.get("real_portfolio_action_authority", False)) and permitted,
         "git_write_authority": _gate(role_block.get("git_write_authority", False), "git_write_allowed"),
         "review_required": role_block.get("review_required"),
         "protected_boundaries": list(pol.get("global_invariants", {}).get("protected_boundaries", [])),
