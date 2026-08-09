@@ -99,6 +99,12 @@ class IllegalTransitionError(RDControlError):
     """Raised when a status change is not a legal edge (fail closed)."""
 
 
+class ConcurrentTransitionError(RDControlError):
+    """Raised when a compare-and-swap transition matches no row because the job's
+    status changed concurrently (or the job vanished) between read and write.
+    Prevents logical lost updates that WAL + busy_timeout alone do not."""
+
+
 class JobNotFoundError(RDControlError):
     """Raised when a job_id is not present in the registry."""
 

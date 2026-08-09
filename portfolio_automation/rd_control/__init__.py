@@ -23,6 +23,7 @@ from portfolio_automation.rd_control.contracts import (
     compute_input_manifest_hash,
     RDControlError,
     IllegalTransitionError,
+    ConcurrentTransitionError,
     JobNotFoundError,
 )
 from portfolio_automation.rd_control import registry, health
@@ -32,6 +33,6 @@ __all__ = [
     "JobType", "JobStatus", "WorkerAuthority", "JobRecord",
     "LEGAL_TRANSITIONS", "TERMINAL_STATUSES",
     "is_legal_transition", "assert_legal_transition", "compute_input_manifest_hash",
-    "RDControlError", "IllegalTransitionError", "JobNotFoundError",
-    "registry", "health",
+    "RDControlError", "IllegalTransitionError", "ConcurrentTransitionError",
+    "JobNotFoundError", "registry", "health",
 ]

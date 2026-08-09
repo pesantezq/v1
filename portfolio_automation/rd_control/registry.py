@@ -18,7 +18,8 @@ from typing import Any, Iterator
 
 from portfolio_automation.rd_control.contracts import (
     SCHEMA_VERSION, JobType, JobStatus, WorkerAuthority, JobRecord,
-    JobNotFoundError, assert_legal_transition, compute_input_manifest_hash,
+    JobNotFoundError, RDControlError, ConcurrentTransitionError,
+    assert_legal_transition, compute_input_manifest_hash,
 )
 
 DEFAULT_DB_PATH = "data/rd_control.db"
@@ -62,14 +63,40 @@ def connect(db_path: str | Path = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connectio
         conn.close()
 
 
+@contextmanager
+def connect_readonly(db_path: str | Path = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
+    """Open the registry strictly read-only: no create, no migrate, no journal
+    change. Used by health so reading state has zero side effects.
+
+    Opens via the ``file:...?mode=ro`` URI, which FAILS if the DB does not exist
+    (a missing/uninitialised registry is a read failure, never silently
+    created). ``PRAGMA query_only`` is belt-and-suspenders against any write."""
+    p = Path(db_path)
+    conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA query_only = ON;")
+        yield conn
+    finally:
+        conn.close()
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Create/upgrade the schema. Only v1 exists today, but the mechanism is
-    real: ``schema_meta.version`` gates future migrations."""
+    """Create the schema on first open and fail closed on an incompatible
+    (newer) one. This is a version GATE plus first-open creation, not a
+    multi-version migration engine — only v1 exists today, but a DB written by a
+    future, newer schema is refused rather than silently used."""
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_meta (version INTEGER NOT NULL);"
     )
     row = conn.execute("SELECT version FROM schema_meta LIMIT 1;").fetchone()
     current = row["version"] if row else 0
+    if current > _DB_SCHEMA_VERSION:
+        raise RDControlError(
+            f"registry schema version {current} is newer than supported "
+            f"{_DB_SCHEMA_VERSION}; refusing to operate (fail closed)"
+        )
     if current < 1:
         conn.executescript(
             """
@@ -238,19 +265,52 @@ def transition(
     if bad:
         raise ValueError(f"fields not updatable on transition: {sorted(bad)}")
     current = get_job(conn, job_id)
-    assert_legal_transition(current.status, to_status)  # raises if illegal
+    return _apply_cas_transition(
+        conn, job_id, from_status=current.status, to_status=to_status,
+        at=at, reason=reason, actor=actor, **updates,
+    )
+
+
+def _apply_cas_transition(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    from_status: JobStatus,
+    to_status: JobStatus,
+    at: str,
+    reason: str | None = None,
+    actor: str = "system",
+    **updates: Any,
+) -> JobRecord:
+    """Atomic compare-and-swap transition guarded by the expected old status.
+
+    The UPDATE carries ``AND status = <from_status>``, so two writers that both
+    validated against the same old status cannot both win: the loser matches 0
+    rows and is refused with :class:`ConcurrentTransitionError`. This prevents
+    logical lost updates / double transitions that WAL + busy_timeout alone do
+    NOT prevent (they serialize the writes but do not re-check the precondition).
+    """
+    assert_legal_transition(from_status, to_status)  # raises if illegal edge
     set_cols = ["status = ?", "updated_at = ?"]
     params: list[Any] = [to_status.value, at]
     for k, v in updates.items():
         set_cols.append(f"{k} = ?")
         params.append(v)
-    params.append(job_id)
-    with conn:  # single transaction: update + audit
-        conn.execute(f"UPDATE jobs SET {', '.join(set_cols)} WHERE job_id = ?;", tuple(params))
+    params.extend([job_id, from_status.value])
+    with conn:  # single transaction: CAS update + audit (rolls back on refusal)
+        cur = conn.execute(
+            f"UPDATE jobs SET {', '.join(set_cols)} WHERE job_id = ? AND status = ?;",
+            tuple(params),
+        )
+        if cur.rowcount != 1:
+            raise ConcurrentTransitionError(
+                f"transition {from_status.value} -> {to_status.value} for {job_id} "
+                f"matched {cur.rowcount} row(s): job missing or status changed concurrently"
+            )
         conn.execute(
             "INSERT INTO job_events (job_id, from_status, to_status, at, reason, actor) "
             "VALUES (?, ?, ?, ?, ?, ?);",
-            (job_id, current.status.value, to_status.value, at, reason, actor),
+            (job_id, from_status.value, to_status.value, at, reason, actor),
         )
     return get_job(conn, job_id)
 

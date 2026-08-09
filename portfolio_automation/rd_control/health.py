@@ -57,7 +57,8 @@ def build_health(
         "status": RED,
     }
     try:
-        with reg.connect(db_path) as conn:
+        # READ-ONLY: never creates/migrates schema or changes journal mode.
+        with reg.connect_readonly(db_path) as conn:
             out["db_accessible"] = True
             ver = reg.schema_version(conn)
             if ver == _EXPECTED_DB_SCHEMA:

@@ -15,7 +15,8 @@ from portfolio_automation.rd_control import registry as reg
 from portfolio_automation.rd_control import health as hlth
 from portfolio_automation.rd_control.contracts import (
     JobType, JobStatus, WorkerAuthority, JobRecord,
-    IllegalTransitionError, JobNotFoundError, TERMINAL_STATUSES,
+    IllegalTransitionError, ConcurrentTransitionError, JobNotFoundError,
+    RDControlError, TERMINAL_STATUSES,
     is_legal_transition, compute_input_manifest_hash,
 )
 
@@ -266,3 +267,80 @@ def test_health_red_on_unreadable_db(tmp_path):
     h = hlth.build_health(str(bad), now=T0)
     assert h["status"] == "RED"
     assert h["errors"]
+
+
+# --- closure: concurrency (compare-and-swap) -------------------------------
+def test_concurrent_transition_cas_prevents_lost_update(db):
+    """Two writers that both validated against the same old status: only one may
+    win. The loser (stale expected status) is refused, and the winner's state
+    is preserved."""
+    # Winner drives the job to RUNNING then RESULT_RECEIVED.
+    with reg.connect(db) as c1:
+        rec = _create(c1)
+        for st in (JobStatus.QUEUED, JobStatus.ADMITTED, JobStatus.RUNNING):
+            rec = reg.transition(c1, rec.job_id, st, at=T0)
+        # A second connection that "decided" while the job was RUNNING.
+        with reg.connect(db) as c2:
+            r2 = reg.get_job(c2, rec.job_id)
+            assert r2.status is JobStatus.RUNNING
+            # c1 wins the race: RUNNING -> RESULT_RECEIVED
+            reg.transition(c1, rec.job_id, JobStatus.RESULT_RECEIVED, at=T0)
+            # c2 applies a transition it validated against the stale RUNNING view.
+            with pytest.raises(ConcurrentTransitionError):
+                reg._apply_cas_transition(
+                    c2, rec.job_id, from_status=JobStatus.RUNNING,
+                    to_status=JobStatus.FAILED_WORKER, at=T0,
+                )
+            # winner preserved; no phantom audit row for the loser
+            assert reg.get_job(c2, rec.job_id).status is JobStatus.RESULT_RECEIVED
+            tos = [e["to_status"] for e in reg.job_events(c2, rec.job_id)]
+            assert "FAILED_WORKER" not in tos
+
+
+def test_cas_transition_on_missing_job_refused(db):
+    with reg.connect(db) as conn:
+        with pytest.raises(ConcurrentTransitionError):
+            reg._apply_cas_transition(
+                conn, "job-ghost", from_status=JobStatus.RUNNING,
+                to_status=JobStatus.INTERRUPTED, at=T0,
+            )
+
+
+# --- closure: schema fail-closed on newer version --------------------------
+def test_connect_fails_closed_on_newer_schema(db):
+    with reg.connect(db) as conn:
+        conn.execute("UPDATE schema_meta SET version = 999;")
+        conn.commit()
+    with pytest.raises(RDControlError):
+        with reg.connect(db):
+            pass
+
+
+def test_health_red_on_newer_schema(db):
+    with reg.connect(db) as conn:
+        conn.execute("UPDATE schema_meta SET version = 999;")
+        conn.commit()
+    h = hlth.build_health(db, now=T0)
+    assert h["status"] == "RED"
+
+
+# --- closure: health has no side effects -----------------------------------
+def test_health_does_not_create_db(tmp_path):
+    missing = tmp_path / "never_created.db"
+    h = hlth.build_health(str(missing), now=T0)
+    assert not missing.exists(), "build_health must not create the registry DB"
+    assert h["status"] == "RED"
+    assert h["db_accessible"] is False
+
+
+def test_health_does_not_migrate_or_change_journal(db):
+    # Create the registry (WAL). Capture schema version + journal mode.
+    with reg.connect(db) as conn:
+        before_ver = reg.schema_version(conn)
+    # Running health many times must not alter schema/journal or create rows.
+    for _ in range(3):
+        hlth.build_health(db, now=T0)
+    with reg.connect_readonly(db) as conn:
+        assert reg.schema_version(conn) == before_ver
+        n = conn.execute("SELECT COUNT(*) AS n FROM jobs;").fetchone()["n"]
+        assert n == 0  # health created no jobs
