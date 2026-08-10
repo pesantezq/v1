@@ -68,6 +68,44 @@ historical schema identity). Deserializers validate both and **recompute
 identity** — a serialized object whose recorded id/hash does not reproduce is
 rejected (tamper evidence).
 
+**Schema-version policy (hardened 2026-08-10; exact rules):**
+
+- Deserialization (`from_dict`) requires the EXACT supported version via the
+  single gate `serde.require_schema_version`: missing, empty, non-string, and
+  unknown/future versions are all rejected. Kernel v1 has **no migration or
+  compatibility mechanism** — deliberately; accepting an unknown version would
+  mean interpreting bytes under semantics this code cannot know.
+- Constructors pin `schema_version` to the module's `SCHEMA_VERSION`: running
+  code IS kernel v1 and can only mint v1 objects.
+- **Identity participation — the schema era.** `schema_version` participates
+  in every deterministic identity through its MAJOR component only
+  (`canonical.schema_era`, strict `MAJOR.MINOR.PATCH` parse). A major bump
+  re-defines field semantics, so identical bytes under a new major version are
+  a new object — a new identity era (the Intraday Lab discipline: integrity ≠
+  eligibility, and era changes are explicit, never accidental). Minor/patch
+  versions are additive/non-semantic by definition and do NOT fragment
+  identity. Because `snapshot_id` embeds `source_id` and features embed input
+  snapshot ids, an era bump cascades through the identity graph by
+  construction; cross-era mapping is an explicit future migration concern.
+
+**Identifier integrity (centralized in `canonical.py`):**
+`validate_contract_id` (`<prefix>_` + exactly 32 lowercase hex) and
+`validate_content_hash` (exactly 64 lowercase hex) are the single format
+validators. `EvidenceRef` — which future contracts embed everywhere — carries
+its own explicit `schema_version` and validates `snapshot_id` (`evs_`),
+`source_id` (`src_`), and `payload_hash` at construction;
+`supersedes_snapshot_id` and snapshot/provenance `source_id`s are validated
+the same way.
+
+**Provenance consistency (canonical provenance can never contradict its
+owning contract):** `producer_type="source_adapter"` REQUIRES
+`provenance.source_id` (an adapter without a source is incoherent — fail
+closed); when a snapshot's provenance names a source it must equal
+`snapshot.source_id`; a FeatureRecord's `provenance.transformation_id`, when
+present, must be exactly `"<derivation_id>@<derivation_version>"` (the
+explicit derivation fields remain the identity-bearing authority — they are
+not collapsed into Provenance).
+
 Identity rule used across all contracts:
 
 ```text
@@ -112,7 +150,7 @@ External Source → DataSourceDescriptor → EvidenceSnapshot → EvidenceRef �
 ### DataSourceDescriptor (`src_…`)
 
 Identifies/characterizes a provider dataset. Identity = (provider, dataset,
-source_type) only; characterization (access/rights/cost/pit_capability/
+source_type) + schema era (§3); characterization (access/rights/cost/pit_capability/
 historical_capability/status) may be re-stated without minting a new source.
 Rights are never claimed unverified (`rights_class` defaults `unknown`).
 **No authentication surface by design** — no url/endpoint/key/token fields
@@ -136,7 +174,8 @@ pairs).
 ### EvidenceRef
 
 Lightweight immutable pointer (snapshot_id, source_id, entity_id,
-evidence_type, payload_hash). Future contracts embed refs, never copies, so
+evidence_type, payload_hash, schema_version) with strict identifier-format
+validation at construction (§3). Future contracts embed refs, never copies, so
 any downstream artifact can prove exactly which evidence it depended on;
 `matches()` verifies id AND content hash.
 
@@ -150,6 +189,12 @@ derivation_version, mandatory input `EvidenceRef`s (except explicit
 `quality="missing"` with `value=None`), provenance, quality ∈ {ok, degraded,
 missing}. Identity covers name/derivation/version/entity/as_of/value/quality/
 input ids — a recomputation that differs is a different record.
+**Input semantics (decided, test-enforced):** `inputs` is an UNORDERED
+DEPENDENCY SET — how each snapshot is used is the derivation's business,
+versioned by `derivation_id`/`derivation_version`, not by argument order.
+Identity sorts input snapshot ids (reordered refs produce the identical
+`feature_id`) and duplicate snapshot ids are rejected. Role-labeled inputs
+would be an additive future change if a concrete correctness need arises.
 
 ## 6. Future contract families (specified, NOT implemented)
 
@@ -302,6 +347,8 @@ contract.
 Construction validates or raises (`ValueError` /
 `CanonicalizationError`) — no partially-valid contract objects.
 Deserialization recomputes hashes/ids and rejects mismatches. Unknown
-`contract_type` or missing `schema_version` is rejected. Nothing in this
+`contract_type` is rejected; `schema_version` must be exactly the supported
+version (missing/empty/unknown/future all rejected — see §3, no migration
+framework exists). Nothing in this
 package writes files, calls networks, or is wired into any pipeline — a
 consumer arrives with the Phase 0C EvidenceGateway.

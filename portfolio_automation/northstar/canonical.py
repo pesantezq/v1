@@ -41,12 +41,73 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
 
 class CanonicalizationError(ValueError):
     """A value cannot be represented canonically (fail closed, never coerce)."""
+
+
+# ── Identifier / hash / version formats (kernel-wide, centralized) ─────────
+#
+# deterministic_id defines the on-the-wire ID format, so this module also owns
+# its validation: every contract ID is ``<prefix>_`` + exactly 32 lowercase
+# hexadecimal characters, and every content hash is exactly 64 lowercase
+# hexadecimal characters. Contracts call these validators instead of growing
+# per-module startswith() checks.
+
+_LOWER_HEX = re.compile(r"[0-9a-f]+")
+_SEMVER = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
+ID_HEX_LENGTH = 32
+HASH_HEX_LENGTH = 64
+
+
+def validate_contract_id(name: str, value: Any, prefix: str) -> str:
+    """Require ``<prefix>_`` + exactly 32 lowercase hex chars. Fail closed."""
+    expected = f"{prefix}_"
+    if not isinstance(value, str) or not value.startswith(expected):
+        raise ValueError(f"{name} must start with {expected!r}, got {value!r}")
+    digest = value[len(expected):]
+    if len(digest) != ID_HEX_LENGTH or not _LOWER_HEX.fullmatch(digest):
+        raise ValueError(
+            f"{name} must be {expected!r} + exactly {ID_HEX_LENGTH} lowercase "
+            f"hexadecimal characters, got {value!r}"
+        )
+    return value
+
+
+def validate_content_hash(name: str, value: Any) -> str:
+    """Require exactly 64 lowercase hex chars (a full sha256). Fail closed."""
+    if (
+        not isinstance(value, str)
+        or len(value) != HASH_HEX_LENGTH
+        or not _LOWER_HEX.fullmatch(value)
+    ):
+        raise ValueError(
+            f"{name} must be exactly {HASH_HEX_LENGTH} lowercase hexadecimal "
+            f"characters, got {value!r}"
+        )
+    return value
+
+
+def schema_era(schema_version: str) -> int:
+    """The identity era of a schema version: its MAJOR component.
+
+    Kernel identity policy: ``schema_version`` participates in deterministic
+    identity through its major version only. A major bump means the schema's
+    SEMANTICS changed, so the same bytes under a new major version are a new
+    object (new identity era — inherited from the Intraday Lab discipline).
+    Minor/patch versions are additive/non-semantic by definition and must NOT
+    fragment identity: re-stating identical information under 1.1.0 keeps the
+    1.0.0 identity.
+    """
+    if not isinstance(schema_version, str) or not _SEMVER.fullmatch(schema_version):
+        raise CanonicalizationError(
+            f"invalid schema_version {schema_version!r} — expected MAJOR.MINOR.PATCH"
+        )
+    return int(schema_version.split(".", 1)[0])
 
 
 def encode_datetime(value: datetime) -> str:

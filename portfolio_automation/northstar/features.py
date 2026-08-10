@@ -19,9 +19,18 @@ canonical serializer gives deterministic float encoding; precision-sensitive
 monetary work is not a Phase 0B concern and can arrive as a later additive
 value kind. No uncontrolled ``Any``.
 
-Identity (→ deterministic ``feature_id``): feature_name, derivation_id,
-derivation_version, entity_id, as_of, input snapshot ids, value, quality.
-Excluded: provenance (production metadata).
+Identity (→ deterministic ``feature_id``): schema era (major version),
+feature_name, derivation_id, derivation_version, entity_id, as_of, input
+snapshot ids, value, quality. Excluded: provenance (production metadata).
+
+Input semantics: ``inputs`` is an UNORDERED DEPENDENCY SET (intentional v1
+semantics). A feature depends on evidence; it does not assign positional
+roles to it — the derivation's own code decides how each snapshot is used,
+and that decision is versioned by ``derivation_id``/``derivation_version``,
+not by argument order. Identity therefore sorts input snapshot ids, so the
+same refs in any order produce the same ``feature_id``; duplicate snapshot
+ids are rejected (a set has no duplicates). Role-labeled inputs would be an
+additive future change if a concrete correctness need arises.
 """
 from __future__ import annotations
 
@@ -33,6 +42,7 @@ from portfolio_automation.northstar.canonical import (
     CanonicalizationError,
     deterministic_id,
     encode_datetime,
+    schema_era,
 )
 from portfolio_automation.northstar.evidence import EvidenceRef
 from portfolio_automation.northstar.provenance import Provenance
@@ -115,28 +125,55 @@ class FeatureRecord:
                 "a derived feature must reference its input evidence "
                 "(empty inputs allowed only for quality='missing')"
             )
+        # inputs are an unordered dependency SET — duplicates are incoherent.
+        snapshot_ids = [r.snapshot_id for r in inputs]
+        if len(snapshot_ids) != len(set(snapshot_ids)):
+            raise ValueError("inputs must not contain duplicate snapshot ids")
         if not isinstance(self.provenance, Provenance):
             raise ValueError("provenance must be a Provenance")
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {SCHEMA_VERSION!r} (this kernel), "
+                f"got {self.schema_version!r}"
+            )
+        # Canonical provenance must not contradict the record's own explicit
+        # derivation identity. The transformation_id format, when present, is
+        # exactly "<derivation_id>@<derivation_version>" so it can never carry
+        # a conflicting id or version. (derivation_id/derivation_version stay
+        # explicit fields — they are identity-bearing; provenance is not.)
+        if self.provenance.transformation_id is not None:
+            expected = f"{self.derivation_id}@{self.derivation_version}"
+            if self.provenance.transformation_id != expected:
+                raise ValueError(
+                    "provenance.transformation_id contradicts the record's "
+                    f"derivation identity: {self.provenance.transformation_id!r} "
+                    f"!= {expected!r}"
+                )
         # A feature must not masquerade as raw evidence.
         if self.feature_name.startswith("evs_") or self.derivation_id.startswith("evs_"):
             raise ValueError("feature identity fields must not impersonate evidence ids")
 
+    def _identity_payload(self) -> dict:
+        """Identity-bearing fields; ``schema_era`` (major version) participates
+        because a semantic schema change re-defines field meaning. ``inputs``
+        are sorted snapshot ids — an unordered dependency set (see module
+        docstring)."""
+        return {
+            "contract_type": CONTRACT_TYPE,
+            "schema_era": schema_era(self.schema_version),
+            "feature_name": self.feature_name,
+            "derivation_id": self.derivation_id,
+            "derivation_version": self.derivation_version,
+            "entity_id": self.entity_id,
+            "as_of": self.as_of,
+            "value": list(self.value) if isinstance(self.value, (list, tuple)) else self.value,
+            "quality": self.quality,
+            "inputs": sorted(r.snapshot_id for r in self.inputs),
+        }
+
     @property
     def feature_id(self) -> str:
-        return deterministic_id(
-            "ftr",
-            {
-                "contract_type": CONTRACT_TYPE,
-                "feature_name": self.feature_name,
-                "derivation_id": self.derivation_id,
-                "derivation_version": self.derivation_version,
-                "entity_id": self.entity_id,
-                "as_of": self.as_of,
-                "value": list(self.value) if isinstance(self.value, (list, tuple)) else self.value,
-                "quality": self.quality,
-                "inputs": sorted(r.snapshot_id for r in self.inputs),
-            },
-        )
+        return deterministic_id("ftr", self._identity_payload())
 
     def to_canonical_dict(self) -> dict:
         return {
@@ -156,12 +193,14 @@ class FeatureRecord:
 
     @classmethod
     def from_dict(cls, data: dict) -> "FeatureRecord":
-        from portfolio_automation.northstar.serde import parse_optional_datetime
+        from portfolio_automation.northstar.serde import (
+            parse_optional_datetime,
+            require_schema_version,
+        )
 
         if data.get("contract_type") != CONTRACT_TYPE:
             raise ValueError(f"not a {CONTRACT_TYPE}: {data.get('contract_type')!r}")
-        if not isinstance(data.get("schema_version"), str):
-            raise ValueError("schema_version is required")
+        require_schema_version(data, expected=SCHEMA_VERSION, contract=CONTRACT_TYPE)
         as_of = parse_optional_datetime(data.get("as_of"))
         if as_of is None:
             raise ValueError("as_of is required")

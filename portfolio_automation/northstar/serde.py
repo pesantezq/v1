@@ -5,6 +5,30 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 
+def require_schema_version(data: dict, *, expected: str, contract: str) -> str:
+    """Fail-closed schema-version gate for every persisted v1 contract.
+
+    Kernel v1 has NO migration/compatibility mechanism (deliberately — see
+    docs/NORTHSTAR_CONTRACTS.md §9), so deserialization requires the exact
+    supported version string. Missing, empty, non-string, and unknown/future
+    versions are all rejected; accepting an unknown version would mean
+    interpreting bytes under semantics this code cannot know.
+    """
+    value = data.get("schema_version")
+    if value is None:
+        raise ValueError(f"{contract}: schema_version is required")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"{contract}: schema_version must be a non-empty string, got {value!r}"
+        )
+    if value != expected:
+        raise ValueError(
+            f"{contract}: unsupported schema_version {value!r} — this kernel "
+            f"supports exactly {expected!r} (fail closed; no migration framework)"
+        )
+    return value
+
+
 def parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse the kernel's ISO-8601 Z encoding back to an aware datetime."""
     if value is None:

@@ -20,6 +20,7 @@ from typing import Optional
 from portfolio_automation.northstar.canonical import (
     CanonicalizationError,
     encode_datetime,
+    validate_contract_id,
 )
 
 PRODUCER_SOURCE_ADAPTER = "source_adapter"   # vendor/source ingestion adapter
@@ -59,6 +60,16 @@ class Provenance:
             encode_datetime(self.recorded_at)
         except CanonicalizationError as exc:
             raise ValueError(f"recorded_at: {exc}") from exc
+        # Fail closed: a source adapter ingests FROM a source by definition —
+        # source_adapter provenance without a source identity is incoherent.
+        if self.producer_type == PRODUCER_SOURCE_ADAPTER and self.source_id is None:
+            raise ValueError(
+                "producer_type='source_adapter' requires source_id — an "
+                "adapter's provenance must name the source it ingested from"
+            )
+        # When present, source_id must be a well-formed DataSourceDescriptor id.
+        if self.source_id is not None:
+            validate_contract_id("provenance.source_id", self.source_id, "src")
 
     def to_canonical_dict(self) -> dict:
         return {

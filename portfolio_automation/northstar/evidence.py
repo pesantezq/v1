@@ -21,8 +21,9 @@ produces two distinct valid snapshots (Phase 0C may later emit DATA_CONFLICT
 from exactly such pairs; no uniqueness is imposed here).
 
 Identity (identity-bearing fields → deterministic ``snapshot_id``):
-    contract_type, source_id, entity_id, entity_type, evidence_type,
-    PIT excluding retrieved_at, supersedes_snapshot_id, payload_hash
+    contract_type, schema era (major version), source_id, entity_id,
+    entity_type, evidence_type, PIT excluding retrieved_at,
+    supersedes_snapshot_id, payload_hash
 Excluded from identity (acquisition metadata): retrieved_at, provenance.
 Re-acquiring identical information therefore reproduces the identical ID.
 """
@@ -36,6 +37,9 @@ from portfolio_automation.northstar.canonical import (
     canonical_dumps,
     content_hash,
     deterministic_id,
+    schema_era,
+    validate_contract_id,
+    validate_content_hash,
 )
 from portfolio_automation.northstar.pit import PointInTime
 from portfolio_automation.northstar.provenance import Provenance
@@ -84,10 +88,30 @@ class EvidenceSnapshot:
             raise ValueError(
                 f"entity_type must be one of {sorted(ENTITY_TYPES)}, got {self.entity_type!r}"
             )
+        validate_contract_id("source_id", self.source_id, "src")
+        if self.supersedes_snapshot_id is not None:
+            validate_contract_id(
+                "supersedes_snapshot_id", self.supersedes_snapshot_id, "evs"
+            )
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {SCHEMA_VERSION!r} (this kernel), "
+                f"got {self.schema_version!r}"
+            )
         if not isinstance(self.pit, PointInTime):
             raise ValueError("pit must be a PointInTime")
         if not isinstance(self.provenance, Provenance):
             raise ValueError("provenance must be a Provenance")
+        # Canonical provenance must not contradict its owning contract: when
+        # the provenance names a source, it must be THIS snapshot's source.
+        if (
+            self.provenance.source_id is not None
+            and self.provenance.source_id != self.source_id
+        ):
+            raise ValueError(
+                "provenance.source_id contradicts snapshot.source_id "
+                f"({self.provenance.source_id!r} != {self.source_id!r})"
+            )
         raw = self.payload
         if not isinstance(raw, dict) or not raw:
             raise ValueError("payload must be a non-empty mapping of domain facts")
@@ -101,21 +125,25 @@ class EvidenceSnapshot:
         """A FRESH deep copy of the domain payload; mutating it changes nothing."""
         return json.loads(self.payload_canonical)
 
+    def _identity_payload(self) -> dict:
+        """Identity-bearing fields; ``schema_era`` (major version) participates
+        because a semantic schema change re-defines field meaning — additive
+        minor/patch restatements keep the same snapshot_id."""
+        return {
+            "contract_type": CONTRACT_TYPE,
+            "schema_era": schema_era(self.schema_version),
+            "source_id": self.source_id,
+            "entity_id": self.entity_id,
+            "entity_type": self.entity_type,
+            "evidence_type": self.evidence_type,
+            "pit": _pit_identity_view(self.pit),
+            "supersedes_snapshot_id": self.supersedes_snapshot_id,
+            "payload_hash": self.payload_hash,
+        }
+
     @property
     def snapshot_id(self) -> str:
-        return deterministic_id(
-            "evs",
-            {
-                "contract_type": CONTRACT_TYPE,
-                "source_id": self.source_id,
-                "entity_id": self.entity_id,
-                "entity_type": self.entity_type,
-                "evidence_type": self.evidence_type,
-                "pit": _pit_identity_view(self.pit),
-                "supersedes_snapshot_id": self.supersedes_snapshot_id,
-                "payload_hash": self.payload_hash,
-            },
-        )
+        return deterministic_id("evs", self._identity_payload())
 
     def revise(self, new_payload: dict, pit: PointInTime, provenance: Provenance) -> "EvidenceSnapshot":
         """A revision is a NEW immutable snapshot superseding this one."""
@@ -161,10 +189,11 @@ class EvidenceSnapshot:
 
     @classmethod
     def from_dict(cls, data: dict) -> "EvidenceSnapshot":
+        from portfolio_automation.northstar.serde import require_schema_version
+
         if data.get("contract_type") != CONTRACT_TYPE:
             raise ValueError(f"not an {CONTRACT_TYPE}: {data.get('contract_type')!r}")
-        if not isinstance(data.get("schema_version"), str):
-            raise ValueError("schema_version is required")
+        require_schema_version(data, expected=SCHEMA_VERSION, contract=CONTRACT_TYPE)
         obj = cls(
             source_id=data["source_id"],
             entity_id=data["entity_id"],
@@ -205,15 +234,24 @@ class EvidenceRef:
     entity_id: str
     evidence_type: str
     payload_hash: str
+    schema_version: str = SCHEMA_VERSION
     contract_type: str = field(default=REF_CONTRACT_TYPE, init=False)
 
     def __post_init__(self) -> None:
-        for name in ("snapshot_id", "source_id", "entity_id", "evidence_type", "payload_hash"):
+        for name in ("entity_id", "evidence_type"):
             value = getattr(self, name)
             if not value or not isinstance(value, str):
                 raise ValueError(f"{name} is required")
-        if not self.snapshot_id.startswith("evs_"):
-            raise ValueError(f"snapshot_id does not look like an evidence id: {self.snapshot_id!r}")
+        # Refs get embedded throughout future Northstar contracts, so their
+        # identifier integrity is validated strictly at construction:
+        validate_contract_id("snapshot_id", self.snapshot_id, "evs")
+        validate_contract_id("source_id", self.source_id, "src")
+        validate_content_hash("payload_hash", self.payload_hash)
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version must be {SCHEMA_VERSION!r} (this kernel), "
+                f"got {self.schema_version!r}"
+            )
 
     def matches(self, snapshot: EvidenceSnapshot) -> bool:
         """True iff this ref points at exactly that snapshot (id AND content)."""
@@ -225,6 +263,7 @@ class EvidenceRef:
     def to_canonical_dict(self) -> dict:
         return {
             "contract_type": self.contract_type,
+            "schema_version": self.schema_version,
             "snapshot_id": self.snapshot_id,
             "source_id": self.source_id,
             "entity_id": self.entity_id,
@@ -234,12 +273,16 @@ class EvidenceRef:
 
     @classmethod
     def from_dict(cls, data: dict) -> "EvidenceRef":
+        from portfolio_automation.northstar.serde import require_schema_version
+
         if data.get("contract_type") != REF_CONTRACT_TYPE:
             raise ValueError(f"not an {REF_CONTRACT_TYPE}: {data.get('contract_type')!r}")
+        require_schema_version(data, expected=SCHEMA_VERSION, contract=REF_CONTRACT_TYPE)
         return cls(
             snapshot_id=data["snapshot_id"],
             source_id=data["source_id"],
             entity_id=data["entity_id"],
             evidence_type=data["evidence_type"],
             payload_hash=data["payload_hash"],
+            schema_version=data["schema_version"],
         )
