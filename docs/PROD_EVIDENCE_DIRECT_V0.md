@@ -416,3 +416,15 @@ Design production access, or broader Engineer SSH.
 
 `DIRECT PRODUCTION EVIDENCE V0 REMAINS TEMPORARY` — to be replaced by governed Agent
 Export / authenticated evidence admission.
+
+## Operational hygiene — snapshot retention (deferred to Operations 0A)
+Admitted snapshots are immutable (`0444`, no-overwrite) and written to the
+trusted-controller-owned `snapshot_dir` (never worker-writable; the rd-worker has
+no route to it). There is currently **no automatic retention/pruning** — the store
+grows unbounded. This is intentional for now: snapshots are audit/certification
+evidence, and pruning them without an owner-approved policy could destroy evidence
+needed for a later credential/behavior audit. **Ops 0A owner action:** define a
+conservative, deterministic retention policy (e.g. keep-N-per-run-id + keep-min-age,
+never delete the anchor `run-manifest` snapshot for an unclosed investigation), or
+an explicit archival step, before enabling continuous production diagnosis. Until
+then, prune manually and deliberately.

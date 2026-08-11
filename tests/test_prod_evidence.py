@@ -307,9 +307,37 @@ def test_controller_rejects_unknown_model_capability(tmp_path):
     assert res.status == "SUCCEEDED"   # controller handled the rejection, model carried on
 
 
-def test_repair_job_cannot_use_prod_evidence():
+# --- Phase 6: temporary-bridge containment ----------------------------------
+# The production-evidence bridge is owned by exactly ONE job type. No other
+# Engineer job — and by extension no Finance/Quant/Design worker reusing these
+# job types — may reach READ_PRODUCTION_DAILY_EVIDENCE without an explicit,
+# reviewed authority change (adding the capability to that job's grant set).
+@pytest.mark.parametrize("jt", list(EngineeringJobType))
+def test_only_daily_diagnostic_may_read_production_evidence(jt):
     from portfolio_automation.engineer_worker import policy
     import portfolio_automation.engineer_worker.contracts as C
-    with pytest.raises(policy.PolicyError):
-        policy.check_tool_allowed(EngineeringJobType.REPAIR_CANDIDATE,
-                                  C.ToolCapability.READ_PRODUCTION_DAILY_EVIDENCE)
+    cap = C.ToolCapability.READ_PRODUCTION_DAILY_EVIDENCE
+    if jt is EngineeringJobType.DAILY_RUN_DIAGNOSTIC:
+        assert cap in policy.tools_for_job(jt)
+        policy.check_tool_allowed(jt, cap)           # must NOT raise
+    else:
+        assert cap not in policy.tools_for_job(jt)
+        with pytest.raises(policy.PolicyError):      # every other job fails closed
+            policy.check_tool_allowed(jt, cap)
+
+
+# --- Phase 11: transport timeout + audit-write failure fail closed -----------
+def test_transport_timeout_unavailable(tmp_path):
+    # subprocess.TimeoutExpired surfaces as rc=None -> UNAVAILABLE, not a crash.
+    ev = _collector(tmp_path, fixed("", rc=None, err="ssh timeout")).retrieve(Cap.DAILY_STATUS)
+    assert ev.status is St.UNAVAILABLE and not ev.admitted
+
+
+def test_audit_write_failure_does_not_break_admission(tmp_path):
+    # audit_log pointing at a directory makes the append open() raise OSError; the
+    # collector must swallow it and still admit an otherwise-valid retrieval
+    # (audit is best-effort telemetry, not an admission gate).
+    audit_dir = tmp_path / "audit_is_a_dir"; audit_dir.mkdir()
+    ev = _collector(tmp_path, fixed('{"run_id":"r1","ok":true}'),
+                    audit_log=str(audit_dir)).retrieve(Cap.DAILY_STATUS)
+    assert ev.status is St.AVAILABLE and ev.admitted

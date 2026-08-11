@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -187,8 +188,12 @@ def daily_artifact_reader(repo_root: str | Path, rel_path: str) -> DiagnosticSou
 
 
 def test_status(repo_root: str | Path, target: str, timeout: int = 120) -> DiagnosticSource:
-    """Run a pytest target (already policy-allowlisted by the caller). Bounded."""
-    res = _run(["python3", "-m", "pytest", target, "-q", "-p", "no:cacheprovider",
+    """Run a pytest target (already policy-allowlisted by the caller). Bounded.
+
+    Uses ``sys.executable`` (the interpreter running the worker) rather than a
+    bare ``python3`` so the disposable-workspace test run inherits the same
+    installed pytest deterministically across venv/CI/Agent-Lab."""
+    res = _run([sys.executable, "-m", "pytest", target, "-q", "-p", "no:cacheprovider",
                 "-o", "addopts="], repo_root, timeout=timeout)
     tail = res["stdout"].splitlines()[-8:]
     summary = next((l for l in reversed(res["stdout"].splitlines())
