@@ -68,6 +68,7 @@ _JOB_TOOL_GRANTS: dict[EngineeringJobType, frozenset[ToolCapability]] = {
     EngineeringJobType.DAILY_RUN_DIAGNOSTIC: frozenset({
         ToolCapability.READ_DAILY_LOG, ToolCapability.READ_DAILY_ARTIFACT,
         ToolCapability.CHECK_REPO_STATUS, ToolCapability.CHECK_RD_HEALTH,
+        ToolCapability.READ_PRODUCTION_DAILY_EVIDENCE,
     }),
     EngineeringJobType.REPOSITORY_DIAGNOSTIC: frozenset({
         ToolCapability.CHECK_REPO_STATUS, ToolCapability.RUN_APPROVED_TEST,

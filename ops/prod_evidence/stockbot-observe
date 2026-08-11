@@ -1,0 +1,125 @@
+#!/bin/bash
+# stockbot-observe — forced-command read-only evidence interface for the
+# dedicated `stockbot-observer` account on the StockBot production VPS.
+#
+# Installed by the OPERATOR (root-owned, 0755, NOT writable by stockbot-observer)
+# and pinned as the ForceCommand for that account. It is the ONLY thing that
+# account can run. It exposes a fixed set of capability verbs over an allowlist
+# of production evidence and NOTHING else: no shell, no arbitrary path, no
+# arbitrary SQL, no writes, no secrets.
+#
+#   ssh stockbot-observer@vps <capability> [selector]
+#   capability in: daily-status | daily-log | run-manifest | artifact | db-query
+#
+# The requested command arrives in $SSH_ORIGINAL_COMMAND (the client cannot
+# bypass this via the forced command). Everything is validated; anything not
+# explicitly allowed exits non-zero with no data (fail closed).
+#
+# TEMPORARY (temporary_direct_read) — superseded by governed Agent Export /
+# authenticated evidence admission. See docs/PROD_EVIDENCE_DIRECT_V0.md.
+set -euo pipefail
+umask 077
+
+# ---- OPERATOR CONFIG: verify these against the pre-change inventory ---------
+STOCKBOT_ROOT="/opt/stockbot"
+LOG_DIR="${STOCKBOT_ROOT}/logs"                 # daily_safe_YYYY-MM-DD.log live here
+MANIFEST_DIR="${STOCKBOT_ROOT}/artifacts/run_manifests"   # <run_id>.json (adjust)
+DB_PATH="${STOCKBOT_ROOT}/data/stockbot.db"     # read-only sqlite (adjust)
+MAX_BYTES=1048576                                # 1 MiB output cap
+declare -A ARTIFACT_MAP=(                        # allowlisted name -> fixed file
+  [daily_status]="${STOCKBOT_ROOT}/artifacts/daily_status.json"
+  [run_manifest]="${MANIFEST_DIR}/latest.json"
+  [health]="${STOCKBOT_ROOT}/artifacts/health.json"
+  [artifact_registry_health]="${STOCKBOT_ROOT}/artifacts/artifact_registry_health.json"
+  [decision_summary]="${STOCKBOT_ROOT}/artifacts/decision_summary.json"
+  [risk_summary]="${STOCKBOT_ROOT}/artifacts/risk_summary.json"
+)
+# Predefined, fixed SQL per query ID. The client may NEVER submit SQL text.
+# OPERATOR: adjust table/column names to the real schema found during inventory.
+declare -A DB_QUERY=(
+  [latest-daily-run]="SELECT run_id, pipeline_mode, status, started_at, completed_at, source_commit FROM run_manifest ORDER BY started_at DESC LIMIT 1;"
+  [recent-health]="SELECT generated_at, overall_status FROM health_history ORDER BY generated_at DESC LIMIT 20;"
+  [recent-errors]="SELECT ts, stage, level, substr(message,1,300) AS message FROM run_events WHERE level IN ('ERROR','WARN') ORDER BY ts DESC LIMIT 50;"
+)
+# ---------------------------------------------------------------------------
+
+deny() { echo "DENIED: $1" >&2; exit 3; }
+
+emit_file() {   # $1 = absolute path; regular-file + size-bounded + read-only
+  local f="$1"
+  [ -e "$f" ] || deny "not found"
+  [ -L "$f" ] && deny "symlink refused"
+  [ -f "$f" ] || deny "not a regular file"
+  # Never expose credential-shaped files even if mis-mapped.
+  case "$f" in
+    *.env|*/.env|*secret*|*credential*|*token*|*id_rsa*|*id_ed25519*|*.pem|*.key) deny "protected file" ;;
+  esac
+  head -c "$MAX_BYTES" -- "$f"
+}
+
+emit_log_tail() {   # $1 = absolute log path; last MAX_BYTES bytes
+  local f="$1"
+  [ -e "$f" ] || deny "log not found"
+  [ -L "$f" ] && deny "symlink refused"
+  [ -f "$f" ] || deny "not a regular file"
+  tail -c "$MAX_BYTES" -- "$f"
+}
+
+run_query() {   # $1 = fixed SQL; read-only sqlite, JSON, bounded
+  command -v sqlite3 >/dev/null 2>&1 || deny "sqlite3 unavailable"
+  [ -f "$DB_PATH" ] || deny "db not found"
+  # -readonly guarantees no writes; immutable avoids lock contention with the
+  # live pipeline. JSON mode; output byte-capped.
+  sqlite3 -readonly -json "file:${DB_PATH}?immutable=1" "$1" | head -c "$MAX_BYTES"
+}
+
+# Parse the forced original command into a capability + single selector token.
+CMD="${SSH_ORIGINAL_COMMAND:-}"
+[ -n "$CMD" ] || deny "no capability"
+# Reject any shell metacharacters outright (defense in depth; we never eval).
+case "$CMD" in
+  *[\;\|\&\$\`\<\>\(\)\{\}\\\'\"]* ) deny "illegal characters" ;;
+  *$'\n'* | *$'\r'* ) deny "newline in command" ;;
+esac
+# Split on whitespace into at most two tokens.
+read -r CAP SEL EXTRA <<<"$CMD"
+[ -z "${EXTRA:-}" ] || deny "too many arguments"
+SEL="${SEL:-}"
+
+case "$CAP" in
+  daily-status)
+    emit_file "${ARTIFACT_MAP[daily_status]}"
+    ;;
+  daily-log)
+    if [ -z "$SEL" ] || [ "$SEL" = "latest" ] || [ "$SEL" = "today" ]; then
+      DATE="$(date '+%Y-%m-%d')"
+    elif [[ "$SEL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      DATE="$SEL"
+    else
+      deny "invalid daily-log selector"
+    fi
+    emit_log_tail "${LOG_DIR}/daily_safe_${DATE}.log"
+    ;;
+  run-manifest)
+    if [ -z "$SEL" ] || [ "$SEL" = "latest" ]; then
+      emit_file "${MANIFEST_DIR}/latest.json"
+    elif [[ "$SEL" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]]; then
+      emit_file "${MANIFEST_DIR}/${SEL}.json"
+    else
+      deny "invalid run_id"
+    fi
+    ;;
+  artifact)
+    [[ "$SEL" =~ ^[a-z0-9_]{1,64}$ ]] || deny "invalid artifact name"
+    [ -n "${ARTIFACT_MAP[$SEL]:-}" ] || deny "artifact not allowlisted"
+    emit_file "${ARTIFACT_MAP[$SEL]}"
+    ;;
+  db-query)
+    [[ "$SEL" =~ ^[a-z0-9-]{1,64}$ ]] || deny "invalid query id"
+    [ -n "${DB_QUERY[$SEL]:-}" ] || deny "query id not allowlisted"
+    run_query "${DB_QUERY[$SEL]}"
+    ;;
+  *)
+    deny "unknown capability"
+    ;;
+esac

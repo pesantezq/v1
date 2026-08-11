@@ -58,6 +58,10 @@ class ToolCapability(str, Enum):
     CHECK_OLLAMA = "CHECK_OLLAMA"
     CHECK_REPO_STATUS = "CHECK_REPO_STATUS"
     RUN_APPROVED_TEST = "RUN_APPROVED_TEST"
+    # Temporary Direct Production Evidence Bridge V0 — the trusted controller
+    # (not the sandbox/model) retrieves narrowly-allowlisted read-only VPS
+    # evidence and hands back only the admitted, sanitized result.
+    READ_PRODUCTION_DAILY_EVIDENCE = "READ_PRODUCTION_DAILY_EVIDENCE"
 
 
 class VerificationStatus(str, Enum):

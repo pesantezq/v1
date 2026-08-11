@@ -21,7 +21,7 @@ from portfolio_automation.rd_control import registry as reg
 from portfolio_automation.rd_control.contracts import (
     JobType, JobStatus, WorkerAuthority,
 )
-from portfolio_automation.engineer_worker import adapters, policy, model_adapter
+from portfolio_automation.engineer_worker import adapters, policy, model_adapter, prod_evidence
 from portfolio_automation.engineer_worker.contracts import (
     ContractError, DiagnosticSource, EngineeringJobSpecV0, EngineeringJobType,
     EngineeringDiagnosticBundleV0, EngineeringFindingV0, EngineeringCandidateV0,
@@ -49,6 +49,10 @@ class ControllerConfig:
     worker_id: str = "engineer-worker"
     worker_version: str = "0A"
     workspace_parent: str | None = None   # trusted-chosen; NOT worker-controlled
+    # Temporary Direct Production Evidence Bridge (trusted-side ONLY). When None,
+    # READ_PRODUCTION_DAILY_EVIDENCE fails closed to UNAVAILABLE. This object holds
+    # the SSH connection facts and NEVER enters the sandbox or model input.
+    prod_evidence_collector: "prod_evidence.ProductionEvidenceCollector | None" = None
 
 
 @dataclass
@@ -141,7 +145,34 @@ def _run_tool(cfg: ControllerConfig, spec: EngineeringJobSpecV0,
     if cap == ToolCapability.RUN_APPROVED_TEST:
         policy.check_test_allowed(spec.allowed_tests, argument)
         return adapters.test_status(cfg.repo_root, argument)
+    if cap == ToolCapability.READ_PRODUCTION_DAILY_EVIDENCE:
+        return _read_production_evidence(cfg, argument)
     raise policy.PolicyError(f"unknown capability: {cap}")
+
+
+def _read_production_evidence(cfg: ControllerConfig, argument: str) -> DiagnosticSource:
+    """Trusted-side production evidence retrieval. The argument is
+    "<capability>[:<selector>]" (e.g. "daily-log:today", "db-query:latest-daily-run").
+    The collector (if configured) runs SSH in the trusted controller; the sandbox
+    /model receive ONLY the admitted, sanitized view — never raw stdout, host, or
+    key. Fails closed to UNAVAILABLE when no collector is wired."""
+    prov = "prod-evidence-bridge (trusted-side, admitted only)"
+    if cfg.prod_evidence_collector is None:
+        return DiagnosticSource(name="prod_evidence", ok=False, provenance=prov,
+                                data={"status": prod_evidence.ProductionEvidenceStatus.UNAVAILABLE.value},
+                                error="production evidence bridge not configured")
+    raw_cap, _, sel = (argument or "").partition(":")
+    try:
+        cap = prod_evidence.ProductionEvidenceCapability(raw_cap.strip())
+    except ValueError:
+        return DiagnosticSource(name="prod_evidence", ok=False, provenance=prov,
+                                data={"status": prod_evidence.ProductionEvidenceStatus.REJECTED.value},
+                                error=f"unknown production capability: {raw_cap!r}")
+    ev = cfg.prod_evidence_collector.retrieve(cap, sel)
+    ok = ev.status is prod_evidence.ProductionEvidenceStatus.AVAILABLE
+    return DiagnosticSource(name="prod_evidence", ok=ok, provenance=prov,
+                            data=ev.to_model_view(),
+                            error=None if ok else (ev.rejection_reason or ev.status.value))
 
 
 # ---------------------------------------------------------------------------
