@@ -15,8 +15,13 @@ Milestone 1 (evidence kernel) implements:
 * evidence   — EvidenceSnapshot + EvidenceRef
 * features   — FeatureRecord
 
-Later Phase 0B milestones add the prediction/research/experiment and
-capital/exit/outcome/passport families. Consumers must never depend on vendor
+Milestone 2 (prediction + research families) adds:
+
+* predictions — PredictionTask + PredictionRecord (estimates, never actions)
+* research    — ResearchTask + WorkerResult (never truth) + ResearchClaim
+                (falsifiable, never certified alpha)
+
+Milestone 3 adds the experiment and capital/exit/outcome/passport families. Consumers must never depend on vendor
 response schemas — vendors adapt INTO these contracts (Evidence Plane), never
 the other way around.
 """
@@ -31,3 +36,12 @@ from portfolio_automation.northstar.provenance import Provenance  # noqa: F401
 from portfolio_automation.northstar.sources import DataSourceDescriptor  # noqa: F401
 from portfolio_automation.northstar.evidence import EvidenceRef, EvidenceSnapshot  # noqa: F401
 from portfolio_automation.northstar.features import FeatureRecord  # noqa: F401
+from portfolio_automation.northstar.predictions import (  # noqa: F401
+    PredictionRecord,
+    PredictionTask,
+)
+from portfolio_automation.northstar.research import (  # noqa: F401
+    ResearchClaim,
+    ResearchTask,
+    WorkerResult,
+)
