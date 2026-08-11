@@ -24,6 +24,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, Tuple
 
+from portfolio_automation.northstar._collections import (
+    normalize_ref_set,
+    normalize_string_set,
+)
 from portfolio_automation.northstar.canonical import (
     CanonicalizationError,
     canonical_dumps,
@@ -42,6 +46,11 @@ RESULT_CONTRACT_TYPE = "worker_result"
 CLAIM_CONTRACT_TYPE = "research_claim"
 
 EFFORT_CLASSES = frozenset({"micro", "small", "standard", "extended"})
+
+#: WorkerResult v1 producer types: a worker is an AI worker or a trusted
+#: system tool. source_adapter/derivation/human provenance on a WorkerResult
+#: is incoherent and rejected (0B.2 hardening, repair 4).
+WORKER_PRODUCER_TYPES = frozenset({"ai_worker", "system"})
 CLAIM_DIRECTIONS = frozenset({"increase", "decrease", "no_effect", "conditional"})
 
 # Keys that would represent an authority claim inside worker findings —
@@ -58,18 +67,6 @@ def _validate_aware(name: str, value: datetime) -> None:
         encode_datetime(value)
     except CanonicalizationError as exc:
         raise ValueError(f"{name}: {exc}") from exc
-
-
-def _validate_unordered_set(name: str, values: Tuple[str, ...], *, allow_empty: bool) -> None:
-    if not isinstance(values, tuple):
-        raise ValueError(f"{name} must be a tuple")
-    if not values and not allow_empty:
-        raise ValueError(f"{name} must not be empty")
-    for v in values:
-        if not v or not isinstance(v, str):
-            raise ValueError(f"{name} entries must be non-empty strings")
-    if len(values) != len(set(values)):
-        raise ValueError(f"{name} must not contain duplicates (unordered set semantics)")
 
 
 def _reject_authority_keys(obj: Any, path: str = "findings") -> None:
@@ -92,8 +89,9 @@ class ResearchTask:
 
     question: str
     as_of: datetime                            # PIT bound: workers may only see evidence with known_at <= as_of (0C)
-    allowed_evidence_types: Tuple[str, ...]    # non-empty; "*" = explicitly unrestricted
+    allowed_evidence_types: Tuple[str, ...]    # non-empty; "*" = explicitly unrestricted (sole value)
     output_expectation: str                    # namespaced, e.g. "worker_result.findings"
+    provenance: Provenance = None              # type: ignore[assignment]  # REQUIRED attribution — NOT identity-bearing
     effort_class: str = "standard"             # one of EFFORT_CLASSES (budget/effort bound)
     scope_entities: Tuple[str, ...] = ()       # may be empty = not entity-scoped
     notes: Optional[str] = None                # NOT identity-bearing
@@ -106,13 +104,13 @@ class ResearchTask:
         if not self.output_expectation or not isinstance(self.output_expectation, str):
             raise ValueError("output_expectation is required")
         _validate_aware("as_of", self.as_of)
-        for name in ("allowed_evidence_types", "scope_entities"):
-            value = getattr(self, name)
-            if isinstance(value, list):
-                value = tuple(value)
-            object.__setattr__(self, name, tuple(sorted(value)) if value else tuple(value))
-        _validate_unordered_set("allowed_evidence_types", self.allowed_evidence_types, allow_empty=False)
-        _validate_unordered_set("scope_entities", self.scope_entities, allow_empty=True)
+        if not isinstance(self.provenance, Provenance):
+            raise ValueError("provenance must be a Provenance (required attribution)")
+        object.__setattr__(self, "allowed_evidence_types",
+                           normalize_string_set("allowed_evidence_types", self.allowed_evidence_types,
+                                                allow_empty=False, wildcard=True))
+        object.__setattr__(self, "scope_entities",
+                           normalize_string_set("scope_entities", self.scope_entities, allow_empty=True))
         if self.effort_class not in EFFORT_CLASSES:
             raise ValueError(
                 f"effort_class must be one of {sorted(EFFORT_CLASSES)}, got {self.effort_class!r}"
@@ -151,6 +149,7 @@ class ResearchTask:
             "effort_class": self.effort_class,
             "scope_entities": sorted(self.scope_entities),
             "notes": self.notes,
+            "provenance": self.provenance.to_canonical_dict(),
         }
 
     @classmethod
@@ -171,6 +170,7 @@ class ResearchTask:
             as_of=as_of,
             allowed_evidence_types=tuple(data["allowed_evidence_types"]),
             output_expectation=data["output_expectation"],
+            provenance=Provenance.from_dict(data["provenance"]),
             effort_class=data.get("effort_class", "standard"),
             scope_entities=tuple(data.get("scope_entities", ())),
             notes=data.get("notes"),
@@ -214,18 +214,21 @@ class WorkerResult:
             raise ValueError("worker_id is required")
         if not isinstance(self.provenance, Provenance):
             raise ValueError("provenance must be a Provenance")
-        value = self.evidence_refs
-        if isinstance(value, list):
-            object.__setattr__(self, "evidence_refs", tuple(value))
-        if not all(isinstance(r, EvidenceRef) for r in self.evidence_refs):
-            raise ValueError("every evidence_refs entry must be an EvidenceRef")
+        # Producer consistency (repair 4): the provenance must BE the worker.
+        if self.provenance.producer_type not in WORKER_PRODUCER_TYPES:
+            raise ValueError(
+                f"WorkerResult provenance.producer_type must be one of "
+                f"{sorted(WORKER_PRODUCER_TYPES)}, got {self.provenance.producer_type!r}"
+            )
+        if self.provenance.producer_id != self.worker_id:
+            raise ValueError(
+                f"provenance.producer_id {self.provenance.producer_id!r} must equal "
+                f"worker_id {self.worker_id!r} — a result's provenance is its worker"
+            )
         object.__setattr__(
             self, "evidence_refs",
-            tuple(sorted(self.evidence_refs, key=lambda r: r.snapshot_id)),
+            normalize_ref_set("evidence_refs", self.evidence_refs, EvidenceRef, "snapshot_id"),
         )
-        ids = [r.snapshot_id for r in self.evidence_refs]
-        if len(ids) != len(set(ids)):
-            raise ValueError("evidence_refs must not contain duplicate snapshot ids")
         raw = self.findings
         if self.abstained:
             if not self.abstention_reason or not isinstance(self.abstention_reason, str):
@@ -262,11 +265,21 @@ class WorkerResult:
         return json.loads(self.findings_canonical)
 
     def _identity_payload(self) -> dict:
+        # Model identity IS semantic (repair 5): the same findings produced by
+        # a different model are a different result. provenance.recorded_at
+        # stays non-identity-bearing (acquisition metadata, kernel-wide rule).
+        # provenance.code_version is deliberately EXCLUDED from identity: a
+        # WorkerResult is research material, never truth — reproduction and
+        # attribution happen through the milestone-3 ExperimentSpec path,
+        # which pins its own code identity; including worker code_version here
+        # would fragment identity on every routine deployment without any
+        # semantic change to the result.
         return {
             "contract_type": RESULT_CONTRACT_TYPE,
             "schema_era": schema_era(self.schema_version),
             "research_task_id": self.research_task_id,
             "worker_id": self.worker_id,
+            "model_id": self.provenance.model_id,
             "evidence_refs": sorted(r.snapshot_id for r in self.evidence_refs),
             "abstained": self.abstained,
             "abstention_reason": self.abstention_reason,
@@ -335,11 +348,11 @@ class ResearchClaim:
     claim: str                                  # the falsifiable statement
     testable_metric: str                        # namespaced, e.g. "return.excess_spy_20d"
     direction: str                              # one of CLAIM_DIRECTIONS
+    provenance: Provenance = None                    # type: ignore[assignment]  # REQUIRED attribution — NOT identity-bearing
     evidence_refs: Tuple[EvidenceRef, ...] = ()      # supporting evidence (unordered set)
     worker_result_ids: Tuple[str, ...] = ()          # wkr_… ids (unordered set)
     scope_entities: Tuple[str, ...] = ()             # may be empty
     notes: Optional[str] = None                      # NOT identity-bearing
-    provenance: Optional[Provenance] = None
     schema_version: str = SCHEMA_VERSION
     contract_type: str = field(default=CLAIM_CONTRACT_TYPE, init=False)
 
@@ -352,31 +365,24 @@ class ResearchClaim:
             raise ValueError(
                 f"direction must be one of {sorted(CLAIM_DIRECTIONS)}, got {self.direction!r}"
             )
-        for name in ("evidence_refs", "worker_result_ids", "scope_entities"):
-            value = getattr(self, name)
-            if isinstance(value, list):
-                object.__setattr__(self, name, tuple(value))
-        if not all(isinstance(r, EvidenceRef) for r in self.evidence_refs):
-            raise ValueError("every evidence_refs entry must be an EvidenceRef")
         object.__setattr__(
             self, "evidence_refs",
-            tuple(sorted(self.evidence_refs, key=lambda r: r.snapshot_id)),
+            normalize_ref_set("evidence_refs", self.evidence_refs, EvidenceRef, "snapshot_id"),
         )
-        object.__setattr__(self, "worker_result_ids", tuple(sorted(self.worker_result_ids)))
-        object.__setattr__(self, "scope_entities", tuple(sorted(self.scope_entities)))
-        ids = [r.snapshot_id for r in self.evidence_refs]
-        if len(ids) != len(set(ids)):
-            raise ValueError("evidence_refs must not contain duplicate snapshot ids")
-        _validate_unordered_set("worker_result_ids", self.worker_result_ids, allow_empty=True)
+        object.__setattr__(self, "worker_result_ids",
+                           normalize_string_set("worker_result_ids", self.worker_result_ids,
+                                                allow_empty=True))
+        object.__setattr__(self, "scope_entities",
+                           normalize_string_set("scope_entities", self.scope_entities,
+                                                allow_empty=True))
         for wid in self.worker_result_ids:
             validate_contract_id("worker_result_ids entry", wid, "wkr")
-        _validate_unordered_set("scope_entities", self.scope_entities, allow_empty=True)
         if not self.evidence_refs and not self.worker_result_ids:
             raise ValueError(
                 "a claim must cite at least one source: evidence_refs or worker_result_ids"
             )
-        if self.provenance is not None and not isinstance(self.provenance, Provenance):
-            raise ValueError("provenance must be a Provenance or None")
+        if not isinstance(self.provenance, Provenance):
+            raise ValueError("provenance must be a Provenance (required attribution)")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(
                 f"schema_version must be {SCHEMA_VERSION!r} (this kernel), "
@@ -411,7 +417,7 @@ class ResearchClaim:
             "worker_result_ids": sorted(self.worker_result_ids),
             "scope_entities": sorted(self.scope_entities),
             "notes": self.notes,
-            "provenance": self.provenance.to_canonical_dict() if self.provenance else None,
+            "provenance": self.provenance.to_canonical_dict(),
         }
 
     @classmethod
@@ -421,16 +427,15 @@ class ResearchClaim:
         if data.get("contract_type") != CLAIM_CONTRACT_TYPE:
             raise ValueError(f"not a {CLAIM_CONTRACT_TYPE}: {data.get('contract_type')!r}")
         require_schema_version(data, expected=SCHEMA_VERSION, contract=CLAIM_CONTRACT_TYPE)
-        prov = data.get("provenance")
         obj = cls(
             claim=data["claim"],
             testable_metric=data["testable_metric"],
             direction=data["direction"],
+            provenance=Provenance.from_dict(data["provenance"]),
             evidence_refs=tuple(EvidenceRef.from_dict(r) for r in data.get("evidence_refs", ())),
             worker_result_ids=tuple(data.get("worker_result_ids", ())),
             scope_entities=tuple(data.get("scope_entities", ())),
             notes=data.get("notes"),
-            provenance=Provenance.from_dict(prov) if prov else None,
             schema_version=data["schema_version"],
         )
         recorded = data.get("claim_id")

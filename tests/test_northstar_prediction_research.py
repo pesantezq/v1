@@ -65,6 +65,7 @@ def _task(**kw) -> PredictionTask:
         horizon_days=kw.pop("horizon_days", 20),
         target=kw.pop("target", "return.total"),
         allowed_evidence_types=kw.pop("allowed_evidence_types", ("market_data.close", "fundamental.revenue")),
+        provenance=kw.pop("provenance", _prov(producer_id="system.prediction_scheduler")),
         **kw,
     )
 
@@ -93,6 +94,7 @@ def _rtask(**kw) -> ResearchTask:
         as_of=kw.pop("as_of", T1),
         allowed_evidence_types=kw.pop("allowed_evidence_types", ("short_interest.ratio", "market_data.close")),
         output_expectation=kw.pop("output_expectation", "worker_result.findings"),
+        provenance=kw.pop("provenance", _prov(producer_id="system.rd_control_plane")),
         **kw,
     )
 
@@ -115,6 +117,8 @@ def _claim(**kw) -> ResearchClaim:
         claim=kw.pop("claim", "High short-interest ratio predicts lower 20d total return"),
         testable_metric=kw.pop("testable_metric", "return.total_20d"),
         direction=kw.pop("direction", "decrease"),
+        provenance=kw.pop("provenance", _prov(producer_id="worker.generic_researcher",
+                                              producer_type="ai_worker")),
         worker_result_ids=kw.pop("worker_result_ids", (_wresult().worker_result_id,)),
         **kw,
     )
@@ -369,3 +373,165 @@ def test_task_params_identity_and_round_trip_preserved():
     assert a.task_id != _task(target_params={"benchmark": "QQQ"}).task_id
     rt = PredictionTask.from_dict(json.loads(canonical_dumps(a.to_canonical_dict())))
     assert rt.task_id == a.task_id and rt == a
+
+
+# ── 0B.2 hardening continuation: six bounded repairs ────────────────────────
+
+
+def test_r2_sequence_values_frozen_and_list_tuple_equivalent():
+    pred_list = _record(prediction_kind="quantiles", prediction_value=[0.01, 0.03, 0.05],
+                        uncertainty_kind="quantile_band", uncertainty_value=[0.02, 0.02, 0.03])
+    caller_pred, caller_unc = [0.01, 0.03, 0.05], [0.02, 0.02, 0.03]
+    r = _record(prediction_kind="quantiles", prediction_value=caller_pred,
+                uncertainty_kind="quantile_band", uncertainty_value=caller_unc)
+    before = r.prediction_id
+    caller_pred.append(9.9)      # mutate caller prediction list
+    caller_unc[0] = 9.9          # mutate caller uncertainty list
+    assert r.prediction_id == before
+    assert r.prediction_value == (0.01, 0.03, 0.05)     # frozen tuple
+    assert r.uncertainty_value == (0.02, 0.02, 0.03)
+    # list == tuple semantics
+    pred_tuple = _record(prediction_kind="quantiles", prediction_value=(0.01, 0.03, 0.05),
+                         uncertainty_kind="quantile_band", uncertainty_value=(0.02, 0.02, 0.03))
+    assert pred_list.prediction_id == pred_tuple.prediction_id == before
+    assert pred_list == pred_tuple
+    # round trip stable, still serialized as JSON arrays
+    data = json.loads(canonical_dumps(r.to_canonical_dict()))
+    assert data["prediction_value"] == [0.01, 0.03, 0.05]
+    rt = PredictionRecord.from_dict(data)
+    assert rt.prediction_id == before and rt == r
+
+
+def test_r3_prediction_abstention_valid_shapes():
+    a = _record(abstained=True, abstention_reason="insufficient defensible evidence",
+                prediction_value=None, uncertainty_kind=None, uncertainty_value=None,
+                evidence_refs=())
+    assert a.abstained and a.prediction_value is None
+    # evidence MAY also be retained when inspected
+    b = _record(abstained=True, abstention_reason="conflicting sources",
+                prediction_value=None, uncertainty_kind=None, uncertainty_value=None)
+    assert b.evidence_refs
+    assert a.prediction_id != b.prediction_id
+    rt = PredictionRecord.from_dict(json.loads(canonical_dumps(a.to_canonical_dict())))
+    assert rt == a and rt.prediction_id == a.prediction_id
+    data = json.loads(canonical_dumps(a.to_canonical_dict()))
+    data["abstention_reason"] = "tampered"
+    with pytest.raises(ValueError, match="does not reproduce"):
+        PredictionRecord.from_dict(data)
+
+
+def test_r3_prediction_abstention_invalid_shapes():
+    with pytest.raises(ValueError, match="abstention_reason"):
+        _record(abstained=True, prediction_value=None, uncertainty_kind=None,
+                uncertainty_value=None)
+    for leak in ({"prediction_value": 0.0}, {"uncertainty_kind": "stdev"},
+                 {"uncertainty_value": 0.01}):
+        kwargs = dict(abstained=True, abstention_reason="r", prediction_value=None,
+                      uncertainty_kind=None, uncertainty_value=None)
+        kwargs.update(leak)
+        with pytest.raises(ValueError, match="must be None when abstained"):
+            _record(**kwargs)
+    with pytest.raises(ValueError, match="requires abstained"):
+        _record(abstention_reason="reason without abstaining")
+    with pytest.raises(ValueError):
+        _record(prediction_value=None)   # normal prediction still needs a value
+    with pytest.raises(ValueError):
+        _record(uncertainty_kind=None)
+    # abstained/abstention_reason participate in identity
+    a = _record(abstained=True, abstention_reason="reason A", prediction_value=None,
+                uncertainty_kind=None, uncertainty_value=None)
+    b = _record(abstained=True, abstention_reason="reason B", prediction_value=None,
+                uncertainty_kind=None, uncertainty_value=None)
+    assert a.prediction_id != b.prediction_id
+
+
+def test_r4_worker_producer_consistency():
+    ok_ai = _wresult()   # ai_worker, matching ids
+    assert ok_ai.provenance.producer_type == "ai_worker"
+    ok_sys = _wresult(worker_id="tool.screener", provenance=_prov(
+        producer_id="tool.screener", producer_type="system"))
+    assert ok_sys.provenance.producer_type == "system"
+    with pytest.raises(ValueError, match="must equal"):
+        _wresult(provenance=_prov(producer_id="someone.else", producer_type="ai_worker"))
+    for bad_type, extra in (("source_adapter", {"source_id": "src_" + "0" * 32}),
+                            ("derivation", {}), ("human", {})):
+        with pytest.raises(ValueError, match="producer_type"):
+            _wresult(provenance=_prov(producer_id="worker.generic_researcher",
+                                      producer_type=bad_type, **extra))
+
+
+def test_r5_worker_model_identity():
+    base = _wresult()
+    modeled = _wresult(provenance=_prov(producer_id="worker.generic_researcher",
+                                        producer_type="ai_worker", model_id="llm.local@1"))
+    other_model = _wresult(provenance=_prov(producer_id="worker.generic_researcher",
+                                            producer_type="ai_worker", model_id="llm.local@2"))
+    assert modeled.worker_result_id != other_model.worker_result_id
+    assert base.worker_result_id != modeled.worker_result_id
+    # recorded_at stays non-identity-bearing
+    later = _wresult(provenance=_prov(producer_id="worker.generic_researcher",
+                                      producer_type="ai_worker",
+                                      recorded_at=datetime(2026, 9, 1, tzinfo=UTC)))
+    assert later.worker_result_id == base.worker_result_id
+    # code_version deliberately EXCLUDED from identity (documented rationale:
+    # reproduction/attribution is the ExperimentSpec path's job; worker deploys
+    # must not fragment result identity)
+    versioned = _wresult(provenance=_prov(producer_id="worker.generic_researcher",
+                                          producer_type="ai_worker", code_version="abc123"))
+    assert versioned.worker_result_id == base.worker_result_id
+
+
+def test_r6_provenance_required_and_non_identity():
+    for ctor, kwargs in ((PredictionTask, dict(entity_ids=("AAPL",), as_of=T1, horizon_days=5,
+                                               target="return.total",
+                                               allowed_evidence_types=("market_data.close",),
+                                               provenance=None)),):
+        with pytest.raises((ValueError, TypeError)):
+            ctor(**kwargs)
+    with pytest.raises(ValueError):
+        _rtask(provenance=None)
+    with pytest.raises(ValueError):
+        _claim(provenance=None)
+    # recorded_at-only change must not change semantic ids
+    later = datetime(2026, 9, 1, tzinfo=UTC)
+    assert _task().task_id == _task(provenance=_prov(
+        producer_id="system.prediction_scheduler", recorded_at=later)).task_id
+    assert _rtask().research_task_id == _rtask(provenance=_prov(
+        producer_id="system.rd_control_plane", recorded_at=later)).research_task_id
+    wid = _wresult().worker_result_id
+    assert _claim(worker_result_ids=(wid,)).claim_id == _claim(
+        worker_result_ids=(wid,),
+        provenance=_prov(producer_id="worker.generic_researcher",
+                         producer_type="ai_worker", recorded_at=later)).claim_id
+    # provenance survives round trips
+    for obj, cls in ((_task(), PredictionTask), (_rtask(), ResearchTask), (_claim(), ResearchClaim)):
+        rt = cls.from_dict(json.loads(canonical_dumps(obj.to_canonical_dict())))
+        assert rt.provenance == obj.provenance
+
+
+def test_r7_strict_containers_and_wildcard():
+    # raw string must raise, not explode into characters
+    with pytest.raises(ValueError, match="list or tuple"):
+        _task(entity_ids="IBM")
+    with pytest.raises(ValueError, match="list or tuple"):
+        _task(allowed_evidence_types=b"bytes")
+    with pytest.raises(ValueError, match="list or tuple"):
+        _rtask(scope_entities={"AAPL"})                    # set rejected
+    with pytest.raises(ValueError, match="list or tuple"):
+        _claim(scope_entities=(e for e in ("AAPL",)))      # generator rejected
+    with pytest.raises(ValueError, match="list or tuple"):
+        _record(evidence_refs={_snapshot().ref()})         # set of refs rejected
+    with pytest.raises(ValueError):
+        _task(entity_ids=("AAPL", "AAPL"))                 # duplicates still rejected
+    # list accepted, tuple accepted, both normalize identically
+    a = _task(entity_ids=["MSFT", "AAPL"])
+    b = _task(entity_ids=("AAPL", "MSFT"))
+    assert a == b and a.task_id == b.task_id and a.entity_ids == ("AAPL", "MSFT")
+    # wildcard: sole value valid, mixture invalid, undefined elsewhere
+    w = _task(allowed_evidence_types=("*",))
+    assert w.allowed_evidence_types == ("*",)
+    assert _rtask(allowed_evidence_types=["*"]).allowed_evidence_types == ("*",)
+    with pytest.raises(ValueError, match="sole"):
+        _task(allowed_evidence_types=("*", "market_data.close"))
+    with pytest.raises(ValueError, match="wildcard"):
+        _task(entity_ids=("*",))                           # no wildcard semantics on universes

@@ -203,12 +203,39 @@ would be an additive future change if a concrete correctness need arises.
 
 Milestone 2 implemented the prediction + research families below. Milestone 3
 families (ExperimentSpec onward) remain specified-only. Implemented families
-add three kernel-wide conventions: unordered ref/scope collections are
-normalized to sorted canonical form at construction (equality ≡
-serialization); provenance model/transformation identity, when present, must
-agree exactly with the record's explicit fields; and authority/action
-surfaces are structurally banned (prediction contracts reject
-allocation/action keys; worker findings reject authority-claiming keys).
+add these kernel-wide conventions (0B.2 hardening-final):
+
+- **Unordered collections** accept ONLY list/tuple (strings/bytes/mappings/
+  sets/generators rejected — `entity_ids="IBM"` raises), reject duplicates,
+  and normalize to sorted canonical tuples (equality ≡ identity ≡
+  serialization). Where `"*"` means explicitly unrestricted
+  (`allowed_evidence_types` on PredictionTask/ResearchTask) it must be the
+  SOLE value.
+- **Provenance is REQUIRED on all five Milestone-2 contracts**
+  (PredictionTask, PredictionRecord, ResearchTask, WorkerResult,
+  ResearchClaim). For PredictionTask/ResearchTask/ResearchClaim it is
+  attribution metadata and does NOT participate in semantic identity — a
+  `recorded_at`-only change never changes `ptk_`/`rtk_`/`rcl_` ids. For
+  WorkerResult, `worker_id == provenance.producer_id` is enforced, producer
+  type must be `ai_worker` or `system`, and `provenance.model_id` IS
+  identity-bearing (a different model is a different result);
+  `recorded_at` stays non-identity everywhere, and worker `code_version` is
+  deliberately excluded from identity (reproduction/attribution is the
+  ExperimentSpec path's job — deploys must not fragment result identity).
+  PredictionRecord's `provenance.model_id`, when present, must equal
+  `<model_id>@<model_version>`.
+- **Deep immutability**: identity-bearing mappings freeze to canonical bytes
+  at construction (snapshot-payload discipline: `EvidenceSnapshot.payload`,
+  `WorkerResult.findings`, `PredictionTask.target_params`); numeric sequence
+  values freeze to tuples (`PredictionRecord.prediction_value`/
+  `uncertainty_value`) — caller mutation can never change identity.
+- **First-class abstention** on PredictionRecord (like WorkerResult):
+  `abstained=True` requires a reason and Nones for prediction/uncertainty
+  (never zeros/NaN/magic values); evidence refs may be empty or retained;
+  abstention fields are identity-bearing. Normal records still require
+  value, uncertainty, and non-empty evidence.
+- **Authority/action surfaces structurally banned** (prediction contracts
+  reject allocation/action keys; worker findings reject authority keys).
 
 Each family below lists responsibility / producer / consumer / key fields /
 identity / lifecycle / failure semantics. All inherit the kernel rules:
