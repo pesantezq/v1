@@ -157,13 +157,20 @@ class TestProjectStateKeys:
         assert "deployment_context" in self.state
 
     def test_vps_context_flags(self):
+        # 2026-08-09 NORTHSTAR_0A authority reconciliation: the pre-2026-05
+        # claims (claude_does_not_run_on_vps / vps_validation_is_manual) are
+        # superseded. Claude runs on the laptop AND the production VPS; the
+        # VPS mode is declared per docs/CLAUDE_VPS_MODES.md and the authority
+        # model is config/agent_policy.yaml.
         dc = self.state.get("deployment_context", {})
-        assert dc.get("claude_does_not_run_on_vps") is True, (
-            "deployment_context.claude_does_not_run_on_vps must be True"
+        assert dc.get("claude_environments") == ["operator_laptop", "production_vps"], (
+            "deployment_context.claude_environments must list both environments"
         )
-        assert dc.get("vps_validation_is_manual") is True, (
-            "deployment_context.vps_validation_is_manual must be True"
+        assert dc.get("authority_policy") == "config/agent_policy.yaml"
+        assert "claude_does_not_run_on_vps" not in dc, (
+            "stale pre-2026-05 flag must not reappear as a live claim"
         )
+        assert dc.get("vps_commands_returned_for_user_when_claude_runs_on_laptop") is True
 
 
 # ── phase_status.yaml keys ─────────────────────────────────────────────────

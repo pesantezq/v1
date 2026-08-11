@@ -1,17 +1,143 @@
 # Agent Orchestration — Phase Status
 # Structured roadmap status for agent context.
-# Last updated: 2026-07-01 (2026-06 monthly-tool-analysis run logged — AMBER;
-# next step unchanged = observe_and_iterate. See observe_and_iterate block below,
-# .agent/project_state.yaml:last_monthly_analysis + june_2026_shipped,
-# docs/monthly_reports/2026-06.md. Prior: 2026-06-01 inaugural monthly run.)
+# Last updated: 2026-08-09 PM (PHASE 0A COMPLETE — gate
+# NORTHSTAR_GOVERNANCE_FOUNDATION_READY; Phase 0B ACTIVE. Prior: opened
+# stockbot_northstar_redesign block below is the CURRENT top-level roadmap
+# objective; observe_and_iterate superseded as SOLE objective (its observation
+# mission continues as a program parallel workstream). See
+# docs/NORTHSTAR_REDESIGN.md + .agent/project_state.yaml:northstar_program.
+# Prior: 2026-07-01 (2026-06 monthly-tool-analysis run logged — AMBER).)
 
 # ---------------------------------------------------------------------------
-# Observe-and-iterate phase status (current)
+# STOCKBOT_NORTHSTAR_REDESIGN (current program, opened 2026-08-09)
+# Charter: docs/NORTHSTAR_REDESIGN.md. Authority: config/agent_policy.yaml.
+# Statuses: complete | active | ready | blocked | waiting_for_evidence |
+#           deferred | not_started | superseded
+# NO future phase below is implemented. Phase 0A is NOT complete while its
+# CI milestone is outstanding.
+# ---------------------------------------------------------------------------
+
+stockbot_northstar_redesign:
+  status: active
+  opened: 2026-08-09
+  charter: docs/NORTHSTAR_REDESIGN.md
+  gates_achieved:
+    - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09; GPT SESSION_CLOSED — NORTHSTAR_PHASE_0A
+  phases:
+    northstar_phase_0a:
+      name: "Architecture, Authority & CI Foundation"
+      status: complete   # 2026-08-09 — gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY
+      gate: NORTHSTAR_GOVERNANCE_FOUNDATION_READY
+      milestones:
+        northstar_0a_authority_roadmap_reconciliation:
+          status: complete   # 2026-08-09; final authority SHA 1794a164 after 3 GPT-reviewed hardening passes (Agent Lab boundary; real_portfolio_action terminology; quant_router/stratlab_certification split; runtime accuracy; environment gating; execution-mode ↔ operational-authority decoupling)
+          deliverables:
+            - docs/NORTHSTAR_REDESIGN.md
+            - config/agent_policy.yaml
+            - portfolio_automation/agent_policy.py
+            - .agent/project_state.yaml northstar_program block + reconciled deployment_context
+            - tests/test_agent_policy.py + tests/test_northstar_authority.py
+        northstar_0a_ci_foundation:
+          status: complete   # 2026-08-09 — remote GREEN: northstar-ci run 31338193791 @ 3fa43377 (Northstar governance SUCCESS + Hermetic regression tests SUCCESS; 10,241 passed / 1 skipped / 10 classified-deselected / 7 subtests)
+          deliverables:
+            - .github/workflows/northstar-ci.yml (validation-only; contents:read; no secrets/VPS/production)
+            - docs/NORTHSTAR_REDESIGN.md §6b (CI scope + non-hermetic classifications)
+          backlog:  # documented CI qualifications — none block 0B
+            - make the 10 classified non-hermetic test IDs hermetic (live-artifact class + production-host-assumption class)
+            - torch/CUDA wheel weight (consider CPU index pin)
+            - GitHub action/Node deprecation warnings
+    northstar_phase_0b:
+      name: "Canonical Evidence, Prediction & Worker Contracts"
+      status: active   # NOT complete — milestones 2+ outstanding
+      step: northstar_0b_canonical_contracts
+      milestones:
+        northstar_0b_contract_architecture_and_evidence_kernel:
+          status: complete   # 2026-08-09 — docs/NORTHSTAR_CONTRACTS.md (full 15-family architecture spec) + evidence kernel implemented: portfolio_automation/northstar/ (canonical strict serializer + sha256 identity, PointInTime with no-fabricated-time discipline, Provenance, DataSourceDescriptor, EvidenceSnapshot + revision chains, EvidenceRef, FeatureRecord). Contracts only — no engines, adapters, wiring, or vendor integrations. HARDENED 2026-08-10 (GPT review verdict HARDEN_THIS_SESSION applied): fail-closed exact schema-version gate (serde.require_schema_version) + constructor pinning; schema era (major version) participates in every deterministic identity; centralized id/hash format validators + EvidenceRef schema_version; provenance consistency (source_adapter requires source_id; snapshot/provenance source agreement; feature transformation_id == derivation_id@derivation_version); feature inputs documented + enforced as an unordered dependency set (order-free identity, duplicates rejected). 44 focused tests (tests/test_northstar_evidence_kernel.py). Certification state: hardened PASS CANDIDATE pending GPT independent verification — "complete" here means implemented+hardened, not finally certified.
+          deliverables:
+            - docs/NORTHSTAR_CONTRACTS.md
+            - portfolio_automation/northstar/ (canonical, pit, provenance, serde, sources, evidence, features)
+            - tests/test_northstar_evidence_kernel.py
+        northstar_0b_prediction_research_experiment_contracts:
+          status: ready      # next 0B milestone — PredictionTask/PredictionRecord + ResearchTask/WorkerResult/ResearchClaim (specified in docs/NORTHSTAR_CONTRACTS.md §6)
+        northstar_0b_decision_outcome_passport_contracts:
+          status: not_started  # ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport
+      purpose: >-
+        Define stable, validated, point-in-time-capable domain contracts that
+        decouple producers from consumers before building the new
+        intelligence engines. Contracts only — no engines, no runtimes, no
+        data-source integrations or purchases.
+      contract_families:
+        - EvidenceRef / EvidenceSnapshot / DataSourceDescriptor / FeatureRecord
+        - PredictionTask / PredictionRecord
+        - ResearchTask / WorkerResult / ResearchClaim
+        - ExperimentSpec / ExperimentResult
+        - CapitalProposal / ExitProposal / OutcomeRecord
+        - StrategyPassport
+      requirements:
+        - deterministic identity + versioning
+        - provenance (producer / source / model / code version)
+        - point-in-time semantics (observed/published/known/retrieved timestamps, effective period, snapshot/hash)
+        - immutability + replay (an experiment identifies the evidence and contract versions it consumed)
+        - additive schema evolution without breaking historical records
+        - separation of concerns (PredictionRecord can never become a CapitalProposal; a CapitalProposal cannot mutate its PredictionRecord; ExitProposal attributable separately; WorkerResult is evidence/candidate material, never production truth)
+        - extensible replaceable data sources as Evidence Plane inputs (FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial/alternative data) — never vendor schemas embedded in Prediction / Capital & Risk / Exit / StratLab / AI workers
+      note: >-
+        AI worker CONTRACTS are authored here (contract-first); governed
+        worker runtimes wait for phases 5+ under the Prime-free Local R&D
+        direction (R&D Control Plane -> Secure Sandbox -> Generic Workers ->
+        Local Models / Trusted Tools). Prime is superseded as orchestrator.
+    northstar_phase_0c:
+      name: "Point-in-Time EvidenceGateway & Research Store"
+      status: not_started
+    northstar_phase_0d:
+      name: "Certification, Champion/Challenger & Incremental-Value Foundation"
+      status: not_started
+    northstar_phase_1:
+      name: "Prediction Engine v2"
+      status: not_started
+    northstar_phase_2:
+      name: "Capital & Risk Engine v2"
+      status: not_started
+    northstar_phase_3:
+      name: "Exit & Replacement Engine v2"
+      status: not_started
+    northstar_phase_4:
+      name: "Evidence-Weighted Influence Engine"
+      status: not_started
+    northstar_phase_5:
+      name: "Governed AI Worker Runtime"
+      status: not_started
+    northstar_phase_6:
+      name: "Finance Worker / research loop / worker expansion (6+)"
+      status: not_started
+      note: Prime-free — supersedes the earlier "Prime + Local Worker" naming; Prime is not the orchestrator in the target architecture
+    northstar_phase_7:
+      name: "TradingAgents Certification & Shadow Integration (worker expansion, conditional)"
+      status: not_started
+    northstar_phase_8:
+      name: "FinRobot / Additional Specialists"
+      status: not_started
+      note: conditional on demonstrated need — not required infrastructure
+    northstar_phase_9:
+      name: "Strategy & Product Factory"
+      status: not_started
+    northstar_phase_10:
+      name: "End-to-End Shadow Certification"
+      status: not_started
+    northstar_phase_11:
+      name: "Human-Gated Production Advisory Migration"
+      status: not_started
+
+# ---------------------------------------------------------------------------
+# Observe-and-iterate phase status (2026-05-20 → 2026-08-09; superseded as the
+# SOLE top-level objective by stockbot_northstar_redesign. The observation /
+# outcome-collection mission itself CONTINUES as a program parallel workstream.
+# Block preserved unchanged below for history.)
 # ---------------------------------------------------------------------------
 
 observe_and_iterate:
-  status: active
-  next_official_step_unchanged: true
+  status: superseded  # 2026-08-09: as sole top-level objective, by stockbot_northstar_redesign; observation continues as parallel workstream (was: active)
+  next_official_step_unchanged: false  # 2026-08-09: next_official_step is now northstar_0a_ci_foundation (was: true)
   last_monthly_analysis:
     date: 2026-07-01
     verdict: AMBER

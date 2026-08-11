@@ -1,0 +1,155 @@
+# StockBot Northstar CI — Phase 0A governance foundation
+# (NORTHSTAR_0A_CI_FOUNDATION, 2026-08-09)
+#
+# Validation only. This workflow provides reproducible evidence, independent
+# of any agent's local/VPS claims, that the repository's engineering and
+# governance invariants hold: syntax/import health, the machine-readable
+# authority model (config/agent_policy.yaml), Northstar project-state
+# correctness, documentation/governance consistency, the operator-control
+# boundary, and the broad hermetic regression suite.
+#
+# It deliberately does NOT: reproduce the production pipeline, contact the
+# VPS, use any credential or secret, read live outputs/, or mutate anything.
+# Live production validation (real artifacts, cron, services, broker/FMP
+# reachability) stays on the VPS and is out of CI scope by design — see
+# docs/NORTHSTAR_REDESIGN.md §"CI foundation".
+
+name: northstar-ci
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/northstar-**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Test-only CI: read the repo, write nothing.
+permissions:
+  contents: read
+
+# Supersede in-flight runs for the same ref; keep main runs complete.
+concurrency:
+  group: northstar-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  northstar-governance:
+    name: Northstar governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        # requirements.txt is the repository's single authoritative dependency
+        # source; pytest is a test-only addition (deliberately not a runtime
+        # requirement). No uv/poetry — plain pip per repo convention.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Compile
+        run: |
+          python -m py_compile \
+            portfolio_automation/agent_policy.py \
+            scripts/agent_context_check.py
+
+      - name: Validate project state (agent context check)
+        run: python scripts/agent_context_check.py
+
+      - name: Validate Northstar authority policy
+        run: python -m pytest -q tests/test_agent_policy.py
+
+      - name: Validate Northstar roadmap state
+        run: |
+          python -m pytest -q \
+            tests/test_northstar_authority.py \
+            tests/test_agent_context_check.py
+
+      - name: Validate documentation governance
+        run: python -m pytest -q tests/test_doc_audit.py
+
+      - name: Validate operator-control boundary
+        run: python -m pytest -q tests/test_operator_control.py
+
+  tests:
+    name: Hermetic regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Configure git identity for test fixtures
+        # tests/test_worker_workspace.py exercises clone/worktree isolation by
+        # making real git commits; hosted runners have no global git identity
+        # (the VPS does), so provide the standard CI one. This is runner
+        # infrastructure, not a test weakening.
+        run: |
+          git config --global user.email "ci@northstar.invalid"
+          git config --global user.name "northstar-ci"
+
+      - name: Run hermetic regression suite
+        # The repository's declared full-suite command
+        # (.agent/project_state.yaml:required_test_policy.full_suite_command)
+        # with its two pre-existing declared exclusions, plus 5 deselected
+        # test IDs that VALIDATE LIVE PRODUCTION RUNTIME STATE and therefore
+        # cannot run hermetically (classified 2026-08-09 by running the full
+        # 10,252-test suite in a bare worktree — 10,246 passed; each of the 5
+        # was then proven to pass against the live VPS corpus, i.e. they are
+        # live-artifact-dependent, not regressions; they remain VPS-side
+        # validation):
+        #   - test_artifact_registry: validates the live outputs/ corpus
+        #     (14 required runtime artifacts absent in a fresh checkout)
+        #   - test_gui_dashboard_memo/quant (3): render routes against live
+        #     outputs/latest daily-memo + quant artifacts
+        #   - test_strategy_projection_anchor: reads the live sandbox
+        #     active-strategy selection
+        # Plus 5 deselected test IDs with PRODUCTION-HOST assumptions,
+        # exposed by remote run 31336323571 (they pass on the VPS; hermetic
+        # rewrites are a documented follow-up, and they keep running in the
+        # VPS-side full suite):
+        #   - test_broker_overlay (4): call load_config with the hardcoded
+        #     absolute path /opt/stockbot/config.json
+        #   - test_operator_worker_runner::test_safe_repair_uses_accept_edits_
+        #     and_strips_api_key: requires a `claude` binary on PATH
+        #     (_run_direct_claude returns early without one, so the test's
+        #     subprocess monkeypatch is never reached)
+        # tests/conftest.py guards the protected scoring registry during the
+        # run. Any OTHER failure here is a real regression — do not mask it
+        # with skips or `|| true`.
+        run: |
+          python -m pytest -q \
+            --ignore=tests/test_gui_api_health.py \
+            --ignore=tests/test_gui_insight_cards.py \
+            --deselect "tests/test_artifact_registry.py::test_sqg_registration_keeps_registry_green_and_debt_free" \
+            --deselect "tests/test_gui_dashboard_memo.py::test_memo_route_all_six_section_headings_present" \
+            --deselect "tests/test_gui_dashboard_memo.py::test_memo_route_has_stacked_sections" \
+            --deselect "tests/test_gui_dashboard_quant.py::test_quant_route_mobile_card_stack_present" \
+            --deselect "tests/test_strategy_projection_anchor.py::test_projection_sets_anchor_strategy_id_when_selected" \
+            --deselect "tests/test_broker_overlay.py::test_apply_overlay_to_config_object" \
+            --deselect "tests/test_broker_overlay.py::test_apply_overlay_writes_source_artifact" \
+            --deselect "tests/test_broker_overlay.py::test_apply_overlay_config_fallback_returns_unchanged" \
+            --deselect "tests/test_broker_overlay.py::test_apply_overlay_records_config_source_on_fallback" \
+            --deselect "tests/test_operator_worker_runner.py::test_safe_repair_uses_accept_edits_and_strips_api_key"

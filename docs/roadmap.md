@@ -1,5 +1,41 @@
 # Roadmap
 
+## Strategic Goal — StockBot Northstar Redesign (opened 2026-08-09, ACTIVE)
+
+The roadmap is now organized as **Strategic Goal → Program → Phase → Milestone
+→ Deliverable**. The authoritative machine-readable state is
+`.agent/project_state.yaml` (program / current phase / current step /
+next_official_step) and `.agent/phase_status.yaml`
+(`stockbot_northstar_redesign` block); the full program charter — governing
+North Star statement, all phases (0A–11) with objectives / dependencies /
+unlocks / exit gates / statuses, the target architectural planes, AI worker
+role classes, critical path, and parallel workstreams — is
+**`docs/NORTHSTAR_REDESIGN.md`**. The agent authority model is
+**`config/agent_policy.yaml`**.
+
+Current position (2026-08-09 PM):
+
+- **Program:** `stockbot_northstar_redesign` — ACTIVE; gate achieved:
+  `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`
+- **Phase 0A** (Architecture, Authority & CI Foundation) — **COMPLETE**
+  (authority @ `1794a164`; remote CI GREEN run `31338193791` @ `3fa43377`;
+  GPT `SESSION_CLOSED — NORTHSTAR_PHASE_0A`)
+- **Phase:** `northstar_phase_0b` (Canonical Evidence, Prediction & Worker
+  Contracts) — **ACTIVE**
+- **Step / Next:** `northstar_0b_canonical_contracts` — contracts only; no
+  engines, runtimes, or data-source integrations
+- Phases 0C–11 are defined, **not started**. No future phase is implemented.
+  AI worker runtimes follow the **Prime-free Local R&D direction** (Prime is
+  superseded as orchestrator).
+
+The `observe_and_iterate` objective that headed this roadmap 2026-05-20 →
+2026-08-09 is superseded **as the sole top-level objective**; production
+observation and outcome collection continue as a program parallel workstream.
+Everything below this section is the historical, reverse-chronological project
+journal and remains accurate history — it is deliberately not rewritten.
+
+---
+
 ## Crowd Radar multi-source (no-extra-cost) — built (2026-06-14)
 
 - Dev-doc-audited, entitlement-probed multi-source connector lane under

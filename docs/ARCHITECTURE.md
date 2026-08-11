@@ -2,6 +2,28 @@
 
 Last verified against code on 2026-05-20 (observability v2 modules + 17-stage safe wrapper + GUI v2 Risk & Impact tab added; P&L advisors layer was added 2026-05-15).
 
+## Northstar Target Architecture (authoritative direction, 2026-08-09)
+
+The `stockbot_northstar_redesign` program (charter: `docs/NORTHSTAR_REDESIGN.md`,
+state: `.agent/project_state.yaml:northstar_program`) makes the following
+**plane separation** the authoritative architectural direction. Everything
+below this section describes the CURRENT production system — it remains the
+**protected incumbent** and is unchanged by the program's Phase 0A; new engines
+replace incumbents only via certification → end-to-end shadow → human-gated
+migration (Phases 0D → 10 → 11).
+
+| Plane | Responsibility | Hard boundary |
+|---|---|---|
+| Evidence Plane | point-in-time, identity-bound, provenance-aware information | no lookahead; frozen evidence is immutable (generalizes Intraday Lab's preregistration / identity-era patterns) |
+| Prediction Engine | estimates future investment outcomes | **does not allocate capital**; predictions are never portfolio actions |
+| Capital & Risk Engine | whether/when/how demonstrated insights deserve capital (independently governed) | **must not modify predictions** |
+| Exit & Replacement Engine | continuation / trim / exit / replacement, evaluated independently | attributed separately from entry quality |
+| StratLab / Certification Plane | decides incremental value of predictors, allocators, exit methods, AI workers, strategies | sole path from quantitative claim to certified evidence |
+| Influence Engine (future) | governed earn/retain/lose/deny influence for demonstrated improvements | evidence-derived, bounded, reversible, audited — **not implemented** |
+| AI Worker Plane | research / investigate / extract / challenge / explain / synthesize / propose experiments — runs in the home Agent Lab on frozen/sanitized production exports, not on the VPS | no direct capital authority; no production approval authority; no broad `/opt/stockbot` access (`config/agent_policy.yaml`) |
+| Product Factory (future) | downstream consumer of validated research | commercial attractiveness cannot change research evidence, Strategy Passports, confidence, or promotion standards |
+| Human / Production Governance | final production-advisory promotion boundary | unchanged; no broker/trade execution is introduced |
+
 ## Observability v2 Layer (2026-05-18..19)
 
 Six observe-only producer modules added under `portfolio_automation/` (and
