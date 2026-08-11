@@ -362,3 +362,57 @@ the certified server verbs; the model never names a verb, path, or SQL.
 authenticated evidence admission. Future Finance/Quant/Design workers do **not**
 inherit this VPS read capability; each additional consumer needs explicit
 authority review.
+
+## Final certification — 2026-08-11 (ENGINEER_DIRECT_PROD_EVIDENCE_READY_WITH_RESTRICTIONS)
+Verdict: **`ENGINEER_DIRECT_PROD_EVIDENCE_READY_WITH_RESTRICTIONS`** (diagnostic
+only). This authorizes the Engineer Worker to *diagnose* approved real production
+evidence retrieved by the trusted controller, admitted locally, and exposed as an
+immutable sanitized snapshot. It does **not** authorize repair, service mutation,
+Daily Safe execution, deployment, push/merge, protected-path edits, Finance/Quant/
+Design production access, or broader Engineer SSH.
+
+- **VPS restricted identity accepted:** account `stockbot-engineer`, forced command
+  `/usr/local/sbin/stockbot-engineer-read` (`STOCKBOT_ENGINEER_RESTRICTED_ACCOUNT_READY`).
+- **Permanent controller key accepted:** `~/.ssh/stockbot_engineer` (ED25519,
+  `SHA256:BPNnnxrpQd147uOv45eHGl/UbC65lBncxCwTwuoR3Lw`), trusted host only; private
+  key never in repo/git/sandbox/rd-worker/Agent-Lab/model input.
+- **Host key pinned:** `~/.ssh/stockbot_engineer_known_hosts`, VPS host key
+  `SHA256:UckpYvsUR+KIIJS/zzHYkghZ12x/iUmh1OFyvbw24cg` verified out-of-band;
+  `StrictHostKeyChecking=yes`.
+- **Transport live-tested:** `daily-status`, `run-manifest`, `last-success` → `rc=0`
+  bounded evidence.
+- **Adversarial (live) passed:** `/bin/sh`, arbitrary command, unknown verb, path
+  traversal, `;`-injection → `denied` (rc≠0); `pty -tt` refused; port-forwarding
+  denied by `restrict`; local selector guards reject traversal/SQL/injection with
+  zero SSH.
+- **authorized_keys parent-directory control issue — discovered and fixed:** the
+  live enrollment had left `~/.ssh` user-owned (a rename/replace hole). Corrected by
+  relocating the trust anchor to root-owned `/etc/ssh/authorized_keys/%u` scoped to
+  the `Match User stockbot-engineer` block (every path component root-owned; admin
+  login unaffected). Re-proven: `stockbot-engineer` cannot create/unlink/rename/
+  overwrite/truncate/chmod its authorized_keys or add a sibling key
+  (`STOCKBOT_ENGINEER_CANNOT_MUTATE_SSH_AUTHORIZATION = PASS`).
+- **Local collector + immutable admission accepted:** size bound, FAIL-CLOSED secret
+  screening, run-identity binding, SHA-256, atomic `0444` no-overwrite snapshot,
+  audit metadata only, model view free of connection facts.
+- **Run-identity semantics (this cert):** `run-manifest` is the AUTHORITATIVE anchor
+  (`run_id` + `source_commit`); evidence lacking a `run_id` (e.g. `daily-status`) is
+  SUPPLEMENTAL — never treated as proof of same-run. `bind_run_identity()` /
+  `classify_against_anchor()` return `ANCHOR`/`SAME_RUN`/`SUPPLEMENTAL`/`CONFLICTING`;
+  a conflict forces `PRODUCTION_EVIDENCE_IDENTITY_UNVERIFIED` and model abstention.
+- **Real run used:** `run_id = 2026-08-10_daily_official`, `source_commit = 10bd0c50`,
+  status `complete` / `ok_with_warnings`, 0 failed stages, one content-liveness
+  warning (`universe_sanitation.top100_daily`).
+- **Model-driven diagnosis accepted:** the approved local model (`qwen2.5:7b` via the
+  inference-only facade) consumed ONLY admitted local snapshots and produced a
+  correct, evidence-grounded `EngineeringFindingV0` (identified the run status and the
+  exact warning; hypotheses hedged; every `evidence_ref` resolved; no fabricated
+  run/hash/connection facts). Under an intentionally CONFLICTING run identity the
+  model abstained (`abstain=true`).
+- **Trust boundary intact:** private key trusted-side only; rd-worker/sandbox has no
+  key and no VPS route; the model diagnosis made zero SSH (replay transport) and only
+  reached the local facade; no production file/DB/service was mutated and no Daily
+  Safe run was triggered (only read-only verbs).
+
+`DIRECT PRODUCTION EVIDENCE V0 REMAINS TEMPORARY` — to be replaced by governed Agent
+Export / authenticated evidence admission.

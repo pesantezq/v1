@@ -273,13 +273,86 @@ def _detect_secret(text: str) -> str | None:
 def assert_coherent(evidence: list[ProductionEvidenceDirectV0]) -> None:
     """Cross-evidence run-identity coherence (Phase O). Raises ProdEvidenceError
     if two admitted pieces disagree on run_id or source_commit — never silently
-    mix runs."""
+    mix runs.
+
+    IMPORTANT (Phase 4): passing this check is NOT proof that two artifacts
+    describe the SAME run. It only proves the absence of a *conflict*. Evidence
+    that carries no run_id is simply excluded here; to reason about same-run
+    membership use ``bind_run_identity`` / ``classify_against_anchor`` below,
+    which treat a missing run_id as SUPPLEMENTAL rather than as agreement."""
     run_ids = {e.run_id for e in evidence if e.admitted and e.run_id}
     commits = {e.source_commit for e in evidence if e.admitted and e.source_commit}
     if len(run_ids) > 1:
         raise ProdEvidenceError(f"mixed run_ids across evidence: {sorted(run_ids)}")
     if len(commits) > 1:
         raise ProdEvidenceError(f"mixed source_commits across evidence: {sorted(commits)}")
+
+
+# --- run-identity binding (Phase 4) -----------------------------------------
+# The run-manifest is the AUTHORITATIVE run anchor (it carries run_id +
+# source_commit). Every other admitted artifact is classified conservatively
+# against that anchor. Absence of a run_id is SUPPLEMENTAL — usable only for
+# generic/current-health/freshness context — never proof of same-run identity.
+class RunIdentityClass(str, Enum):
+    ANCHOR = "ANCHOR"              # the run-manifest that defines the anchored run
+    SAME_RUN = "SAME_RUN"         # explicitly ties to the anchor (matching run_id or commit)
+    SUPPLEMENTAL = "SUPPLEMENTAL"  # no run_id and no conflicting commit; generic/freshness only
+    CONFLICTING = "CONFLICTING"   # different run_id or source_commit -> identity unverified
+
+
+def anchor_identity(evidence: list[ProductionEvidenceDirectV0]) -> tuple[str | None, str | None]:
+    """Return (run_id, source_commit) of the authoritative run anchor — the first
+    admitted run-manifest carrying a run_id. (None, None) if there is no anchor."""
+    for e in evidence:
+        if (e.admitted and e.capability == ProductionEvidenceCapability.RUN_MANIFEST.value
+                and e.run_id):
+            return e.run_id, e.source_commit
+    return None, None
+
+
+def classify_against_anchor(ev: ProductionEvidenceDirectV0,
+                            anchor_run_id: str | None,
+                            anchor_commit: str | None) -> RunIdentityClass:
+    """Classify one admitted artifact relative to the anchored run. Missing run_id
+    is SUPPLEMENTAL (NOT same-run) unless a source_commit deterministically ties it
+    to the anchor. A differing run_id or source_commit is CONFLICTING."""
+    if (ev.capability == ProductionEvidenceCapability.RUN_MANIFEST.value
+            and ev.run_id and ev.run_id == anchor_run_id):
+        return RunIdentityClass.ANCHOR
+    if ev.run_id is not None:
+        return (RunIdentityClass.SAME_RUN if ev.run_id == anchor_run_id
+                else RunIdentityClass.CONFLICTING)
+    # No run_id: a matching source_commit is a deterministic tie; a differing one
+    # is a conflict; otherwise it is supplemental (freshness/generic context only).
+    if ev.source_commit and anchor_commit:
+        return (RunIdentityClass.SAME_RUN if ev.source_commit == anchor_commit
+                else RunIdentityClass.CONFLICTING)
+    return RunIdentityClass.SUPPLEMENTAL
+
+
+def bind_run_identity(evidence: list[ProductionEvidenceDirectV0]) -> dict[str, Any]:
+    """Produce a conservative run-identity binding over admitted evidence:
+    the anchor run_id/source_commit, each artifact's class, and whether any
+    artifact conflicts with the anchor (which must force the model to abstain on
+    the affected run-specific claim -> PRODUCTION_EVIDENCE_IDENTITY_UNVERIFIED)."""
+    admitted = [e for e in evidence if e.admitted]
+    run_id, commit = anchor_identity(admitted)
+    classes: dict[str, str] = {}
+    conflict = False
+    for e in admitted:
+        cls = classify_against_anchor(e, run_id, commit)
+        classes[e.retrieval_id] = cls.value
+        if cls is RunIdentityClass.CONFLICTING:
+            conflict = True
+    return {
+        "anchor_run_id": run_id,
+        "anchor_source_commit": commit,
+        "has_anchor": run_id is not None,
+        "classes": classes,
+        "conflict": conflict,
+        "identity_status": (ProductionEvidenceStatus.IDENTITY_UNVERIFIED.value
+                            if conflict else ProductionEvidenceStatus.AVAILABLE.value),
+    }
 
 
 class ProductionEvidenceCollector:

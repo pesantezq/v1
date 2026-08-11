@@ -163,6 +163,48 @@ def test_assert_coherent_rejects_mixed_runs(tmp_path):
     assert_coherent([a, a])   # same run -> coherent
 
 
+# --- run-identity binding (Phase 4): run-manifest = authoritative anchor -----
+def test_anchor_identity_from_run_manifest(tmp_path):
+    manifest = _collector(tmp_path, fixed('{"run_id":"2026-08-10_daily_official","source_commit":"10bd0c50"}')).retrieve(Cap.RUN_MANIFEST)
+    status = _collector(tmp_path, fixed('{"status":"ok_with_warnings"}')).retrieve(Cap.DAILY_STATUS)
+    run_id, commit = PE.anchor_identity([manifest, status])
+    assert run_id == "2026-08-10_daily_official" and commit == "10bd0c50"
+
+
+def test_missing_run_id_is_supplemental_not_same_run(tmp_path):
+    """A daily-status with NO run_id must NOT be treated as proof of same-run."""
+    manifest = _collector(tmp_path, fixed('{"run_id":"R1","source_commit":"c1"}')).retrieve(Cap.RUN_MANIFEST)
+    status = _collector(tmp_path, fixed('{"status":"green"}')).retrieve(Cap.DAILY_STATUS)
+    cls = PE.classify_against_anchor(status, "R1", "c1")
+    assert cls is PE.RunIdentityClass.SUPPLEMENTAL          # NOT SAME_RUN
+    assert PE.classify_against_anchor(manifest, "R1", "c1") is PE.RunIdentityClass.ANCHOR
+    binding = PE.bind_run_identity([manifest, status])
+    assert binding["anchor_run_id"] == "R1" and binding["conflict"] is False
+    assert binding["classes"][status.retrieval_id] == "SUPPLEMENTAL"
+
+
+def test_conflicting_run_id_forces_identity_unverified(tmp_path):
+    manifest = _collector(tmp_path, fixed('{"run_id":"R1","source_commit":"c1"}')).retrieve(Cap.RUN_MANIFEST)
+    other = _collector(tmp_path, fixed('{"run_id":"R2"}')).retrieve(Cap.DAILY_STATUS)
+    binding = PE.bind_run_identity([manifest, other])
+    assert binding["conflict"] is True
+    assert binding["identity_status"] == St.IDENTITY_UNVERIFIED.value
+    assert binding["classes"][other.retrieval_id] == "CONFLICTING"
+
+
+def test_conflicting_source_commit_detected(tmp_path):
+    """No run_id but a DIFFERENT source_commit than the anchor is a conflict."""
+    manifest = _collector(tmp_path, fixed('{"run_id":"R1","source_commit":"c1"}')).retrieve(Cap.RUN_MANIFEST)
+    log = _collector(tmp_path, fixed('{"commit":"c2","note":"x"}')).retrieve(Cap.DAILY_LOG, "today")
+    assert PE.classify_against_anchor(log, "R1", "c1") is PE.RunIdentityClass.CONFLICTING
+
+
+def test_matching_source_commit_ties_supplemental_to_run(tmp_path):
+    manifest = _collector(tmp_path, fixed('{"run_id":"R1","source_commit":"c1"}')).retrieve(Cap.RUN_MANIFEST)
+    log = _collector(tmp_path, fixed('{"commit":"c1","note":"x"}')).retrieve(Cap.DAILY_LOG, "today")
+    assert PE.classify_against_anchor(log, "R1", "c1") is PE.RunIdentityClass.SAME_RUN
+
+
 # --- snapshot hardening (Phase Q) -------------------------------------------
 def test_snapshot_no_overwrite(tmp_path):
     c = _collector(tmp_path, fixed('{"ok":1}'))
