@@ -48,8 +48,19 @@ stockbot_northstar_redesign:
             - GitHub action/Node deprecation warnings
     northstar_phase_0b:
       name: "Canonical Evidence, Prediction & Worker Contracts"
-      status: active   # 2026-08-09 PM — current step: northstar_0b_canonical_contracts
+      status: active   # NOT complete — milestones 2+ outstanding
       step: northstar_0b_canonical_contracts
+      milestones:
+        northstar_0b_contract_architecture_and_evidence_kernel:
+          status: complete   # 2026-08-09 — docs/NORTHSTAR_CONTRACTS.md (full 15-family architecture spec) + evidence kernel implemented: portfolio_automation/northstar/ (canonical strict serializer + sha256 identity, PointInTime with no-fabricated-time discipline, Provenance, DataSourceDescriptor, EvidenceSnapshot + revision chains, EvidenceRef, FeatureRecord). Contracts only — no engines, adapters, wiring, or vendor integrations. HARDENED 2026-08-10 (GPT review verdict HARDEN_THIS_SESSION applied): fail-closed exact schema-version gate (serde.require_schema_version) + constructor pinning; schema era (major version) participates in every deterministic identity; centralized id/hash format validators + EvidenceRef schema_version; provenance consistency (source_adapter requires source_id; snapshot/provenance source agreement; feature transformation_id == derivation_id@derivation_version); feature inputs documented + enforced as an unordered dependency set (order-free identity, duplicates rejected). 44 focused tests (tests/test_northstar_evidence_kernel.py). Certification state: hardened PASS CANDIDATE pending GPT independent verification — "complete" here means implemented+hardened, not finally certified.
+          deliverables:
+            - docs/NORTHSTAR_CONTRACTS.md
+            - portfolio_automation/northstar/ (canonical, pit, provenance, serde, sources, evidence, features)
+            - tests/test_northstar_evidence_kernel.py
+        northstar_0b_prediction_research_experiment_contracts:
+          status: ready      # next 0B milestone — PredictionTask/PredictionRecord + ResearchTask/WorkerResult/ResearchClaim (specified in docs/NORTHSTAR_CONTRACTS.md §6)
+        northstar_0b_decision_outcome_passport_contracts:
+          status: not_started  # ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport
       purpose: >-
         Define stable, validated, point-in-time-capable domain contracts that
         decouple producers from consumers before building the new
