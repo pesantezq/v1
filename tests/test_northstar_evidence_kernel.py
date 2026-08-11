@@ -573,10 +573,12 @@ def test_no_execution_or_approval_surface_on_evidence_contracts():
             assert not any(m.lower().startswith(word) for m in methods), (cls.__name__, word)
 
 
-def test_prediction_capital_contracts_not_yet_present():
-    # Milestone discipline: later families are NOT implemented in milestone 1.
+def test_milestone3_contracts_not_yet_present():
+    # Milestone discipline: milestone 2 shipped the prediction/research
+    # families; the experiment/decision/outcome/passport families remain
+    # unimplemented until milestone 3.
     import portfolio_automation.northstar as ns
 
-    for later in ("PredictionRecord", "CapitalProposal", "ExitProposal",
-                  "StrategyPassport", "WorkerResult", "ExperimentSpec"):
+    for later in ("CapitalProposal", "ExitProposal", "StrategyPassport",
+                  "ExperimentSpec", "ExperimentResult", "OutcomeRecord"):
         assert not hasattr(ns, later)
