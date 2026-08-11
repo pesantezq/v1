@@ -19,6 +19,7 @@ semantics): identity sorts them, duplicates are rejected.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, Tuple
@@ -124,10 +125,14 @@ class PredictionTask:
     target: str                          # namespaced target, e.g. "return.total"
     allowed_evidence_types: Tuple[str, ...]   # evidence-type scope (non-empty; "*" = explicitly unrestricted)
     allowed_feature_names: Tuple[str, ...] = ()  # feature scope (may be empty = features not required)
-    target_params: Optional[dict] = None      # strict-JSON params refining the target (identity-bearing)
     notes: Optional[str] = None                # human context — NOT identity-bearing
+    target_params_canonical: Optional[str] = field(init=False, default=None)
     schema_version: str = SCHEMA_VERSION
     contract_type: str = field(default=TASK_CONTRACT_TYPE, init=False)
+    # Construction-only input (snapshot-payload discipline): validated, frozen
+    # to canonical bytes, and the caller's mutable reference is dropped —
+    # task identity can never change after construction.
+    target_params: Optional[dict] = None       # strict-JSON params refining the target (identity-bearing)
 
     def __post_init__(self) -> None:
         for name in ("entity_ids", "allowed_evidence_types", "allowed_feature_names"):
@@ -145,16 +150,26 @@ class PredictionTask:
             raise ValueError("horizon_days must be a positive integer")
         if not self.target or not isinstance(self.target, str):
             raise ValueError("target is required")
-        if self.target_params is not None:
-            if not isinstance(self.target_params, dict) or not self.target_params:
+        raw_params = self.target_params
+        if raw_params is not None:
+            if not isinstance(raw_params, dict) or not raw_params:
                 raise ValueError("target_params must be a non-empty mapping or None")
-            canonical_dumps(self.target_params)  # strict-JSON validation
-        _reject_action_surface("target_params", self.target_params)
+            _reject_action_surface("target_params", raw_params)
+            # Freeze by value: strict canonical validation, then the canonical
+            # string is the truth and the caller's mutable dict is dropped.
+            object.__setattr__(self, "target_params_canonical", canonical_dumps(raw_params))
+        object.__setattr__(self, "target_params", None)
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(
                 f"schema_version must be {SCHEMA_VERSION!r} (this kernel), "
                 f"got {self.schema_version!r}"
             )
+
+    def target_params_copy(self) -> Optional[dict]:
+        """A FRESH deep copy of target_params (or None); mutating it changes nothing."""
+        if self.target_params_canonical is None:
+            return None
+        return json.loads(self.target_params_canonical)
 
     def _identity_payload(self) -> dict:
         return {
@@ -164,7 +179,7 @@ class PredictionTask:
             "as_of": self.as_of,
             "horizon_days": self.horizon_days,
             "target": self.target,
-            "target_params": self.target_params,
+            "target_params": self.target_params_copy(),
             "allowed_evidence_types": sorted(self.allowed_evidence_types),
             "allowed_feature_names": sorted(self.allowed_feature_names),
         }
@@ -182,7 +197,7 @@ class PredictionTask:
             "as_of": self.as_of,
             "horizon_days": self.horizon_days,
             "target": self.target,
-            "target_params": self.target_params,
+            "target_params": self.target_params_copy(),
             "allowed_evidence_types": sorted(self.allowed_evidence_types),
             "allowed_feature_names": sorted(self.allowed_feature_names),
             "notes": self.notes,

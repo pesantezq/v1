@@ -337,3 +337,35 @@ def test_contract_types_distinct_and_prefixed():
     }
     prefixes = {v.split("_", 1)[0] for v in objs.values()}
     assert prefixes == {"ptk", "prd", "rtk", "wkr", "rcl"}
+
+
+# ── 0B.2 hardening: PredictionTask deep immutability ───────────────────────
+
+
+def test_task_params_caller_mutation_cannot_change_identity():
+    params = {"benchmark": "SPY", "bands": [1, 2, 3]}
+    t = _task(target_params=params)
+    before = t.task_id
+    params["benchmark"] = "TAMPERED"      # caller mutates original reference
+    params["bands"].append(99)
+    assert t.task_id == before
+    assert t.target_params_copy() == {"benchmark": "SPY", "bands": [1, 2, 3]}
+    # The mutable reference was dropped entirely (snapshot-payload discipline).
+    assert t.target_params is None
+
+
+def test_task_params_copy_is_fresh_each_access():
+    t = _task(target_params={"benchmark": "SPY"})
+    copy = t.target_params_copy()
+    copy["benchmark"] = "TAMPERED"
+    assert t.target_params_copy() == {"benchmark": "SPY"}
+    assert _task(target_params=None).target_params_copy() is None
+
+
+def test_task_params_identity_and_round_trip_preserved():
+    a = _task(target_params={"benchmark": "SPY"})
+    b = _task(target_params={"benchmark": "SPY"})
+    assert a.task_id == b.task_id and a == b
+    assert a.task_id != _task(target_params={"benchmark": "QQQ"}).task_id
+    rt = PredictionTask.from_dict(json.loads(canonical_dumps(a.to_canonical_dict())))
+    assert rt.task_id == a.task_id and rt == a
