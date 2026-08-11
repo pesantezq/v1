@@ -161,14 +161,16 @@ def _read_production_evidence(cfg: ControllerConfig, argument: str) -> Diagnosti
         return DiagnosticSource(name="prod_evidence", ok=False, provenance=prov,
                                 data={"status": prod_evidence.ProductionEvidenceStatus.UNAVAILABLE.value},
                                 error="production evidence bridge not configured")
+    # The model names a PROD_* capability (+ optional date selector) — never a
+    # raw verb, path, or SQL. Resolution is deterministic + fail-closed.
     raw_cap, _, sel = (argument or "").partition(":")
     try:
-        cap = prod_evidence.ProductionEvidenceCapability(raw_cap.strip())
-    except ValueError:
+        cap, resolved_sel = prod_evidence.resolve_model_capability(raw_cap.strip(), sel.strip())
+    except prod_evidence.ProdEvidenceError as e:
         return DiagnosticSource(name="prod_evidence", ok=False, provenance=prov,
                                 data={"status": prod_evidence.ProductionEvidenceStatus.REJECTED.value},
-                                error=f"unknown production capability: {raw_cap!r}")
-    ev = cfg.prod_evidence_collector.retrieve(cap, sel)
+                                error=str(e))
+    ev = cfg.prod_evidence_collector.retrieve(cap, resolved_sel)
     ok = ev.status is prod_evidence.ProductionEvidenceStatus.AVAILABLE
     return DiagnosticSource(name="prod_evidence", ok=ok, provenance=prov,
                             data=ev.to_model_view(),

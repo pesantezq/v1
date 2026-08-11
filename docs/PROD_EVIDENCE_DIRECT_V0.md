@@ -1,5 +1,19 @@
 # Temporary Direct Production Evidence Bridge V0
 
+> **UPDATE (permanent key + certified VPS account).** The VPS side is certified
+> as `STOCKBOT_ENGINEER_RESTRICTED_ACCOUNT_READY`: the account is
+> **`stockbot-engineer`** with forced command
+> **`/usr/local/sbin/stockbot-engineer-read`** (root-owned) and the certified
+> restricted `authorized_keys` template. This supersedes the earlier
+> `stockbot-observer`/`stockbot-observe` naming in the bootstrap packet below
+> (kept as the reference template). The permanent trusted-controller key and its
+> enrollment/host-key-pin/smoke steps are in the **"Permanent controller key"**
+> section at the end of this document. The local collector
+> (`prod_evidence.py`) now targets `stockbot-engineer`, exposes model-visible
+> `ModelCapability` (`PROD_*`) names mapped to the certified server verbs, fails
+> **closed** on secret-like content, verifies **run identity**, and writes an
+> immutable, no-overwrite, symlink-safe local snapshot.
+
 **Status: TEMPORARY (`temporary_direct_read`) / experimental / non-canonical.**
 Lets the **trusted local Engineer Worker controller** retrieve a narrow set of
 **read-only** evidence from the StockBot production VPS so the local Engineer
@@ -244,3 +258,107 @@ ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
 — rather than broadening Claude's SSH authority. Do **not** add a broad
 `Bash(ssh *)` rule; any future automation is scoped to this single observer
 capability.
+
+---
+
+# Permanent controller key — enrollment + host-key pin + smoke (operator steps)
+
+The trusted controller's permanent dedicated key was generated on the trusted
+Ubuntu host (this mission):
+
+- private key: `~/.ssh/stockbot_engineer` (mode 0600, owner = operator; `~/.ssh` 0700)
+- public fingerprint: `SHA256:BPNnnxrpQd147uOv45eHGl/UbC65lBncxCwTwuoR3Lw` (ED25519)
+- comment: `stockbot-engineer-trusted-controller`
+
+Isolation proven: the private key exists ONLY on the trusted Ubuntu host, outside
+the repo, untracked by git, not in any repo file; the StockBot-Agent-Lab distro
+has no `/home/pesan`, no copy of the key anywhere, and `rd-worker` cannot read the
+path (it does not exist in that distro). It is never in the sandbox, model input,
+`.env`, telemetry, or `ProductionEvidenceDirectV0`.
+
+## Gate A — fresh external operator SSH (HUMAN)
+Before enrolling the permanent key, open a NEW SSH session from the machine you
+normally use to administer the VPS and confirm the *admin* login still works. Do
+not substitute a localhost/self-login. Record: timestamp, host identity, success
+(no secrets). If it fails, STOP — restore operator access first.
+
+## Phase E/F — enroll ONLY the public key (certified restricted template)
+Append this single line to `stockbot-engineer`'s `authorized_keys` on the VPS
+(root-controlled file, not writable by `stockbot-engineer`). It preserves the
+certified restrictions (`restrict` implies no-agent/port/x11-forwarding, no-pty,
+no-user-rc) and pins the forced command:
+
+```
+restrict,command="/usr/local/sbin/stockbot-engineer-read" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILl7UC9XUX33ZVxeR9+y6K36xggxUx+hZE9FrtsbhDUh stockbot-engineer-trusted-controller
+```
+
+Apply via your existing VPS root/Claude session (the local harness blocks
+outbound SSH; do not route around it). The change must be: one restricted key
+entry, no sshd change, no permission broadening, no extra account change. Then
+verify from the VPS: the fingerprint matches `SHA256:BPNnnxrpQd147uOv45eHGl/UbC65lBncxCwTwuoR3Lw`,
+the `restrict,command=…` options are present, there is no duplicate unrestricted
+key, and no private key exists on the VPS.
+
+## Phase H — pin the VPS host identity (dedicated known_hosts)
+Do NOT use `StrictHostKeyChecking=no`. Capture the host key into a dedicated
+known_hosts and verify the fingerprint out-of-band (against the VPS-reported
+value) BEFORE trusting it:
+```bash
+ssh-keyscan -t ed25519 -p 22 46.224.25.135 > ~/.ssh/known_hosts_stockbot_engineer
+ssh-keygen -lf ~/.ssh/known_hosts_stockbot_engineer   # compare to the VPS-reported host fingerprint
+```
+Record: host `46.224.25.135`, key type ed25519, the fingerprint, and the
+verification source. The collector uses `StrictHostKeyChecking=yes` +
+`UserKnownHostsFile=~/.ssh/known_hosts_stockbot_engineer`; a changed key →
+`PRODUCTION_EVIDENCE_UNAVAILABLE` (never auto-accept).
+
+## Phase G — permanent-key smoke (positive + negative)
+```bash
+SSHE="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile=$HOME/.ssh/known_hosts_stockbot_engineer \
+  -i $HOME/.ssh/stockbot_engineer stockbot-engineer@46.224.25.135"
+$SSHE daily-status        ; echo rc=$?     # POSITIVE: bounded evidence, rc=0
+$SSHE run-manifest        ; echo rc=$?     # POSITIVE
+$SSHE id                  ; echo rc=$?     # NEGATIVE: forced command -> denied
+$SSHE /bin/sh             ; echo rc=$?     # NEGATIVE
+$SSHE -N -L 9999:localhost:22 ; echo rc=$? # NEGATIVE: forwarding refused
+```
+Purpose: prove the PERMANENT key is bound to the same restricted authority.
+
+## Phase W — trusted collector smoke (transport/admission only, NOT model diagnosis)
+The local harness blocks the collector's outbound SSH, so run the single fixed
+invocation yourself and hand the output back for admission through the same
+pipeline (size bound → secret screen → run-identity → hash → immutable snapshot):
+```bash
+$SSHE daily-status       # capture stdout; paste it back for local admission
+$SSHE run-manifest
+```
+This certifies transport + admission separately from model behavior. Do NOT ask
+the Engineer model to diagnose production until that end-to-end gate is
+explicitly authorized.
+
+## Model-visible capability enum (the ONLY names the worker may request)
+`PROD_DAILY_STATUS`, `PROD_DAILY_STATUS_JSON`, `PROD_PIPELINE_STATUS`,
+`PROD_RUN_MANIFEST`, `PROD_HEALTH`, `PROD_LAST_SUCCESS`, `PROD_DAILY_LOG`
+(date selector), `PROD_DAILY_CHECK` (date selector), `PROD_DB_LATEST_DAILY_RUN`,
+`PROD_DB_RECENT_HEALTH`, `PROD_DB_RECENT_ERRORS`. These map deterministically to
+the certified server verbs; the model never names a verb, path, or SQL.
+
+## Run-identity, secrets, snapshot (local admission policy)
+- **Run identity:** an admitted piece's `run_id`/`source_commit` is bound; a
+  mismatch against an expected run → `IDENTITY_UNVERIFIED` (abstain). Capabilities
+  without a `run_id` by design (e.g. status) carry freshness via
+  `generated_at`/`retrieved_at`. `assert_coherent()` refuses mixed-run evidence —
+  yesterday's run / prior artifact / mixed-run is never silently substituted.
+- **Secrets:** FAIL CLOSED — any credential-shaped content (private-key blocks,
+  `token/api_key/password/...=<value>`, AWS ids, bearer/authorization) →
+  `REJECTED`. Already-`<redacted>` values pass. Secret values are never logged.
+- **Snapshot:** immutable `0444`, atomic create, **no overwrite** of an existing
+  retrieval id, symlink-safe dir + target checks; outside worker-writable state.
+  The worker receives only the admitted local snapshot, never live SSH stdout.
+
+## Future replacement + inheritance
+`DIRECT PRODUCTION EVIDENCE V0 IS TEMPORARY`, replaced by governed Agent Export /
+authenticated evidence admission. Future Finance/Quant/Design workers do **not**
+inherit this VPS read capability; each additional consumer needs explicit
+authority review.
