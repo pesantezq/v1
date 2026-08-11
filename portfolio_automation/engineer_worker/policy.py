@@ -48,6 +48,11 @@ _PROTECTED_PATTERNS: tuple[str, ...] = (
     "portfolio_automation/engineer_worker/contracts.py",
     "portfolio_automation/engineer_worker/adapters.py",
     "portfolio_automation/engineer_worker/model_adapter.py",
+    # EW-0A certification/authority core + the trusted authority state.
+    "portfolio_automation/engineer_worker/ew0a.py",
+    "portfolio_automation/engineer_worker/ew0a_authority.py",
+    "portfolio_automation/engineer_worker/gpt_supervisor.py",
+    "config/ew0a_authority",                  # trusted-controlled authority state
 )
 
 # --- repair scope: candidate edits are only allowed under these prefixes -----
