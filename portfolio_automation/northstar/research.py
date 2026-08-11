@@ -27,6 +27,7 @@ from typing import Any, Optional, Tuple
 from portfolio_automation.northstar._collections import (
     normalize_ref_set,
     normalize_string_set,
+    parse_ref_list,
 )
 from portfolio_automation.northstar.canonical import (
     CanonicalizationError,
@@ -168,11 +169,11 @@ class ResearchTask:
         obj = cls(
             question=data["question"],
             as_of=as_of,
-            allowed_evidence_types=tuple(data["allowed_evidence_types"]),
+            allowed_evidence_types=data["allowed_evidence_types"],
             output_expectation=data["output_expectation"],
             provenance=Provenance.from_dict(data["provenance"]),
             effort_class=data.get("effort_class", "standard"),
-            scope_entities=tuple(data.get("scope_entities", ())),
+            scope_entities=data.get("scope_entities", ()),
             notes=data.get("notes"),
             schema_version=data["schema_version"],
         )
@@ -318,7 +319,8 @@ class WorkerResult:
             research_task_id=data["research_task_id"],
             worker_id=data["worker_id"],
             provenance=Provenance.from_dict(data["provenance"]),
-            evidence_refs=tuple(EvidenceRef.from_dict(r) for r in data.get("evidence_refs", ())),
+            evidence_refs=parse_ref_list("evidence_refs", data.get("evidence_refs", ()),
+                                         EvidenceRef.from_dict),
             abstained=data.get("abstained", False),
             abstention_reason=data.get("abstention_reason"),
             confidence=data.get("confidence"),
@@ -432,9 +434,10 @@ class ResearchClaim:
             testable_metric=data["testable_metric"],
             direction=data["direction"],
             provenance=Provenance.from_dict(data["provenance"]),
-            evidence_refs=tuple(EvidenceRef.from_dict(r) for r in data.get("evidence_refs", ())),
-            worker_result_ids=tuple(data.get("worker_result_ids", ())),
-            scope_entities=tuple(data.get("scope_entities", ())),
+            evidence_refs=parse_ref_list("evidence_refs", data.get("evidence_refs", ()),
+                                         EvidenceRef.from_dict),
+            worker_result_ids=data.get("worker_result_ids", ()),
+            scope_entities=data.get("scope_entities", ()),
             notes=data.get("notes"),
             schema_version=data["schema_version"],
         )

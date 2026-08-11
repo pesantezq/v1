@@ -535,3 +535,64 @@ def test_r7_strict_containers_and_wildcard():
         _task(allowed_evidence_types=("*", "market_data.close"))
     with pytest.raises(ValueError, match="wildcard"):
         _task(entity_ids=("*",))                           # no wildcard semantics on universes
+
+
+# ── 0B.2 final hardening: strict containers hold on the from_dict path ──────
+
+
+def test_r7f_from_dict_rejects_string_collections():
+    # A tampered serialized document must be rejected, never exploded into
+    # characters by tuple() pre-coercion before constructor validation.
+    task_data = json.loads(canonical_dumps(_task().to_canonical_dict()))
+    task_data["entity_ids"] = "IBM"
+    with pytest.raises(ValueError, match="list or tuple"):
+        PredictionTask.from_dict(task_data)
+    task_data2 = json.loads(canonical_dumps(_task().to_canonical_dict()))
+    task_data2["allowed_evidence_types"] = "market_data.close"
+    with pytest.raises(ValueError, match="list or tuple"):
+        PredictionTask.from_dict(task_data2)
+
+    rtask_data = json.loads(canonical_dumps(_rtask().to_canonical_dict()))
+    rtask_data["scope_entities"] = "AAPL"
+    with pytest.raises(ValueError, match="list or tuple"):
+        ResearchTask.from_dict(rtask_data)
+
+    claim_data = json.loads(canonical_dumps(_claim().to_canonical_dict()))
+    claim_data["worker_result_ids"] = "wkr_" + "0" * 32
+    with pytest.raises(ValueError, match="list or tuple"):
+        ResearchClaim.from_dict(claim_data)
+
+
+def test_r7f_from_dict_rejects_malformed_ref_collections():
+    rec_data = json.loads(canonical_dumps(_record().to_canonical_dict()))
+    rec_data["evidence_refs"] = "evs_stringy"
+    with pytest.raises(ValueError, match="list or tuple"):
+        PredictionRecord.from_dict(rec_data)
+    rec_data2 = json.loads(canonical_dumps(_record().to_canonical_dict()))
+    rec_data2["evidence_refs"] = ["not-a-mapping"]
+    with pytest.raises(ValueError, match="serialized mapping"):
+        PredictionRecord.from_dict(rec_data2)
+
+    w_data = json.loads(canonical_dumps(_wresult().to_canonical_dict()))
+    w_data["evidence_refs"] = {"snapshot_id": "evs_x"}   # mapping, not a list of mappings
+    with pytest.raises(ValueError, match="list or tuple"):
+        WorkerResult.from_dict(w_data)
+
+    c_data = json.loads(canonical_dumps(_claim(evidence_refs=(_snapshot().ref(),),
+                                               worker_result_ids=()).to_canonical_dict()))
+    c_data["evidence_refs"] = [42]
+    with pytest.raises(ValueError, match="serialized mapping"):
+        ResearchClaim.from_dict(c_data)
+
+
+def test_r7f_round_trips_still_hold_for_all_five():
+    for obj, cls in (
+        (_task(target_params={"benchmark": "SPY"}), PredictionTask),
+        (_record(prediction_kind="quantiles", prediction_value=[0.01, 0.05],
+                 uncertainty_kind="quantile_band", uncertainty_value=[0.01, 0.02]), PredictionRecord),
+        (_rtask(scope_entities=("AAPL",)), ResearchTask),
+        (_wresult(), WorkerResult),
+        (_claim(), ResearchClaim),
+    ):
+        rt = cls.from_dict(json.loads(canonical_dumps(obj.to_canonical_dict())))
+        assert rt == obj

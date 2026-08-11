@@ -73,3 +73,21 @@ def normalize_ref_set(name: str, value: Any, ref_type: type, key: str) -> tuple:
     if len(ids) != len(set(ids)):
         raise ValueError(f"{name} must not contain duplicate {key}s")
     return tuple(sorted(items, key=lambda r: getattr(r, key)))
+
+
+def parse_ref_list(name: str, value: Any, ref_from_dict) -> tuple:
+    """Deserialization-path container discipline (0B.2 final hardening).
+
+    ``from_dict`` methods must NOT pre-coerce serialized collections with
+    ``tuple(...)`` or bare iteration — a tampered document carrying a string
+    would be exploded character-by-character BEFORE constructor validation.
+    This helper enforces list/tuple-ness and mapping entries FIRST, then maps
+    the ref parser; the constructor still re-validates the result.
+    """
+    items = _require_list_or_tuple(name, value)
+    for i, entry in enumerate(items):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"{name}[{i}] must be a serialized mapping, got {type(entry).__name__}"
+            )
+    return tuple(ref_from_dict(entry) for entry in items)

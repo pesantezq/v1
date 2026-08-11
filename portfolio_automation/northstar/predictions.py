@@ -27,6 +27,7 @@ from typing import Any, Optional, Tuple
 from portfolio_automation.northstar._collections import (
     normalize_ref_set,
     normalize_string_set,
+    parse_ref_list,
 )
 from portfolio_automation.northstar.canonical import (
     CanonicalizationError,
@@ -212,14 +213,17 @@ class PredictionTask:
         if as_of is None:
             raise ValueError("as_of is required")
         obj = cls(
-            entity_ids=tuple(data["entity_ids"]),
+            # Raw pass-through: the constructor's strict container validation
+            # must see the serialized value as-is (no tuple() pre-coercion,
+            # which would explode a tampered string into characters).
+            entity_ids=data["entity_ids"],
             as_of=as_of,
             horizon_days=data["horizon_days"],
             target=data["target"],
             target_params=data.get("target_params"),
-            allowed_evidence_types=tuple(data["allowed_evidence_types"]),
+            allowed_evidence_types=data["allowed_evidence_types"],
             provenance=Provenance.from_dict(data["provenance"]),
-            allowed_feature_names=tuple(data.get("allowed_feature_names", ())),
+            allowed_feature_names=data.get("allowed_feature_names", ()),
             notes=data.get("notes"),
             schema_version=data["schema_version"],
         )
@@ -400,8 +404,9 @@ class PredictionRecord:
             uncertainty_value=data.get("uncertainty_value"),
             model_id=data["model_id"],
             model_version=data["model_version"],
-            evidence_refs=tuple(EvidenceRef.from_dict(r) for r in data.get("evidence_refs", ())),
-            feature_ids=tuple(data.get("feature_ids", ())),
+            evidence_refs=parse_ref_list("evidence_refs", data.get("evidence_refs", ()),
+                                         EvidenceRef.from_dict),
+            feature_ids=data.get("feature_ids", ()),
             provenance=Provenance.from_dict(data["provenance"]),
             abstained=data.get("abstained", False),
             abstention_reason=data.get("abstention_reason"),
