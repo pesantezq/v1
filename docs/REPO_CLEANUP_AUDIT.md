@@ -46,7 +46,7 @@ Not deleted in this pass:
 
 - `demo_email_view.csv`, `demo_scored_recommendations.csv`, `demo_tracker.xlsx` - likely demo artifacts.
 - `output/` - old generated-output directory separate from governed `outputs/`.
-- `stockbot.txt`, `stockbot.txt.pub` - key-like files; review for removal/rotation outside normal code cleanup.
+- `stockbot.txt`, `stockbot.txt.pub` - **REMOVED from the working tree** (2026-08-11 hardening pass): confirmed a real unencrypted ed25519 private key + its public keys, exposed in git history/`origin/main`. Historical remediation (rotation + optional history purge) is **operator-DEFERRED / accepted-risk** — see `docs/LEGACY_CREDENTIAL_EXPOSURE.md`. New key commits are now blocked by `tools/secret_scan.py` + `tests/test_secret_hygiene.py` and `.gitignore` patterns.
 - `DEPLOYMENT.md` and `docs/deployment.md` - overlapping deployment docs that should be reconciled.
 - `decision_memo.md`, `email_draft.md`, `email_prompt.txt`, `ml_analysis_prompt.txt`, `monthly_memo.md`, `escalation_packet.md` - likely generated or prompt artifacts; confirm whether still operator-maintained.
 - `test_demo.py` - standalone demo test; confirm whether it still has value.
