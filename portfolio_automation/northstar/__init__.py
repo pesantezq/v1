@@ -54,3 +54,4 @@ from portfolio_automation.northstar.decisions import (  # noqa: F401  (milestone
     ExitProposal,
 )
 from portfolio_automation.northstar.outcomes import OutcomeRecord  # noqa: F401  (milestone 3)
+from portfolio_automation.northstar.passport import StrategyPassport  # noqa: F401  (milestone 3)
