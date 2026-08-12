@@ -49,4 +49,7 @@ from portfolio_automation.northstar.experiments import (  # noqa: F401  (milesto
     ExperimentResult,
     ExperimentSpec,
 )
-from portfolio_automation.northstar.decisions import CapitalProposal  # noqa: F401  (milestone 3)
+from portfolio_automation.northstar.decisions import (  # noqa: F401  (milestone 3)
+    CapitalProposal,
+    ExitProposal,
+)
