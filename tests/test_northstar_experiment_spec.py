@@ -17,7 +17,9 @@ import pytest
 from portfolio_automation.northstar import (
     Provenance, ResearchClaim, ResearchTask, WorkerResult, canonical_dumps,
 )
-from portfolio_automation.northstar.experiments import ExperimentSpec, SCHEMA_VERSION
+from portfolio_automation.northstar.experiments import (
+    ExperimentResult, ExperimentSpec, SCHEMA_VERSION,
+)
 
 UTC = timezone.utc
 T0 = datetime(2026, 8, 5, 13, 30, tzinfo=UTC)
@@ -195,3 +197,117 @@ def test_carries_no_result_or_action_fields():
                  "metric_values", "outcome", "allocation", "action", "execute",
                  "capital", "trade", "approved", "certified"}
     assert names.isdisjoint(forbidden), f"ExperimentSpec must not carry result/action fields: {names & forbidden}"
+
+
+# =========================== ExperimentResult ==============================
+def _rprov(**kw) -> Provenance:
+    return Provenance(
+        producer_id=kw.pop("producer_id", "stratlab.walkforward"),
+        producer_type=kw.pop("producer_type", "system"),
+        recorded_at=kw.pop("recorded_at", T1),
+        model_id=kw.pop("model_id", "stratlab.walkforward@1"),
+        code_version=kw.pop("code_version", "abc1234"),
+        **kw,
+    )
+
+
+def _result(**kw) -> ExperimentResult:
+    return ExperimentResult(
+        experiment_spec_id=kw.pop("experiment_spec_id", _spec().experiment_spec_id),
+        provenance=kw.pop("provenance", _rprov()),
+        windows_evaluated=kw.pop("windows_evaluated", ("20d", "60d")),
+        observations=kw.pop("observations", {"return.excess_spy_20d": {"mean": 0.012, "n": 42, "p": 0.03}}),
+        **kw,
+    )
+
+
+def test_result_valid_and_prefix():
+    r = _result()
+    assert r.experiment_result_id.startswith("exr_")
+    assert r.contract_type == "experiment_result"
+
+
+def test_result_references_spec_by_valid_id():
+    with pytest.raises(ValueError):
+        _result(experiment_spec_id="rcl_not_a_spec")
+    with pytest.raises(ValueError):
+        _result(experiment_spec_id="nope")
+
+
+def test_result_identity_order_free_and_deterministic():
+    a = _result(windows_evaluated=("20d", "60d"))
+    b = _result(windows_evaluated=("60d", "20d"))
+    assert a.experiment_result_id == b.experiment_result_id
+
+
+@pytest.mark.parametrize("change", [
+    dict(windows_evaluated=("20d",)),
+    dict(observations={"return.excess_spy_20d": {"mean": 0.02, "n": 42, "p": 0.03}}),
+    dict(partial=True, partial_reason="only 20d ran"),
+    dict(provenance=_rprov(model_id="other.model@2")),
+    dict(provenance=_rprov(code_version="def5678")),
+])
+def test_result_identity_changes(change):
+    assert _result().experiment_result_id != _result(**change).experiment_result_id
+
+
+def test_result_provenance_producer_not_identity_bearing():
+    # producer_id / recorded_at are attribution; model_id + code_version ARE identity.
+    a = _result()
+    b = _result(provenance=_rprov(producer_id="other.runner", recorded_at=T0))
+    assert a.experiment_result_id == b.experiment_result_id
+
+
+def test_result_observations_required_and_frozen():
+    with pytest.raises(ValueError):
+        _result(observations={})
+    payload = {"return.excess_spy_20d": {"mean": 0.01, "n": 30, "p": 0.04}}
+    r = _result(observations=payload)
+    payload["return.excess_spy_20d"]["mean"] = 999   # mutate caller dict
+    assert r.observations_copy()["return.excess_spy_20d"]["mean"] == 0.01   # unchanged
+
+
+def test_result_rejects_authority_observation_keys():
+    for bad in ({"certified": True}, {"metrics": {"approve": 1}}, {"allocate": 100}):
+        with pytest.raises(ValueError):
+            _result(observations=bad)
+
+
+def test_result_partial_discipline():
+    with pytest.raises(ValueError):
+        _result(partial=True)                        # partial without reason
+    with pytest.raises(ValueError):
+        _result(partial=False, partial_reason="x")   # reason without partial
+    assert _result(partial=True, partial_reason="provider outage; only 20d ran").partial
+
+
+def test_result_roundtrip_and_tamper():
+    r = _result()
+    payload = json.loads(canonical_dumps(r.to_canonical_dict()))
+    back = ExperimentResult.from_dict(payload)
+    assert back.experiment_result_id == r.experiment_result_id
+    assert back.to_canonical_dict() == r.to_canonical_dict()
+    payload["experiment_result_id"] = "exr_deadbeef"
+    with pytest.raises(ValueError):
+        ExperimentResult.from_dict(payload)
+
+
+def test_result_wrong_contract_type_rejected():
+    d = json.loads(canonical_dumps(_result().to_canonical_dict()))
+    d["contract_type"] = "experiment_spec"
+    with pytest.raises(ValueError):
+        ExperimentResult.from_dict(d)
+
+
+def test_result_cannot_rewrite_spec_no_prereg_fields():
+    # structural: an ExperimentResult holds NO preregistration/spec fields — it
+    # only references the spec by id, so it can never edit preregistered criteria.
+    names = {f.name for f in dataclasses.fields(ExperimentResult)}
+    prereg = {"universe", "metrics", "success_gate", "abandon_gate",
+              "evaluation_windows", "allowed_evidence_types", "hypothesis_claim_id"}
+    assert names.isdisjoint(prereg), f"ExperimentResult must not carry spec fields: {names & prereg}"
+
+
+def test_result_frozen():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        _result().partial = True   # type: ignore[misc]

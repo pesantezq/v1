@@ -45,4 +45,7 @@ from portfolio_automation.northstar.research import (  # noqa: F401
     ResearchTask,
     WorkerResult,
 )
-from portfolio_automation.northstar.experiments import ExperimentSpec  # noqa: F401  (milestone 3)
+from portfolio_automation.northstar.experiments import (  # noqa: F401  (milestone 3)
+    ExperimentResult,
+    ExperimentSpec,
+)
