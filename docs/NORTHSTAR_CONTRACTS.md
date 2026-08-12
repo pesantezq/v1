@@ -1,8 +1,11 @@
 # Northstar Canonical Contracts — Phase 0B Architecture
 
-Status: milestone 1 (`northstar_0b_contract_architecture_and_evidence_kernel`)
-— evidence kernel **implemented** (`portfolio_automation/northstar/`), all
-other families **specified here, not implemented**. Machine-readable status:
+Status: milestone 2 (`northstar_0b_prediction_research_experiment_contracts`)
+— evidence kernel + **prediction family (PredictionTask, PredictionRecord)**
+and **research family (ResearchTask, WorkerResult, ResearchClaim)**
+**implemented** (`portfolio_automation/northstar/`); the experiment and
+decision/outcome/passport families remain **specified here, not implemented**
+(milestone 3). Machine-readable status:
 `.agent/phase_status.yaml:northstar_phase_0b`. Charter context:
 `docs/NORTHSTAR_REDESIGN.md`.
 
@@ -196,7 +199,43 @@ Identity sorts input snapshot ids (reordered refs produce the identical
 `feature_id`) and duplicate snapshot ids are rejected. Role-labeled inputs
 would be an additive future change if a concrete correctness need arises.
 
-## 6. Future contract families (specified, NOT implemented)
+## 6. Contract families beyond the evidence kernel
+
+Milestone 2 implemented the prediction + research families below. Milestone 3
+families (ExperimentSpec onward) remain specified-only. Implemented families
+add these kernel-wide conventions (0B.2 hardening-final):
+
+- **Unordered collections** accept ONLY list/tuple (strings/bytes/mappings/
+  sets/generators rejected — `entity_ids="IBM"` raises), reject duplicates,
+  and normalize to sorted canonical tuples (equality ≡ identity ≡
+  serialization). Where `"*"` means explicitly unrestricted
+  (`allowed_evidence_types` on PredictionTask/ResearchTask) it must be the
+  SOLE value.
+- **Provenance is REQUIRED on all five Milestone-2 contracts**
+  (PredictionTask, PredictionRecord, ResearchTask, WorkerResult,
+  ResearchClaim). For PredictionTask/ResearchTask/ResearchClaim it is
+  attribution metadata and does NOT participate in semantic identity — a
+  `recorded_at`-only change never changes `ptk_`/`rtk_`/`rcl_` ids. For
+  WorkerResult, `worker_id == provenance.producer_id` is enforced, producer
+  type must be `ai_worker` or `system`, and `provenance.model_id` IS
+  identity-bearing (a different model is a different result);
+  `recorded_at` stays non-identity everywhere, and worker `code_version` is
+  deliberately excluded from identity (reproduction/attribution is the
+  ExperimentSpec path's job — deploys must not fragment result identity).
+  PredictionRecord's `provenance.model_id`, when present, must equal
+  `<model_id>@<model_version>`.
+- **Deep immutability**: identity-bearing mappings freeze to canonical bytes
+  at construction (snapshot-payload discipline: `EvidenceSnapshot.payload`,
+  `WorkerResult.findings`, `PredictionTask.target_params`); numeric sequence
+  values freeze to tuples (`PredictionRecord.prediction_value`/
+  `uncertainty_value`) — caller mutation can never change identity.
+- **First-class abstention** on PredictionRecord (like WorkerResult):
+  `abstained=True` requires a reason and Nones for prediction/uncertainty
+  (never zeros/NaN/magic values); evidence refs may be empty or retained;
+  abstention fields are identity-bearing. Normal records still require
+  value, uncertainty, and non-empty evidence.
+- **Authority/action surfaces structurally banned** (prediction contracts
+  reject allocation/action keys; worker findings reject authority keys).
 
 Each family below lists responsibility / producer / consumer / key fields /
 identity / lifecycle / failure semantics. All inherit the kernel rules:
@@ -204,7 +243,7 @@ frozen, canonical serialization, `contract_type` + `schema_version`,
 deterministic ID from semantic fields, explicit provenance, EvidenceRefs
 instead of copies, additive evolution.
 
-### PredictionTask (`ptk_…`) — milestone 2
+### PredictionTask (`ptk_…`) — IMPLEMENTED (milestone 2, predictions.py)
 
 - **Responsibility:** define the prediction question: entity/universe, as_of,
   horizon, target definition, allowed evidence/feature scope.
@@ -218,7 +257,7 @@ instead of copies, additive evolution.
 - **Failure semantics:** malformed universe/horizon/target → construction
   error; tasks never carry results.
 
-### PredictionRecord (`prd_…`) — milestone 2
+### PredictionRecord (`prd_…`) — IMPLEMENTED (milestone 2, predictions.py)
 
 - **Responsibility:** one estimate: prediction value/distribution,
   uncertainty/confidence, model identity, horizon; references its
@@ -231,7 +270,7 @@ instead of copies, additive evolution.
 - **Failure semantics:** a prediction that cannot state its evidence is
   invalid; uncertainty is required (no implied certainty).
 
-### ResearchTask (`rtk_…`) — milestone 2
+### ResearchTask (`rtk_…`) — IMPLEMENTED (milestone 2, research.py)
 
 - **Responsibility:** bounded research work definition compatible with the
   future sandbox/control-plane execution (Prime-free R&D direction).
@@ -239,7 +278,7 @@ instead of copies, additive evolution.
 - **Required:** question, scope bounds, allowed evidence, output contract
   expectations, budget/effort class.
 
-### WorkerResult (`wkr_…`) — milestone 2
+### WorkerResult (`wkr_…`) — IMPLEMENTED (milestone 2, research.py)
 
 - **Responsibility:** structured output of a research worker. **Never
   production truth** — evidence/candidate material only (authority:
@@ -249,7 +288,7 @@ instead of copies, additive evolution.
   structured findings, abstention/uncertainty representation.
 - **Failure semantics:** a result claiming authority fields fails validation.
 
-### ResearchClaim (`rcl_…`) — milestone 2
+### ResearchClaim (`rcl_…`) — IMPLEMENTED (milestone 2, research.py)
 
 - **Responsibility:** a falsifiable hypothesis distilled from worker results/
   evidence: claim statement, direction, scope, supporting EvidenceRefs +

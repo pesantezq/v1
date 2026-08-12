@@ -58,9 +58,13 @@ stockbot_northstar_redesign:
             - portfolio_automation/northstar/ (canonical, pit, provenance, serde, sources, evidence, features)
             - tests/test_northstar_evidence_kernel.py
         northstar_0b_prediction_research_experiment_contracts:
-          status: ready      # next 0B milestone — PredictionTask/PredictionRecord + ResearchTask/WorkerResult/ResearchClaim (specified in docs/NORTHSTAR_CONTRACTS.md §6)
+          status: complete   # 2026-08-11 — predictions.py (PredictionTask ptk_/PredictionRecord prd_: mandatory uncertainty + evidence refs, model-provenance consistency, action surface structurally banned, resolution by reference only) + research.py (ResearchTask rtk_, WorkerResult wkr_: never production truth, authority keys rejected, abstention first-class, frozen findings; ResearchClaim rcl_: structural falsifiability, never certified alpha). 23 focused tests (tests/test_northstar_prediction_research.py); contracts only.
+          deliverables:
+            - portfolio_automation/northstar/predictions.py
+            - portfolio_automation/northstar/research.py
+            - tests/test_northstar_prediction_research.py
         northstar_0b_decision_outcome_passport_contracts:
-          status: not_started  # ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport
+          status: ready      # next 0B milestone — ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport (specified in docs/NORTHSTAR_CONTRACTS.md §6)
       purpose: >-
         Define stable, validated, point-in-time-capable domain contracts that
         decouple producers from consumers before building the new
