@@ -1,0 +1,20 @@
+{
+  "authority": "A1_ASSISTED_ENGINEERING",
+  "auto_authority_promotion": false,
+  "auto_capital_action": false,
+  "auto_claude_escalation_for_e3_or_exhausted_e2": true,
+  "auto_deploy": false,
+  "auto_merge": false,
+  "auto_next_task_within_mission": true,
+  "auto_production_mutation": false,
+  "auto_repair_within_attempt_limit": true,
+  "claude_attempts_per_escalation": 2,
+  "engineer_attempts_per_task": 2,
+  "engineering_mode": "SUPERVISED_AUTONOMOUS",
+  "gpt_supervisor_required": true,
+  "max_concurrent_tasks": 1,
+  "max_tasks_without_checkpoint": 10,
+  "mission_id": "northstar_0b_prediction_research_experiment_contracts",
+  "schema_kind": "experimental_noncanonical",
+  "schema_version": "engineering.runtime_policy.v0"
+}

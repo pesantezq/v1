@@ -152,6 +152,7 @@ class EngineeringTaskV0:
     goal: str
     risk_class: RiskClass
     executor: Executor
+    mission_id: str | None = None       # the mission this task belongs to (scope boundary)
     base_sha: str | None = None
     allowed_paths: list[str] = field(default_factory=list)
     protected_paths: list[str] = field(default_factory=list)

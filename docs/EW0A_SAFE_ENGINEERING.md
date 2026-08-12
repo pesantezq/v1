@@ -108,8 +108,40 @@ authority state (`config/ew0a_authority.json`) is a **protected path** outside t
 worker's repair scope — the worker cannot promote itself. Eight A1 authority tests
 pass against the live state; activation rolls back to A0 on any failure.
 
+## Supervised-autonomous loop (readiness-validated 2026-08-11)
+`ew0a_loop.py` wires the certified machinery into the bounded operating loop:
+mission → auto next-task **within the mission** → risk route (E1/E2 Engineer, E3
+Claude, E4 Human) → candidate → deterministic + independent-GPT verification →
+PASS/REPAIR/ESCALATE/ABSTAIN → bounded repair (attempt-limited) → Claude escalation
+(returns to independent verification) → next task → **mission-boundary STOP**.
+
+Runtime policy (`config/ew0a_runtime.json`, trusted/protected):
+`ENGINEERING_MODE=SUPERVISED_AUTONOMOUS`, `AUTHORITY=A1`,
+`GPT_SUPERVISOR_REQUIRED=true`, `AUTO_NEXT_TASK_WITHIN_MISSION=true`,
+`AUTO_REPAIR_WITHIN_ATTEMPT_LIMIT=true`,
+`AUTO_CLAUDE_ESCALATION_FOR_E3_OR_EXHAUSTED_E2=true`; `AUTO_MERGE/AUTO_DEPLOY/
+AUTO_PRODUCTION_MUTATION/AUTO_AUTHORITY_PROMOTION/AUTO_CAPITAL_ACTION=false`;
+conservative window (1 concurrent task, 10 tasks/checkpoint, 2 engineer + 2 Claude
+attempts). Stops automatically on: E4/human-required, authority violation, false
+certification, supervisor outage, engineer+Claude both fail, new relevant broad
+regression, mission complete, or checkpoint-budget exhaustion. Validated by
+`tests/test_ew0a_loop.py` (31) + a harmless dry run (`tools/ew0a_dry_run.py`):
+E1 pass · E2 repair→pass · E3 Claude-escalation → all VERIFIED; an out-of-mission
+task is refused at the boundary.
+
+## Northstar mission ordering (readiness finding)
+The authoritative `.agent/phase_status.yaml` shows the **next 0B milestone is
+`northstar_0b_prediction_research_experiment_contracts`** (status `ready`:
+PredictionTask/PredictionRecord + ResearchTask/WorkerResult/ResearchClaim). The
+decision/outcome/passport contracts (`northstar_0b_decision_outcome_passport_
+contracts`, informally "0B.3": ExperimentSpec/ExperimentResult + CapitalProposal/
+ExitProposal/OutcomeRecord/StrategyPassport) are `not_started` and gated behind it.
+The runtime policy's first authorized mission is therefore set to the prediction/
+research/experiment contracts milestone, and any task tagged with a different
+mission is refused at the loop boundary.
+
 ## Boundary
-EW-0A does **not** enable Northstar 0B.3, autonomous production maintenance,
-self-healing, autonomous deployment, or the Daily Manager. A1 is bounded
-assisted-engineering only; every consequential/production action remains
-human/Claude-gated.
+EW-0A does **not** enable autonomous production maintenance, self-healing,
+autonomous deployment, or the Daily Manager, and no autonomous Northstar mission
+is started by this validation. A1 is bounded assisted-engineering only; every
+consequential/production action remains human/Claude-gated.
