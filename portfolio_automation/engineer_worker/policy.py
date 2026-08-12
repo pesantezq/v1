@@ -52,6 +52,7 @@ _PROTECTED_PATTERNS: tuple[str, ...] = (
     "portfolio_automation/engineer_worker/ew0a.py",
     "portfolio_automation/engineer_worker/ew0a_authority.py",
     "portfolio_automation/engineer_worker/ew0a_loop.py",
+    "portfolio_automation/engineer_worker/ew0a_readmodels.py",
     "portfolio_automation/engineer_worker/gpt_supervisor.py",
     "config/ew0a_authority",                  # trusted-controlled authority state
     "config/ew0a_runtime",                    # trusted-controlled runtime policy
