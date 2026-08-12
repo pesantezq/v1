@@ -321,10 +321,11 @@ def test_claim_identity_and_round_trip():
 def test_prediction_and_capital_remain_separate_families():
     import portfolio_automation.northstar as ns
 
-    # Milestone 3 underway: ExperimentSpec + ExperimentResult delivered;
-    # capital/exit/outcome/passport stay absent until built.
-    assert hasattr(ns, "ExperimentSpec") and hasattr(ns, "ExperimentResult")
-    for absent in ("CapitalProposal", "ExitProposal", "OutcomeRecord", "StrategyPassport"):
+    # Milestone 3 underway: ExperimentSpec + ExperimentResult + CapitalProposal
+    # delivered; exit/outcome/passport stay absent until built.
+    for delivered in ("ExperimentSpec", "ExperimentResult", "CapitalProposal"):
+        assert hasattr(ns, delivered)
+    for absent in ("ExitProposal", "OutcomeRecord", "StrategyPassport"):
         assert not hasattr(ns, absent)
     # And PredictionRecord is not a base class of anything here — reference,
     # not inheritance, is the only permitted relationship.
