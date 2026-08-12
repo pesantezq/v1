@@ -574,11 +574,12 @@ def test_no_execution_or_approval_surface_on_evidence_contracts():
 
 
 def test_milestone3_contracts_not_yet_present():
-    # Milestone discipline: milestone 2 shipped the prediction/research
-    # families; the experiment/decision/outcome/passport families remain
-    # unimplemented until milestone 3.
+    # Milestone discipline: milestone 3 (decision/outcome/passport) is now
+    # underway — ExperimentSpec is delivered + verified; the remaining
+    # milestone-3 families stay unimplemented until built.
     import portfolio_automation.northstar as ns
 
+    assert hasattr(ns, "ExperimentSpec")   # milestone 3 — first deliverable
     for later in ("CapitalProposal", "ExitProposal", "StrategyPassport",
-                  "ExperimentSpec", "ExperimentResult", "OutcomeRecord"):
+                  "ExperimentResult", "OutcomeRecord"):
         assert not hasattr(ns, later)
