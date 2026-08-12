@@ -579,7 +579,7 @@ def test_milestone3_contracts_not_yet_present():
     # milestone-3 families stay unimplemented until built.
     import portfolio_automation.northstar as ns
 
-    for delivered in ("ExperimentSpec", "ExperimentResult", "CapitalProposal", "ExitProposal"):  # milestone 3 — delivered
+    for delivered in ("ExperimentSpec", "ExperimentResult", "CapitalProposal", "ExitProposal", "OutcomeRecord"):  # milestone 3 — delivered
         assert hasattr(ns, delivered)
-    for later in ("StrategyPassport", "OutcomeRecord"):
+    for later in ("StrategyPassport",):
         assert not hasattr(ns, later)
