@@ -2,8 +2,15 @@
 
 A SEPARATE trust boundary from ``prod_evidence._detect_secret``, which guards
 production runtime evidence admission and is deliberately left untouched. That
-detector is correct for its own boundary: in a production log, ``token=<anything>``
-really is a credential leak, and it has no source structure to reason about.
+detector is correct for its own boundary: in a production log, a token assignment
+carrying any value really is a credential leak, and there is no source structure
+to reason about.
+
+(Note on style: this module documents credential patterns by DESCRIBING them
+rather than by exhibiting literal keyword-equals-value examples. Docstrings get
+copied into tickets, logs and review packets, so a literal example would be a
+credential-shaped string in transit — and would make this very file
+untransmittable to the independent reviewer.)
 
 This screen guards a different question: may this evidence be transmitted to the
 INDEPENDENT supervisor for review? Source code legitimately *names* credential
@@ -29,11 +36,12 @@ Three layers, in order. Any layer may block; only layers 2 and 3 can exempt.
            buys nothing. Non-Python evidence gets no structural parse and
            therefore NO exemption.
 
-  Layer 3  SYNTHETIC SENTINEL — a value EXACTLY equal to
-           ``<synthetic-secret-fixture>``. Not a prefix, suffix, or substring
-           rule: ``api_key=<synthetic-secret-fixture>REALKEY`` stays blocked.
-           There is deliberately no ``TEST_``/``fake_``/``dummy_`` exemption,
-           which would be an obvious exfiltration escape hatch.
+  Layer 3  SYNTHETIC SENTINEL — a value EXACTLY equal to the sentinel constant
+           below. Equality only: a value consisting of the sentinel followed by
+           (or preceded by) further characters is NOT exempt, so appending a real
+           key to the sentinel stays blocked. There is deliberately no
+           ``TEST_``/``fake_``/``dummy_`` exemption, which would be an obvious
+           exfiltration escape hatch.
 
 Fail-closed everywhere: an unparseable source yields no exempt spans (strict), and
 any error yields a finding rather than silence.
