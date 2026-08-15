@@ -256,8 +256,12 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
                           total_required=len(_NORTHSTAR_0B3), is_complete=(verified == len(_NORTHSTAR_0B3)))
 
 
-def build_dashboard(repo_root: str | Path) -> dict[str, Any]:
-    """Assemble the full read-only dashboard from authoritative sources."""
+def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
+    """Assemble the full read-only dashboard from authoritative sources.
+
+    ``now`` is injected rather than read from the clock (the no-fabricated-time
+    discipline used across the Northstar contracts); readiness assessment needs a
+    timestamp and a projection must never invent one."""
     root = Path(repo_root)
     level = read_authority_level(root)
     policy = read_runtime_policy(root)
@@ -294,7 +298,7 @@ def build_dashboard(repo_root: str | Path) -> dict[str, Any]:
         controller="ACTIVE", gpt_supervisor=PENDING_BACKEND, engineer_runtime=PENDING_BACKEND,
         sandbox=PENDING_BACKEND, evidence_bridge=PENDING_BACKEND, authority=level.value,
         control_loop="READY")
-    return {
+    dashboard = {
         **_base("Dashboard"),
         "controller": controller.to_dict(),
         "supervisor": build_supervisor_summary(records).to_dict(),
@@ -305,3 +309,13 @@ def build_dashboard(repo_root: str | Path) -> dict[str, Any]:
         "attention_items": [],   # only human-relevant items; none outstanding
         "system_health": health.to_dict(),
     }
+    # Learning projections (Phase 13). Degrade to PENDING_BACKEND rather than
+    # failing the whole dashboard if the learning store is absent.
+    try:
+        from portfolio_automation.engineer_worker.learning.readmodels import (
+            build_learning_dashboard)
+        dashboard["learning"] = build_learning_dashboard(
+            root, worker.worker_identity, now or PENDING_BACKEND)
+    except Exception:  # noqa: BLE001
+        dashboard["learning"] = PENDING_BACKEND
+    return dashboard

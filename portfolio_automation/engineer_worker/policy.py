@@ -56,6 +56,16 @@ _PROTECTED_PATTERNS: tuple[str, ...] = (
     "portfolio_automation/engineer_worker/gpt_supervisor.py",
     "config/ew0a_authority",                  # trusted-controlled authority state
     "config/ew0a_runtime",                    # trusted-controlled runtime policy
+    # Learning Kernel: lessons, competence and graduation thresholds are
+    # controller-owned. The worker may READ them (worker_view) but may never edit
+    # them, propose its own activation, or retune its own graduation bar.
+    "portfolio_automation/engineer_worker/learning/",
+    "config/ew0a_learning",                   # trusted-controlled learning policy
+    "docs/EW0A_LEARNING_LESSONS.jsonl",
+    "docs/EW0A_LEARNING_COMPETENCE.jsonl",
+    "docs/EW0A_LEARNING_EVALUATIONS.jsonl",
+    "docs/EW0A_LEARNING_RETRIEVALS.jsonl",
+    "docs/EW0A_LEARNING_BOOTSTRAP_EVIDENCE.jsonl",
 )
 
 # --- repair scope: candidate edits are only allowed under these prefixes -----
