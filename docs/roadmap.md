@@ -13,7 +13,7 @@ role classes, critical path, and parallel workstreams — is
 **`docs/NORTHSTAR_REDESIGN.md`**. The agent authority model is
 **`config/agent_policy.yaml`**.
 
-Current position (2026-08-09 PM):
+Current position (2026-08-15):
 
 - **Program:** `stockbot_northstar_redesign` — ACTIVE; gate achieved:
   `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`
@@ -21,9 +21,21 @@ Current position (2026-08-09 PM):
   (authority @ `1794a164`; remote CI GREEN run `31338193791` @ `3fa43377`;
   GPT `SESSION_CLOSED — NORTHSTAR_PHASE_0A`)
 - **Phase:** `northstar_phase_0b` (Canonical Evidence, Prediction & Worker
-  Contracts) — **ACTIVE**
-- **Step / Next:** `northstar_0b_canonical_contracts` — contracts only; no
-  engines, runtimes, or data-source integrations
+  Contracts) — **ACTIVE**. All three canonical-contract milestones are now
+  delivered and durable:
+  - `northstar_0b_contract_architecture_and_evidence_kernel` — COMPLETE
+  - `northstar_0b_prediction_research_experiment_contracts` — COMPLETE
+  - `northstar_0b_decision_outcome_passport_contracts` — COMPLETE
+    (0B.3: ExperimentSpec/ExperimentResult/CapitalProposal/ExitProposal/
+    OutcomeRecord/StrategyPassport; certified candidate `4d7aab6` → merged main
+    `7534f24` via PR #14; `northstar-ci` run **#21 SUCCESS** on merged main)
+  - The **phase-level** 0B exit gate (`contracts reviewed + versioned +
+    test-covered`) has NOT yet been formally closed — that is a separate
+    reconciliation, so the phase deliberately remains ACTIVE here.
+- **Parallel (non-Northstar) workstream:** the Engineer Learning Kernel is
+  `certification_candidate` — engineering-organization infrastructure, **not** a
+  canonical Northstar contract. It is `NON_BLOCKING_FOR_NORTHSTAR_0B`. C1 is
+  **DISABLED**; no capability has reached `READY_FOR_CERTIFICATION`.
 - Phases 0C–11 are defined, **not started**. No future phase is implemented.
   AI worker runtimes follow the **Prime-free Local R&D direction** (Prime is
   superseded as orchestrator).
