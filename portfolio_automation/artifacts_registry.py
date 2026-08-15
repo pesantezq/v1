@@ -562,6 +562,32 @@ REGISTRY: tuple[Artifact, ...] = (
         documented_in="docs/DAILY_SANDBOX_RUN.md",
         description="Operator-readable companion to sandbox_run_status.json.",
     ),
+
+    # ------------------------------------------------------------------
+    # POLICY — agent production export health (observe-only boundary)
+    # ------------------------------------------------------------------
+    # The immutable snapshot manifests live under outputs/agent_export/snapshots/
+    # <id>/ (a per-snapshot dynamic path, not a fixed catalog entry) and are
+    # tracked by the export's own manifest hashing. Only the fixed-path health
+    # artifact is registered here; the latest pointer is tracked in
+    # artifact_registry.yaml (raw-path registry). This preserves each copied
+    # artifact's ORIGINAL provenance rather than re-attributing it to the exporter.
+    Artifact(
+        name="agent_export_health",
+        namespace=OutputNamespace.POLICY,
+        relative_path="agent_export_health.json",
+        format=FORMAT_JSON,
+        writer_module="portfolio_automation.agent_export",
+        writer_function="run_agent_export_health",
+        consumers=(),
+        schema_version=1,
+        append_only=False,
+        optional=True,
+        observe_only_required=True,
+        documented_in="docs/STOCKBOT_AGENT_EXPORT.md",
+        description="Observe-only health for the agent export subsystem: latest "
+                    "snapshot age, hash/schema validation, GREEN/AMBER/RED status.",
+    ),
 )
 
 

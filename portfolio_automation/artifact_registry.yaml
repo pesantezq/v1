@@ -1905,3 +1905,51 @@ artifacts:
     severity_if_missing: info
     consumer_status: consumed
     notes: Weekly ETF email send/dry-run/duplicate-suppressed receipt (content hash, recipients, reason). Default inert (email gated OFF).
+
+  # ── Agent production export (added 2026-08-08) ─────────────────────────────
+  # Observe-only export boundary. Freezes an allowlisted, sanitized, hash-verified
+  # snapshot of a completed run for future Agent Lab / Prime consumption. On-demand
+  # (not part of the daily cron yet); both rows are optional so their absence never
+  # perturbs daily_run_status. See docs/STOCKBOT_AGENT_EXPORT.md.
+  agent_export/latest.json:
+    path: outputs/agent_export/latest.json
+    label: agent export latest pointer
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: agent_export
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Metadata pointer to the most recent immutable agent snapshot (id, hash, git sha). Not a copy of the snapshot.
+
+  agent_export_health.json:
+    path: outputs/policy/agent_export_health.json
+    label: agent export health
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: agent_export
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Observe-only health for the export subsystem (latest snapshot age, hash/schema validation, GREEN/AMBER/RED).
+
+  # ── R&D Control Plane (added 2026-08-09) ───────────────────────────────────
+  # Observe-only health for the deterministic R&D job registry (SQLite-backed).
+  # On-demand producer; optional so its absence never perturbs the daily lane.
+  # See docs/RD_CONTROL_PLANE.md.
+  rd_control_health.json:
+    path: outputs/policy/rd_control_health.json
+    label: R&D control plane health
+    lens: meta_governance
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: rd_control
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: Observe-only health for the R&D control plane (schema status, job counts by status, stale RUNNING, failed jobs, GREEN/AMBER/RED). SQLite is authoritative; this artifact is derivative telemetry.

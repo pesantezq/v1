@@ -1,0 +1,138 @@
+{
+  "schema_kind": "experimental_noncanonical",
+  "schema_version": "engineering.eval_registry.v0",
+  "note": "Registry over REAL pytest node IDs. Not a second test framework — see evals/README.md.",
+  "categories": {
+    "regression/authority": {
+      "description": "Authority boundaries the worker must never cross.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_worker_cannot_mutate_any_learning_state",
+        "tests/test_ew0a_learning.py::test_transfer_case_8_worker_cannot_game_competence_metrics",
+        "tests/test_ew0a_learning.py::test_learning_state_paths_are_protected_from_worker_repair",
+        "tests/test_ew0a_learning.py::test_worker_view_module_defines_no_mutators",
+        "tests/test_ew0a_learning.py::test_worker_view_never_imports_a_mutator",
+        "tests/test_ew0a_learning.py::test_readiness_can_never_grant_authority",
+        "tests/test_ew0a_learning.py::test_config_can_never_enable_automatic_certification",
+        "tests/test_ew0a_learning.py::test_config_with_empty_trusted_actors_fails_closed",
+        "tests/test_ew0a_authority.py::test_all_forbidden_ops_denied_even_at_a1",
+        "tests/test_ew0a_authority.py::test_A1_8_worker_self_promotion_denied",
+        "tests/test_ew0a_authority.py::test_A1_7_protected_path_write_denied"
+      ]
+    },
+    "regression/false_certification": {
+      "description": "Work must never be certified without deterministic PASS and independent GPT PASS.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_correct_requires_verified_outcome_not_just_agreement",
+        "tests/test_ew0a_learning.py::test_validation_fails_closed_without_semantic_reviewer",
+        "tests/test_ew0a_learning.py::test_hard_blocker_overrides_excellent_statistics",
+        "tests/test_ew0a_learning.py::test_legacy_records_remain_valid_but_are_not_upgraded",
+        "tests/test_ew0a_learning.py::test_authority_expansion_requires_a_strongly_bound_record"
+      ]
+    },
+    "regression/stale_state": {
+      "description": "Stale local state must not be mistaken for authoritative state.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_only_active_lessons_are_retrievable",
+        "tests/test_ew0a_learning.py::test_contradicted_lesson_is_not_retrieved",
+        "tests/test_ew0a_learning.py::test_contradicted_lesson_cannot_be_reactivated"
+      ]
+    },
+    "regression/reconciliation": {
+      "description": "Safe repository reconciliation (bootstrap lesson B).",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_bootstrap_lessons_cover_the_four_proven_lessons"
+      ]
+    },
+    "regression/lesson_poisoning": {
+      "description": "Fabricated, unsupported or overgeneralized lessons must never activate.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_lesson_with_unresolvable_evidence_is_refused",
+        "tests/test_ew0a_learning.py::test_poisoned_lesson_claiming_unoccurred_event_is_refused",
+        "tests/test_ew0a_learning.py::test_overgeneralized_principle_is_rejected",
+        "tests/test_ew0a_learning.py::test_transfer_case_7_overgeneralization_attempt_is_rejected",
+        "tests/test_ew0a_learning.py::test_semantic_reviewer_repair_blocks_activation",
+        "tests/test_ew0a_learning.py::test_extractor_proposes_candidate_never_active",
+        "tests/test_ew0a_learning.py::test_confidence_is_derived_not_asserted"
+      ]
+    },
+    "regression/retry": {
+      "description": "Bounded repair and attempt limits.",
+      "node_ids": [
+        "tests/test_ew0a_loop.py::test_retry_bound_enforced_then_claude_escalation",
+        "tests/test_ew0a_learning.py::test_rejected_lesson_still_updates_competence"
+      ]
+    },
+    "regression/escalation": {
+      "description": "Missed or incorrect escalation, including the E4 human boundary.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_missed_e4_escalation_is_a_hard_blocker",
+        "tests/test_ew0a_learning.py::test_high_risk_capability_requires_stricter_thresholds",
+        "tests/test_ew0a_learning.py::test_consecutive_safe_resets_on_unsafe_observation"
+      ]
+    },
+    "regression/crash_recovery": {
+      "description": "Interrupted or unavailable verification is never success.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_validation_fails_closed_without_semantic_reviewer"
+      ]
+    },
+    "capability/risk_routing": {
+      "description": "Canonical-contract risk classification (bootstrap lesson A).",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_bootstrap_lesson_a_records_the_generalization_evidence",
+        "tests/test_ew0a_learning.py::test_transfer_case_1_previously_seen_pattern_is_retrieved"
+      ]
+    },
+    "capability/executor_routing": {
+      "description": "Executor assignment matches the authoritative risk model.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_correct_requires_verified_outcome_not_just_agreement"
+      ]
+    },
+    "capability/task_selection": {
+      "description": "Task selection quality within a mission boundary.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_extractor_returns_no_meaningful_learning_for_routine_success"
+      ]
+    },
+    "capability/acceptance_criteria": {
+      "description": "Acceptance-criteria quality banding.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_extractor_corroborates_existing_lesson_instead_of_forking"
+      ]
+    },
+    "capability/verification_planning": {
+      "description": "Verification plans bound to the artifact they judge.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_binding_detects_altered_diff",
+        "tests/test_ew0a_learning.py::test_binding_detects_altered_evidence_manifest",
+        "tests/test_ew0a_learning.py::test_manifest_hash_is_order_independent",
+        "tests/test_ew0a_learning.py::test_candidate_bound_requires_real_shas"
+      ]
+    },
+    "capability/lesson_transfer": {
+      "description": "Learning must CHANGE BEHAVIOR, not merely be retrieved.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_transfer_case_2_same_principle_different_subsystem_still_transfers",
+        "tests/test_ew0a_learning.py::test_transfer_case_3_similar_wording_different_risk_semantics_not_retrieved",
+        "tests/test_ew0a_learning.py::test_transfer_case_4_irrelevant_lesson_is_not_retrieved",
+        "tests/test_ew0a_learning.py::test_transfer_case_5_lesson_contradicted_by_newer_evidence",
+        "tests/test_ew0a_learning.py::test_transfer_case_6_repeated_unsafe_error_after_retrieval_is_failed_transfer",
+        "tests/test_ew0a_learning.py::test_successful_transfer_is_recorded_when_behavior_changes",
+        "tests/test_ew0a_learning.py::test_retrieval_is_recorded_for_every_decision",
+        "tests/test_ew0a_learning.py::test_empty_retrieval_is_still_recorded"
+      ]
+    },
+    "capability/safe_reconciliation": {
+      "description": "Append-only history; lineage preserved through supersession.",
+      "node_ids": [
+        "tests/test_ew0a_learning.py::test_supersession_preserves_lineage_and_history",
+        "tests/test_ew0a_learning.py::test_lesson_log_is_append_only"
+      ]
+    },
+    "certification/hidden": {
+      "description": "Held-out certification cases. DELIBERATELY EMPTY — a hidden set authored by the session that built the system is not held out. Must be authored by a separate certification mission.",
+      "node_ids": []
+    }
+  }
+}

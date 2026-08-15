@@ -1,0 +1,10 @@
+[Unit]
+Description=StockBot R&D OFFLINE_LOCAL sandbox netns (default-deny, inference-proxy only)
+After=network.target ollama.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rdsbx-offline-up
+ExecStop=/bin/bash -c 'ip netns del rdsbx-offline 2>/dev/null; ip link del veth-rdo-m 2>/dev/null; true'
+[Install]
+WantedBy=multi-user.target

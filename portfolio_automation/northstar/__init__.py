@@ -45,3 +45,13 @@ from portfolio_automation.northstar.research import (  # noqa: F401
     ResearchTask,
     WorkerResult,
 )
+from portfolio_automation.northstar.experiments import (  # noqa: F401  (milestone 3)
+    ExperimentResult,
+    ExperimentSpec,
+)
+from portfolio_automation.northstar.decisions import (  # noqa: F401  (milestone 3)
+    CapitalProposal,
+    ExitProposal,
+)
+from portfolio_automation.northstar.outcomes import OutcomeRecord  # noqa: F401  (milestone 3)
+from portfolio_automation.northstar.passport import StrategyPassport  # noqa: F401  (milestone 3)

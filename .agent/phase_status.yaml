@@ -64,7 +64,40 @@ stockbot_northstar_redesign:
             - portfolio_automation/northstar/research.py
             - tests/test_northstar_prediction_research.py
         northstar_0b_decision_outcome_passport_contracts:
-          status: ready      # next 0B milestone — ExperimentSpec/ExperimentResult + CapitalProposal/ExitProposal/OutcomeRecord/StrategyPassport (specified in docs/NORTHSTAR_CONTRACTS.md §6)
+          status: certified_candidate_awaiting_durability   # 2026-08-15: all six contracts implemented + individually VERIFIED (deterministic + independent GPT) + final cross-contract GPT certification PASS at candidate SHA 4d7aab68cb8be917f6509f99364048d3bbf46dc2. NOT "complete": the certified candidate is NOT merged to origin/main (branch 30 commits ahead, absent from remote; push blocked on GitHub write credentials — operator action required). The durability path push -> PR -> CI -> review -> merge -> post-merge main CI is outstanding; do not mark complete until the certified-candidate -> merged-main SHA mapping exists.
+          deliverables:
+            - portfolio_automation/northstar/ (ExperimentSpec exs_, ExperimentResult exr_, CapitalProposal cap_, ExitProposal xit_, OutcomeRecord out_, StrategyPassport spp_)
+            - tests/test_northstar_0b3_cross_contract.py + six per-contract suites
+            - docs/EW0A_0B3_RECORDS.jsonl (apprenticeship + certification evidence)
+          certification:
+            candidate_sha: 4d7aab68cb8be917f6509f99364048d3bbf46dc2
+            merged_main_sha: null   # populated when the durability path completes
+            false_certifications: 0
+            authority_boundary_violations: 0
+            new_relevant_failures: 0   # exact node-ID comparison vs pristine HEAD worktree: identical 15 pre-existing failures
+          durability:
+            pushed: 2026-08-15   # origin/feature/ew-0a-safe-operations @ 3e1d684440ae04e51098807ae2dd11424882e04e (contains certified candidate 4d7aab6)
+            auth_fix: "SSH key stockbot-engineer-trusted-controller registered on the pesantezq account; remote switched https -> git@github.com:pesantezq/v1.git; ~/.ssh/config pins the key with IdentitiesOnly=yes so a different identity cannot be silently offered (the original 403 was an authenticated push as the WRONG account, enrique-pesantez-fairfield-edu, not a missing credential)"
+            ci_on_push: not_triggered   # .github/workflows/northstar-ci.yml push trigger matches only main and feature/northstar-**; this branch does not match. The pull_request->main trigger DOES match, so CI runs on the PR.
+            pull_request: pending   # requires a browser/gh action; no gh CLI or API token available in this environment
+            merge: pending
+            post_merge_main_ci: pending
+        northstar_0b_engineering_learning_kernel:
+          status: certification_candidate   # 2026-08-15 — automatic lesson extraction/retrieval/evaluation/competence/graduation + SHA-bound verification. Engineering-organization records, NOT canonical Northstar contracts. C1 remains DISABLED; readiness grants nothing.
+          deliverables:
+            - portfolio_automation/engineer_worker/learning/ (contracts, config, store, extractor, validation, retriever, evaluator, competence, graduation, binding, kernel, bootstrap, readmodels, worker_view)
+            - config/ew0a_learning.json (controller-owned, protected path)
+            - tests/test_ew0a_learning.py (56) + tests/test_ew0a_evals_registry.py (3)
+            - evals/ (registry over real pytest node IDs; certification/hidden deliberately empty)
+            - docs/EW0A_LEARNING_KERNEL.md + docs/WORKER_CONTROL_CENTER_LEARNING_HANDOFF.md
+            - tools/ew0a_learning_bootstrap.py + tools/ew0a_learning_replay.py
+          evidence:
+            bootstrap_lessons_active: 3     # A canonical-contract routing (conf 0.90), C secret-token boundary (0.65), D process self-match (0.65)
+            bootstrap_lessons_candidate: 1  # B stale-branch reconciliation — failed 2-of-3 independent semantic consensus; NOT activated, reported honestly
+            replay_observations: 5          # real 0B.3 Engineer decisions, authoritative records
+            lesson_transfer_rate: 1.0       # 4/4 on the four post-lesson contracts
+            capability_readiness: LEARNING  # canonical_contract_risk_routing under high-risk thresholds
+            live_worker_demonstration: not_achieved   # Ollama not running this session; no NEW live Engineer proposal was obtained
       purpose: >-
         Define stable, validated, point-in-time-capable domain contracts that
         decouple producers from consumers before building the new

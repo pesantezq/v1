@@ -321,11 +321,11 @@ def test_claim_identity_and_round_trip():
 def test_prediction_and_capital_remain_separate_families():
     import portfolio_automation.northstar as ns
 
-    # Milestone 2 ships predictions/research; capital/exit/outcome/passport
-    # and experiment families stay absent until milestone 3.
-    for absent in ("CapitalProposal", "ExitProposal", "OutcomeRecord",
-                   "StrategyPassport", "ExperimentSpec", "ExperimentResult"):
-        assert not hasattr(ns, absent)
+    # Milestone 3 COMPLETE: all six experiment/decision/outcome/passport families
+    # delivered. Reference-not-inheritance is still the only permitted relationship.
+    for delivered in ("ExperimentSpec", "ExperimentResult", "CapitalProposal",
+                      "ExitProposal", "OutcomeRecord", "StrategyPassport"):
+        assert hasattr(ns, delivered)
     # And PredictionRecord is not a base class of anything here — reference,
     # not inheritance, is the only permitted relationship.
     assert PredictionRecord.__subclasses__() == []

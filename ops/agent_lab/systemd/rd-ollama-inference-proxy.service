@@ -1,0 +1,14 @@
+[Unit]
+Description=StockBot R&D inference-only Ollama proxy (worker-facing, mgmt endpoints denied)
+After=network.target ollama.service rdsbx-offline.service
+Requires=rdsbx-offline.service
+[Service]
+# Binds the sandbox netns gateway IP; forwards inference-only to local Ollama.
+ExecStart=/usr/bin/python3 /usr/local/sbin/rd-ollama-inference-proxy 10.201.0.1 11435
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target

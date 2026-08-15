@@ -574,11 +574,11 @@ def test_no_execution_or_approval_surface_on_evidence_contracts():
 
 
 def test_milestone3_contracts_not_yet_present():
-    # Milestone discipline: milestone 2 shipped the prediction/research
-    # families; the experiment/decision/outcome/passport families remain
-    # unimplemented until milestone 3.
+    # Milestone discipline: milestone 3 (experiment/decision/outcome/passport) is
+    # now COMPLETE — all six families are delivered + verified. The guard now
+    # asserts full presence (kept under its original name for history continuity).
     import portfolio_automation.northstar as ns
 
-    for later in ("CapitalProposal", "ExitProposal", "StrategyPassport",
-                  "ExperimentSpec", "ExperimentResult", "OutcomeRecord"):
-        assert not hasattr(ns, later)
+    for delivered in ("ExperimentSpec", "ExperimentResult", "CapitalProposal",
+                      "ExitProposal", "OutcomeRecord", "StrategyPassport"):  # milestone 3 — all delivered
+        assert hasattr(ns, delivered)
