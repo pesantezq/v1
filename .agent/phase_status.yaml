@@ -64,24 +64,32 @@ stockbot_northstar_redesign:
             - portfolio_automation/northstar/research.py
             - tests/test_northstar_prediction_research.py
         northstar_0b_decision_outcome_passport_contracts:
-          status: certified_candidate_awaiting_durability   # 2026-08-15: all six contracts implemented + individually VERIFIED (deterministic + independent GPT) + final cross-contract GPT certification PASS at candidate SHA 4d7aab68cb8be917f6509f99364048d3bbf46dc2. NOT "complete": the certified candidate is NOT merged to origin/main (branch 30 commits ahead, absent from remote; push blocked on GitHub write credentials — operator action required). The durability path push -> PR -> CI -> review -> merge -> post-merge main CI is outstanding; do not mark complete until the certified-candidate -> merged-main SHA mapping exists.
+          status: complete   # 2026-08-15 — DURABLE. All six contracts individually VERIFIED (deterministic + independent GPT) + final cross-contract GPT certification PASS at candidate SHA 4d7aab6, now merged to authoritative main via PR #14. Certified-candidate -> merged-main mapping recorded below; post-merge main independently re-validated.
           deliverables:
             - portfolio_automation/northstar/ (ExperimentSpec exs_, ExperimentResult exr_, CapitalProposal cap_, ExitProposal xit_, OutcomeRecord out_, StrategyPassport spp_)
             - tests/test_northstar_0b3_cross_contract.py + six per-contract suites
             - docs/EW0A_0B3_RECORDS.jsonl (apprenticeship + certification evidence)
           certification:
             candidate_sha: 4d7aab68cb8be917f6509f99364048d3bbf46dc2
-            merged_main_sha: null   # populated when the durability path completes
+            merged_main_sha: 7534f24b638bc30085fc99a7d496e2ef36e4b0a4   # "Merge pull request #14 from pesantezq/feature/ew-0a-safe-operations"; certified candidate 4d7aab6 verified as an ancestor of origin/main
             false_certifications: 0
             authority_boundary_violations: 0
             new_relevant_failures: 0   # exact node-ID comparison vs pristine HEAD worktree: identical 15 pre-existing failures
           durability:
             pushed: 2026-08-15   # origin/feature/ew-0a-safe-operations @ 3e1d684440ae04e51098807ae2dd11424882e04e (contains certified candidate 4d7aab6)
             auth_fix: "SSH key stockbot-engineer-trusted-controller registered on the pesantezq account; remote switched https -> git@github.com:pesantezq/v1.git; ~/.ssh/config pins the key with IdentitiesOnly=yes so a different identity cannot be silently offered (the original 403 was an authenticated push as the WRONG account, enrique-pesantez-fairfield-edu, not a missing credential)"
-            ci_on_push: not_triggered   # .github/workflows/northstar-ci.yml push trigger matches only main and feature/northstar-**; this branch does not match. The pull_request->main trigger DOES match, so CI runs on the PR.
-            pull_request: pending   # requires a browser/gh action; no gh CLI or API token available in this environment
-            merge: pending
-            post_merge_main_ci: pending
+            ci_on_push: not_triggered   # .github/workflows/northstar-ci.yml push trigger matches only main and feature/northstar-**; the feature branch did not match. The pull_request->main and push:main triggers DO match.
+            pull_request: 14   # merged 2026-08-15T16:56:39-04:00 by pesantezq
+            merge: complete   # origin/main 0ef307a3 -> 7534f24b; 0 commits remain unmerged from the feature branch
+            post_merge_main_validation: >-
+              INDEPENDENT LOCAL RE-VALIDATION of merged main 7534f24 (not a report of the
+              GitHub Actions result, which this environment cannot query — no gh CLI or API
+              token): full hermetic suite 10,638 passed / 15 failed / 158 skipped. The 15
+              failing node IDs are IDENTICAL to the pre-merge baseline and to a pristine
+              pre-change HEAD worktree, so the merge introduced NEW_RELEVANT_FAILURES=0.
+              The GitHub Actions northstar-ci run for the merge to main should be confirmed
+              separately in the Actions tab.
+            known_baseline_failures: 15   # artifact_registry(1) broker_overlay(4) gui_dashboard_memo(2) gui_dashboard_quant(1) intraday_lab_session2(3) intraday_lab_session3_irregular(2) operator_worker_runner(1) strategy_projection_anchor(1)
         northstar_0b_engineering_learning_kernel:
           status: certification_candidate   # 2026-08-15 — automatic lesson extraction/retrieval/evaluation/competence/graduation + SHA-bound verification. Engineering-organization records, NOT canonical Northstar contracts. C1 remains DISABLED; readiness grants nothing.
           deliverables:
