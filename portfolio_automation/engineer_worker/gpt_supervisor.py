@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
-from portfolio_automation.engineer_worker.prod_evidence import _detect_secret
+from portfolio_automation.engineer_worker import supervisor_screen
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 SUPERVISOR_SCHEMA_VERSION = "engineering.supervisor_decision.v0"
@@ -121,10 +121,30 @@ SUPERVISOR_SYSTEM = (
 )
 
 
-def _screen_packet(packet_json: str) -> None:
-    """Refuse to transmit a packet that contains credential-shaped material."""
-    if _detect_secret(packet_json) or _APIKEY_RE.search(packet_json):
-        raise SupervisorError("packet contains secret-like material; refusing to transmit")
+def _screen_packet(packet: dict[str, Any], packet_json: str) -> None:
+    """Refuse to transmit a packet that contains credential-shaped material.
+
+    Screening runs against the packet STRUCTURE (via ``supervisor_screen``) rather
+    than only its serialized text, so that Python source evidence can be classified
+    with AST context: a credential keyword inside a regex pattern literal is a
+    pattern definition, while ``api_key = "..."`` is a value. The flat
+    ``_APIKEY_RE`` check is retained on the serialized form as a context-free
+    backstop — it cannot be exempted by any structural rule.
+
+    ``prod_evidence._detect_secret`` is deliberately NOT applied here. It guards a
+    different boundary (production runtime evidence admission) where no source
+    structure exists to reason about, and it remains unchanged for that purpose.
+    Applying it to source-code review is what starved the Northstar 0B.1 reviewer
+    of the security evidence it needed. See docs/EW0A_SUPERVISOR_SCREEN.md."""
+    result = supervisor_screen.screen_packet(packet)
+    if result.blocked:
+        rules = sorted({f.rule for f in result.findings})
+        raise SupervisorError(
+            f"packet contains secret-like material; refusing to transmit (rules: {rules})")
+    if _APIKEY_RE.search(packet_json):
+        raise SupervisorError(
+            "packet contains secret-like material; refusing to transmit (rules: "
+            "['provider_api_key_backstop'])")
 
 
 SupervisorTransport = Callable[[dict[str, Any]], dict[str, Any]]
@@ -207,7 +227,7 @@ def review(packet: dict[str, Any], cfg: SupervisorConfig, now_fn: Callable[[], s
         return SupervisorDecision(SupervisorVerdict.SUPERVISOR_UNAVAILABLE,
                                   error="packet exceeds size bound", decided_at=decided_at)
     try:
-        _screen_packet(packet_json)
+        _screen_packet(packet, packet_json)
     except SupervisorError as e:
         return SupervisorDecision(SupervisorVerdict.SUPERVISOR_UNAVAILABLE,
                                   error=str(e), decided_at=decided_at)

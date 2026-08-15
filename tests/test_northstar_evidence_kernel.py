@@ -348,11 +348,36 @@ def test_canonical_contracts_carry_no_vendor_response_structures():
 
 
 def test_descriptor_rejects_credential_material():
-    for bad_note in ("api_key=abc123", "Bearer xyz", "token=deadbeef", "sk-abcdefghijkl"):
+    # Values use the EXACT synthetic sentinel <synthetic-secret-fixture> instead of
+    # credential-shaped literals. What is under test is unchanged: the descriptor
+    # guard matches the KEYWORD ("api_key", "token=", "apikey"), so every case here
+    # is still rejected and these assertions still prove the descriptor refuses
+    # credential material.
+    #
+    # The sentinel affects only whether this file may be TRANSMITTED to the
+    # independent supervisor for security review (see docs/EW0A_SUPERVISOR_SCREEN.md);
+    # credential-shaped literals here previously made the whole file untransmittable,
+    # which starved the Northstar 0B.1 certification of its evidence. It is NOT a
+    # contract exemption — test_descriptor_rejects_sentinel_bearing_material below
+    # pins that the guard still rejects sentinel-bearing values.
+    for bad_note in ("api_key=<synthetic-secret-fixture>", "Bearer xyz",
+                     "token=<synthetic-secret-fixture>", "sk-abcdefghijkl"):
         with pytest.raises(ValueError):
             make_source(notes=bad_note)
     with pytest.raises(ValueError):
-        make_source(dataset="quotes?apikey=SECRET")
+        make_source(dataset="quotes?apikey=<synthetic-secret-fixture>")
+
+
+def test_descriptor_rejects_sentinel_bearing_material():
+    """The sentinel is a TRANSFER mechanism, never a contract exemption.
+
+    Credential material has no place in a persisted, hashed descriptor regardless
+    of how the value is written."""
+    for bad in ("api_key=<synthetic-secret-fixture>",
+                "token=<synthetic-secret-fixture>",
+                "password=<synthetic-secret-fixture>"):
+        with pytest.raises(ValueError):
+            make_source(notes=bad)
 
 
 # ── Round trip + versioning ────────────────────────────────────────────────
