@@ -75,6 +75,13 @@ stockbot_northstar_redesign:
             false_certifications: 0
             authority_boundary_violations: 0
             new_relevant_failures: 0   # exact node-ID comparison vs pristine HEAD worktree: identical 15 pre-existing failures
+          durability:
+            pushed: 2026-08-15   # origin/feature/ew-0a-safe-operations @ 3e1d684440ae04e51098807ae2dd11424882e04e (contains certified candidate 4d7aab6)
+            auth_fix: "SSH key stockbot-engineer-trusted-controller registered on the pesantezq account; remote switched https -> git@github.com:pesantezq/v1.git; ~/.ssh/config pins the key with IdentitiesOnly=yes so a different identity cannot be silently offered (the original 403 was an authenticated push as the WRONG account, enrique-pesantez-fairfield-edu, not a missing credential)"
+            ci_on_push: not_triggered   # .github/workflows/northstar-ci.yml push trigger matches only main and feature/northstar-**; this branch does not match. The pull_request->main trigger DOES match, so CI runs on the PR.
+            pull_request: pending   # requires a browser/gh action; no gh CLI or API token available in this environment
+            merge: pending
+            post_merge_main_ci: pending
         northstar_0b_engineering_learning_kernel:
           status: certification_candidate   # 2026-08-15 — automatic lesson extraction/retrieval/evaluation/competence/graduation + SHA-bound verification. Engineering-organization records, NOT canonical Northstar contracts. C1 remains DISABLED; readiness grants nothing.
           deliverables:
