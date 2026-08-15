@@ -48,7 +48,37 @@ stockbot_northstar_redesign:
             - GitHub action/Node deprecation warnings
     northstar_phase_0b:
       name: "Canonical Evidence, Prediction & Worker Contracts"
-      status: active   # NOT complete — milestones 2+ outstanding
+      status: active   # 2026-08-15 — STILL ACTIVE. Exit gate "contracts reviewed + versioned + test-covered" is NOT satisfied: the "reviewed" clause holds for 0B.2 and 0B.3 but NOT for 0B.1, whose independent certification returned ABSTAIN (see exit_gate below). Do not close this phase, and do not treat 0C as unblocked, until 0B.1 certification returns PASS.
+      exit_gate:
+        definition: "contracts reviewed + versioned + test-covered"   # docs/NORTHSTAR_REDESIGN.md phase table, row 0B
+        status: NOT_SATISFIED
+        versioned: PROVEN         # 18 contract classes; serde.require_schema_version enforces a fail-closed EXACT version gate; schema era participates in deterministic identity
+        test_covered: PROVEN      # 194 tests across 8 contract suites, all passing (evidence_kernel 44, prediction_research 36, experiment_spec 43, capital_proposal 12, exit_proposal 17, outcome_record 15, strategy_passport 15, cross_contract 12)
+        reviewed:
+          northstar_0b_contract_architecture_and_evidence_kernel: ABSTAIN   # BLOCKER — see blocker_0b1 below
+          northstar_0b_prediction_research_experiment_contracts: PASS       # gpt-4o-2024-08-06, 2026-08-15
+          northstar_0b_decision_outcome_passport_contracts: PASS            # per-contract PASS records + cross-contract certification PASS
+        evidence: docs/EW0A_0B_PHASE_CERTIFICATION.jsonl
+        blocker_0b1: >-
+          The independent reviewer returned ABSTAIN, not because the evidence kernel is
+          believed defective, but because it could not see enough of it. The trusted
+          supervisor packet screen refuses to transmit
+          portfolio_automation/northstar/sources.py and
+          tests/test_northstar_evidence_kernel.py: sources.py implements the Evidence
+          Plane's OWN credential screen (so it necessarily contains credential-shaped
+          patterns) and the kernel tests carry deliberate fake-credential fixtures that
+          prove that screen rejects them. Neither holds a real secret. The reviewer
+          specifically could not validate the acceptance criterion "credential-shaped
+          material in a DataSourceDescriptor is refused", and correctly followed the
+          packet's own instruction to ABSTAIN rather than PASS on unseen material.
+          This is a genuine certification blocker and is recorded as one. The secret
+          detector was NOT weakened to obtain a verdict — doing so inside a certification
+          mission would corrupt the very control being certified. Resolution belongs to a
+          separate, security-reviewed evidence-transfer / detector-precision task.
+          NOTE: this is the third occurrence of the same false-positive class already
+          recorded as Learning Kernel bootstrap lesson C (credential detection over free
+          text requires token boundaries), which is now well-evidenced enough to justify
+          that separate task.
       step: northstar_0b_canonical_contracts
       milestones:
         northstar_0b_contract_architecture_and_evidence_kernel:
