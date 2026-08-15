@@ -233,3 +233,54 @@ def test_runtime_policy_roundtrip(tmp_path):
     write_runtime_policy(tmp_path, POLICY)
     got = read_runtime_policy(tmp_path)
     assert got.mission_id == "northstar_test" and got.gpt_supervisor_required and not got.auto_merge
+
+
+# --- Idle controller state (no mission executing) ---------------------------
+# Pins the semantics of an EMPTY mission_id so that it is a SPECIFIED state
+# rather than an ambiguous value. Reconciling the runtime after a mission
+# completes must not mean pointing it at a different stale mission, and must not
+# pre-authorize the next one. The existing schema already expresses "no mission
+# executing" safely: the mission-boundary check in run_mission refuses every
+# task, so nothing can be dispatched while the controller is idle.
+IDLE_POLICY = RuntimePolicy(mission_id="")
+
+
+def _must_not_run(*_args, **_kwargs):
+    raise AssertionError("no executor may be invoked while the controller is idle")
+
+
+def test_idle_runtime_refuses_every_task():
+    """An idle controller dispatches nothing, whatever is queued."""
+    queue = [_task(task_id="a", mission_id="northstar_test"),
+             _task(task_id="b", mission_id="some_other_mission")]
+    rep = run_mission(IDLE_POLICY, queue, Lvl.A1_ASSISTED_ENGINEERING,
+                      _must_not_run, _must_not_run, _must_not_run, _now, _vid)
+    assert rep.tasks_run == []
+    assert rep.verified == 0
+    assert "out-of-mission task" in rep.stop_reason
+
+
+def test_idle_runtime_still_denies_the_disabled_authorities():
+    """Idling must not relax any authority boundary."""
+    assert IDLE_POLICY.disabled_authorities_ok() is True
+    assert not IDLE_POLICY.auto_merge and not IDLE_POLICY.auto_deploy
+    assert not IDLE_POLICY.auto_production_mutation
+    assert not IDLE_POLICY.auto_authority_promotion
+    assert not IDLE_POLICY.auto_capital_action
+
+
+def test_idle_runtime_round_trips(tmp_path):
+    from portfolio_automation.engineer_worker.ew0a_loop import (
+        read_runtime_policy, write_runtime_policy)
+    write_runtime_policy(tmp_path, IDLE_POLICY)
+    got = read_runtime_policy(tmp_path)
+    assert got.mission_id == ""
+    assert got.gpt_supervisor_required is True
+
+
+def test_a_real_mission_still_dispatches_after_idle_support():
+    """Regression guard: supporting an idle state must not break normal operation."""
+    rep = run_mission(POLICY, [_task(task_id="a")], Lvl.A1_ASSISTED_ENGINEERING,
+                      _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_PASS(),
+                      _now, _vid)
+    assert rep.verified == 1

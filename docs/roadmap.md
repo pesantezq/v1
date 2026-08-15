@@ -20,23 +20,39 @@ Current position (2026-08-15):
 - **Phase 0A** (Architecture, Authority & CI Foundation) — **COMPLETE**
   (authority @ `1794a164`; remote CI GREEN run `31338193791` @ `3fa43377`;
   GPT `SESSION_CLOSED — NORTHSTAR_PHASE_0A`)
-- **Phase:** `northstar_phase_0b` (Canonical Evidence, Prediction & Worker
-  Contracts) — **ACTIVE**. All three canonical-contract milestones are now
-  delivered and durable:
-  - `northstar_0b_contract_architecture_and_evidence_kernel` — COMPLETE
-  - `northstar_0b_prediction_research_experiment_contracts` — COMPLETE
-  - `northstar_0b_decision_outcome_passport_contracts` — COMPLETE
-    (0B.3: ExperimentSpec/ExperimentResult/CapitalProposal/ExitProposal/
-    OutcomeRecord/StrategyPassport; certified candidate `4d7aab6` → merged main
-    `7534f24` via PR #14; `northstar-ci` run **#21 SUCCESS** on merged main)
-  - The **phase-level** 0B exit gate (`contracts reviewed + versioned +
-    test-covered`) has NOT yet been formally closed — that is a separate
-    reconciliation, so the phase deliberately remains ACTIVE here.
+- **Phase 0B** (Canonical Evidence, Prediction & Worker Contracts) —
+  **COMPLETE** (2026-08-15 @ main `eddc6f2`; gate
+  `NORTHSTAR_0B_CONTRACTS_READY`). Exit gate `contracts reviewed + versioned +
+  test-covered` satisfied and **proven, not assumed**:
+  - *versioned* — 18 contract classes; `serde.require_schema_version` enforces a
+    fail-closed exact-version gate; schema era participates in identity
+  - *test-covered* — 194 tests across 8 contract suites, all passing
+  - *reviewed* — each milestone independently certified **PASS**:
+    - `..._contract_architecture_and_evidence_kernel` (0B.1) — PASS
+    - `..._prediction_research_experiment_contracts` (0B.2) — PASS
+    - `..._decision_outcome_passport_contracts` (0B.3) — PASS
+      (certified candidate `4d7aab6` → merged main `7534f24`, PR #14, CI #21)
+  - 0B.1 first returned **ABSTAIN** and that record is permanently retained. The
+    reviewer could not *see* the evidence — the supervisor packet screen refused
+    to transmit the Evidence Plane's own credential guard and the fixtures
+    proving it works. Resolved by a separate security-reviewed mission (PR #17)
+    that made the evidence-transfer screen precise **without weakening any
+    credential protection**, then ONE fresh review. The detector was never
+    loosened and no verdict was rerolled.
+- **Engineer runtime:** IDLE — `mission_id` is empty, so the mission-boundary
+  check refuses every task. Deliberately not pointed at a completed mission
+  (stale) nor at 0C (that would pre-authorize the next milestone). Authority
+  remains `A1_ASSISTED_ENGINEERING`; controller level `C0.5_SHADOW`.
 - **Parallel (non-Northstar) workstream:** the Engineer Learning Kernel is
   `certification_candidate` — engineering-organization infrastructure, **not** a
   canonical Northstar contract. It is `NON_BLOCKING_FOR_NORTHSTAR_0B`. C1 is
   **DISABLED**; no capability has reached `READY_FOR_CERTIFICATION`.
-- Phases 0C–11 are defined, **not started**. No future phase is implemented.
+- **Phase 0C** (Point-in-Time EvidenceGateway & Research Store) — **`ready`**:
+  its dependency is satisfied and **implementation has not begun**. No 0C code
+  exists — no EvidenceGateway, research store, PIT adapters, vendor selection or
+  MissionSpec. Starting it needs a separate explicit authorization; closing 0B
+  did not grant one.
+- Phases 0D–11 are defined, **not started**. No future phase is implemented.
   AI worker runtimes follow the **Prime-free Local R&D direction** (Prime is
   superseded as orchestrator).
 

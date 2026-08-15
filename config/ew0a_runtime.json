@@ -14,7 +14,7 @@
   "gpt_supervisor_required": true,
   "max_concurrent_tasks": 1,
   "max_tasks_without_checkpoint": 10,
-  "mission_id": "northstar_0b_prediction_research_experiment_contracts",
+  "mission_id": "",
   "schema_kind": "experimental_noncanonical",
   "schema_version": "engineering.runtime_policy.v0"
 }

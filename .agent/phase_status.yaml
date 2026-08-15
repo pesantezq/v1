@@ -23,6 +23,23 @@ stockbot_northstar_redesign:
   charter: docs/NORTHSTAR_REDESIGN.md
   gates_achieved:
     - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09; GPT SESSION_CLOSED — NORTHSTAR_PHASE_0A
+    - NORTHSTAR_0B_CONTRACTS_READY           # 2026-08-15 @ main eddc6f2; exit gate "contracts reviewed + versioned + test-covered" satisfied; 0B.1/0B.2/0B.3 each independently reviewed PASS
+  engineer_runtime_state:
+    mission_id: ""        # IDLE — no mission executing. Deliberately NOT pointed at a
+                          # completed mission (that would be stale) and NOT at 0C (that
+                          # would pre-authorize the next milestone). The existing
+                          # RuntimePolicy schema expresses this safely: run_mission's
+                          # mission-boundary check refuses EVERY task while mission_id is
+                          # empty, so nothing can be dispatched. Pinned by
+                          # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
+                          # and three companion tests, so the empty value is a SPECIFIED
+                          # state rather than an ambiguous one. No schema change was
+                          # required.
+    last_authorized_mission: northstar_0b_decision_outcome_passport_contracts   # complete + durable
+    awaiting: next authorized mission (operator/controller)
+    authority: A1_ASSISTED_ENGINEERING       # unchanged
+    controller_level: C0.5_SHADOW            # unchanged
+    c1: DISABLED                             # unchanged
   phases:
     northstar_phase_0a:
       name: "Architecture, Authority & CI Foundation"
@@ -48,37 +65,35 @@ stockbot_northstar_redesign:
             - GitHub action/Node deprecation warnings
     northstar_phase_0b:
       name: "Canonical Evidence, Prediction & Worker Contracts"
-      status: active   # 2026-08-15 — STILL ACTIVE. Exit gate "contracts reviewed + versioned + test-covered" is NOT satisfied: the "reviewed" clause holds for 0B.2 and 0B.3 but NOT for 0B.1, whose independent certification returned ABSTAIN (see exit_gate below). Do not close this phase, and do not treat 0C as unblocked, until 0B.1 certification returns PASS.
+      status: complete   # 2026-08-15 — exit gate "contracts reviewed + versioned + test-covered" SATISFIED and proven, not assumed. All three canonical-contract milestones are durable on authoritative main and independently reviewed. See exit_gate below for the evidence. Closing this phase does NOT authorize 0C; 0C is `ready` (dependencies satisfied, implementation not begun) and requires a separate operator/controller authorization to start.
       exit_gate:
         definition: "contracts reviewed + versioned + test-covered"   # docs/NORTHSTAR_REDESIGN.md phase table, row 0B
-        status: NOT_SATISFIED
+        status: SATISFIED
+        satisfied_at_main_sha: eddc6f2f92c880bcc131432d750600ce0be4503f   # push CI northstar-ci run #29 SUCCESS
         versioned: PROVEN         # 18 contract classes; serde.require_schema_version enforces a fail-closed EXACT version gate; schema era participates in deterministic identity
-        test_covered: PROVEN      # 194 tests across 8 contract suites, all passing (evidence_kernel 44, prediction_research 36, experiment_spec 43, capital_proposal 12, exit_proposal 17, outcome_record 15, strategy_passport 15, cross_contract 12)
+        test_covered: PROVEN      # 194 tests across 8 contract suites, all passing (evidence_kernel 45, prediction_research 36, experiment_spec 43, capital_proposal 12, exit_proposal 17, outcome_record 15, strategy_passport 15, cross_contract 12)
         reviewed:
-          northstar_0b_contract_architecture_and_evidence_kernel: ABSTAIN   # BLOCKER — see blocker_0b1 below
+          northstar_0b_contract_architecture_and_evidence_kernel: PASS      # fresh certification 2026-08-15 at eddc6f2 (gpt-4o-2024-08-06), after the ABSTAIN blocker was resolved
           northstar_0b_prediction_research_experiment_contracts: PASS       # gpt-4o-2024-08-06, 2026-08-15
           northstar_0b_decision_outcome_passport_contracts: PASS            # per-contract PASS records + cross-contract certification PASS
         evidence: docs/EW0A_0B_PHASE_CERTIFICATION.jsonl
-        blocker_0b1: >-
-          The independent reviewer returned ABSTAIN, not because the evidence kernel is
-          believed defective, but because it could not see enough of it. The trusted
-          supervisor packet screen refuses to transmit
-          portfolio_automation/northstar/sources.py and
-          tests/test_northstar_evidence_kernel.py: sources.py implements the Evidence
-          Plane's OWN credential screen (so it necessarily contains credential-shaped
-          patterns) and the kernel tests carry deliberate fake-credential fixtures that
-          prove that screen rejects them. Neither holds a real secret. The reviewer
-          specifically could not validate the acceptance criterion "credential-shaped
-          material in a DataSourceDescriptor is refused", and correctly followed the
-          packet's own instruction to ABSTAIN rather than PASS on unseen material.
-          This is a genuine certification blocker and is recorded as one. The secret
-          detector was NOT weakened to obtain a verdict — doing so inside a certification
-          mission would corrupt the very control being certified. Resolution belongs to a
-          separate, security-reviewed evidence-transfer / detector-precision task.
-          NOTE: this is the third occurrence of the same false-positive class already
-          recorded as Learning Kernel bootstrap lesson C (credential detection over free
-          text requires token boundaries), which is now well-evidenced enough to justify
-          that separate task.
+        false_certifications: 0
+        authority_boundary_violations: 0
+        new_relevant_failures: 0   # broad suite 10,689 passed / 15 failed; identical baseline node IDs
+        history_0b1: >-
+          0B.1 first returned ABSTAIN and that record is RETAINED permanently in the
+          certification ledger. The reviewer abstained because it could not SEE the
+          evidence, not because the kernel was believed defective: the supervisor packet
+          screen refused to transmit sources.py (which implements the Evidence Plane's
+          own credential guard, so it necessarily contains credential-shaped patterns)
+          and tests/test_northstar_evidence_kernel.py (whose synthetic fixtures prove
+          that guard rejects credentials). The secret detector was NOT weakened to obtain
+          a verdict. It was resolved by a separate security-reviewed mission (PR #17)
+          that made the supervisor evidence-transfer screen precise while leaving the
+          production evidence detector and the DataSourceDescriptor guard unchanged; that
+          change was itself independently security-reviewed PASS. Only then was ONE fresh
+          0B.1 review run against the changed state, and it confirmed the previously
+          unevaluable criterion directly. The verdict was never rerolled.
       step: northstar_0b_canonical_contracts
       milestones:
         northstar_0b_contract_architecture_and_evidence_kernel:
@@ -121,6 +136,9 @@ stockbot_northstar_redesign:
             known_baseline_failures: 15   # artifact_registry(1) broker_overlay(4) gui_dashboard_memo(2) gui_dashboard_quant(1) intraday_lab_session2(3) intraday_lab_session3_irregular(2) operator_worker_runner(1) strategy_projection_anchor(1)
         northstar_0b_engineering_learning_kernel:
           status: certification_candidate   # 2026-08-15 — automatic lesson extraction/retrieval/evaluation/competence/graduation + SHA-bound verification. Engineering-organization records, NOT canonical Northstar contracts. C1 remains DISABLED; readiness grants nothing.
+          classification: NON_BLOCKING_FOR_NORTHSTAR_0B   # This is PARALLEL_ENGINEER_WORKER_CAPABILITY — controller/engineering-organization infrastructure, not a canonical Northstar contract. The 0B exit gate is about CONTRACTS (reviewed + versioned + test-covered), so this milestone's immature capability-graduation evidence neither blocks nor contributes to 0B closure. It is tracked here for locality rather than relocated, to avoid restructuring the roadmap around one record.
+          workstream: parallel_engineer_worker_autonomy
+          blocks_northstar_0b: false
           deliverables:
             - portfolio_automation/engineer_worker/learning/ (contracts, config, store, extractor, validation, retriever, evaluator, competence, graduation, binding, kernel, bootstrap, readmodels, worker_view)
             - config/ew0a_learning.json (controller-owned, protected path)
@@ -162,7 +180,10 @@ stockbot_northstar_redesign:
         Local Models / Trusted Tools). Prime is superseded as orchestrator.
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
-      status: not_started
+      status: ready   # 2026-08-15 — dependency (0B) satisfied; implementation NOT begun. `ready` here carries the same meaning it did for northstar_0b_decision_outcome_passport_contracts before that milestone started: next in line, prerequisites met, nothing built. NO 0C code exists: no EvidenceGateway, no research store, no PIT adapters, no vendor selection, no MissionSpec. Starting 0C requires a separate explicit operator/controller authorization; closing 0B did not grant it.
+      depends_on: northstar_phase_0b   # satisfied at main eddc6f2
+      implementation_started: false
+      exit_gate: "lookahead-audited PIT reads over the research store"   # docs/NORTHSTAR_REDESIGN.md phase table, row 0C
     northstar_phase_0d:
       name: "Certification, Champion/Challenger & Incremental-Value Foundation"
       status: not_started
