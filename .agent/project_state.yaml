@@ -200,6 +200,7 @@ northstar_program:
   authority_policy: config/agent_policy.yaml
   gates_achieved:
     - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09 — Phase 0A closed (GPT: SESSION_CLOSED — NORTHSTAR_PHASE_0A); evidence: authority model @ 1794a164 + northstar-ci run 31338193791 GREEN @ 3fa43377
+    - NORTHSTAR_0B_CONTRACTS_READY           # 2026-08-15 — Phase 0B closed @ main eddc6f2 (northstar-ci run #29 SUCCESS); exit gate "contracts reviewed + versioned + test-covered": versioned PROVEN, test-covered PROVEN (194 tests), reviewed PASS for all three milestones. 0B.1 first ABSTAINed on an evidence-TRANSFER limitation (retained in the ledger), resolved by a security-reviewed screen-precision change that weakened no credential protection, then re-reviewed once.
   # Local R&D direction (recorded at 0A→0B handoff, operator/GPT-set):
   # StockBot R&D Control Plane → Secure Sandbox → Generic Workers →
   # Local Models / Trusted Tools. PRIME IS SUPERSEDED as orchestrator in the
@@ -221,8 +222,8 @@ northstar_program:
     risk controls, or production boundaries.
   phases:  # statuses mirror phase_status.yaml; NO future phase is implemented
     northstar_phase_0a: {name: "Architecture, Authority & CI Foundation", status: complete}  # 2026-08-09; gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY
-    northstar_phase_0b: {name: "Canonical Evidence, Prediction & Worker Contracts", status: active}  # 2026-08-09 PM
-    northstar_phase_0c: {name: "Point-in-Time EvidenceGateway & Research Store", status: not_started}
+    northstar_phase_0b: {name: "Canonical Evidence, Prediction & Worker Contracts", status: complete}  # 2026-08-15 @ main eddc6f2 — exit gate "contracts reviewed + versioned + test-covered" SATISFIED; 0B.1/0B.2/0B.3 each independently certified PASS; evidence docs/EW0A_0B_PHASE_CERTIFICATION.jsonl
+    northstar_phase_0c: {name: "Point-in-Time EvidenceGateway & Research Store", status: ready}  # 2026-08-15 — dependency (0B) satisfied; implementation NOT begun and no 0C code exists. Starting 0C requires separate explicit authorization; closing 0B did not grant it.
     northstar_phase_0d: {name: "Certification, Champion/Challenger & Incremental-Value Foundation", status: not_started}
     northstar_phase_1: {name: "Prediction Engine v2", status: not_started}
     northstar_phase_2: {name: "Capital & Risk Engine v2", status: not_started}
