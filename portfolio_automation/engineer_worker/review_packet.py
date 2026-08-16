@@ -219,10 +219,20 @@ class ReviewPacket:
         duplicates: list[str] = []
         for entry in entries:
             if entry.criterion_id in seen:
-                # Conflicting bindings for one criterion make the proof map
-                # ambiguous; ambiguity is refused rather than resolved.
-                if seen[entry.criterion_id].artifact_ids != entry.artifact_ids:
-                    duplicates.append(entry.criterion_id)
+                # EXACTLY ONE means exactly one. A repeated entry is refused
+                # whether its artifact_ids are identical, different, reordered or
+                # partially overlapping.
+                #
+                # An earlier version only rejected CONFLICTING repeats, on the
+                # reasoning that identical ones are harmless. That substituted
+                # "duplicates are harmless when identical" for the invariant the
+                # module actually declares, and left duplicate semantics
+                # undefined: nothing said whether first or last should win, so a
+                # future edit to one of two identical entries would silently
+                # change which binding applied. Refusing ambiguity is cheaper
+                # than defining a precedence rule nobody will remember.
+                duplicates.append(entry.criterion_id)
+                continue          # never overwrite; no last-one-wins
             seen[entry.criterion_id] = entry
 
         manifested = set(seen)
@@ -234,7 +244,9 @@ class ReviewPacket:
                             f"only_in_manifest={sorted(manifested - declared)} "
                             f"only_in_criteria={sorted(declared - manifested)}")
             if duplicates:
-                gaps.append(f"conflicting duplicate manifest entries: {sorted(set(duplicates))}")
+                gaps.append(f"duplicate manifest entries (exactly one per criterion "
+                            f"is required, identical repeats included): "
+                            f"{sorted(set(duplicates))}")
             result.missing.append({
                 "criterion_id": "MANIFEST",
                 "claim": "every declared criterion has exactly one manifest entry",

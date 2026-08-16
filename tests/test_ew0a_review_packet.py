@@ -404,3 +404,68 @@ def test_malformed_manifest_entry_fails_closed():
     p.manifest = ["not-a-manifest-entry"]
     out = dispatch_review(p, spy, screen=False)
     assert out.dispatched is False and spy.was_called is False
+
+
+# ══ SENIOR REVIEW ROUND 3: "exactly one" means exactly one ════════════════
+# Duplicate detection previously rejected only CONFLICTING repeats, on the
+# reasoning that identical ones are harmless. That substituted a convenience
+# rule for the invariant the module declares, and left duplicate semantics
+# undefined — nothing said whether first or last should win, so editing one of
+# two identical entries would silently change which binding applied.
+
+
+def test_p_identical_duplicate_manifest_entries_fail_closed():
+    """The exact case that passed pre-repair: same criterion, same bindings."""
+    spy = ReviewerSpy()
+    p = _packet()
+    p.add_criterion(TAMPER_CRITERION)
+    p.add_evidence(_test_source("tests/test_evidence_gateway_admissibility.py"))
+    p.add_evidence(_result())
+    p.bind("C1_TAMPER", "tests/test_evidence_gateway_admissibility.py", "focused-tests")
+    p.bind("C1_TAMPER", "tests/test_evidence_gateway_admissibility.py", "focused-tests")
+    out = dispatch_review(p, spy, screen=False)
+    assert out.completeness.complete is False
+    assert out.dispatched is False
+    assert spy.was_called is False
+    assert any("duplicate" in g for m in out.completeness.missing for g in m["gaps"])
+
+
+def test_q_reordered_duplicate_manifest_entries_fail_closed():
+    """Same artifacts in a different order is still a second entry."""
+    spy = ReviewerSpy()
+    p = _packet()
+    p.add_criterion(TAMPER_CRITERION)
+    p.add_evidence(_test_source("tests/test_evidence_gateway_admissibility.py"))
+    p.add_evidence(_result())
+    p.bind("C1_TAMPER", "tests/test_evidence_gateway_admissibility.py", "focused-tests")
+    p.bind("C1_TAMPER", "focused-tests", "tests/test_evidence_gateway_admissibility.py")
+    out = dispatch_review(p, spy, screen=False)
+    assert out.dispatched is False and spy.was_called is False
+
+
+def test_partially_overlapping_duplicate_fails_closed():
+    spy = ReviewerSpy()
+    p = _packet()
+    p.add_criterion(TAMPER_CRITERION)
+    p.add_evidence(_test_source("tests/test_evidence_gateway_admissibility.py"))
+    p.add_evidence(_result())
+    p.bind("C1_TAMPER", "tests/test_evidence_gateway_admissibility.py", "focused-tests")
+    p.bind("C1_TAMPER", "focused-tests")
+    out = dispatch_review(p, spy, screen=False)
+    assert out.dispatched is False and spy.was_called is False
+
+
+def test_duplicates_are_not_silently_deduplicated_or_last_one_wins():
+    """No precedence rule is applied: the FIRST entry is retained for reporting
+    and the packet is refused outright, rather than one binding quietly winning."""
+    spy = ReviewerSpy()
+    p = _packet()
+    p.add_criterion(TAMPER_CRITERION)
+    p.add_evidence(_test_source("tests/test_evidence_gateway_admissibility.py"))
+    p.add_evidence(_result())
+    p.bind("C1_TAMPER", "tests/test_evidence_gateway_admissibility.py", "focused-tests")
+    p.bind("C1_TAMPER")            # a later empty binding must not "win"
+    out = dispatch_review(p, spy, screen=False)
+    assert out.dispatched is False and spy.was_called is False
+    # exactly one entry survives internally; the packet is still refused
+    assert len(p._manifest_entries()) == 2
