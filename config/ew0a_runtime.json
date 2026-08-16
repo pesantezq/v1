@@ -14,7 +14,7 @@
   "gpt_supervisor_required": true,
   "max_concurrent_tasks": 1,
   "max_tasks_without_checkpoint": 10,
-  "mission_id": "",
+  "mission_id": "northstar_0c_pit_evidence_gateway_research_store",
   "schema_kind": "experimental_noncanonical",
   "schema_version": "engineering.runtime_policy.v0"
 }

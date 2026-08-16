@@ -10,6 +10,7 @@ the generic .agent/ schema. This file pins the Northstar-specific state:
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -21,8 +22,12 @@ STATE_FILE = REPO_ROOT / ".agent" / "project_state.yaml"
 PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
+AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
+
+# 0C left this list on 2026-08-15 when the operator explicitly authorized it. It
+# is now the CURRENT phase, guarded by its own tests below (which additionally
+# assert that being active has NOT been confused with being implemented).
 FUTURE_PHASES = [
-    "northstar_phase_0c",
     "northstar_phase_0d",
     "northstar_phase_1",
     "northstar_phase_2",
@@ -39,14 +44,9 @@ FUTURE_PHASES = [
 
 # Statuses that mean "no implementation exists". `ready` is included because it
 # denotes ONLY that a phase's dependency is satisfied — it is emphatically not a
-# claim that anything was built. The guards below still forbid `complete` and
-# `active` for every future phase, and restrict `ready` to the single phase whose
-# dependency is actually satisfied, so `ready` cannot creep down the roadmap.
+# claim that anything was built. Every phase after the current one must sit in
+# this set, and `complete`/`active` remain forbidden for all of them.
 NOT_IMPLEMENTED_STATUSES = {"not_started", "ready"}
-
-# The only future phase permitted to be `ready`: 0B is complete, so 0C's
-# dependency is met. Implementation has NOT begun.
-DEPENDENCY_SATISFIED_PHASE = "northstar_phase_0c"
 
 
 def _load(path: Path) -> dict:
@@ -87,14 +87,33 @@ def test_program_is_northstar(state):
 
 
 def test_current_phase_and_step(state):
-    # 2026-08-09 PM: Phase 0A closed (gate NORTHSTAR_GOVERNANCE_FOUNDATION_READY);
-    # Phase 0B (canonical contracts) is active.
-    assert state["current_phase"] == "northstar_phase_0b"
-    assert state["current_step"] == "northstar_0b_canonical_contracts"
+    # 2026-08-15: Phase 0B closed (gate NORTHSTAR_0B_CONTRACTS_READY) and Phase 0C
+    # was authorized by explicit operator decision. The controller pointers must
+    # follow the authorized mission — a stale pointer at a completed phase is the
+    # defect this guard exists to catch.
+    assert state["current_phase"] == "northstar_phase_0c"
+    assert state["current_step"] == AUTHORIZED_0C_MISSION
 
 
-def test_next_official_step_is_canonical_contracts(state):
-    assert state["next_official_step"]["primary"] == "northstar_0b_canonical_contracts"
+def test_next_official_step_is_the_authorized_0c_mission(state):
+    nos = state["next_official_step"]
+    assert nos["primary"] == AUTHORIZED_0C_MISSION
+    # History is carried forward, not erased.
+    assert nos["prior_primary"] == "northstar_0b_canonical_contracts"
+
+
+def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
+    """The top-level pointers and the phase map must agree.
+
+    They drifted apart once already: the phase map said 0B complete / 0C ready
+    while current_phase still pointed at 0B. Two authoritative surfaces that
+    disagree mean at least one of them is lying."""
+    phases = phase["stockbot_northstar_redesign"]["phases"]
+    current = state["current_phase"]
+    assert phases[current]["status"] == "active", (
+        f"current_phase {current} must be the phase marked active"
+    )
+    assert state["northstar_program"]["phases"][current]["status"] == "active"
 
 
 # ── Req 3: agent_context_check reports the new state ───────────────────────
@@ -111,8 +130,8 @@ def test_agent_context_check_reports_program_phase_step():
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "stockbot_northstar_redesign" in out
-    assert "northstar_phase_0b" in out
-    assert "northstar_0b_canonical_contracts" in out
+    assert "northstar_phase_0c" in out
+    assert AUTHORIZED_0C_MISSION in out
     # The stale claim must be gone from the summary.
     assert "Claude runs locally. Return VPS commands" not in out
 
@@ -123,17 +142,13 @@ def test_agent_context_check_reports_program_phase_step():
 def test_no_future_phase_marked_complete_in_project_state(state):
     phases = state["northstar_program"]["phases"]
     for name in FUTURE_PHASES:
-        status = phases[name]["status"]
-        assert status in NOT_IMPLEMENTED_STATUSES, (
-            f"{name} must not be implemented — future phases are not started"
+        assert phases[name]["status"] == "not_started", (
+            f"{name} must be not_started — phases beyond the authorized one are "
+            "neither started nor pre-authorized"
         )
-        if name != DEPENDENCY_SATISFIED_PHASE:
-            assert status == "not_started", (
-                f"{name} must be not_started — only {DEPENDENCY_SATISFIED_PHASE} "
-                "has its dependency satisfied"
-            )
     assert phases["northstar_phase_0a"]["status"] == "complete"
     assert phases["northstar_phase_0b"]["status"] == "complete"
+    assert phases["northstar_phase_0c"]["status"] == "active"
 
 
 def test_phase_0a_complete_with_gate_and_both_milestones(phase):
@@ -190,14 +205,53 @@ def test_learning_kernel_is_non_blocking_parallel_capability(phase):
     assert "northstar_0b_engineering_learning_kernel" not in p0b["exit_gate"]["reviewed"]
 
 
-def test_engineer_runtime_is_idle_after_phase_closure(phase):
-    """After a mission completes the runtime must be IDLE — not pointed at a
-    completed mission (stale) and not pre-authorizing the next phase."""
+def test_engineer_runtime_points_at_the_authorized_mission(phase):
+    """The runtime mission_id IS the bounded mission boundary. It must name the
+    authorized mission — never a completed one (stale) and never an
+    unauthorized future phase."""
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
-    assert rt["mission_id"] == ""
+    assert rt["mission_id"] == AUTHORIZED_0C_MISSION
     assert rt["c1"] == "DISABLED"
     assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
-    assert "0c" not in str(rt["mission_id"]).lower()
+    assert rt["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
+
+
+def test_runtime_config_matches_the_authorized_mission_and_grants_nothing():
+    """Activation sets WHICH mission may be dispatched. It grants no authority."""
+    runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
+    assert runtime["mission_id"] == AUTHORIZED_0C_MISSION
+    assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
+    assert runtime["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
+    assert runtime["max_concurrent_tasks"] == 1
+    for denied in ("auto_merge", "auto_deploy", "auto_production_mutation",
+                   "auto_authority_promotion", "auto_capital_action"):
+        assert runtime[denied] is False, f"{denied} must remain disabled"
+
+
+def test_runtime_still_refuses_out_of_mission_tasks():
+    """The mission boundary must still bind: authorizing 0C authorizes 0C tasks
+    and nothing else."""
+    from portfolio_automation.engineer_worker.ew0a import (
+        EngineeringTaskV0, Executor, RiskClass)
+    from portfolio_automation.engineer_worker.ew0a_authority import EngineerAuthorityLevel
+    from portfolio_automation.engineer_worker.ew0a_loop import (
+        read_runtime_policy, run_mission)
+
+    policy = read_runtime_policy(REPO_ROOT)
+    assert policy is not None and policy.mission_id == AUTHORIZED_0C_MISSION
+
+    def _must_not_run(*_a, **_k):
+        raise AssertionError("an out-of-mission task must never be dispatched")
+
+    foreign = EngineeringTaskV0(
+        task_id="t-foreign", title="t", goal="g", risk_class=RiskClass.E1_ROUTINE,
+        executor=Executor.ENGINEER, mission_id="northstar_phase_0d_something",
+        allowed_paths=["tests/"], allowed_tests=["tests/tx.py"])
+    rep = run_mission(policy, [foreign], EngineerAuthorityLevel.A1_ASSISTED_ENGINEERING,
+                      _must_not_run, _must_not_run, _must_not_run,
+                      lambda: "2026-08-15T00:00:00+00:00", lambda: "v1")
+    assert rep.tasks_run == []
+    assert "out-of-mission task" in rep.stop_reason
 
 
 def test_no_future_phase_marked_complete_in_phase_status(phase):
@@ -206,17 +260,49 @@ def test_no_future_phase_marked_complete_in_phase_status(phase):
         status = phases[name]["status"]
         assert status in NOT_IMPLEMENTED_STATUSES
         assert status not in ("complete", "active")
-        if name != DEPENDENCY_SATISFIED_PHASE:
-            assert status == "not_started"
+        assert status == "not_started"
 
 
-def test_dependency_satisfied_phase_has_no_implementation(phase):
-    """`ready` must mean ONLY that the dependency is met. If 0C is ever marked
-    ready while claiming implementation, that is a roadmap-integrity failure."""
-    p0c = phase["stockbot_northstar_redesign"]["phases"][DEPENDENCY_SATISFIED_PHASE]
-    if p0c["status"] == "ready":
-        assert p0c["implementation_started"] is False
-        assert p0c["depends_on"] == "northstar_phase_0b"
+# ── Phase 0C activation: authorized, NOT implemented ───────────────────────
+
+
+def test_phase_0c_is_authorized_and_active(phase):
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    assert p0c["status"] == "active"
+    assert p0c["step"] == AUTHORIZED_0C_MISSION
+    auth = p0c["authorization"]
+    assert auth["authorized_by"] == "operator"
+    assert auth["authorized_mission"] == AUTHORIZED_0C_MISSION
+
+
+def test_phase_0c_depends_on_a_completed_0b(phase):
+    phases = phase["stockbot_northstar_redesign"]["phases"]
+    p0c = phases["northstar_phase_0c"]
+    assert p0c["depends_on"] == "northstar_phase_0b"
+    assert phases[p0c["depends_on"]]["status"] == "complete"
+
+
+def test_activation_is_not_implementation(phase):
+    """`active` records AUTHORIZATION, not construction.
+
+    Collapsing the two would let an activation mission claim work it never did.
+    The first real 0C implementation mission flips implementation_started."""
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    assert p0c["implementation_started"] is False
+
+
+def test_activation_granted_no_vendor_or_purchase_authority(phase):
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    vendor = p0c["vendor_authority"].lower()
+    assert "no vendor is selected" in vendor
+    assert "e4" in vendor
+
+
+def test_activation_scope_excludes_later_phases_and_capital(phase):
+    scope = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"][
+        "authorization"]["scope"].lower()
+    for forbidden in ("0d", "capital", "portfolio", "production", "broker", "c1"):
+        assert forbidden in scope, f"scope must explicitly exclude {forbidden}"
 
 
 # ── Req 10: observe_and_iterate history preserved, not erased ──────────────

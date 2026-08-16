@@ -39,19 +39,31 @@ Current position (2026-08-15):
     that made the evidence-transfer screen precise **without weakening any
     credential protection**, then ONE fresh review. The detector was never
     loosened and no verdict was rerolled.
-- **Engineer runtime:** IDLE — `mission_id` is empty, so the mission-boundary
-  check refuses every task. Deliberately not pointed at a completed mission
-  (stale) nor at 0C (that would pre-authorize the next milestone). Authority
-  remains `A1_ASSISTED_ENGINEERING`; controller level `C0.5_SHADOW`.
+- **Engineer runtime:** `mission_id` =
+  `northstar_0c_pit_evidence_gateway_research_store` — set from IDLE on
+  2026-08-15 by the operator's explicit 0C authorization. This value is the
+  bounded mission boundary: tasks from other phases are still refused. Setting
+  it grants no new authority. Authority remains `A1_ASSISTED_ENGINEERING`;
+  controller level `C0.5_SHADOW`.
 - **Parallel (non-Northstar) workstream:** the Engineer Learning Kernel is
   `certification_candidate` — engineering-organization infrastructure, **not** a
   canonical Northstar contract. It is `NON_BLOCKING_FOR_NORTHSTAR_0B`. C1 is
   **DISABLED**; no capability has reached `READY_FOR_CERTIFICATION`.
-- **Phase 0C** (Point-in-Time EvidenceGateway & Research Store) — **`ready`**:
-  its dependency is satisfied and **implementation has not begun**. No 0C code
-  exists — no EvidenceGateway, research store, PIT adapters, vendor selection or
-  MissionSpec. Starting it needs a separate explicit authorization; closing 0B
-  did not grant one.
+- **Phase 0C** (Point-in-Time EvidenceGateway & Research Store) — **ACTIVE**,
+  the current authorized phase. Authorized 2026-08-15 by explicit operator
+  decision; step `northstar_0c_pit_evidence_gateway_research_store`.
+  - `active` records **authorization, not construction**:
+    `implementation_started` is still **false** and **no 0C code exists** — no
+    EvidenceGateway, research store, PIT adapters, vendor integration or
+    MissionSpec. The first implementation mission flips that flag.
+  - Exit gate: **lookahead-audited PIT reads over the research store** —
+    evidence available at a historical time T must be restricted to what was
+    genuinely knowable at T, and that restriction must be *audited*, not asserted.
+  - **No vendor is selected or purchased.** The gateway must support replaceable
+    Evidence Plane inputs, but vendor acquisition and paid-data purchase are E4
+    human decisions and were **not** granted by this activation.
+  - Scope: 0C **only**. Not 0D+, not capital allocation, not portfolio/trading
+    authority, not production deployment, not broker access, not C1.
 - Phases 0D–11 are defined, **not started**. No future phase is implemented.
   AI worker runtimes follow the **Prime-free Local R&D direction** (Prime is
   superseded as orchestrator).
