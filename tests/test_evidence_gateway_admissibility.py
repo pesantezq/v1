@@ -274,3 +274,171 @@ def test_gateway_introduces_no_prediction_or_capital_authority():
                  "position", "capital", "prediction", "signal", "buy", "sell")
     leaked = {i for i in identifiers if any(f in i for f in forbidden)}
     assert not leaked, f"trading/allocation concepts in the gateway code: {leaked}"
+
+
+# ══ TASK 2: whole-evidence admission (identity + provenance binding) ═══════
+from portfolio_automation.evidence_gateway.admission import (
+    AdmissionDecision, AdmissionReason, admit)
+from portfolio_automation.northstar.evidence import EvidenceRef, EvidenceSnapshot
+from portfolio_automation.northstar.provenance import Provenance
+
+SRC = "src_" + "a" * 32
+
+
+def _prov(source_id=SRC, producer_type="source_adapter", **kw):
+    # The 0B contract refuses a source_adapter provenance without a source_id,
+    # so the no-source case must use a producer type for which that is coherent.
+    if source_id is None:
+        producer_type = "system"
+    return Provenance(producer_id="adapter.test", producer_type=producer_type,
+                      recorded_at=AS_OF - timedelta(days=2), source_id=source_id, **kw)
+
+
+def _snap(known_at=None, payload=None, source_id=SRC, provenance=None):
+    return EvidenceSnapshot(
+        source_id=source_id, entity_id="AAPL", entity_type="symbol",
+        evidence_type="fundamental.revenue",
+        pit=_pit(known_at=known_at if known_at is not None else AS_OF - timedelta(days=1)),
+        provenance=provenance if provenance is not None else _prov(source_id=source_id),
+        payload=payload or {"revenue": 123})
+
+
+# --- admission happy path + timing delegation -----------------------------
+def test_well_formed_evidence_is_admitted():
+    d = admit(_snap(), AS_OF)
+    assert d.admitted is True
+    assert d.reason is AdmissionReason.ADMITTED
+    assert d.snapshot_id.startswith("evs_")
+
+
+def test_future_evidence_is_refused_and_stays_attributable_to_timing():
+    """A lookahead refusal must be reported as lookahead, not as something else —
+    otherwise an auditor counting lookahead refusals undercounts them."""
+    d = admit(_snap(known_at=AS_OF + timedelta(days=1)), AS_OF)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.PIT_REFUSED
+    assert d.pit_reason is AdmissibilityReason.KNOWN_AT_AFTER_AS_OF
+
+
+def test_unknown_timing_is_refused_through_the_pit_layer():
+    snap = EvidenceSnapshot(
+        source_id=SRC, entity_id="AAPL", entity_type="symbol",
+        evidence_type="fundamental.revenue", pit=_pit(),   # known_at unknown
+        provenance=_prov(), payload={"revenue": 1})
+    d = admit(snap, AS_OF)
+    assert d.reason is AdmissionReason.PIT_REFUSED
+    assert d.pit_reason is AdmissibilityReason.KNOWN_AT_UNKNOWN
+
+
+def test_timing_is_checked_before_identity():
+    """Ordering is part of the audit contract: evidence that is BOTH future-dated
+    and ref-mismatched must report the timing failure."""
+    snap = _snap(known_at=AS_OF + timedelta(days=5))
+    wrong_ref = _snap(payload={"revenue": 999}).ref()
+    d = admit(snap, AS_OF, ref=wrong_ref)
+    assert d.reason is AdmissionReason.PIT_REFUSED
+
+
+# --- identity is recomputed, never trusted --------------------------------
+def test_identity_is_derived_from_content_so_tampering_changes_it():
+    """Two snapshots differing only in payload cannot share an identity; that is
+    what makes the recomputation check meaningful rather than decorative."""
+    a, b = _snap(payload={"revenue": 1}), _snap(payload={"revenue": 2})
+    assert a.snapshot_id != b.snapshot_id
+    assert a.payload_hash != b.payload_hash
+
+
+def test_admitted_decision_reports_the_recomputed_identity():
+    snap = _snap()
+    d = admit(snap, AS_OF)
+    assert d.snapshot_id == snap.snapshot_id
+
+
+# --- provenance must not contradict the evidence --------------------------
+def test_the_0b_contract_refuses_contradicting_provenance_at_construction():
+    """PRIMARY enforcement lives in the CONTRACT, not the gateway.
+
+    EvidenceSnapshot already refuses a provenance naming a different source, so a
+    contradicting snapshot cannot normally exist to be presented to the gateway."""
+    other = "src_" + "b" * 32
+    with pytest.raises(ValueError):
+        EvidenceSnapshot(
+            source_id=SRC, entity_id="AAPL", entity_type="symbol",
+            evidence_type="fundamental.revenue",
+            pit=_pit(known_at=AS_OF - timedelta(days=1)),
+            provenance=_prov(source_id=other), payload={"revenue": 1})
+
+
+def test_gateway_backstops_contradicting_provenance_on_a_bypassed_object():
+    """The gateway check is DEFENCE IN DEPTH, not the primary guarantee.
+
+    It only matters for evidence reconstructed WITHOUT the constructor — a future
+    store loading rows directly, say. Simulated by deliberately bypassing the
+    frozen dataclass, which is the only way such an object can arise."""
+    snap = _snap()
+    object.__setattr__(snap.provenance, "source_id", "src_" + "c" * 32)
+    d = admit(snap, AS_OF)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.PROVENANCE_SOURCE_MISMATCH
+
+
+def test_provenance_without_a_source_is_admitted():
+    """A system-produced snapshot names no source; coherent, not a defect."""
+    assert admit(_snap(provenance=_prov(source_id=None)), AS_OF).admitted is True
+
+
+# --- reference binding ----------------------------------------------------
+def test_matching_ref_is_accepted():
+    snap = _snap()
+    assert admit(snap, AS_OF, ref=snap.ref()).admitted is True
+
+
+def test_ref_pointing_at_different_content_is_refused():
+    snap = _snap(payload={"revenue": 1})
+    other_ref = _snap(payload={"revenue": 2}).ref()
+    d = admit(snap, AS_OF, ref=other_ref)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.REF_DOES_NOT_MATCH_SNAPSHOT
+
+
+def test_non_ref_object_is_refused():
+    d = admit(_snap(), AS_OF, ref={"snapshot_id": "evs_x"})
+    assert d.reason is AdmissionReason.NOT_AN_EVIDENCE_REF
+
+
+# --- malformed input ------------------------------------------------------
+def test_non_snapshot_input_returns_a_decision():
+    for bad in (None, {}, "evs_x", 7):
+        d = admit(bad, AS_OF)
+        assert d.admitted is False
+        assert d.reason is AdmissionReason.NOT_AN_EVIDENCE_SNAPSHOT
+
+
+def test_admission_decision_cannot_lie_about_itself():
+    with pytest.raises(ValueError):
+        AdmissionDecision(admitted=True, reason=AdmissionReason.PIT_REFUSED)
+    with pytest.raises(ValueError):
+        AdmissionDecision(admitted=False, reason=AdmissionReason.ADMITTED)
+
+
+def test_admission_carries_the_pit_decision_for_audit():
+    """Even on a non-timing refusal the timing verdict stays visible."""
+    snap = _snap()
+    d = admit(snap, AS_OF, ref=_snap(payload={"x": 9}).ref())
+    assert d.reason is AdmissionReason.REF_DOES_NOT_MATCH_SNAPSHOT
+    assert d.pit_decision is not None and d.pit_decision.admitted is True
+
+
+def test_admission_module_introduces_no_storage_or_vendor():
+    mod = (Path(__file__).resolve().parents[1] / "portfolio_automation" /
+           "evidence_gateway" / "admission.py")
+    tree = ast.parse(mod.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = {a.name for a in node.names}
+            module = getattr(node, "module", "") or ""
+            for banned in ("sqlite3", "socket", "requests", "urllib", "os", "psycopg2"):
+                assert banned not in names and not module.startswith(banned)
+    src = mod.read_text(encoding="utf-8").lower()
+    for vendor in ("fmp", "finra", "bloomberg", "polygon", "iex"):
+        assert vendor not in src
