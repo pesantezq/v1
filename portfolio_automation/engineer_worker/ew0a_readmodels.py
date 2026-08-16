@@ -248,12 +248,38 @@ def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[s
 _NORTHSTAR_0B3 = ("ExperimentSpec", "ExperimentResult", "CapitalProposal",
                   "ExitProposal", "OutcomeRecord", "StrategyPassport")
 
+# Deliverable sets are MISSION-SCOPED. The six 0B.3 contracts describe that
+# milestone and nothing else; reporting them under a different mission would
+# show a completed phase's progress as the current phase's progress. That drift
+# was caught in senior review of the first 0C session, where the runtime mission
+# had moved to 0C while this projection still reported the 0B.3 six.
+_MISSION_DELIVERABLES: dict[str, tuple[str, ...]] = {
+    "northstar_0b_decision_outcome_passport_contracts": _NORTHSTAR_0B3,
+}
+
 
 def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
-    deliverables = {name: ("VERIFIED" if name in present else "NOT_STARTED") for name in _NORTHSTAR_0B3}
+    """Project mission progress ONLY for a mission whose deliverable set is known.
+
+    For any other mission the deliverables are reported as unknown rather than
+    borrowed from a different milestone: a dashboard that shows 0B completion
+    while the controller is running 0C is worse than one that admits it does not
+    know, because the first is confidently wrong."""
+    required = _MISSION_DELIVERABLES.get(mission_id)
+    if required is None:
+        return MissionSummary(
+            mission_id=mission_id, deliverables={}, verified_count=0,
+            total_required=0, is_complete=False,
+            completion_note=(
+                f"{PENDING_BACKEND}: no authoritative deliverable set is projected "
+                f"for mission {mission_id!r}; progress is deliberately NOT inferred "
+                f"from another mission's deliverables"))
+    deliverables = {name: ("VERIFIED" if name in present else "NOT_STARTED")
+                    for name in required}
     verified = sum(1 for v in deliverables.values() if v == "VERIFIED")
-    return MissionSummary(mission_id=mission_id, deliverables=deliverables, verified_count=verified,
-                          total_required=len(_NORTHSTAR_0B3), is_complete=(verified == len(_NORTHSTAR_0B3)))
+    return MissionSummary(mission_id=mission_id, deliverables=deliverables,
+                          verified_count=verified, total_required=len(required),
+                          is_complete=(verified == len(required)))
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
@@ -318,4 +344,28 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
             root, worker.worker_identity, now or PENDING_BACKEND)
     except Exception:  # noqa: BLE001
         dashboard["learning"] = PENDING_BACKEND
+
+    # Active autonomous-session projection. This is what makes an unattended
+    # session WATCHABLE through the established controller-owned path:
+    #
+    #     session ledger (controller evidence) -> read model (here) -> GUI
+    #
+    # Read-only and NON-AUTHORITATIVE, like every other projection in this
+    # module. Absent when no session ledger exists — an absent session is
+    # reported as absent, never synthesized.
+    dashboard["active_session"] = _build_active_session(root)
     return dashboard
+
+
+def _build_active_session(repo_root: Path) -> dict[str, Any] | str:
+    """Project the current autonomous session, or PENDING_BACKEND if none.
+
+    Degrades rather than failing the dashboard: an observability problem must
+    never make the engineering evidence unreadable."""
+    try:
+        from tools.ns0c_session import ledger_path, session_projection
+        if not ledger_path(repo_root).exists():
+            return PENDING_BACKEND
+        return session_projection(repo_root=repo_root)
+    except Exception:  # noqa: BLE001
+        return PENDING_BACKEND
