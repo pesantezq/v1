@@ -18,11 +18,37 @@ be malformed would be reported as an identity problem, and an auditor counting
 lookahead refusals across a backtest would undercount them. Refusal reasons are
 audit evidence, so which rule fires matters, not merely that one did.
 
-Identity is RECOMPUTED, never trusted. ``EvidenceSnapshot`` derives
-``snapshot_id`` and ``payload_hash`` from content, so a snapshot reconstructed
-from storage with an altered payload produces a different id than it carries.
-Comparing the carried value against the recomputed one is what makes tampering
-visible; accepting the carried value would make the check decorative.
+WHAT INTEGRITY THIS ACTUALLY PROVES — stated precisely, because an earlier
+version of this module overstated it and a senior review caught the false claim.
+
+The three guarantees are NOT the same strength, and are separated deliberately:
+
+A. Guaranteed by ``EvidenceSnapshot`` CONSTRUCTION.
+   ``payload_canonical`` and ``payload_hash`` are both derived from the payload
+   at construction and cannot disagree for a normally-built object. The gateway
+   cannot add anything here.
+
+B. INDEPENDENTLY RECHECKED HERE.
+   The payload's canonical form is re-parsed and re-hashed, and the result is
+   compared against the stored ``payload_hash``. This is a real recomputation
+   from stored content — not a read-back of the stored hash, which is what an
+   earlier draft did and which proved nothing. It catches evidence that was
+   reconstructed outside the constructor and then altered: a mutated
+   ``payload_canonical`` no longer hashes to its recorded ``payload_hash``, and
+   a mutated ``payload_hash`` no longer matches its content.
+
+C. Available ONLY with an external anchor.
+   ``snapshot_id`` is a DERIVED PROPERTY with no stored counterpart, so the
+   gateway has nothing to compare it against and cannot detect an "id mismatch"
+   on a bare snapshot — there is no second value to disagree with. Identity is
+   anchored only when the caller supplies an ``EvidenceRef``, whose
+   ``snapshot_id`` and ``payload_hash`` were recorded elsewhere, or when the
+   snapshot came through ``EvidenceSnapshot.from_dict``, which already rejects a
+   serialized id that does not reproduce.
+
+There is deliberately no SNAPSHOT_ID_MISMATCH reason code. A branch that can
+never fire would make the API look stronger than it is, which is exactly the
+kind of claim this repair exists to remove.
 
 This module adds NO storage, NO vendor coupling and NO authority. It reads
 evidence objects and returns a decision.
@@ -36,6 +62,7 @@ from typing import Any, Optional
 
 from portfolio_automation.evidence_gateway.admissibility import (
     AdmissibilityDecision, AdmissibilityReason, is_admissible)
+from portfolio_automation.northstar.canonical import content_hash
 from portfolio_automation.northstar.evidence import EvidenceRef, EvidenceSnapshot
 
 SCHEMA_VERSION = "1.0.0"
@@ -52,9 +79,15 @@ class AdmissionReason(str, Enum):
     ADMITTED = "ADMITTED"
     # delegated to the PIT layer; the specific timing reason is carried through
     PIT_REFUSED = "PIT_REFUSED"
-    # identity could not be reproduced from content
-    SNAPSHOT_ID_MISMATCH = "SNAPSHOT_ID_MISMATCH"
+    # payload content does not hash to its recorded payload_hash
     PAYLOAD_HASH_MISMATCH = "PAYLOAD_HASH_MISMATCH"
+    # payload canonical form is unusable (cannot be parsed or re-hashed)
+    PAYLOAD_NOT_CANONICAL = "PAYLOAD_NOT_CANONICAL"
+    # NOTE: there is deliberately NO SNAPSHOT_ID_MISMATCH. snapshot_id is a
+    # derived property with no stored counterpart, so on a bare snapshot there
+    # is no second value to disagree with and such a branch could never fire.
+    # Identity anchoring comes from an EvidenceRef (below) or from
+    # EvidenceSnapshot.from_dict, which already rejects a non-reproducing id.
     # origin contradicts the evidence it is attached to
     PROVENANCE_SOURCE_MISMATCH = "PROVENANCE_SOURCE_MISMATCH"
     # a supplied pointer does not point here
@@ -130,17 +163,30 @@ def admit(snapshot: EvidenceSnapshot, as_of: datetime,
             pit_decision=pit_decision, snapshot_id=None,
             detail=f"point-in-time refusal: {pit_decision.reason.value}")
 
-    # 2. IDENTITY — recomputed from content, never taken on trust.
-    #    EvidenceSnapshot derives both values, so a mismatch means the object we
-    #    hold is not the evidence its identifier claims.
+    # 2. PAYLOAD INTEGRITY — a genuine recomputation from stored content.
+    #    Re-parse the canonical payload and re-hash it, then compare against the
+    #    recorded payload_hash. Reading snapshot.payload_hash back and calling it
+    #    "recomputed" (as an earlier draft did) proves nothing: both values would
+    #    come from the same stored field. Hashing the stored CONTENT is what
+    #    makes a post-construction alteration visible.
     try:
-        recomputed_id = snapshot.snapshot_id
-        recomputed_hash = snapshot.payload_hash
+        recomputed_hash = content_hash(snapshot.payload_copy())
     except Exception as exc:  # noqa: BLE001 — malformed evidence must not escape
         return AdmissionDecision(
-            admitted=False, reason=AdmissionReason.SNAPSHOT_ID_MISMATCH,
+            admitted=False, reason=AdmissionReason.PAYLOAD_NOT_CANONICAL,
             pit_decision=pit_decision,
-            detail=f"identity could not be recomputed: {type(exc).__name__}")
+            detail=f"payload could not be parsed or re-hashed: {type(exc).__name__}")
+
+    if recomputed_hash != snapshot.payload_hash:
+        return AdmissionDecision(
+            admitted=False, reason=AdmissionReason.PAYLOAD_HASH_MISMATCH,
+            pit_decision=pit_decision,
+            detail=("payload content does not hash to its recorded payload_hash; "
+                    "the evidence was altered after construction"))
+
+    # snapshot_id is derived, so it is computed here for reporting only — NOT
+    # as an integrity check. See the module docstring, guarantee (C).
+    recomputed_id = snapshot.snapshot_id
 
     # 3. PROVENANCE — origin must not contradict the evidence it describes.
     prov_source = getattr(snapshot.provenance, "source_id", None)

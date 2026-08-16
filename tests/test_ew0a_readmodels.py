@@ -96,7 +96,8 @@ def test_supervisor_summary_counts_and_no_secrets():
 
 # --- full dashboard integration (real repo) ---------------------------------
 def test_build_dashboard_integration():
-    repo = "/home/pesan/stockbot-lab/repo/v1"
+    from pathlib import Path as _P
+    repo = _P(__file__).resolve().parents[1]   # not one operator's checkout
     d = rm.build_dashboard(repo)
     for section in ("controller", "supervisor", "worker", "worker_authority",
                     "mission", "apprenticeship", "attention_items", "system_health"):
@@ -104,8 +105,112 @@ def test_build_dashboard_integration():
     # dynamic controller identity (not a hardcoded permanent invariant)
     assert d["controller"]["controller_identity"] == "claude_code"
     assert d["worker"]["operational_state"] == PENDING_BACKEND         # no heartbeat backend
-    assert d["mission"]["deliverables"]["ExperimentSpec"] == "VERIFIED"
+    # Mission progress is MISSION-SCOPED. The runtime mission is now 0C, whose
+    # deliverable set is not projected, so the six 0B.3 contracts must NOT appear
+    # here. Reporting a completed phase's deliverables as the current phase's
+    # progress is exactly the drift senior review caught on PR #20.
+    assert "ExperimentSpec" not in d["mission"]["deliverables"]
+    assert d["mission"]["is_complete"] is False
     # no secret anywhere in the whole dashboard
     blob = json.dumps(d)
     for leak in ("sk-", "Bearer", ".ew0a_openai_key", "Authorization"):
         assert leak not in blob
+
+
+# ══ SENIOR-REVIEW REPAIR: real GUI observability for an autonomous session ══
+# Finding B of the PR #20 senior review: a standalone projection function is NOT
+# GUI integration, and build_dashboard() was still reporting the six 0B.3
+# contracts as mission progress while the runtime mission had moved to 0C.
+import ast as _ast
+import json as _json
+from pathlib import Path as _Path
+
+_REPO = _Path(__file__).resolve().parents[1]
+_C0_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
+_0B3_MISSION = "northstar_0b_decision_outcome_passport_contracts"
+_0B3_NAMES = {"ExperimentSpec", "ExperimentResult", "CapitalProposal",
+              "ExitProposal", "OutcomeRecord", "StrategyPassport"}
+
+
+def test_0b3_deliverables_are_not_reported_as_0c_mission_progress():
+    """The drift senior review caught: a completed phase's deliverables must not
+    be shown as the current phase's progress. Confidently wrong is worse than
+    admitting the deliverable set is unknown."""
+    from portfolio_automation.engineer_worker.ew0a_readmodels import build_mission_summary
+    summary = build_mission_summary(_C0_MISSION, present=set(_0B3_NAMES))
+    assert set(summary.deliverables) & _0B3_NAMES == set()
+    assert summary.is_complete is False
+    assert summary.verified_count == 0
+    assert "PENDING_BACKEND" in summary.completion_note
+
+
+def test_the_0b3_mission_still_reports_its_own_deliverables():
+    """The fix is scoped, not a blanket disabling of mission progress."""
+    from portfolio_automation.engineer_worker.ew0a_readmodels import build_mission_summary
+    summary = build_mission_summary(_0B3_MISSION, present=set(_0B3_NAMES))
+    assert set(summary.deliverables) == _0B3_NAMES
+    assert summary.is_complete is True
+
+
+def test_active_session_is_visible_through_the_controller_owned_dashboard():
+    """Observability is proven only when the ESTABLISHED read-model path carries
+    it — which is what a standalone projection function did not do."""
+    from portfolio_automation.engineer_worker.ew0a_readmodels import build_dashboard
+    dash = build_dashboard(_REPO, now="2026-08-16T05:00:00+00:00")
+    session = dash["active_session"]
+    assert session != "PENDING_BACKEND", "session ledger exists but is not projected"
+    assert session["mission_id"] == _C0_MISSION
+    assert session["session_objective"] == "EvidenceGateway Foundation"
+    assert session["current_task_id"]
+
+
+def test_session_projection_reports_verified_only_from_recorded_evidence():
+    """A task counts VERIFIED only from a recorded TaskOutcome final_status, never
+    from absence of error or from a task merely finishing."""
+    from tools.ns0c_session import read_events, session_projection
+    proj = session_projection(repo_root=_REPO)
+    recorded = [e for e in read_events(_REPO / "docs" /
+                "NORTHSTAR_0C_SESSION_ns0c-evgw-foundation-001.jsonl")
+                if e.get("kind") == "TaskOutcome" and e.get("final_status") == "VERIFIED"]
+    assert proj["tasks_verified"] == len(recorded)
+
+
+def test_missing_live_backends_stay_pending_backend():
+    """A partial honest dashboard beats a fake live one."""
+    from tools.ns0c_session import session_projection
+    proj = session_projection(repo_root=_REPO)
+    assert proj["worker_heartbeat"] == "PENDING_BACKEND"
+    assert proj["supervisor_latency_ms"] == "PENDING_BACKEND"
+
+
+def test_absent_session_ledger_projects_pending_backend_not_a_fabrication(tmp_path):
+    from portfolio_automation.engineer_worker.ew0a_readmodels import _build_active_session
+    assert _build_active_session(tmp_path) == "PENDING_BACKEND"
+
+
+def test_session_projection_surfaces_the_authority_boundaries():
+    from tools.ns0c_session import session_projection
+    proj = session_projection(repo_root=_REPO)
+    assert proj["authority"] == "A1_ASSISTED_ENGINEERING"
+    assert proj["c1_status"] == "DISABLED"
+    assert proj["auto_merge"] is False
+    assert proj["production_mutation"] is False
+    assert proj["capital_action"] is False
+
+
+def test_session_module_has_no_hardcoded_operator_checkout_path():
+    """Read-model code must not depend on one machine's path."""
+    src = (_REPO / "tools" / "ns0c_session.py").read_text(encoding="utf-8")
+    assert "/home/pesan/" not in src
+
+
+def test_readmodel_session_path_has_no_authoritative_write():
+    """GUI -> authoritative mutation must not exist. The session projection and
+    its reader import only read accessors."""
+    src = (_REPO / "tools" / "ns0c_session.py").read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.FunctionDef) and node.name == "session_projection":
+            body = _ast.dump(node)
+            for writer in ("open(", "write", "record("):
+                assert writer not in body, f"projection must not {writer}"

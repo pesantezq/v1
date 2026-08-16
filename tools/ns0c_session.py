@@ -21,11 +21,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO = Path("/home/pesan/stockbot-lab/repo/v1")
+# Derived from this file's location, never a hardcoded operator checkout: the
+# read-model consumes this module, and read-model code must not depend on one
+# machine's path. A repo_root may still be passed explicitly by the trusted
+# controller boundary.
+REPO = Path(__file__).resolve().parents[1]
 SESSION_ID = "ns0c-evgw-foundation-001"
 MISSION_ID = "northstar_0c_pit_evidence_gateway_research_store"
 SESSION_OBJECTIVE = "EvidenceGateway Foundation"
-LEDGER = REPO / "docs" / f"NORTHSTAR_0C_SESSION_{SESSION_ID}.jsonl"
+LEDGER_REL = f"docs/NORTHSTAR_0C_SESSION_{SESSION_ID}.jsonl"
+LEDGER = REPO / LEDGER_REL
+
+
+def ledger_path(repo_root: Path | str | None = None) -> Path:
+    """Ledger location for a given checkout; defaults to this repository."""
+    return (Path(repo_root) / LEDGER_REL) if repo_root is not None else LEDGER
 
 # Session lifecycle states surfaced to the GUI.
 SESSION_STATES = (
@@ -80,14 +90,15 @@ def read_events(path: Path | None = None) -> list[dict]:
 PENDING_BACKEND = "PENDING_BACKEND"
 
 
-def session_projection(path: Path | None = None) -> dict:
+def session_projection(path: Path | None = None,
+                       repo_root: Path | str | None = None) -> dict:
     """Controller-owned projection of live session/task state for the GUI.
 
     NON-AUTHORITATIVE and read-only. A task is reported VERIFIED only when the
     controller evidence records deterministic PASS *and* GPT PASS *and* roadmap
     post-check PASS — the projection never derives success from absence of
     error, from progress, or from a task merely finishing."""
-    events = read_events(path)
+    events = read_events(path if path is not None else ledger_path(repo_root))
     started = next((e for e in events if e["kind"] == "SessionStarted"), None)
     states = [e for e in events if e["kind"] == "SessionState"]
     stages = [e for e in events if e["kind"] == "TaskStage"]

@@ -442,3 +442,79 @@ def test_admission_module_introduces_no_storage_or_vendor():
     src = mod.read_text(encoding="utf-8").lower()
     for vendor in ("fmp", "finra", "bloomberg", "polygon", "iex"):
         assert vendor not in src
+
+
+# ══ SENIOR-REVIEW REPAIR: real payload-integrity adversarial tests ═════════
+# The original task-2 tests showed that two DIFFERENT valid snapshots produce
+# different hashes — an adjacent property. They never constructed an actual
+# mismatch, so the frozen criterion "a tampered payload is refused" was never
+# exercised and the task passed while the criterion was unmet. These tests
+# construct the mismatch directly.
+#
+# Bypassing the frozen dataclass is the ONLY way such an object can arise (a
+# normally-constructed snapshot cannot disagree with itself), and it is exactly
+# how evidence reconstructed outside the constructor would look.
+
+def test_mutated_payload_content_is_refused():
+    """payload_canonical altered, payload_hash left intact — content no longer
+    hashes to its recorded hash."""
+    snap = _snap(payload={"revenue": 1})
+    object.__setattr__(snap, "payload_canonical", '{"revenue":999}')
+    d = admit(snap, AS_OF)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.PAYLOAD_HASH_MISMATCH
+
+
+def test_mutated_payload_hash_is_refused():
+    """payload_hash altered, content left intact — the recorded hash no longer
+    matches what the content actually hashes to."""
+    snap = _snap(payload={"revenue": 1})
+    object.__setattr__(snap, "payload_hash", "0" * 64)
+    d = admit(snap, AS_OF)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.PAYLOAD_HASH_MISMATCH
+
+
+def test_unparseable_payload_canonical_is_refused():
+    snap = _snap()
+    object.__setattr__(snap, "payload_canonical", "{not json")
+    d = admit(snap, AS_OF)
+    assert d.admitted is False
+    assert d.reason is AdmissionReason.PAYLOAD_NOT_CANONICAL
+
+
+def test_integrity_check_is_a_real_recomputation_not_a_readback():
+    """Regression guard for the exact false-pass the senior review caught.
+
+    If admit() were re-reading snapshot.payload_hash instead of hashing the
+    stored content, both mutation tests above would PASS admission. This test
+    states the property directly: the recomputed hash is derived from content."""
+    from portfolio_automation.northstar.canonical import content_hash
+    snap = _snap(payload={"revenue": 1})
+    assert content_hash(snap.payload_copy()) == snap.payload_hash
+    object.__setattr__(snap, "payload_canonical", '{"revenue":2}')
+    assert content_hash(snap.payload_copy()) != snap.payload_hash
+
+
+def test_no_unreachable_snapshot_id_mismatch_reason_exists():
+    """snapshot_id is derived with no stored counterpart, so an id-mismatch
+    branch could never fire. Keeping one would make the API look stronger than
+    it is — which is the claim this repair removed."""
+    assert not hasattr(AdmissionReason, "SNAPSHOT_ID_MISMATCH")
+
+
+def test_evidence_ref_is_the_actual_identity_anchor():
+    """Identity is anchored by an EXTERNAL ref, not by self-comparison."""
+    snap = _snap(payload={"revenue": 1})
+    assert admit(snap, AS_OF, ref=snap.ref()).admitted is True
+    assert admit(snap, AS_OF, ref=_snap(payload={"revenue": 2}).ref()).reason is (
+        AdmissionReason.REF_DOES_NOT_MATCH_SNAPSHOT)
+
+
+def test_from_dict_rejects_a_non_reproducing_serialized_identity():
+    """The other identity anchor, provided by the 0B contract itself."""
+    snap = _snap(payload={"revenue": 1})
+    data = snap.to_canonical_dict()
+    data["snapshot_id"] = "evs_" + "0" * 32
+    with pytest.raises(ValueError):
+        EvidenceSnapshot.from_dict(data)
