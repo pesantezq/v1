@@ -98,13 +98,21 @@ class VisibleMember:
 class WithheldMember:
     """A snapshot excluded from the view, and why."""
 
+    #: The id ADMISSION was willing to vouch for. None when the snapshot was
+    #: refused before its identity was validated — absence here is a fact about
+    #: how far admission got, not a missing value to be filled in.
     snapshot_id: Optional[str]
     reason: str
     pit_reason: Optional[str] = None
+    #: The id the CORPUS used for this member. Reported separately so a withheld
+    #: entry stays correlatable with the supersedes links that name it, without
+    #: implying admission validated that identity.
+    corpus_snapshot_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"snapshot_id": self.snapshot_id, "reason": self.reason,
-                "pit_reason": self.pit_reason}
+                "pit_reason": self.pit_reason,
+                "corpus_snapshot_id": self.corpus_snapshot_id}
 
 
 @dataclass
@@ -166,18 +174,31 @@ def resolve_visibility(snapshots: Iterable[EvidenceSnapshot],
     # Nothing about supersession is examined yet. A snapshot that fails here is
     # excluded entirely — it is neither visible NOR able to supersede anything.
     admitted: list[tuple[EvidenceSnapshot, AdmissionDecision]] = []
+    # Refusals are KEPT, keyed by id, so the audit record for an unresolved link
+    # can state why the predecessor was actually withheld instead of guessing.
+    refusals: dict[str, AdmissionDecision] = {}
     for snapshot in corpus:
         decision = admit(snapshot, as_of)
         if decision.admitted:
             admitted.append((snapshot, decision))
             continue
+        # Keyed by the CORPUS id, not decision.snapshot_id: admission declines to
+        # vouch for an identity it refused before validating (a PIT refusal
+        # carries snapshot_id=None), yet the corpus and every supersedes link
+        # still refer to the snapshot by that id.
+        # getattr: the corpus may legitimately contain a non-snapshot, which is
+        # withheld rather than raised on. Such a member has no corpus id at all.
+        corpus_id = getattr(snapshot, "snapshot_id", None)
+        if isinstance(corpus_id, str):
+            refusals[corpus_id] = decision
         # A future revision that is ALSO malformed reports as future evidence,
         # because admit() evaluates timing first — a later integrity failure must
         # not obscure the lookahead finding.
         result.withheld.append(WithheldMember(
             snapshot_id=decision.snapshot_id,
             reason=decision.reason.value,
-            pit_reason=decision.pit_reason.value if decision.pit_reason else None))
+            pit_reason=decision.pit_reason.value if decision.pit_reason else None,
+            corpus_snapshot_id=corpus_id if isinstance(corpus_id, str) else None))
 
     admitted_ids = {s.snapshot_id for s, _ in admitted}
 
@@ -206,19 +227,41 @@ def resolve_visibility(snapshots: Iterable[EvidenceSnapshot],
             in_corpus = target in corpus_ids
             state = (LinkState.PREDECESSOR_NOT_ADMITTED if in_corpus
                      else LinkState.PREDECESSOR_NOT_IN_CORPUS)
-            result.unresolved_links.append({
+            audit: dict[str, Any] = {
                 "snapshot_id": sid, "supersedes_snapshot_id": target,
-                "state": state.value,
-                "detail": ("predecessor was not knowable at as_of"
-                           if in_corpus else
-                           "predecessor is absent from the supplied corpus; it is "
-                           "recorded as unresolved and never invented")})
+                "state": state.value}
+            if in_corpus:
+                # An audit record must say why evidence was ACTUALLY withheld.
+                # "Not knowable at as_of" is only one of the reasons a predecessor
+                # can fail admission — integrity and malformed provenance are
+                # others — and asserting timing for all of them would be a
+                # plausible-sounding explanation of a different fact. The real
+                # AdmissionDecision is carried through instead.
+                refusal = refusals.get(target)
+                audit["detail"] = ("predecessor is present in corpus but was not "
+                                   "admitted at as_of")
+                audit["predecessor_admission_reason"] = (
+                    refusal.reason.value if refusal is not None else None)
+                audit["predecessor_pit_reason"] = (
+                    refusal.pit_reason.value
+                    if refusal is not None and refusal.pit_reason is not None else None)
+                audit["predecessor_withheld_on_timing"] = (
+                    refusal is not None
+                    and refusal.reason is AdmissionReason.PIT_REFUSED)
+            else:
+                audit["detail"] = ("predecessor is absent from the supplied corpus; "
+                                   "it is recorded as unresolved and never invented")
+            result.unresolved_links.append(audit)
 
         result.visible.append(VisibleMember(
             snapshot_id=sid, supersedes_snapshot_id=target, link_state=state,
             superseded_by=tuple(sorted(superseded_by.get(sid, ())))))
 
     result.visible.sort(key=lambda m: m.snapshot_id)
-    result.withheld.sort(key=lambda m: (m.snapshot_id or "", m.reason))
+    # corpus id leads the key: admission-vouched ids are None for early refusals,
+    # so sorting on them alone would leave several withheld members tied and
+    # their order dependent on input order, breaking deterministic replay.
+    result.withheld.sort(key=lambda m: (m.corpus_snapshot_id or "",
+                                        m.snapshot_id or "", m.reason))
     result.unresolved_links.sort(key=lambda d: d["snapshot_id"])
     return result

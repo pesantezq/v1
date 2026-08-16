@@ -202,18 +202,109 @@ def test_scenario_f_predecessor_absent_from_corpus_is_unresolved_not_invented():
     assert "never invented" in view.unresolved_links[0]["detail"]
 
 
-def test_scenario_f_predecessor_present_but_not_knowable_is_distinguished():
-    """'Not yet knowable' and 'absent entirely' are both unresolved, but they are
-    different audit facts."""
-    late_root = _snap(FEB20, {"revenue": 100})
-    child = _snap(MAR01, {"revenue": 111}, supersedes=late_root.snapshot_id)
-    view = resolve_visibility([late_root, child], MAR01)
-    # both knowable at MAR01 -> resolved
-    assert view.member(child.snapshot_id).link_state is LinkState.RESOLVED
+def _unresolved_for(view, snapshot_id):
+    return next(u for u in view.unresolved_links if u["snapshot_id"] == snapshot_id)
 
-    later_child = _snap(APR01, {"revenue": 122}, supersedes=late_root.snapshot_id)
-    view2 = resolve_visibility([late_root, later_child], JAN15)
-    assert view2.visible == []          # neither knowable at Jan 15
+
+def _corrupt_payload_keeping_identity(snapshot):
+    """Make a snapshot fail the integrity check WITHOUT changing its id.
+
+    payload_hash is identity-bearing but payload_canonical is not (see
+    evidence.py: 'Excluded from identity (acquisition metadata)'). Corrupting the
+    hash would therefore mint a DIFFERENT snapshot_id, and the link naming the
+    original id would stop pointing at this object — the same identity-shift trap
+    that made self-supersession unconstructible. Mutating the canonical form
+    leaves identity fixed while the recomputed hash no longer matches, which is
+    exactly a stored-payload corruption."""
+    object.__setattr__(snapshot, "payload_canonical", '{"revenue": 999999}')
+    return snapshot
+
+
+def test_scenario_f_predecessor_present_but_pit_withheld_is_distinguished():
+    """CASE A — predecessor IS in the corpus but was not knowable at as_of.
+
+    DEFENSIVE, NOT EXPECTED BUSINESS BEHAVIOUR. This builds a child that is
+    knowable BEFORE the predecessor it names. The canonical contracts permit the
+    topology — nothing in EvidenceSnapshot or PointInTime requires a predecessor's
+    known_at to precede its successor's — so the resolver must have a defined,
+    truthful answer for it. It is not a chronology anyone should produce on
+    purpose.
+
+    An earlier version of this test asserted RESOLVED and then an empty view,
+    which never constructed a visible child with an unadmitted predecessor at
+    all. It proved an adjacent arrangement rather than the state it named."""
+    predecessor = _snap(FEB20, {"revenue": 100})
+    child = _snap(JAN10, {"revenue": 111}, supersedes=predecessor.snapshot_id)
+
+    view = resolve_visibility([predecessor, child], JAN15)
+
+    assert view.is_visible(child.snapshot_id), "the child WAS knowable at Jan 15"
+    assert not view.is_visible(predecessor.snapshot_id), "the predecessor was not"
+    member = view.member(child.snapshot_id)
+    assert member.link_state is LinkState.PREDECESSOR_NOT_ADMITTED
+
+    audit = _unresolved_for(view, child.snapshot_id)
+    assert audit["detail"] == ("predecessor is present in corpus but was not "
+                               "admitted at as_of")
+    assert audit["predecessor_admission_reason"] == "PIT_REFUSED"
+    assert audit["predecessor_pit_reason"] == "KNOWN_AT_AFTER_AS_OF"
+    assert audit["predecessor_withheld_on_timing"] is True
+
+
+def test_scenario_f_predecessor_present_but_integrity_withheld_reports_integrity():
+    """CASE B — the SAME LinkState, a DIFFERENT audit reason.
+
+    This is the precision the repair is about. Here the predecessor was
+    perfectly knowable at as_of; it was refused because its payload no longer
+    hashes to its recorded payload_hash. An audit record claiming it "was not
+    knowable" would be a plausible sentence about the wrong fact, and would send
+    an investigator looking at clocks instead of at corruption."""
+    predecessor = _snap(JAN10, {"revenue": 100})
+    child = _snap(JAN10, {"revenue": 111}, supersedes=predecessor.snapshot_id)
+    _corrupt_payload_keeping_identity(predecessor)
+
+    view = resolve_visibility([predecessor, child], JAN15)
+
+    assert view.is_visible(child.snapshot_id)
+    assert not view.is_visible(predecessor.snapshot_id)
+    assert view.member(child.snapshot_id).link_state is LinkState.PREDECESSOR_NOT_ADMITTED
+
+    audit = _unresolved_for(view, child.snapshot_id)
+    assert audit["predecessor_admission_reason"] == "PAYLOAD_HASH_MISMATCH"
+    assert audit["predecessor_pit_reason"] == "ADMITTED", (
+        "PIT was evaluated and PASSED here; reporting that is what makes the "
+        "integrity refusal legible as a LATER failure rather than a timing one")
+    assert audit["predecessor_withheld_on_timing"] is False, (
+        "an integrity refusal must never be reported as a timing refusal")
+
+
+def test_scenario_f_the_three_predecessor_situations_stay_distinguishable():
+    """Present+PIT, present+integrity, and absent must not collapse together."""
+    p_pit = _snap(FEB20, {"revenue": 1})
+    c_pit = _snap(JAN10, {"revenue": 2}, supersedes=p_pit.snapshot_id)
+    p_bad = _snap(JAN10, {"revenue": 3})
+    c_bad = _snap(JAN10, {"revenue": 4}, supersedes=p_bad.snapshot_id)
+    _corrupt_payload_keeping_identity(p_bad)
+    orphan = _snap(JAN10, {"revenue": 5}, supersedes="evs_" + "9" * 32)
+
+    view = resolve_visibility([p_pit, c_pit, p_bad, c_bad, orphan], JAN15)
+
+    states = {m.snapshot_id: m.link_state for m in view.visible}
+    assert states[c_pit.snapshot_id] is LinkState.PREDECESSOR_NOT_ADMITTED
+    assert states[c_bad.snapshot_id] is LinkState.PREDECESSOR_NOT_ADMITTED
+    assert states[orphan.snapshot_id] is LinkState.PREDECESSOR_NOT_IN_CORPUS
+
+    reasons = {u["snapshot_id"]: u.get("predecessor_admission_reason")
+               for u in view.unresolved_links}
+    assert reasons[c_pit.snapshot_id] == "PIT_REFUSED"
+    assert reasons[c_bad.snapshot_id] == "PAYLOAD_HASH_MISMATCH"
+    assert reasons[orphan.snapshot_id] is None, (
+        "an absent predecessor has no admission decision to report; None is the "
+        "truthful value and must not be filled in with a guess")
+
+    # and none of them may be superseded by evidence that never reached the view
+    for m in view.visible:
+        assert m.superseded_by == ()
 
 
 # ── SCENARIO G: malformed chain topology ───────────────────────────────────
