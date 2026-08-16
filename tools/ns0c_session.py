@@ -190,13 +190,21 @@ class SessionEpisode:
         return [e for e in self.events if e.get("kind") == kind]
 
 
-def split_episodes(events: Iterable[dict],
-                   ledger: Optional[Path] = None) -> list[SessionEpisode]:
+def split_episodes(events: Iterable[dict], ledger: Optional[Path] = None
+                   ) -> tuple[list[SessionEpisode], list[dict]]:
     """Cut a ledger into episodes at each ``SessionStarted``.
 
-    Events preceding the first SessionStarted belong to no episode and are
-    dropped rather than attributed to one."""
+    Returns the episodes and any UNATTRIBUTED events — those preceding the first
+    SessionStarted in the file. They are handed back rather than folded into an
+    episode, because a session's task counts must contain that session's work and
+    nothing else.
+
+    A ledger with no SessionStarted at all is a legitimate CONTINUATION: a
+    session that adopts a corrected identity starts writing to a new file without
+    starting a new episode. Those events are attributed later, by the session id
+    they carry, never by which file they happen to live in."""
     episodes: list[SessionEpisode] = []
+    unattributed: list[dict] = []
     current: Optional[SessionEpisode] = None
     for event in events:
         if event.get("kind") == "SessionStarted":
@@ -205,7 +213,9 @@ def split_episodes(events: Iterable[dict],
             episodes.append(current)
         elif current is not None:
             current.events.append(event)
-    return episodes
+        else:
+            unattributed.append(event)
+    return episodes, unattributed
 
 
 def _corrections(all_events: Iterable[dict]) -> dict[str, dict]:
@@ -229,10 +239,13 @@ def load_episodes(repo_root: Path | str | None = None,
     paths = [path] if path is not None else ledger_paths(repo_root)
     raw: list[SessionEpisode] = []
     every_event: list[dict] = []
+    loose: list[dict] = []
     for p in paths:
         events = read_events(p)
         every_event.extend(events)
-        raw.extend(split_episodes(events, ledger=p))
+        episodes, unattributed = split_episodes(events, ledger=p)
+        raw.extend(episodes)
+        loose.extend(unattributed)
 
     fixes = _corrections(every_event)
     out: list[SessionEpisode] = []
@@ -248,6 +261,16 @@ def load_episodes(repo_root: Path | str | None = None,
                                       corrected_from=episode.recorded_session_id))
         else:
             out.append(episode)
+    # Continuation events are attributed by the session id they CARRY, matched
+    # against logical identity. An event naming no known session is dropped, not
+    # adopted by the nearest episode: attributing work to a session that did not
+    # record it is the same merge this projection exists to prevent.
+    by_id = {e.session_id: e for e in out if e.session_id}
+    for event in loose:
+        episode = by_id.get(event.get("session_id"))
+        if episode is not None:
+            episode.events.append(event)
+
     out.sort(key=lambda e: (e.started_at or "", e.session_id or ""))
     return out
 

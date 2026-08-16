@@ -278,3 +278,44 @@ def test_real_ledger_projects_both_bounded_sessions_distinctly():
             == "Revision / Supersession Safety Foundation")
     assert (sessions[ns.SESSION1_ID]["session_started_at"]
             != sessions[ns.SESSION2_ID]["session_started_at"])
+
+
+# ── continuation ledgers ───────────────────────────────────────────────────
+def test_continuation_ledger_events_attach_to_their_named_session(tmp_path):
+    """A session that adopts a corrected identity writes to a NEW file without
+    starting a new episode. Those records must reach their session, and they are
+    matched by the id they carry rather than by which file they live in."""
+    _ledger(tmp_path)
+    (tmp_path / "docs" / f"NORTHSTAR_0C_SESSION_{S2}.jsonl").write_text(
+        json.dumps({"kind": "TaskOutcome", "session_id": S2, "task_id": "s2t2",
+                    "final_status": "VERIFIED"}) + "\n", encoding="utf-8")
+
+    two = ns.session_projection(repo_root=tmp_path, session_id=S2)
+    one = ns.session_projection(repo_root=tmp_path, session_id=S1)
+
+    assert two["tasks_verified"] == 2, "the continuation outcome belongs to S2"
+    assert two["tasks_attempted"] == 2
+    assert one["tasks_verified"] == 2, "S1 is unaffected by S2 continuing"
+
+
+def test_continuation_event_naming_an_unknown_session_is_dropped(tmp_path):
+    """Never adopted by the nearest episode."""
+    _ledger(tmp_path)
+    (tmp_path / "docs" / f"NORTHSTAR_0C_SESSION_{S2}.jsonl").write_text(
+        json.dumps({"kind": "TaskOutcome", "session_id": "ns0c-ghost",
+                    "task_id": "x", "final_status": "VERIFIED"}) + "\n",
+        encoding="utf-8")
+
+    assert ns.session_projection(repo_root=tmp_path, session_id=S2)["tasks_verified"] == 1
+    assert ns.session_projection(repo_root=tmp_path, session_id=S1)["tasks_verified"] == 2
+
+
+def test_real_session2_continuation_records_are_visible():
+    """The repair's own findings were written to the session-2 ledger after the
+    identity correction; they must project onto session 2, and only onto it."""
+    episodes = {e.session_id: e for e in ns.load_episodes(repo_root=REPO)}
+    kinds = {e.get("kind") for e in episodes[ns.SESSION2_ID].events}
+    assert "SeniorReviewFinding" in kinds
+    assert "DeterministicVerification" in kinds
+    assert "SeniorReviewFinding" not in {e.get("kind")
+                                         for e in episodes[ns.SESSION1_ID].events}
