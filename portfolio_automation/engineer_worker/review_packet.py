@@ -110,6 +110,31 @@ class Evidence:
         return bool(self.content.strip())
 
 
+@dataclass(frozen=True)
+class ManifestEntry:
+    """The machine-checked proof map for ONE criterion.
+
+    A manifest is NOT documentation. It is the binding that says *these exact
+    artifacts* prove *this exact criterion*, and every claim it makes is verified
+    against the real Evidence objects. An earlier version carried this metadata
+    but never checked it, which made two failures possible at once: an empty
+    manifest skipped parity enforcement entirely, and evidence supplied for one
+    criterion satisfied another criterion's requirements because kinds were
+    compared globally. Both are closed by binding artifacts per criterion and
+    validating the binding rather than trusting it."""
+
+    criterion_id: str
+    artifact_ids: tuple[str, ...]
+    omitted_evidence: tuple[str, ...] = ()
+    omission_reason: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"criterion_id": self.criterion_id,
+                "evidence_included": list(self.artifact_ids),
+                "omitted_evidence": list(self.omitted_evidence),
+                "omission_reason": self.omission_reason}
+
+
 @dataclass
 class CompletenessResult:
     complete: bool
@@ -145,6 +170,32 @@ class ReviewPacket:
     def add_evidence(self, evidence: Evidence) -> None:
         self.evidence[evidence.artifact_id] = evidence
 
+    def bind(self, criterion_id: str, *artifact_ids: str,
+             omitted: Iterable[str] = (), omission_reason: Optional[str] = None) -> None:
+        """Bind artifacts to a criterion — the manifest entry, typed."""
+        self.manifest.append(ManifestEntry(
+            criterion_id=criterion_id, artifact_ids=tuple(artifact_ids),
+            omitted_evidence=tuple(omitted), omission_reason=omission_reason))
+
+    def _manifest_entries(self) -> list[ManifestEntry]:
+        """Normalize manifest input. A malformed entry becomes an entry with NO
+        bound artifacts, so it fails closed rather than being skipped."""
+        out: list[ManifestEntry] = []
+        for raw in self.manifest:
+            if isinstance(raw, ManifestEntry):
+                out.append(raw)
+                continue
+            if isinstance(raw, dict) and raw.get("criterion_id"):
+                out.append(ManifestEntry(
+                    criterion_id=str(raw["criterion_id"]),
+                    artifact_ids=tuple(raw.get("evidence_included") or ()),
+                    omitted_evidence=tuple(raw.get("omitted_evidence") or ()),
+                    omission_reason=raw.get("omission_reason")))
+            else:
+                out.append(ManifestEntry(criterion_id="MALFORMED_ENTRY",
+                                         artifact_ids=()))
+        return out
+
     # -- completeness -----------------------------------------------------
     def check_completeness(self, *, screen: bool = True) -> CompletenessResult:
         """Prove every criterion's declared evidence is actually present.
@@ -158,24 +209,76 @@ class ReviewPacket:
             result.reason = "no criteria declared; nothing to prove"
             return result
 
+        # --- manifest parity is MANDATORY whenever criteria exist ------------
+        # No `if manifest:` guard. An earlier version only enforced parity when a
+        # manifest happened to be present, so an EMPTY manifest bypassed the rule
+        # the module itself states — a fail-open hole inside a fail-closed gate.
+        declared = {c.criterion_id for c in self.criteria}
+        entries = self._manifest_entries()
+        seen: dict[str, ManifestEntry] = {}
+        duplicates: list[str] = []
+        for entry in entries:
+            if entry.criterion_id in seen:
+                # Conflicting bindings for one criterion make the proof map
+                # ambiguous; ambiguity is refused rather than resolved.
+                if seen[entry.criterion_id].artifact_ids != entry.artifact_ids:
+                    duplicates.append(entry.criterion_id)
+            seen[entry.criterion_id] = entry
+
+        manifested = set(seen)
+        if manifested != declared or duplicates:
+            result.complete = False
+            gaps = []
+            if manifested != declared:
+                gaps.append(f"manifest/criteria mismatch: "
+                            f"only_in_manifest={sorted(manifested - declared)} "
+                            f"only_in_criteria={sorted(declared - manifested)}")
+            if duplicates:
+                gaps.append(f"conflicting duplicate manifest entries: {sorted(set(duplicates))}")
+            result.missing.append({
+                "criterion_id": "MANIFEST",
+                "claim": "every declared criterion has exactly one manifest entry",
+                "gaps": gaps})
+
+        # --- per-criterion evidence, bound by the manifest -------------------
         for criterion in self.criteria:
             gaps: list[str] = []
+            entry = seen.get(criterion.criterion_id)
 
-            # Every declared artifact must exist and be substantive.
-            for artifact_id in criterion.required_artifacts:
+            # Artifacts bound to THIS criterion only. Evidence supplied for a
+            # different criterion is not available here, which is what stops a
+            # DIFF for criterion A satisfying criterion B's DIFF requirement.
+            bound_ids = set(entry.artifact_ids) if entry else set()
+            bound: list[Evidence] = []
+            for artifact_id in sorted(bound_ids):
                 item = self.evidence.get(artifact_id)
                 if item is None:
-                    gaps.append(f"artifact absent: {artifact_id}")
+                    gaps.append(f"manifest references unknown artifact: {artifact_id}")
                 elif not item.is_substantive():
-                    gaps.append(f"artifact present but empty: {artifact_id}")
+                    gaps.append(f"bound artifact present but empty: {artifact_id}")
+                else:
+                    bound.append(item)
 
-            # Every declared evidence KIND must be represented by a substantive
-            # artifact. This is what refuses counts-without-source: the criterion
-            # declares TEST_SOURCE, and a TEST_COUNT cannot satisfy it.
-            supplied_kinds = {e.kind for e in self.evidence.values() if e.is_substantive()}
+            # Every artifact the criterion declares as required must be BOUND to
+            # it, not merely present somewhere in the packet.
+            for artifact_id in criterion.required_artifacts:
+                if artifact_id not in bound_ids:
+                    where = ("present in packet but not bound to this criterion"
+                             if artifact_id in self.evidence else "absent")
+                    gaps.append(f"required artifact not bound: {artifact_id} ({where})")
+
+            if entry and entry.omitted_evidence:
+                gaps.append(f"manifest declares omitted required evidence: "
+                            f"{sorted(entry.omitted_evidence)} "
+                            f"(reason: {entry.omission_reason or 'unstated'})")
+
+            # Required KINDS are satisfied only by this criterion's own bound
+            # artifacts. TEST_COUNT/PROSE still cannot stand in for source.
+            bound_kinds = {e.kind for e in bound}
             for kind in criterion.required_evidence:
-                if kind not in supplied_kinds:
-                    gaps.append(f"required evidence kind missing: {kind.value}")
+                if kind not in bound_kinds:
+                    gaps.append(f"required evidence kind not bound to this criterion: "
+                                f"{kind.value}")
 
             if gaps:
                 result.complete = False
@@ -183,18 +286,6 @@ class ReviewPacket:
                                        "claim": criterion.claim, "gaps": gaps})
             else:
                 result.satisfied.append(criterion.criterion_id)
-
-        # Any criterion referenced by the manifest but never declared, or declared
-        # without a manifest entry, is a controller bookkeeping error -> fail closed.
-        declared = {c.criterion_id for c in self.criteria}
-        manifested = {m.get("criterion_id") for m in self.manifest}
-        if manifested and manifested != declared:
-            result.complete = False
-            result.missing.append({
-                "criterion_id": "MANIFEST", "claim": "manifest covers every criterion",
-                "gaps": [f"manifest/criteria mismatch: "
-                         f"only_in_manifest={sorted(manifested - declared)} "
-                         f"only_in_criteria={sorted(declared - manifested)}"]})
 
         # Secret screening runs BEFORE dispatch. A refused artifact is reported as
         # withheld — never summarized around and called equivalent evidence.
@@ -230,7 +321,7 @@ class ReviewPacket:
                           "required_evidence": [k.value for k in c.required_evidence],
                           "required_artifacts": list(c.required_artifacts)}
                          for c in self.criteria],
-            "evidence_manifest": self.manifest,
+            "evidence_manifest": [e.to_dict() for e in self._manifest_entries()],
             "source_files": [{"path": e.artifact_id, "content": e.content}
                              for e in self.evidence.values()
                              if e.kind in (EvidenceKind.SOURCE, EvidenceKind.TEST_SOURCE,
