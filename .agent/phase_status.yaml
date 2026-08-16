@@ -25,21 +25,22 @@ stockbot_northstar_redesign:
     - NORTHSTAR_GOVERNANCE_FOUNDATION_READY  # 2026-08-09; GPT SESSION_CLOSED — NORTHSTAR_PHASE_0A
     - NORTHSTAR_0B_CONTRACTS_READY           # 2026-08-15 @ main eddc6f2; exit gate "contracts reviewed + versioned + test-covered" satisfied; 0B.1/0B.2/0B.3 each independently reviewed PASS
   engineer_runtime_state:
-    mission_id: ""        # IDLE — no mission executing. Deliberately NOT pointed at a
-                          # completed mission (that would be stale) and NOT at 0C (that
-                          # would pre-authorize the next milestone). The existing
-                          # RuntimePolicy schema expresses this safely: run_mission's
-                          # mission-boundary check refuses EVERY task while mission_id is
-                          # empty, so nothing can be dispatched. Pinned by
-                          # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
-                          # and three companion tests, so the empty value is a SPECIFIED
-                          # state rather than an ambiguous one. No schema change was
-                          # required.
+    mission_id: northstar_0c_pit_evidence_gateway_research_store
+                          # 2026-08-15 — set from IDLE ("") by explicit operator
+                          # authorization of Phase 0C. This value IS the bounded mission
+                          # boundary: run_mission admits tasks whose mission_id matches
+                          # and refuses every other phase/mission, so widening scope
+                          # requires changing this field deliberately rather than drifting
+                          # into it. Setting it grants NO new authority — only which
+                          # mission's tasks may be dispatched.
     last_authorized_mission: northstar_0b_decision_outcome_passport_contracts   # complete + durable
-    awaiting: next authorized mission (operator/controller)
+    prior_state: IDLE     # mission_id was "" between 0B closure and this authorization;
+                          # the idle semantics remain pinned by
+                          # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
     authority: A1_ASSISTED_ENGINEERING       # unchanged
+    engineering_mode: SUPERVISED_AUTONOMOUS  # unchanged
     controller_level: C0.5_SHADOW            # unchanged
-    c1: DISABLED                             # unchanged
+    c1: DISABLED                             # unchanged — activation grants no promotion
   phases:
     northstar_phase_0a:
       name: "Architecture, Authority & CI Foundation"
@@ -180,10 +181,39 @@ stockbot_northstar_redesign:
         Local Models / Trusted Tools). Prime is superseded as orchestrator.
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
-      status: ready   # 2026-08-15 — dependency (0B) satisfied; implementation NOT begun. `ready` here carries the same meaning it did for northstar_0b_decision_outcome_passport_contracts before that milestone started: next in line, prerequisites met, nothing built. NO 0C code exists: no EvidenceGateway, no research store, no PIT adapters, no vendor selection, no MissionSpec. Starting 0C requires a separate explicit operator/controller authorization; closing 0B did not grant it.
-      depends_on: northstar_phase_0b   # satisfied at main eddc6f2
-      implementation_started: false
+      status: active   # 2026-08-15 — AUTHORIZED. Explicit operator decision started this phase (previously `ready`). See authorization below.
+      step: northstar_0c_pit_evidence_gateway_research_store
+      depends_on: northstar_phase_0b   # complete; gate NORTHSTAR_0B_CONTRACTS_READY @ main 678c73e
+      implementation_started: false    # DELIBERATE: `active` records AUTHORIZATION, not construction. The repository already distinguishes these, and the distinction is preserved rather than collapsed: nothing has been built. No EvidenceGateway, no research store, no PIT adapters, no vendor integration, no MissionSpec. The first 0C implementation mission flips this to true; an activation mission must never claim work it did not do.
+      authorization:
+        authorized_by: operator
+        authorized_at: 2026-08-15
+        authorized_mission: northstar_0c_pit_evidence_gateway_research_store
+        scope: >-
+          Starts Phase 0C ONLY. Explicitly does NOT authorize Phase 0D or later,
+          capital-allocation changes, portfolio/trading authority, production
+          deployment, broker access, vendor purchase or paid-data acquisition, or
+          C1 activation / authority promotion.
+      objective: >-
+        Point-in-time, identity-bound, provenance-aware evidence access,
+        generalizing the Intraday Lab preregistration / identity-era /
+        frozen-evidence patterns. Consumes the 0B canonical contracts
+        (EvidenceRef / EvidenceSnapshot / DataSourceDescriptor / FeatureRecord)
+        rather than redefining them.
       exit_gate: "lookahead-audited PIT reads over the research store"   # docs/NORTHSTAR_REDESIGN.md phase table, row 0C
+      exit_gate_meaning: >-
+        Evidence available at a historical time T must be restricted to what was
+        genuinely knowable at T, and that restriction must be AUDITED rather than
+        asserted. Recorded here as the target; NOT implemented by this activation.
+      vendor_authority: >-
+        The gateway must ultimately support REPLACEABLE Evidence Plane inputs, but
+        no vendor is selected, integrated, or purchased by this activation. Vendor
+        acquisition and paid-data purchase are E4 human decisions. No dependency on
+        FMP, SEC, FINRA, paid feeds or alternative data is created here.
+      risk_routing_note: >-
+        0C is architecture-sensitive. Implementation work defaults to E3 -> Claude
+        where the existing risk classifier requires it. This reflects routing
+        evidence only; learning informs routing and never grants authority.
     northstar_phase_0d:
       name: "Certification, Champion/Challenger & Incremental-Value Foundation"
       status: not_started
