@@ -267,9 +267,21 @@ def test_r4_exact_candidate_dispatches_exactly_once():
         "DETERMINISTIC_PASS_BOUND_TO_CANDIDATE": "YES",
         "REVIEW_CANDIDATE_CONTAINS_TASK_DIFF": "YES",
         "EVIDENCE_MATCHES_CANDIDATE": "YES",
+        # PENDING is correct HERE: this is the binding-time object, and the
+        # freshness question has not been asked yet.
         "HEAD_UNCHANGED_AT_DISPATCH": "PENDING",
     }
-    assert out.candidate_binding.checks["HEAD_UNCHANGED_AT_DISPATCH"] == "PENDING"
+    # ...but PENDING was the DEFECT once dispatch had happened. recheck_head()
+    # returned `self` unchanged when HEAD was stationary, so the successful path
+    # recorded an unresolved freshness check beside candidate_bound=YES -- which
+    # is what every binding record in the crashed 0C session actually says. The
+    # terminal resolution now answers YES or NO, so a restarted reader can tell
+    # "checked and fine" from "never checked".
+    assert out.candidate_binding.checks["HEAD_UNCHANGED_AT_DISPATCH"] == "YES"
+    assert out.head_resolution.verdict == "YES"
+    assert out.head_resolution.resolution_reason == "UNCHANGED"
+    assert out.head_resolution.head_at_dispatch == SHA_B
+    assert out.to_dict()["reviewer_called"] == "YES"
 
 
 # ── working tree vs committed candidate ────────────────────────────────────

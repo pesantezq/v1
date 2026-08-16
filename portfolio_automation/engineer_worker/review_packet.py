@@ -46,6 +46,44 @@ PACKET_SCHEMA_VERSION = "engineering.review_packet.v0"
 #: exists to prevent, and a truncated packet is an incomplete packet.
 MAX_PACKET_BYTES = 220 * 1024
 
+#: Top-level payload keys that carry the packet's BINDING. ``context`` is
+#: splatted last in ``to_supervisor_packet`` and would otherwise overwrite them.
+_RESERVED_PACKET_KEYS = frozenset({
+    "schema_version", "schema_kind", "candidate_sha", "mission_id", "task",
+    "prior_verdicts", "criteria", "evidence_manifest", "source_files",
+    "supporting_evidence",
+})
+
+
+def canonical_packet_bytes(payload: dict[str, Any]) -> bytes:
+    """THE serialization of a review packet. Frozen.
+
+    Every ``pkt_`` digest already recorded in a session ledger was produced by
+    this exact form, so changing separators, ``ensure_ascii`` or key ordering
+    would orphan history. Hashing and durable persistence both route through
+    here so the bytes that are hashed and the bytes that are stored cannot
+    drift apart -- which is precisely how a hash with no preimage arose."""
+    return json.dumps(payload, sort_keys=True, ensure_ascii=True,
+                      default=str).encode("utf-8")
+
+
+def packet_hash_of_bytes(blob: bytes) -> str:
+    """Packet identity computed over STORED BYTES, never a rebuilt object.
+
+    ``to_supervisor_packet`` emits ``source_files``/``supporting_evidence`` as
+    lists in ``evidence`` insertion order, and ``sort_keys`` does not sort list
+    elements, so the same logical packet rebuilt in a different order hashes
+    differently. Reconstruction therefore reloads bytes; it never re-derives
+    them."""
+    return "pkt_" + hashlib.sha256(blob).hexdigest()[:32]
+
+
+def packet_sha256_of_bytes(blob: bytes) -> str:
+    """Untruncated digest. ``packet_hash`` keeps 128 bits for addressing; the
+    full digest is recorded alongside it so verification is not limited to the
+    truncation."""
+    return hashlib.sha256(blob).hexdigest()
+
 
 class EvidenceKind(str, Enum):
     """What KIND of artifact proves a claim.
@@ -350,8 +388,23 @@ class ReviewPacket:
                                                   EvidenceKind.TEST_COUNT,
                                                   EvidenceKind.LEDGER_RECORD,
                                                   EvidenceKind.PROSE)],
-            **self.context,
+            **self._safe_context(),
         }
+
+    def _safe_context(self) -> dict[str, Any]:
+        """Context, refused if it would overwrite a binding field.
+
+        ``context`` is splatted LAST, so a key colliding with a reserved
+        top-level name silently wins. A packet whose ``candidate_sha`` attribute
+        says one commit while the bytes handed to the reviewer say another is the
+        binding defect this package exists to prevent, one layer down: the gate
+        validates the attribute (review_candidate.bind_candidate) and the
+        reviewer reads the payload. Fail closed rather than pick a winner."""
+        collisions = sorted(set(self.context) & _RESERVED_PACKET_KEYS)
+        if collisions:
+            raise PacketError(
+                "context may not overwrite binding fields: " + ", ".join(collisions))
+        return dict(self.context)
 
     def packet_hash(self) -> str:
         """Deterministic identity over the packet CONTENT.
@@ -359,12 +412,10 @@ class ReviewPacket:
         Changing any included evidence changes the hash, so a verdict can be
         bound to exactly what was reviewed and cannot be silently reattached to a
         different packet."""
-        blob = json.dumps(self.to_supervisor_packet(), sort_keys=True,
-                          ensure_ascii=True, default=str)
-        return "pkt_" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+        return packet_hash_of_bytes(canonical_packet_bytes(self.to_supervisor_packet()))
 
     def size_bytes(self) -> int:
-        return len(json.dumps(self.to_supervisor_packet(), default=str).encode("utf-8"))
+        return len(canonical_packet_bytes(self.to_supervisor_packet()))
 
 
 @dataclass
@@ -376,6 +427,9 @@ class DispatchResult:
     decision: Any = None
     next_action: str = ""
     candidate_binding: Any = None
+    #: Terminal HEAD evidence. Present whenever dispatch reached the final
+    #: resolution point; ``None`` only when an earlier gate refused first.
+    head_resolution: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {"review_dispatched": self.dispatched,
@@ -383,6 +437,9 @@ class DispatchResult:
                "next_action": self.next_action, **self.completeness.to_dict()}
         if self.candidate_binding is not None:
             out["candidate_binding"] = self.candidate_binding.to_dict()
+        if self.head_resolution is not None:
+            out["head_resolution"] = self.head_resolution.to_dict()
+            out["reviewer_called"] = "YES" if self.dispatched else "NO"
         return out
 
 
@@ -448,7 +505,12 @@ def dispatch_review(packet: ReviewPacket, reviewer: Callable[[dict[str, Any]], A
     # Last look at HEAD. Assembling and screening the packet took real time, and
     # a commit or checkout during that window would leave this describing a
     # candidate that is no longer checked out.
-    binding = binding.recheck_head()
+    #
+    # This is the SINGLE evidential resolution point: it always yields a terminal
+    # YES or NO. The earlier probe at the top of this function stays a plain
+    # recheck_head() early abort, so exactly one terminal record is produced per
+    # dispatch and there is no ambiguity about which one is authoritative.
+    binding, head_resolution = binding.resolve_head_terminal()
     if not binding.ok:
         completeness.complete = False
         completeness.reason = "HEAD moved after the packet was built"
@@ -459,10 +521,12 @@ def dispatch_review(packet: ReviewPacket, reviewer: Callable[[dict[str, Any]], A
         return DispatchResult(False, completeness, packet_hash=packet.packet_hash(),
                               candidate_sha=packet.candidate_sha,
                               next_action="REVIEW_NOT_DISPATCHED",
-                              candidate_binding=binding)
+                              candidate_binding=binding,
+                              head_resolution=head_resolution)
 
     decision = reviewer(packet.to_supervisor_packet())
     return DispatchResult(True, completeness, packet_hash=packet.packet_hash(),
                           candidate_sha=packet.candidate_sha, decision=decision,
                           next_action="VERDICT_RECORDED",
-                          candidate_binding=binding)
+                          candidate_binding=binding,
+                          head_resolution=head_resolution)
