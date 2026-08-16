@@ -52,10 +52,21 @@ Current position (2026-08-15):
 - **Phase 0C** (Point-in-Time EvidenceGateway & Research Store) — **ACTIVE**,
   the current authorized phase. Authorized 2026-08-15 by explicit operator
   decision; step `northstar_0c_pit_evidence_gateway_research_store`.
-  - `active` records **authorization, not construction**:
-    `implementation_started` is still **false** and **no 0C code exists** — no
-    EvidenceGateway, research store, PIT adapters, vendor integration or
-    MissionSpec. The first implementation mission flips that flag.
+  - **Implementation has begun** (`implementation_started: true`). The
+    **EvidenceGateway foundation is durable** at main `33de038` (PR #20,
+    `northstar-ci` run **#44 SUCCESS**, session `ns0c-evgw-foundation-001`):
+    fail-closed PIT admissibility (`known_at <= as_of`), whole-evidence
+    admission with independent payload-integrity recomputation, session
+    observability through the controller-owned read model, and a fail-closed
+    certification evidence gate.
+  - **Phase 0C is NOT complete.** The exit gate is unsatisfied and **no Research
+    Store exists**. Remaining: revision/supersession safety, research-store
+    persistence and query, historical as-of reads, lookahead audit over store
+    reads, and replay/reproducibility.
+  - Next bounded **candidate** (not authorized): revision/supersession safety.
+  - `effective_period_end` vs `as_of` remains **UNRESOLVED** — the canonical
+    contract establishes no such rule, and it must not be inferred merely
+    because the field exists.
   - Exit gate: **lookahead-audited PIT reads over the research store** —
     evidence available at a historical time T must be restricted to what was
     genuinely knowable at T, and that restriction must be *audited*, not asserted.
