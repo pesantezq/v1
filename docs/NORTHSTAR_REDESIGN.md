@@ -8,9 +8,10 @@ remote CI GREEN run `31338193791` @ `3fa43377`). **Phase 0B: COMPLETE**
 run #31 SUCCESS; exit gate `contracts reviewed + versioned + test-covered`
 satisfied, with 0B.1/0B.2/0B.3 each independently certified PASS).
 **Phase 0C: ACTIVE** (step `northstar_0c_pit_evidence_gateway_research_store`),
-authorized 2026-08-15 by explicit operator decision. `ACTIVE` records
-AUTHORIZATION, not construction: `implementation_started` is still `false` and
-no 0C code exists.
+authorized 2026-08-15. Implementation has BEGUN
+(`implementation_started: true`): the EvidenceGateway foundation is durable at
+main `33de038` (PR #20, `northstar-ci` run #44 SUCCESS). Phase 0C is NOT
+complete — its exit gate is unsatisfied and no Research Store exists.
 Authoritative machine-readable state: `.agent/project_state.yaml` (program /
 phase / step) + `.agent/phase_status.yaml` (per-phase status) +
 `config/agent_policy.yaml` (agent authority).
@@ -62,9 +63,10 @@ Status vocabulary (extends the repo's existing lowercase enum — `complete`,
 ## 3. Phases
 
 Statuses below mirror `.agent/phase_status.yaml:stockbot_northstar_redesign`.
-**Phases 0A and 0B are complete; Phase 0C is authorized and active but NOT yet
-implemented (`implementation_started: false`); no phase below 0C is implemented
-or started.**
+**Phases 0A and 0B are complete. Phase 0C is active and implementation has
+BEGUN (`implementation_started: true`): its EvidenceGateway foundation is
+durable, but the phase is NOT complete — the exit gate is unsatisfied and no
+Research Store exists. No phase below 0C is implemented or started.**
 
 ### Foundation
 
@@ -72,7 +74,7 @@ or started.**
 |---|---|---|---|---|---|---|
 | 0A | Architecture, Authority & CI Foundation | **complete** (gate `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`, 2026-08-09) | Make the North Star authoritative; one coherent authority model; CI that proves invariants on every change | topology stabilization (done 2026-08-09) | every later phase | ACHIEVED: authority reconciled (`1794a164`, 3 hardening passes) AND CI green remotely (run `31338193791`) |
 | 0B | Canonical Evidence, Prediction & Worker Contracts | **complete** | Define the canonical PredictionRecord / evidence / AI-worker contracts (schemas, not runtimes) — incl. **replaceable data-source extensibility**: external sources (FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial data) are Evidence Plane inputs with source/dataset/record identity, provenance, PIT timestamps, snapshot/hash, schema/version, rights metadata — never vendor schemas embedded in the engines or workers | 0A | 0C, 0D, worker admission later | contracts reviewed + versioned + test-covered |
-| 0C | Point-in-Time EvidenceGateway & Research Store | **active** (authorized 2026-08-15; implementation NOT begun) | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
+| 0C | Point-in-Time EvidenceGateway & Research Store | **active** (implementation in progress; EvidenceGateway foundation durable @ `33de038`, PR #20, main CI #44 — exit gate NOT satisfied, Research Store not built) | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
 | 0D | Certification, Champion/Challenger & Incremental-Value Foundation | not_started | The mechanism that decides whether anything (predictor, allocator, exit method, AI worker, strategy) demonstrates incremental value | 0B, 0C | Phases 1–8 admission | reproducible certification verdicts with controlled attribution |
 
 ### Core intelligence

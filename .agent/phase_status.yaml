@@ -184,7 +184,42 @@ stockbot_northstar_redesign:
       status: active   # 2026-08-15 — AUTHORIZED. Explicit operator decision started this phase (previously `ready`). See authorization below.
       step: northstar_0c_pit_evidence_gateway_research_store
       depends_on: northstar_phase_0b   # complete; gate NORTHSTAR_0B_CONTRACTS_READY @ main 678c73e
-      implementation_started: false    # DELIBERATE: `active` records AUTHORIZATION, not construction. The repository already distinguishes these, and the distinction is preserved rather than collapsed: nothing has been built. No EvidenceGateway, no research store, no PIT adapters, no vendor integration, no MissionSpec. The first 0C implementation mission flips this to true; an activation mission must never claim work it did not do.
+      implementation_started: true     # 2026-08-16 — flipped by the FIRST durable 0C implementation, exactly as the activation record said it would be. See evidence_gateway_foundation below. `active` still records that the phase is in progress, NOT that it is complete: the 0C exit gate is unsatisfied and the Research Store does not exist.
+      milestones:
+        evidence_gateway_foundation:
+          status: complete   # 2026-08-16 — durable. The FOUNDATION milestone only; it does not complete Phase 0C.
+          durable: true
+          merged_main_sha: 33de038645238fcbaf0e0dd210bbdec48c704058
+          post_merge_main_ci_run: 44
+          post_merge_main_ci_result: SUCCESS
+          session_id: ns0c-evgw-foundation-001
+          pull_request: 20
+          delivered:
+            - portfolio_automation/evidence_gateway/admissibility.py (fail-closed PIT admissibility; known_at <= as_of)
+            - portfolio_automation/evidence_gateway/admission.py (whole-evidence admission; independent payload-integrity recomputation)
+            - portfolio_automation/engineer_worker/review_packet.py (fail-closed certification evidence gate)
+            - Worker Control Center session observability via the controller-owned read model
+            - tests/test_evidence_gateway_admissibility.py, tests/test_ew0a_review_packet.py
+          certification_history: >-
+            Preserved in full and never rerolled: an initial task-2 PASS later found to
+            have passed an unmet frozen criterion (SENIOR_REVIEW_FALSE_PASS, 2 findings),
+            a fresh REPAIR on an under-evidenced packet, and an under-scoped criterion
+            recorded as a scope gap. Final senior merge review PASS_ON_MERITS. See
+            docs/NORTHSTAR_0C_SESSION_ns0c-evgw-foundation-001.jsonl.
+      remaining_work:   # the 0C exit gate is NOT satisfied by the foundation
+        - revision/supersession safety (a later revision must not leak backward into a historical as-of read)
+        - "research-store foundation - persistence and query"
+        - historical as-of reads over the store
+        - lookahead audit over store reads
+        - replay/reproducibility as required by the contracts
+      next_bounded_candidate: revision/supersession safety   # CANDIDATE ONLY — not implemented and NOT independently authorized; starting it requires its own authorization
+      unresolved_semantics:
+        effective_period_vs_as_of: >-
+          UNRESOLVED / NOT DECIDED. No rule such as effective_period_end <= as_of exists.
+          The canonical PointInTime contract does not establish one, and partial-period
+          evidence (e.g. month-to-date) may legitimately extend past a read instant.
+          Recorded so a future autonomous worker does NOT infer the policy merely because
+          the field exists. Deciding it is a contract decision, not an implementation choice.
       authorization:
         authorized_by: operator
         authorized_at: 2026-08-15

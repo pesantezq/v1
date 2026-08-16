@@ -282,13 +282,25 @@ def test_phase_0c_depends_on_a_completed_0b(phase):
     assert phases[p0c["depends_on"]]["status"] == "complete"
 
 
-def test_activation_is_not_implementation(phase):
-    """`active` records AUTHORIZATION, not construction.
+def test_implementation_started_requires_durability_evidence(phase):
+    """`active` records AUTHORIZATION; `implementation_started` records CONSTRUCTION.
 
-    Collapsing the two would let an activation mission claim work it never did.
-    The first real 0C implementation mission flips implementation_started."""
+    This guard originally asserted the flag was False, which was the truth at
+    activation time. The flag has since flipped on real durable work, so it now
+    enforces the invariant that actually matters and outlives both states: the
+    flag may be true ONLY when durability evidence exists. A flag flipped without
+    a merged SHA and a green main CI run would be the same overclaim the original
+    guard was written to prevent."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
-    assert p0c["implementation_started"] is False
+    if p0c["implementation_started"] is True:
+        milestones = p0c.get("milestones") or {}
+        durable = [m for m in milestones.values() if m.get("durable") is True]
+        assert durable, "implementation_started=true requires a durable milestone"
+        for m in durable:
+            assert m.get("merged_main_sha")
+            assert m.get("post_merge_main_ci_result") == "SUCCESS"
+    # Whatever the flag says, the phase must not be claimed complete.
+    assert p0c["status"] != "complete"
 
 
 def test_activation_granted_no_vendor_or_purchase_authority(phase):
@@ -350,3 +362,103 @@ def test_advisory_invariants_unchanged(state):
     forbidden = state["forbidden_changes"]
     assert "introducing_auto_execution_or_trading" in forbidden
     assert "calling_broker_apis" in forbidden
+
+
+# ══ 0C FOUNDATION STATE RECONCILIATION ═══════════════════════════════════
+# After PR #20 merged durably, authoritative state still said 0C implementation
+# had not begun. These tests pin the reconciliation in BOTH directions: state
+# must admit that implementation started, and must NOT overclaim what is done.
+
+FOUNDATION_MAIN_SHA = "33de038645238fcbaf0e0dd210bbdec48c704058"
+
+
+def _p0c(phase):
+    return phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+
+
+def test_phase_0c_remains_active_and_is_not_complete(phase):
+    p0c = _p0c(phase)
+    assert p0c["status"] == "active"
+    assert p0c["status"] != "complete"
+
+
+def test_0c_implementation_started_is_true(phase):
+    """The defect this reconciliation fixed: durable implementation had shipped
+    while state still claimed nothing was built."""
+    assert _p0c(phase)["implementation_started"] is True
+
+
+def test_phase_0b_remains_complete(phase):
+    phases = phase["stockbot_northstar_redesign"]["phases"]
+    assert phases["northstar_phase_0b"]["status"] == "complete"
+
+
+def test_evidencegateway_foundation_durability_evidence_is_recorded(phase):
+    m = _p0c(phase)["milestones"]["evidence_gateway_foundation"]
+    assert m["durable"] is True
+    assert m["merged_main_sha"] == FOUNDATION_MAIN_SHA
+    assert m["post_merge_main_ci_run"] == 44
+    assert m["post_merge_main_ci_result"] == "SUCCESS"
+    assert m["session_id"] == "ns0c-evgw-foundation-001"
+
+
+def test_0c_exit_gate_is_not_yet_satisfied(phase):
+    """Foundation durable does NOT mean the phase gate is met."""
+    p0c = _p0c(phase)
+    assert p0c["exit_gate"] == "lookahead-audited PIT reads over the research store"
+    assert "exit_gate_satisfied" not in p0c
+    assert p0c.get("remaining_work"), "remaining 0C work must stay recorded"
+
+
+def test_research_store_is_not_claimed_complete(phase):
+    """The strongest overclaim risk: foundation completeness reading as store
+    completeness."""
+    remaining = " ".join(_p0c(phase)["remaining_work"]).lower()
+    assert "research-store" in remaining or "research store" in remaining
+    milestones = _p0c(phase)["milestones"]
+    assert not any("research_store" in name for name in milestones)
+
+
+def test_next_bounded_candidate_is_a_candidate_not_an_authorization(phase):
+    p0c = _p0c(phase)
+    assert p0c["next_bounded_candidate"] == "revision/supersession safety"
+    # it must not appear as an implemented or started milestone
+    assert not any("revision" in name or "supersession" in name
+                   for name in p0c["milestones"])
+
+
+def test_effective_period_policy_remains_unresolved(phase):
+    """A future worker must not infer the rule merely because the field exists."""
+    note = _p0c(phase)["unresolved_semantics"]["effective_period_vs_as_of"].lower()
+    assert "unresolved" in note and "not decided" in note
+    assert "does not establish" in note
+
+
+def test_later_phases_remain_not_started(phase):
+    phases = phase["stockbot_northstar_redesign"]["phases"]
+    for name in FUTURE_PHASES:
+        assert phases[name]["status"] == "not_started"
+
+
+def test_authority_and_runtime_unchanged_by_reconciliation(phase):
+    rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
+    assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
+    assert rt["c1"] == "DISABLED"
+    assert rt["mission_id"] == AUTHORIZED_0C_MISSION
+    runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
+    assert runtime["mission_id"] == AUTHORIZED_0C_MISSION
+    assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
+    for denied in ("auto_merge", "auto_deploy", "auto_production_mutation",
+                   "auto_authority_promotion", "auto_capital_action"):
+        assert runtime[denied] is False
+
+
+def test_no_authoritative_surface_still_says_implementation_has_not_begun():
+    """Prose drift is the failure mode here, so it is checked directly."""
+    stale = ("IMPLEMENTATION NOT BEGUN", "implementation NOT begun",
+             "no 0C code exists")
+    for rel in (".agent/phase_status.yaml", ".agent/project_state.yaml",
+                "docs/roadmap.md", "docs/NORTHSTAR_REDESIGN.md"):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for phrase in stale:
+            assert phrase not in text, f"{rel} still says: {phrase}"
