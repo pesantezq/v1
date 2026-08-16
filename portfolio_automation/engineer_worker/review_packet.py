@@ -102,6 +102,11 @@ class Evidence:
     kind: EvidenceKind
     content: str = ""
     detail: str = ""
+    #: Repository path this content was taken from, when it has one. Declaring it
+    #: lets the candidate binding compare the supplied content against the blob AT
+    #: the candidate commit, which is what distinguishes evidence from the
+    #: committed candidate from evidence merely lying in a working tree.
+    source_path: Optional[str] = None
 
     def is_substantive(self) -> bool:
         """Present AND non-empty. A declared-but-empty artifact is not evidence."""
@@ -370,21 +375,46 @@ class DispatchResult:
     candidate_sha: Optional[str] = None
     decision: Any = None
     next_action: str = ""
+    candidate_binding: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"review_dispatched": self.dispatched,
-                "packet_hash": self.packet_hash, "candidate_sha": self.candidate_sha,
-                "next_action": self.next_action, **self.completeness.to_dict()}
+        out = {"review_dispatched": self.dispatched,
+               "packet_hash": self.packet_hash, "candidate_sha": self.candidate_sha,
+               "next_action": self.next_action, **self.completeness.to_dict()}
+        if self.candidate_binding is not None:
+            out["candidate_binding"] = self.candidate_binding.to_dict()
+        return out
 
 
 def dispatch_review(packet: ReviewPacket, reviewer: Callable[[dict[str, Any]], Any],
-                    *, expected_sha: Optional[str] = None,
+                    *, candidate: Any, expected_sha: Optional[str] = None,
                     screen: bool = True) -> DispatchResult:
-    """Gate, then dispatch. The reviewer is called ONLY on a complete packet.
+    """Gate, then dispatch. The reviewer is called ONLY on a complete packet
+    that is bound to the committed candidate it claims to describe.
 
-    ``expected_sha`` binds the packet to the candidate the caller believes it is
-    reviewing; a mismatch fails closed, so a packet built from one tree cannot be
-    presented as evidence for another."""
+    ``candidate`` is a ``review_candidate.CandidateBinding`` and is REQUIRED, not
+    optional. Session 2 owned a candidate check and simply did not use it: the
+    packet was built from the working tree and reviewed against the session's
+    starting commit. A safety gate that a caller may forget is a gate that will
+    eventually be forgotten, so the decision is now impossible to skip — there is
+    no default and no bypass value.
+
+    ``expected_sha`` is retained as an additional caller-side assertion. It is
+    strictly weaker than the binding (both sides come from the caller) and can
+    never substitute for it."""
+    binding = candidate.recheck_head()
+    if not binding.ok:
+        completeness = CompletenessResult(
+            complete=False,
+            missing=[{"criterion_id": "CANDIDATE_BINDING",
+                      "claim": "the packet describes the committed candidate, and "
+                               "deterministic verification passed on it",
+                      "gaps": [r.value for r in binding.refusals] + list(binding.details)}],
+            reason="candidate not bound to a verified commit")
+        return DispatchResult(False, completeness, candidate_sha=binding.packet_sha,
+                              next_action="REVIEW_NOT_DISPATCHED",
+                              candidate_binding=binding)
+
     if expected_sha is not None and packet.candidate_sha != expected_sha:
         completeness = CompletenessResult(
             complete=False,
@@ -393,7 +423,8 @@ def dispatch_review(packet: ReviewPacket, reviewer: Callable[[dict[str, Any]], A
                       "gaps": [f"packet sha {packet.candidate_sha!r} != "
                                f"expected {expected_sha!r}"]}],
             reason="candidate sha mismatch")
-        return DispatchResult(False, completeness, next_action="REPAIR_PACKET")
+        return DispatchResult(False, completeness, next_action="REPAIR_PACKET",
+                              candidate_binding=binding)
 
     completeness = packet.check_completeness(screen=screen)
 
@@ -411,9 +442,27 @@ def dispatch_review(packet: ReviewPacket, reviewer: Callable[[dict[str, Any]], A
     if not completeness.complete:
         return DispatchResult(False, completeness, packet_hash=packet.packet_hash(),
                               candidate_sha=packet.candidate_sha,
-                              next_action="REPAIR_PACKET")
+                              next_action="REPAIR_PACKET",
+                              candidate_binding=binding)
+
+    # Last look at HEAD. Assembling and screening the packet took real time, and
+    # a commit or checkout during that window would leave this describing a
+    # candidate that is no longer checked out.
+    binding = binding.recheck_head()
+    if not binding.ok:
+        completeness.complete = False
+        completeness.reason = "HEAD moved after the packet was built"
+        completeness.missing.append({
+            "criterion_id": "CANDIDATE_BINDING",
+            "claim": "the candidate is still checked out at dispatch",
+            "gaps": [r.value for r in binding.refusals] + list(binding.details)})
+        return DispatchResult(False, completeness, packet_hash=packet.packet_hash(),
+                              candidate_sha=packet.candidate_sha,
+                              next_action="REVIEW_NOT_DISPATCHED",
+                              candidate_binding=binding)
 
     decision = reviewer(packet.to_supervisor_packet())
     return DispatchResult(True, completeness, packet_hash=packet.packet_hash(),
                           candidate_sha=packet.candidate_sha, decision=decision,
-                          next_action="VERDICT_RECORDED")
+                          next_action="VERDICT_RECORDED",
+                          candidate_binding=binding)
