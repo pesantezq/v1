@@ -420,11 +420,34 @@ def test_research_store_is_not_claimed_complete(phase):
 
 
 def test_next_bounded_candidate_is_a_candidate_not_an_authorization(phase):
+    """The candidate names the NEXT bounded task and is never itself a
+    milestone. Retargeted after revision/supersession safety shipped: the guard
+    is about the roadmap not self-authorizing, not about which task is queued."""
     p0c = _p0c(phase)
-    assert p0c["next_bounded_candidate"] == "revision/supersession safety"
-    # it must not appear as an implemented or started milestone
-    assert not any("revision" in name or "supersession" in name
-                   for name in p0c["milestones"])
+    candidate = p0c["next_bounded_candidate"]
+    assert "research-store" in candidate or "research store" in candidate
+    # a queued candidate must not also be recorded as an implemented milestone
+    assert not any("research_store" in name for name in p0c["milestones"])
+
+
+def test_revision_supersession_safety_durability_evidence_is_recorded(phase):
+    """It shipped, so state must say so. Leaving it queued as a candidate is
+    what would send the autonomous task resolver back to redo PR #22."""
+    m = _p0c(phase)["milestones"]["revision_supersession_safety"]
+    assert m["durable"] is True
+    assert m["merged_main_sha"] == "3d97bb392b595f90baa8787b8c9d2aa592c00f8a"
+    assert m["post_merge_main_ci_result"] == "SUCCESS"
+    assert m["session_id"] == "ns0c-revision-supersession-002"
+    assert m["pull_request"] == 22
+
+
+def test_revision_safety_did_not_resolve_the_deferred_policies(phase):
+    """Shipping the safety rule must not be read as having decided the two
+    questions it deliberately left open."""
+    preserved = " ".join(
+        _p0c(phase)["milestones"]["revision_supersession_safety"]["preserved_unresolved"])
+    assert "UNRESOLVED_NOT_INVENTED" in preserved
+    assert "effective_period" in preserved
 
 
 def test_effective_period_policy_remains_unresolved(phase):
