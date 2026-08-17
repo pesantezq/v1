@@ -98,6 +98,91 @@ _HOST_RE = re.compile(
 #: a dotted name, because a bare label is indistinguishable from an opaque token.
 _BARE_HOSTS = frozenset({"localhost"})
 
+# --- top-level identity field validation -------------------------------------
+#
+# Tool config was not the only path into a durable record. Values copied from
+# the caller straight into model_provider / model_name / prompt_version and the
+# rest reached the journal with NO validation at all, so a credential placed in
+# reviewer_identity["provider"] was persisted verbatim. These fields need the
+# same discipline the tool config already had.
+#
+# HONEST LIMIT: for opaque identifiers like a model name, structure is a weaker
+# lever than it is for tool config -- "gpt-4o" and a lowercase token are the
+# same shape. Lowercasing plus a charset plus a length bound rejects the common
+# mixed-case, high-entropy credential formats, and the pattern backstop covers
+# the rest. This is defence in depth, not a proof, and it is not claimed as one.
+
+#: 40-hex commit id.
+_SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+#: Prefixed content id: pkt_…, exid_…, evs_…, rvi_…, fset_…
+_PREFIXED_ID_RE = re.compile(r"\A[a-z][a-z0-9]{1,15}_[0-9a-f]{8,64}\Z")
+#: Uppercase enum: A1_ASSISTED_ENGINEERING, E3_HIGH
+_ENUM_RE = re.compile(r"\A[A-Z][A-Z0-9_]{0,47}\Z")
+#: Lowercase identifier: engineer.local_qwen2_5_7b, northstar_0c_…, gpt-4o
+_IDENT_RE = re.compile(r"\A[a-z0-9][a-z0-9._:-]{0,63}\Z")
+#: Branch: lowercase identifier that may contain slashes.
+_BRANCH_RE = re.compile(r"\A[a-z0-9][a-z0-9._/-]{0,127}\Z")
+
+
+def _matched(pattern: "re.Pattern[str]", value: Any, max_len: int) -> Optional[str]:
+    if not isinstance(value, str) or not value or len(value) > max_len:
+        return None
+    if any(s in value.lower() for s in _SECRETISH):
+        return None
+    return value if pattern.match(value) else None
+
+
+def _identifier(value: Any, max_len: int = 64) -> Optional[str]:
+    return _matched(_IDENT_RE, value, max_len)
+
+
+#: Validator per identity field. A field with no entry is not caller-supplied.
+_IDENTITY_VALIDATORS: dict[str, Any] = {
+    "worker_id": lambda v: _identifier(v),
+    "worker_role": lambda v: _identifier(v, 48),
+    "authority_level": lambda v: _matched(_ENUM_RE, v, 48),
+    "model_provider": lambda v: _identifier(v, 32),
+    "model_name": lambda v: _identifier(v, 64),
+    "model_version": lambda v: _identifier(v, 48),
+    "prompt_version": lambda v: _identifier(v, 64),
+    "instruction_version": lambda v: _identifier(v, 64),
+    "repository_sha": lambda v: _matched(_SHA_RE, v, 40),
+    "candidate_sha": lambda v: _matched(_SHA_RE, v, 40),
+    "branch": lambda v: _matched(_BRANCH_RE, v, 128),
+    "task_id": lambda v: _identifier(v, 64),
+    "mission_id": lambda v: _identifier(v, 96),
+    "input_id": lambda v: (_matched(_PREFIXED_ID_RE, v, 80) or _identifier(v, 80)),
+}
+
+
+def safe_identity_value(field: str, value: Any) -> str:
+    """Validate one identity attribute, or report it as unavailable.
+
+    A rejected value becomes UNAVAILABLE rather than being dropped silently or
+    persisted verbatim: the record then says truthfully that the attribute is
+    not known, which is the same discipline used for genuinely missing data."""
+    if value == UNAVAILABLE or value == LEGACY_UNATTRIBUTED:
+        return value
+    validator = _IDENTITY_VALIDATORS.get(field)
+    if validator is None:
+        return UNAVAILABLE
+    checked = validator(value)
+    return checked if checked is not None else UNAVAILABLE
+
+
+def supervisor_prompt_version(system_prompt: str) -> str:
+    """Deterministic identity of the EXACT instruction text used.
+
+    A protocol label like "one-shot" describes the calling convention, not the
+    prompt: edit the system prompt and the label is unchanged, so records from
+    before and after an instruction change would be indistinguishable. That
+    would defeat the question this substrate exists to answer -- compare
+    false-PASS rates before and after prompt version Y."""
+    if not isinstance(system_prompt, str) or not system_prompt:
+        return UNAVAILABLE
+    return "sysprompt-" + hashlib.sha256(
+        system_prompt.encode("utf-8")).hexdigest()[:16]
+
 
 def _bounded_int(lo: int, hi: int):
     def _check(value: Any) -> Optional[int]:
@@ -181,30 +266,41 @@ def safe_toolset_identity(name: str, config: Optional[Mapping[str, Any]] = None
 
     A credential-pattern check is retained as defence in depth, but it is not
     load-bearing: no claim of reliable secret detection is made or needed."""
+    # `field` -- NOT `name`. An earlier version rebound the `name` PARAMETER
+    # inside this loop, so after iterating it held the last config key instead
+    # of the toolset. Both toolset_id and the digest were then tied to whatever
+    # key happened to sort last, which silently detached the recorded toolset
+    # identity from the actual toolset.
+    toolset_name = _identifier(name, 64) or UNAVAILABLE
     safe: dict[str, Any] = {}
     dropped: list[str] = []
-    for key, value in sorted((config or {}).items()):
-        name = str(key)
+    for field, value in sorted((config or {}).items()):
+        field = str(field)
         # The allowlist alone decides which KEYS may be recorded. A substring
         # check on the key name is not only redundant here, it is wrong: it
         # dropped the legitimate `max_tokens` and `max_completion_tokens`
         # because their names contain "token". Screening applies to VALUES.
-        validator = _SAFE_TOOL_FIELDS.get(name)
+        validator = _SAFE_TOOL_FIELDS.get(field)
         if validator is None:
-            dropped.append(name)
+            dropped.append(field)
             continue
         checked = validator(value)
         if checked is None:
-            dropped.append(name)
+            dropped.append(field)
             continue
         # Defence in depth, after the structural contract has already passed.
         if isinstance(checked, str) and any(s in checked.lower() for s in _SECRETISH):
-            dropped.append(name)
+            dropped.append(field)
             continue
-        safe[name] = checked
+        safe[field] = checked
+    # The digest is over the RESOLVED toolset plus its safe config. `toolset`
+    # is removed from the splat so a config entry cannot shadow the argument --
+    # the shadowing that made digest(name=A, cfg toolset=B) equal digest(name=B).
+    material = {k: v for k, v in safe.items() if k != "toolset"}
     digest = hashlib.sha256(
-        _canonical({"toolset": name, **safe}).encode("utf-8")).hexdigest()[:32]
-    return {"toolset_id": name, "safe_config": safe,
+        _canonical({"toolset": toolset_name, **material}).encode("utf-8")
+    ).hexdigest()[:32]
+    return {"toolset_id": toolset_name, "safe_config": safe,
             "dropped_keys": sorted(dropped), "config_digest": digest}
 
 
@@ -346,13 +442,21 @@ def build_execution_identity(*, worker_id: str = UNAVAILABLE,
              if toolset != UNAVAILABLE else
              {"toolset_id": UNAVAILABLE, "safe_config": {},
               "config_digest": UNAVAILABLE})
+    # EVERY caller-supplied attribute is validated here, at the one construction
+    # point. Previously only tool config was screened, so a credential placed in
+    # reviewer_identity["provider"] flowed straight into the durable record.
+    checked = {
+        field: safe_identity_value(field, value) for field, value in (
+            ("worker_id", worker_id), ("worker_role", worker_role),
+            ("authority_level", authority_level),
+            ("model_provider", model_provider), ("model_name", model_name),
+            ("model_version", model_version), ("prompt_version", prompt_version),
+            ("instruction_version", instruction_version),
+            ("repository_sha", repository_sha), ("candidate_sha", candidate_sha),
+            ("branch", branch), ("task_id", task_id), ("mission_id", mission_id),
+            ("input_id", input_id))
+    }
     return ExecutionIdentity(
-        worker_id=worker_id, worker_role=worker_role, authority_level=authority_level,
-        model_provider=model_provider, model_name=model_name,
-        model_version=model_version, prompt_version=prompt_version,
-        instruction_version=instruction_version,
         toolset_id=tools["toolset_id"], toolset_digest=tools["config_digest"],
         toolset_safe_config=tools["safe_config"],
-        repository_sha=repository_sha, candidate_sha=candidate_sha, branch=branch,
-        task_id=task_id, mission_id=mission_id, input_id=input_id,
-        recorded_at=recorded_at)
+        recorded_at=recorded_at, **checked)

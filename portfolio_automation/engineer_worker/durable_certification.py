@@ -44,7 +44,7 @@ from portfolio_automation.engineer_worker.review_packet_store import (
 from portfolio_automation.engineer_worker import supervisor_screen
 from portfolio_automation.engineer_worker.execution_identity import (
     UNAVAILABLE, ExecutionIdentity, build_execution_identity,
-    safe_toolset_identity,
+    safe_toolset_identity, supervisor_prompt_version,
 )
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
@@ -115,6 +115,8 @@ class ReviewContext:
         once. Attributes this context genuinely does not know stay UNAVAILABLE:
         substituting a configured default would assert a configuration that may
         never have run."""
+        from portfolio_automation.engineer_worker import gpt_supervisor
+
         ident = dict(self.reviewer_identity)
         return build_execution_identity(
             worker_role="independent_reviewer",
@@ -124,6 +126,13 @@ class ReviewContext:
             # version is normally unavailable. Recording the configured NAME
             # here would claim precision nobody has.
             model_version=ident.get("model_version", UNAVAILABLE),
+            # Bound to the EXACT instruction text, not to a protocol label.
+            # "one-shot" describes the calling convention: edit the system
+            # prompt and that label is unchanged, so records from before and
+            # after an instruction change would be indistinguishable -- which
+            # defeats "compare false-PASS rates before and after prompt Y".
+            prompt_version=supervisor_prompt_version(
+                getattr(gpt_supervisor, "SUPERVISOR_SYSTEM", "")),
             instruction_version=ident.get("protocol", UNAVAILABLE),
             toolset=ident.get("toolset", "gpt_supervisor.review"),
             tool_config=ident,

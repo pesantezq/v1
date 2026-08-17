@@ -301,6 +301,128 @@ def test_an_over_long_value_is_dropped_rather_than_embedded():
     assert "mode" in safe["dropped_keys"]
 
 
+# ══ FINAL REPAIR 1: top-level identity fields are validated too ═══════════
+# Tool config was not the only path into a durable record. Values copied
+# straight into model_provider / model_name / prompt_version reached the
+# journal with NO validation at all.
+
+@pytest.mark.parametrize("field", [
+    "worker_id", "worker_role", "authority_level", "model_provider",
+    "model_name", "model_version", "prompt_version", "instruction_version",
+    "repository_sha", "candidate_sha", "branch", "task_id", "mission_id",
+    "input_id",
+])
+def test_a_credential_in_any_top_level_field_becomes_unavailable(field):
+    """The leak this repair closes: these were copied verbatim into the record."""
+    fake = "sk-" + "A1b2C3d4E5f6"
+    ident = build_execution_identity(**{field: fake})
+    assert getattr(ident, field) == UNAVAILABLE
+    assert fake not in json.dumps(ident.to_dict())
+    assert field in ident.unavailable_attributes()
+
+
+def test_a_rejected_attribute_is_unavailable_not_silently_dropped():
+    """It must read as 'not known', the same as genuinely missing data --
+    never as a plausible value and never as an absent field."""
+    ident = build_execution_identity(model_name="NOT A MODEL NAME!!")
+    assert ident.model_name == UNAVAILABLE
+    assert "model_name" in ident.to_dict()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("worker_id", "engineer.local_qwen2_5_7b"),
+    ("authority_level", "A1_ASSISTED_ENGINEERING"),
+    ("model_provider", "openai"),
+    ("model_name", "gpt-4o"),
+    ("model_name", "qwen2.5:7b"),
+    ("repository_sha", "a" * 40),
+    ("candidate_sha", "b" * 40),
+    ("branch", "feature/ai-execution-identity"),
+    ("task_id", "ew0a-cr-t1"),
+    ("mission_id", "northstar_0c_pit_evidence_gateway_research_store"),
+    ("input_id", "pkt_" + "c" * 32),
+])
+def test_real_production_values_survive_validation(field, value):
+    """POSITIVE CONTROL. The fix must not become drop-everything: every one of
+    these is a value the system actually produces."""
+    assert getattr(build_execution_identity(**{field: value}), field) == value
+
+
+def test_a_non_sha_cannot_masquerade_as_a_commit_id():
+    for bad in ("not-a-sha", "A" * 40, "a" * 39, "a" * 41):
+        assert build_execution_identity(candidate_sha=bad).candidate_sha == UNAVAILABLE
+
+
+# ══ FINAL REPAIR 2: toolset name is not shadowed by its own config ════════
+def test_toolset_id_is_the_toolset_not_the_last_config_key():
+    """The bug: the loop rebound the `name` PARAMETER, so after iterating it
+    held whichever config key sorted last. Both toolset_id and the digest were
+    then tied to that key rather than to the actual toolset."""
+    safe = safe_toolset_identity("gpt_supervisor.review",
+                                 {"timeout": 60, "protocol": "one-shot"})
+    assert safe["toolset_id"] == "gpt_supervisor.review"
+
+
+def test_a_toolset_key_in_config_cannot_shadow_the_toolset_argument():
+    """digest(name=A, cfg toolset=B) must not equal digest(name=B, cfg empty)."""
+    a = safe_toolset_identity("gpt_supervisor.review", {"toolset": "other.tool"})
+    b = safe_toolset_identity("other.tool", {})
+    assert a["toolset_id"] == "gpt_supervisor.review"
+    assert a["config_digest"] != b["config_digest"]
+
+
+def test_the_digest_still_distinguishes_different_toolsets():
+    assert safe_toolset_identity("a.tool", {})["config_digest"] != \
+        safe_toolset_identity("b.tool", {})["config_digest"]
+
+
+def test_a_credential_shaped_toolset_name_is_rejected():
+    assert safe_toolset_identity("sk-" + "A1b2C3d4", {})["toolset_id"] == UNAVAILABLE
+
+
+# ══ FINAL REPAIR 3: prompt identity binds the exact instruction text ══════
+def test_prompt_version_is_a_digest_of_the_actual_supervisor_prompt():
+    from portfolio_automation.engineer_worker import gpt_supervisor
+    from portfolio_automation.engineer_worker.execution_identity import (
+        supervisor_prompt_version)
+    version = supervisor_prompt_version(gpt_supervisor.SUPERVISOR_SYSTEM)
+    assert version.startswith("sysprompt-")
+    assert version == supervisor_prompt_version(gpt_supervisor.SUPERVISOR_SYSTEM)
+
+
+def test_editing_the_supervisor_prompt_changes_the_recorded_version():
+    """The point of binding the text rather than a protocol label: "one-shot"
+    is unchanged by a prompt edit, so records from before and after would be
+    indistinguishable -- defeating "compare false-PASS rates before and after
+    prompt version Y"."""
+    from portfolio_automation.engineer_worker import gpt_supervisor
+    from portfolio_automation.engineer_worker.execution_identity import (
+        supervisor_prompt_version)
+    original = gpt_supervisor.SUPERVISOR_SYSTEM
+    assert supervisor_prompt_version(original) != \
+        supervisor_prompt_version(original + "\nAlso consider X.")
+
+
+def test_an_absent_prompt_is_unavailable_not_a_digest_of_nothing():
+    from portfolio_automation.engineer_worker.execution_identity import (
+        supervisor_prompt_version)
+    for empty in ("", None, 123):
+        assert supervisor_prompt_version(empty) == UNAVAILABLE
+
+
+def test_the_production_identity_carries_the_real_prompt_digest(durable_ctx):
+    """PRODUCTION PATH. The identity built by the certification context must
+    bind the instruction text actually in use, not a label."""
+    from portfolio_automation.engineer_worker import gpt_supervisor
+    from portfolio_automation.engineer_worker.execution_identity import (
+        supervisor_prompt_version)
+    ident = durable_ctx.execution_identity(candidate_sha=SHA_A, task_id="t1")
+    assert ident.prompt_version == supervisor_prompt_version(
+        gpt_supervisor.SUPERVISOR_SYSTEM)
+    assert ident.prompt_version != ident.instruction_version
+    assert ident.toolset_id == "gpt_supervisor.review"
+
+
 # ── PRODUCTION PATH: a real certification record carries the envelope ──────
 # A helper that passes unit tests but no producer uses would not satisfy this
 # mission. These exercise dispatch_durably -- the mandatory certification path
