@@ -25,6 +25,10 @@ from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
 from portfolio_automation.engineer_worker.ew0a_authority import (
     read_authority_level, EngineerAuthorityLevel, FORBIDDEN_OPS)
 from portfolio_automation.engineer_worker.ew0a_loop import read_runtime_policy
+from portfolio_automation.engineer_worker.control_center_truth import (
+    Capability, Readiness, ReadinessAssessment, TruthState, assess_readiness,
+    classify,
+)
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 READMODEL_SCHEMA_VERSION = "engineering.readmodel.v0"
@@ -282,6 +286,66 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
                           is_complete=(verified == len(required)))
 
 
+def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, Any]],
+                          worker: Any, now: str | None) -> ReadinessAssessment:
+    """Classify every oversight capability from the evidence actually present.
+
+    Each capability declares whether a PRODUCER exists. That is an engineering
+    fact about this repository, not a runtime observation, and it is what keeps
+    a missing subsystem reported as PENDING_BACKEND instead of as an outage.
+
+    Nothing here builds a backend. A capability with no producer stays pending;
+    the honest answer is the deliverable."""
+    last_verification = None
+    for rec in reversed(records):
+        if rec.get("gpt_verdict") and rec.get("recorded_at"):
+            last_verification = rec["recorded_at"]
+            break
+
+    caps = [
+        # Authority and mission come from protected config files that are read
+        # directly. They are authoritative-by-file and do not decay, so
+        # demanding a timestamp would manufacture UNKNOWNs.
+        Capability("controller_state",
+                   classify(producer_exists=True,
+                            value=policy.mission_id if policy else None,
+                            requires_freshness=False),
+                   required=True,
+                   detail="config/ew0a_runtime.json (protected, read-only here)"),
+        Capability("worker_authority",
+                   classify(producer_exists=True,
+                            value=getattr(level, "value", None),
+                            requires_freshness=False),
+                   required=True,
+                   detail="config/ew0a_authority.json (protected, read-only here)"),
+        Capability("mission_state",
+                   classify(producer_exists=True,
+                            value=policy.mission_id if policy else None,
+                            requires_freshness=False),
+                   required=True, detail="runtime policy mission_id"),
+        # A producer EXISTS for verification history (the records ledger), so
+        # its freshness is measurable and it can legitimately go STALE.
+        Capability("supervisor_state",
+                   classify(producer_exists=True, value=last_verification,
+                            recorded_at=last_verification, now=now,
+                            threshold="verification"),
+                   required=True, detail="recorded gpt_verdict history"),
+        # No producer has been built for any of these. Building them is
+        # explicitly out of scope for this mission.
+        Capability("worker_activity",
+                   classify(producer_exists=False, value=None),
+                   required=True,
+                   detail="no WorkerHeartbeatV0 producer exists"),
+        Capability("queue_state", classify(producer_exists=False, value=None),
+                   required=False, detail="no dispatch queue producer exists"),
+        Capability("component_health", classify(producer_exists=False, value=None),
+                   required=False, detail="no health-probe producer exists"),
+        Capability("controller_since", classify(producer_exists=False, value=None),
+                   required=False, detail="no controller-session record exists"),
+    ]
+    return assess_readiness(caps)
+
+
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
     """Assemble the full read-only dashboard from authoritative sources.
 
@@ -335,6 +399,10 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         "attention_items": [],   # only human-relevant items; none outstanding
         "system_health": health.to_dict(),
     }
+    # Backend truth states + capability readiness. Derived from the evidence
+    # just assembled -- never asserted, and never a LIVE percentage.
+    dashboard["backend_truth"] = _assess_backend_truth(
+        level=level, policy=policy, records=records, worker=worker, now=now).to_dict()
     # Learning projections (Phase 13). Degrade to PENDING_BACKEND rather than
     # failing the whole dashboard if the learning store is absent.
     try:

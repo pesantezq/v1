@@ -106,6 +106,62 @@ disagreement by itself. Currently: none outstanding.
   supervisor availability/latency/queue/outage; component health
   (gpt/engineer/sandbox/bridge); `controller_since`.
 
+## Backend truth states (`control_center_truth.py`)
+`PENDING_BACKEND` alone was carrying at least three meanings — nobody built the
+producer, the producer cannot answer right now, and we hold a value but cannot tell
+whether it is still true. Those lead an operator to different actions, so they are now
+distinct. Emitted at `dashboard["backend_truth"]`.
+
+| State | Meaning | Produced when |
+|---|---|---|
+| `LIVE` | authoritative value within its freshness threshold | producer exists, value present, age ≤ threshold (or the value does not decay) |
+| `STALE` | authoritative value **measured** as too old | producer exists, value present, **valid** timestamp, age > threshold |
+| `PENDING_BACKEND` | engineering incompleteness | no producer has been built |
+| `UNAVAILABLE` | operational condition | producer exists but returned no usable value |
+| `UNKNOWN` | undecidable from evidence | timestamp missing/unparseable/naive/future, or no reference time |
+
+**Missing timestamp is `UNKNOWN`, never `STALE`.** Calling an untimestamped value stale
+asserts an age nobody measured. It looks conservative, which is why it is the tempting
+mistake.
+
+### Freshness
+Thresholds are named in `FRESHNESS_SECONDS` (heartbeat 300s · supervisor 900s ·
+verification 86400s · default 3600s), never buried literals. Age is measured against the
+**injected** `now` passed to `build_dashboard`, never the wall clock — an AST test
+asserts the module calls no `now()`/`utcnow()`/`today()`. Identical evidence at an
+identical reference time yields an identical classification.
+
+## Readiness (capability-based, not a percentage)
+A LIVE percentage is the wrong summary: dozens of live cosmetic fields can coexist with
+an operator who cannot see what the worker is doing. Readiness is decided by whole
+capability groups; `state_counts` is emitted as **diagnostics only**.
+
+| Readiness | Meaning |
+|---|---|
+| `READY` | every required capability live |
+| `MOSTLY_LIVE` | required capabilities live; only secondary gaps |
+| `PARTIAL` | one or more **required** capabilities not live |
+| `UNAVAILABLE` | the oversight floor (`controller_state`, `worker_authority`) is not established |
+
+Required: `controller_state`, `worker_authority`, `mission_state`, `supervisor_state`,
+`worker_activity`. Secondary: `queue_state`, `component_health`, `controller_since`.
+
+### Current classification — `PARTIAL`
+Derived, not asserted (`tests/test_control_center_truth.py`). `controller_state`,
+`worker_authority` and `mission_state` are LIVE from protected config;
+`supervisor_state` ages against recorded verdicts and can legitimately go STALE.
+
+**Remaining `PENDING_BACKEND` capabilities** — no producer exists for any of these, and
+building them was explicitly out of scope for this mission:
+- `worker_activity` (no `WorkerHeartbeatV0` producer) — **required**, so it alone
+  prevents `READY`
+- `queue_state` (no dispatch-queue producer)
+- `component_health` (no health-probe producer)
+- `controller_since` (no controller-session record)
+
+`PARTIAL` is the honest answer while a required capability has no producer. A fabricated
+`LIVE` would be worse than a truthful `PENDING_BACKEND`.
+
 ## Things the GUI must NEVER do
 Mutate EW authority · mutate mission/task state · change risk · certify tasks · bypass
 GPT · merge · deploy · write production/`/opt/stockbot` · issue capital/broker actions ·
