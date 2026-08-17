@@ -306,6 +306,13 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
                            # -- writing it verbatim would put a credential into
                            # an append-only, replicated ledger, where it cannot
                            # be removed. Only the safe projection is recorded.
+                           #
+                           # Note the invocation-id path above hashes the RAW
+                           # mapping. What persists from it is the derived
+                           # identifier, not the raw material -- which is a
+                           # weaker statement than "nothing persists", and is
+                           # the accurate one. See the finding in
+                           # docs/EW0A_EXECUTION_IDENTITY.md.
                            reviewer_identity=safe_toolset_identity(
                                "gpt_supervisor.review",
                                dict(context.reviewer_identity))["safe_config"],

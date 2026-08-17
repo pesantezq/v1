@@ -178,18 +178,122 @@ def test_credential_shaped_config_never_reaches_the_identity_record(key, value):
 
 
 def test_a_secret_smuggled_under_an_allowlisted_key_is_still_dropped():
-    """The key allowlist alone is not enough -- the value is screened too."""
+    """SUPERSEDED SEMANTICS, retained as a case rather than as the proof.
+
+    This originally passed only because the word "Bearer" was recognised, which
+    was the weakness: it proved a word filter caught a word, not that the field
+    was safe. It now passes structurally -- the value is not a lowercase token
+    -- and the real proof lives in the bare-credential tests below."""
     safe = safe_toolset_identity("t", {"mode": "Bearer sk-abc123secrettoken"})
     assert "mode" not in safe["safe_config"]
     assert "mode" in safe["dropped_keys"]
 
 
-def test_safe_config_keeps_useful_non_secret_fields():
-    """The screen must not be so blunt that identity carries nothing."""
-    safe = safe_toolset_identity("gpt_supervisor.review",
-                                 {"model": "gpt-4o", "timeout": 60, "protocol": "one-shot"})
-    assert safe["safe_config"] == {"protocol": "one-shot", "timeout": 60}
-    assert safe["config_digest"] and safe["config_digest"] != UNAVAILABLE
+# ── STRUCTURAL VALIDATION: bare credential shapes carry no giveaway word ───
+@pytest.mark.parametrize("field,value", [
+    ("mode", "sk-" + "A1b2C3d4E5f6G7h8"),
+    ("protocol", "ghp_" + "z" * 30),
+    ("toolset_version", "AKIA" + "Q" * 16),
+    ("toolset", "ghp_" + "z" * 30),
+    # Deliberately NOT a real vendor prefix. The structural contract is the
+    # defence, so the test should not depend on recognising a provider's
+    # format -- and a realistic vendor-shaped literal trips push protection,
+    # which is the scanner correctly refusing to carry credential-shaped text.
+    ("mode", "Zq7-" + "Xy9Kp2Lm4Nb6" + "-Rt8Vw"),
+    ("protocol", "A" * 20),
+])
+def test_a_bare_credential_shaped_value_cannot_enter_safe_config(field, value):
+    """THE REPAIR. None of these contain key/token/secret/password/bearer, so a
+    substring filter accepts every one of them. The field's structural contract
+    is what rejects them: uppercase, underscores and opaque shapes are not
+    lowercase hyphenated tokens or dotted identifiers."""
+    safe = safe_toolset_identity("t", {field: value})
+    assert field not in safe["safe_config"]
+    assert field in safe["dropped_keys"]
+    assert value not in json.dumps(safe)
+
+
+@pytest.mark.parametrize("value", [
+    "https://user:password@example.com",
+    "https://example.com?token=fake",
+    "https://example.com/#secret",
+    "user:pw@example.com",
+    "https://example.com/v1/secret-path",
+    "sk-" + "A1b2C3d4",
+])
+def test_unsafe_url_material_cannot_survive_through_api_base_host(value):
+    """POLICY: reject outright, never strip. A URL carrying userinfo, a query or
+    a fragment is evidence the caller is passing secret-bearing material here;
+    keeping just the hostname would discard that signal."""
+    safe = safe_toolset_identity("t", {"api_base_host": value})
+    assert "api_base_host" not in safe["safe_config"]
+    assert value not in json.dumps(safe)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("timeout", "sk-fake"),
+    ("timeout", "60"),
+    ("timeout", True),
+    ("timeout", 0),
+    ("timeout", 999_999),
+    ("max_tokens", {"secret": "x"}),
+    ("max_tokens", 3.5),
+    ("mode", ["one-shot"]),
+    ("protocol", {"p": "one-shot"}),
+])
+def test_wrong_typed_values_cannot_enter_safe_config(field, value):
+    """`timeout` accepting a string at all was the plainest evidence there was
+    no type contract. bool is rejected explicitly: it is an int subclass, so
+    True would otherwise masquerade as 1."""
+    safe = safe_toolset_identity("t", {field: value})
+    assert field not in safe["safe_config"]
+
+
+def test_unknown_keys_remain_fail_closed():
+    safe = safe_toolset_identity("t", {"endpoint": "https://x", "region": "us",
+                                       "api_key": "sk-fake"})
+    assert safe["safe_config"] == {}
+    assert set(safe["dropped_keys"]) == {"endpoint", "region", "api_key"}
+
+
+# ── POSITIVE CONTROLS: the repair must not become "drop everything" ────────
+def test_legitimate_configuration_is_still_represented():
+    safe = safe_toolset_identity("gpt_supervisor.review", {
+        "toolset": "gpt_supervisor.review", "toolset_version": "1.2.3",
+        "protocol": "one-shot", "mode": "strict", "timeout": 60,
+        "max_tokens": 4096, "max_completion_tokens": 2000,
+        "api_base_host": "api.openai.com"})
+    assert safe["dropped_keys"] == []
+    assert safe["safe_config"]["protocol"] == "one-shot"
+    assert safe["safe_config"]["timeout"] == 60
+    assert safe["safe_config"]["max_completion_tokens"] == 2000
+    assert safe["safe_config"]["api_base_host"] == "api.openai.com"
+
+
+def test_token_named_fields_are_not_dropped_for_their_names():
+    """Caught by a positive control during the repair: an over-eager key-name
+    screen dropped max_tokens and max_completion_tokens because their NAMES
+    contain "token". The allowlist decides keys; screening applies to values."""
+    safe = safe_toolset_identity("t", {"max_tokens": 4096,
+                                       "max_completion_tokens": 2000})
+    assert safe["safe_config"] == {"max_tokens": 4096, "max_completion_tokens": 2000}
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("api.openai.com", "api.openai.com"),
+    ("https://api.openai.com", "api.openai.com"),
+    ("https://api.openai.com/", "api.openai.com"),
+    ("localhost:11434", "localhost:11434"),
+    ("API.OpenAI.com", "api.openai.com"),
+])
+def test_a_clean_host_is_accepted_and_normalised(value, expected):
+    safe = safe_toolset_identity("t", {"api_base_host": value})
+    assert safe["safe_config"]["api_base_host"] == expected
+
+
+@pytest.mark.parametrize("value", ["v1", "1.2.3", "one-shot", "2"])
+def test_legitimate_versions_are_accepted(value):
+    assert safe_toolset_identity("t", {"toolset_version": value})["safe_config"]
 
 
 def test_an_over_long_value_is_dropped_rather_than_embedded():

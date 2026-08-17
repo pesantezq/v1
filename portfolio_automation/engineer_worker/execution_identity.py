@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
@@ -61,17 +63,106 @@ UNAVAILABLE = "UNAVAILABLE_AT_RECORD_TIME"
 #: inference can recover it.
 LEGACY_UNATTRIBUTED = "LEGACY_UNATTRIBUTED"
 
-#: Tool-configuration keys safe to record verbatim. Everything else is dropped
-#: before it can reach durable storage. An allowlist, never a denylist: a
-#: denylist fails open on the key nobody thought of.
-_SAFE_TOOL_KEYS = frozenset({
-    "toolset", "toolset_version", "protocol", "mode", "timeout",
-    "max_tokens", "max_completion_tokens", "api_base_host",
-})
-
 #: Substrings that mark a value as credential-bearing regardless of its key.
+#: DEFENCE IN DEPTH ONLY -- never the primary boundary. A word filter cannot
+#: recognise a bare opaque token, which is exactly how ``mode = "sk-..."``
+#: survived the first implementation of this screen.
 _SECRETISH = ("key", "token", "secret", "password", "authorization", "bearer",
               "credential")
+
+# --- field-specific structural validation ------------------------------------
+#
+# A field is safe because its CONTRACT constrains what it can contain, not
+# because a generic substring filter failed to recognise the value as a secret.
+# The first version of this screen relied on the latter and leaked: `mode`,
+# `protocol` and `toolset_version` accepted arbitrary short strings, and
+# `timeout` accepted a string at all.
+#
+# Every validator below returns the normalised value, or None to reject.
+
+#: Lowercase hyphenated token: "one-shot", "strict". Rejects uppercase and
+#: underscores, which is what excludes "sk-A1b2C3d4", "ghp_..." and "AKIA...".
+_TOKEN_RE = re.compile(r"\A[a-z][a-z0-9]*(-[a-z0-9]+)*\Z")
+#: Dotted lowercase identifier requiring at least one dot: "gpt_supervisor.review".
+#: The mandatory dot is what rejects a bare opaque token like "ghp_zzzz...".
+_TOOLSET_RE = re.compile(r"\A[a-z][a-z0-9_]{0,23}(\.[a-z][a-z0-9_]{0,23})+\Z")
+#: Version: "v1", "1.2.3" -- or a lowercase token like "one-shot".
+_VERSION_RE = re.compile(r"\A(v?\d+(\.\d+){0,3}|[a-z][a-z0-9]*(-[a-z0-9]+)*)\Z")
+#: Hostname, optionally with a port. No userinfo, path, query or fragment.
+_HOST_RE = re.compile(
+    r"\A(?=.{1,253}\Z)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+    r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:\d{1,5})?\Z")
+
+
+#: Single-label hosts that are legitimate without a dot. Anything else must be
+#: a dotted name, because a bare label is indistinguishable from an opaque token.
+_BARE_HOSTS = frozenset({"localhost"})
+
+
+def _bounded_int(lo: int, hi: int):
+    def _check(value: Any) -> Optional[int]:
+        # bool is an int subclass in Python; accepting it here would let True
+        # masquerade as 1 and make the recorded configuration misleading.
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value if lo <= value <= hi else None
+    return _check
+
+
+def _matching(pattern: "re.Pattern[str]", max_len: int):
+    def _check(value: Any) -> Optional[str]:
+        if not isinstance(value, str) or len(value) > max_len:
+            return None
+        return value if pattern.match(value) else None
+    return _check
+
+
+def _host(value: Any) -> Optional[str]:
+    """Accept a host, or a URL that carries nothing but a host.
+
+    POLICY: reject outright rather than strip. A URL carrying userinfo, a query
+    or a fragment is evidence the caller is passing secret-bearing material
+    here; silently keeping the hostname would discard that signal and record a
+    value the caller never meant as an identity. Fail closed instead."""
+    if not isinstance(value, str) or not value or len(value) > 253:
+        return None
+    candidate = value.strip()
+    if "://" in candidate:
+        parsed = urllib.parse.urlsplit(candidate)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            return None
+        if parsed.path not in ("", "/"):
+            return None
+        candidate = parsed.netloc
+    if "@" in candidate or "/" in candidate or "?" in candidate or "#" in candidate:
+        return None
+    candidate = candidate.lower()
+    if not _HOST_RE.match(candidate):
+        return None
+    # A bare single label is not enough. "sk-a1b2c3d4" is a SYNTACTICALLY VALID
+    # hostname, so grammar alone would admit a credential here -- found by the
+    # negative test. An API base host is a dotted name, or an explicit local
+    # host; anything else is rejected rather than guessed at.
+    host = candidate.split(":", 1)[0]
+    if "." not in host and host not in _BARE_HOSTS:
+        return None
+    return candidate
+
+
+#: Tool-configuration keys safe to record, each with the validator that defines
+#: what "safe" means for it. An allowlist, never a denylist: a denylist fails
+#: open on the key nobody thought of.
+_SAFE_TOOL_FIELDS: dict[str, Any] = {
+    "toolset": _matching(_TOOLSET_RE, 64),
+    "toolset_version": _matching(_VERSION_RE, 24),
+    "protocol": _matching(_TOKEN_RE, 24),
+    "mode": _matching(_TOKEN_RE, 24),
+    "timeout": _bounded_int(1, 86_400),
+    "max_tokens": _bounded_int(1, 1_000_000),
+    "max_completion_tokens": _bounded_int(1, 1_000_000),
+    "api_base_host": _host,
+}
+_SAFE_TOOL_KEYS = frozenset(_SAFE_TOOL_FIELDS)
 
 
 def _canonical(payload: Mapping[str, Any]) -> str:
@@ -82,23 +173,35 @@ def safe_toolset_identity(name: str, config: Optional[Mapping[str, Any]] = None
                           ) -> dict[str, Any]:
     """Project tool configuration down to something safe to persist.
 
-    Two independent filters, because either alone fails: the key allowlist stops
-    unknown fields, and the value screen stops a credential smuggled under an
-    allowlisted-looking name. A digest over the SAFE projection is kept so two
-    different configurations remain distinguishable without either being
-    readable."""
+    STRUCTURAL VALIDATION IS THE BOUNDARY. Each allowlisted key has a validator
+    defining the shape its value may take; anything else is dropped. The earlier
+    version relied on a substring filter and leaked, because a bare token like
+    ``sk-A1b2C3d4`` contains none of the suspicious words -- and ``timeout``
+    accepted a string at all, since nothing enforced its type.
+
+    A credential-pattern check is retained as defence in depth, but it is not
+    load-bearing: no claim of reliable secret detection is made or needed."""
     safe: dict[str, Any] = {}
     dropped: list[str] = []
     for key, value in sorted((config or {}).items()):
-        lowered = str(key).lower()
-        if key not in _SAFE_TOOL_KEYS or any(s in lowered for s in _SECRETISH):
-            dropped.append(str(key))
+        name = str(key)
+        # The allowlist alone decides which KEYS may be recorded. A substring
+        # check on the key name is not only redundant here, it is wrong: it
+        # dropped the legitimate `max_tokens` and `max_completion_tokens`
+        # because their names contain "token". Screening applies to VALUES.
+        validator = _SAFE_TOOL_FIELDS.get(name)
+        if validator is None:
+            dropped.append(name)
             continue
-        text = str(value)
-        if any(s in text.lower() for s in _SECRETISH) or len(text) > 200:
-            dropped.append(str(key))
+        checked = validator(value)
+        if checked is None:
+            dropped.append(name)
             continue
-        safe[str(key)] = value
+        # Defence in depth, after the structural contract has already passed.
+        if isinstance(checked, str) and any(s in checked.lower() for s in _SECRETISH):
+            dropped.append(name)
+            continue
+        safe[name] = checked
     digest = hashlib.sha256(
         _canonical({"toolset": name, **safe}).encode("utf-8")).hexdigest()[:32]
     return {"toolset_id": name, "safe_config": safe,

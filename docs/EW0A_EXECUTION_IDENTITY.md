@@ -81,11 +81,35 @@ Tool configuration is the realistic leak path — it is the one place an API key
 credential plausibly lives. Identity records are durable, replicated and append-only, so a
 leak there is permanent.
 
-Two independent filters, because either alone fails:
-1. **key allowlist** (`_SAFE_TOOL_KEYS`) — a denylist would fail open on the key nobody
-   thought of;
-2. **value screen** — catches a credential smuggled under an allowlisted-looking key, and
-   drops over-long values.
+### Structural validation is the boundary
+
+A field is safe because **its contract constrains what it can contain**, not because a
+generic substring filter failed to recognise the value as a secret. Each allowlisted key
+has a validator:
+
+| Field | Accepts | Rejects |
+|---|---|---|
+| `toolset` | dotted lowercase identifier, ≥1 dot, ≤64 (`gpt_supervisor.review`) | bare opaque tokens (`ghp_zzz…`), uppercase |
+| `toolset_version` | `v1`, `1.2.3`, or lowercase token, ≤24 | `AKIA…`, uppercase, opaque strings |
+| `protocol`, `mode` | lowercase hyphenated token, ≤24 (`one-shot`, `strict`) | `sk-A1b2…`, `ghp_…`, uppercase, underscores |
+| `timeout` | `int` 1–86 400 (**not** `bool`) | strings, floats, `True`, out of range |
+| `max_tokens`, `max_completion_tokens` | `int` 1–1 000 000 (**not** `bool`) | strings, dicts, floats |
+| `api_base_host` | dotted host or `localhost`, optional `:port`, normalised lowercase | userinfo, query, fragment, path, bare single labels |
+
+An earlier version relied on a substring filter and **leaked**: `mode = "sk-A1b2C3d4"`
+contains none of key/token/secret/password/bearer, and `timeout` accepted a string at all
+because nothing enforced its type.
+
+`api_base_host` **rejects rather than strips**. A URL carrying userinfo, a query or a
+fragment is evidence the caller is passing secret-bearing material; keeping just the
+hostname would discard that signal. A bare single label is also rejected — `sk-a1b2c3d4`
+is a syntactically valid hostname, so grammar alone would admit a credential there.
+
+A credential-pattern check is retained as **defence in depth**, applied to values after
+the structural contract has passed. No claim of reliable generic secret detection is made
+or needed. Note the allowlist governs **keys** only: an earlier over-eager key-name screen
+dropped the legitimate `max_tokens` and `max_completion_tokens` because their names
+contain "token".
 
 Only the safe projection plus a digest over it is kept, so two configurations remain
 distinguishable without either being readable. `dropped_keys` records what was excluded.
@@ -94,6 +118,23 @@ distinguishable without either being readable. `dropped_keys` records what was e
 record wrote `reviewer_identity` as a raw dict; a caller placing `api_key` or `key_file`
 there would have written a credential into an append-only ledger. It is now screened
 through the same projection. No production security detector was weakened.
+
+### `review_invocation_id` — accurate statement of the property
+
+`review_invocation_id` hashes the **raw** reviewer identity mapping, and the resulting
+identifier **is** written into lifecycle records. The accurate property is therefore:
+
+> Raw credential material is not persisted by that path; only the derived identifier is.
+
+That is weaker than "nothing persists", and it is the correct claim. A one-way derived
+identifier is not the same as absence.
+
+**Recorded as debt, not changed here.** If a caller placed a low-entropy secret or a
+guessable key-file path into the reviewer identity, the persisted digest would in
+principle be subject to offline dictionary correlation. Current callers pass only
+`{provider, model, protocol}`, so no such value is known to have entered the hash.
+Screening the invocation-id material would change **every historical invocation id** and
+therefore the recorded review lineage, which is outside this repair's authorised scope.
 
 ## Production integration
 
