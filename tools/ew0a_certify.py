@@ -33,6 +33,12 @@ from portfolio_automation.engineer_worker import ew0a, policy   # noqa: E402
 from portfolio_automation.engineer_worker.ew0a import (          # noqa: E402
     RiskClass, Executor, TaskStatus, VerificationVerdict, FailureClass,
     EngineeringTaskV0, AttemptEvidence, certify_attempt, status_for_verdict,
+)
+from portfolio_automation.engineer_worker.durable_certification import (
+    ReviewContext,
+)
+from portfolio_automation.engineer_worker.review_candidate import (
+    GitRepoView,
     assign_executor, worker_may_execute, build_claude_escalation_packet,
     OutcomeRecord, append_outcome)
 from portfolio_automation.engineer_worker.gpt_supervisor import (  # noqa: E402
@@ -52,6 +58,17 @@ def now() -> str:
 
 def supervisor(packet):
     return gpt_review(packet, SUP_CFG, now)
+
+
+# Durable certification is rooted at the CANONICAL checkout, never at the
+# disposable worktree this tool creates and removes. A preimage stored inside a
+# worktree is deleted the moment the task finishes, which would reproduce
+# exactly the hash-with-no-preimage failure this machinery exists to prevent.
+CERTIFICATION = ReviewContext.open(
+    REPO, mission_id="ew0a_certification", session_id="ew0a_certify_tool",
+    reviewer_identity={"provider": "openai", "model": SUP_CFG.model,
+                       "protocol": "one-shot"},
+    repo=GitRepoView(str(REPO)))
 
 def base_sha() -> str:
     return subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
@@ -188,7 +205,7 @@ def mission1(sha: str) -> None:
         "Use only plain `assert` statements and that single import.")
     attempt, ws = _engineer_attempt(task, sha, rel, prompt)
     try:
-        v = certify_attempt(task, attempt, supervisor, now, "v-M1")
+        v = certify_attempt(task, attempt, supervisor, now, "v-M1", certification=CERTIFICATION)
         st = status_for_verdict(v.verdict)
         tests_passed = attempt.test_results[task.allowed_tests[0]].startswith("PASS")
         false_cert = (v.verdict is VerificationVerdict.PASS) and not tests_passed
@@ -234,7 +251,7 @@ def mission2(sha: str) -> None:
         "Use only plain assert statements.")
     attempt, ws = _engineer_attempt(task, sha, rel, prompt)
     try:
-        v = certify_attempt(task, attempt, supervisor, now, "v-M2")
+        v = certify_attempt(task, attempt, supervisor, now, "v-M2", certification=CERTIFICATION)
         st = status_for_verdict(v.verdict)
         tests_passed = attempt.test_results[task.allowed_tests[0]].startswith("PASS")
         false_cert = (v.verdict is VerificationVerdict.PASS) and not tests_passed
@@ -280,7 +297,7 @@ def mission3(sha: str):
             changed_paths=[rel], diff_text=unified_diff(ws, rel), tests_run=[rel],
             test_results={rel: ("PASS " if rc == 0 else "FAIL ") + summary},
             py_compile_ok=True, canonical_repo_touched=False)
-        v = certify_attempt(task, attempt, supervisor, now, "v-M3")
+        v = certify_attempt(task, attempt, supervisor, now, "v-M3", certification=CERTIFICATION)
         st = status_for_verdict(v.verdict)
         false_cert = v.verdict is VerificationVerdict.PASS
         if false_cert:
@@ -325,7 +342,7 @@ def mission4(sha: str, failed_task, failed_attempt, failed_v):
             diff_text=unified_diff(ws, rel), tests_run=[rel],
             test_results={rel: ("PASS " if rc == 0 else "FAIL ") + summary},
             py_compile_ok=True, canonical_repo_touched=False)
-        v = certify_attempt(task, claude_attempt, supervisor, now, "v-M4")
+        v = certify_attempt(task, claude_attempt, supervisor, now, "v-M4", certification=CERTIFICATION)
         st = status_for_verdict(v.verdict)
         tests_passed = claude_attempt.test_results[rel].startswith("PASS")
         false_cert = (v.verdict is VerificationVerdict.PASS) and not tests_passed
@@ -430,13 +447,13 @@ def mission6(sha: str) -> None:
             changed_paths=[], diff_text="", tests_run=[], test_results={},
             py_compile_ok=None, canonical_repo_touched=False,
             abstained=True, abstain_reason="acceptance criteria are unverifiable/ambiguous")
-        v = certify_attempt(task, attempt, supervisor, now, "v-M6")
+        v = certify_attempt(task, attempt, supervisor, now, "v-M6", certification=CERTIFICATION)
         st = status_for_verdict(v.verdict)
         # also independently confirm GPT abstains on an ambiguous packet with a guessed change
         guess = AttemptEvidence(attempt_id="att-M6b", executor=Executor.ENGINEER_STRICT,
                                 worker_claim="IMPLEMENTATION_COMPLETE", changed_paths=[],
                                 tests_run=[], test_results={}, canonical_repo_touched=False)
-        v2 = certify_attempt(task, guess, supervisor, now, "v-M6b")
+        v2 = certify_attempt(task, guess, supervisor, now, "v-M6b", certification=CERTIFICATION)
         no_change = canonical_unchanged()
         gate = (st is TaskStatus.ABSTAINED and no_change
                 and v2.verdict in (VerificationVerdict.ABSTAIN, VerificationVerdict.REPAIR,

@@ -33,6 +33,8 @@ from portfolio_automation.engineer_worker.ew0a import (
 from portfolio_automation.engineer_worker.ew0a_authority import (
     EngineerAuthorityLevel, AuthorityError, admit_engineer_task, assert_operation_allowed)
 from portfolio_automation.engineer_worker.gpt_supervisor import SupervisorDecision, SupervisorVerdict
+from portfolio_automation.engineer_worker.durable_certification import (
+    CertificationUnavailable, ReviewContext)
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 RUNTIME_SCHEMA_VERSION = "engineering.runtime_policy.v0"
@@ -147,9 +149,19 @@ class TaskRunResult:
 
 def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: RuntimePolicy,
              engineer_fn: EngineerFn, claude_fn: ClaudeFn, supervisor: SupervisorFn,
-             now_fn: Callable[[], str], vid: Callable[[], str]) -> TaskRunResult:
+             now_fn: Callable[[], str], vid: Callable[[], str],
+             *, certification: ReviewContext) -> TaskRunResult:
     """Run one task through routing -> bounded engineer attempts -> escalation ->
-    independent verification. Never certifies without deterministic PASS + GPT PASS."""
+    independent verification. Never certifies without deterministic PASS + GPT
+    PASS, and never reaches the supervisor except through durable certification.
+
+    ``certification`` is required and has no default. A parameter that can be
+    omitted is a parameter that will be omitted, and the omission would restore
+    the ephemeral path this exists to close."""
+    if not certification.durable:
+        raise CertificationUnavailable(
+            "the A1 operating loop refuses a non-durable certification context; "
+            "work stays unverified rather than certified on weaker evidence")
     route = route_task(task, level)
     if route is Route.HUMAN_REQUIRED:
         return TaskRunResult(task.task_id, route.value, TaskStatus.ESCALATION_REQUIRED.value,
@@ -164,7 +176,8 @@ def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: Run
         while eng_attempts < limit:
             eng_attempts += 1
             attempt = engineer_fn(task, eng_attempts)
-            v = certify_attempt(task, attempt, supervisor, now_fn, vid())
+            v = certify_attempt(task, attempt, supervisor, now_fn, vid(),
+                                certification=certification)
             last_v = v
             if v.verdict is VerificationVerdict.PASS:
                 return _ok(task, route, v, eng_attempts, False, 0, False)
@@ -193,7 +206,9 @@ def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: Run
     while claude_attempts < climit:
         claude_attempts += 1
         c_attempt = claude_fn(task, last_v)
-        v = certify_attempt(task, c_attempt, supervisor, now_fn, vid())  # Claude does NOT bypass GPT
+        # Claude does NOT bypass GPT, and does not bypass durable certification.
+        v = certify_attempt(task, c_attempt, supervisor, now_fn, vid(),
+                            certification=certification)
         last_v = v
         if v.verdict is VerificationVerdict.PASS:
             return _ok(task, Route.CLAUDE, v, eng_attempts, True, claude_attempts, False)
@@ -237,11 +252,15 @@ class MissionReport:
 def run_mission(policy: RuntimePolicy, task_queue: list[EngineeringTaskV0],
                 level: EngineerAuthorityLevel, engineer_fn: EngineerFn, claude_fn: ClaudeFn,
                 supervisor: SupervisorFn, now_fn: Callable[[], str], vid: Callable[[], str],
-                outcome_log: str | None = None) -> MissionReport:
+                outcome_log: str | None = None, *,
+                certification: ReviewContext) -> MissionReport:
     """Process tasks WITHIN the authorized mission only. Auto-selects the next task
     after each completion; STOPS at the mission boundary, on human-required, on an
     authority violation, on supervisor outage, or when the checkpoint budget is
     exhausted. It NEVER starts a task from another mission or another phase."""
+    if not certification.durable:
+        raise CertificationUnavailable(
+            "the A1 operating loop refuses a non-durable certification context")
     rep = MissionReport(mission_id=policy.mission_id)
     processed = 0
     for task in task_queue:
@@ -252,7 +271,8 @@ def run_mission(policy: RuntimePolicy, task_queue: list[EngineeringTaskV0],
         if processed >= policy.max_tasks_without_checkpoint:
             rep.stop_reason = LoopStop.CHECKPOINT_BUDGET.value
             break
-        r = run_task(task, level, policy, engineer_fn, claude_fn, supervisor, now_fn, vid)
+        r = run_task(task, level, policy, engineer_fn, claude_fn, supervisor, now_fn,
+                     vid, certification=certification)
         rep.tasks_run.append(asdict(r))
         processed += 1
         if outcome_log:

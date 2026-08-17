@@ -66,6 +66,30 @@ class CandidateRefusal(str, Enum):
     NO_DETERMINISTIC_PASS = "NO_DETERMINISTIC_PASS"
     VERIFICATION_NOT_BOUND_TO_CANDIDATE = "VERIFICATION_NOT_BOUND_TO_CANDIDATE"
     HEAD_MOVED_BEFORE_DISPATCH = "HEAD_MOVED_BEFORE_DISPATCH"
+    #: Distinct from HEAD_MOVED_BEFORE_DISPATCH: git failed to answer at all.
+    #: Reporting an unresolvable HEAD as a moved HEAD would describe a broken
+    #: checkout as a rebase and send a recovering operator after the wrong fault.
+    HEAD_UNRESOLVABLE_AT_DISPATCH = "HEAD_UNRESOLVABLE_AT_DISPATCH"
+
+
+@dataclass(frozen=True)
+class HeadResolution:
+    """Terminal answer to 'is the candidate still checked out?'.
+
+    ``verdict`` is only ever "YES" or "NO". There is deliberately no third
+    value: an unresolved freshness check recorded next to a dispatched review
+    is the defect this type exists to make unrepresentable."""
+
+    verdict: str                      # "YES" | "NO" -- never "PENDING"
+    head_at_binding: Optional[str]
+    head_at_dispatch: Optional[str]
+    resolution_reason: str            # "UNCHANGED" | "MOVED" | "UNRESOLVABLE"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"head_unchanged_at_dispatch": self.verdict,
+                "head_at_binding": self.head_at_binding,
+                "head_at_dispatch": self.head_at_dispatch,
+                "head_resolution_reason": self.resolution_reason}
 
 
 def file_digest(text: str) -> str:
@@ -145,6 +169,53 @@ class CandidateBinding:
                 "checked out",),
             checks={**self.checks, "HEAD_UNCHANGED_AT_DISPATCH": "NO"},
             verification_ref=self.verification_ref)
+
+    def resolve_head_terminal(self) -> tuple["CandidateBinding", "HeadResolution"]:
+        """Answer HEAD_UNCHANGED_AT_DISPATCH terminally: YES or NO, never PENDING.
+
+        ``bind_candidate`` seeds the check as PENDING, which is correct AT
+        BINDING TIME -- the question has not been asked yet. ``recheck_head``
+        then returns ``self`` unchanged when HEAD is stationary, so on the
+        SUCCESS path the value stays PENDING forever: every binding record in
+        the crashed 0C session reads PENDING beside ``candidate_bound: YES``.
+        A reviewer was dispatched under a freshness check that was never
+        resolved, and after restart nothing could distinguish 'checked and fine'
+        from 'never checked'.
+
+        The invariant is NOT that PENDING never appears; it is that no record
+        naming a reviewer invocation may contain it. This method is the single
+        evidential resolution point and always returns a NEW binding."""
+        if self.repo is None:
+            return self, HeadResolution(
+                verdict="NO", head_at_binding=self.head_at_binding,
+                head_at_dispatch=None, resolution_reason="UNRESOLVABLE")
+        head_now = self.repo.head_sha()
+        if head_now is None:
+            # An unresolvable HEAD is NOT a moved HEAD. Conflating them would
+            # report a git failure as a rebase and hide a broken checkout.
+            return CandidateBinding(
+                packet_sha=self.packet_sha, head_at_binding=self.head_at_binding,
+                repo=self.repo,
+                refusals=self.refusals + (CandidateRefusal.HEAD_UNRESOLVABLE_AT_DISPATCH,),
+                details=self.details + (
+                    "HEAD could not be resolved immediately before dispatch; "
+                    "refusing rather than assuming it is unchanged",),
+                checks={**self.checks, "HEAD_UNCHANGED_AT_DISPATCH": "NO"},
+                verification_ref=self.verification_ref), HeadResolution(
+                    verdict="NO", head_at_binding=self.head_at_binding,
+                    head_at_dispatch=None, resolution_reason="UNRESOLVABLE")
+        if head_now == self.head_at_binding:
+            return CandidateBinding(
+                packet_sha=self.packet_sha, head_at_binding=self.head_at_binding,
+                repo=self.repo, refusals=self.refusals, details=self.details,
+                checks={**self.checks, "HEAD_UNCHANGED_AT_DISPATCH": "YES"},
+                verification_ref=self.verification_ref), HeadResolution(
+                    verdict="YES", head_at_binding=self.head_at_binding,
+                    head_at_dispatch=head_now, resolution_reason="UNCHANGED")
+        moved = self.recheck_head()
+        return moved, HeadResolution(
+            verdict="NO", head_at_binding=self.head_at_binding,
+            head_at_dispatch=head_now, resolution_reason="MOVED")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": BINDING_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,

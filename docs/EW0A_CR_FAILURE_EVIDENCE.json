@@ -1,0 +1,95 @@
+{
+ "baseline": {
+  "captured_at_sha": "3d97bb392b595f90baa8787b8c9d2aa592c00f8a",
+  "collect_errors": [],
+  "environment": {
+   "implementation": "CPython",
+   "platform": "Linux",
+   "python_version": "3.12.3"
+  },
+  "failure_count": 15,
+  "failure_node_ids": [
+   "tests/test_artifact_registry.py::test_sqg_registration_keeps_registry_green_and_debt_free",
+   "tests/test_broker_overlay.py::test_apply_overlay_config_fallback_returns_unchanged",
+   "tests/test_broker_overlay.py::test_apply_overlay_records_config_source_on_fallback",
+   "tests/test_broker_overlay.py::test_apply_overlay_to_config_object",
+   "tests/test_broker_overlay.py::test_apply_overlay_writes_source_artifact",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_all_six_section_headings_present",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_has_stacked_sections",
+   "tests/test_gui_dashboard_quant.py::test_quant_route_mobile_card_stack_present",
+   "tests/test_intraday_lab_session2.py::test_calendar_provenance_discloses_coverage_and_backend",
+   "tests/test_intraday_lab_session2.py::test_dates_outside_the_certified_window_are_uncertified",
+   "tests/test_intraday_lab_session2.py::test_manifest_records_calendar_provenance_and_limitations",
+   "tests/test_intraday_lab_session3_irregular.py::test_mwcb_prevalence_is_exact_and_needs_no_provider_calls",
+   "tests/test_intraday_lab_session3_irregular.py::test_sample_windows_are_deterministic_and_provider_compatible",
+   "tests/test_operator_worker_runner.py::test_safe_repair_uses_accept_edits_and_strips_api_key",
+   "tests/test_strategy_projection_anchor.py::test_projection_sets_anchor_strategy_id_when_selected"
+  ],
+  "failure_set_digest": "fset_01605b673b23e3436c23c3d83899eb81",
+  "pytest_exitstatus": 1,
+  "schema_kind": "experimental_noncanonical",
+  "schema_version": "engineering.failure_set.v1",
+  "selection_args": [],
+  "usable": true
+ },
+ "candidate": {
+  "captured_at_sha": null,
+  "collect_errors": [],
+  "environment": {
+   "implementation": "CPython",
+   "platform": "Linux",
+   "python_version": "3.12.3"
+  },
+  "failure_count": 15,
+  "failure_node_ids": [
+   "tests/test_artifact_registry.py::test_sqg_registration_keeps_registry_green_and_debt_free",
+   "tests/test_broker_overlay.py::test_apply_overlay_config_fallback_returns_unchanged",
+   "tests/test_broker_overlay.py::test_apply_overlay_records_config_source_on_fallback",
+   "tests/test_broker_overlay.py::test_apply_overlay_to_config_object",
+   "tests/test_broker_overlay.py::test_apply_overlay_writes_source_artifact",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_all_six_section_headings_present",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_has_stacked_sections",
+   "tests/test_gui_dashboard_quant.py::test_quant_route_mobile_card_stack_present",
+   "tests/test_intraday_lab_session2.py::test_calendar_provenance_discloses_coverage_and_backend",
+   "tests/test_intraday_lab_session2.py::test_dates_outside_the_certified_window_are_uncertified",
+   "tests/test_intraday_lab_session2.py::test_manifest_records_calendar_provenance_and_limitations",
+   "tests/test_intraday_lab_session3_irregular.py::test_mwcb_prevalence_is_exact_and_needs_no_provider_calls",
+   "tests/test_intraday_lab_session3_irregular.py::test_sample_windows_are_deterministic_and_provider_compatible",
+   "tests/test_operator_worker_runner.py::test_safe_repair_uses_accept_edits_and_strips_api_key",
+   "tests/test_strategy_projection_anchor.py::test_projection_sets_anchor_strategy_id_when_selected"
+  ],
+  "failure_set_digest": "fset_01605b673b23e3436c23c3d83899eb81",
+  "pytest_exitstatus": 1,
+  "schema_kind": "experimental_noncanonical",
+  "schema_version": "engineering.failure_set.v1",
+  "selection_args": [],
+  "usable": true
+ },
+ "delta": {
+  "comparability": "COMPARABLE",
+  "details": [],
+  "fixed": [],
+  "identical": [
+   "tests/test_artifact_registry.py::test_sqg_registration_keeps_registry_green_and_debt_free",
+   "tests/test_broker_overlay.py::test_apply_overlay_config_fallback_returns_unchanged",
+   "tests/test_broker_overlay.py::test_apply_overlay_records_config_source_on_fallback",
+   "tests/test_broker_overlay.py::test_apply_overlay_to_config_object",
+   "tests/test_broker_overlay.py::test_apply_overlay_writes_source_artifact",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_all_six_section_headings_present",
+   "tests/test_gui_dashboard_memo.py::test_memo_route_has_stacked_sections",
+   "tests/test_gui_dashboard_quant.py::test_quant_route_mobile_card_stack_present",
+   "tests/test_intraday_lab_session2.py::test_calendar_provenance_discloses_coverage_and_backend",
+   "tests/test_intraday_lab_session2.py::test_dates_outside_the_certified_window_are_uncertified",
+   "tests/test_intraday_lab_session2.py::test_manifest_records_calendar_provenance_and_limitations",
+   "tests/test_intraday_lab_session3_irregular.py::test_mwcb_prevalence_is_exact_and_needs_no_provider_calls",
+   "tests/test_intraday_lab_session3_irregular.py::test_sample_windows_are_deterministic_and_provider_compatible",
+   "tests/test_operator_worker_runner.py::test_safe_repair_uses_accept_edits_and_strips_api_key",
+   "tests/test_strategy_projection_anchor.py::test_projection_sets_anchor_strategy_id_when_selected"
+  ],
+  "new_relevant_failures": 0,
+  "newly_failing": [],
+  "regression_status": "NO_NEW_FAILURES",
+  "relevance_policy": "ALL_NEW_FAILURES_ARE_RELEVANT",
+  "removed_no_longer_collected": []
+ }
+}

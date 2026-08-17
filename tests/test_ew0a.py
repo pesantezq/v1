@@ -111,69 +111,69 @@ def test_deterministic_test_failure():
 
 
 # --- certify_attempt: the core invariant -------------------------------------
-def test_verified_requires_det_ok_AND_supervisor_pass():
+def test_verified_requires_det_ok_AND_supervisor_pass(legacy_ctx, stationary_binding):
     sup = _sup(SupervisorVerdict.PASS, reasons=["all criteria met"])
-    v = certify_attempt(_task(), _attempt(), sup, _clock(), "v1")
+    v = certify_attempt(_task(), _attempt(), sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.PASS
     assert status_for_verdict(v.verdict) is TaskStatus.VERIFIED
     assert sup.called["n"] == 1
 
 
-def test_protected_path_breach_never_consults_supervisor():
+def test_protected_path_breach_never_consults_supervisor(legacy_ctx, stationary_binding):
     sup = _sup(SupervisorVerdict.PASS)   # even if GPT would PASS...
     a = _attempt(changed_paths=["decision_engine.py"])
-    v = certify_attempt(_task(allowed_paths=["."]), a, sup, _clock(), "v1")
+    v = certify_attempt(_task(allowed_paths=["."]), a, sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.FAIL           # ...deterministic breach wins
     assert v.failure_class == FailureClass.POLICY_VIOLATION.value
     assert sup.called["n"] == 0                            # supervisor NOT consulted
     assert status_for_verdict(v.verdict) is TaskStatus.FAILED_VALIDATION
 
 
-def test_worker_claim_alone_does_not_certify():
+def test_worker_claim_alone_does_not_certify(legacy_ctx, stationary_binding):
     # deterministic ok but a required test failed -> REPAIR regardless of the loud claim
     sup = _sup(SupervisorVerdict.PASS)
     a = _attempt(worker_claim="DONE! SHIP IT!", test_results={"tests/test_x.py": "FAIL"})
-    v = certify_attempt(_task(), a, sup, _clock(), "v1")
+    v = certify_attempt(_task(), a, sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.REPAIR and sup.called["n"] == 0
 
 
-def test_canonical_repo_touched_is_policy_violation():
+def test_canonical_repo_touched_is_policy_violation(legacy_ctx, stationary_binding):
     sup = _sup(SupervisorVerdict.PASS)
     a = _attempt(canonical_repo_touched=True)
-    v = certify_attempt(_task(), a, sup, _clock(), "v1")
+    v = certify_attempt(_task(), a, sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.FAIL and sup.called["n"] == 0
     assert not v.canonical_repo_untouched
 
 
-def test_supervisor_repair_maps_through():
+def test_supervisor_repair_maps_through(legacy_ctx, stationary_binding):
     sup = _sup(SupervisorVerdict.REPAIR, unresolved=["criterion X unmet"])
-    v = certify_attempt(_task(), _attempt(), sup, _clock(), "v1")
+    v = certify_attempt(_task(), _attempt(), sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.REPAIR
     assert status_for_verdict(v.verdict) is TaskStatus.REPAIR_REQUIRED
 
 
-def test_supervisor_escalate_maps_through():
-    v = certify_attempt(_task(), _attempt(), _sup(SupervisorVerdict.ESCALATE), _clock(), "v1")
+def test_supervisor_escalate_maps_through(legacy_ctx, stationary_binding):
+    v = certify_attempt(_task(), _attempt(), _sup(SupervisorVerdict.ESCALATE), _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.ESCALATE
     assert status_for_verdict(v.verdict) is TaskStatus.ESCALATION_REQUIRED
 
 
-def test_supervisor_unavailable_is_not_a_pass():
-    v = certify_attempt(_task(), _attempt(), _sup(SupervisorVerdict.SUPERVISOR_UNAVAILABLE), _clock(), "v1")
+def test_supervisor_unavailable_is_not_a_pass(legacy_ctx, stationary_binding):
+    v = certify_attempt(_task(), _attempt(), _sup(SupervisorVerdict.SUPERVISOR_UNAVAILABLE), _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.SUPERVISOR_UNAVAILABLE
     assert status_for_verdict(v.verdict) is not TaskStatus.VERIFIED
 
 
-def test_worker_abstention():
+def test_worker_abstention(legacy_ctx, stationary_binding):
     a = _attempt(abstained=True, abstain_reason="requirements ambiguous")
-    v = certify_attempt(_task(), a, _sup(SupervisorVerdict.PASS), _clock(), "v1")
+    v = certify_attempt(_task(), a, _sup(SupervisorVerdict.PASS), _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.ABSTAIN
     assert status_for_verdict(v.verdict) is TaskStatus.ABSTAINED
 
 
-def test_supervisor_packet_has_no_secrets_by_construction():
+def test_supervisor_packet_has_no_secrets_by_construction(legacy_ctx, stationary_binding):
     sup = _sup(SupervisorVerdict.PASS)
-    certify_attempt(_task(), _attempt(), sup, _clock(), "v1")
+    certify_attempt(_task(), _attempt(), sup, _clock(), "v1", certification=legacy_ctx, candidate=stationary_binding)
     import json
     blob = json.dumps(sup.last_packet)
     for leak in ("Authorization", "Bearer", "sk-", "/.ssh/", "stockbot_engineer"):
