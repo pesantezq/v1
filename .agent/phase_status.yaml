@@ -228,12 +228,30 @@ stockbot_northstar_redesign:
             review PASS_ON_MERITS. A machine crash mid-session was recovered with
             no work lost. See
             docs/NORTHSTAR_0C_SESSION_ns0c-revision-supersession-002.jsonl.
+        research_store_foundation:
+          status: verified_candidate   # 2026-08-17 — implementation proven and independently reviewed, NOT yet durable. Durable requires merge plus post-merge main CI.
+          durable: false
+          reviewed_candidate_sha: 1448d0f1449334be1daf85886af359cbbc31607c
+          gpt_verdict: PASS            # all twelve criteria, none unresolved
+          session_id: ns0c-research-store-foundation-003
+          storage_backend: "stdlib sqlite3"
+          delivered:
+            - portfolio_automation/research_store/store.py (immutable snapshot_id-keyed evidence persistence, three independent integrity layers, deterministic corpus query)
+            - tests/test_research_store.py
+          owns:
+            - durable persistence of canonical EvidenceSnapshot objects
+            - exact retrieval by snapshot_id and by EvidenceRef
+            - deterministic metadata corpus query
+          deliberately_does_not_own:
+            - historical as-of reads (EvidenceGateway; no as_of parameter exists in the store)
+            - lookahead audit
+            - revision winner selection (UNRESOLVED_NOT_INVENTED)
+            - effective_period semantics (UNRESOLVED / NOT DECIDED)
       remaining_work:   # the 0C exit gate is NOT satisfied by the foundations above
-        - "research-store foundation - persistence and query"
         - historical as-of reads over the store
         - lookahead audit over store reads
         - replay/reproducibility as required by the contracts
-      next_bounded_candidate: "research-store foundation - persistence and query"   # CANDIDATE ONLY — this file never authorizes work; authorization is an operator act recorded outside it. Scope when started: storage + corpus retrieval ONLY. It does not own historical admissibility, revision winner selection, or effective_period semantics, which remain with the EvidenceGateway and with deliberately unresolved policy.
+      next_bounded_candidate: "historical as-of reads over the research store"   # CANDIDATE ONLY — this file never authorizes work; authorization is an operator act recorded outside it. Combines store corpus retrieval with EvidenceGateway PIT admission, revision visibility and an explicit audit output.
       unresolved_semantics:
         effective_period_vs_as_of: >-
           UNRESOLVED / NOT DECIDED. No rule such as effective_period_end <= as_of exists.

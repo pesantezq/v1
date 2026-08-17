@@ -411,23 +411,35 @@ def test_0c_exit_gate_is_not_yet_satisfied(phase):
 
 
 def test_research_store_is_not_claimed_complete(phase):
-    """The strongest overclaim risk: foundation completeness reading as store
-    completeness."""
+    """The strongest overclaim risk: FOUNDATION completeness reading as STORE
+    completeness. The foundation is now a reviewed candidate, so the guard moves
+    from 'no such milestone' to 'the milestone must not claim durability'.
+    Durable means merged with post-merge main CI, and neither has happened."""
+    m = _p0c(phase)["milestones"]["research_store_foundation"]
+    assert m["durable"] is False
+    assert m["status"] != "complete"
+    assert "merged_main_sha" not in m, "not merged, so no merged SHA may be recorded"
+    # the FOUNDATION is not the whole store: historical reads remain outstanding
     remaining = " ".join(_p0c(phase)["remaining_work"]).lower()
-    assert "research-store" in remaining or "research store" in remaining
-    milestones = _p0c(phase)["milestones"]
-    assert not any("research_store" in name for name in milestones)
+    assert "as-of reads" in remaining
+    assert "lookahead audit" in remaining
 
 
 def test_next_bounded_candidate_is_a_candidate_not_an_authorization(phase):
     """The candidate names the NEXT bounded task and is never itself a
-    milestone. Retargeted after revision/supersession safety shipped: the guard
-    is about the roadmap not self-authorizing, not about which task is queued."""
+    milestone. The guard is about the roadmap not self-authorizing, not about
+    which task happens to be queued — so it is asserted structurally rather than
+    against a name that changes every session."""
     p0c = _p0c(phase)
     candidate = p0c["next_bounded_candidate"]
-    assert "research-store" in candidate or "research store" in candidate
-    # a queued candidate must not also be recorded as an implemented milestone
-    assert not any("research_store" in name for name in p0c["milestones"])
+    assert candidate, "a next candidate must always be named"
+    slug = candidate.lower().replace(" ", "_").replace("-", "_")
+    for name in p0c["milestones"]:
+        assert name not in slug, (
+            f"{name} is queued as the next candidate AND recorded as a milestone; "
+            "one of those is wrong")
+    assert any(word in candidate.lower() for word in ("as-of", "as_of")), \
+        "after the store foundation, historical as-of reads are next"
 
 
 def test_revision_supersession_safety_durability_evidence_is_recorded(phase):
