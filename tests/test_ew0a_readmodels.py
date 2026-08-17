@@ -176,26 +176,35 @@ def test_session_projection_reports_verified_only_from_recorded_evidence():
     """A task counts VERIFIED only from a recorded TaskOutcome final_status, never
     from absence of error or from a task merely finishing.
 
-    Counted per EPISODE. The ledger holds two bounded sessions, so summing every
-    TaskOutcome in the file would credit each session with the other's work —
-    the merge this projection was repaired to prevent."""
-    from tools.ns0c_session import (SESSION1_ID, SESSION2_ID, load_episodes,
-                                    session_projection)
-    episodes = {e.session_id: e for e in load_episodes(repo_root=_REPO)}
-    for session_id in (SESSION1_ID, SESSION2_ID):
-        proj = session_projection(repo_root=_REPO, session_id=session_id)
-        recorded = [o for o in episodes[session_id].of_kind("TaskOutcome")
+    Counted per EPISODE. Summing every TaskOutcome in the ledgers would credit
+    each session with the others' work — the merge this projection was repaired
+    to prevent.
+
+    Asserted over EVERY episode rather than a pinned pair. The pinned form broke
+    the moment a third bounded session appeared: it summed two sessions and
+    compared that against the whole file. Worse, it broke on an evidence-only
+    commit, because appending a TaskOutcome changes what this test observes even
+    though no implementation, test or config file changed — a certification tail
+    can be provably evidence-only and still move a test that reads the
+    evidence."""
+    from tools.ns0c_session import load_episodes, session_projection
+    episodes = load_episodes(repo_root=_REPO)
+    assert len(episodes) >= 2, "the merge risk only exists with multiple episodes"
+
+    per_session = []
+    for episode in episodes:
+        proj = session_projection(repo_root=_REPO, session_id=episode.session_id)
+        recorded = [o for o in episode.of_kind("TaskOutcome")
                     if o.get("final_status") == "VERIFIED"]
         assert proj["tasks_verified"] == len(recorded)
+        per_session.append(proj["tasks_verified"])
 
-    total_in_file = sum(1 for e in load_episodes(repo_root=_REPO)
-                        for o in e.of_kind("TaskOutcome")
+    total_in_file = sum(1 for e in episodes for o in e.of_kind("TaskOutcome")
                         if o.get("final_status") == "VERIFIED")
-    per_session = [session_projection(repo_root=_REPO, session_id=s)["tasks_verified"]
-                   for s in (SESSION1_ID, SESSION2_ID)]
-    assert sum(per_session) == total_in_file
+    assert sum(per_session) == total_in_file, (
+        "every verified task belongs to exactly one episode")
     assert all(count < total_in_file for count in per_session), (
-        "neither session may claim the whole file's verified work")
+        "no session may claim the whole file's verified work")
 
 
 def test_missing_live_backends_stay_pending_backend():
