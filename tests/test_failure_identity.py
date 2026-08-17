@@ -14,18 +14,21 @@ from pathlib import Path
 import pytest
 
 from portfolio_automation.engineer_worker.failure_identity import (
-    Comparability, FailureDelta, FailureSet, RegressionStatus,
+    CaptureConcurrency, Comparability, FailureDelta, FailureSet, RegressionStatus,
     compare_failure_sets, env_fingerprint,
 )
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-def _fs(nodes, *, exitstatus=1, selection=("tests",), collect_errors=(), env=None):
+def _fs(nodes, *, exitstatus=1, selection=("tests",), collect_errors=(), env=None,
+        concurrency=CaptureConcurrency.SERIAL, workspace=None):
     return FailureSet(node_ids=tuple(nodes), exitstatus=exitstatus,
                       selection_args=tuple(selection),
                       collect_errors=tuple(collect_errors),
-                      environment=env if env is not None else {"python_version": "3.12.3"})
+                      environment=env if env is not None else {"python_version": "3.12.3"},
+                      capture_concurrency=concurrency,
+                      capture_workspace_id=workspace)
 
 
 # ── the defect the crash exposed ───────────────────────────────────────────
@@ -127,6 +130,93 @@ def test_delta_is_recomputable_from_persisted_records_alone():
                              FailureSet.from_dict(reloaded["candidate"]))
     assert d.new_relevant_failures == 1
     assert d.newly_failing == ("tests/t.py::test_c",)
+
+
+# ── capture concurrency: contaminated measurement is refused ───────────────
+def test_parallel_shared_capture_refuses_despite_identical_sets():
+    """The required case. Identical node sets, and still not comparable."""
+    nodes = ["tests/t.py::test_a", "tests/t.py::test_b"]
+    d = compare_failure_sets(_fs(nodes),
+                             _fs(nodes, concurrency=CaptureConcurrency.PARALLEL_SHARED))
+    assert d.comparability is Comparability.UNCOMPARABLE_CONCURRENT_CAPTURE
+    assert d.regression_status is RegressionStatus.UNKNOWN
+    assert d.new_relevant_failures is None
+    assert d.identical == ()
+
+
+def test_parallel_shared_baseline_refuses_even_when_candidate_is_serial():
+    d = compare_failure_sets(_fs(["tests/t.py::test_a"],
+                                 concurrency=CaptureConcurrency.PARALLEL_SHARED),
+                             _fs(["tests/t.py::test_a"]))
+    assert d.comparability is Comparability.UNCOMPARABLE_CONCURRENT_CAPTURE
+
+
+def test_the_phantom_fixed_test_is_unrepresentable_under_shared_capture():
+    """The real defect: a concurrent run clobbered an artifact, one node
+    vanished, and a count read that as an improvement."""
+    baseline = _fs(["tests/t.py::test_a", "tests/t.py::test_clobbered"],
+                   concurrency=CaptureConcurrency.PARALLEL_SHARED)
+    candidate = _fs(["tests/t.py::test_a"])
+    d = compare_failure_sets(baseline, candidate)
+    assert d.fixed == (), "a phantom fix must not be reportable"
+    assert d.regression_status is RegressionStatus.UNKNOWN
+    assert d.new_relevant_failures is None
+
+
+def test_unknown_capture_concurrency_is_refused_not_permitted():
+    d = compare_failure_sets(_fs(["tests/t.py::test_a"],
+                                 concurrency=CaptureConcurrency.UNKNOWN),
+                             _fs(["tests/t.py::test_a"]))
+    assert d.comparability is Comparability.CAPTURE_CONCURRENCY_UNKNOWN
+    assert d.new_relevant_failures is None
+
+
+def test_legacy_record_without_the_field_round_trips_as_unknown():
+    """Silence means unknown, never SERIAL. The records predating this field
+    are the same corpus that produced the contaminated comparison."""
+    legacy = {"failure_node_ids": ["tests/t.py::test_a"], "pytest_exitstatus": 1}
+    fs = FailureSet.from_dict(legacy)
+    assert fs.capture_concurrency is CaptureConcurrency.UNKNOWN
+    assert compare_failure_sets(fs, fs).new_relevant_failures is None
+
+
+def test_parallel_isolated_captures_in_separate_workspaces_are_comparable():
+    """Legitimate worktree-parallel CI is not blocked."""
+    d = compare_failure_sets(
+        _fs(["tests/t.py::test_a"], concurrency=CaptureConcurrency.PARALLEL_ISOLATED,
+            workspace="/ws/base"),
+        _fs(["tests/t.py::test_a"], concurrency=CaptureConcurrency.PARALLEL_ISOLATED,
+            workspace="/ws/cand"))
+    assert d.comparability is Comparability.COMPARABLE
+    assert d.new_relevant_failures == 0
+
+
+def test_parallel_isolated_sharing_a_workspace_is_treated_as_shared():
+    """Self-declared isolation loses to contradicting evidence."""
+    d = compare_failure_sets(
+        _fs(["tests/t.py::test_a"], concurrency=CaptureConcurrency.PARALLEL_ISOLATED,
+            workspace="/ws/same"),
+        _fs(["tests/t.py::test_a"], concurrency=CaptureConcurrency.PARALLEL_ISOLATED,
+            workspace="/ws/same"))
+    assert d.comparability is Comparability.UNCOMPARABLE_CONCURRENT_CAPTURE
+
+
+def test_concurrency_refusal_precedes_selection_and_environment_refusals():
+    """Pins check order, so a reshuffle cannot let a matching selection mask
+    contamination."""
+    d = compare_failure_sets(
+        _fs([], selection=("tests/a",), concurrency=CaptureConcurrency.PARALLEL_SHARED),
+        _fs([], selection=("tests/b",)))
+    assert d.comparability is Comparability.UNCOMPARABLE_CONCURRENT_CAPTURE
+
+
+def test_capture_concurrency_survives_the_durable_round_trip():
+    shared = _fs(["tests/t.py::test_a"],
+                 concurrency=CaptureConcurrency.PARALLEL_SHARED)
+    reloaded = FailureSet.from_dict(json.loads(json.dumps(shared.to_dict())))
+    assert reloaded.capture_concurrency is CaptureConcurrency.PARALLEL_SHARED
+    assert compare_failure_sets(reloaded, _fs(["tests/t.py::test_a"])) \
+        .new_relevant_failures is None
 
 
 def test_node_ids_survive_parametrisation_and_classes_byte_exact():

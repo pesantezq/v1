@@ -42,12 +42,29 @@ FAILURE_SET_SCHEMA_VERSION = "engineering.failure_set.v1"
 _USABLE_EXIT_STATUS = frozenset({0, 1})
 
 
+class CaptureConcurrency(str, Enum):
+    """How a regression capture was taken.
+
+    Recorded because it was observed to matter: capturing a baseline and a
+    candidate CONCURRENTLY against a shared filesystem produced a phantom
+    "fixed" test -- one suite clobbered an artifact the other depended on. Under
+    a count-only baseline that presents as one FEWER failure, i.e. as an
+    improvement, which is the most dangerous possible framing of contamination."""
+
+    SERIAL = "SERIAL"                        # nothing else was writing that tree
+    PARALLEL_ISOLATED = "PARALLEL_ISOLATED"  # concurrent, but private workspace
+    PARALLEL_SHARED = "PARALLEL_SHARED"      # concurrent, shared tree -> refuse
+    UNKNOWN = "UNKNOWN"                      # not recorded -> refuse
+
+
 class Comparability(str, Enum):
     """Whether two failure sets may be compared at all."""
 
     COMPARABLE = "COMPARABLE"
     UNCOMPARABLE_SELECTION = "UNCOMPARABLE_SELECTION"
     UNCOMPARABLE_ENVIRONMENT = "UNCOMPARABLE_ENVIRONMENT"
+    UNCOMPARABLE_CONCURRENT_CAPTURE = "UNCOMPARABLE_CONCURRENT_CAPTURE"
+    CAPTURE_CONCURRENCY_UNKNOWN = "CAPTURE_CONCURRENCY_UNKNOWN"
     UNUSABLE_BASELINE_RUN = "UNUSABLE_BASELINE_RUN"
     UNUSABLE_CANDIDATE_RUN = "UNUSABLE_CANDIDATE_RUN"
     BASELINE_IDENTITY_UNAVAILABLE = "BASELINE_IDENTITY_UNAVAILABLE"
@@ -63,6 +80,13 @@ class RegressionStatus(str, Enum):
     NO_NEW_FAILURES = "NO_NEW_FAILURES"
     NEW_FAILURES = "NEW_FAILURES"
     UNKNOWN = "UNKNOWN"
+
+
+def _as_concurrency(value: Any) -> CaptureConcurrency:
+    try:
+        return CaptureConcurrency(value)
+    except ValueError:
+        return CaptureConcurrency.UNKNOWN
 
 
 def env_fingerprint() -> dict[str, str]:
@@ -83,6 +107,13 @@ class FailureSet:
     collect_errors: tuple[str, ...] = ()
     captured_at_sha: Optional[str] = None
     environment: dict[str, str] = field(default_factory=dict)
+    #: Defaults to UNKNOWN so a legacy record -- one written before this was
+    #: recorded, including the corpus that contained the known contaminated
+    #: comparison -- can never be read as SERIAL by omission.
+    capture_concurrency: CaptureConcurrency = CaptureConcurrency.UNKNOWN
+    #: Identity of the writable root. Self-declared isolation is not trusted on
+    #: its own: two PARALLEL_ISOLATED captures sharing this id were not isolated.
+    capture_workspace_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         # Stable order is part of the contract: a digest that depended on
@@ -116,6 +147,8 @@ class FailureSet:
                 "selection_args": list(self.selection_args),
                 "captured_at_sha": self.captured_at_sha,
                 "environment": dict(self.environment),
+                "capture_concurrency": self.capture_concurrency.value,
+                "capture_workspace_id": self.capture_workspace_id,
                 "usable": self.usable()}
 
     @classmethod
@@ -127,7 +160,12 @@ class FailureSet:
             selection_args=tuple(record.get("selection_args") or ()),
             collect_errors=tuple(record.get("collect_errors") or ()),
             captured_at_sha=record.get("captured_at_sha"),
-            environment=dict(record.get("environment") or {}))
+            environment=dict(record.get("environment") or {}),
+            # An absent or unrecognised value becomes UNKNOWN, never SERIAL. The
+            # records that predate this field are exactly the corpus that
+            # contained the known contaminated comparison.
+            capture_concurrency=_as_concurrency(record.get("capture_concurrency")),
+            capture_workspace_id=record.get("capture_workspace_id"))
 
 
 @dataclass(frozen=True)
@@ -191,6 +229,34 @@ def compare_failure_sets(baseline: Optional[FailureSet], candidate: FailureSet,
             Comparability.UNUSABLE_CANDIDATE_RUN,
             f"candidate exitstatus={candidate.exitstatus} "
             f"collect_errors={list(candidate.collect_errors)}")
+    # Concurrency is a property of ONE capture -- does this run's result mean
+    # anything at all -- so it is settled with the other single-side guards,
+    # before asking whether two meaningful runs line up. Checking it here also
+    # guarantees it fires on the real defect's shape, where selection and
+    # environment matched perfectly and only the capture was contaminated.
+    for side, fs in (("baseline", baseline), ("candidate", candidate)):
+        if fs.capture_concurrency is CaptureConcurrency.UNKNOWN:
+            return _uncomparable(
+                Comparability.CAPTURE_CONCURRENCY_UNKNOWN,
+                f"{side} does not record how it was captured; a run that may have "
+                "shared a filesystem with another capture cannot establish identity")
+    shared_workspace = (
+        baseline.capture_concurrency is CaptureConcurrency.PARALLEL_ISOLATED
+        and candidate.capture_concurrency is CaptureConcurrency.PARALLEL_ISOLATED
+        and baseline.capture_workspace_id is not None
+        and baseline.capture_workspace_id == candidate.capture_workspace_id)
+    if (baseline.capture_concurrency is CaptureConcurrency.PARALLEL_SHARED
+            or candidate.capture_concurrency is CaptureConcurrency.PARALLEL_SHARED
+            or shared_workspace):
+        return _uncomparable(
+            Comparability.UNCOMPARABLE_CONCURRENT_CAPTURE,
+            "at least one capture ran concurrently against a shared tree; "
+            "contention between suites produces phantom fixes, which a count "
+            "reports as an improvement" +
+            (" (both sides declared PARALLEL_ISOLATED but share a workspace id, "
+             "so the declaration is contradicted by the evidence)"
+             if shared_workspace else ""))
+
     if require_same_selection and baseline.selection_args != candidate.selection_args:
         return _uncomparable(
             Comparability.UNCOMPARABLE_SELECTION,
