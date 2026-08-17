@@ -156,16 +156,19 @@ def test_active_session_is_visible_through_the_controller_owned_dashboard():
     """Observability is proven only when the ESTABLISHED read-model path carries
     it — which is what a standalone projection function did not do."""
     from portfolio_automation.engineer_worker.ew0a_readmodels import build_dashboard
-    from tools.ns0c_session import SESSION2_ID
+    from tools.ns0c_session import load_episodes
     dash = build_dashboard(_REPO, now="2026-08-16T05:00:00+00:00")
     session = dash["active_session"]
     assert session != "PENDING_BACKEND", "session ledger exists but is not projected"
     assert session["mission_id"] == _C0_MISSION
     # The ACTIVE session is the most recent bounded episode, not whichever
-    # SessionStarted happens to be first in the file. Two bounded sessions share
-    # this ledger, and the dashboard must show the current one.
-    assert session["session_id"] == SESSION2_ID
-    assert session["session_objective"] == "Revision / Supersession Safety Foundation"
+    # SessionStarted happens to be first. Asserted against the ledgers rather
+    # than a pinned id: the invariant must keep holding as sessions are added,
+    # and a hardcoded constant has to be edited every time — which is how a
+    # guard quietly decays into a formality.
+    episodes = load_episodes(_REPO)
+    assert session["session_id"] == episodes[-1].session_id
+    assert session["session_objective"], "the episode must name its own objective"
     assert session["current_task_id"]
 
 
