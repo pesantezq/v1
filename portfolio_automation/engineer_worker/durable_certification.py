@@ -42,6 +42,10 @@ from portfolio_automation.engineer_worker.review_packet_store import (
     BindingFacts, PacketStore, PacketStoreError,
 )
 from portfolio_automation.engineer_worker import supervisor_screen
+from portfolio_automation.engineer_worker.execution_identity import (
+    UNAVAILABLE, ExecutionIdentity, build_execution_identity,
+    safe_toolset_identity,
+)
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 CERTIFICATION_SCHEMA_VERSION = "engineering.durable_certification.v0"
@@ -100,6 +104,31 @@ class ReviewContext:
     #: no binding certifies a tree nobody checked.
     candidate_binding: Any = None
     durable: bool = True
+
+    def execution_identity(self, *, candidate_sha: str = UNAVAILABLE,
+                           task_id: str = UNAVAILABLE,
+                           input_id: str = UNAVAILABLE) -> ExecutionIdentity:
+        """The configuration behind reviews dispatched through this context.
+
+        Built here rather than at each call site so every producer attributes
+        the same way, and so tool configuration is screened for secrets exactly
+        once. Attributes this context genuinely does not know stay UNAVAILABLE:
+        substituting a configured default would assert a configuration that may
+        never have run."""
+        ident = dict(self.reviewer_identity)
+        return build_execution_identity(
+            worker_role="independent_reviewer",
+            model_provider=ident.get("provider", UNAVAILABLE),
+            model_name=ident.get("model", UNAVAILABLE),
+            # Chat APIs do not return the build actually served, so the exact
+            # version is normally unavailable. Recording the configured NAME
+            # here would claim precision nobody has.
+            model_version=ident.get("model_version", UNAVAILABLE),
+            instruction_version=ident.get("protocol", UNAVAILABLE),
+            toolset=ident.get("toolset", "gpt_supervisor.review"),
+            tool_config=ident,
+            candidate_sha=candidate_sha, task_id=task_id,
+            mission_id=self.mission_id, input_id=input_id)
 
     @classmethod
     def open(cls, repo_root: str | Path, *, mission_id: str, session_id: str,
@@ -191,6 +220,12 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
         criterion_digest=criterion_set_digest(criterion_ids),
         reviewer_identity=dict(context.reviewer_identity))
 
+    # The execution configuration that produced this review. Built ONCE and
+    # attached to every lifecycle record, so a later audit can group verdicts by
+    # configuration instead of reconstructing it from scattered fields.
+    identity = context.execution_identity(
+        candidate_sha=candidate_sha, task_id=task_id, input_id=phash)
+
     def refuse(code: str, detail: str, *, called: bool = False,
                head: Optional[str] = None) -> DispatchOutcome:
         context.journal.append(LifecycleKind.DISPATCH_REFUSED,
@@ -223,7 +258,8 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
     context.journal.append(LifecycleKind.PACKET_BUILT, review_invocation_id=rid,
                            packet_hash=phash, candidate_sha=candidate_sha,
                            task_id=task_id, attempt_id=attempt_id,
-                           criteria=criterion_ids, size_bytes=len(blob))
+                           criteria=criterion_ids, size_bytes=len(blob),
+                           execution_identity=identity.to_dict())
     try:
         persisted = context.store.persist(blob, expected_hash=phash, screened=True)
     except PacketStoreError as exc:
@@ -265,7 +301,15 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
     # WRITE-AHEAD. Last statement before the call.
     context.journal.append(LifecycleKind.REVIEWER_CALLED, review_invocation_id=rid,
                            packet_hash=phash,
-                           reviewer_identity=dict(context.reviewer_identity),
+                           # Screened, NOT the raw mapping. A caller may put a
+                           # key_file path or an api_key in the reviewer identity
+                           # -- writing it verbatim would put a credential into
+                           # an append-only, replicated ledger, where it cannot
+                           # be removed. Only the safe projection is recorded.
+                           reviewer_identity=safe_toolset_identity(
+                               "gpt_supervisor.review",
+                               dict(context.reviewer_identity))["safe_config"],
+                           execution_identity=identity.to_dict(),
                            note="WRITE-AHEAD: fsynced before the request left "
                                 "this process")
     decision = supervisor(json.loads(verified.blob.decode("utf-8")))
@@ -276,6 +320,7 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
                            else str(decision))
     context.journal.append(LifecycleKind.VERDICT_PERSISTED, review_invocation_id=rid,
                            packet_hash=phash, candidate_sha=candidate_sha,
+                           execution_identity=identity.to_dict(),
                            verdict=decision.to_dict() if hasattr(decision, "to_dict")
                            else str(decision))
     return DispatchOutcome(decision, True, rid, packet_hash=phash,
