@@ -21,6 +21,9 @@ from typing import Any, Callable
 
 from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
 from portfolio_automation.engineer_worker import policy
+from portfolio_automation.engineer_worker.durable_certification import (
+    CertificationUnavailable, ReviewContext, dispatch_durably,
+)
 from portfolio_automation.engineer_worker.gpt_supervisor import (
     SupervisorDecision, SupervisorVerdict)
 
@@ -227,6 +230,18 @@ class EngineeringVerificationV0:
     schema_version: str = VERIFICATION_SCHEMA_VERSION
     schema_kind: str = SCHEMA_KIND
 
+    def __post_init__(self) -> None:
+        # A PASS with no evidence references is a certification that cannot
+        # exhibit what it certified. Without this the dataclass could simply be
+        # constructed with verdict=PASS and status_for_verdict would hand back
+        # VERIFIED, which is a route to certification that never touches the
+        # durable path at all.
+        if self.verdict is VerificationVerdict.PASS and not self.evidence_refs:
+            raise ValueError(
+                "a PASS must carry evidence_refs binding it to a persisted "
+                "review packet; certification without a preimage is not "
+                "certification")
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["verdict"] = self.verdict.value
@@ -373,10 +388,30 @@ def read_outcomes(path: str) -> list[dict[str, Any]]:
 
 
 # --- the deterministic certification orchestrator ----------------------------
+def _decision_from_record(record: Any) -> SupervisorDecision:
+    """Rebuild a SupervisorDecision from a durably recorded verdict.
+
+    Used only on the recovery path, and only after the journal has proved the
+    verdict is backed by a packet that still verifies."""
+    if isinstance(record, SupervisorDecision):
+        return record
+    data = record if isinstance(record, dict) else {}
+    try:
+        verdict = SupervisorVerdict(data.get("verdict"))
+    except ValueError:
+        verdict = SupervisorVerdict.SUPERVISOR_UNAVAILABLE
+    return SupervisorDecision(
+        verdict=verdict, reasons=list(data.get("reasons") or []),
+        unresolved_requirements=list(data.get("unresolved_requirements") or []),
+        model=data.get("model"), decided_at=data.get("decided_at"),
+        error=data.get("error"))
+
+
 def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
                     supervisor: Callable[[dict[str, Any]], SupervisorDecision],
-                    now_fn: Callable[[], str], verification_id: str
-                    ) -> EngineeringVerificationV0:
+                    now_fn: Callable[[], str], verification_id: str,
+                    *, certification: "ReviewContext",
+                    candidate: Any = None) -> EngineeringVerificationV0:
     """Authoritative, deterministic certification of ONE attempt.
 
     Order of authority (all fail-closed):
@@ -417,9 +452,42 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
             failure_class=(fc.value if fc else FailureClass.VERIFICATION_FAILURE.value),
             unresolved_requirements=unresolved, **base)
 
-    # Deterministic gate passed -> consult the INDEPENDENT supervisor.
+    # Deterministic gate passed -> consult the INDEPENDENT supervisor, through
+    # the durable certification path. The reviewer is reached ONLY via
+    # dispatch_durably, so a verdict cannot exist without persisted bytes, a
+    # write-ahead journal record and terminal HEAD evidence.
     packet = build_supervisor_packet(task, attempt, det_summary)
-    decision = supervisor(packet)
+    # The binding may be supplied per-call or carried on the context; either
+    # way it is REQUIRED, and dispatch_durably refuses without one.
+    candidate = candidate if candidate is not None else certification.candidate_binding
+    outcome = dispatch_durably(
+        packet, supervisor, context=certification,
+        candidate_sha=(candidate.head_at_binding if candidate is not None else ""),
+        attempt_id=attempt.attempt_id, task_id=task.task_id,
+        acceptance_criteria=task.acceptance_criteria,
+        candidate_binding=candidate)
+
+    if not outcome.dispatched:
+        if outcome.refusal == "VERDICT_ALREADY_RECORDED":
+            # A restart found this exact review already answered. Reuse it;
+            # asking again would be a reroll, not a recovery.
+            decision = _decision_from_record(outcome.decision)
+        else:
+            # Every other refusal leaves the work UNVERIFIED. This is terminal
+            # here rather than policy-conditional: routing it through a
+            # config-gated branch would put a boolean between fail-closed and a
+            # second reviewer call.
+            return EngineeringVerificationV0(
+                verdict=VerificationVerdict.SUPERVISOR_UNAVAILABLE,
+                deterministic_ok=True, protected_path_ok=prot, scope_ok=scope,
+                policy_ok=pol, tests_ok=tests,
+                supervisor_verdict=SupervisorVerdict.SUPERVISOR_UNAVAILABLE.value,
+                supervisor_reasons=[outcome.refusal or "certification refused",
+                                    outcome.detail],
+                failure_class=FailureClass.VERIFICATION_FAILURE.value,
+                evidence_refs=outcome.evidence_refs, **base)
+    else:
+        decision = outcome.decision
     sup = decision.verdict
 
     if sup is SupervisorVerdict.PASS:
@@ -439,7 +507,7 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
         policy_ok=pol, tests_ok=tests,
         supervisor_verdict=sup.value, supervisor_reasons=decision.reasons,
         unresolved_requirements=decision.unresolved_requirements,
-        failure_class=fclass, **base)
+        failure_class=fclass, evidence_refs=outcome.evidence_refs, **base)
 
 
 def status_for_verdict(v: VerificationVerdict) -> TaskStatus:

@@ -99,3 +99,70 @@ def _protect_scoring_registry():
     assert not violations, (
         f"protected scoring registry mutated by the test suite: {violations} "
         f"(restored). A test applied to the live config paths — make it hermetic.")
+
+
+# --- EW-0A durable certification ---------------------------------------------
+# Deliberately explicit. No default anywhere lets a test — or a future caller —
+# reach the supervisor without durable evidence by omitting an argument.
+
+class _FakeRepo:
+    """Stationary HEAD. Terminal resolution needs a repo to be able to say YES."""
+
+    def __init__(self, head: str = "a" * 40) -> None:
+        self._head = head
+
+    def head_sha(self):
+        return self._head
+
+    def file_at(self, sha: str, path: str):
+        return None
+
+
+class _StationaryBinding:
+    """Minimal candidate binding for tests that only need dispatch to proceed.
+
+    Real certification uses review_candidate.bind_candidate; this exercises the
+    same protocol without a git repository per test."""
+
+    def __init__(self, head: str = "a" * 40) -> None:
+        self.head_at_binding = head
+        self.repo = _FakeRepo(head)
+        self.refusals = ()
+        self.checks = {"HEAD_UNCHANGED_AT_DISPATCH": "PENDING"}
+
+    @property
+    def ok(self) -> bool:
+        return not self.refusals
+
+    def to_dict(self):
+        return {"candidate_bound": "YES", "git_head_at_binding": self.head_at_binding,
+                "checks": dict(self.checks), "refusals": []}
+
+    def resolve_head_terminal(self):
+        from portfolio_automation.engineer_worker.review_candidate import HeadResolution
+        self.checks["HEAD_UNCHANGED_AT_DISPATCH"] = "YES"
+        return self, HeadResolution(verdict="YES", head_at_binding=self.head_at_binding,
+                                    head_at_dispatch=self.head_at_binding,
+                                    resolution_reason="UNCHANGED")
+
+
+@pytest.fixture
+def durable_ctx(tmp_path):
+    """A real durable context. The operating loop accepts only this."""
+    from portfolio_automation.engineer_worker.durable_certification import ReviewContext
+    binding = _StationaryBinding()
+    return ReviewContext.open(tmp_path, mission_id="m1", session_id="pytest",
+                              reviewer_identity={"model": "stub"},
+                              repo=binding.repo, candidate_binding=binding)
+
+
+@pytest.fixture
+def legacy_ctx(tmp_path):
+    """EXPLICIT legacy adapter. The operating loop refuses it — that is the point."""
+    from portfolio_automation.engineer_worker.durable_certification import ReviewContext
+    return ReviewContext.legacy_in_memory(tmp_path)
+
+
+@pytest.fixture
+def stationary_binding():
+    return _StationaryBinding()

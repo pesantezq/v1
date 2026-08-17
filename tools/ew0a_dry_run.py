@@ -18,6 +18,7 @@ from portfolio_automation.engineer_worker.ew0a import (             # noqa: E402
 from portfolio_automation.engineer_worker.ew0a_authority import EngineerAuthorityLevel as Lvl  # noqa: E402
 from portfolio_automation.engineer_worker.ew0a_loop import (        # noqa: E402
     RuntimePolicy, run_mission, write_runtime_policy, read_runtime_policy)
+from portfolio_automation.engineer_worker.durable_certification import ReviewContext
 from portfolio_automation.engineer_worker.gpt_supervisor import SupervisorDecision, SupervisorVerdict  # noqa: E402
 
 # The AUTHORITATIVE next 0B milestone (see .agent/phase_status.yaml): the
@@ -76,7 +77,11 @@ queue = [T("dry-1", RiskClass.E1_ROUTINE),          # E1 -> pass
                            mission_id="northstar_0b_decision_outcome_passport_contracts",  # 0B.3 - refused
                            allowed_paths=["tests/"], allowed_tests=["tests/tx.py"], max_attempts=2)]
 
-rep = run_mission(policy, queue, Lvl.A1_ASSISTED_ENGINEERING, engineer, claude, supervisor, now, vid)
+CERTIFICATION = ReviewContext.open(
+    REPO, mission_id=policy.mission_id, session_id="ew0a_dry_run",
+    reviewer_identity={"provider": "stub", "model": "dry-run"})
+rep = run_mission(policy, queue, Lvl.A1_ASSISTED_ENGINEERING, engineer, claude,
+                  supervisor, now, vid, certification=CERTIFICATION)
 
 print("\n== DRY RUN MISSION REPORT ==")
 for t in rep.tasks_run:

@@ -168,10 +168,24 @@ class ReviewJournal:
                   "schema_version": JOURNAL_SCHEMA_VERSION,
                   "schema_kind": SCHEMA_KIND, **fields}
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        existed = self.path.exists()
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
+        if not existed:
+            # Fsyncing the file is not enough on a FIRST append: without a
+            # directory fsync the whole journal can vanish in a real power loss,
+            # and absence of REVIEWER_CALLED would then read as "provably never
+            # called" when the reviewer may in fact have been billed.
+            try:
+                dfd = os.open(str(self.path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError:
+                pass
         return record
 
     def events_for(self, invocation_id: str) -> tuple[list[dict], bool]:
@@ -179,8 +193,15 @@ class ReviewJournal:
         return [e for e in events
                 if e.get("review_invocation_id") == invocation_id], intact
 
-    def recover(self, invocation_id: str) -> RecoveryFinding:
-        """Decide, from durable evidence alone, what may happen next."""
+    def recover(self, invocation_id: str, *, store: Any = None) -> RecoveryFinding:
+        """Decide, from durable evidence alone, what may happen next.
+
+        ``store`` is the packet store. When supplied, a recovered verdict is
+        only honoured if the packet it names still verifies. Without that check
+        the journal is a trust root with no integrity: it is a plain text file,
+        so a single forged or corrupted VERDICT_PERSISTED line would yield a
+        reconstructed PASS with no reviewer call and no packet in existence.
+        Callers on the certification path MUST pass it."""
         try:
             events, tail_intact = self.events_for(invocation_id)
         except JournalError as exc:
@@ -205,8 +226,30 @@ class ReviewJournal:
                     return e
             return None
 
+        def verdict_backed_by_a_real_packet(record: dict) -> Optional[str]:
+            """None when the verdict may be trusted, else why it may not."""
+            if store is None:
+                return None
+            phash = record.get("packet_hash")
+            if not phash:
+                return ("the verdict record names no packet, so nothing ties it "
+                        "to a reviewed artifact")
+            result = store.verify(phash)
+            if not getattr(result, "ok", False):
+                return (f"the packet {phash} this verdict names does not verify: "
+                        f"{[r.value for r in getattr(result, 'refusals', ())]}")
+            return None
+
         persisted = latest(LifecycleKind.VERDICT_PERSISTED)
         if persisted is not None:
+            bad = verdict_backed_by_a_real_packet(persisted)
+            if bad:
+                return RecoveryFinding(
+                    RecoveryState.RECOVERY_INDETERMINATE_FAIL_CLOSED, invocation_id,
+                    observed_kinds=kinds, reviewer_may_have_been_billed=True,
+                    dispatch_permitted=False,
+                    reason="a persisted verdict exists but is not backed by a "
+                           "verifiable packet -- " + bad)
             return RecoveryFinding(
                 RecoveryState.VERDICT_ALREADY_RECORDED, invocation_id,
                 observed_kinds=kinds, reviewer_may_have_been_billed=True,
@@ -218,6 +261,14 @@ class ReviewJournal:
         called = latest(LifecycleKind.REVIEWER_CALLED)
 
         if returned is not None:
+            bad = verdict_backed_by_a_real_packet(returned)
+            if bad:
+                return RecoveryFinding(
+                    RecoveryState.RECOVERY_INDETERMINATE_FAIL_CLOSED, invocation_id,
+                    observed_kinds=kinds, reviewer_may_have_been_billed=True,
+                    dispatch_permitted=False,
+                    reason="a returned verdict exists but is not backed by a "
+                           "verifiable packet -- " + bad)
             return RecoveryFinding(
                 RecoveryState.VERDICT_ALREADY_RECORDED, invocation_id,
                 observed_kinds=kinds, reviewer_may_have_been_billed=True,

@@ -228,7 +228,7 @@ def test_runtime_config_matches_the_authorized_mission_and_grants_nothing():
         assert runtime[denied] is False, f"{denied} must remain disabled"
 
 
-def test_runtime_still_refuses_out_of_mission_tasks():
+def test_runtime_still_refuses_out_of_mission_tasks(durable_ctx):
     """The mission boundary must still bind: authorizing 0C authorizes 0C tasks
     and nothing else."""
     from portfolio_automation.engineer_worker.ew0a import (
@@ -249,7 +249,7 @@ def test_runtime_still_refuses_out_of_mission_tasks():
         allowed_paths=["tests/"], allowed_tests=["tests/tx.py"])
     rep = run_mission(policy, [foreign], EngineerAuthorityLevel.A1_ASSISTED_ENGINEERING,
                       _must_not_run, _must_not_run, _must_not_run,
-                      lambda: "2026-08-15T00:00:00+00:00", lambda: "v1")
+                      lambda: "2026-08-15T00:00:00+00:00", lambda: "v1", certification=durable_ctx)
     assert rep.tasks_run == []
     assert "out-of-mission task" in rep.stop_reason
 

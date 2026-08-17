@@ -66,7 +66,7 @@ def test_A1_4_e4_denied_routes_to_claude_human():
         admit_engineer_task(Lvl.A1_ASSISTED_ENGINEERING, RiskClass.E4_CONSEQUENTIAL)
 
 
-def test_A1_5_main_write_denied():
+def test_A1_5_main_write_denied(legacy_ctx, stationary_binding):
     with pytest.raises(AuthorityError):
         assert_operation_allowed(Lvl.A1_ASSISTED_ENGINEERING, "MAIN_WRITE")
     # and a candidate that touches the canonical repo fails deterministic certification
@@ -75,7 +75,8 @@ def test_A1_5_main_write_denied():
     att = AttemptEvidence(attempt_id="a", executor=Executor.ENGINEER, worker_claim="done",
                           changed_paths=["tests/x.py"], canonical_repo_touched=True)
     v = certify_attempt(task, att, lambda p: (_ for _ in ()).throw(AssertionError("no supervisor")),
-                        lambda: "t", "v")
+                        lambda: "t", "v",
+                        certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.FAIL and v.failure_class == FailureClass.POLICY_VIOLATION.value
 
 
@@ -86,7 +87,7 @@ def test_A1_6_production_and_capital_ops_denied(op):
         assert_operation_allowed(Lvl.A1_ASSISTED_ENGINEERING, op)
 
 
-def test_A1_7_protected_path_write_denied():
+def test_A1_7_protected_path_write_denied(legacy_ctx, stationary_binding):
     assert policy.is_protected("decision_engine.py")
     assert policy.is_protected("portfolio_automation/scoring/rank.py")
     assert policy.is_protected("config/ew0a_authority.json")
@@ -95,7 +96,8 @@ def test_A1_7_protected_path_write_denied():
     att = AttemptEvidence(attempt_id="a", executor=Executor.ENGINEER, worker_claim="done",
                           changed_paths=["decision_engine.py"], canonical_repo_touched=False)
     v = certify_attempt(task, att, lambda p: (_ for _ in ()).throw(AssertionError("no supervisor")),
-                        lambda: "t", "v")
+                        lambda: "t", "v",
+                        certification=legacy_ctx, candidate=stationary_binding)
     assert v.verdict is VerificationVerdict.FAIL and not v.protected_path_ok
 
 
