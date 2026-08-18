@@ -78,6 +78,11 @@ class DispatchOutcome:
     detail: str = ""
     reviewer_called: bool = False
     head_verdict: Optional[str] = None
+    #: EW-0B. The screened execution identity attached to this dispatch's
+    #: lifecycle records, surfaced so the verification record and the
+    #: apprenticeship outcome carry the same attribution as the journal rather
+    #: than a separately-derived one.
+    execution_identity: Optional[dict] = None
 
     @property
     def evidence_refs(self) -> list[str]:
@@ -241,9 +246,11 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
                                review_invocation_id=rid, packet_hash=phash,
                                reviewer_called="YES" if called else "NO",
                                next_action="REVIEW_NOT_DISPATCHED",
-                               refusal=code, detail=detail)
+                               refusal=code, detail=detail,
+                               execution_identity=identity.to_dict())
         return DispatchOutcome(None, False, rid, packet_hash=phash, refusal=code,
-                               detail=detail, reviewer_called=called, head_verdict=head)
+                               detail=detail, reviewer_called=called, head_verdict=head,
+                               execution_identity=identity.to_dict())
 
     # Recovery FIRST: a restarted process must not re-ask a question that was
     # already put to an independent reviewer.
@@ -296,8 +303,12 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
     context.journal.append(LifecycleKind.CANDIDATE_BOUND, review_invocation_id=rid,
                            **candidate_binding.to_dict())
     if not candidate_binding.ok:
+        # getattr, not .value: candidate_binding is a caller-supplied protocol,
+        # and this line runs while REFUSING. A formatting crash here converts a
+        # clean fail-closed refusal into an unhandled exception that escapes the
+        # loop -- turning the safest outcome into the loudest one.
         return refuse("CANDIDATE_NOT_BOUND",
-                      f"{[r.value for r in candidate_binding.refusals]}")
+                      f"{[getattr(r, 'value', str(r)) for r in candidate_binding.refusals]}")
 
     bound, head = candidate_binding.resolve_head_terminal()
     context.journal.append(LifecycleKind.DISPATCH_ATTEMPTED, review_invocation_id=rid,
@@ -341,4 +352,5 @@ def dispatch_durably(packet: dict[str, Any], supervisor, *, context: ReviewConte
                            else str(decision))
     return DispatchOutcome(decision, True, rid, packet_hash=phash,
                            store_rel=persisted.store_rel, reviewer_called=True,
-                           head_verdict="YES")
+                           head_verdict="YES",
+                           execution_identity=identity.to_dict())

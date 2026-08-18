@@ -39,10 +39,16 @@ def _task(**kw):
     return EngineeringTaskV0(**base)
 
 
+from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
+
+_DIFF = "--- a/tests/tx.py\n+++ b/tests/tx.py\n+assert True\n"
+ROADMAP = RoadmapAuthorization.for_mission("m1")
+
+
 def _attempt(n: int = 1):
     return AttemptEvidence(
         attempt_id=f"a{n}", executor=Executor.ENGINEER, worker_claim="done",
-        changed_paths=["tests/tx.py"], tests_run=["tests/tx.py"],
+        changed_paths=["tests/tx.py"], diff_text=_DIFF, tests_run=["tests/tx.py"],
         test_results={"tests/tx.py": "PASS"}, py_compile_ok=True,
         canonical_repo_touched=False)
 
@@ -75,7 +81,7 @@ def test_run_task_refuses_a_non_durable_context(legacy_ctx):
     with pytest.raises(CertificationUnavailable):
         run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
                  lambda t, n: _attempt(n), lambda t, v: _attempt(9), spy,
-                 _now, lambda: "v1", certification=legacy_ctx)
+                 _now, lambda: "v1", certification=legacy_ctx, roadmap=ROADMAP)
     assert spy.calls == 0, "the reviewer is not reached on a refused context"
 
 
@@ -84,7 +90,7 @@ def test_run_mission_refuses_a_non_durable_context(legacy_ctx):
     with pytest.raises(CertificationUnavailable):
         run_mission(POLICY, [_task()], Lvl.A1_ASSISTED_ENGINEERING,
                     lambda t, n: _attempt(n), lambda t, v: _attempt(9), spy,
-                    _now, lambda: "v1", certification=legacy_ctx)
+                    _now, lambda: "v1", certification=legacy_ctx, roadmap=ROADMAP)
     assert spy.calls == 0
 
 
@@ -104,7 +110,7 @@ def test_a_verified_task_leaves_persisted_bytes_and_a_complete_journal(durable_c
     spy = Spy()
     result = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
                       lambda t, n: _attempt(n), lambda t, v: _attempt(9), spy,
-                      _now, lambda: "v1", certification=durable_ctx)
+                      _now, lambda: "v1", certification=durable_ctx, roadmap=ROADMAP)
 
     assert result.final_status == "VERIFIED"
     assert spy.calls == 1
@@ -128,7 +134,7 @@ def test_the_reviewer_receives_the_reloaded_persisted_bytes(durable_ctx):
     spy = Spy()
     run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
              lambda t, n: _attempt(n), lambda t, v: _attempt(9), spy,
-             _now, lambda: "v1", certification=durable_ctx)
+             _now, lambda: "v1", certification=durable_ctx, roadmap=ROADMAP)
 
     events, _ = read_events_strict(durable_ctx.journal.path)
     phash = next(e["packet_hash"] for e in events

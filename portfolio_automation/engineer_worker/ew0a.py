@@ -24,8 +24,14 @@ from portfolio_automation.engineer_worker import policy
 from portfolio_automation.engineer_worker.durable_certification import (
     CertificationUnavailable, ReviewContext, dispatch_durably,
 )
+from portfolio_automation.engineer_worker.evidence_sufficiency import assess_evidence
 from portfolio_automation.engineer_worker.gpt_supervisor import (
     SupervisorDecision, SupervisorVerdict)
+
+
+def _candidate_sha(candidate: Any) -> str | None:
+    """The commit a binding describes, or None when it cannot say."""
+    return getattr(candidate, "head_at_binding", None)
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 TASK_SCHEMA_VERSION = "engineering.task.v0"
@@ -114,6 +120,11 @@ class FailureClass(str, Enum):
     SECURITY_ESCALATION = "SECURITY_ESCALATION"
     WORKER_FAILURE = "WORKER_FAILURE"
     SANDBOX_FAILURE = "SANDBOX_FAILURE"
+    # EW-0B: the attempt cleared the deterministic gate but carries too little
+    # evidence to be judged at all (no criteria, no diff, no test execution,
+    # results with no run behind them). Distinct from TEST_FAILURE, which means
+    # a test ran and failed -- here nothing ran, which is the weaker evidence.
+    EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
     TIMEOUT = "TIMEOUT"
     INTERRUPTED = "INTERRUPTED"
 
@@ -138,6 +149,7 @@ _FAILURE_ACTION: dict[FailureClass, NextAction] = {
     FailureClass.SECURITY_ESCALATION: NextAction.ESCALATE_HUMAN,
     FailureClass.WORKER_FAILURE: NextAction.RETRY_ENGINEER,
     FailureClass.SANDBOX_FAILURE: NextAction.REMAIN_UNVERIFIED,
+    FailureClass.EVIDENCE_INSUFFICIENT: NextAction.RETRY_ENGINEER,
     FailureClass.TIMEOUT: NextAction.REMAIN_UNVERIFIED,
     FailureClass.INTERRUPTED: NextAction.REMAIN_UNVERIFIED,      # INTERRUPTED is never SUCCESS
 }
@@ -197,6 +209,18 @@ class AttemptEvidence:
     abstained: bool = False
     abstain_reason: str | None = None
     notes: str = ""
+    #: EW-0B. Proof that THIS attempt's evidence describes a committed
+    #: candidate. A repair that actually changes code produces a NEW commit, so
+    #: the binding taken for attempt 1 no longer describes attempt 2 -- reusing
+    #: it makes every genuine repair refuse at dispatch (HEAD moved), which is
+    #: safe but means the repair-to-certification path can never complete.
+    #: When None the context-level binding is used, preserving prior behaviour.
+    candidate_binding: Any = None
+    #: EW-0B escalation lineage. When Claude repairs an engineer attempt, this
+    #: names the attempt it was handed, so a later audit can read the chain
+    #: worker -> REPAIR -> Claude -> independent review without inferring it
+    #: from ordering. Additive: absent on every historical record.
+    escalated_from_attempt_id: str | None = None
 
 
 # --- deterministic verification record ---------------------------------------
@@ -227,6 +251,16 @@ class EngineeringVerificationV0:
     failure_class: str | None = None
     evidence_refs: list[str] = field(default_factory=list)
     verified_at: str | None = None
+    #: EW-0B. The execution configuration behind the review, so an audit can
+    #: group verdicts by model/prompt/toolset without reconstructing it.
+    execution_identity: dict[str, Any] | None = None
+    #: EW-0B. The deterministic evidence-sufficiency result, recorded whether
+    #: it refused or not -- a check that only leaves a trace when it fires
+    #: cannot later be distinguished from a check that never ran.
+    evidence_assessment: dict[str, Any] | None = None
+    #: EW-0B. The candidate this verdict is about. A verdict that does not name
+    #: its candidate can be misread as applying to a later one.
+    candidate_sha: str | None = None
     schema_version: str = VERIFICATION_SCHEMA_VERSION
     schema_kind: str = SCHEMA_KIND
 
@@ -299,7 +333,8 @@ def deterministic_check(task: EngineeringTaskV0, attempt: AttemptEvidence
 
 # --- supervisor packet + escalation packet builders --------------------------
 def build_supervisor_packet(task: EngineeringTaskV0, attempt: AttemptEvidence,
-                            det: dict[str, Any]) -> dict[str, Any]:
+                            det: dict[str, Any],
+                            evidence: dict[str, Any] | None = None) -> dict[str, Any]:
     """Bounded evidence for the INDEPENDENT GPT supervisor. Contains NO secrets,
     NO connection facts, NO credentials — just task + attempt evidence."""
     return {
@@ -315,6 +350,7 @@ def build_supervisor_packet(task: EngineeringTaskV0, attempt: AttemptEvidence,
         "test_results": attempt.test_results,
         "py_compile_ok": attempt.py_compile_ok,
         "deterministic_checks": det,
+        "evidence_sufficiency": evidence,
         "worker_claim": attempt.worker_claim,
         "worker_abstained": attempt.abstained,
         "abstain_reason": attempt.abstain_reason,
@@ -363,6 +399,23 @@ class OutcomeRecord:
     human_intervention: bool
     disposition: str
     recorded_at: str
+    # --- EW-0B attribution (all additive; every field has a default, so records
+    # written before this change still load and still validate) --------------
+    mission_id: str | None = None
+    candidate_sha: str | None = None
+    #: Identity of the execution configuration that produced the supervisor
+    #: decision. Present so G1 can later group outcomes by configuration; the
+    #: full identity is on the verification record, this is the join key.
+    execution_id: str | None = None
+    #: Safe (screened) execution identity attributes. No secrets: it is built
+    #: by execution_identity.build_execution_identity, which validates every
+    #: field and writes UNAVAILABLE_AT_RECORD_TIME rather than guessing.
+    execution_identity: dict[str, Any] | None = None
+    #: One entry per attempt: attempt_id, executor, candidate_sha, verdict,
+    #: failure_class, escalated_from_attempt_id. This is what makes the record
+    #: machine-readable enough to answer "what failed, what was repaired, what
+    #: did the supervisor decide" without parsing prose.
+    attempt_lineage: list[dict[str, Any]] = field(default_factory=list)
     schema_version: str = OUTCOME_SCHEMA_VERSION
     schema_kind: str = SCHEMA_KIND
 
@@ -435,6 +488,7 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
             unresolved_requirements=[attempt.abstain_reason or "worker abstained"],
             **base)
 
+    assessment = assess_evidence(task, attempt)
     prot, scope, pol, tests, unresolved, fc = deterministic_check(task, attempt)
     det_ok = prot and scope and pol and tests and not attempt.canonical_repo_touched
     det_summary = {"protected_path_ok": prot, "scope_ok": scope, "policy_ok": pol,
@@ -450,16 +504,37 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
             verdict=verdict, deterministic_ok=False, protected_path_ok=prot,
             scope_ok=scope, policy_ok=pol, tests_ok=tests,
             failure_class=(fc.value if fc else FailureClass.VERIFICATION_FAILURE.value),
-            unresolved_requirements=unresolved, **base)
+            unresolved_requirements=unresolved,
+            evidence_assessment=assessment.to_dict(), **base)
+
+    if not assessment.sufficient:
+        # The attempt cleared the deterministic gate, but only because the gate
+        # quantifies over sets the attempt left empty. The supervisor is NOT
+        # consulted: asking a model to notice an omission is strictly weaker
+        # than refusing the omission here, and a reviewer call spends real money
+        # on a question whose answer is already determined.
+        return EngineeringVerificationV0(
+            verdict=VerificationVerdict.REPAIR, deterministic_ok=True,
+            protected_path_ok=prot, scope_ok=scope, policy_ok=pol, tests_ok=tests,
+            failure_class=FailureClass.EVIDENCE_INSUFFICIENT.value,
+            unresolved_requirements=list(assessment.details),
+            evidence_assessment=assessment.to_dict(), **base)
 
     # Deterministic gate passed -> consult the INDEPENDENT supervisor, through
     # the durable certification path. The reviewer is reached ONLY via
     # dispatch_durably, so a verdict cannot exist without persisted bytes, a
     # write-ahead journal record and terminal HEAD evidence.
-    packet = build_supervisor_packet(task, attempt, det_summary)
+    packet = build_supervisor_packet(task, attempt, det_summary,
+                                     assessment.to_dict())
     # The binding may be supplied per-call or carried on the context; either
     # way it is REQUIRED, and dispatch_durably refuses without one.
-    candidate = candidate if candidate is not None else certification.candidate_binding
+    # EW-0B: an attempt may carry its OWN binding. A repair that really
+    # changes code commits a new candidate, and the binding taken for the
+    # previous attempt describes a tree that is no longer checked out.
+    candidate = (candidate if candidate is not None
+                 else getattr(attempt, "candidate_binding", None))
+    if candidate is None:
+        candidate = certification.candidate_binding
     outcome = dispatch_durably(
         packet, supervisor, context=certification,
         candidate_sha=(candidate.head_at_binding if candidate is not None else ""),
@@ -485,7 +560,10 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
                 supervisor_reasons=[outcome.refusal or "certification refused",
                                     outcome.detail],
                 failure_class=FailureClass.VERIFICATION_FAILURE.value,
-                evidence_refs=outcome.evidence_refs, **base)
+                evidence_refs=outcome.evidence_refs,
+                execution_identity=outcome.execution_identity,
+                evidence_assessment=assessment.to_dict(),
+                candidate_sha=_candidate_sha(candidate), **base)
     else:
         decision = outcome.decision
     sup = decision.verdict
@@ -507,7 +585,10 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
         policy_ok=pol, tests_ok=tests,
         supervisor_verdict=sup.value, supervisor_reasons=decision.reasons,
         unresolved_requirements=decision.unresolved_requirements,
-        failure_class=fclass, evidence_refs=outcome.evidence_refs, **base)
+        failure_class=fclass, evidence_refs=outcome.evidence_refs,
+        execution_identity=outcome.execution_identity,
+        evidence_assessment=assessment.to_dict(),
+        candidate_sha=_candidate_sha(candidate), **base)
 
 
 def status_for_verdict(v: VerificationVerdict) -> TaskStatus:
