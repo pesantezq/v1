@@ -209,13 +209,20 @@ class AttemptEvidence:
     abstained: bool = False
     abstain_reason: str | None = None
     notes: str = ""
-    #: EW-0B. Proof that THIS attempt's evidence describes a committed
-    #: candidate. A repair that actually changes code produces a NEW commit, so
-    #: the binding taken for attempt 1 no longer describes attempt 2 -- reusing
-    #: it makes every genuine repair refuse at dispatch (HEAD moved), which is
-    #: safe but means the repair-to-certification path can never complete.
-    #: When None the context-level binding is used, preserving prior behaviour.
-    candidate_binding: Any = None
+    #: EW-0B. The commit this attempt CLAIMS to have produced -- a string, and
+    #: deliberately nothing more.
+    #:
+    #: A repair that actually changes code produces a NEW commit, so the binding
+    #: taken for attempt 1 no longer describes attempt 2, and the loop could not
+    #: certify a genuine repair without some per-attempt candidate. The first
+    #: version of this field carried the BINDING OBJECT, which was wrong in a way
+    #: that mattered: AttemptEvidence is worker-produced evidence, and a binding
+    #: object is behaviour -- one whose resolve_head_terminal always answered
+    #: YES would have certified anything, from inside the structure the gate
+    #: exists to judge. A name is inert. The controller resolves it against
+    #: version control (ReviewContext.resolve_candidate) and refuses on
+    #: disagreement. When None the controller's own binding is used unchanged.
+    claimed_candidate_sha: str | None = None
     #: EW-0B escalation lineage. When Claude repairs an engineer attempt, this
     #: names the attempt it was handed, so a later audit can read the chain
     #: worker -> REPAIR -> Claude -> independent review without inferring it
@@ -480,6 +487,16 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
                 attempt_id=attempt.attempt_id, verified_at=now_fn(),
                 canonical_repo_untouched=not attempt.canonical_repo_touched)
 
+    # Resolve the candidate BEFORE anything can return. Every outcome for a
+    # produced attempt then names the commit it was about, including the ones
+    # that never reach the supervisor. A deterministic failure whose record does
+    # not say WHICH candidate failed cannot be told apart from a failure of some
+    # other candidate when the lineage is read back.
+    candidate, binding_refusal = certification.resolve_candidate(
+        getattr(attempt, "claimed_candidate_sha", None), explicit=candidate)
+    cand_sha = _candidate_sha(candidate)
+    base["candidate_sha"] = cand_sha
+
     if attempt.abstained:
         return EngineeringVerificationV0(
             verdict=VerificationVerdict.ABSTAIN, deterministic_ok=True,
@@ -487,6 +504,18 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
             failure_class=FailureClass.AMBIGUOUS_REQUIREMENT.value,
             unresolved_requirements=[attempt.abstain_reason or "worker abstained"],
             **base)
+
+    if binding_refusal is not None:
+        # The attempt named a candidate the controller does not agree exists.
+        # POLICY_VIOLATION rather than a new class: this is a worker asserting
+        # authority it does not have, and it correctly maps to STOP_NO_RETRY --
+        # re-running a worker that mis-states its candidate produces another
+        # mis-stated candidate.
+        return EngineeringVerificationV0(
+            verdict=VerificationVerdict.FAIL, deterministic_ok=False,
+            protected_path_ok=True, scope_ok=True, policy_ok=False, tests_ok=True,
+            failure_class=FailureClass.POLICY_VIOLATION.value,
+            unresolved_requirements=[binding_refusal], **base)
 
     assessment = assess_evidence(task, attempt)
     prot, scope, pol, tests, unresolved, fc = deterministic_check(task, attempt)
@@ -526,15 +555,8 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
     # write-ahead journal record and terminal HEAD evidence.
     packet = build_supervisor_packet(task, attempt, det_summary,
                                      assessment.to_dict())
-    # The binding may be supplied per-call or carried on the context; either
-    # way it is REQUIRED, and dispatch_durably refuses without one.
-    # EW-0B: an attempt may carry its OWN binding. A repair that really
-    # changes code commits a new candidate, and the binding taken for the
-    # previous attempt describes a tree that is no longer checked out.
-    candidate = (candidate if candidate is not None
-                 else getattr(attempt, "candidate_binding", None))
-    if candidate is None:
-        candidate = certification.candidate_binding
+    # ``candidate`` was resolved above by the controller and is REQUIRED;
+    # dispatch_durably refuses without one.
     outcome = dispatch_durably(
         packet, supervisor, context=certification,
         candidate_sha=(candidate.head_at_binding if candidate is not None else ""),
@@ -562,8 +584,7 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
                 failure_class=FailureClass.VERIFICATION_FAILURE.value,
                 evidence_refs=outcome.evidence_refs,
                 execution_identity=outcome.execution_identity,
-                evidence_assessment=assessment.to_dict(),
-                candidate_sha=_candidate_sha(candidate), **base)
+                evidence_assessment=assessment.to_dict(), **base)
     else:
         decision = outcome.decision
     sup = decision.verdict
@@ -587,8 +608,7 @@ def certify_attempt(task: EngineeringTaskV0, attempt: AttemptEvidence,
         unresolved_requirements=decision.unresolved_requirements,
         failure_class=fclass, evidence_refs=outcome.evidence_refs,
         execution_identity=outcome.execution_identity,
-        evidence_assessment=assessment.to_dict(),
-        candidate_sha=_candidate_sha(candidate), **base)
+        evidence_assessment=assessment.to_dict(), **base)
 
 
 def status_for_verdict(v: VerificationVerdict) -> TaskStatus:

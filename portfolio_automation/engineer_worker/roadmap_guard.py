@@ -59,6 +59,11 @@ class RoadmapAuthorization:
     authorized_mission_id: Optional[str]
     source: str
     detail: str = ""
+    #: True ONLY when resolved from the protected roadmap record on disk.
+    #: An in-memory authorization is a caller asserting its own permission, so
+    #: the production entry point refuses it. Mirrors ReviewContext.durable:
+    #: the object is real either way, and the seam that matters is one level up.
+    authoritative: bool = False
 
     @property
     def any_mission_authorized(self) -> bool:
@@ -70,7 +75,8 @@ class RoadmapAuthorization:
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": ROADMAP_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,
                 "authorized_mission_id": self.authorized_mission_id,
-                "source": self.source, "detail": self.detail}
+                "source": self.source, "detail": self.detail,
+                "authoritative": self.authoritative}
 
     @classmethod
     def read(cls, repo_root: str | Path,
@@ -101,7 +107,8 @@ class RoadmapAuthorization:
             return cls(None, rel,
                        "the roadmap records an IDLE engineer runtime; no mission "
                        "is authorized")
-        return cls(mission.strip(), rel, "read from the roadmap record")
+        return cls(mission.strip(), rel, "read from the roadmap record",
+                   authoritative=True)
 
     @classmethod
     def for_mission(cls, mission_id: str) -> "RoadmapAuthorization":
@@ -112,7 +119,24 @@ class RoadmapAuthorization:
         object, and only ``read`` can produce one from the protected record.
         ``tests/test_ew0b_hardening.py`` pins the real file against the real
         runtime policy so this constructor cannot paper over live drift."""
-        return cls(mission_id, "explicit", "constructed in memory by name")
+        return cls(mission_id, "explicit", "constructed in memory by name",
+                   authoritative=False)
+
+
+def assert_roadmap_authoritative(roadmap: RoadmapAuthorization) -> None:
+    """Raise unless this authorization came from the protected record.
+
+    Without this the guard is defeated by its own input type: a caller that can
+    construct RoadmapAuthorization.for_mission(x) can authorize x, which is the
+    caller authorizing itself -- exactly the self-consistency the guard was
+    built to break. The synthetic constructor stays, named and isolated, for
+    harnesses and tests; it simply cannot reach the production entry point."""
+    if not roadmap.authoritative:
+        raise RoadmapViolation(
+            f"refusing a non-authoritative roadmap authorization ({roadmap.source}: "
+            f"{roadmap.detail}); the authorized implementation item must be "
+            "resolved from the protected roadmap record, not supplied by the "
+            "caller that wants to be authorized")
 
 
 def assert_mission_authorized(roadmap: RoadmapAuthorization,

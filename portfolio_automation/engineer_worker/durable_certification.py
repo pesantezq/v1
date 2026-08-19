@@ -108,7 +108,46 @@ class ReviewContext:
     #: context so the operating loop cannot dispatch without one: a review with
     #: no binding certifies a tree nobody checked.
     candidate_binding: Any = None
+    #: CONTROLLER-OWNED candidate resolution. Given the SHA an attempt CLAIMS to
+    #: have produced, this returns a binding built from version control -- an
+    #: authority the worker does not author. It exists because the alternative,
+    #: letting an attempt hand over a binding OBJECT, hands the worker the
+    #: behaviour of the gate that judges it: a supplied binding whose
+    #: resolve_head_terminal always answers YES certifies anything. Evidence may
+    #: come from the worker; authority may not.
+    candidate_binder: Any = None     # Callable[[Optional[str]], binding|None]
     durable: bool = True
+
+    def resolve_candidate(self, claimed_sha: Optional[str] = None,
+                          explicit: Any = None) -> tuple[Any, Optional[str]]:
+        """Resolve the binding this review will be dispatched under.
+
+        Returns ``(binding, refusal_detail)``. The claim is only ever a STRING,
+        and it is checked against a binding this context produced. A claim that
+        does not match what the controller resolved is a refusal, not a
+        preference: the attempt is asserting a candidate that the only
+        trustworthy source does not agree exists."""
+        if explicit is not None:
+            binding = explicit
+        elif self.candidate_binder is not None:
+            try:
+                binding = self.candidate_binder(claimed_sha)
+            except Exception as exc:                      # noqa: BLE001
+                return None, (f"the controller could not resolve a candidate for "
+                              f"claim {claimed_sha!r}: {type(exc).__name__}: {exc}")
+        else:
+            binding = self.candidate_binding
+
+        if binding is None:
+            return None, None          # dispatch_durably refuses NO_CANDIDATE_BINDING
+
+        resolved = getattr(binding, "head_at_binding", None)
+        if claimed_sha and resolved != claimed_sha:
+            return None, (
+                f"the attempt claims candidate {claimed_sha!r} but the controller "
+                f"resolved {resolved!r}; a worker may NAME a candidate, and only "
+                "the controller may bind one")
+        return binding, None
 
     def execution_identity(self, *, candidate_sha: str = UNAVAILABLE,
                            task_id: str = UNAVAILABLE,
@@ -147,7 +186,7 @@ class ReviewContext:
     @classmethod
     def open(cls, repo_root: str | Path, *, mission_id: str, session_id: str,
              reviewer_identity: Mapping[str, str], repo: Any = None,
-             candidate_binding: Any = None,
+             candidate_binding: Any = None, candidate_binder: Any = None,
              journal_rel: str = DEFAULT_JOURNAL_REL) -> "ReviewContext":
         """Initialise durable certification, or refuse.
 
@@ -168,14 +207,16 @@ class ReviewContext:
                    journal=ReviewJournal(path=journal_path),
                    mission_id=mission_id, session_id=session_id,
                    reviewer_identity=dict(reviewer_identity), repo=repo,
-                   candidate_binding=candidate_binding)
+                   candidate_binding=candidate_binding,
+                   candidate_binder=candidate_binder)
 
     @classmethod
     def legacy_in_memory(cls, root: str | Path, *, mission_id: str = "legacy",
                          session_id: str = "legacy",
                          reviewer_identity: Optional[Mapping[str, str]] = None,
                          repo: Any = None,
-                         candidate_binding: Any = None) -> "ReviewContext":
+                         candidate_binding: Any = None,
+                         candidate_binder: Any = None) -> "ReviewContext":
         """EXPLICIT test/legacy adapter over a throwaway root.
 
         A real context, so the certification path has no second branch; marked
@@ -183,10 +224,12 @@ class ReviewContext:
         this by name -- it is never reached by omitting an argument."""
         ctx = cls.open(root, mission_id=mission_id, session_id=session_id,
                        reviewer_identity=dict(reviewer_identity or {"model": "stub"}),
-                       repo=repo, candidate_binding=candidate_binding)
+                       repo=repo, candidate_binding=candidate_binding,
+                       candidate_binder=candidate_binder)
         return cls(store=ctx.store, journal=ctx.journal, mission_id=mission_id,
                    session_id=session_id, reviewer_identity=ctx.reviewer_identity,
-                   repo=repo, candidate_binding=candidate_binding, durable=False)
+                   repo=repo, candidate_binding=candidate_binding,
+                   candidate_binder=candidate_binder, durable=False)
 
 
 def binding_envelope(packet: dict[str, Any], *, candidate_sha: str, mission_id: str,

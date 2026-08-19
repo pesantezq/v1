@@ -91,6 +91,18 @@ Every failure mode (missing file, unparseable YAML, absent key, empty/IDLE
 mission) resolves to *no mission is authorized*, which refuses everything. The
 failure mode of this module is a stopped loop, never a widened one.
 
+**Review repair.** Taking a `RoadmapAuthorization` is right for a harness and
+wrong as the *only* door: a caller able to construct
+`RoadmapAuthorization.for_mission(x)` can authorize `x`, which is the applicant
+authorizing itself — precisely the self-consistency the guard was built to
+break. `RoadmapAuthorization.authoritative` is now True only for `.read()`, and
+`run_authorized_mission` is the **production entry point**: it resolves *both*
+sides from protected on-disk state — the roadmap record for which mission is
+authorized, the runtime policy for what the loop is configured to run — and has
+no parameter through which authorization can be injected. Agreement between two
+independently protected records is not self-consistency. The synthetic path is
+not removed, only made unreachable from there.
+
 ### 3. A genuine repair could never certify
 
 `run_task` used one `certification.candidate_binding` for every attempt. A repair
@@ -101,10 +113,23 @@ Failing closed was correct. But it meant the repair-to-certification path — th
 core EW-0B graduation proof — could not complete against a real new candidate,
 and had never been exercised end to end.
 
-`AttemptEvidence.candidate_binding` lets an attempt carry its own binding.
-Absent, the context binding is used, so prior behaviour is unchanged. Each
-candidate now gets its own SHA, its own packet, its own `review_invocation_id`
-and its own verdict; candidate 1's PASS is not reachable for candidate 2.
+**Review repair — this was fixed wrongly the first time.** The initial fix let
+`AttemptEvidence` carry the binding *object*. `AttemptEvidence` is
+**worker-produced evidence**, and a binding object is **behaviour**: one whose
+`resolve_head_terminal` always answered `YES` would have certified anything,
+from inside the very structure the gate exists to judge. It handed the applicant
+the gate.
+
+A worker may **name** a candidate; only the controller may **bind** one.
+`AttemptEvidence.claimed_candidate_sha` is a string and nothing more — inert.
+`ReviewContext.candidate_binder` is controller-owned and resolves the binding
+from version control, ignoring the claim and binding whatever is actually
+checked out; `resolve_candidate` then checks the claim against that answer and
+refuses on disagreement (`POLICY_VIOLATION` → `STOP_NO_RETRY`, supervisor never
+called). With no claim, the controller's own binding is used unchanged.
+
+Each candidate still gets its own SHA, packet, `review_invocation_id` and
+verdict; candidate 1's PASS is not reachable for candidate 2.
 
 ### 4. A worker exception took down the mission
 
@@ -123,7 +148,7 @@ empty packet.
 ### 5. The refusal path could crash
 
 `dispatch_durably` formatted `candidate_binding.refusals` with `r.value`,
-assuming enum members — but `candidate_binding` is a caller-supplied protocol.
+assuming enum members — but the binding is a supplied protocol object.
 An `AttributeError` there converts a clean fail-closed refusal into an unhandled
 exception that escapes the loop. Defensive formatting is usually a smell; on a
 refusal path it is the requirement.
@@ -146,6 +171,19 @@ It was also **silently broken**: with no candidate binding, every task reported
 became mandatory. A rehearsal that cannot reach the reviewer rehearses nothing.
 
 ---
+
+### 7. A candidate that failed before dispatch did not name itself
+
+`candidate_sha` was stamped only on the post-dispatch verification records. An
+attempt that failed the deterministic gate, or the evidence gate, or abstained,
+recorded `None` — so reading the lineage back, a failed candidate could not be
+told apart from a failure of some *other* candidate.
+
+The candidate is now resolved **before any return path exists**, and every
+outcome for a produced attempt names the commit it was about. The paired
+negative control matters as much: when nothing is resolvable the record still
+says `None` rather than a plausible SHA, so this did not become "always stamp
+something".
 
 ## Attribution
 

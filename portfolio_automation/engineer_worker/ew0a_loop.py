@@ -36,7 +36,8 @@ from portfolio_automation.engineer_worker.gpt_supervisor import SupervisorDecisi
 from portfolio_automation.engineer_worker.durable_certification import (
     CertificationUnavailable, ReviewContext)
 from portfolio_automation.engineer_worker.roadmap_guard import (
-    RoadmapAuthorization, RoadmapViolation, assert_mission_authorized)
+    RoadmapAuthorization, RoadmapViolation, assert_mission_authorized,
+    assert_roadmap_authoritative)
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
 RUNTIME_SCHEMA_VERSION = "engineering.runtime_policy.v0"
@@ -357,6 +358,40 @@ def _stop(task, route, v, eng_a, verdict, *, escalated=False, claude_attempts=0,
                          execution_identity=(v.execution_identity if v else None),
                          candidate_sha=(v.candidate_sha if v else None),
                          worker_failures=worker_failures)
+
+
+def run_authorized_mission(repo_root: str | Path, level: EngineerAuthorityLevel,
+                           task_queue: list[EngineeringTaskV0],
+                           engineer_fn: EngineerFn, claude_fn: ClaudeFn,
+                           supervisor: SupervisorFn, now_fn: Callable[[], str],
+                           vid: Callable[[], str], outcome_log: str | None = None,
+                           *, certification: ReviewContext) -> "MissionReport":
+    """THE PRODUCTION ENTRY POINT. Resolves its own authorization from disk.
+
+    ``run_mission`` takes a RoadmapAuthorization, which is right for a harness
+    and wrong as the only door: a caller able to construct
+    ``RoadmapAuthorization.for_mission(x)`` can authorize x, and a guard whose
+    input the applicant manufactures is the applicant authorizing itself.
+
+    Both sides are resolved here from protected on-disk state -- the roadmap
+    record for WHICH mission is authorized, the runtime policy for what the
+    loop is configured to run -- and neither is accepted from the caller. The
+    synthetic path is not removed, only made unreachable from here."""
+    root = Path(repo_root)
+    roadmap = RoadmapAuthorization.read(root)
+    assert_roadmap_authoritative(roadmap)
+    policy = read_runtime_policy(root)
+    if policy is None:
+        raise RoadmapViolation(
+            f"the runtime policy at {DEFAULT_RUNTIME_REL} is absent or malformed; "
+            "refusing to dispatch under a configuration that cannot be read")
+    # Cross-check, not self-check: the policy is one protected file and the
+    # roadmap is another, so agreement here is two independent records agreeing
+    # rather than one caller agreeing with itself.
+    assert_mission_authorized(roadmap, policy.mission_id)
+    return run_mission(policy, task_queue, level, engineer_fn, claude_fn,
+                       supervisor, now_fn, vid, outcome_log,
+                       certification=certification, roadmap=roadmap)
 
 
 @dataclass

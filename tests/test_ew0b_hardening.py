@@ -41,7 +41,8 @@ from portfolio_automation.engineer_worker.gpt_supervisor import (
     SupervisorConfig, SupervisorDecision, SupervisorVerdict, review)
 from portfolio_automation.engineer_worker.review_candidate import HeadResolution
 from portfolio_automation.engineer_worker.roadmap_guard import (
-    RoadmapAuthorization, RoadmapViolation, assert_mission_authorized)
+    RoadmapAuthorization, RoadmapViolation, assert_mission_authorized,
+    assert_roadmap_authoritative)
 
 MISSION = "ew0b_hardening_mission"
 ROADMAP = RoadmapAuthorization.for_mission(MISSION)
@@ -103,13 +104,33 @@ class _Binding:
         return self, HeadResolution("NO", self.head_at_binding, now, "MOVED")
 
 
-def _ctx(root: Path, *, binding=None, reviewer=None) -> ReviewContext:
+class _Controller:
+    """Controller-owned candidate resolution. Stands in for git.
+
+    Deliberately IGNORES the claim and binds whatever is actually checked out.
+    That is the production shape: the controller asks version control what the
+    candidate is, and the worker's claim is then checked against the answer
+    rather than used to produce it."""
+
+    def __init__(self, head=SHA_A):
+        self.head = head
+
+    def commit(self, sha):
+        """Simulate the repair actually committing a new candidate."""
+        self.head = sha
+
+    def __call__(self, claimed_sha):
+        return _Binding(self.head)
+
+
+def _ctx(root: Path, *, binding=None, reviewer=None, binder=None) -> ReviewContext:
     return ReviewContext.open(
         root, mission_id=MISSION, session_id="ew0b",
         reviewer_identity=dict(reviewer or {"provider": "openai", "model": "gpt-4o",
                                             "protocol": "one-shot"}),
         repo=(binding or _Binding()).repo,
-        candidate_binding=binding if binding is not None else _Binding())
+        candidate_binding=binding if binding is not None else _Binding(),
+        candidate_binder=binder)
 
 
 class Spy:
@@ -141,13 +162,13 @@ def _task(**over):
     return EngineeringTaskV0(**d)
 
 
-def _attempt(n=1, *, passing=True, binding=None, **over):
+def _attempt(n=1, *, passing=True, claimed=None, **over):
     d = dict(attempt_id=f"a{n}", executor=Executor.ENGINEER,
              worker_claim="IMPLEMENTATION_COMPLETE", changed_paths=["tests/tx.py"],
              diff_text=_DIFF, tests_run=["tests/tx.py"],
              test_results={"tests/tx.py": "PASS (3 passed)" if passing else "FAIL (1 failed)"},
              py_compile_ok=True, canonical_repo_touched=False,
-             candidate_binding=binding)
+             claimed_candidate_sha=claimed)
     d.update(over)
     return AttemptEvidence(**d)
 
@@ -199,13 +220,17 @@ def test_s2_repair_produces_a_new_candidate_sha_and_certifies(tmp_path):
     anything HEAD moved and dispatch refused. Failing closed was correct, but it
     meant the repair-to-certification path had never been exercised end to end.
     """
-    b1, b2 = _Binding(SHA_A), _Binding(SHA_B)
-    ctx = _ctx(tmp_path, binding=b1)
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
     spy = Spy(SupervisorVerdict.REPAIR, SupervisorVerdict.PASS)
 
     def engineer(task, n):
-        # attempt 1 = the defective candidate at SHA_A; attempt 2 = repaired at SHA_B
-        return _attempt(n, binding=b1 if n == 1 else b2)
+        # attempt 1 = the defective candidate at SHA_A. The repair really
+        # commits, so the CONTROLLER's head moves; the worker only NAMES what
+        # it produced and the controller binds what it finds.
+        if n == 2:
+            controller.commit(SHA_B)
+        return _attempt(n, claimed=controller.head)
 
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, engineer,
                  lambda t, v: _attempt(9), spy, _now, _vid,
@@ -231,7 +256,7 @@ def test_s2_negative_reusing_the_first_binding_after_a_repair_refuses(tmp_path):
     stale = _Binding(SHA_A, repo=_Repo(SHA_B))     # HEAD moved under the binding
     ctx = _ctx(tmp_path, binding=stale)
     spy = Spy(SupervisorVerdict.PASS)
-    v = certify_attempt(_task(), _attempt(2, binding=stale), spy, _now, "v1",
+    v = certify_attempt(_task(), _attempt(2, claimed=SHA_A), spy, _now, "v1",
                         certification=ctx)
     assert v.verdict is VerificationVerdict.SUPERVISOR_UNAVAILABLE
     assert spy.calls == 0, "the reviewer is never asked about a moved candidate"
@@ -539,9 +564,9 @@ def test_s8_changing_the_candidate_produces_a_different_review_identity(tmp_path
     ctx_a = _ctx(tmp_path / "a", binding=_Binding(SHA_A))
     ctx_b = _ctx(tmp_path / "b", binding=_Binding(SHA_B))
     spy = Spy(SupervisorVerdict.PASS)
-    certify_attempt(_task(), _attempt(1, binding=_Binding(SHA_A)), spy, _now, "v1",
+    certify_attempt(_task(), _attempt(1, claimed=SHA_A), spy, _now, "v1",
                     certification=ctx_a)
-    certify_attempt(_task(), _attempt(1, binding=_Binding(SHA_B)), spy, _now, "v2",
+    certify_attempt(_task(), _attempt(1, claimed=SHA_B), spy, _now, "v2",
                     certification=ctx_b)
 
     def rids(root):
@@ -930,16 +955,17 @@ def test_s16_fail_repair_new_candidate_verification_independent_pass_durable(tmp
     deterministic verification -> INDEPENDENT review -> PASS -> durable
     certification, with identity and lineage retained at every step.
     """
-    b1, b2 = _Binding(SHA_A), _Binding(SHA_B)
-    ctx = _ctx(tmp_path, binding=b1)
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
     spy = Spy(SupervisorVerdict.PASS)          # would pass anything it is shown
     log = tmp_path / "outcomes.jsonl"
 
     def engineer(task, n):
         # attempt 1 genuinely fails its tests -> deterministic REPAIR, no review
         if n == 1:
-            return _attempt(1, passing=False, binding=b1)
-        return _attempt(2, passing=True, binding=b2)
+            return _attempt(1, passing=False, claimed=controller.head)
+        controller.commit(SHA_B)
+        return _attempt(2, passing=True, claimed=controller.head)
 
     rep = run_mission(POLICY, [_task()], Lvl.A1_ASSISTED_ENGINEERING, engineer,
                       lambda t, v: _attempt(9), spy, _now, _vid, str(log),
@@ -951,6 +977,9 @@ def test_s16_fail_repair_new_candidate_verification_independent_pass_durable(tmp
     assert spy.calls == 1
     assert r["attempt_lineage"][0]["verdict"] == "REPAIR"
     assert r["attempt_lineage"][0]["failure_class"] == FailureClass.TEST_FAILURE.value
+    # FINDING C: the candidate that FAILED deterministically still names itself,
+    # even though it never reached the supervisor.
+    assert r["attempt_lineage"][0]["candidate_sha"] == SHA_A
     assert r["attempt_lineage"][1]["verdict"] == "PASS"
     assert r["candidate_sha"] == SHA_B
 
@@ -1138,6 +1167,320 @@ def test_every_failure_class_has_a_declared_next_action():
     inside the loop, at the worst possible moment."""
     for fc in FailureClass:
         assert isinstance(action_for_failure(fc), NextAction)
+
+
+# =========================================================================== #
+# REVIEW FINDING A -- candidate binding is controller-owned, never worker-owned
+#
+# The first EW-0B candidate let AttemptEvidence carry the binding OBJECT. That
+# put behaviour inside worker-produced evidence: a binding whose
+# resolve_head_terminal always answered YES would have certified anything, from
+# inside the very structure the gate exists to judge. A worker may NAME a
+# candidate; only the controller may BIND one.
+# =========================================================================== #
+class _ForgedBinding:
+    """What an attempt would have supplied if it could. It cannot."""
+
+    head_at_binding = "f" * 40
+    refusals = ()
+    checks = {"HEAD_UNCHANGED_AT_DISPATCH": "YES"}
+    repo = None
+
+    @property
+    def ok(self):
+        return True
+
+    def to_dict(self):
+        return {"candidate_bound": "YES", "git_head_at_binding": self.head_at_binding,
+                "checks": dict(self.checks), "refusals": []}
+
+    def resolve_head_terminal(self):
+        # Always agrees. This is the whole point: a gate whose answer the
+        # applicant supplies is not a gate.
+        return self, HeadResolution("YES", self.head_at_binding,
+                                    self.head_at_binding, "UNCHANGED")
+
+
+def test_findingA_attempt_evidence_cannot_carry_a_binding_object():
+    """Type-level: the field an attempt may set is a STRING, and there is no
+    field through which behaviour can be handed to the gate."""
+    fields = AttemptEvidence.__dataclass_fields__
+    assert "claimed_candidate_sha" in fields
+    assert "candidate_binding" not in fields, (
+        "a worker-settable binding object is authority, not evidence")
+    with pytest.raises(TypeError):
+        AttemptEvidence(attempt_id="a", executor=Executor.ENGINEER,
+                        worker_claim="done", candidate_binding=_ForgedBinding())
+
+
+def test_findingA_a_forged_binding_cannot_be_smuggled_in_as_a_claim(tmp_path):
+    """Adversarial: the attempt names the forged binding's SHA. The controller
+    resolves the real one, they disagree, and nothing is dispatched."""
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
+    spy = Spy(SupervisorVerdict.PASS)          # would pass anything it is shown
+    v = certify_attempt(_task(), _attempt(1, claimed=_ForgedBinding.head_at_binding),
+                        spy, _now, "v1", certification=ctx)
+    assert v.verdict is VerificationVerdict.FAIL
+    assert v.failure_class == FailureClass.POLICY_VIOLATION.value
+    assert spy.calls == 0
+    assert any("may NAME a candidate" in r for r in v.unresolved_requirements)
+
+
+def test_findingA_a_mismatched_claim_is_refused_without_a_reviewer_call(tmp_path):
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
+    spy = Spy(SupervisorVerdict.PASS)
+    v = certify_attempt(_task(), _attempt(1, claimed=SHA_B), spy, _now, "v1",
+                        certification=ctx)
+    assert v.verdict is VerificationVerdict.FAIL and spy.calls == 0
+
+
+def test_findingA_a_mis_stated_candidate_is_not_retried(tmp_path):
+    """POLICY_VIOLATION, so STOP_NO_RETRY: re-running a worker that mis-states
+    its candidate produces another mis-stated candidate."""
+    controller = _Controller(SHA_A)
+    calls = {"n": 0}
+
+    def engineer(task, n):
+        calls["n"] += 1
+        return _attempt(n, claimed=SHA_B)
+
+    no_escalation = RuntimePolicy(
+        mission_id=MISSION, auto_claude_escalation_for_e3_or_exhausted_e2=False)
+    spy = Spy(SupervisorVerdict.PASS)
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, no_escalation, engineer,
+                 lambda t, v: _attempt(9), spy, _now, _vid,
+                 certification=_ctx(tmp_path, binder=controller), roadmap=ROADMAP)
+    assert calls["n"] == 1, "the engineer is not re-run on a mis-stated candidate"
+    assert r.final_status != TaskStatus.VERIFIED.value
+    assert spy.calls == 0, "nothing was certified on the false claim"
+    assert r.attempt_lineage[0]["failure_class"] == FailureClass.POLICY_VIOLATION.value
+
+
+def test_findingA_positive_control_a_truthful_claim_certifies(tmp_path):
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
+    spy = Spy(SupervisorVerdict.PASS)
+    v = certify_attempt(_task(), _attempt(1, claimed=SHA_A), spy, _now, "v1",
+                        certification=ctx)
+    assert v.verdict is VerificationVerdict.PASS and v.candidate_sha == SHA_A
+    assert spy.calls == 1
+
+
+def test_findingA_positive_control_no_claim_uses_the_controller_binding(tmp_path):
+    """Backward compatibility: an attempt that names nothing is bound by the
+    controller exactly as before."""
+    ctx = _ctx(tmp_path)                        # no binder, context binding only
+    spy = Spy(SupervisorVerdict.PASS)
+    v = certify_attempt(_task(), _attempt(1), spy, _now, "v1", certification=ctx)
+    assert v.verdict is VerificationVerdict.PASS and v.candidate_sha == SHA_A
+
+
+def test_findingA_positive_control_the_repair_path_still_works(tmp_path):
+    """The capability the binding field exists for survives the repair: a real
+    repair moves the controller's head and certifies at the NEW candidate."""
+    controller = _Controller(SHA_A)
+    ctx = _ctx(tmp_path, binder=controller)
+    spy = Spy(SupervisorVerdict.REPAIR, SupervisorVerdict.PASS)
+
+    def engineer(task, n):
+        if n == 2:
+            controller.commit(SHA_B)
+        return _attempt(n, claimed=controller.head)
+
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, engineer,
+                 lambda t, v: _attempt(9), spy, _now, _vid,
+                 certification=ctx, roadmap=ROADMAP)
+    assert r.final_status == TaskStatus.VERIFIED.value
+    assert [e["candidate_sha"] for e in r.attempt_lineage] == [SHA_A, SHA_B]
+
+
+def test_findingA_a_controller_that_cannot_resolve_refuses_rather_than_guesses(tmp_path):
+    def broken(claimed):
+        raise OSError("git is unavailable")
+
+    ctx = _ctx(tmp_path, binder=broken)
+    spy = Spy(SupervisorVerdict.PASS)
+    v = certify_attempt(_task(), _attempt(1, claimed=SHA_A), spy, _now, "v1",
+                        certification=ctx)
+    assert v.verdict is VerificationVerdict.FAIL and spy.calls == 0
+
+
+# =========================================================================== #
+# REVIEW FINDING B -- the production entry point resolves its OWN authorization
+#
+# run_mission takes a RoadmapAuthorization, which is right for a harness and
+# wrong as the only door: a caller able to construct for_mission(x) can
+# authorize x. That is the applicant authorizing itself -- the same
+# self-consistency the guard was built to break.
+# =========================================================================== #
+def _repo_state(root: Path, *, roadmap_mission: str | None, policy_mission: str):
+    if roadmap_mission is not None:
+        _roadmap_file(root, roadmap_mission)
+    cfg = root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "ew0a_runtime.json").write_text(json.dumps({
+        "mission_id": policy_mission, "authority": "A1_ASSISTED_ENGINEERING",
+        "gpt_supervisor_required": True, "schema_version": "engineering.runtime_policy.v0",
+        "schema_kind": "experimental_noncanonical"}), encoding="utf-8")
+    return root
+
+
+def test_findingB_manufactured_authorization_cannot_reach_the_production_entry():
+    """There is no parameter to inject one, and the assertion refuses it."""
+    import inspect
+    sig = inspect.signature(L.run_authorized_mission)
+    assert "roadmap" not in sig.parameters, (
+        "the production entry point must resolve authorization, not accept it")
+    with pytest.raises(RoadmapViolation):
+        assert_roadmap_authoritative(RoadmapAuthorization.for_mission(MISSION))
+
+
+def test_findingB_a_synthetic_authorization_is_marked_non_authoritative(tmp_path):
+    synthetic = RoadmapAuthorization.for_mission(MISSION)
+    assert synthetic.authoritative is False
+    assert synthetic.to_dict()["authoritative"] is False
+    _roadmap_file(tmp_path, MISSION)
+    real = RoadmapAuthorization.read(tmp_path)
+    assert real.authoritative is True and real.to_dict()["authoritative"] is True
+
+
+def test_findingB_a_policy_naming_a_future_item_is_refused_from_disk(tmp_path):
+    """Adversarial: BOTH on-disk files are attacker-shaped except the roadmap.
+    The runtime policy names G1; the roadmap does not authorize it."""
+    _repo_state(tmp_path, roadmap_mission=MISSION,
+                policy_mission="g1_supervisor_measurement")
+
+    def must_not_run(*a):
+        raise AssertionError("an unauthorized roadmap item must never execute")
+
+    with pytest.raises(RoadmapViolation) as exc:
+        L.run_authorized_mission(
+            tmp_path, Lvl.A1_ASSISTED_ENGINEERING,
+            [_task(mission_id="g1_supervisor_measurement")],
+            must_not_run, must_not_run, must_not_run, _now, _vid,
+            certification=_ctx(tmp_path))
+    # Raised, not reported: a caller can ignore a report field.
+    assert "g1_supervisor_measurement" in str(exc.value)
+
+
+@pytest.mark.parametrize("roadmap_mission", [None, ""])
+def test_findingB_absent_or_idle_roadmap_refuses_at_the_production_entry(
+        tmp_path, roadmap_mission):
+    if roadmap_mission == "":
+        _roadmap_file(tmp_path, "''")
+    _repo_state(tmp_path, roadmap_mission=None, policy_mission=MISSION)
+    with pytest.raises(RoadmapViolation):
+        L.run_authorized_mission(tmp_path, Lvl.A1_ASSISTED_ENGINEERING, [_task()],
+                                 lambda t, n: _attempt(n), lambda t, v: _attempt(9),
+                                 Spy(), _now, _vid, certification=_ctx(tmp_path))
+
+
+def test_findingB_an_unreadable_runtime_policy_refuses(tmp_path):
+    _roadmap_file(tmp_path, MISSION)
+    with pytest.raises(RoadmapViolation):
+        L.run_authorized_mission(tmp_path, Lvl.A1_ASSISTED_ENGINEERING, [_task()],
+                                 lambda t, n: _attempt(n), lambda t, v: _attempt(9),
+                                 Spy(), _now, _vid, certification=_ctx(tmp_path))
+
+
+def test_findingB_positive_control_agreeing_protected_records_dispatch(tmp_path):
+    """Two independent protected records agreeing is not self-consistency."""
+    _repo_state(tmp_path, roadmap_mission=MISSION, policy_mission=MISSION)
+    rep = L.run_authorized_mission(
+        tmp_path, Lvl.A1_ASSISTED_ENGINEERING, [_task()],
+        lambda t, n: _attempt(n), lambda t, v: _attempt(9),
+        Spy(SupervisorVerdict.PASS), _now, _vid, certification=_ctx(tmp_path))
+    assert rep.verified == 1 and not rep.roadmap_violation
+
+
+def test_findingB_the_harness_path_stays_available_and_isolated(tmp_path):
+    """The synthetic path is not removed -- only made unreachable from the
+    production entry. A test/harness may still drive run_mission directly."""
+    rep = run_mission(POLICY, [_task()], Lvl.A1_ASSISTED_ENGINEERING,
+                      lambda t, n: _attempt(n), lambda t, v: _attempt(9),
+                      Spy(SupervisorVerdict.PASS), _now, _vid,
+                      certification=_ctx(tmp_path),
+                      roadmap=RoadmapAuthorization.for_mission(MISSION))
+    assert rep.verified == 1
+
+
+def test_findingB_the_real_repo_resolves_authoritatively():
+    root = Path(__file__).resolve().parents[1]
+    assert RoadmapAuthorization.read(root).authoritative is True
+
+
+# =========================================================================== #
+# REVIEW FINDING C -- a candidate that fails BEFORE dispatch still names itself
+#
+# A deterministic failure whose record does not say WHICH candidate failed
+# cannot be told apart, when the lineage is read back, from a failure of some
+# other candidate.
+# =========================================================================== #
+@pytest.mark.parametrize("over,task_over,expect_class", [
+    (dict(passing=False), {}, FailureClass.TEST_FAILURE.value),
+    (dict(changed_paths=["config/ew0a_authority.json"],
+          diff_text="--- a/config/ew0a_authority.json\n+x\n"),
+     dict(allowed_paths=["."]), FailureClass.POLICY_VIOLATION.value),
+    (dict(tests_run=[], test_results={}), {},
+     FailureClass.EVIDENCE_INSUFFICIENT.value),
+    (dict(abstained=True, abstain_reason="ambiguous"), {},
+     FailureClass.AMBIGUOUS_REQUIREMENT.value),
+])
+def test_findingC_every_pre_dispatch_outcome_names_its_candidate(
+        tmp_path, over, task_over, expect_class):
+    ctx = _ctx(tmp_path, binder=_Controller(SHA_A))
+    spy = Spy(SupervisorVerdict.PASS)
+    v = certify_attempt(_task(**task_over), _attempt(1, claimed=SHA_A, **over),
+                        spy, _now, "v1", certification=ctx)
+    assert v.failure_class == expect_class
+    assert v.verdict is not VerificationVerdict.PASS
+    assert v.candidate_sha == SHA_A, (
+        f"{expect_class} left no candidate on the record; the lineage cannot say "
+        "which candidate failed")
+    assert spy.calls == 0
+
+
+def test_findingC_positive_control_a_dispatched_outcome_also_names_it(tmp_path):
+    ctx = _ctx(tmp_path, binder=_Controller(SHA_A))
+    v = certify_attempt(_task(), _attempt(1, claimed=SHA_A),
+                        Spy(SupervisorVerdict.PASS), _now, "v1", certification=ctx)
+    assert v.verdict is VerificationVerdict.PASS and v.candidate_sha == SHA_A
+
+
+def test_findingC_negative_control_an_unresolvable_candidate_is_not_invented(tmp_path):
+    """The paired control that stops this becoming 'always stamp something'.
+    With nothing to resolve, the record says None rather than a plausible SHA."""
+    ctx = ReviewContext.open(tmp_path, mission_id=MISSION, session_id="s",
+                             reviewer_identity={"model": "stub"}, repo=_Repo(),
+                             candidate_binding=None)
+    v = certify_attempt(_task(), _attempt(1, passing=False), Spy(), _now, "v1",
+                        certification=ctx)
+    assert v.verdict is VerificationVerdict.REPAIR
+    assert v.candidate_sha is None
+
+
+def test_findingC_lineage_carries_the_failed_candidate_through_run_task(tmp_path):
+    """End to end on the real loop: the failing attempt's SHA reaches the
+    apprenticeship lineage, not just the verification record."""
+    controller = _Controller(SHA_A)
+    log = tmp_path / "outcomes.jsonl"
+
+    def engineer(task, n):
+        if n == 1:
+            return _attempt(1, passing=False, claimed=SHA_A)
+        controller.commit(SHA_B)
+        return _attempt(2, passing=True, claimed=SHA_B)
+
+    rep = run_mission(POLICY, [_task()], Lvl.A1_ASSISTED_ENGINEERING, engineer,
+                      lambda t, v: _attempt(9), Spy(SupervisorVerdict.PASS),
+                      _now, _vid, str(log),
+                      certification=_ctx(tmp_path, binder=controller),
+                      roadmap=ROADMAP)
+    lineage = read_outcomes(str(log))[0]["attempt_lineage"]
+    assert [e["candidate_sha"] for e in lineage] == [SHA_A, SHA_B]
+    assert lineage[0]["verdict"] == "REPAIR" and lineage[1]["verdict"] == "PASS"
 
 
 # =========================================================================== #
