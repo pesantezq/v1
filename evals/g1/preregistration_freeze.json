@@ -1,9 +1,24 @@
 {
- "freeze_digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
- "preregistration_commit": "755eb80162406009c18c0a608f66b312f016238a",
+ "freeze_digest": "g1freeze_502c13e1104e8bc301edf2254f46a138",
+ "freeze_version": "v3",
+ "preregistration_commit": "08f3e216c4a304e3afb5ee8305c2fdca7af1de1e",
  "registered_file": "evals/g1/preregistration.json",
  "schema_kind": "experimental_noncanonical",
  "schema_version": "engineering.g1.preregistration.v1",
  "scope": "This proves the criteria, taxonomy, splits, gold labels and gold provenance were fixed before the scored run and have not changed since. It does NOT claim the gold labels are correct, nor that they are human-adjudicated.",
+ "superseded_freezes": [
+  {
+   "commit": "f7abf6b03bceafc0f4574071db59ae56a3edd9b7",
+   "digest": "g1freeze_c3527fd036cdb524d1cc7516b8d51420",
+   "superseded_because": "audit selection policy improved (PASS-first, stratified); audit policy is registered material",
+   "version": "v1"
+  },
+  {
+   "commit": "755eb80162406009c18c0a608f66b312f016238a",
+   "digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
+   "superseded_because": "corpus expanded from 17 to 55 cases for G1 completion; the corpus is registered material",
+   "version": "v2"
+  }
+ ],
  "verification": "verify_freeze() re-derives the digest from current code and compares it against the copy of preregistration.json committed at preregistration_commit, read via git show. It does not trust the working tree."
 }
