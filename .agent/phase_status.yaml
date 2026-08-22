@@ -213,13 +213,52 @@ stockbot_northstar_redesign:
             a fresh REPAIR on an under-evidenced packet, and an under-scoped criterion
             recorded as a scope gap. Final senior merge review PASS_ON_MERITS. See
             docs/NORTHSTAR_0C_SESSION_ns0c-evgw-foundation-001.jsonl.
-      remaining_work:   # the 0C exit gate is NOT satisfied by the foundation
-        - revision/supersession safety (a later revision must not leak backward into a historical as-of read)
-        - "research-store foundation - persistence and query"
+        revision_supersession_safety:
+          status: complete   # 2026-08-16 — durable. PIT admission FIRST, supersession interpretation SECOND.
+          durable: true
+          merged_main_sha: 3d97bb392b595f90baa8787b8c9d2aa592c00f8a
+          post_merge_main_ci_run: 53
+          post_merge_main_ci_result: SUCCESS
+          session_id: ns0c-revision-supersession-002
+          pull_request: 22
+          delivered:
+            - portfolio_automation/evidence_gateway/revisions.py (a later revision cannot leak backward into a historical as-of read)
+            - tests/test_evidence_gateway_revisions.py
+          preserved_unresolved:
+            - winner_policy = UNRESOLVED_NOT_INVENTED
+            - effective_period_vs_as_of = UNRESOLVED / NOT DECIDED
+          certification_history: >-
+            Preserved in full and never rerolled: the original PASS was recorded
+            against a pre-implementation SHA and is retained as history without
+            certifying the PR candidate; Part A PASSed; Part B drew two REPAIR
+            verdicts that were escalated rather than rerolled. Final senior merge
+            review PASS_ON_MERITS. A machine crash mid-session was recovered with
+            no work lost. See
+            docs/NORTHSTAR_0C_SESSION_ns0c-revision-supersession-002.jsonl.
+        research_store_foundation:
+          status: verified_candidate   # 2026-08-17 — implementation proven and independently reviewed, NOT yet durable. Durable requires merge plus post-merge main CI.
+          durable: false
+          reviewed_candidate_sha: 1448d0f1449334be1daf85886af359cbbc31607c
+          gpt_verdict: PASS            # all twelve criteria, none unresolved
+          session_id: ns0c-research-store-foundation-003
+          storage_backend: "stdlib sqlite3"
+          delivered:
+            - portfolio_automation/research_store/store.py (immutable snapshot_id-keyed evidence persistence, three independent integrity layers, deterministic corpus query)
+            - tests/test_research_store.py
+          owns:
+            - durable persistence of canonical EvidenceSnapshot objects
+            - exact retrieval by snapshot_id and by EvidenceRef
+            - deterministic metadata corpus query
+          deliberately_does_not_own:
+            - historical as-of reads (EvidenceGateway; no as_of parameter exists in the store)
+            - lookahead audit
+            - revision winner selection (UNRESOLVED_NOT_INVENTED)
+            - effective_period semantics (UNRESOLVED / NOT DECIDED)
+      remaining_work:   # the 0C exit gate is NOT satisfied by the foundations above
         - historical as-of reads over the store
         - lookahead audit over store reads
         - replay/reproducibility as required by the contracts
-      next_bounded_candidate: revision/supersession safety   # CANDIDATE ONLY — not implemented and NOT independently authorized; starting it requires its own authorization
+      next_bounded_candidate: "historical as-of reads over the research store"   # CANDIDATE ONLY — this file never authorizes work; authorization is an operator act recorded outside it. Combines store corpus retrieval with EvidenceGateway PIT admission, revision visibility and an explicit audit output.
       unresolved_semantics:
         effective_period_vs_as_of: >-
           UNRESOLVED / NOT DECIDED. No rule such as effective_period_end <= as_of exists.

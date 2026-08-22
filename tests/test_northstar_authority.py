@@ -419,20 +419,55 @@ def test_0c_exit_gate_is_not_yet_satisfied(phase):
 
 
 def test_research_store_is_not_claimed_complete(phase):
-    """The strongest overclaim risk: foundation completeness reading as store
-    completeness."""
+    """The strongest overclaim risk: FOUNDATION completeness reading as STORE
+    completeness. The foundation is now a reviewed candidate, so the guard moves
+    from 'no such milestone' to 'the milestone must not claim durability'.
+    Durable means merged with post-merge main CI, and neither has happened."""
+    m = _p0c(phase)["milestones"]["research_store_foundation"]
+    assert m["durable"] is False
+    assert m["status"] != "complete"
+    assert "merged_main_sha" not in m, "not merged, so no merged SHA may be recorded"
+    # the FOUNDATION is not the whole store: historical reads remain outstanding
     remaining = " ".join(_p0c(phase)["remaining_work"]).lower()
-    assert "research-store" in remaining or "research store" in remaining
-    milestones = _p0c(phase)["milestones"]
-    assert not any("research_store" in name for name in milestones)
+    assert "as-of reads" in remaining
+    assert "lookahead audit" in remaining
 
 
 def test_next_bounded_candidate_is_a_candidate_not_an_authorization(phase):
+    """The candidate names the NEXT bounded task and is never itself a
+    milestone. The guard is about the roadmap not self-authorizing, not about
+    which task happens to be queued — so it is asserted structurally rather than
+    against a name that changes every session."""
     p0c = _p0c(phase)
-    assert p0c["next_bounded_candidate"] == "revision/supersession safety"
-    # it must not appear as an implemented or started milestone
-    assert not any("revision" in name or "supersession" in name
-                   for name in p0c["milestones"])
+    candidate = p0c["next_bounded_candidate"]
+    assert candidate, "a next candidate must always be named"
+    slug = candidate.lower().replace(" ", "_").replace("-", "_")
+    for name in p0c["milestones"]:
+        assert name not in slug, (
+            f"{name} is queued as the next candidate AND recorded as a milestone; "
+            "one of those is wrong")
+    assert any(word in candidate.lower() for word in ("as-of", "as_of")), \
+        "after the store foundation, historical as-of reads are next"
+
+
+def test_revision_supersession_safety_durability_evidence_is_recorded(phase):
+    """It shipped, so state must say so. Leaving it queued as a candidate is
+    what would send the autonomous task resolver back to redo PR #22."""
+    m = _p0c(phase)["milestones"]["revision_supersession_safety"]
+    assert m["durable"] is True
+    assert m["merged_main_sha"] == "3d97bb392b595f90baa8787b8c9d2aa592c00f8a"
+    assert m["post_merge_main_ci_result"] == "SUCCESS"
+    assert m["session_id"] == "ns0c-revision-supersession-002"
+    assert m["pull_request"] == 22
+
+
+def test_revision_safety_did_not_resolve_the_deferred_policies(phase):
+    """Shipping the safety rule must not be read as having decided the two
+    questions it deliberately left open."""
+    preserved = " ".join(
+        _p0c(phase)["milestones"]["revision_supersession_safety"]["preserved_unresolved"])
+    assert "UNRESOLVED_NOT_INVENTED" in preserved
+    assert "effective_period" in preserved
 
 
 def test_effective_period_policy_remains_unresolved(phase):
