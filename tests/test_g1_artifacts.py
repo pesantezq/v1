@@ -79,12 +79,22 @@ def test_the_formal_artifacts_exist():
 # PREREGISTRATION BINDING
 # =========================================================================== #
 def test_the_formal_run_is_bound_to_a_verified_freeze(report):
+    """The binding must hold in any checkout.
+
+    The commit-level proof needs the freeze commit's object, which a shallow
+    CI clone does not carry. That is indeterminate, not refuted -- so this
+    asserts the digest binding unconditionally and the commit proof only where
+    it can be attempted."""
     pre = report["preregistration"]
     v = PRE.verify_freeze(REPO)
     assert v.ok, v.reasons
     assert pre["freeze_digest"] == v.current_digest
     assert pre["preregistration_commit"] == v.recorded_commit
     assert pre["population"] == "PREREGISTERED_FORMAL"
+    if v.commit_available:
+        assert v.fully_verified, v.reasons
+    else:
+        assert v.indeterminate_reasons
 
 
 def test_every_record_carries_the_verified_freeze_digest(records):

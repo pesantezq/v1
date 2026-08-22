@@ -148,17 +148,41 @@ def freeze_digest() -> str:
 
 @dataclass(frozen=True)
 class FreezeVerification:
+    """Verification outcome, with 'unverifiable here' kept distinct from 'false'.
+
+    CI checks out with ``fetch-depth: 1``, so the freeze commit's object is
+    simply absent from that clone. An earlier version reported that as a
+    verification FAILURE, which is wrong in the direction that matters: the
+    freeze was not refuted, it could not be examined. Reporting absence as
+    refutation would eventually train a reader to ignore the check; reporting it
+    as success would hide a real one. So it gets its own state."""
+
     ok: bool
     reasons: tuple[str, ...]
     recorded_commit: str
     recorded_digest: str
     current_digest: str
+    #: Is the freeze commit's object present in THIS checkout?
+    commit_available: bool = True
+    #: Was the registered file actually read out of that commit and matched?
+    verified_against_commit: bool = False
+    #: Why the commit-level proof could not be attempted, when it could not.
+    indeterminate_reasons: tuple[str, ...] = ()
+
+    @property
+    def fully_verified(self) -> bool:
+        """Digest matches AND the commit itself was examined."""
+        return self.ok and self.verified_against_commit
 
     def to_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "reasons": list(self.reasons),
                 "recorded_commit": self.recorded_commit,
                 "recorded_digest": self.recorded_digest,
-                "current_digest": self.current_digest}
+                "current_digest": self.current_digest,
+                "commit_available": self.commit_available,
+                "verified_against_commit": self.verified_against_commit,
+                "fully_verified": self.fully_verified,
+                "indeterminate_reasons": list(self.indeterminate_reasons)}
 
 
 def _git(repo_root: Path, *args: str) -> Optional[str]:
@@ -182,7 +206,13 @@ def verify_freeze(repo_root: str | Path) -> FreezeVerification:
          digest -- read with ``git show``, not from the working tree, because a
          working-tree read would compare the freeze to itself.
 
-    Check 3 is the one that makes this more than a self-assertion."""
+    Check 3 is the one that makes this more than a self-assertion. It requires
+    the commit object to be PRESENT, which it is not in a shallow clone. When the
+    object is absent the result is INDETERMINATE for check 3 and ``ok`` still
+    reflects checks 1 and 2: the freeze has not been refuted, it merely cannot
+    be examined from here. ``fully_verified`` is the stricter property, and a
+    caller that needs the commit-level proof should read that instead of
+    ``ok``."""
     root = Path(repo_root)
     reasons: list[str] = []
     current = freeze_digest()
@@ -205,9 +235,22 @@ def verify_freeze(repo_root: str | Path) -> FreezeVerification:
             f"the frozen material has CHANGED since the freeze: recorded "
             f"{recorded}, current {current}")
 
+    commit_available = True
+    verified_against_commit = False
+    indeterminate: list[str] = []
+
     if commit and commit != UNCOMMITTED:
-        blob = _git(root, "show", f"{commit}:{PREREGISTRATION_REL}")
-        if blob is None:
+        # Is the object even here? A shallow checkout will not have it, and that
+        # is a different fact from "the commit lacks the material".
+        present = _git(root, "cat-file", "-e", f"{commit}^{{commit}}") is not None
+        blob = _git(root, "show", f"{commit}:{PREREGISTRATION_REL}") if present else None
+        if not present:
+            commit_available = False
+            indeterminate.append(
+                f"commit {commit[:12]} is not present in this checkout (a "
+                "shallow clone does not carry it), so the commit-level proof "
+                "could not be attempted; the digest check above still holds")
+        elif blob is None:
             reasons.append(
                 f"commit {commit[:12]} does not contain {PREREGISTRATION_REL}; "
                 "a freeze point that does not hold the registered material "
@@ -224,9 +267,14 @@ def verify_freeze(repo_root: str | Path) -> FreezeVerification:
                         f"the digest committed at {commit[:12]} "
                         f"({committed_digest}) does not match the current "
                         f"material ({current})")
+                else:
+                    verified_against_commit = True
 
-    return FreezeVerification(not reasons, tuple(reasons), commit, recorded,
-                              current)
+    return FreezeVerification(
+        not reasons, tuple(reasons), commit, recorded, current,
+        commit_available=commit_available,
+        verified_against_commit=verified_against_commit,
+        indeterminate_reasons=tuple(indeterminate))
 
 
 def preregistration_artifact() -> dict[str, Any]:

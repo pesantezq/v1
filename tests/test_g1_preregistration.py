@@ -133,25 +133,70 @@ def test_the_committed_preregistration_matches_the_current_material():
         "the frozen material has changed since preregistration.json was written")
 
 
-def test_the_freeze_verifies_against_the_recorded_commit():
-    """The load-bearing check: read the registered file OUT OF the commit.
-
-    A working-tree read would compare the freeze to itself."""
+def test_the_freeze_is_not_refuted_anywhere():
+    """Checks 1 and 2 hold in every checkout, shallow or not."""
     v = PRE.verify_freeze(REPO)
     assert v.ok, v.reasons
     assert v.recorded_commit != PRE.UNCOMMITTED
     assert v.recorded_digest == v.current_digest
 
 
-def test_verification_fails_when_the_pointer_names_a_bogus_commit(tmp_path):
-    """Negative control: the verifier must actually be able to fail."""
+def test_the_commit_level_proof_holds_where_the_commit_is_available():
+    """The load-bearing check: read the registered file OUT OF the commit.
+
+    A working-tree read would compare the freeze to itself. CI checks out with
+    fetch-depth 1, so the freeze commit's object is absent there -- which is
+    INDETERMINATE, not refuted, and must be reported as such rather than
+    silently passing or noisily failing."""
+    v = PRE.verify_freeze(REPO)
+    if not v.commit_available:
+        assert v.indeterminate_reasons, (
+            "an unavailable commit must say why it could not be examined")
+        assert not v.verified_against_commit
+        assert v.ok, "absence of the object is not refutation"
+        pytest.skip(f"freeze commit not in this checkout: "
+                    f"{v.indeterminate_reasons[0]}")
+    assert v.fully_verified, v.reasons
+    assert v.verified_against_commit
+
+
+def test_an_unavailable_commit_is_indeterminate_not_a_failure(tmp_path):
+    """Negative control for the new distinction itself."""
     (tmp_path / "evals" / "g1").mkdir(parents=True)
     (tmp_path / PRE.FREEZE_POINTER_REL).write_text(json.dumps({
         "preregistration_commit": "0" * 40,
         "freeze_digest": PRE.freeze_digest()}), encoding="utf-8")
-    v = PRE.verify_freeze(tmp_path)
+    v = PRE.verify_freeze(tmp_path)          # not a git repo at all
+    assert not v.commit_available
+    assert not v.verified_against_commit
+    assert v.ok, "the digest matched; nothing was refuted"
+    assert v.indeterminate_reasons
+
+
+def test_verification_fails_when_a_present_commit_lacks_the_material(tmp_path):
+    """Negative control: a commit that EXISTS but lacks the registered file is a
+    genuine failure, distinct from an absent object."""
+    import subprocess
+    repo = tmp_path / "r"
+    repo.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+    (repo / "unrelated.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "no preregistration here"],
+                   cwd=repo, check=True, env=env)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                         capture_output=True, text=True, env=env).stdout.strip()
+    (repo / "evals" / "g1").mkdir(parents=True)
+    (repo / PRE.FREEZE_POINTER_REL).write_text(json.dumps({
+        "preregistration_commit": sha,
+        "freeze_digest": PRE.freeze_digest()}), encoding="utf-8")
+    v = PRE.verify_freeze(repo)
+    assert v.commit_available, "the commit exists in this repo"
     assert not v.ok
-    assert any("does not contain" in r or "unreadable" in r for r in v.reasons)
+    assert any("does not contain" in r for r in v.reasons)
 
 
 def test_verification_fails_when_the_recorded_digest_is_stale(tmp_path):
