@@ -57,11 +57,13 @@ detection" is in the packet. `gpt-4o` refused it; `gpt-4o-mini` passed it,
 citing the passing benign-line test. This is the single most consequential
 individual result in the corpus.
 
-**Run-to-run variance is itself a finding.** Two runs of the identical corpus
-produced the same false-PASS *count* for `gpt-4o-mini` (5) but a different
-*composition* — `g1-repair-mocked-away-behaviour` failed in one run and not the
-other. At n=17 per model, *which* cases fail is unstable even when the rate is
-not. Any future threshold must be set against a much larger corpus.
+**A previously stated run-to-run variance conclusion has been withdrawn.** An
+earlier version of this document presented run-to-run instability in *which*
+cases fail as a finding. The raw records for the first of those runs were
+overwritten before they were committed, so the claim has no attributable
+evidence behind it and is retracted rather than restated. It may well be true —
+small-sample instability is expected — but G1 does not get to assert things it
+cannot show. Anything on this point is an unverified observation, not a result.
 
 ---
 
@@ -107,13 +109,57 @@ acceptable alternate verdict for a case whose expected answer is a refusal.**
 Enforced in `EvaluationCaseV0.__post_init__`, not left to discretion — otherwise
 the primary safety metric could be defined away one case at a time.
 
-## Criteria were frozen before the scored run
+## Preregistration: a real freeze, not a claim about a SHA
 
-`g1/criteria.py` is a separate module, committed before any live call was scored,
-recording what counts as a false PASS, what counts as a false FAIL, which
-classes are excluded, which severities are safety-critical, and the minimum
-audit coverage. The report renders them from that file rather than restating
-them, so a change is a visible diff to a frozen artifact.
+An earlier version of this work set `CRITERIA_FROZEN_AT_CANDIDATE = "3bdb329a"`
+— the parent commit, which **does not contain `criteria.py` at all**, because G1
+did not exist yet. The claim was checkable and false, and it read as a stronger
+guarantee than the truth while proving less. It would have survived
+indefinitely, because nobody re-checks a SHA that looks plausible. A test now
+asserts that commit really lacked the file, so the rationale for this repair
+cannot quietly become folklore.
+
+The freeze is now a **content digest** over everything that must not move once
+scoring begins: the criteria, the taxonomy, and per case its version, packet
+fingerprint, expected verdict, acceptable alternates, gold basis, gold
+provenance, split and severity. It is computed from that material alone, never
+from a commit id — which is what resolves the ordering problem, since a commit
+cannot contain its own SHA:
+
+1. a commit introduces the registered material and `preregistration.json`,
+   carrying the digest;
+2. that commit's SHA is read afterwards and recorded in a separate pointer;
+3. `verify_freeze()` proves the **current** code still digests to the value
+   recorded in that commit — read with `git show`, not from the working tree,
+   because a working-tree read would compare the freeze to itself.
+
+Step 3 is load-bearing and anyone can re-run it. Negative controls prove the
+verifier can fail: a bogus commit and a stale digest are both rejected, and a
+parametrised test mutates each frozen field in turn and asserts the digest
+changes.
+
+**The freeze then bound its own author.** After the first formal run, the audit
+sampler was improved — certifications now sort strictly ahead of other
+high-severity decisions, and selection is stratified so no priority band is
+starved. Audit selection policy is *registered material*, so that improvement
+required a **new freeze and a fresh scored run**, not a quiet edit under the old
+one. Run 001 is preserved under `formal_superseded_freeze_v1/` with a manifest
+saying why. Keeping a worse sampler to avoid admitting a policy change would
+have been cargo-cult rigour; changing policy silently would have been the
+original defect again.
+
+```
+freeze v1  g1freeze_c3527fd036cdb524d1cc7516b8d51420  @ f7abf6b   (superseded)
+freeze v2  g1freeze_fd5410cd3d5af64b5f96e4af8022e460  @ 755eb80   (in force)
+```
+
+What the freeze does **not** claim: that the gold labels are correct, or
+human-adjudicated. Only that they were fixed before the scored run and have not
+changed since.
+
+**No numeric graduation threshold is applied.** None has been frozen by the
+operator, and a threshold chosen after seeing results lands where the results
+already are. The report *recommends* one for separate human approval.
 
 **No numeric graduation threshold is applied.** None has been frozen by the
 operator, and a threshold chosen after seeing results lands where the results
@@ -131,6 +177,40 @@ declines to apply it.
   and coverage and nothing else; `build_report()` has no `status` parameter.
   There is no COMPLETE-with-caveats state, because that is how INCONCLUSIVE gets
   reported as success.
+
+## Audit identity: three defects that inflated apparent coverage
+
+All three were in the first G1 candidate and all three made the audit look
+further along than it was.
+
+**Selection and completion keyed on `case_id` alone.** The corpus is measured
+under more than one model, so one case yields several scored decisions — and an
+adjudication of `gpt-4o`'s answer silently satisfied coverage for
+`gpt-4o-mini`'s answer to the *same question*. Worse, an audit record for a
+decision that was never selected counted anyway. Identity is now `record_id`,
+which includes `execution_id`, `config_id` and `run_id`; non-member submissions
+are **rejected and reported**, not dropped and not counted.
+
+**The sample came from a different population than the accuracy denominator.**
+It excluded the three `EXCLUDED_*` classes but still admitted supervisor outages
+and `HUMAN_REVIEW_PENDING` records. An outage is not a semantic judgement;
+auditing one buys nothing and makes the fraction look met. Both now share
+`contracts.is_scored`, so they cannot drift.
+
+**`round()` computed the target**, so a configured 20% minimum could round
+*down* — 20% of 11 became 2. Now `ceil`. A minimum that rounds down is not a
+minimum.
+
+## Configuration identity is pre-call
+
+`MeasurementConfig` used to carry `served_model_version`, which is only knowable
+*after* the call. So `config_id` was one value before execution and another
+after, while the records — written during execution — kept the pre-call id. The
+report then listed configurations that joined to **nothing**.
+
+The served build is now a post-call observation on the *record*. Configuration
+identity is strictly what was requested, and a test asserts every reported
+configuration joins back to real records in both directions.
 
 ## Human audit: pending, by design
 
@@ -192,14 +272,25 @@ for.
 
 ## Artifacts
 
+Three populations, physically separate and never pooled.
+
 ```
-evals/g1/g1_report.json           full machine-readable report
-evals/g1/g1_records.json          34 immutable, attributable records
-evals/g1/g1_per_model.json        per-configuration breakdown
-evals/g1/g1_audit_packet.json     the human audit packet (unadjudicated)
-evals/g1/g1_corpus_manifest.json  corpus composition + case fingerprints
+evals/g1/preregistration.json              the registered material + digest
+evals/g1/preregistration_freeze.json       the commit anchor
+
+evals/g1/formal/                           THE PREREGISTERED RESULT
+    report.json                            bound to freeze v2, verified
+    records.json                           34 records, run g1run-formal-002
+    per_model.json                          per-configuration breakdown
+    audit_packet.json                      7 decisions, unadjudicated
+
+evals/g1/formal_superseded_freeze_v1/      formal run 001 under freeze v1
+evals/g1/historical_exploratory/           34 pre-freeze decisions, byte-identical
 ```
 
-`tests/test_g1_artifacts.py` re-derives the report's numbers from the committed
-records using current code, so the stored evidence cannot drift from the logic
-that produced it.
+Every record carries `run_id`, `population` and `preregistration_digest`, so a
+population is a property of the record rather than of the directory it happens
+to sit in. `tests/test_g1_artifacts.py` re-derives the report's numbers, status
+and audit sample from the committed records using current code;
+`tests/test_g1_preregistration.py` proves the freeze against its commit and
+proves the historical files were copied, not edited.
