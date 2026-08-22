@@ -124,9 +124,54 @@ def _identity(case: EvaluationCaseV0, cfg: MeasurementConfig, *,
     return ident.to_dict()
 
 
+class FreezeNotReady(RuntimeError):
+    """Formal scoring was attempted before the freeze could be verified.
+
+    The gate lives in the library, not only in the run script, so a future
+    caller cannot reach the supervisor by writing its own loop. Verification is
+    performed here rather than accepted as an argument: a boolean supplied by
+    the party that wants to score is not evidence."""
+
+
+def _assert_freeze_ready(repo_root, expected_digest: str, *,
+                         require_commit_proof: bool) -> None:
+    """Gate formal scoring on the freeze.
+
+    TWO STRENGTHS, deliberately.
+
+    Always required: the preregistration verifies and the working tree digests
+    to the freeze the run declares. Those hold in any checkout and catch the
+    thing that actually matters -- registered material moving after the freeze.
+
+    require_commit_proof additionally demands that the freeze commit object
+    be present so containment can be read out of it. That is the right bar for a
+    REAL scored run, where money is spent and a preregistered claim is minted,
+    and it is what the run script asks for. It is the wrong bar for hermetic
+    tests: CI checks out with fetch-depth 1, so the object is absent there, and
+    an absent object is INDETERMINATE rather than refuted. Making every record
+    construction demand it turned a shallow clone into a failure."""
+    from portfolio_automation.engineer_worker.g1.preregistration import verify_freeze
+
+    v = verify_freeze(repo_root)
+    if not v.ok:
+        raise FreezeNotReady(
+            f"refusing to score: the preregistration does not verify: "
+            f"{list(v.reasons)}")
+    if v.current_digest != expected_digest:
+        raise FreezeNotReady(
+            f"refusing to score: the run declares freeze {expected_digest} but "
+            f"the working tree registers {v.current_digest}; the corpus or "
+            "criteria moved after the freeze")
+    if require_commit_proof and not v.fully_verified:
+        raise FreezeNotReady(
+            "refusing to score: containment could not be proven at the freeze "
+            f"commit: {list(v.indeterminate_reasons) or list(v.reasons)}")
+
+
 def run_cases(cases: Sequence[EvaluationCaseV0], supervisor: SupervisorFn, *,
               config: MeasurementConfig, now_fn: Callable[[], str],
-              run_id: str,
+              run_id: str, repo_root: Any = None,
+              require_commit_proof: bool = False,
               population: RunPopulation = RunPopulation.PREREGISTERED_FORMAL,
               preregistration_digest: str = UNAVAILABLE,
               worker_id: str = "g1_supervisor_benchmark",
@@ -145,12 +190,21 @@ def run_cases(cases: Sequence[EvaluationCaseV0], supervisor: SupervisorFn, *,
     ``population`` and ``preregistration_digest`` travel on every record so a
     later reader can tell a preregistered result from an exploratory one without
     knowing which file it came out of."""
-    if population is RunPopulation.PREREGISTERED_FORMAL and \
-            preregistration_digest == UNAVAILABLE:
-        raise ValueError(
-            "a PREREGISTERED_FORMAL run requires a preregistration_digest; "
-            "without one there is nothing proving what was frozen before the "
-            "measurement, which is the only thing that makes it preregistered")
+    if population is RunPopulation.PREREGISTERED_FORMAL:
+        if preregistration_digest == UNAVAILABLE:
+            raise ValueError(
+                "a PREREGISTERED_FORMAL run requires a preregistration_digest; "
+                "without one there is nothing proving what was frozen before "
+                "the measurement, which is the only thing that makes it "
+                "preregistered")
+        if repo_root is None:
+            raise ValueError(
+                "a PREREGISTERED_FORMAL run requires repo_root so the freeze "
+                "can be verified HERE, before any call is made. A caller-"
+                "supplied 'the freeze is fine' boolean would be "
+                "self-certification")
+        _assert_freeze_ready(repo_root, preregistration_digest,
+                             require_commit_proof=require_commit_proof)
     leaked = [c.case_id for c in cases if c.split is Split.HELD_OUT]
     if leaked and not allow_held_out:
         raise SplitLeakError(

@@ -120,6 +120,12 @@ def build_report(*, metrics: G1Metrics, coverage: AuditCoverage,
     The frozen taxonomy, criteria and corpus manifests are embedded rather than
     referenced, so a reader can check what was counted without trusting that
     the source has not moved since."""
+    # A report is a claim about ONE population. Checked here as well as in
+    # compute_metrics, because a caller can assemble a report from
+    # pre-computed metrics and would otherwise bypass the metric-level check.
+    if records:
+        from portfolio_automation.engineer_worker.g1.metrics import assert_homogeneous
+        assert_homogeneous(records)
     decision = measurement_status(metrics, coverage)
     return {
         "schema_version": REPORT_SCHEMA_VERSION, "schema_kind": G1_SCHEMA_KIND,

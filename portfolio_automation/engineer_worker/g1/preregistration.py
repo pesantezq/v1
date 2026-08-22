@@ -49,7 +49,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from portfolio_automation.engineer_worker.g1 import G1_NAMESPACE, G1_SCHEMA_KIND
 from portfolio_automation.engineer_worker.g1 import corpus as CORPUS
@@ -283,9 +283,16 @@ def preregistration_artifact() -> dict[str, Any]:
     return {**content, "freeze_digest": freeze_digest()}
 
 
-def freeze_pointer(commit: str) -> dict[str, Any]:
-    """The anchor, written AFTER the freeze commit exists."""
+def freeze_pointer(commit: str,
+                  superseded: Sequence[Mapping[str, str]] = ()) -> dict[str, Any]:
+    """The anchor, written AFTER the freeze commit exists.
+
+    superseded records the freeze lineage. A reader inspecting a formal
+    result needs to know not just which freeze it was measured under but which
+    freezes preceded it and why they were replaced -- otherwise a superseded
+    population looks like a contradictory one."""
     return {
+        "superseded_freezes": [dict(s) for s in superseded],
         "schema_version": PREREGISTRATION_SCHEMA_VERSION,
         "schema_kind": G1_SCHEMA_KIND,
         "preregistration_commit": commit,
