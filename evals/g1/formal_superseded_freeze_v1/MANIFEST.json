@@ -1,0 +1,11 @@
+{
+ "freeze_digest": "g1freeze_c3527fd036cdb524d1cc7516b8d51420",
+ "not_combinable_with": "evals/g1/formal/",
+ "population": "PREREGISTERED_FORMAL",
+ "preregistration_commit": "f7abf6b03bceafc0f4574071db59ae56a3edd9b7",
+ "run_id": "g1run-formal-001",
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.superseded_formal_run.v1",
+ "status": "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE",
+ "why_superseded": "Run 001 scored correctly under freeze v1 and its supervisor decisions are valid. It is superseded because the AUDIT SELECTION POLICY was subsequently improved -- PASS certifications now sort strictly ahead of other high-severity cases, and the sample is stratified so no priority band is starved. Audit policy is part of the registered material, so changing it required a new freeze rather than a quiet edit under the old one. Preserved because it is real evidence and because the supersession is itself the mechanism working."
+}

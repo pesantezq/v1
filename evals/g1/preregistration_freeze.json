@@ -1,0 +1,9 @@
+{
+ "freeze_digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
+ "preregistration_commit": "755eb80162406009c18c0a608f66b312f016238a",
+ "registered_file": "evals/g1/preregistration.json",
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.preregistration.v1",
+ "scope": "This proves the criteria, taxonomy, splits, gold labels and gold provenance were fixed before the scored run and have not changed since. It does NOT claim the gold labels are correct, nor that they are human-adjudicated.",
+ "verification": "verify_freeze() re-derives the digest from current code and compares it against the copy of preregistration.json committed at preregistration_commit, read via git show. It does not trust the working tree."
+}
