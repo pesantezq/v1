@@ -39,6 +39,13 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping, Sequence
 
 from portfolio_automation.engineer_worker.g1 import G1_NAMESPACE, G1_SCHEMA_KIND
+from portfolio_automation.engineer_worker.g1.casebuild import packet
+from portfolio_automation.engineer_worker.g1.corpus_escalate_abstain import (
+    ESCALATE_ABSTAIN_CASES,
+)
+from portfolio_automation.engineer_worker.g1.corpus_pass_repair import (
+    PASS_REPAIR_CASES,
+)
 from portfolio_automation.engineer_worker.g1.contracts import (
     EvaluationCaseV0, G1ContractError, GoldBasis, Severity, SourceClass, Split,
 )
@@ -46,58 +53,10 @@ from portfolio_automation.engineer_worker.g1.taxonomy import OutcomeClass as V
 
 CORPUS_SCHEMA_VERSION = f"{G1_NAMESPACE}.corpus.v1"
 
-#: Bumped when ROTATING_FRESH cases are replaced. A static benchmark eventually
-#: measures memorisation of the benchmark.
-ROTATION_EPOCH = 1
-
-_OK_CHECKS = {"protected_path_ok": True, "scope_ok": True, "policy_ok": True,
-              "tests_ok": True, "canonical_repo_untouched": True}
-_OK_EVIDENCE = {"evidence_sufficient": "YES", "refusals": [], "details": [],
-                "checks": {"ACCEPTANCE_CRITERIA_PRESENT": "YES",
-                           "CHANGED_PATHS_PRESENT": "YES",
-                           "TESTS_RUN_PRESENT": "YES", "DIFF_PRESENT": "YES",
-                           "CHANGED_PATHS_IN_DIFF": "YES",
-                           "RESULTS_BACKED_BY_RUNS": "YES"}}
-
-
-def packet(*, task_id: str, title: str, goal: str, requirements: Sequence[str],
-           criteria: Sequence[str], changed: Sequence[str], diff: str,
-           tests: Sequence[str], results: Mapping[str, str],
-           worker_claim: str = "IMPLEMENTATION_COMPLETE",
-           candidate_sha: str = "0" * 40,
-           verification_steps: Sequence[str] = ()) -> dict[str, Any]:
-    """Build a packet with the EXACT keys the production path produces.
-
-    Deliberately mirrors ``ew0a.build_supervisor_packet`` +
-    ``durable_certification.binding_envelope``. A corpus that invented its own
-    field names would measure the supervisor's behaviour on a prompt it never
-    sees in production."""
-    return {
-        "schema_version": "engineering.ew0a_supervisor_packet.v1",
-        "schema_kind": G1_SCHEMA_KIND,
-        "task": {"task_id": task_id, "title": title, "goal": goal,
-                 "risk_class": "E2_MODERATE", "executor": "ENGINEER",
-                 "session_id": "g1", "attempt_id": "a1"},
-        "requirements": list(requirements),
-        "acceptance_criteria": list(criteria),
-        "verification_steps": list(verification_steps),
-        "allowed_paths": ["portfolio_automation/", "tests/"],
-        "changed_files": list(changed),
-        "diff": diff,
-        "tests_run": list(tests),
-        "test_results": dict(results),
-        "py_compile_ok": True,
-        "deterministic_checks": dict(_OK_CHECKS),
-        "evidence_sufficiency": dict(_OK_EVIDENCE),
-        "worker_claim": worker_claim,
-        "worker_abstained": False,
-        "abstain_reason": None,
-        "candidate_sha": candidate_sha,
-        "mission_id": "g1_supervisor_measurement",
-        "criteria": [{"criterion_id": f"AC{i}", "claim": c}
-                     for i, c in enumerate(criteria)],
-    }
-
+#: Bumped when the ROTATING_FRESH generation changes. A static benchmark
+#: eventually measures memorisation of the benchmark. Epoch 2 adds the
+#: G1-completion expansion.
+ROTATION_EPOCH = 2
 
 def _case(**kw) -> EvaluationCaseV0:
     kw.setdefault("case_version", 1)
@@ -785,8 +744,13 @@ _ABSTAIN_CASES = [
 ]
 
 
+#: The G1-completion corpus. The original 17 cases are retained verbatim -- they
+#: still satisfy the case contract, and discarding measured questions to make
+#: room for new ones would throw away comparability for no gain. The expansion
+#: adds breadth of JUDGEMENT, not repeated observations of the same questions.
 ALL_CASES: tuple[EvaluationCaseV0, ...] = tuple(
-    _PASS_CASES + _REPAIR_CASES + _ESCALATE_CASES + _ABSTAIN_CASES)
+    _PASS_CASES + _REPAIR_CASES + _ESCALATE_CASES + _ABSTAIN_CASES
+) + PASS_REPAIR_CASES + ESCALATE_ABSTAIN_CASES
 
 
 class SplitLeakError(AssertionError):
