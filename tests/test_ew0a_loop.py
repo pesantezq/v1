@@ -19,6 +19,7 @@ from portfolio_automation.engineer_worker.ew0a_authority import (
 from portfolio_automation.engineer_worker.ew0a_loop import (
     RuntimePolicy, Route, route_task, run_task, run_mission, regression_delta, LoopStop)
 from portfolio_automation.engineer_worker.gpt_supervisor import SupervisorDecision, SupervisorVerdict
+from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
 
 
 def _now():
@@ -38,16 +39,28 @@ def _task(risk=RiskClass.E1_ROUTINE, mission="northstar_test", **over):
     return EngineeringTaskV0(**d)
 
 
+# A diff that actually names the path it claims to change. The previous
+# fixtures carried none, which the EW-0B evidence-sufficiency gate refuses: a
+# changed-file list with no diff behind it is a claim, not evidence.
+_DIFF = "--- a/tests/tx.py\n+++ b/tests/tx.py\n+assert True\n"
+
+# The roadmap authorization these tests run under. Undefaulted at the call
+# site on purpose -- see roadmap_guard: a guard that can be omitted is omitted.
+ROADMAP = RoadmapAuthorization.for_mission("northstar_test")
+
+
 def _pass_attempt(task, n):
     return AttemptEvidence(attempt_id=f"a{n}", executor=Executor.ENGINEER, worker_claim="done",
-                           changed_paths=["tests/tx.py"], tests_run=["tests/tx.py"],
+                           changed_paths=["tests/tx.py"], diff_text=_DIFF,
+                           tests_run=["tests/tx.py"],
                            test_results={"tests/tx.py": "PASS"}, py_compile_ok=True,
                            canonical_repo_touched=False)
 
 
 def _fail_attempt(task, n):
     return AttemptEvidence(attempt_id=f"a{n}", executor=Executor.ENGINEER, worker_claim="done",
-                           changed_paths=["tests/tx.py"], tests_run=["tests/tx.py"],
+                           changed_paths=["tests/tx.py"], diff_text=_DIFF,
+                           tests_run=["tests/tx.py"],
                            test_results={"tests/tx.py": "FAIL"}, py_compile_ok=True,
                            canonical_repo_touched=False)
 
@@ -86,18 +99,18 @@ def test_route_engineer_denied_without_a1():
 def test_engineer_pass_verified(durable_ctx):
     sup = SUP_PASS()
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, _pass_attempt,
-                 lambda t, v: _pass_attempt(t, 9), sup, _now, _vid, certification=durable_ctx)
+                 lambda t, v: _pass_attempt(t, 9), sup, _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.final_status == TaskStatus.VERIFIED.value and sup.calls == 1
 
 def test_deterministic_fail_never_verified_even_if_gpt_would_pass(durable_ctx):
     sup = SUP_PASS()   # GPT would pass, but a failing test blocks deterministically
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, _fail_attempt,
-                 lambda t, v: _fail_attempt(t, 9), sup, _now, _vid, certification=durable_ctx)
+                 lambda t, v: _fail_attempt(t, 9), sup, _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.final_status != TaskStatus.VERIFIED.value
 
 def test_supervisor_unavailable_pauses_never_verifies(durable_ctx):
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, _pass_attempt,
-                 lambda t, v: _pass_attempt(t, 9), SUP_UNAVAIL(), _now, _vid, certification=durable_ctx)
+                 lambda t, v: _pass_attempt(t, 9), SUP_UNAVAIL(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.supervisor_outage and r.final_status != TaskStatus.VERIFIED.value
 
 
@@ -108,18 +121,18 @@ def test_repair_then_pass_within_limit(durable_ctx):
         calls["n"] = n
         return _pass_attempt(t, n) if n >= 2 else _fail_attempt(t, n)
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, eng,
-                 lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                 lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.final_status == TaskStatus.VERIFIED.value and r.engineer_attempts == 2
 
 def test_retry_bound_enforced_then_claude_escalation(durable_ctx):
     # engineer always fails; max_attempts=2 -> exactly 2 attempts, then Claude fixes it
     r = run_task(_task(max_attempts=2), Lvl.A1_ASSISTED_ENGINEERING, POLICY, _fail_attempt,
-                 lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                 lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.engineer_attempts == 2 and r.escalated and r.final_status == TaskStatus.VERIFIED.value
 
 def test_both_fail_stops_not_verified(durable_ctx):
     r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, _fail_attempt,
-                 lambda t, v: _fail_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                 lambda t, v: _fail_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.final_status != TaskStatus.VERIFIED.value and r.escalated
 
 
@@ -127,14 +140,14 @@ def test_both_fail_stops_not_verified(durable_ctx):
 def test_claude_result_still_goes_through_gpt(durable_ctx):
     # Claude "passes" deterministically but GPT REPAIRs -> not verified
     r = run_task(_task(RiskClass.E3_HIGH), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
-                 _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_REPAIR(), _now, _vid, certification=durable_ctx)
+                 _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_REPAIR(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.route == Route.CLAUDE.value and r.final_status != TaskStatus.VERIFIED.value
 
 
 # --- Phase 9/10: human + disabled authorities -------------------------------
 def test_e4_human_required_stop(durable_ctx):
     r = run_task(_task(RiskClass.E4_CONSEQUENTIAL), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
-                 _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                 _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert r.human_required and r.final_status != TaskStatus.VERIFIED.value
 
 @pytest.mark.parametrize("op", ["MERGE", "DEPLOY", "PRODUCTION_WRITE", "SELF_PROMOTION", "CAPITAL_DECISION",
@@ -154,7 +167,7 @@ def test_mission_boundary_refuses_out_of_mission_task(durable_ctx):
          _task(task_id="in2", mission="northstar_test"),
          _task(task_id="OUT", mission="some_other_phase")]
     rep = run_mission(POLICY, q, Lvl.A1_ASSISTED_ENGINEERING, _pass_attempt,
-                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     ran = [t["task_id"] for t in rep.tasks_run]
     assert ran == ["in1", "in2"] and "OUT" not in ran
     assert rep.stop_reason.startswith(LoopStop.MISSION_COMPLETE.value)
@@ -162,20 +175,20 @@ def test_mission_boundary_refuses_out_of_mission_task(durable_ctx):
 def test_mission_completes_and_stops_for_review(durable_ctx):
     q = [_task(task_id="a"), _task(task_id="b")]
     rep = run_mission(POLICY, q, Lvl.A1_ASSISTED_ENGINEERING, _pass_attempt,
-                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert rep.verified == 2 and rep.stop_reason == LoopStop.MISSION_COMPLETE.value
 
 def test_checkpoint_budget_stops(durable_ctx):
     pol = RuntimePolicy(mission_id="northstar_test", max_tasks_without_checkpoint=1)
     q = [_task(task_id="a"), _task(task_id="b")]
     rep = run_mission(pol, q, Lvl.A1_ASSISTED_ENGINEERING, _pass_attempt,
-                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert len(rep.tasks_run) == 1 and rep.stop_reason == LoopStop.CHECKPOINT_BUDGET.value
 
 def test_human_required_stops_mission(durable_ctx):
     q = [_task(task_id="a"), _task(task_id="e4", risk=RiskClass.E4_CONSEQUENTIAL), _task(task_id="never")]
     rep = run_mission(POLICY, q, Lvl.A1_ASSISTED_ENGINEERING, _pass_attempt,
-                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx)
+                      lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert "never" not in [t["task_id"] for t in rep.tasks_run]
     assert rep.stop_reason == LoopStop.HUMAN_REQUIRED.value
 
@@ -222,7 +235,7 @@ def test_durable_outcomes_written(tmp_path, durable_ctx):
     log = str(tmp_path / "out.jsonl")
     q = [_task(task_id="a"), _task(task_id="b")]
     run_mission(POLICY, q, Lvl.A1_ASSISTED_ENGINEERING, _pass_attempt,
-                lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, outcome_log=log, certification=durable_ctx)
+                lambda t, v: _pass_attempt(t, 9), SUP_PASS(), _now, _vid, outcome_log=log, certification=durable_ctx, roadmap=ROADMAP)
     from portfolio_automation.engineer_worker.ew0a import read_outcomes
     rows = read_outcomes(log)
     assert len(rows) == 2 and all(r["final_status"] == "VERIFIED" for r in rows)
@@ -255,10 +268,14 @@ def test_idle_runtime_refuses_every_task(durable_ctx):
     queue = [_task(task_id="a", mission_id="northstar_test"),
              _task(task_id="b", mission_id="some_other_mission")]
     rep = run_mission(IDLE_POLICY, queue, Lvl.A1_ASSISTED_ENGINEERING,
-                      _must_not_run, _must_not_run, _must_not_run, _now, _vid, certification=durable_ctx)
+                      _must_not_run, _must_not_run, _must_not_run, _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert rep.tasks_run == []
     assert rep.verified == 0
-    assert "out-of-mission task" in rep.stop_reason
+    # An idle controller is now refused one layer earlier too: the roadmap
+    # authorizes a named mission and "" is not it. _must_not_run proves no
+    # executor was invoked either way.
+    assert rep.roadmap_violation
+    assert rep.stop_reason.startswith(LoopStop.ROADMAP_VIOLATION.value)
 
 
 def test_idle_runtime_still_denies_the_disabled_authorities():
@@ -283,5 +300,5 @@ def test_a_real_mission_still_dispatches_after_idle_support(durable_ctx):
     """Regression guard: supporting an idle state must not break normal operation."""
     rep = run_mission(POLICY, [_task(task_id="a")], Lvl.A1_ASSISTED_ENGINEERING,
                       _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_PASS(),
-                      _now, _vid, certification=durable_ctx)
+                      _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert rep.verified == 1

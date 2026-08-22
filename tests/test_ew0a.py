@@ -49,7 +49,9 @@ def _task(**over):
 
 def _attempt(**over):
     d = dict(attempt_id="a1", executor=Executor.ENGINEER, worker_claim="IMPLEMENTATION_COMPLETE",
-             changed_paths=["docs/foo.md"], diff_text="+text", tests_run=["tests/test_x.py"],
+             changed_paths=["docs/foo.md"],
+             diff_text="--- a/docs/foo.md\n+++ b/docs/foo.md\n+text",
+             tests_run=["tests/test_x.py"],
              test_results={"tests/test_x.py": "PASS (2 passed)"}, py_compile_ok=True,
              canonical_repo_touched=False)
     d.update(over)

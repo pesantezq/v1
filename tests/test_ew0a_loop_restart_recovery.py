@@ -43,6 +43,7 @@ from portfolio_automation.engineer_worker.ew0a_loop import RuntimePolicy, run_ta
 from portfolio_automation.engineer_worker.gpt_supervisor import (
     SupervisorDecision, SupervisorVerdict)
 from portfolio_automation.engineer_worker.review_candidate import HeadResolution
+from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
 
 HEAD = "a" * 40
 
@@ -104,13 +105,15 @@ task = EngineeringTaskV0(task_id="t1", title="t", goal="g",
 def engineer_fn(t, n):
     return AttemptEvidence(attempt_id="a1", executor=Executor.ENGINEER,
         worker_claim="done", changed_paths=["tests/tx.py"],
+        diff_text="--- a/tests/tx.py\\n+++ b/tests/tx.py\\n+assert True\\n",
         tests_run=["tests/tx.py"], test_results={{"tests/tx.py": "PASS"}},
         py_compile_ok=True, canonical_repo_touched=False)
 
 res = run_task(task, Lvl.A1_ASSISTED_ENGINEERING, RuntimePolicy(mission_id="m1"),
                engineer_fn, lambda t, v: engineer_fn(t, 9), supervisor,
                lambda: "2026-01-01T00:00:00+00:00", lambda: "v-" + phase,
-               certification=ctx)
+               certification=ctx,
+               roadmap=RoadmapAuthorization.for_mission("m1"))
 (root / ("result_" + phase + ".json")).write_text(json.dumps({{
     "final_status": res.final_status, "verdict": res.verdict}}))
 os._exit(0)

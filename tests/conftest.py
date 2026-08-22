@@ -166,3 +166,26 @@ def legacy_ctx(tmp_path):
 @pytest.fixture
 def stationary_binding():
     return _StationaryBinding()
+
+
+@pytest.fixture
+def moved_binding():
+    """A candidate whose HEAD has moved since the packet was bound.
+
+    The repo answers with a DIFFERENT sha than the binding recorded, which is
+    what a real commit between binding and dispatch looks like."""
+    b = _StationaryBinding(head="a" * 40)
+    b.repo = _FakeRepo("b" * 40)
+    return b
+
+
+@pytest.fixture
+def roadmap_ok():
+    """Roadmap authorization for the mission the loop tests actually run.
+
+    Explicit and named. The production resolution path is
+    RoadmapAuthorization.read, which reads the protected roadmap record;
+    tests/test_ew0b_hardening.py pins the REAL record against the REAL runtime
+    policy, so this fixture cannot hide live disagreement."""
+    from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
+    return RoadmapAuthorization.for_mission("northstar_test")

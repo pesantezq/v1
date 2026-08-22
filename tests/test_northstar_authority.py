@@ -236,8 +236,12 @@ def test_runtime_still_refuses_out_of_mission_tasks(durable_ctx):
     from portfolio_automation.engineer_worker.ew0a_authority import EngineerAuthorityLevel
     from portfolio_automation.engineer_worker.ew0a_loop import (
         read_runtime_policy, run_mission)
+    from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
 
     policy = read_runtime_policy(REPO_ROOT)
+    # Resolved from the REAL roadmap record, so this exercises the production
+    # guard rather than an in-memory stand-in.
+    roadmap = RoadmapAuthorization.read(REPO_ROOT)
     assert policy is not None and policy.mission_id == AUTHORIZED_0C_MISSION
 
     def _must_not_run(*_a, **_k):
@@ -249,8 +253,12 @@ def test_runtime_still_refuses_out_of_mission_tasks(durable_ctx):
         allowed_paths=["tests/"], allowed_tests=["tests/tx.py"])
     rep = run_mission(policy, [foreign], EngineerAuthorityLevel.A1_ASSISTED_ENGINEERING,
                       _must_not_run, _must_not_run, _must_not_run,
-                      lambda: "2026-08-15T00:00:00+00:00", lambda: "v1", certification=durable_ctx)
+                      lambda: "2026-08-15T00:00:00+00:00", lambda: "v1",
+                      certification=durable_ctx, roadmap=roadmap)
     assert rep.tasks_run == []
+    # The mission itself IS authorized; the foreign task is refused by the
+    # mission boundary, not by the roadmap guard. Both layers are live.
+    assert not rep.roadmap_violation
     assert "out-of-mission task" in rep.stop_reason
 
 
