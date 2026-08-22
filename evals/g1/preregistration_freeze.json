@@ -1,6 +1,6 @@
 {
- "freeze_digest": "g1freeze_c3527fd036cdb524d1cc7516b8d51420",
- "preregistration_commit": "f7abf6b03bceafc0f4574071db59ae56a3edd9b7",
+ "freeze_digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
+ "preregistration_commit": "755eb80162406009c18c0a608f66b312f016238a",
  "registered_file": "evals/g1/preregistration.json",
  "schema_kind": "experimental_noncanonical",
  "schema_version": "engineering.g1.preregistration.v1",
