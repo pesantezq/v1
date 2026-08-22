@@ -115,16 +115,42 @@ def test_no_exploratory_record_leaked_into_the_formal_population(records):
                for r in records)
 
 
-def test_the_superseded_and_historical_populations_are_kept_separate():
-    hist = REPO / "evals" / "g1" / "historical_exploratory"
-    sup = REPO / "evals" / "g1" / "formal_superseded_freeze_v1"
-    assert (hist / "MANIFEST.json").is_file()
-    assert (sup / "MANIFEST.json").is_file()
-    supman = json.loads((sup / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert supman["status"] == "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE"
-    assert supman["not_combinable_with"] == "evals/g1/formal/"
-    histman = json.loads((hist / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert histman["population"] == "EXPLORATORY_HISTORICAL"
+def test_all_four_populations_are_kept_physically_separate():
+    """Historical, superseded-v1, freeze-v2 and current freeze-v3.
+
+    Each carries a manifest stating what it is and what it may not be pooled
+    with. A directory without one would eventually be read as current."""
+    base = REPO / "evals" / "g1"
+    for rel, key, want in (
+            ("historical_exploratory", "population", "EXPLORATORY_HISTORICAL"),
+            ("formal_superseded_freeze_v1", "status",
+             "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE"),
+            ("formal_freeze_v2", "status",
+             "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2")):
+        man = json.loads((base / rel / "MANIFEST.json").read_text(encoding="utf-8"))
+        assert man[key] == want, rel
+        assert "not_combinable_with" in man, rel
+    v2 = json.loads((base / "formal_freeze_v2" / "MANIFEST.json"
+                     ).read_text(encoding="utf-8"))
+    assert v2["n_scored"] == 34
+    assert v2["freeze_digest"] != PRE.freeze_digest(), (
+        "the preserved run must name a DIFFERENT freeze than the current one")
+
+
+def test_the_current_formal_population_meets_the_completeness_target(records):
+    """>= 100 scored decisions, which is the existing G1 completeness rule.
+
+    Not an autonomy threshold — it means the population is large enough for the
+    current rule, nothing more."""
+    scored = [r for r in records if C.is_scored(r)]
+    assert len(scored) >= 100, len(scored)
+    assert len({r.config.model_name for r in records}) == 2
+
+
+def test_the_current_run_is_bound_to_freeze_v3(report, records):
+    assert report["preregistration"]["freeze_digest"] == PRE.freeze_digest()
+    assert all(r.preregistration_digest == PRE.freeze_digest() for r in records)
+    assert all(r.run_id == "g1run-formal-003" for r in records)
 
 
 # =========================================================================== #

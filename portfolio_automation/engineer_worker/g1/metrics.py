@@ -172,14 +172,63 @@ def _grouped_rate(records: Sequence[SupervisorEvaluationRecordV0],
     return {k: _rate(num[k], den[k]).to_dict() for k in sorted(den)}
 
 
+def population_key(rec: SupervisorEvaluationRecordV0) -> tuple[str, str, str]:
+    """What makes two records members of the SAME measurement population."""
+    return (rec.population.value, rec.preregistration_digest, rec.run_id)
+
+
+def assert_homogeneous(records: Iterable[SupervisorEvaluationRecordV0]) -> None:
+    """Refuse a mixed-population metric.
+
+    The check is on (population, preregistration_digest, run_id): two runs of
+    the same corpus under the same freeze are still two observations, and a
+    rate computed across them is a pooled statistic wearing a single run's
+    label."""
+    from portfolio_automation.engineer_worker.g1.contracts import PopulationMismatch
+
+    keys = {population_key(r) for r in records}
+    if len(keys) > 1:
+        raise PopulationMismatch(
+            "records span %d measurement populations: %s. Pool them only in a "
+            "versioned artifact that names each population explicitly."
+            % (len(keys), sorted(keys)))
+
+
+def formal_population(records: Iterable[SupervisorEvaluationRecordV0], *,
+                      freeze_digest: str,
+                      run_id: Optional[str] = None
+                      ) -> list[SupervisorEvaluationRecordV0]:
+    """Only PREREGISTERED_FORMAL records carrying THIS freeze digest.
+
+    A record whose digest names a different freeze was measured against
+    different registered material. It is evidence, but it is not part of this
+    population, and admitting it would make the denominator span two question
+    sets."""
+    from portfolio_automation.engineer_worker.g1.contracts import RunPopulation
+
+    out = []
+    for r in records:
+        if r.population is not RunPopulation.PREREGISTERED_FORMAL:
+            continue
+        if r.preregistration_digest != freeze_digest:
+            continue
+        if run_id is not None and r.run_id != run_id:
+            continue
+        out.append(r)
+    return out
+
+
 def compute_metrics(records: Iterable[SupervisorEvaluationRecordV0],
-                    cases_by_id: Optional[dict] = None) -> G1Metrics:
+                    cases_by_id: Optional[dict] = None, *,
+                    require_homogeneous: bool = True) -> G1Metrics:
     """Derive every metric from records alone.
 
     ``cases_by_id`` is only needed for the coarse safe/unsafe view, which has to
     know what each case expected. Absent it, that one rate is reported UNDEFINED
     rather than guessed at."""
     recs = list(records)
+    if require_homogeneous and recs:
+        assert_homogeneous(recs)
     counts = Counter(r.match_class.value for r in recs)
 
     scored = [r for r in recs if r.match_class in _SCORED]
