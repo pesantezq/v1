@@ -1,5 +1,26 @@
 """Human spot-audit surface for G1.
 
+WHAT WAS WRONG BEFORE THIS REPAIR.
+
+Three defects, all of which inflated apparent coverage:
+
+  * the sample and the completion check keyed on ``case_id`` alone. The corpus
+    is measured under more than one model, so one case yields several scored
+    decisions -- and an adjudication of gpt-4o's answer silently satisfied
+    coverage for gpt-4o-mini's answer to the same question. Worse, an audit
+    record for a case that was never selected counted anyway.
+  * the sample was drawn from a DIFFERENT population than the accuracy
+    denominator: it excluded the three EXCLUDED_* classes but still admitted
+    supervisor outages and HUMAN_REVIEW_PENDING records. Outages are not
+    semantic judgements; spending audit budget on them buys nothing and makes
+    the fraction look met.
+  * ``round()`` computed the target, so a configured 20% minimum could round
+    DOWN -- 20% of 11 became 2. A minimum that rounds down is not a minimum.
+
+Now: identity is ``record_id`` (which includes execution_id, config_id, run_id),
+the population is ``contracts.is_scored`` -- the same predicate ``metrics``
+uses -- and the target is ``ceil``.
+
 THE ONE RULE THIS MODULE ENFORCES.
 
 It cannot invent a human label. There is no default verdict, no "assumed
@@ -23,6 +44,7 @@ places where being wrong costs the most and where the label is hardest.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping, Optional, Sequence
@@ -30,6 +52,7 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 from portfolio_automation.engineer_worker.g1 import G1_NAMESPACE, G1_SCHEMA_KIND
 from portfolio_automation.engineer_worker.g1.contracts import (
     EvaluationCaseV0, MatchClass, Severity, SupervisorEvaluationRecordV0,
+    is_scored,
 )
 from portfolio_automation.engineer_worker.g1.criteria import MIN_HUMAN_AUDIT_FRACTION
 from portfolio_automation.engineer_worker.g1.taxonomy import OutcomeClass
@@ -53,21 +76,38 @@ class AuditAgreement(str, Enum):
     UNDECIDED = "UNDECIDED"     # a human looked and could not settle it
 
 
+class AuditMembershipError(ValueError):
+    """An audit record was submitted for a decision that was never selected.
+
+    Rejected rather than ignored. Silently dropping it would make a submission
+    that looks like progress produce none, and silently accepting it would let
+    unrelated adjudications satisfy a coverage requirement."""
+
+
 @dataclass(frozen=True)
 class AuditItem:
-    """One case packaged for a human, with the reason it was selected."""
+    """One scored DECISION packaged for a human, with why it was selected.
+
+    Keyed by ``record_id``, not ``case_id``: the same question answered by two
+    models is two decisions, and each needs its own adjudication."""
 
     case_id: str
     record_id: str
-    priority: int
-    selection_reason: str
-    expected_verdict: str
-    supervisor_verdict: str
-    severity: str
-    split: str
-    protected_high_impact: bool
-    supervisor_reasons: tuple[str, ...]
-    execution_id: str
+    #: The configuration and run this decision came from, so a human can see
+    #: which of several answers to the same case they are judging.
+    execution_id_ref: str = ""
+    config_id: str = ""
+    run_id: str = ""
+    served_model_version: str = ""
+    priority: int = 0
+    selection_reason: str = ""
+    expected_verdict: str = ""
+    supervisor_verdict: str = ""
+    severity: str = ""
+    split: str = ""
+    protected_high_impact: bool = False
+    supervisor_reasons: tuple[str, ...] = ()
+    execution_id: str = ""
     #: The exact question the human is being asked to answer, so the audit does
     #: not silently become "do you like this code".
     question: str = (
@@ -77,6 +117,9 @@ class AuditItem:
 
     def to_dict(self) -> dict[str, Any]:
         return {"case_id": self.case_id, "record_id": self.record_id,
+                "execution_id_ref": self.execution_id_ref,
+                "config_id": self.config_id, "run_id": self.run_id,
+                "served_model_version": self.served_model_version,
                 "priority": self.priority,
                 "selection_reason": self.selection_reason,
                 "expected_verdict": self.expected_verdict,
@@ -103,28 +146,44 @@ def _priority(rec: SupervisorEvaluationRecordV0) -> tuple[int, str]:
     return _PRIORITY_OTHER, "baseline coverage"
 
 
+def scored_population(records: Sequence[SupervisorEvaluationRecordV0]
+                      ) -> list[SupervisorEvaluationRecordV0]:
+    """EXACTLY the population ``compute_metrics`` scores.
+
+    Shares ``contracts.is_scored`` with metrics rather than re-deriving the
+    filter. Two filters that are meant to agree eventually do not, and the
+    drift here spent audit budget on outages."""
+    return [r for r in records if is_scored(r)]
+
+
 def select_audit_sample(records: Sequence[SupervisorEvaluationRecordV0], *,
                         fraction: float = MIN_HUMAN_AUDIT_FRACTION
                         ) -> tuple[AuditItem, ...]:
-    """Choose the audit sample deterministically.
+    """Choose the audit sample deterministically, by decision identity.
 
     No randomness: a reproducible sample can be re-derived and checked months
-    later, and ``Math.random``-style selection would make the audit
-    unauditable."""
-    scored = [r for r in records if r.match_class not in (
-        MatchClass.EXCLUDED_PRE_SUPERVISOR, MatchClass.EXCLUDED_RUNTIME_FAILURE,
-        MatchClass.EXCLUDED_HUMAN_BOUND)]
+    later, and random selection would make the audit itself unauditable.
+
+    ``ceil``, not ``round``: a configured minimum that can round down is not a
+    minimum. 20% of 11 scored decisions is 3, never 2."""
+    scored = scored_population(records)
     if not scored:
         return ()
-    target = max(1, round(len(scored) * fraction))
-    ranked = sorted(scored, key=lambda r: (_priority(r)[0], r.case_id))
-    chosen = ranked[:target]
+    target = min(len(scored), max(1, math.ceil(len(scored) * fraction)))
+    # Sorted by (priority, record_id) -- record_id, not case_id, so the ordering
+    # is total across decisions rather than colliding when one case appears
+    # under several configurations.
+    ranked = sorted(scored, key=lambda r: (_priority(r)[0], r.record_id()))
     out = []
-    for r in chosen:
+    for r in ranked[:target]:
         prio, reason = _priority(r)
         out.append(AuditItem(
-            case_id=r.case_id, record_id=r.record_id(), priority=prio,
-            selection_reason=reason,
+            case_id=r.case_id, record_id=r.record_id(),
+            execution_id_ref=r.execution_id,
+            config_id=(r.config.config_id() if r.config else ""),
+            run_id=r.run_id,
+            served_model_version=r.served_model_version,
+            priority=prio, selection_reason=reason,
             expected_verdict=r.expected_verdict.value,
             supervisor_verdict=r.actual_outcome.value,
             severity=r.severity.value, split=r.split.value,
@@ -139,6 +198,9 @@ class HumanAuditRecord:
     """One adjudication BY AN ACTUAL HUMAN. No defaults for the human fields."""
 
     case_id: str
+    #: The EXACT scored decision this adjudicates. Required: an audit that names
+    #: only a case cannot say which model's answer it judged.
+    record_id: str
     supervisor_verdict: str
     human_verdict: str
     reviewer_id: str
@@ -148,6 +210,11 @@ class HumanAuditRecord:
     rationale: str = ""
 
     def __post_init__(self) -> None:
+        if not str(self.record_id).strip():
+            raise ValueError(
+                "record_id is required: an adjudication that names only a case "
+                "cannot say which scored decision it judged, and one model's "
+                "answer must never satisfy coverage for another's")
         for field_name in ("human_verdict", "reviewer_id", "reviewed_at"):
             if not str(getattr(self, field_name)).strip():
                 raise ValueError(
@@ -181,7 +248,7 @@ class HumanAuditRecord:
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": AUDIT_SCHEMA_VERSION,
                 "schema_kind": G1_SCHEMA_KIND,
-                "case_id": self.case_id,
+                "case_id": self.case_id, "record_id": self.record_id,
                 "supervisor_verdict": self.supervisor_verdict,
                 "human_verdict": self.human_verdict,
                 "agreement": self.agreement.value,
@@ -199,7 +266,12 @@ class AuditCoverage:
     n_scored: int
     required: int
     completed: int
+    #: Record ids, not case ids. The pending list must identify decisions.
+    pending_record_ids: tuple[str, ...]
     pending_case_ids: tuple[str, ...]
+    #: Submitted adjudications that named a decision outside the sample. Kept
+    #: visible instead of dropped: a rejected submission is information.
+    rejected_record_ids: tuple[str, ...]
     agreement_count: int
     disagreement_count: int
     weighted_disagreement: int
@@ -224,7 +296,9 @@ class AuditCoverage:
                 "status": self.status,
                 "n_scored": self.n_scored, "required": self.required,
                 "completed": self.completed,
+                "pending_record_ids": list(self.pending_record_ids),
                 "pending_case_ids": list(self.pending_case_ids),
+                "rejected_record_ids": list(self.rejected_record_ids),
                 "agreement_count": self.agreement_count,
                 "disagreement_count": self.disagreement_count,
                 "agreement_rate": self.agreement_rate,
@@ -235,23 +309,41 @@ class AuditCoverage:
 
 def audit_coverage(sample: Sequence[AuditItem],
                    completed: Sequence[HumanAuditRecord],
-                   *, n_scored: int) -> AuditCoverage:
-    """Coverage arithmetic that reports the shortfall instead of hiding it."""
-    done = {r.case_id: r for r in completed}
-    pending = tuple(i.case_id for i in sample if i.case_id not in done)
-    agree = sum(1 for r in completed if r.agreement is AuditAgreement.AGREE)
-    disagree = sum(1 for r in completed if r.agreement is AuditAgreement.DISAGREE)
+                   *, n_scored: int, strict: bool = False) -> AuditCoverage:
+    """Coverage arithmetic that reports the shortfall instead of hiding it.
+
+    Only adjudications whose ``record_id`` is IN the selected sample count. An
+    unrelated audit record -- one for a decision that was never selected, or for
+    the same case under a different model -- is rejected, not counted. With
+    ``strict=True`` it raises instead, for callers that would rather fail than
+    read a rejection list."""
+    selected = {i.record_id for i in sample}
+    members = [r for r in completed if r.record_id in selected]
+    rejected = tuple(sorted(r.record_id for r in completed
+                            if r.record_id not in selected))
+    if rejected and strict:
+        raise AuditMembershipError(
+            f"{len(rejected)} audit record(s) name decisions outside the "
+            f"selected sample: {list(rejected)}")
+
+    done = {r.record_id: r for r in members}
+    pending_recs = tuple(i.record_id for i in sample if i.record_id not in done)
+    pending_cases = tuple(i.case_id for i in sample if i.record_id not in done)
+    agree = sum(1 for r in members if r.agreement is AuditAgreement.AGREE)
+    disagree = sum(1 for r in members if r.agreement is AuditAgreement.DISAGREE)
     return AuditCoverage(
         n_scored=n_scored,
         required=len(sample),
         completed=len(done),
-        pending_case_ids=pending,
+        pending_record_ids=pending_recs,
+        pending_case_ids=pending_cases,
+        rejected_record_ids=rejected,
         agreement_count=agree,
         disagreement_count=disagree,
         weighted_disagreement=sum(
-            r.severity_weighted_disagreement for r in completed),
+            r.severity_weighted_disagreement for r in members),
         high_severity_disagreements=tuple(
-            r.case_id for r in completed
+            r.record_id for r in members
             if r.agreement is AuditAgreement.DISAGREE
             and r.severity in (Severity.SAFETY_CRITICAL, Severity.HIGH)))
 

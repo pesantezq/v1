@@ -36,7 +36,8 @@ from portfolio_automation.engineer_worker.execution_identity import (
 )
 from portfolio_automation.engineer_worker.g1 import G1_NAMESPACE, G1_SCHEMA_KIND
 from portfolio_automation.engineer_worker.g1.contracts import (
-    EvaluationCaseV0, MeasurementConfig, SupervisorEvaluationRecordV0, classify,
+    EvaluationCaseV0, MeasurementConfig, RunPopulation,
+    SupervisorEvaluationRecordV0, classify,
 )
 from portfolio_automation.engineer_worker.g1.corpus import SplitLeakError
 from portfolio_automation.engineer_worker.g1.taxonomy import OutcomeClass, Population
@@ -107,9 +108,10 @@ def _identity(case: EvaluationCaseV0, cfg: MeasurementConfig, *,
         model_provider=cfg.model_provider,
         model_name=cfg.model_name,
         # Left UNAVAILABLE on purpose: the pre-call identity cannot know the
-        # build the API will serve. The served build is recorded on the
-        # MeasurementConfig instead, where it is a post-hoc observation rather
-        # than a claim about what was requested.
+        # build the API will serve. The served build is recorded on the RECORD
+        # (served_model_version), where it is a post-call observation. It is
+        # deliberately NOT on MeasurementConfig: a configuration whose identity
+        # changes once it has run cannot be joined back to its own records.
         model_version=UNAVAILABLE,
         prompt_version=cfg.prompt_version,
         instruction_version=cfg.instruction_version,
@@ -124,6 +126,9 @@ def _identity(case: EvaluationCaseV0, cfg: MeasurementConfig, *,
 
 def run_cases(cases: Sequence[EvaluationCaseV0], supervisor: SupervisorFn, *,
               config: MeasurementConfig, now_fn: Callable[[], str],
+              run_id: str,
+              population: RunPopulation = RunPopulation.PREREGISTERED_FORMAL,
+              preregistration_digest: str = UNAVAILABLE,
               worker_id: str = "g1_supervisor_benchmark",
               measure_latency: bool = False,
               allow_held_out: bool = False) -> RunResult:
@@ -131,7 +136,21 @@ def run_cases(cases: Sequence[EvaluationCaseV0], supervisor: SupervisorFn, *,
 
     ``allow_held_out`` must be set explicitly to touch the held-out split. The
     guard is not about mistrusting the caller; it is about making a held-out
-    read appear in the source, where a reviewer will see it."""
+    read appear in the source, where a reviewer will see it.
+
+    ``run_id`` is REQUIRED and undefaulted. Records from two runs of the same
+    corpus under the same configuration must be distinguishable, or the second
+    run looks like a correction of the first rather than a second observation.
+
+    ``population`` and ``preregistration_digest`` travel on every record so a
+    later reader can tell a preregistered result from an exploratory one without
+    knowing which file it came out of."""
+    if population is RunPopulation.PREREGISTERED_FORMAL and \
+            preregistration_digest == UNAVAILABLE:
+        raise ValueError(
+            "a PREREGISTERED_FORMAL run requires a preregistration_digest; "
+            "without one there is nothing proving what was frozen before the "
+            "measurement, which is the only thing that makes it preregistered")
     leaked = [c.case_id for c in cases if c.split is Split.HELD_OUT]
     if leaked and not allow_held_out:
         raise SplitLeakError(
@@ -163,7 +182,9 @@ def run_cases(cases: Sequence[EvaluationCaseV0], supervisor: SupervisorFn, *,
             supervisor_error=getattr(decision, "error", None),
             latency_ms=latency_ms,
             recorded_at=now_fn(),
-            protected_high_impact=case.protected_high_impact))
+            protected_high_impact=case.protected_high_impact,
+            run_id=run_id, population=population,
+            preregistration_digest=preregistration_digest))
     return RunResult(records=tuple(records), config=config,
                      splits_run=tuple(sorted({c.split.value for c in cases})))
 

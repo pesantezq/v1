@@ -103,6 +103,22 @@ class SourceClass(str, Enum):
     HISTORICAL = "HISTORICAL"
 
 
+class RunPopulation(str, Enum):
+    """Which measurement population a record belongs to.
+
+    Statistics from these two populations must never be combined without a
+    versioned aggregation that names both. An exploratory run happened before
+    the corpus and criteria were frozen, so its numbers describe a target that
+    could still move; a preregistered run does not. Pooling them would let the
+    unfrozen half quietly carry the frozen half's authority."""
+
+    #: Measured before the preregistration commit existed. Kept as evidence,
+    #: never as a preregistered result.
+    EXPLORATORY_HISTORICAL = "EXPLORATORY_HISTORICAL"
+    #: Measured against a committed, digest-verified frozen corpus + criteria.
+    PREREGISTERED_FORMAL = "PREREGISTERED_FORMAL"
+
+
 class MatchClass(str, Enum):
     """The outcome of comparing expected against actual."""
 
@@ -258,11 +274,20 @@ class MeasurementConfig:
     prompt_version: str = UNAVAILABLE
     instruction_version: str = UNAVAILABLE
     toolset_id: str = UNAVAILABLE
-    #: The build the API actually served, learned from the response. Distinct
-    #: from model_name: "gpt-4o" is what was requested, "gpt-4o-2024-08-06" is
-    #: what answered. Only knowable AFTER the call, which is why the pre-call
-    #: ExecutionIdentity leaves model_version UNAVAILABLE and this does not.
-    served_model_version: str = UNAVAILABLE
+
+    # NOTE: there is deliberately NO served_model_version here.
+    #
+    # An earlier version carried it, and that quietly broke the join between a
+    # report's configuration list and the records it summarises. The served
+    # build is only knowable AFTER the call, so a config carrying it has one
+    # config_id before execution and a different one after -- and the records,
+    # written during execution, kept the pre-call id. The report then listed
+    # configurations that matched nothing.
+    #
+    # Configuration identity is now strictly PRE-CALL: what was requested. The
+    # served build is a post-call OBSERVATION and lives on the record, where it
+    # belongs. Identity that changes after the thing it identifies has run is
+    # not identity.
 
     def config_id(self) -> str:
         return "g1cfg_" + hashlib.sha256(
@@ -304,6 +329,17 @@ class SupervisorEvaluationRecordV0:
     #: replay tests would have to special-case time.
     recorded_at: str = UNAVAILABLE
     protected_high_impact: bool = False
+    #: Which measurement run produced this record. Part of record identity, so
+    #: two runs of the same corpus under the same configuration are separate
+    #: observations rather than one overwriting the other.
+    run_id: str = UNAVAILABLE
+    #: Exploratory or preregistered. Carried on the record, not inferred from
+    #: which file it happens to sit in.
+    population: RunPopulation = RunPopulation.PREREGISTERED_FORMAL
+    #: Digest of the frozen preregistration state this record was measured
+    #: against. UNAVAILABLE for exploratory records -- which is the honest value,
+    #: because no freeze existed when they were taken.
+    preregistration_digest: str = UNAVAILABLE
     schema_version: str = RECORD_SCHEMA_VERSION
     schema_kind: str = G1_SCHEMA_KIND
 
@@ -320,8 +356,16 @@ class SupervisorEvaluationRecordV0:
         return self.match_class is MatchClass.FALSE_PASS
 
     def record_id(self) -> str:
-        """Content-addressed. A changed configuration is a NEW record, never an
-        edit to an old one -- which is what keeps historical results honest."""
+        """Content-addressed identity of ONE scored decision.
+
+        This is the key the audit system uses. It must therefore distinguish the
+        same case measured under two models: keying an audit on case_id alone
+        let an adjudication of gpt-4o's answer silently satisfy coverage for
+        gpt-4o-mini's answer to the same question.
+
+        ``run_id`` participates so that re-running an identical corpus under an
+        identical configuration produces distinct records rather than one
+        appearing to overwrite the other."""
         material = {
             "case_id": self.case_id, "case_fingerprint": self.case_fingerprint,
             "expected": self.expected_verdict.value,
@@ -330,8 +374,15 @@ class SupervisorEvaluationRecordV0:
             "execution_id": self.execution_id,
             "config_id": self.config.config_id() if self.config else UNAVAILABLE,
             "review_invocation_id": self.review_invocation_id or UNAVAILABLE,
+            "run_id": self.run_id,
+            "population": self.population.value,
         }
         return "g1rec_" + hashlib.sha256(_canonical(material).encode()).hexdigest()[:20]
+
+    @property
+    def audit_key(self) -> str:
+        """The identity an audit must match. Exact, per-decision, immutable."""
+        return self.record_id()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -355,7 +406,27 @@ class SupervisorEvaluationRecordV0:
             "latency_ms": self.latency_ms,
             "recorded_at": self.recorded_at,
             "protected_high_impact": self.protected_high_impact,
+            "run_id": self.run_id,
+            "population": self.population.value,
+            "preregistration_digest": self.preregistration_digest,
         }
+
+
+#: The ONLY match classes that represent a scored semantic judgement. Defined
+#: here, next to MatchClass, so metrics and audit cannot disagree about the
+#: population -- an audit sample drawn from a different set than the accuracy
+#: denominator was how outages and pending records got into the audit budget.
+SCORED_MATCH_CLASSES = frozenset({
+    MatchClass.TRUE_PASS, MatchClass.FALSE_PASS,
+    MatchClass.TRUE_REPAIR, MatchClass.FALSE_REPAIR,
+    MatchClass.TRUE_ESCALATE, MatchClass.FALSE_ESCALATE,
+    MatchClass.TRUE_ABSTAIN, MatchClass.FALSE_ABSTAIN,
+})
+
+
+def is_scored(record: "SupervisorEvaluationRecordV0") -> bool:
+    """One predicate, used by both metrics and audit."""
+    return record.match_class in SCORED_MATCH_CLASSES
 
 
 def classify(case: EvaluationCaseV0, actual: OutcomeClass) -> MatchClass:

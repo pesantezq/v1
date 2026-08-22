@@ -52,17 +52,35 @@ def _case(cid="c1", expected=V.REPAIR, split=C.Split.DEVELOPMENT,
     return C.EvaluationCaseV0(**kw)
 
 
-def _rec(case, actual, *, cfg=CFG, ident=None):
+def _rec(case, actual, *, cfg=CFG, ident=None, run_id="run-test",
+         population=C.RunPopulation.PREREGISTERED_FORMAL,
+         prereg="g1freeze_test"):
     return C.SupervisorEvaluationRecordV0(
         case_id=case.case_id, case_fingerprint=case.fingerprint(),
         expected_verdict=case.expected_supervisor_verdict, actual_outcome=actual,
         match_class=C.classify(case, actual), severity=case.severity,
         split=case.split, gold_basis=case.gold_basis,
-        execution_identity=ident or {"execution_id": "exid_test",
+        execution_identity=ident or {"execution_id": f"exid_{cfg.model_name}",
                                      "model_name": cfg.model_name,
                                      "prompt_version": cfg.prompt_version},
         config=cfg, recorded_at=_now(),
-        protected_high_impact=case.protected_high_impact)
+        protected_high_impact=case.protected_high_impact,
+        run_id=run_id, population=population, preregistration_digest=prereg)
+
+
+CFG_B = C.MeasurementConfig(model_provider="openai", model_name="other-model",
+                            prompt_version="sysprompt-testaaaa",
+                            instruction_version="one-shot",
+                            toolset_id="gpt_supervisor.review")
+
+
+def _audit(item, human_verdict="REPAIR", reviewer="human-1"):
+    """Build a real adjudication for a SELECTED item."""
+    return A.HumanAuditRecord(
+        case_id=item.case_id, record_id=item.record_id,
+        supervisor_verdict=item.supervisor_verdict, human_verdict=human_verdict,
+        reviewer_id=reviewer, reviewed_at="2026-08-22T02:00:00Z",
+        execution_id=item.execution_id, severity=C.Severity(item.severity))
 
 
 def _fixed(verdict, error=None):
@@ -295,13 +313,87 @@ def test_records_do_not_read_the_clock():
         "recorded_at"].default == UNAVAILABLE
 
 
+def test_config_identity_is_pre_call_and_stable():
+    """A configuration whose id changes after it runs cannot be joined back to
+    its own records -- which is exactly what happened before this repair."""
+    assert "served_model_version" not in C.MeasurementConfig.__dataclass_fields__
+    before = CFG.config_id()
+    assert CFG.config_id() == before
+    assert CFG.to_dict()["config_id"] == before
+
+
+def test_every_report_configuration_joins_back_to_its_records():
+    dev = CORP.development_cases()
+    a = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=CFG,
+                      now_fn=_now, run_id="r", preregistration_digest="g1freeze_test")
+    b = RUN.run_cases(dev, _fixed(SupervisorVerdict.REPAIR), config=CFG_B,
+                      now_fn=_now, run_id="r", preregistration_digest="g1freeze_test")
+    records = list(a.records) + list(b.records)
+    m = M.compute_metrics(records, CORP.by_id())
+    cov = A.audit_coverage((), (), n_scored=m.n_scored)
+    rep = R.build_report(metrics=m, coverage=cov, records=records,
+                         configs=[CFG, CFG_B])
+    record_cfg_ids = {r.config.config_id() for r in records}
+    for cfg in rep["configurations"]:
+        assert cfg["config_id"] in record_cfg_ids, (
+            f"{cfg['config_id']} appears in the report but matches no record")
+    assert record_cfg_ids == {c["config_id"] for c in rep["configurations"]}
+
+
+def test_served_build_lives_on_the_record_not_the_configuration():
+    dev = CORP.development_cases()[:1]
+
+    def with_model(packet):
+        d = SupervisorDecision(SupervisorVerdict.PASS, reasons=["x"])
+        object.__setattr__(d, "model", "test-model-2026-01-01")
+        return d
+
+    res = RUN.run_cases(dev, with_model, config=CFG, now_fn=_now, run_id="r",
+                        preregistration_digest="g1freeze_test")
+    r = res.records[0]
+    assert r.served_model_version == "test-model-2026-01-01"
+    assert r.config.config_id() == CFG.config_id()
+
+
+# --- run identity ---------------------------------------------------------
+def test_run_id_is_required_for_a_preregistered_run():
+    import inspect
+    sig = inspect.signature(RUN.run_cases)
+    assert sig.parameters["run_id"].default is inspect.Parameter.empty
+
+
+def test_a_preregistered_run_requires_a_freeze_digest():
+    with pytest.raises(ValueError):
+        RUN.run_cases(CORP.development_cases()[:1], _fixed(SupervisorVerdict.PASS),
+                      config=CFG, now_fn=_now, run_id="r")
+
+
+def test_two_runs_of_the_same_corpus_are_distinct_observations():
+    case = _case("same", expected=V.REPAIR)
+    a = _rec(case, V.REPAIR, run_id="run-1")
+    b = _rec(case, V.REPAIR, run_id="run-2")
+    assert a.record_id() != b.record_id()
+
+
+def test_population_is_carried_on_the_record_not_inferred_from_a_file():
+    case = _case("p", expected=V.REPAIR)
+    hist = _rec(case, V.REPAIR,
+                population=C.RunPopulation.EXPLORATORY_HISTORICAL,
+                prereg="UNAVAILABLE_AT_RECORD_TIME")
+    formal = _rec(case, V.REPAIR)
+    assert hist.population is C.RunPopulation.EXPLORATORY_HISTORICAL
+    assert formal.population is C.RunPopulation.PREREGISTERED_FORMAL
+    assert hist.record_id() != formal.record_id(), (
+        "an exploratory and a preregistered observation of the same case must "
+        "not share an identity")
+    assert hist.to_dict()["population"] == "EXPLORATORY_HISTORICAL"
+
+
 def test_record_id_is_content_addressed_and_config_sensitive():
     case = _case()
     base = _rec(case, V.REPAIR)
     same = _rec(case, V.REPAIR)
-    other_cfg = _rec(case, V.REPAIR, cfg=C.MeasurementConfig(
-        model_provider="openai", model_name="different-model",
-        prompt_version="sysprompt-testaaaa"))
+    other_cfg = _rec(case, V.REPAIR, cfg=CFG_B)
     assert base.record_id() == same.record_id()
     assert base.record_id() != other_cfg.record_id(), (
         "a different configuration must be a NEW record, never an overwrite")
@@ -331,19 +423,23 @@ def test_the_runner_refuses_held_out_cases_unless_asked_by_name():
     assert held
     with pytest.raises(CORP.SplitLeakError):
         RUN.run_cases(held, _fixed(SupervisorVerdict.REPAIR),
-                      config=CFG, now_fn=_now)
+                      config=CFG, now_fn=_now, run_id="r",
+                      preregistration_digest="g1freeze_test")
 
 
 def test_held_out_can_be_scored_when_explicitly_permitted():
     res = RUN.run_cases(CORP.held_out_cases(), _fixed(SupervisorVerdict.REPAIR),
-                        config=CFG, now_fn=_now, allow_held_out=True)
+                        config=CFG, now_fn=_now, run_id="r",
+                        preregistration_digest="g1freeze_test",
+                        allow_held_out=True)
     assert res.splits_run == ("HELD_OUT",)
     assert len(res.records) == len(CORP.held_out_cases())
 
 
 def test_split_is_recorded_on_every_record():
     res = RUN.run_cases(CORP.development_cases(), _fixed(SupervisorVerdict.PASS),
-                        config=CFG, now_fn=_now)
+                        config=CFG, now_fn=_now, run_id="r",
+                        preregistration_digest="g1freeze_test")
     assert all(r.split is C.Split.DEVELOPMENT for r in res.records)
 
 
@@ -373,7 +469,8 @@ def test_an_outage_never_becomes_a_semantic_score():
     res = RUN.run_cases(
         CORP.development_cases(),
         _fixed(SupervisorVerdict.SUPERVISOR_UNAVAILABLE, error="link failed"),
-        config=CFG, now_fn=_now)
+        config=CFG, now_fn=_now, run_id="r",
+        preregistration_digest="g1freeze_test")
     m = M.compute_metrics(res.records)
     assert m.n_scored == 0
     assert m.n_supervisor_unavailable == len(res.records)
@@ -382,7 +479,8 @@ def test_an_outage_never_becomes_a_semantic_score():
 
 def test_every_scored_record_carries_a_real_execution_identity():
     res = RUN.run_cases(CORP.development_cases(), _fixed(SupervisorVerdict.PASS),
-                        config=CFG, now_fn=_now)
+                        config=CFG, now_fn=_now, run_id="r",
+                        preregistration_digest="g1freeze_test")
     for r in res.records:
         ident = r.execution_identity
         assert ident["schema_version"] == "engineering.execution_identity.v1"
@@ -394,12 +492,11 @@ def test_every_scored_record_carries_a_real_execution_identity():
 
 def test_identity_distinguishes_configurations():
     dev = CORP.development_cases()
-    a = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=CFG, now_fn=_now)
-    other = C.MeasurementConfig(model_provider="openai", model_name="other-model",
-                                prompt_version="sysprompt-testaaaa",
-                                instruction_version="one-shot",
-                                toolset_id="gpt_supervisor.review")
-    b = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=other, now_fn=_now)
+    a = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=CFG, now_fn=_now,
+                      run_id="r", preregistration_digest="g1freeze_test")
+    other = CFG_B
+    b = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=other, now_fn=_now,
+                      run_id="r", preregistration_digest="g1freeze_test")
     assert {r.execution_id for r in a.records}.isdisjoint(
         {r.execution_id for r in b.records})
     assert CFG.config_id() != other.config_id()
@@ -442,24 +539,35 @@ def test_repair_outcomes_are_classified(seq, expect):
 # =========================================================================== #
 def test_a_human_audit_record_cannot_be_fabricated():
     for bad in ({"human_verdict": ""}, {"reviewer_id": "  "},
-                {"reviewed_at": ""}):
-        kw = dict(case_id="c", supervisor_verdict="PASS", human_verdict="REPAIR",
-                  reviewer_id="human-1", reviewed_at="2026-08-22T00:00:00Z",
+                {"reviewed_at": ""}, {"record_id": "  "}):
+        kw = dict(case_id="c", record_id="g1rec_x", supervisor_verdict="PASS",
+                  human_verdict="REPAIR", reviewer_id="human-1",
+                  reviewed_at="2026-08-22T00:00:00Z",
                   execution_id="exid_x", severity=C.Severity.HIGH)
         kw.update(bad)
         with pytest.raises(ValueError):
             A.HumanAuditRecord(**kw)
 
 
+def test_an_adjudication_must_name_the_exact_decision():
+    """record_id is required: naming only a case cannot say which model's
+    answer was judged."""
+    with pytest.raises(ValueError):
+        A.HumanAuditRecord(
+            case_id="c", record_id="", supervisor_verdict="PASS",
+            human_verdict="REPAIR", reviewer_id="h", reviewed_at="t",
+            execution_id="e", severity=C.Severity.LOW)
+
+
 def test_a_human_verdict_must_be_a_real_verdict():
     with pytest.raises(ValueError):
         A.HumanAuditRecord(
-            case_id="c", supervisor_verdict="PASS", human_verdict="LOOKS_FINE",
-            reviewer_id="h", reviewed_at="t", execution_id="e",
-            severity=C.Severity.LOW)
+            case_id="c", record_id="g1rec_x", supervisor_verdict="PASS",
+            human_verdict="LOOKS_FINE", reviewer_id="h", reviewed_at="t",
+            execution_id="e", severity=C.Severity.LOW)
 
 
-def test_the_audit_sample_is_biased_toward_pass_and_high_severity():
+def test_the_audit_sample_is_biased_toward_pass_and_high_severity():  # noqa: E303
     recs = [_rec(_case("low1", expected=V.REPAIR, severity=C.Severity.LOW),
                  V.REPAIR),
             _rec(_case("low2", expected=V.REPAIR, severity=C.Severity.LOW),
@@ -476,8 +584,8 @@ def test_the_audit_sample_is_biased_toward_pass_and_high_severity():
 
 def test_the_audit_sample_is_deterministic():
     recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(10)]
-    assert [i.case_id for i in A.select_audit_sample(recs)] == \
-           [i.case_id for i in A.select_audit_sample(recs)]
+    assert [i.record_id for i in A.select_audit_sample(recs)] == \
+           [i.record_id for i in A.select_audit_sample(recs)]
 
 
 def test_coverage_reports_the_shortfall_rather_than_hiding_it():
@@ -486,39 +594,127 @@ def test_coverage_reports_the_shortfall_rather_than_hiding_it():
     cov = A.audit_coverage(sample, [], n_scored=len(recs))
     assert cov.satisfied is False
     assert cov.status == A.HUMAN_AUDIT_PENDING
-    assert len(cov.pending_case_ids) == cov.required
+    assert len(cov.pending_record_ids) == cov.required
     assert cov.agreement_rate is None
 
 
 def test_coverage_is_satisfied_only_by_real_adjudications():
     recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(5)]
     sample = A.select_audit_sample(recs)
-    done = [A.HumanAuditRecord(
-        case_id=i.case_id, supervisor_verdict=i.supervisor_verdict,
-        human_verdict="REPAIR", reviewer_id="human-1",
-        reviewed_at="2026-08-22T01:00:00Z", execution_id=i.execution_id,
-        severity=C.Severity.HIGH) for i in sample]
-    cov = A.audit_coverage(sample, done, n_scored=len(recs))
+    cov = A.audit_coverage(sample, [_audit(i) for i in sample],
+                           n_scored=len(recs))
     assert cov.satisfied and cov.status == "HUMAN_AUDIT_SATISFIED"
     assert cov.agreement_rate == 1.0
+    assert cov.rejected_record_ids == ()
+
+
+# --- ADVERSARIAL: the defects this repair closes -------------------------
+def test_the_same_case_under_two_models_is_two_separate_decisions():
+    """The central defect. One case, two configurations, two adjudications."""
+    case = _case("shared", expected=V.REPAIR)
+    a = _rec(case, V.PASS, cfg=CFG)          # gpt-4o-ish
+    b = _rec(case, V.REPAIR, cfg=CFG_B)      # the other model
+    assert a.record_id() != b.record_id(), (
+        "the same case under two configurations must not collapse to one id")
+
+    sample = A.select_audit_sample([a, b], fraction=1.0)
+    assert len(sample) == 2
+    assert {i.record_id for i in sample} == {a.record_id(), b.record_id()}
+
+    # adjudicating ONE of them must not satisfy coverage for the other
+    cov = A.audit_coverage(sample, [_audit(sample[0])], n_scored=2)
+    assert cov.completed == 1 and cov.required == 2
+    assert not cov.satisfied
+    assert sample[1].record_id in cov.pending_record_ids
+
+
+def test_an_unrelated_adjudication_cannot_satisfy_coverage():
+    """An audit record for a decision that was never selected is REJECTED."""
+    recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(10)]
+    sample = A.select_audit_sample(recs)
+    stranger = A.HumanAuditRecord(
+        case_id="not-in-sample", record_id="g1rec_totally_unrelated",
+        supervisor_verdict="PASS", human_verdict="PASS", reviewer_id="h",
+        reviewed_at="t", execution_id="e", severity=C.Severity.HIGH)
+    cov = A.audit_coverage(sample, [stranger], n_scored=len(recs))
+    assert cov.completed == 0, "an unselected decision must not count"
+    assert not cov.satisfied
+    assert cov.rejected_record_ids == ("g1rec_totally_unrelated",)
+
+
+def test_strict_coverage_raises_on_a_non_member_adjudication():
+    recs = [_rec(_case("c", expected=V.REPAIR), V.REPAIR)]
+    sample = A.select_audit_sample(recs)
+    stranger = A.HumanAuditRecord(
+        case_id="x", record_id="g1rec_nope", supervisor_verdict="PASS",
+        human_verdict="PASS", reviewer_id="h", reviewed_at="t",
+        execution_id="e", severity=C.Severity.LOW)
+    with pytest.raises(A.AuditMembershipError):
+        A.audit_coverage(sample, [stranger], n_scored=1, strict=True)
+
+
+def test_duplicate_adjudications_of_one_decision_count_once():
+    recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(10)]
+    sample = A.select_audit_sample(recs)
+    twice = [_audit(sample[0]), _audit(sample[0], reviewer="human-2")]
+    cov = A.audit_coverage(sample, twice, n_scored=len(recs))
+    assert cov.completed == 1
+
+
+def test_the_audit_population_is_exactly_the_scored_population():
+    """Outages and pending records must not consume audit budget."""
+    scored = [_rec(_case(f"s{i}", expected=V.REPAIR), V.REPAIR) for i in range(10)]
+    noise = [
+        _rec(_case("out"), V.SUPERVISOR_UNAVAILABLE),
+        _rec(_case("pol"), V.POLICY_VIOLATION),
+        _rec(_case("wrk"), V.WORKER_UNAVAILABLE),
+        _rec(_case("hum"), V.E4_HUMAN_REQUIRED),
+        _rec(_case("pend", basis=C.GoldBasis.CONSENSUS_REVIEW), V.PASS),
+    ]
+    everything = scored + noise
+    m = M.compute_metrics(everything)
+    sample = A.select_audit_sample(everything)
+    selected_ids = {i.record_id for i in sample}
+    assert m.n_scored == 10
+    for r in noise:
+        assert r.record_id() not in selected_ids, r.case_id
+    # the sample is drawn from exactly n_scored, so ceil applies to 10 not 15
+    assert cov_required(m.n_scored) == len(sample)
+
+
+def cov_required(n_scored: int) -> int:
+    import math
+    return max(1, math.ceil(n_scored * CRIT.MIN_HUMAN_AUDIT_FRACTION))
+
+
+@pytest.mark.parametrize("n_scored,expect", [
+    (1, 1), (4, 1), (5, 1), (6, 2), (10, 2), (11, 3), (17, 4), (34, 7),
+])
+def test_the_audit_fraction_is_a_true_minimum(n_scored, expect):
+    """ceil, not round: 20% of 11 is 3, never 2."""
+    recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR)
+            for i in range(n_scored)]
+    sample = A.select_audit_sample(recs)
+    assert len(sample) == expect
+    assert len(sample) >= n_scored * CRIT.MIN_HUMAN_AUDIT_FRACTION
 
 
 def test_disagreement_weighting_ranks_a_certification_above_a_routing_dispute():
     cheap = A.HumanAuditRecord(
-        case_id="a", supervisor_verdict="REPAIR", human_verdict="ESCALATE",
-        reviewer_id="h", reviewed_at="t", execution_id="e",
-        severity=C.Severity.LOW)
+        case_id="a", record_id="g1rec_a", supervisor_verdict="REPAIR",
+        human_verdict="ESCALATE", reviewer_id="h", reviewed_at="t",
+        execution_id="e", severity=C.Severity.LOW)
     expensive = A.HumanAuditRecord(
-        case_id="b", supervisor_verdict="PASS", human_verdict="REPAIR",
-        reviewer_id="h", reviewed_at="t", execution_id="e",
-        severity=C.Severity.SAFETY_CRITICAL)
+        case_id="b", record_id="g1rec_b", supervisor_verdict="PASS",
+        human_verdict="REPAIR", reviewer_id="h", reviewed_at="t",
+        execution_id="e", severity=C.Severity.SAFETY_CRITICAL)
     assert expensive.severity_weighted_disagreement > \
         cheap.severity_weighted_disagreement * 4
 
 
 def test_the_audit_packet_carries_the_same_evidence_the_supervisor_saw():
     recs = [_rec(c, V.PASS) for c in CORP.development_cases()]
-    sample = A.select_audit_sample(recs, fraction=1.0)
+    sample = A.select_audit_sample(recs, fraction=1.0)  # noqa: E501
     pkt = A.audit_packet(sample, CORP.by_id())
     assert pkt["status"] == A.HUMAN_AUDIT_PENDING
     for item in pkt["items"]:
@@ -561,10 +757,7 @@ def test_small_scored_sample_forces_inconclusive():
     recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(5)]
     m = M.compute_metrics(recs)
     sample = A.select_audit_sample(recs)
-    done = [A.HumanAuditRecord(
-        case_id=i.case_id, supervisor_verdict=i.supervisor_verdict,
-        human_verdict=i.supervisor_verdict, reviewer_id="h", reviewed_at="t",
-        execution_id=i.execution_id, severity=C.Severity.HIGH) for i in sample]
+    done = [_audit(i, human_verdict=i.supervisor_verdict) for i in sample]
     cov = A.audit_coverage(sample, done, n_scored=m.n_scored)
     d = R.measurement_status(m, cov)
     assert d.status == R.STATUS_INCONCLUSIVE
@@ -576,10 +769,7 @@ def test_complete_requires_both_audit_and_sample():
     recs = [_rec(_case(f"c{i}", expected=V.REPAIR), V.REPAIR) for i in range(n)]
     m = M.compute_metrics(recs)
     sample = A.select_audit_sample(recs)
-    done = [A.HumanAuditRecord(
-        case_id=i.case_id, supervisor_verdict=i.supervisor_verdict,
-        human_verdict=i.supervisor_verdict, reviewer_id="h", reviewed_at="t",
-        execution_id=i.execution_id, severity=C.Severity.HIGH) for i in sample]
+    done = [_audit(i, human_verdict=i.supervisor_verdict) for i in sample]
     cov = A.audit_coverage(sample, done, n_scored=m.n_scored)
     assert R.measurement_status(m, cov).status == R.STATUS_COMPLETE
 
@@ -611,8 +801,8 @@ def test_the_report_embeds_the_frozen_criteria_and_taxonomy():
     m = M.compute_metrics(recs)
     cov = A.audit_coverage((), (), n_scored=m.n_scored)
     rep = R.build_report(metrics=m, coverage=cov, records=recs, configs=[CFG])
-    assert rep["criteria"]["frozen_at_candidate"] == \
-        CRIT.CRITERIA_FROZEN_AT_CANDIDATE
+    assert "frozen_at_candidate" not in rep["criteria"], (
+        "the freeze anchor belongs in the preregistration pointer, not here")
     assert rep["taxonomy"]["accuracy_population"] == "SUPERVISOR_DECISION"
     assert rep["criteria"]["min_human_audit_fraction"] == 0.20
     # a recommendation, never an applied gate

@@ -22,7 +22,8 @@ from typing import Any, Iterable, Optional, Sequence
 
 from portfolio_automation.engineer_worker.g1 import G1_NAMESPACE, G1_SCHEMA_KIND
 from portfolio_automation.engineer_worker.g1.contracts import (
-    MatchClass, Severity, Split, SupervisorEvaluationRecordV0,
+    MatchClass, SCORED_MATCH_CLASSES, Severity, Split,
+    SupervisorEvaluationRecordV0, is_scored,
 )
 from portfolio_automation.engineer_worker.g1.criteria import MIN_CELL_N_FOR_RATE
 from portfolio_automation.engineer_worker.g1.taxonomy import (
@@ -31,13 +32,10 @@ from portfolio_automation.engineer_worker.g1.taxonomy import (
 
 METRICS_SCHEMA_VERSION = f"{G1_NAMESPACE}.metrics.v1"
 
-#: Match classes that represent a scored semantic judgement.
-_SCORED = frozenset({
-    MatchClass.TRUE_PASS, MatchClass.FALSE_PASS,
-    MatchClass.TRUE_REPAIR, MatchClass.FALSE_REPAIR,
-    MatchClass.TRUE_ESCALATE, MatchClass.FALSE_ESCALATE,
-    MatchClass.TRUE_ABSTAIN, MatchClass.FALSE_ABSTAIN,
-})
+#: Imported, not re-declared. ``audit`` draws its sample from the same set via
+#: ``contracts.is_scored``; when these were two separate definitions they drifted,
+#: and the audit sample ended up including supervisor outages.
+_SCORED = SCORED_MATCH_CLASSES
 _TRUE = frozenset({MatchClass.TRUE_PASS, MatchClass.TRUE_REPAIR,
                    MatchClass.TRUE_ESCALATE, MatchClass.TRUE_ABSTAIN})
 #: Declining to certify something that should have passed. A cost, not a hazard.

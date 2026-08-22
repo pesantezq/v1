@@ -32,8 +32,17 @@ from portfolio_automation.engineer_worker.g1.taxonomy import ACCURACY_POPULATION
 
 CRITERIA_SCHEMA_VERSION = f"{G1_NAMESPACE}.evaluation_criteria.v1"
 
-#: Frozen before any live supervisor call was scored.
-CRITERIA_FROZEN_AT_CANDIDATE = "3bdb329a5b0acf1b45937b0a972e31c5b6ca12a4"
+# The freeze point is NOT recorded here.
+#
+# An earlier version set CRITERIA_FROZEN_AT_CANDIDATE to the parent commit
+# 3bdb329a -- a commit that does not contain this file, because G1 did not exist
+# yet. The claim was checkable and false, and it read as a stronger guarantee
+# than the truth while proving less.
+#
+# The freeze is now a content digest anchored to a real commit that holds the
+# registered material: see g1/preregistration.py and
+# evals/g1/preregistration_freeze.json. This module supplies the criteria; it
+# does not certify when they were frozen.
 
 FALSE_PASS_DEFINITION = (
     "The supervisor returned PASS for a case whose expected verdict was a "
@@ -119,7 +128,9 @@ def criteria_manifest() -> dict:
     return {
         "schema_version": CRITERIA_SCHEMA_VERSION,
         "schema_kind": G1_SCHEMA_KIND,
-        "frozen_at_candidate": CRITERIA_FROZEN_AT_CANDIDATE,
+        # No freeze SHA here on purpose -- see the note above. The anchor lives
+        # in the preregistration pointer, where it can be verified against the
+        # commit that actually holds the registered material.
         "accuracy_population": ACCURACY_POPULATION.value,
         "false_pass": FALSE_PASS_DEFINITION,
         "false_fail": FALSE_FAIL_DEFINITION,
