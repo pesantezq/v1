@@ -63,6 +63,7 @@ class LoopStop(str, Enum):
     BOTH_FAILED = "STOP:engineer_and_claude_failed"
     ROADMAP_VIOLATION = "STOP:roadmap_violation"
     WORKER_OUTAGE = "STOP:worker_unavailable"
+    POLICY_VIOLATION = "STOP:policy_violation"
 
 
 @dataclass
@@ -203,6 +204,11 @@ class TaskRunResult:
     #: evidence is a different fact from one that produced failing evidence.
     worker_failures: int = 0
     worker_unavailable: bool = False
+    #: A deterministic authority/scope breach terminated this task branch.
+    #: Carried as a flag rather than left for the mission layer to re-derive by
+    #: string-matching failure_class: the decision is made once, where the
+    #: evidence is, and read everywhere else.
+    policy_violation: bool = False
 
 
 def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: RuntimePolicy,
@@ -263,9 +269,14 @@ def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: Run
                 break                                   # pause; never certify without GPT
             if v.verdict in (VerificationVerdict.ESCALATE, VerificationVerdict.ABSTAIN):
                 break
-            # REPAIR/FAIL -> bounded retry (auto_repair) or exhaust
-            if v.verdict is VerificationVerdict.FAIL and v.failure_class == FailureClass.POLICY_VIOLATION.value:
-                break                                   # policy violation: stop, no retry
+            if _is_policy_violation(v):
+                # STOP_NO_RETRY, applied in full: no engineer retry, no Claude,
+                # and the supervisor was never consulted because the breach was
+                # caught deterministically before dispatch.
+                return _terminal_violation(task, route, v, eng_attempts,
+                                           lineage=lineage,
+                                           worker_failures=worker_failures)
+            # REPAIR -> bounded retry (auto_repair) or exhaust
         # engineer exhausted / escalate / abstain
         if supervisor_outage:
             return _stop(task, route, last_v, eng_attempts, "SUPERVISOR_UNAVAILABLE",
@@ -308,6 +319,15 @@ def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: Run
                             certification=certification)
         last_v = v
         lineage.append(_lineage_entry(c_attempt, v, executor=Route.CLAUDE.value))
+        if _is_policy_violation(v):
+            # The rule does not depend on who breached it. A more capable
+            # executor producing an out-of-bounds candidate is not a reason to
+            # give it another turn.
+            return _terminal_violation(task, Route.CLAUDE, v, eng_attempts,
+                                       lineage=lineage,
+                                       worker_failures=worker_failures,
+                                       escalated=True,
+                                       claude_attempts=claude_attempts)
         if v.verdict is VerificationVerdict.PASS:
             return _ok(task, Route.CLAUDE, v, eng_attempts, True, claude_attempts, False,
                        lineage=lineage, worker_failures=worker_failures)
@@ -329,6 +349,36 @@ def run_task(task: EngineeringTaskV0, level: EngineerAuthorityLevel, policy: Run
                          candidate_sha=(last_v.candidate_sha if last_v else None),
                          worker_failures=worker_failures,
                          worker_unavailable=bool(last_worker_error and last_v is None))
+
+
+def _terminal_violation(task, route, v, eng_a, *, lineage=None, worker_failures=0,
+                        escalated=False, claude_attempts=0):
+    """Terminate the branch on a deterministic authority/scope breach.
+
+    ``action_for_failure(POLICY_VIOLATION)`` is STOP_NO_RETRY, and that policy
+    was only half-applied: the engineer was not retried, but the loop then fell
+    through to Claude escalation. So a protected-path breach still spent an
+    escalation, and if Claude returned a clean candidate the task could reach
+    VERIFIED -- a run whose first act was an authority violation ending in a
+    certification.
+
+    Escalation is for work that is legitimately hard: a REPAIR the engineer
+    cannot converge on, an explicit ESCALATE, an exhausted repair budget, an E3
+    task. A boundary breach is not hard work; it is out of bounds, and handing
+    it to a more capable executor is the one response that cannot be right.
+    FAILED_VALIDATION is terminal (see ew0a._TERMINAL)."""
+    return TaskRunResult(
+        task.task_id, route.value, TaskStatus.FAILED_VALIDATION.value,
+        v.verdict.value, eng_a, escalated, claude_attempts, False, False,
+        v.to_dict(), v.failure_class, attempt_lineage=list(lineage or []),
+        execution_identity=v.execution_identity, candidate_sha=v.candidate_sha,
+        worker_failures=worker_failures, policy_violation=True)
+
+
+def _is_policy_violation(v) -> bool:
+    return (v is not None
+            and v.verdict is VerificationVerdict.FAIL
+            and v.failure_class == FailureClass.POLICY_VIOLATION.value)
 
 
 def _ok(task, route, v, eng_a, escalated, claude_a, human, *, lineage=None,
@@ -405,6 +455,7 @@ class MissionReport:
     supervisor_outage: bool = False
     worker_outage: bool = False
     roadmap_violation: bool = False
+    policy_violation: bool = False
 
 
 def run_mission(policy: RuntimePolicy, task_queue: list[EngineeringTaskV0],
@@ -466,6 +517,15 @@ def run_mission(policy: RuntimePolicy, task_queue: list[EngineeringTaskV0],
                 attempt_lineage=list(r.attempt_lineage)))
         if r.final_status == TaskStatus.VERIFIED.value:
             rep.verified += 1
+        if r.policy_violation:
+            # Checked FIRST among the stop conditions. A task that breached an
+            # authority boundary is the strongest signal the queue itself may be
+            # unsafe, so the mission does not walk on to the next execution path
+            # -- the outcome is already recorded above, which is what makes
+            # stopping here an explained stop rather than a silent one.
+            rep.policy_violation = True
+            rep.stop_reason = LoopStop.POLICY_VIOLATION.value
+            break
         if r.human_required:
             rep.human_required += 1
             rep.stop_reason = LoopStop.HUMAN_REQUIRED.value

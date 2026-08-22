@@ -185,6 +185,38 @@ negative control matters as much: when nothing is resolvable the record still
 says `None` rather than a plausible SHA, so this did not become "always stamp
 something".
 
+### 8. `STOP_NO_RETRY` was only half-applied
+
+`action_for_failure(POLICY_VIOLATION)` is `STOP_NO_RETRY`, and the engineer was
+indeed not retried — but `run_task` then **fell through to Claude escalation**.
+So a protected-path or out-of-scope breach still spent an escalation, and if
+Claude returned a clean candidate the task could reach `VERIFIED`: a run whose
+first act was an authority violation ending in a certification.
+
+Escalation is for work that is legitimately hard — a REPAIR the engineer cannot
+converge on, an explicit ESCALATE, an exhausted repair budget, an E3 task. A
+boundary breach is not hard work; it is out of bounds, and handing it to a *more
+capable* executor is the one response that cannot be right.
+
+A `POLICY_VIOLATION` now terminates the affected branch at
+`TaskStatus.FAILED_VALIDATION` (which is in `ew0a._TERMINAL`): no engineer
+retry, no Claude, and no supervisor call, because the breach was caught
+deterministically before dispatch. The rule does not depend on who breached it
+— a violating *Claude* candidate is equally terminal and does not get a second
+turn. At mission level the violation is **recorded and then stopped**: a stop
+with no record is indistinguishable from a crash, and a record with no stop
+walks on to the next execution path.
+
+`TaskRunResult.policy_violation` carries the decision as a flag rather than
+leaving the mission layer to re-derive it by string-matching `failure_class`.
+
+The paired positive controls are what keep this from becoming “nothing ever
+escalates”: ordinary test failure still retries, repeated legitimate REPAIR
+still reaches Claude (Scenario 13), explicit ESCALATE still escalates without
+burning the repair budget, E3 still routes straight to Claude, and a
+non-converging REPAIR still stops at the *escalation* boundary rather than the
+policy one — the two must stay distinguishable.
+
 ## Attribution
 
 Every lifecycle record naming a decision carries an `execution_identity`

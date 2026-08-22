@@ -1484,6 +1484,205 @@ def test_findingC_lineage_carries_the_failed_candidate_through_run_task(tmp_path
 
 
 # =========================================================================== #
+# SCENARIO 6 (STRENGTHENED) -- POLICY_VIOLATION IS TERMINAL
+#
+# action_for_failure(POLICY_VIOLATION) is STOP_NO_RETRY, and that policy was
+# only half-applied: the engineer was not retried, but the loop fell through to
+# Claude escalation. A protected-path breach therefore spent an escalation, and
+# if Claude returned a clean candidate the task could reach VERIFIED -- a run
+# whose first act was an authority violation ending in a certification.
+#
+# Escalation is for work that is legitimately hard. A boundary breach is not
+# hard work; it is out of bounds, and handing it to a more capable executor is
+# the one response that cannot be right.
+# =========================================================================== #
+class _CountingClaude:
+    """Claude that would happily produce a clean, certifiable candidate.
+
+    That is the point: if the loop escalates a violation, this makes the task
+    PASS, and the test fails loudly instead of silently tolerating it."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, task, last_v):
+        self.calls += 1
+        return _attempt(99)
+
+
+_PROTECTED = "config/ew0a_authority.json"
+
+
+def _violating(n, kind):
+    if kind == "protected":
+        return _attempt(n, changed_paths=[_PROTECTED],
+                        diff_text=f"--- a/{_PROTECTED}\n+++ b/{_PROTECTED}\n+x\n")
+    # out-of-scope: a real, unprotected path that the task never allowed
+    return _attempt(n, changed_paths=["portfolio_automation/universe/pick.py"],
+                    diff_text="--- a/portfolio_automation/universe/pick.py\n"
+                              "+++ b/portfolio_automation/universe/pick.py\n+x\n")
+
+
+@pytest.mark.parametrize("kind", ["protected", "out_of_scope"])
+def test_s6t_a_violation_terminates_the_branch_immediately(tmp_path, kind):
+    """The four counters the mission names, in one assertion block."""
+    engineer_calls = {"n": 0}
+    claude = _CountingClaude()
+    spy = Spy(SupervisorVerdict.PASS)      # would certify anything it is shown
+
+    def engineer(task, n):
+        engineer_calls["n"] += 1
+        return _violating(n, kind)
+
+    task = _task(allowed_paths=["tests/"]) if kind == "out_of_scope" else _task()
+    r = run_task(task, Lvl.A1_ASSISTED_ENGINEERING, POLICY, engineer, claude,
+                 spy, _now, _vid, certification=_ctx(tmp_path), roadmap=ROADMAP)
+
+    assert engineer_calls["n"] == 1, "the engineer is not retried"
+    assert claude.calls == 0, "a boundary breach is never escalated"
+    assert spy.calls == 0, "the breach was caught deterministically, before review"
+    assert r.final_status != TaskStatus.VERIFIED.value
+
+    # ...and the terminal state is explicit, not merely 'not verified'.
+    assert r.final_status == TaskStatus.FAILED_VALIDATION.value
+    assert r.policy_violation is True
+    assert r.failure_class == FailureClass.POLICY_VIOLATION.value
+    assert r.escalated is False and r.claude_attempts == 0
+    assert action_for_failure(FailureClass.POLICY_VIOLATION) is NextAction.STOP_NO_RETRY
+
+
+def test_s6t_the_terminal_status_is_actually_terminal():
+    """FAILED_VALIDATION is in the terminal set, so nothing downstream may
+    treat this branch as still in flight."""
+    from portfolio_automation.engineer_worker.ew0a import _TERMINAL
+    assert TaskStatus.FAILED_VALIDATION in _TERMINAL
+    assert status_for_verdict(VerificationVerdict.FAIL) is TaskStatus.FAILED_VALIDATION
+
+
+def test_s6t_a_violating_claude_candidate_is_also_terminal(tmp_path):
+    """The rule does not depend on who breached it. Engineer legitimately fails
+    twice (REPAIR), escalation is correct, and then Claude breaches -- so the
+    branch terminates instead of spending its second Claude attempt."""
+    claude_calls = {"n": 0}
+
+    def claude(task, last_v):
+        claude_calls["n"] += 1
+        return _violating(9, "protected")
+
+    spy = Spy(SupervisorVerdict.REPAIR, SupervisorVerdict.REPAIR)
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING,
+                 RuntimePolicy(mission_id=MISSION, claude_attempts_per_escalation=2),
+                 lambda t, n: _attempt(n), claude, spy, _now, _vid,
+                 certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert claude_calls["n"] == 1, "Claude does not get a second turn after a breach"
+    assert r.policy_violation and r.escalated
+    assert r.final_status == TaskStatus.FAILED_VALIDATION.value
+    assert spy.calls == 2, "the two legitimate engineer REPAIRs were reviewed"
+
+
+def test_s6t_the_mission_records_the_violation_and_stops(tmp_path):
+    """Recorded, THEN stopped. A stop with no record is indistinguishable from
+    a crash; a record with no stop walks on to the next execution path."""
+    log = tmp_path / "outcomes.jsonl"
+    claude = _CountingClaude()
+    rep = run_mission(POLICY, [_task(task_id="breach"), _task(task_id="never")],
+                      Lvl.A1_ASSISTED_ENGINEERING,
+                      lambda t, n: _violating(n, "protected"), claude,
+                      Spy(SupervisorVerdict.PASS), _now, _vid, str(log),
+                      certification=_ctx(tmp_path), roadmap=ROADMAP)
+
+    assert rep.policy_violation is True
+    assert rep.stop_reason == LoopStop.POLICY_VIOLATION.value
+    assert [x["task_id"] for x in rep.tasks_run] == ["breach"]
+    assert rep.verified == 0 and claude.calls == 0
+
+    recs = read_outcomes(str(log))
+    assert len(recs) == 1
+    assert recs[0]["policy_violation"] is True
+    assert recs[0]["final_status"] == TaskStatus.FAILED_VALIDATION.value
+    assert recs[0]["failure_classes"] == [FailureClass.POLICY_VIOLATION.value]
+    # The breaching candidate still names itself (review finding C).
+    assert recs[0]["attempt_lineage"][0]["candidate_sha"] == SHA_A
+
+
+# --- POSITIVE CONTROLS: everything legitimate still escalates ---------------
+def test_s6t_positive_an_ordinary_test_failure_still_retries(tmp_path):
+    """The paired control that stops this becoming 'nothing ever retries'."""
+    calls = {"n": 0}
+
+    def engineer(task, n):
+        calls["n"] += 1
+        return _attempt(n, passing=(n >= 2))
+
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY, engineer,
+                 _CountingClaude(), Spy(SupervisorVerdict.PASS), _now, _vid,
+                 certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert calls["n"] == 2, "a plain test failure is still a bounded retry"
+    assert r.final_status == TaskStatus.VERIFIED.value
+    assert r.policy_violation is False
+
+
+def test_s6t_positive_repeated_legitimate_repair_still_escalates(tmp_path):
+    """Scenario 13 must still hold: exhausted repair budget reaches Claude."""
+    claude = _CountingClaude()
+    spy = Spy(SupervisorVerdict.REPAIR, SupervisorVerdict.REPAIR,
+              SupervisorVerdict.PASS)
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
+                 lambda t, n: _attempt(n), claude, spy, _now, _vid,
+                 certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert r.engineer_attempts == 2 and claude.calls == 1
+    assert r.escalated and r.final_status == TaskStatus.VERIFIED.value
+    assert r.policy_violation is False
+
+
+def test_s6t_positive_an_explicit_escalate_still_escalates(tmp_path):
+    claude = _CountingClaude()
+    spy = Spy(SupervisorVerdict.ESCALATE, SupervisorVerdict.PASS)
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
+                 lambda t, n: _attempt(n), claude, spy, _now, _vid,
+                 certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert r.engineer_attempts == 1, "ESCALATE does not burn the repair budget"
+    assert claude.calls == 1 and r.escalated
+    assert r.final_status == TaskStatus.VERIFIED.value
+
+
+def test_s6t_positive_e3_routing_still_goes_straight_to_claude(tmp_path):
+    claude = _CountingClaude()
+    r = run_task(_task(risk_class=RiskClass.E3_HIGH), Lvl.A1_ASSISTED_ENGINEERING,
+                 POLICY, lambda t, n: pytest.fail("E3 must not reach the engineer"),
+                 claude, Spy(SupervisorVerdict.PASS), _now, _vid,
+                 certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert r.route == Route.CLAUDE.value and claude.calls == 1
+    assert r.final_status == TaskStatus.VERIFIED.value
+
+
+def test_s6t_positive_the_mission_continues_past_a_legitimate_failure(tmp_path):
+    """A REPAIR that never converges stops the mission at the escalation
+    boundary, not at a policy boundary -- the two must stay distinguishable."""
+    log = tmp_path / "outcomes.jsonl"
+    rep = run_mission(POLICY, [_task(task_id="hard")], Lvl.A1_ASSISTED_ENGINEERING,
+                      lambda t, n: _attempt(n), lambda t, v: _attempt(9),
+                      Spy(SupervisorVerdict.REPAIR), _now, _vid, str(log),
+                      certification=_ctx(tmp_path), roadmap=ROADMAP)
+    assert rep.policy_violation is False
+    assert rep.stop_reason != LoopStop.POLICY_VIOLATION.value
+    assert read_outcomes(str(log))[0]["policy_violation"] is False
+
+
+def test_s6t_a_mis_stated_candidate_is_terminal_too(tmp_path):
+    """The binding-claim mismatch from review finding A classifies as
+    POLICY_VIOLATION, so it inherits this routing without a second rule."""
+    claude = _CountingClaude()
+    spy = Spy(SupervisorVerdict.PASS)
+    r = run_task(_task(), Lvl.A1_ASSISTED_ENGINEERING, POLICY,
+                 lambda t, n: _attempt(n, claimed=SHA_B), claude, spy, _now, _vid,
+                 certification=_ctx(tmp_path, binder=_Controller(SHA_A)),
+                 roadmap=ROADMAP)
+    assert r.policy_violation and claude.calls == 0 and spy.calls == 0
+    assert r.final_status == TaskStatus.FAILED_VALIDATION.value
+
+
+# =========================================================================== #
 # DOC DRIFT GUARD
 # =========================================================================== #
 def test_the_hardening_doc_names_every_evidence_refusal():
