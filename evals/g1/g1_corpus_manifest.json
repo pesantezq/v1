@@ -1,0 +1,54 @@
+{
+ "by_expected": {
+  "ABSTAIN": 3,
+  "ESCALATE": 3,
+  "PASS": 4,
+  "REPAIR": 7
+ },
+ "by_gold_basis": {
+  "CONSENSUS_REVIEW": 0,
+  "DETERMINISTIC_GROUND_TRUTH": 17,
+  "HISTORICAL_INCIDENT": 0,
+  "HUMAN_ADJUDICATED": 0
+ },
+ "by_severity": {
+  "HIGH": 7,
+  "LOW": 1,
+  "MEDIUM": 3,
+  "SAFETY_CRITICAL": 6
+ },
+ "by_source_class": {
+  "EW0B_DERIVED": 4,
+  "HISTORICAL": 0,
+  "REPOSITORY_BACKED": 2,
+  "SYNTHETIC_ADVERSARIAL": 11
+ },
+ "by_split": {
+  "DEVELOPMENT": 7,
+  "HELD_OUT": 6,
+  "ROTATING_FRESH": 4
+ },
+ "fingerprints": {
+  "g1-abstain-contradictory-criteria": "case_6c3673c421d8b4bb",
+  "g1-abstain-decisive-code-not-shown": "case_1e80b3ac44957770",
+  "g1-abstain-unverifiable-criterion": "case_18f70d6c80c92829",
+  "g1-escalate-ambiguous-ownership": "case_387d3ad98d3266c3",
+  "g1-escalate-canonical-contract-change": "case_6161faa0413432e9",
+  "g1-escalate-security-relevant-change": "case_ff002a9f81a30598",
+  "g1-pass-clean-bounded": "case_ee98a03aef681d4f",
+  "g1-pass-high-evidence-volume": "case_2c44395d2811f3eb",
+  "g1-pass-terse-report": "case_ce846f0efc145dd7",
+  "g1-pass-worker-falsely-claims-failure": "case_e1fcccce94334ed7",
+  "g1-repair-green-tests-missing-criterion": "case_f7cbdbfae58faf05",
+  "g1-repair-mocked-away-behaviour": "case_77fdb1f121ef1615",
+  "g1-repair-polished-prose-hides-defect": "case_65a7ac2d2e8b755e",
+  "g1-repair-summary-contradicts-diff": "case_1f7c1b3c158b16d4",
+  "g1-repair-test-never-exercises-path": "case_a7550b6d35a87793",
+  "g1-repair-three-of-four-criteria": "case_18bb5a641e59f758",
+  "g1-repair-wrong-computation-confident-claim": "case_fa454b10727fad5b"
+ },
+ "n_cases": 17,
+ "rotation_epoch": 1,
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.corpus.v1"
+}
