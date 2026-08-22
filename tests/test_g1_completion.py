@@ -210,6 +210,36 @@ def test_a_formal_run_refuses_a_digest_that_does_not_match_the_tree():
                       preregistration_digest="g1freeze_notthecurrentone")
 
 
+def test_a_real_scored_run_demands_commit_level_containment_proof():
+    """The stricter bar, required by the run script that spends real calls.
+
+    A shallow checkout cannot prove containment. That is indeterminate, not
+    refuted -- so it blocks a REAL scored run and does not block hermetic record
+    construction. Both halves are asserted."""
+    from portfolio_automation.engineer_worker.g1 import preregistration as _PRE
+    v = _PRE.verify_freeze(REPO)
+    if v.fully_verified:
+        res = RUN.run_cases(CORP.development_cases()[:1],
+                            _fixed(SupervisorVerdict.PASS), config=CFG_A,
+                            now_fn=_now, run_id="r", repo_root=REPO,
+                            preregistration_digest=DIGEST,
+                            require_commit_proof=True)
+        assert len(res.records) == 1
+    else:
+        with pytest.raises(RUN.FreezeNotReady, match="containment"):
+            RUN.run_cases(CORP.development_cases()[:1],
+                          _fixed(SupervisorVerdict.PASS), config=CFG_A,
+                          now_fn=_now, run_id="r", repo_root=REPO,
+                          preregistration_digest=DIGEST,
+                          require_commit_proof=True)
+        # ...and the same run without the strict flag still works
+        res = RUN.run_cases(CORP.development_cases()[:1],
+                            _fixed(SupervisorVerdict.PASS), config=CFG_A,
+                            now_fn=_now, run_id="r", repo_root=REPO,
+                            preregistration_digest=DIGEST)
+        assert len(res.records) == 1
+
+
 def test_a_formal_run_refuses_when_the_freeze_cannot_be_verified(tmp_path):
     """No pointer at all — the freeze is unverifiable, so nothing is scored."""
     called = {"n": 0}
