@@ -112,7 +112,13 @@ def frozen_content() -> dict[str, Any]:
             "selection": ("deterministic, keyed on record_id, drawn from the "
                           "same scored population compute_metrics uses, target "
                           "computed with ceil so the fraction is a true "
-                          "minimum"),
+                          "minimum. Priority order: certifications (PASS) "
+                          "strictly first, then protected/high-impact, then "
+                          "expected-vs-actual disagreements, then "
+                          "escalation/ambiguity, then baseline. STRATIFIED: at "
+                          "least one decision from every non-empty priority "
+                          "band is included before remaining slots are filled "
+                          "by priority, so no band is starved."),
             "membership": ("an adjudication counts only if its record_id is in "
                            "the selected sample"),
         },
