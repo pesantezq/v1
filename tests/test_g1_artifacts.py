@@ -115,7 +115,48 @@ def test_no_exploratory_record_leaked_into_the_formal_population(records):
                for r in records)
 
 
-def test_all_four_populations_are_kept_physically_separate():
+def test_v3_artifacts_remain_immutable_and_marked_superseded():
+    """The superseded population must survive intact, with its reason recorded."""
+    import json as _json
+    v3 = REPO / "evals" / "g1" / "formal_superseded_freeze_v3"
+    man = _json.loads((v3 / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert man["status"] == "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT"
+    assert man["run_id"] == "g1run-formal-003"
+    assert man["n_records"] == 110
+    assert man["freeze_digest"] != PRE.freeze_digest()
+    # both defective cases are named, not summarised away
+    assert "g1c-esc-ci-trust-boundary" in man["why_superseded"]
+    assert "g1-pass-clean-bounded" in man["why_superseded"]
+    # its records still name freeze v3 -- they were NOT relabelled
+    recs = _json.loads((v3 / "records.json").read_text(encoding="utf-8"))
+    assert len(recs) == 110
+    assert {r["preregistration_digest"] for r in recs} ==         {"g1freeze_502c13e1104e8bc301edf2254f46a138"}
+    assert {r["run_id"] for r in recs} == {"g1run-formal-003"}
+    # its audit packet must not be presented for adjudication
+    assert "must NOT be adjudicated" in man["audit_packet_status"]
+
+
+def test_only_v4_records_enter_the_current_report(records, report):
+    assert report["preregistration"]["run_id"] == "g1run-formal-004"
+    assert {r.run_id for r in records} == {"g1run-formal-004"}
+    assert {r.preregistration_digest for r in records} == {PRE.freeze_digest()}
+
+
+def test_the_audit_packet_is_generated_from_v4_only(records, packet):
+    v4_ids = {r.record_id() for r in records}
+    for item in packet["items"]:
+        assert item["record_id"] in v4_ids, item["record_id"]
+        assert item["run_id"] == "g1run-formal-004"
+
+
+def test_every_case_in_the_current_run_was_reachable(records):
+    """The defect that superseded v3 must not exist in v4."""
+    CORP.assert_all_cases_reachable()
+    measured = {r.case_id for r in records}
+    assert measured == {c.case_id for c in CORP.ALL_CASES}
+
+
+def test_all_populations_are_kept_physically_separate():
     """Historical, superseded-v1, freeze-v2 and current freeze-v3.
 
     Each carries a manifest stating what it is and what it may not be pooled
@@ -126,7 +167,9 @@ def test_all_four_populations_are_kept_physically_separate():
             ("formal_superseded_freeze_v1", "status",
              "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE"),
             ("formal_freeze_v2", "status",
-             "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2")):
+             "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2"),
+            ("formal_superseded_freeze_v3", "status",
+             "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT")):
         man = json.loads((base / rel / "MANIFEST.json").read_text(encoding="utf-8"))
         assert man[key] == want, rel
         assert "not_combinable_with" in man, rel
@@ -147,10 +190,12 @@ def test_the_current_formal_population_meets_the_completeness_target(records):
     assert len({r.config.model_name for r in records}) == 2
 
 
-def test_the_current_run_is_bound_to_freeze_v3(report, records):
+def test_the_current_run_is_bound_to_the_current_freeze(report, records):
+    """Deliberately not hard-coded to a run number: a freeze supersession must
+    not require editing an assertion that is really about binding."""
     assert report["preregistration"]["freeze_digest"] == PRE.freeze_digest()
     assert all(r.preregistration_digest == PRE.freeze_digest() for r in records)
-    assert all(r.run_id == "g1run-formal-003" for r in records)
+    assert len({r.run_id for r in records}) == 1
 
 
 # =========================================================================== #
