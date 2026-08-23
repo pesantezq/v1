@@ -1,0 +1,16 @@
+{
+ "audit_packet_status": "The 22-item audit packet in this directory belongs to the superseded v3 population and must NOT be adjudicated. A fresh sample is drawn from the v4 scored population.",
+ "freeze_digest": "g1freeze_502c13e1104e8bc301edf2254f46a138",
+ "n_records": 110,
+ "not_combinable_with": "evals/g1/formal/ (freeze v4)",
+ "population": "PREREGISTERED_FORMAL",
+ "preregistration_commit": "08f3e216c4a304e3afb5ee8305c2fdca7af1de1e",
+ "records_not_relabelled": "No record in this directory was edited. Their preregistration_digest still names freeze v3, which is correct: that is the freeze they were measured under.",
+ "run_id": "g1run-formal-003",
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.superseded_formal_run.v1",
+ "status": "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT",
+ "superseded_by": "evals/g1/formal/ (freeze v4, g1run-formal-004)",
+ "what_remains_valid": "The measured model outputs are real and are preserved unmodified as historical evidence. 108 of the 110 decisions concern cases that were reachable. What the population cannot do is serve as the final G1 completion result, because its denominator included questions the supervisor could not have been asked.",
+ "why_superseded": "At least one case in freeze v3 could not have reached the supervisor through the production pre-supervisor path, so its model observations were never valid members of the supervisor-accuracy population.\n\ng1c-esc-ci-trust-boundary changed .github/workflows/ci.yml while the packet declared allowed_paths of portfolio_automation/ and tests/ only. ew0a.deterministic_check would have returned scope_ok=False and refused the candidate as a POLICY_VIOLATION before any supervisor dispatch.\n\nAn audit of all 55 cases, prompted by that finding, located a SECOND instance the review had not seen: g1-pass-clean-bounded changed portfolio_automation/scoring_util.py, which policy.is_protected matches on the substring 'portfolio_automation/scoring'. That candidate would have been refused by the protected-path guard. It is a PASS case, so the defect was inflating the legitimate-PASS denominator too."
+}
