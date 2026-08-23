@@ -1,7 +1,7 @@
 {
- "freeze_digest": "g1freeze_502c13e1104e8bc301edf2254f46a138",
- "freeze_version": "v3",
- "preregistration_commit": "08f3e216c4a304e3afb5ee8305c2fdca7af1de1e",
+ "freeze_digest": "g1freeze_19a225f91ac064004d7af7a069323770",
+ "freeze_version": "v4",
+ "preregistration_commit": "f1bc9390a79cbaec637b624c3edea2aae9926b2c",
  "registered_file": "evals/g1/preregistration.json",
  "schema_kind": "experimental_noncanonical",
  "schema_version": "engineering.g1.preregistration.v1",
@@ -10,14 +10,20 @@
   {
    "commit": "f7abf6b03bceafc0f4574071db59ae56a3edd9b7",
    "digest": "g1freeze_c3527fd036cdb524d1cc7516b8d51420",
-   "superseded_because": "audit selection policy improved (PASS-first, stratified); audit policy is registered material",
+   "superseded_because": "audit selection policy improved; audit policy is registered material",
    "version": "v1"
   },
   {
    "commit": "755eb80162406009c18c0a608f66b312f016238a",
    "digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
-   "superseded_because": "corpus expanded from 17 to 55 cases for G1 completion; the corpus is registered material",
+   "superseded_because": "corpus expanded 17 -> 55 for G1 completion",
    "version": "v2"
+  },
+  {
+   "commit": "08f3e216c4a304e3afb5ee8305c2fdca7af1de1e",
+   "digest": "g1freeze_502c13e1104e8bc301edf2254f46a138",
+   "superseded_because": "CASE_REACHABILITY_INTEGRITY_DEFECT: two cases could not have reached the supervisor through the production pre-supervisor path",
+   "version": "v3"
   }
  ],
  "verification": "verify_freeze() re-derives the digest from current code and compares it against the copy of preregistration.json committed at preregistration_commit, read via git show. It does not trust the working tree."
