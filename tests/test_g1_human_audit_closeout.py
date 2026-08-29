@@ -154,9 +154,21 @@ def test_human_completion_did_not_alter_frozen_gold(records):
 
 
 def test_the_freeze_still_verifies_after_recording_the_audit():
+    """Recording an audit must not disturb the freeze.
+
+    The digest binding is asserted unconditionally because it holds in any
+    checkout. The commit-level proof is asserted only where the freeze commit
+    object is present: CI checks out with fetch-depth 1, and an absent object is
+    INDETERMINATE rather than refuted. This is the same distinction the
+    verifier already makes, and asserting fully_verified unconditionally here
+    was a repeat of an error corrected in an earlier mission."""
     v = PRE.verify_freeze(REPO)
-    assert v.ok and v.fully_verified, v.reasons
+    assert v.ok, v.reasons
     assert v.current_digest == "g1freeze_19a225f91ac064004d7af7a069323770"
+    if v.commit_available:
+        assert v.fully_verified, v.reasons
+    else:
+        assert v.indeterminate_reasons
 
 
 def test_case_id_alone_cannot_stand_in_for_a_decision(completed, records):
