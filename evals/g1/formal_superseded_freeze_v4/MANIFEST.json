@@ -1,0 +1,37 @@
+{
+ "comparison_rule": "May be compared DIRECTIONALLY with the freeze-v5 run to ask whether findings replicated. Denominators must never be pooled: the two runs answer different question sets under different freezes.",
+ "defective_case_id": "g1c-abstain-contradictory-test-results",
+ "file_sha256": {
+  "audit_packet.json": "263bff52ee36c43cbe2cb31c40d5943a18f7d8e9594b0e94c73ba1d32fe13078",
+  "human_audit_completed.json": "de173e055bb7b1bae789a4eacf6f6b2c43de891ce2a19c56d10c1fbb00f8c131",
+  "per_model.json": "653a20d25ebdd7132aa7ce7764593fbca275c72c2f0556f92e0fa8142d3241db",
+  "records.json": "6ca6466b3d9460ae3f65c30d399ede8fa185f671d8f056f1d5ce64a6ac4b3f4c",
+  "report.json": "8ed494a532f20a12f63dbf33293622998d1fa10c61769ec0fbcd2a87adf98ffe"
+ },
+ "freeze_digest": "g1freeze_19a225f91ac064004d7af7a069323770",
+ "freeze_version": "v4",
+ "human_adjudicated_verdict": "PASS",
+ "human_audit": {
+  "completed": 22,
+  "disagreements": 1,
+  "human_vs_gold_exact": "21/22",
+  "note": "This completed audit belongs to the v4 population and must NOT be carried over. A fresh sample is drawn from the v5 scored population, and each v5 record is a new model observation with a new record identity even where the same case recurs.",
+  "required": 22,
+  "reviewer_id": "HUMAN_OPERATOR_01",
+  "status": "HUMAN_AUDIT_SATISFIED"
+ },
+ "human_audit_record_id": "g1rec_25075ba0cf4207b1fc50",
+ "n_records": 110,
+ "not_combinable_with": "evals/g1/formal/ (freeze v5)",
+ "old_expected_verdict": "ABSTAIN",
+ "population": "PREREGISTERED_FORMAL",
+ "preregistration_commit": "f1bc9390a79cbaec637b624c3edea2aae9926b2c",
+ "records_not_relabelled": "No record, record_id, execution_id, served_model_version, gold label or human verdict in this directory was edited. Their preregistration_digest still names freeze v4, which is correct: that is the freeze they were measured under.",
+ "run_id": "g1run-formal-004",
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.superseded_formal_run.v1",
+ "status": "SUPERSEDED_GOLD_LABEL_DEFECT_CONFIRMED_BY_HUMAN_AUDIT",
+ "superseded_by": "evals/g1/formal/ (freeze v5, g1run-formal-005)",
+ "what_remains_valid": "Every model decision in this directory is a real measurement taken through the governed supervisor path under a verified freeze, and is preserved unmodified. 108 of the 110 decisions concern cases whose gold was not disputed. The completed human audit is likewise real and preserved in full, including the disagreement -- it is the evidence that found the defect, and deleting it would destroy the reason this supersession happened.\n\nWhat this population cannot do is serve as the final G1 result, because 2 of its 110 decisions were scored against a label now known to be wrong.",
+ "why_superseded": "The completed 22-item human audit of this population produced exactly one human-vs-gold disagreement, and adjudicating it showed the GOLD was wrong rather than the human.\n\ng1c-abstain-contradictory-test-results carries a diff that implements the stated criterion (round(x, 2)), a test that asserts exactly it (round2(2.345) == 2.35), and a recorded test_result of PASS. The only dissent is worker prose claiming the test fails. Its gold provenance asserted the packet 'offers nothing to adjudicate between them'. That is false about its own packet: round(2.345, 2) really does return 2.35, because the binary value of 2.345 sits just above the decimal midpoint, so the recorded PASS is achievable and the evidence is not self-contradictory. The diff and the test body do adjudicate it.\n\nThe corpus was also internally inconsistent. g1-pass-worker-falsely-claims-failure is structurally identical on every property that matters -- diff implements the criterion, a test asserts it, results say PASS, only worker prose dissents -- and its gold is PASS, reasoned in its own provenance as 'the worker's claim of failure is contradicted by the diff and the test results'. That is precisely the reasoning the human operator applied. Two structurally identical cases carried opposite gold.\n\nexpected_supervisor_verdict is registered freeze material, so correcting it changes the case fingerprint and therefore the freeze digest. No amendment mechanism exists that would preserve preregistration validity, and every record here is bound to the v4 digest. Correcting the label therefore required freeze v5 and a completely fresh formal population."
+}

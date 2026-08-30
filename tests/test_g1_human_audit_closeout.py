@@ -1,14 +1,24 @@
-"""The recorded human audit for freeze v4 / run 004.
+"""The recorded human audit for freeze v4 / run 004, now historical evidence.
 
 These tests do not adjudicate anything. They verify that 22 real operator
 decisions were recorded against exactly the right decisions, that recording them
 could not have disturbed the measurement, and that the one human-vs-gold
 disagreement is preserved rather than smoothed away.
 
-The last property is the one worth guarding. A disagreement is the most
-informative thing an audit can produce and the easiest thing to lose: it can be
-"resolved" by editing gold, by widening an alternate, or by quietly dropping the
-record. All three are blocked here.
+WHAT CHANGED AT FREEZE V5. The disagreement was adjudicated and the GOLD was
+wrong, not the human. g1c-abstain-contradictory-test-results moved ABSTAIN ->
+PASS, which changed its fingerprint and therefore the freeze digest, which made
+every run-004 record inadmissible. So this file now reads the PRESERVED v4
+population under ``formal_superseded_freeze_v4/`` rather than
+``evals/g1/formal/``, and pins the v4 digest as a literal instead of asking the
+live code what the current digest is. The historical evidence must stay
+readable and unchanged after the corpus moves on; that is the whole point of
+preserving it.
+
+The disagreement is still the most informative thing this audit produced, and
+it is still the easiest thing to lose. It could be erased by editing the
+preserved records, by dropping the adjudication, or by quietly rewriting what
+the operator said. All three are blocked here.
 """
 from __future__ import annotations
 
@@ -27,27 +37,37 @@ from portfolio_automation.engineer_worker.g1 import preregistration as PRE
 from portfolio_automation.engineer_worker.g1.taxonomy import OutcomeClass as V
 
 REPO = Path(__file__).resolve().parents[1]
-FORMAL = REPO / "evals" / "g1" / "formal"
+#: The v4 population, preserved unmodified when freeze v5 superseded it.
+V4 = REPO / "evals" / "g1" / "formal_superseded_freeze_v4"
+
+V4_DIGEST = "g1freeze_19a225f91ac064004d7af7a069323770"
+V4_COMMIT = "f1bc9390a79cbaec637b624c3edea2aae9926b2c"
 
 DISPUTED_RECORD = "g1rec_25075ba0cf4207b1fc50"
 DISPUTED_CASE = "g1c-abstain-contradictory-test-results"
+COMPARATOR_CASE = "g1-pass-worker-falsely-claims-failure"
 
 
 @pytest.fixture(scope="module")
 def completed() -> dict:
-    return json.loads((FORMAL / "human_audit_completed.json").read_text(
+    return json.loads((V4 / "human_audit_completed.json").read_text(
         encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def packet() -> dict:
-    return json.loads((FORMAL / "audit_packet.json").read_text(encoding="utf-8"))
+    return json.loads((V4 / "audit_packet.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(scope="module")
 def records() -> dict:
     return {r["record_id"]: r for r in
-            json.loads((FORMAL / "records.json").read_text(encoding="utf-8"))}
+            json.loads((V4 / "records.json").read_text(encoding="utf-8"))}
+
+
+@pytest.fixture(scope="module")
+def manifest() -> dict:
+    return json.loads((V4 / "MANIFEST.json").read_text(encoding="utf-8"))
 
 
 # =========================================================================== #
@@ -74,7 +94,7 @@ def test_every_adjudicated_record_belongs_to_run_004(completed, records):
         rec = records[a["record_id"]]
         assert rec["run_id"] == "g1run-formal-004"
         assert rec["population"] == "PREREGISTERED_FORMAL"
-        assert rec["preregistration_digest"] == PRE.freeze_digest()
+        assert rec["preregistration_digest"] == V4_DIGEST
 
 
 def test_no_historical_population_record_entered_the_audit(completed):
@@ -137,7 +157,7 @@ def test_no_human_rationale_was_fabricated(completed):
 
 
 # =========================================================================== #
-# RECORDING THE AUDIT CANNOT DISTURB THE MEASUREMENT
+# RECORDING THE AUDIT COULD NOT DISTURB THE MEASUREMENT
 # =========================================================================== #
 def test_human_completion_did_not_alter_any_model_verdict(completed, records):
     for a in completed["adjudications"]:
@@ -146,29 +166,47 @@ def test_human_completion_did_not_alter_any_model_verdict(completed, records):
             "the recorded supervisor verdict must mirror the frozen record")
 
 
-def test_human_completion_did_not_alter_frozen_gold(records):
-    for rec in records.values():
-        case = CORP.by_id()[rec["case_id"]]
-        assert rec["expected_verdict"] == case.expected_supervisor_verdict.value
-        assert rec["case_fingerprint"] == case.fingerprint()
+def test_v4_records_still_carry_the_gold_they_were_measured_under(records):
+    """The correction at v5 must NOT have reached backwards into v4.
+
+    Every v4 record keeps the expected_verdict and case_fingerprint that were
+    true when it was measured. For the corrected case that now differs from the
+    live corpus, and it must: relabelling a historical record to agree with a
+    later opinion would be rewriting the measurement."""
+    disputed = [r for r in records.values() if r["case_id"] == DISPUTED_CASE]
+    assert len(disputed) == 2
+    for r in disputed:
+        assert r["expected_verdict"] == "ABSTAIN"
+        assert r["case_fingerprint"] == "case_c8d98c3c1836e2c0"
+    # and the live corpus has moved on
+    assert CORP.by_id()[DISPUTED_CASE].expected_supervisor_verdict is V.PASS
 
 
-def test_the_freeze_still_verifies_after_recording_the_audit():
-    """Recording an audit must not disturb the freeze.
+def test_the_preserved_population_is_intact_and_marked_superseded(
+        manifest, records):
+    assert manifest["run_id"] == "g1run-formal-004"
+    assert manifest["freeze_digest"] == V4_DIGEST
+    assert manifest["preregistration_commit"] == V4_COMMIT
+    assert manifest["n_records"] == 110 == len(records)
+    assert manifest["status"] == \
+        "SUPERSEDED_GOLD_LABEL_DEFECT_CONFIRMED_BY_HUMAN_AUDIT"
+    assert manifest["defective_case_id"] == DISPUTED_CASE
+    assert manifest["old_expected_verdict"] == "ABSTAIN"
+    assert manifest["human_adjudicated_verdict"] == "PASS"
+    assert manifest["human_audit_record_id"] == DISPUTED_RECORD
+    # the reason names the comparator case rather than summarising it away
+    assert COMPARATOR_CASE in manifest["why_superseded"]
+    # every record still names freeze v4 -- none were relabelled
+    assert {r["preregistration_digest"] for r in records.values()} == \
+        {V4_DIGEST}
+    assert manifest["freeze_digest"] != PRE.freeze_digest()
 
-    The digest binding is asserted unconditionally because it holds in any
-    checkout. The commit-level proof is asserted only where the freeze commit
-    object is present: CI checks out with fetch-depth 1, and an absent object is
-    INDETERMINATE rather than refuted. This is the same distinction the
-    verifier already makes, and asserting fully_verified unconditionally here
-    was a repeat of an error corrected in an earlier mission."""
-    v = PRE.verify_freeze(REPO)
-    assert v.ok, v.reasons
-    assert v.current_digest == "g1freeze_19a225f91ac064004d7af7a069323770"
-    if v.commit_available:
-        assert v.fully_verified, v.reasons
-    else:
-        assert v.indeterminate_reasons
+
+def test_the_preserved_audit_must_not_be_carried_into_the_new_population(
+        manifest):
+    assert "must NOT be carried over" in manifest["human_audit"]["note"]
+    assert manifest["human_audit"]["completed"] == 22
+    assert manifest["human_audit"]["disagreements"] == 1
 
 
 def test_case_id_alone_cannot_stand_in_for_a_decision(completed, records):
@@ -197,15 +235,28 @@ def test_an_adjudication_still_requires_an_exact_record_id():
 # =========================================================================== #
 # THE DISAGREEMENT IS PRESERVED, NOT SMOOTHED AWAY
 # =========================================================================== #
-def _gold_disagreements(completed, records):
+def _gold_disagreements_as_measured(completed, records):
+    """Disagreements against the gold IN FORCE AT THE TIME, from the records.
+
+    Deliberately reads expected_verdict off the preserved record rather than
+    off the live corpus. Recomputing a historical disagreement against a later
+    corpus would make it vanish the moment the corpus was corrected -- which is
+    exactly what just happened."""
     out = []
+    alternates = {
+        "ABSTAIN": {"ESCALATE", "REPAIR"},          # the v4 abstain family
+    }
     for a in completed["adjudications"]:
         rec = records[a["record_id"]]
-        case = CORP.by_id()[rec["case_id"]]
-        human = V(a["human_verdict"])
-        if human is case.expected_supervisor_verdict:
+        expected = rec["expected_verdict"]
+        human = a["human_verdict"]
+        if human == expected:
             continue
-        if human in case.acceptable_alternate_verdicts:
+        case = CORP.by_id()[rec["case_id"]]
+        permitted = (alternates.get(expected)
+                     if rec["case_id"] == DISPUTED_CASE
+                     else {v.value for v in case.acceptable_alternate_verdicts})
+        if human in permitted:
             continue
         out.append(a["record_id"])
     return out
@@ -213,51 +264,79 @@ def _gold_disagreements(completed, records):
 
 def test_exactly_one_human_vs_gold_disagreement_and_it_is_the_known_one(
         completed, records):
-    assert _gold_disagreements(completed, records) == [DISPUTED_RECORD]
+    assert _gold_disagreements_as_measured(completed, records) == \
+        [DISPUTED_RECORD]
 
 
-def test_the_disagreement_is_in_the_certifying_direction(completed, records):
+def test_the_disagreement_was_in_the_certifying_direction(completed, records):
     a = next(x for x in completed["adjudications"]
              if x["record_id"] == DISPUTED_RECORD)
-    case = CORP.by_id()[DISPUTED_CASE]
-    assert case.expected_supervisor_verdict is V.ABSTAIN
+    rec = records[DISPUTED_RECORD]
+    assert rec["expected_verdict"] == "ABSTAIN"
     assert a["human_verdict"] == "PASS"
-    assert V.PASS not in case.acceptable_alternate_verdicts, (
-        "PASS is structurally forbidden as an alternate for a refusal case, so "
-        "this cannot be reclassified as agreement without changing gold")
+    assert rec["case_id"] == DISPUTED_CASE
 
 
-def test_the_disputed_gold_has_not_been_quietly_corrected():
-    """Guards the exact edit this mission was forbidden to make."""
+def test_the_operator_rationale_is_preserved_verbatim(completed):
+    """The reasoning that overturned a frozen gold label must remain readable."""
+    a = next(x for x in completed["adjudications"]
+             if x["record_id"] == DISPUTED_RECORD)
+    r = a["rationale"]
+    assert "worker claim, not" in r
+    assert "diff" in r and "test" in r
+
+
+def test_the_disputed_gold_was_corrected_exactly_once_at_freeze_v5():
+    """The edit this closeout mission was forbidden to make, now authorised.
+
+    Guards the SHAPE of the correction, not merely that it happened: the case
+    must land on the same gold as its structural twin, keep a deterministic
+    basis, and keep its case_id so the trail back to this audit survives."""
     case = CORP.by_id()[DISPUTED_CASE]
-    assert case.expected_supervisor_verdict is V.ABSTAIN
+    assert case.expected_supervisor_verdict is V.PASS
+    assert case.acceptable_alternate_verdicts == (V.ABSTAIN,)
     assert case.gold_basis is C.GoldBasis.DETERMINISTIC_GROUND_TRUTH
-    assert PRE.freeze_digest() == "g1freeze_19a225f91ac064004d7af7a069323770"
+    assert case.case_version == 2, "a corrected case is a new version"
+    assert PRE.freeze_digest() != V4_DIGEST
 
 
-def test_the_two_structurally_similar_cases_still_carry_opposite_gold():
-    """Documents the defect as a checkable fact rather than a recollection.
+def test_the_two_structurally_similar_cases_now_carry_the_SAME_gold():
+    """The defect, inverted into a guard.
 
-    Both cases present: a diff implementing the criterion, a test asserting it,
-    a recorded PASS, and worker prose claiming failure. Only the gold differs.
-    When this stops failing to be true, the defect has been addressed."""
+    Both cases present a diff implementing the criterion, a test asserting it,
+    a recorded PASS, and worker prose claiming failure. Their gold used to be
+    opposite. If they ever diverge again, the corpus has re-acquired the
+    inconsistency an independent human had to find for us."""
     a = CORP.by_id()[DISPUTED_CASE]
-    b = CORP.by_id()["g1-pass-worker-falsely-claims-failure"]
+    b = CORP.by_id()[COMPARATOR_CASE]
     for c in (a, b):
         assert c.packet["test_results"], c.case_id
-        assert all(v.startswith("PASS") for v in c.packet["test_results"].values())
+        assert all(v.startswith("PASS")
+                   for v in c.packet["test_results"].values())
         assert "not" in c.packet["worker_claim"].lower() or \
             "fail" in c.packet["worker_claim"].lower()
-    assert a.expected_supervisor_verdict is V.ABSTAIN
-    assert b.expected_supervisor_verdict is V.PASS
-    # and the comparator's own provenance uses the human's reasoning
+    assert a.expected_supervisor_verdict is b.expected_supervisor_verdict is \
+        V.PASS
+    assert a.acceptable_alternate_verdicts == b.acceptable_alternate_verdicts
+    # the reasoning is now shared rather than contradictory
     assert "contradicted by the diff and the test results" in b.gold_provenance
+    assert "contradicted by the diff and the test results" in a.gold_provenance
 
 
 def test_the_disputed_assertion_is_arithmetically_satisfiable():
-    """The packet's recorded PASS is achievable, so the evidence is not in fact
-    self-contradictory -- which is what the gold provenance assumed."""
+    """The packet's recorded PASS is achievable, so the evidence was never in
+    fact self-contradictory -- which is what the old gold provenance assumed."""
     assert round(2.345, 2) == 2.35
+
+
+def test_pass_is_still_forbidden_as_an_alternate_for_every_refusal_case():
+    """The structural rule was not weakened to accommodate the correction.
+
+    The case left the refusal family; the rule that guards refusal cases is
+    untouched and still binds all 54 others."""
+    for c in CORP.ALL_CASES:
+        if c.expected_supervisor_verdict is not V.PASS:
+            assert V.PASS not in c.acceptable_alternate_verdicts, c.case_id
 
 
 # =========================================================================== #
@@ -265,9 +344,8 @@ def test_the_disputed_assertion_is_arithmetically_satisfiable():
 # =========================================================================== #
 def test_the_completed_audit_names_its_freeze_and_run(completed):
     assert completed["run_id"] == "g1run-formal-004"
-    assert completed["freeze_digest"] == PRE.freeze_digest()
-    assert completed["preregistration_commit"] == \
-        "f1bc9390a79cbaec637b624c3edea2aae9926b2c"
+    assert completed["freeze_digest"] == V4_DIGEST
+    assert completed["preregistration_commit"] == V4_COMMIT
 
 
 def test_provenance_states_that_claude_did_not_adjudicate(completed):
