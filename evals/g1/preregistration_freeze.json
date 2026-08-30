@@ -1,7 +1,7 @@
 {
- "freeze_digest": "g1freeze_19a225f91ac064004d7af7a069323770",
- "freeze_version": "v4",
- "preregistration_commit": "f1bc9390a79cbaec637b624c3edea2aae9926b2c",
+ "freeze_digest": "g1freeze_0e8965f37d61a2888e1197ef0f0855a7",
+ "freeze_version": "v5",
+ "preregistration_commit": "74b82067c3e36933372b16b3e4a01b401d8edb52",
  "registered_file": "evals/g1/preregistration.json",
  "schema_kind": "experimental_noncanonical",
  "schema_version": "engineering.g1.preregistration.v1",
@@ -24,6 +24,12 @@
    "digest": "g1freeze_502c13e1104e8bc301edf2254f46a138",
    "superseded_because": "CASE_REACHABILITY_INTEGRITY_DEFECT: two cases could not have reached the supervisor through the production pre-supervisor path",
    "version": "v3"
+  },
+  {
+   "commit": "f1bc9390a79cbaec637b624c3edea2aae9926b2c",
+   "digest": "g1freeze_19a225f91ac064004d7af7a069323770",
+   "superseded_because": "GOLD_LABEL_DEFECT_CONFIRMED_BY_HUMAN_AUDIT: the completed 22-item human audit of run 004 produced one human-vs-gold disagreement, and adjudicating it showed the gold was wrong. g1c-abstain-contradictory-test-results was frozen at ABSTAIN although its diff implements the criterion, its test asserts it and the recorded result is PASS, with only worker prose dissenting -- the same structure as g1-pass-worker-falsely-claims-failure, whose gold was PASS. expected_supervisor_verdict is registered material, so the correction moved the case fingerprint and the freeze digest, and no amendment mechanism exists that preserves preregistration validity. Run 004 is preserved unmodified under evals/g1/formal_superseded_freeze_v4/.",
+   "version": "v4"
   }
  ],
  "verification": "verify_freeze() re-derives the digest from current code and compares it against the copy of preregistration.json committed at preregistration_commit, read via git show. It does not trust the working tree."
