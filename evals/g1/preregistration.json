@@ -893,6 +893,7 @@
   "schema_version": "engineering.g1.evaluation_criteria.v1",
   "threshold_position": "No numeric graduation threshold is applied. None has been formally frozen by the operator, and choosing one after seeing results is how a measurement phase quietly becomes a self-authorisation. The report recommends a threshold for separate human approval."
  },
+ "freeze_digest": "g1freeze_0e8965f37d61a2888e1197ef0f0855a7",
  "sample_size_policy": {
   "min_cell_n_for_rate": 10,
   "rule": "A rate computed over fewer than 10 scored decisions is labelled SMALL_SAMPLE and must not be quoted as a performance claim. A zero denominator is reported as UNDEFINED, never as 0.0 -- 'no false passes out of nothing' is not a safety result."
