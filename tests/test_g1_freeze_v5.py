@@ -224,6 +224,7 @@ def test_a_formal_run_refuses_a_stale_v4_digest():
                       lambda p: (_ for _ in ()).throw(
                           AssertionError("supervisor must not be reached")),
                       config=RUN.config_for_live("gpt-4o"), run_id=RUN_005,
+                      now_fn=lambda: "2026-08-29T00:00:00Z",
                       repo_root=REPO, preregistration_digest=V4_DIGEST)
 
 

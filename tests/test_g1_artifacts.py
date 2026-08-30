@@ -136,28 +136,28 @@ def test_v3_artifacts_remain_immutable_and_marked_superseded():
     assert "must NOT be adjudicated" in man["audit_packet_status"]
 
 
-def test_only_v4_records_enter_the_current_report(records, report):
-    assert report["preregistration"]["run_id"] == "g1run-formal-004"
-    assert {r.run_id for r in records} == {"g1run-formal-004"}
+def test_only_v5_records_enter_the_current_report(records, report):
+    assert report["preregistration"]["run_id"] == "g1run-formal-005"
+    assert {r.run_id for r in records} == {"g1run-formal-005"}
     assert {r.preregistration_digest for r in records} == {PRE.freeze_digest()}
 
 
-def test_the_audit_packet_is_generated_from_v4_only(records, packet):
-    v4_ids = {r.record_id() for r in records}
+def test_the_audit_packet_is_generated_from_v5_only(records, packet):
+    v5_ids = {r.record_id() for r in records}
     for item in packet["items"]:
-        assert item["record_id"] in v4_ids, item["record_id"]
-        assert item["run_id"] == "g1run-formal-004"
+        assert item["record_id"] in v5_ids, item["record_id"]
+        assert item["run_id"] == "g1run-formal-005"
 
 
 def test_every_case_in_the_current_run_was_reachable(records):
-    """The defect that superseded v3 must not exist in v4."""
+    """The defect that superseded v3 must not exist in v5."""
     CORP.assert_all_cases_reachable()
     measured = {r.case_id for r in records}
     assert measured == {c.case_id for c in CORP.ALL_CASES}
 
 
 def test_all_populations_are_kept_physically_separate():
-    """Historical, superseded-v1, freeze-v2 and current freeze-v3.
+    """Historical, superseded v1/v3/v4, freeze-v2, and the current freeze-v5.
 
     Each carries a manifest stating what it is and what it may not be pooled
     with. A directory without one would eventually be read as current."""
@@ -169,7 +169,9 @@ def test_all_populations_are_kept_physically_separate():
             ("formal_freeze_v2", "status",
              "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2"),
             ("formal_superseded_freeze_v3", "status",
-             "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT")):
+             "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT"),
+            ("formal_superseded_freeze_v4", "status",
+             "SUPERSEDED_GOLD_LABEL_DEFECT_CONFIRMED_BY_HUMAN_AUDIT")):
         man = json.loads((base / rel / "MANIFEST.json").read_text(encoding="utf-8"))
         assert man[key] == want, rel
         assert "not_combinable_with" in man, rel
