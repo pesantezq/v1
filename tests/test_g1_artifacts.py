@@ -115,16 +115,89 @@ def test_no_exploratory_record_leaked_into_the_formal_population(records):
                for r in records)
 
 
-def test_the_superseded_and_historical_populations_are_kept_separate():
-    hist = REPO / "evals" / "g1" / "historical_exploratory"
-    sup = REPO / "evals" / "g1" / "formal_superseded_freeze_v1"
-    assert (hist / "MANIFEST.json").is_file()
-    assert (sup / "MANIFEST.json").is_file()
-    supman = json.loads((sup / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert supman["status"] == "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE"
-    assert supman["not_combinable_with"] == "evals/g1/formal/"
-    histman = json.loads((hist / "MANIFEST.json").read_text(encoding="utf-8"))
-    assert histman["population"] == "EXPLORATORY_HISTORICAL"
+def test_v3_artifacts_remain_immutable_and_marked_superseded():
+    """The superseded population must survive intact, with its reason recorded."""
+    import json as _json
+    v3 = REPO / "evals" / "g1" / "formal_superseded_freeze_v3"
+    man = _json.loads((v3 / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert man["status"] == "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT"
+    assert man["run_id"] == "g1run-formal-003"
+    assert man["n_records"] == 110
+    assert man["freeze_digest"] != PRE.freeze_digest()
+    # both defective cases are named, not summarised away
+    assert "g1c-esc-ci-trust-boundary" in man["why_superseded"]
+    assert "g1-pass-clean-bounded" in man["why_superseded"]
+    # its records still name freeze v3 -- they were NOT relabelled
+    recs = _json.loads((v3 / "records.json").read_text(encoding="utf-8"))
+    assert len(recs) == 110
+    assert {r["preregistration_digest"] for r in recs} ==         {"g1freeze_502c13e1104e8bc301edf2254f46a138"}
+    assert {r["run_id"] for r in recs} == {"g1run-formal-003"}
+    # its audit packet must not be presented for adjudication
+    assert "must NOT be adjudicated" in man["audit_packet_status"]
+
+
+def test_only_v5_records_enter_the_current_report(records, report):
+    assert report["preregistration"]["run_id"] == "g1run-formal-005"
+    assert {r.run_id for r in records} == {"g1run-formal-005"}
+    assert {r.preregistration_digest for r in records} == {PRE.freeze_digest()}
+
+
+def test_the_audit_packet_is_generated_from_v5_only(records, packet):
+    v5_ids = {r.record_id() for r in records}
+    for item in packet["items"]:
+        assert item["record_id"] in v5_ids, item["record_id"]
+        assert item["run_id"] == "g1run-formal-005"
+
+
+def test_every_case_in_the_current_run_was_reachable(records):
+    """The defect that superseded v3 must not exist in v5."""
+    CORP.assert_all_cases_reachable()
+    measured = {r.case_id for r in records}
+    assert measured == {c.case_id for c in CORP.ALL_CASES}
+
+
+def test_all_populations_are_kept_physically_separate():
+    """Historical, superseded v1/v3/v4, freeze-v2, and the current freeze-v5.
+
+    Each carries a manifest stating what it is and what it may not be pooled
+    with. A directory without one would eventually be read as current."""
+    base = REPO / "evals" / "g1"
+    for rel, key, want in (
+            ("historical_exploratory", "population", "EXPLORATORY_HISTORICAL"),
+            ("formal_superseded_freeze_v1", "status",
+             "SUPERSEDED_BY_AUDIT_POLICY_REFREEZE"),
+            ("formal_freeze_v2", "status",
+             "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2"),
+            ("formal_superseded_freeze_v3", "status",
+             "SUPERSEDED_CASE_REACHABILITY_INTEGRITY_DEFECT"),
+            ("formal_superseded_freeze_v4", "status",
+             "SUPERSEDED_GOLD_LABEL_DEFECT_CONFIRMED_BY_HUMAN_AUDIT")):
+        man = json.loads((base / rel / "MANIFEST.json").read_text(encoding="utf-8"))
+        assert man[key] == want, rel
+        assert "not_combinable_with" in man, rel
+    v2 = json.loads((base / "formal_freeze_v2" / "MANIFEST.json"
+                     ).read_text(encoding="utf-8"))
+    assert v2["n_scored"] == 34
+    assert v2["freeze_digest"] != PRE.freeze_digest(), (
+        "the preserved run must name a DIFFERENT freeze than the current one")
+
+
+def test_the_current_formal_population_meets_the_completeness_target(records):
+    """>= 100 scored decisions, which is the existing G1 completeness rule.
+
+    Not an autonomy threshold — it means the population is large enough for the
+    current rule, nothing more."""
+    scored = [r for r in records if C.is_scored(r)]
+    assert len(scored) >= 100, len(scored)
+    assert len({r.config.model_name for r in records}) == 2
+
+
+def test_the_current_run_is_bound_to_the_current_freeze(report, records):
+    """Deliberately not hard-coded to a run number: a freeze supersession must
+    not require editing an assertion that is really about binding."""
+    assert report["preregistration"]["freeze_digest"] == PRE.freeze_digest()
+    assert all(r.preregistration_digest == PRE.freeze_digest() for r in records)
+    assert len({r.run_id for r in records}) == 1
 
 
 # =========================================================================== #
@@ -180,10 +253,16 @@ def test_the_reported_metrics_are_reproducible(records, report):
         assert got[key] == want[key], key
 
 
-def test_the_reported_status_is_still_what_the_evidence_implies(records, report):
+def test_the_reported_status_is_still_what_the_evidence_implies(
+        records, report, adjudications):
+    """The published status must be what the CURRENT evidence implies.
+
+    The adjudications are fed in from the recorded human audit rather than
+    assumed empty: a status recomputed against a fabricated-empty audit would
+    silently disagree with the report the moment a real audit landed."""
     m = M.compute_metrics(records, CORP.by_id())
     sample = A.select_audit_sample(records)
-    cov = A.audit_coverage(sample, [], n_scored=m.n_scored)
+    cov = A.audit_coverage(sample, adjudications, n_scored=m.n_scored)
     assert R.measurement_status(m, cov).status == report["status"]["status"]
 
 
@@ -198,6 +277,27 @@ def test_no_excluded_outcome_is_inside_the_scored_denominator(records, report):
 @pytest.fixture(scope="module")
 def packet() -> dict:
     return json.loads((FORMAL / "audit_packet.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def completed() -> dict:
+    return json.loads(
+        (FORMAL / "human_audit_completed.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def adjudications(completed) -> list:
+    """The recorded human audit, rebuilt through the real contract.
+
+    HumanAuditRecord has no defaults for verdict, reviewer or timestamp, so a
+    fabricated or partial adjudication cannot survive this reconstruction."""
+    return [A.HumanAuditRecord(
+        case_id=a["case_id"], record_id=a["record_id"],
+        supervisor_verdict=a["supervisor_verdict"],
+        human_verdict=a["human_verdict"], reviewer_id=a["reviewer_id"],
+        reviewed_at=a["reviewed_at"], execution_id=a["execution_id"],
+        severity=C.Severity(a["severity"]), rationale=a.get("rationale", ""),
+    ) for a in completed["adjudications"]]
 
 
 def test_the_audit_packet_is_keyed_on_record_identity(packet):
@@ -250,21 +350,35 @@ def test_the_packet_identifies_which_configuration_each_decision_came_from(packe
         assert item["run_id"].startswith("g1run-formal-")
 
 
-def test_the_audit_is_pending_and_nothing_is_prefilled(report, packet):
+def test_the_audit_is_complete_and_the_issued_packet_stays_unadjudicated(
+        report, packet):
+    """The audit is satisfied, and the ISSUED packet was never written into.
+
+    Adjudications live in their own artifact. Keeping the packet clean means
+    the question a human was asked can still be read back exactly as asked,
+    and no verdict can be smuggled into the request itself."""
     a = report["human_audit"]
-    assert a["status"] == A.HUMAN_AUDIT_PENDING
-    assert a["completed"] == 0 and a["required"] > 0
-    assert a["agreement_rate"] is None
+    assert a["status"] == "HUMAN_AUDIT_SATISFIED"
+    assert a["completed"] == a["required"] > 0
+    assert a["agreement_rate"] is not None
     assert a["rejected_record_ids"] == []
+    assert a["pending_record_ids"] == [] and a["pending_case_ids"] == []
     assert packet["status"] == A.HUMAN_AUDIT_PENDING
     assert "human_verdict" not in json.dumps(packet)
     for item in packet["items"]:
         assert item["packet"] is not None
 
 
-def test_pending_ids_are_record_ids_not_case_ids(report, packet):
-    pending = set(report["human_audit"]["pending_record_ids"])
-    assert pending == {i["record_id"] for i in packet["items"]}
+def test_every_adjudicated_id_is_a_record_id_from_this_packet(
+        report, packet, completed):
+    """Identity is per-decision. One model's answer must never satisfy
+    coverage for another model's answer to the same case."""
+    assert report["human_audit"]["pending_record_ids"] == []
+    issued = {i["record_id"] for i in packet["items"]}
+    adjudicated = {a["record_id"] for a in completed["adjudications"]}
+    assert adjudicated == issued
+    assert all(r.startswith("g1rec_") for r in adjudicated)
+    assert len(adjudicated) == len(completed["adjudications"])
 
 
 # =========================================================================== #

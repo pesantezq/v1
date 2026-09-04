@@ -22,10 +22,19 @@ from portfolio_automation.engineer_worker.g1 import metrics as M
 from portfolio_automation.engineer_worker.g1 import report as R
 from portfolio_automation.engineer_worker.g1 import runner as RUN
 from portfolio_automation.engineer_worker.g1 import taxonomy as T
+from portfolio_automation.engineer_worker.g1 import preregistration as PRE
 from portfolio_automation.engineer_worker.gpt_supervisor import (
     SupervisorDecision, SupervisorVerdict)
 
 V = T.OutcomeClass
+
+# A FORMAL run now verifies the freeze in the library, so these tests supply the
+# real repository root and the real digest rather than a placeholder. The gate is
+# a precondition on scoring, not a measurement input, so it changes nothing about
+# what these tests assert.
+from pathlib import Path as _Path
+REPO = _Path(__file__).resolve().parents[1]
+REAL_DIGEST = PRE.freeze_digest()
 
 
 def _now():
@@ -325,9 +334,9 @@ def test_config_identity_is_pre_call_and_stable():
 def test_every_report_configuration_joins_back_to_its_records():
     dev = CORP.development_cases()
     a = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=CFG,
-                      now_fn=_now, run_id="r", preregistration_digest="g1freeze_test")
+                      now_fn=_now, run_id="r", repo_root=REPO, preregistration_digest=REAL_DIGEST)
     b = RUN.run_cases(dev, _fixed(SupervisorVerdict.REPAIR), config=CFG_B,
-                      now_fn=_now, run_id="r", preregistration_digest="g1freeze_test")
+                      now_fn=_now, run_id="r", repo_root=REPO, preregistration_digest=REAL_DIGEST)
     records = list(a.records) + list(b.records)
     m = M.compute_metrics(records, CORP.by_id())
     cov = A.audit_coverage((), (), n_scored=m.n_scored)
@@ -349,7 +358,7 @@ def test_served_build_lives_on_the_record_not_the_configuration():
         return d
 
     res = RUN.run_cases(dev, with_model, config=CFG, now_fn=_now, run_id="r",
-                        preregistration_digest="g1freeze_test")
+                        repo_root=REPO, preregistration_digest=REAL_DIGEST)
     r = res.records[0]
     assert r.served_model_version == "test-model-2026-01-01"
     assert r.config.config_id() == CFG.config_id()
@@ -424,13 +433,13 @@ def test_the_runner_refuses_held_out_cases_unless_asked_by_name():
     with pytest.raises(CORP.SplitLeakError):
         RUN.run_cases(held, _fixed(SupervisorVerdict.REPAIR),
                       config=CFG, now_fn=_now, run_id="r",
-                      preregistration_digest="g1freeze_test")
+                      repo_root=REPO, preregistration_digest=REAL_DIGEST)
 
 
 def test_held_out_can_be_scored_when_explicitly_permitted():
     res = RUN.run_cases(CORP.held_out_cases(), _fixed(SupervisorVerdict.REPAIR),
                         config=CFG, now_fn=_now, run_id="r",
-                        preregistration_digest="g1freeze_test",
+                        repo_root=REPO, preregistration_digest=REAL_DIGEST,
                         allow_held_out=True)
     assert res.splits_run == ("HELD_OUT",)
     assert len(res.records) == len(CORP.held_out_cases())
@@ -439,7 +448,7 @@ def test_held_out_can_be_scored_when_explicitly_permitted():
 def test_split_is_recorded_on_every_record():
     res = RUN.run_cases(CORP.development_cases(), _fixed(SupervisorVerdict.PASS),
                         config=CFG, now_fn=_now, run_id="r",
-                        preregistration_digest="g1freeze_test")
+                        repo_root=REPO, preregistration_digest=REAL_DIGEST)
     assert all(r.split is C.Split.DEVELOPMENT for r in res.records)
 
 
@@ -470,7 +479,7 @@ def test_an_outage_never_becomes_a_semantic_score():
         CORP.development_cases(),
         _fixed(SupervisorVerdict.SUPERVISOR_UNAVAILABLE, error="link failed"),
         config=CFG, now_fn=_now, run_id="r",
-        preregistration_digest="g1freeze_test")
+        repo_root=REPO, preregistration_digest=REAL_DIGEST)
     m = M.compute_metrics(res.records)
     assert m.n_scored == 0
     assert m.n_supervisor_unavailable == len(res.records)
@@ -480,7 +489,7 @@ def test_an_outage_never_becomes_a_semantic_score():
 def test_every_scored_record_carries_a_real_execution_identity():
     res = RUN.run_cases(CORP.development_cases(), _fixed(SupervisorVerdict.PASS),
                         config=CFG, now_fn=_now, run_id="r",
-                        preregistration_digest="g1freeze_test")
+                        repo_root=REPO, preregistration_digest=REAL_DIGEST)
     for r in res.records:
         ident = r.execution_identity
         assert ident["schema_version"] == "engineering.execution_identity.v1"
@@ -493,10 +502,10 @@ def test_every_scored_record_carries_a_real_execution_identity():
 def test_identity_distinguishes_configurations():
     dev = CORP.development_cases()
     a = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=CFG, now_fn=_now,
-                      run_id="r", preregistration_digest="g1freeze_test")
+                      run_id="r", repo_root=REPO, preregistration_digest=REAL_DIGEST)
     other = CFG_B
     b = RUN.run_cases(dev, _fixed(SupervisorVerdict.PASS), config=other, now_fn=_now,
-                      run_id="r", preregistration_digest="g1freeze_test")
+                      run_id="r", repo_root=REPO, preregistration_digest=REAL_DIGEST)
     assert {r.execution_id for r in a.records}.isdisjoint(
         {r.execution_id for r in b.records})
     assert CFG.config_id() != other.config_id()

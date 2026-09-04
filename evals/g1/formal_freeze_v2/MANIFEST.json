@@ -1,0 +1,13 @@
+{
+ "comparison_rule": "May be compared DIRECTIONALLY with the freeze-v3 run to ask whether findings replicated. Denominators must never be pooled: the two runs answer different question sets under different freezes.",
+ "freeze_digest": "g1freeze_fd5410cd3d5af64b5f96e4af8022e460",
+ "n_scored": 34,
+ "not_combinable_with": "evals/g1/formal/ (freeze v3)",
+ "population": "PREREGISTERED_FORMAL",
+ "preregistration_commit": "755eb80162406009c18c0a608f66b312f016238a",
+ "run_id": "g1run-formal-002",
+ "schema_kind": "experimental_noncanonical",
+ "schema_version": "engineering.g1.formal_population.v1",
+ "status": "VALID_PREREGISTERED_RESULT_UNDER_FREEZE_V2",
+ "why_not_current": "The G1-completion mission expanded the corpus from 17 to 55 cases. The corpus is registered material, so the expansion required a new freeze (v3) and a new formal run. This run remains a valid preregistered result under freeze v2 and is preserved unmodified as the prior formal baseline."
+}

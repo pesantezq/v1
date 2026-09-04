@@ -46,6 +46,16 @@ class G1ContractError(ValueError):
     """Deterministic, fail-closed contract violation."""
 
 
+class PopulationMismatch(G1ContractError):
+    """Records from more than one measurement population reached one metric.
+
+    Raised rather than silently averaged. Pooling an exploratory run with a
+    preregistered one produces a number that looks like a preregistered result
+    and is not, and the unfrozen half would borrow the frozen half's authority.
+    A legitimate cross-population comparison must be a versioned artifact that
+    names both populations explicitly -- never an accident inside a denominator."""
+
+
 class Split(str, Enum):
     """Which dataset partition a case belongs to.
 
