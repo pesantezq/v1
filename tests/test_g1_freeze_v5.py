@@ -351,6 +351,120 @@ def test_no_v4_human_decision_was_copied_forward(packet005):
     assert {i["record_id"] for i in packet005["items"]}.isdisjoint(v4_ids)
 
 
-def test_no_completed_audit_exists_for_run_005_yet():
-    """Claude is not the auditor. The file must not appear until a human acts."""
-    assert not (FORMAL / "human_audit_completed.json").is_file()
+def test_the_completed_audit_is_a_real_human_record_bound_to_run_005(packet005):
+    """Claude is not the auditor. This file may only exist because a human acted.
+
+    What is pinned here is everything that would have to be true of a genuine
+    adjudication and false of a fabricated one: an explicit verdict drawn from
+    the four legal values, a named reviewer, a timestamp, exact membership of
+    the run-005 sample, and no overlap with the freeze v4 population."""
+    path = FORMAL / "human_audit_completed.json"
+    assert path.is_file()
+    doc = json.loads(path.read_text(encoding="utf-8"))
+
+    frozen = json.loads((REPO / "evals" / "g1" / "preregistration_freeze.json")
+                        .read_text(encoding="utf-8"))
+    assert doc["run_id"] == "g1run-formal-005"
+    assert doc["freeze_digest"] == frozen["freeze_digest"]
+    assert doc["reviewer_id"].strip()
+
+    adj = doc["adjudications"]
+    issued = {i["record_id"] for i in packet005["items"]}
+    assert {a["record_id"] for a in adj} == issued
+    assert len(adj) == len(issued)
+
+    for a in adj:
+        assert a["human_verdict"] in {"PASS", "REPAIR", "ESCALATE", "ABSTAIN"}
+        assert a["reviewer_id"].strip() and a["reviewed_at"].strip()
+        assert a["agreement"] == (
+            "AGREE" if a["human_verdict"] == a["supervisor_verdict"]
+            else "DISAGREE")
+
+
+def test_no_v4_adjudication_leaked_into_the_v5_audit():
+    """Freeze v4 evidence may not stand in for freeze v5 evidence."""
+    v5 = json.loads(
+        (FORMAL / "human_audit_completed.json").read_text(encoding="utf-8"))
+    v4 = json.loads(
+        (V4 / "human_audit_completed.json").read_text(encoding="utf-8"))
+    assert v5["freeze_digest"] != v4["freeze_digest"]
+    assert v5["run_id"] != v4["run_id"]
+    v5_ids = {a["record_id"] for a in v5["adjudications"]}
+    v4_ids = {a["record_id"] for a in v4["adjudications"]}
+    assert v5_ids.isdisjoint(v4_ids)
+
+
+def test_human_gold_agreement_recomputes_to_22_of_22(run005, packet005):
+    """Recompute human<->gold for run 005 from the committed artifacts.
+
+    Consulting expected_verdict is safe HERE and only here: the human verdicts
+    are already locked in a separate artifact, so reading gold can no longer
+    influence what a human decided. This test reads gold; it never writes it.
+
+    WHAT THIS PROVES, AND WHAT IT CANNOT.
+
+    The repository can prove structural validity, identity, coverage and
+    internal consistency of the adjudication artifact: that every adjudicated
+    id is a real run-005 decision under freeze v5, that the adjudicated set is
+    exactly the issued sample, and that the published agreement figures equal
+    an independent recomputation from the records.
+
+    It CANNOT prove cognitive human authorship. No test can distinguish a
+    verdict a human reasoned to from a well-formed value someone wrote down.
+    The provenance string carries that claim and is asserted below as a claim:
+    the human operator decided and confirmed all 22 verdicts, ChatGPT assisted
+    the operator with evidence analysis, and Claude transcribed and recorded
+    them. That is exactly as strong as the evidence is, and no stronger."""
+    doc = json.loads(
+        (FORMAL / "human_audit_completed.json").read_text(encoding="utf-8"))
+    adj = doc["adjudications"]
+
+    # The adjudicated set must be EXACTLY the issued run-005 sample.
+    issued = {i["record_id"] for i in packet005["items"]}
+    adjudicated = {a["record_id"] for a in adj}
+    assert adjudicated == issued
+    assert len(adj) == len(adjudicated) == len(issued)
+
+    # Join to the run-005 population by record_id, and re-verify the binding
+    # of every joined record rather than trusting the file it came from.
+    by_id = {r["record_id"]: r for r in run005}
+    assert adjudicated <= set(by_id)
+
+    matched = 0
+    sup_matched = 0
+    for a in adj:
+        rec = by_id[a["record_id"]]
+        assert rec["run_id"] == RUN_005
+        assert rec["preregistration_digest"] == PRE.freeze_digest()
+        # The adjudication's copy of the supervisor answer must agree with the
+        # record, or the comparison below is against a rewritten opponent.
+        assert a["supervisor_verdict"] == rec["actual_outcome"]
+        if a["human_verdict"] == rec["expected_verdict"]:
+            matched += 1
+        if a["human_verdict"] == rec["actual_outcome"]:
+            sup_matched += 1
+
+    total = len(adj)
+    assert matched == 22
+    assert total == 22
+    assert matched / total == 1.0
+
+    # Whatever the report publishes must equal THIS recomputation, not a
+    # hardcoded expectation. The report currently carries human<->supervisor
+    # under human_audit; human<->gold is not published at all.
+    report = json.loads((FORMAL / "report.json").read_text(encoding="utf-8"))
+    ha = report["human_audit"]
+    assert ha["completed"] == total
+    assert ha["agreement_count"] == sup_matched
+    assert ha["agreement_rate"] == sup_matched / total
+    for key in ("human_gold_agreement", "human_gold_agreement_rate",
+                "human_gold_agreement_count"):
+        published = ha.get(key, report.get(key))
+        if published is not None:
+            assert published in (matched, matched / total)
+
+    # Provenance is a claim about people, asserted as a claim.
+    prov = doc["provenance"].lower()
+    assert "human operator" in prov
+    assert "chatgpt" in prov
+    assert "transcription" in prov

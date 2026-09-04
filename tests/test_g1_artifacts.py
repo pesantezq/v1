@@ -253,10 +253,16 @@ def test_the_reported_metrics_are_reproducible(records, report):
         assert got[key] == want[key], key
 
 
-def test_the_reported_status_is_still_what_the_evidence_implies(records, report):
+def test_the_reported_status_is_still_what_the_evidence_implies(
+        records, report, adjudications):
+    """The published status must be what the CURRENT evidence implies.
+
+    The adjudications are fed in from the recorded human audit rather than
+    assumed empty: a status recomputed against a fabricated-empty audit would
+    silently disagree with the report the moment a real audit landed."""
     m = M.compute_metrics(records, CORP.by_id())
     sample = A.select_audit_sample(records)
-    cov = A.audit_coverage(sample, [], n_scored=m.n_scored)
+    cov = A.audit_coverage(sample, adjudications, n_scored=m.n_scored)
     assert R.measurement_status(m, cov).status == report["status"]["status"]
 
 
@@ -271,6 +277,27 @@ def test_no_excluded_outcome_is_inside_the_scored_denominator(records, report):
 @pytest.fixture(scope="module")
 def packet() -> dict:
     return json.loads((FORMAL / "audit_packet.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def completed() -> dict:
+    return json.loads(
+        (FORMAL / "human_audit_completed.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def adjudications(completed) -> list:
+    """The recorded human audit, rebuilt through the real contract.
+
+    HumanAuditRecord has no defaults for verdict, reviewer or timestamp, so a
+    fabricated or partial adjudication cannot survive this reconstruction."""
+    return [A.HumanAuditRecord(
+        case_id=a["case_id"], record_id=a["record_id"],
+        supervisor_verdict=a["supervisor_verdict"],
+        human_verdict=a["human_verdict"], reviewer_id=a["reviewer_id"],
+        reviewed_at=a["reviewed_at"], execution_id=a["execution_id"],
+        severity=C.Severity(a["severity"]), rationale=a.get("rationale", ""),
+    ) for a in completed["adjudications"]]
 
 
 def test_the_audit_packet_is_keyed_on_record_identity(packet):
@@ -323,21 +350,35 @@ def test_the_packet_identifies_which_configuration_each_decision_came_from(packe
         assert item["run_id"].startswith("g1run-formal-")
 
 
-def test_the_audit_is_pending_and_nothing_is_prefilled(report, packet):
+def test_the_audit_is_complete_and_the_issued_packet_stays_unadjudicated(
+        report, packet):
+    """The audit is satisfied, and the ISSUED packet was never written into.
+
+    Adjudications live in their own artifact. Keeping the packet clean means
+    the question a human was asked can still be read back exactly as asked,
+    and no verdict can be smuggled into the request itself."""
     a = report["human_audit"]
-    assert a["status"] == A.HUMAN_AUDIT_PENDING
-    assert a["completed"] == 0 and a["required"] > 0
-    assert a["agreement_rate"] is None
+    assert a["status"] == "HUMAN_AUDIT_SATISFIED"
+    assert a["completed"] == a["required"] > 0
+    assert a["agreement_rate"] is not None
     assert a["rejected_record_ids"] == []
+    assert a["pending_record_ids"] == [] and a["pending_case_ids"] == []
     assert packet["status"] == A.HUMAN_AUDIT_PENDING
     assert "human_verdict" not in json.dumps(packet)
     for item in packet["items"]:
         assert item["packet"] is not None
 
 
-def test_pending_ids_are_record_ids_not_case_ids(report, packet):
-    pending = set(report["human_audit"]["pending_record_ids"])
-    assert pending == {i["record_id"] for i in packet["items"]}
+def test_every_adjudicated_id_is_a_record_id_from_this_packet(
+        report, packet, completed):
+    """Identity is per-decision. One model's answer must never satisfy
+    coverage for another model's answer to the same case."""
+    assert report["human_audit"]["pending_record_ids"] == []
+    issued = {i["record_id"] for i in packet["items"]}
+    adjudicated = {a["record_id"] for a in completed["adjudications"]}
+    assert adjudicated == issued
+    assert all(r.startswith("g1rec_") for r in adjudicated)
+    assert len(adjudicated) == len(completed["adjudications"])
 
 
 # =========================================================================== #
