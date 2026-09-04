@@ -98,7 +98,12 @@ class Observation:
     net_excess_pct: float
 
 
-def build_claim(recorded_at: datetime) -> ResearchClaim:
+def build_claim(recorded_at: datetime, evidence_refs: tuple) -> ResearchClaim:
+    """The claim must cite evidence -- ResearchClaim refuses an uncited claim.
+
+    It cites the same scored outcome snapshots the experiment evaluated, so the
+    hypothesis and the test are anchored to one identical evidence set rather
+    than to a convenient subset chosen afterwards."""
     return ResearchClaim(
         claim=("StockBot watchlist signals earn a positive 7-day return in "
                "excess of SPY over the same interval, net of friction."),
@@ -106,6 +111,7 @@ def build_claim(recorded_at: datetime) -> ResearchClaim:
         direction="increase",
         provenance=Provenance(producer_id=RUNNER_ID, producer_type=PRODUCER_SYSTEM,
                               recorded_at=recorded_at, code_version=RUNNER_VERSION),
+        evidence_refs=evidence_refs,
         scope_entities=("watchlist_signals",),
         notes=("Preregistered as VS-001 before execution. A null result is a "
                "valid outcome and does not disprove skill; it reports that this "
@@ -152,7 +158,7 @@ def run(repo_root: Path) -> dict[str, Any]:
             continue
         leak_checked += 1
         decision = is_admissible(item.outcome.pit, item.scan_time)
-        if decision.admissible:
+        if decision.admitted:
             leak_admitted += 1
         else:
             refusal_reasons[str(getattr(decision.reason, "value", decision.reason))] += 1
@@ -167,7 +173,7 @@ def run(repo_root: Path) -> dict[str, Any]:
         if item.outcome is None:
             excluded_unmatured += 1
             continue
-        if is_admissible(item.outcome.pit, evaluation_as_of).admissible:
+        if is_admissible(item.outcome.pit, evaluation_as_of).admitted:
             admitted.append(item)
 
     # ---- benchmark join, strictly within a scan ----
@@ -178,6 +184,7 @@ def run(repo_root: Path) -> dict[str, Any]:
 
     friction = PRE.FRICTION_ROUND_TRIP_PCT + PRE.FRICTION_COMMISSION_PCT
     observations: list[Observation] = []
+    scored_refs: list[Any] = []
     excluded_no_benchmark = 0
     for item in admitted:
         if item.ticker == BENCHMARK_TICKER:
@@ -189,6 +196,7 @@ def run(repo_root: Path) -> dict[str, Any]:
         raw = payload["outcome_return_7d_pct"]
         bm = bench[item.scan_time]
         gross = raw - bm
+        scored_refs.append(item.outcome.ref())
         observations.append(Observation(
             ticker=item.ticker, scan_time=item.scan_time,
             signal_score=item.signal.payload_copy().get("signal_score"),
@@ -253,9 +261,10 @@ def run(repo_root: Path) -> dict[str, Any]:
     }
 
     recorded_at = datetime.now(timezone.utc)
-    claim = build_claim(recorded_at)
+    refs = tuple(scored_refs)
+    claim = build_claim(recorded_at, refs)
     universe = tuple(sorted({o.ticker for o in observations}))
-    spec = build_spec(claim.research_claim_id, as_of=evaluation_as_of,
+    spec = build_spec(claim.claim_id, as_of=evaluation_as_of,
                       universe=universe, recorded_at=recorded_at)
 
     observations_payload = {
@@ -274,6 +283,7 @@ def run(repo_root: Path) -> dict[str, Any]:
         provenance=Provenance(producer_id=RUNNER_ID, producer_type=PRODUCER_SYSTEM,
                               recorded_at=recorded_at, code_version=RUNNER_VERSION),
         windows_evaluated=(HORIZON_WINDOW,),
+        evidence_refs=refs,
         observations=observations_payload,
         notes="Northstar vertical slice VS-001 — preregistered before execution.",
     )
