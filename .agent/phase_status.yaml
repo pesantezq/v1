@@ -31,16 +31,38 @@ stockbot_northstar_redesign:
   # them. Those durable milestones remain valid and are not retroactively
   # invalidated; the queue is not applied backwards.
   0C_EARLY_AUTHORIZATION_RECONCILED: "YES"   # quoted: bare YES is YAML 1.1 boolean true, and this is a state marker, not a flag
+  # Measurements are NOT gates. A gate in gates_achieved above means an exit
+  # criterion was satisfied and something is now permitted. G1 measured the
+  # supervisor and permits nothing, so it is recorded here instead -- putting a
+  # NORTHSTAR_G1_*_READY entry in gates_achieved would assert a readiness the
+  # evidence contradicts.
+  durable_measurements:
+    g1_supervisor_measurement:
+      status: durable                        # 2026-09-04 @ main 9d9db1f (PR #29); main CI run 33900326574 SUCCESS
+      freeze: g1freeze_0e8965f37d61a2888e1197ef0f0855a7
+      run: g1run-formal-005
+      measurement_status: G1_MEASUREMENT_COMPLETE
+      human_audit: HUMAN_AUDIT_SATISFIED     # 22/22 adjudicated by the human operator
+      grants_authority: false                # G1 measures. It grants nothing.
+      thresholds_satisfied: false            # false-pass 13.6% overall / 19.6% SAFETY_CRITICAL
+                                             # against a recommended <=2% / 0%. The measurement is
+                                             # durable; the supervisor is NOT approved by it.
+      evidence: docs/G1_SUPERVISOR_MEASUREMENT.md, evals/g1/formal/
   engineer_runtime_state:
-    mission_id: northstar_0c_pit_evidence_gateway_research_store
-                          # 2026-08-15 — set from IDLE ("") by explicit operator
-                          # authorization of Phase 0C. This value IS the bounded mission
+    mission_id: northstar_vertical_slice_and_preregistration
+                          # 2026-09-04 — repointed from Phase 0C by explicit operator
+                          # authorization, after G1 became durable on main. This value IS
+                          # the bounded mission
                           # boundary: run_mission admits tasks whose mission_id matches
                           # and refuses every other phase/mission, so widening scope
                           # requires changing this field deliberately rather than drifting
                           # into it. Setting it grants NO new authority — only which
                           # mission's tasks may be dispatched.
-    last_authorized_mission: northstar_0b_decision_outcome_passport_contracts   # complete + durable
+    last_authorized_mission: northstar_0c_pit_evidence_gateway_research_store
+                          # NOT complete: 0C is waiting_for_evidence with an unsatisfied exit
+                          # gate. Its durable milestones remain valid and are not invalidated
+                          # by this repointing. Before it: northstar_0b_decision_outcome_passport_contracts
+                          # (complete + durable).
     prior_state: IDLE     # mission_id was "" between 0B closure and this authorization;
                           # the idle semantics remain pinned by
                           # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
@@ -188,7 +210,7 @@ stockbot_northstar_redesign:
         Local Models / Trusted Tools). Prime is superseded as orchestrator.
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
-      status: active   # 2026-08-15 — AUTHORIZED. Explicit operator decision started this phase (previously `ready`). See authorization below.
+      status: waiting_for_evidence   # 2026-09-04 — was `active` (authorized 2026-08-15). NOT complete, NOT superseded, NOT deferred, and NOT abandoned: every durable milestone below stands and every remaining_work item is preserved verbatim. The protected queue now places the Vertical Slice before the remainder of 0C, and the slice is what will establish which evidence capabilities the rest of 0C actually requires. `waiting_for_evidence` is the existing status vocabulary term for exactly that; no new status was invented. See authorization below for the original operator decision.
       step: northstar_0c_pit_evidence_gateway_research_store
       depends_on: northstar_phase_0b   # complete; gate NORTHSTAR_0B_CONTRACTS_READY @ main 678c73e
       implementation_started: true     # 2026-08-16 — flipped by the FIRST durable 0C implementation, exactly as the activation record said it would be. See evidence_gateway_foundation below. `active` still records that the phase is in progress, NOT that it is complete: the 0C exit gate is unsatisfied and the Research Store does not exist.
@@ -256,6 +278,29 @@ stockbot_northstar_redesign:
         0C is architecture-sensitive. Implementation work defaults to E3 -> Claude
         where the existing risk classifier requires it. This reflects routing
         evidence only; learning informs routing and never grants authority.
+    northstar_vertical_slice_and_preregistration:
+      name: "Vertical Slice & Preregistration"
+      status: active   # 2026-09-04 — the currently authorized mission for NEW work.
+      step: northstar_vertical_slice_and_preregistration
+      depends_on: g1_supervisor_measurement   # durable_measurements above; satisfied 2026-09-04 @ main 9d9db1f
+      executed: false   # NOTHING has been run. No preregistration, no defect/intervention
+                        # journal, no experiment, no slice code exists yet. This block records
+                        # only that the mission is dispatchable.
+      objective: >-
+        Build and run the smallest credible end-to-end Northstar investing research
+        slice that exercises the real architecture and produces operating evidence.
+        For learning and validation.
+      authorization:
+        authorized_by: operator
+        authorized_at: 2026-09-04
+        authorized_mission: northstar_vertical_slice_and_preregistration
+        prerequisite: G1 durable on authoritative main 9d9db1f (PR #29, main CI 33900326574 SUCCESS)
+        scope: >-
+          Starts the Vertical Slice ONLY. Explicitly does NOT authorize resuming 0C,
+          starting 0D or later, trading, capital-allocation changes, brokerage
+          execution, production deployment, vendor purchase, C1 activation or any
+          authority promotion. G1 completing granted no authority and this does not
+          either -- it selects which mission's tasks may be dispatched.
     northstar_phase_0d:
       name: "Certification, Champion/Challenger & Incremental-Value Foundation"
       status: not_started
