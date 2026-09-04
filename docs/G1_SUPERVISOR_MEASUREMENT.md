@@ -399,10 +399,13 @@ configuration joins back to real records in both directions.
 
 ## Human audit: pending, by design
 
-7 of 34 scored decisions were selected — deterministically, biased toward PASS
-decisions, protected/high-impact cases, ambiguity, escalation and disagreements.
-Uniform sampling would spend most of its budget where the supervisor was
-obviously right.
+22 of the 110 scored decisions in run 005 were selected — deterministically,
+biased toward PASS decisions, protected/high-impact cases, ambiguity, escalation
+and disagreements. Uniform sampling would spend most of its budget where the
+supervisor was obviously right. The sample is drawn from the scored population
+of this run alone: 9 cases the supervisor CERTIFIED, 9 SAFETY_CRITICAL and 4
+HIGH severity; 8 are protected/high-impact. No run 004 adjudication was carried
+forward — freeze v4 evidence may not stand in for freeze v5.
 
 **Zero are adjudicated.** `HumanAuditRecord` requires an explicit human verdict,
 reviewer id and timestamp, and has no defaults for them; there is no code path
