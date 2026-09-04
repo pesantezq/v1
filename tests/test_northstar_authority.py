@@ -23,6 +23,12 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
+#: The mission the roadmap authorizes NOW. 2026-09-04: repointed from 0C to the
+#: Vertical Slice after G1 became durable. 0C did not complete and was not
+#: superseded -- it is waiting_for_evidence with its durable work intact -- so
+#: both identifiers stay live here: one is the current boundary, the other is a
+#: real phase whose remaining work is deliberately NOT dispatchable yet.
+AUTHORIZED_MISSION = "northstar_vertical_slice_and_preregistration"
 
 # 0C left this list on 2026-08-15 when the operator explicitly authorized it. It
 # is now the CURRENT phase, guarded by its own tests below (which additionally
@@ -87,19 +93,19 @@ def test_program_is_northstar(state):
 
 
 def test_current_phase_and_step(state):
-    # 2026-08-15: Phase 0B closed (gate NORTHSTAR_0B_CONTRACTS_READY) and Phase 0C
-    # was authorized by explicit operator decision. The controller pointers must
-    # follow the authorized mission — a stale pointer at a completed phase is the
-    # defect this guard exists to catch.
-    assert state["current_phase"] == "northstar_phase_0c"
-    assert state["current_step"] == AUTHORIZED_0C_MISSION
+    # 2026-09-04: G1 became durable and the operator repointed the boundary to the
+    # Vertical Slice. The controller pointers must follow the authorized mission —
+    # a stale pointer at a phase that is no longer dispatchable is the defect this
+    # guard exists to catch, and 0C is now exactly such a phase.
+    assert state["current_phase"] == AUTHORIZED_MISSION
+    assert state["current_step"] == AUTHORIZED_MISSION
 
 
-def test_next_official_step_is_the_authorized_0c_mission(state):
+def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
-    assert nos["primary"] == AUTHORIZED_0C_MISSION
-    # History is carried forward, not erased.
-    assert nos["prior_primary"] == "northstar_0b_canonical_contracts"
+    assert nos["primary"] == AUTHORIZED_MISSION
+    # History is carried forward, not erased: 0C really was the prior primary.
+    assert nos["prior_primary"] == AUTHORIZED_0C_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -130,10 +136,99 @@ def test_agent_context_check_reports_program_phase_step():
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "stockbot_northstar_redesign" in out
-    assert "northstar_phase_0c" in out
-    assert AUTHORIZED_0C_MISSION in out
+    assert AUTHORIZED_MISSION in out
     # The stale claim must be gone from the summary.
     assert "Claude runs locally. Return VPS commands" not in out
+
+
+# ── G1 is a durable MEASUREMENT, never a gate ─────────────────────────────
+
+
+def test_g1_is_recorded_as_a_durable_measurement_and_not_as_a_gate(phase):
+    """G1 measured the supervisor. It permits nothing.
+
+    The temptation this guard exists to refuse is structural: a completed
+    measurement looks like an achievement, and achievements live in
+    gates_achieved, and everything in gates_achieved means something is now
+    allowed. G1 allows nothing -- and the supervisor it measured did NOT meet
+    the recommended thresholds -- so a gate entry would be a false claim in the
+    one place a reader most trusts."""
+    program = phase["stockbot_northstar_redesign"]
+    g1 = program["durable_measurements"]["g1_supervisor_measurement"]
+
+    assert g1["status"] == "durable"
+    assert g1["freeze"] == "g1freeze_0e8965f37d61a2888e1197ef0f0855a7"
+    assert g1["run"] == "g1run-formal-005"
+    assert g1["measurement_status"] == "G1_MEASUREMENT_COMPLETE"
+    assert g1["human_audit"] == "HUMAN_AUDIT_SATISFIED"
+
+    # Grants nothing, and says so in the record rather than by omission.
+    assert g1["grants_authority"] is False
+    assert g1["thresholds_satisfied"] is False
+
+    # Not a gate, under any spelling.
+    for gate in program["gates_achieved"]:
+        assert "G1" not in gate, f"G1 must not appear as a gate: {gate}"
+    assert program["gates_achieved"] == [
+        "NORTHSTAR_GOVERNANCE_FOUNDATION_READY", "NORTHSTAR_0B_CONTRACTS_READY"]
+
+
+# ── the Vertical Slice is the one current mission ─────────────────────────
+
+
+def test_vertical_slice_is_the_active_mission_but_has_not_executed(phase):
+    vs = phase["stockbot_northstar_redesign"]["phases"][AUTHORIZED_MISSION]
+    assert vs["status"] == "active"
+    assert vs["step"] == AUTHORIZED_MISSION
+    # Authorized to start is not the same as started.
+    assert vs["executed"] is False
+    auth = vs["authorization"]
+    assert auth["authorized_by"] == "operator"
+    assert auth["authorized_mission"] == AUTHORIZED_MISSION
+
+
+def test_exactly_one_roadmap_mission_is_active(phase, state):
+    """Two active missions would mean two dispatch boundaries, i.e. none."""
+    for phases in (phase["stockbot_northstar_redesign"]["phases"],
+                   state["northstar_program"]["phases"]):
+        active = [k for k, v in phases.items() if v.get("status") == "active"]
+        assert active == [AUTHORIZED_MISSION], active
+
+
+def test_every_controller_pointer_agrees_on_the_current_mission(state, phase):
+    """Three surfaces name the current mission. Any disagreement means at least
+    one of them is lying, and the loop would dispatch off the wrong one."""
+    runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
+    assert state["current_step"] == AUTHORIZED_MISSION
+    assert state["next_official_step"]["primary"] == AUTHORIZED_MISSION
+    assert runtime["mission_id"] == AUTHORIZED_MISSION
+    rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
+    assert rt["mission_id"] == AUTHORIZED_MISSION
+    # No authoritative pointer may still name 0C as the CURRENT mission.
+    assert rt["mission_id"] != AUTHORIZED_0C_MISSION
+    assert runtime["mission_id"] != AUTHORIZED_0C_MISSION
+    assert state["current_step"] != AUTHORIZED_0C_MISSION
+
+
+def test_neither_0c_nor_0d_can_be_dispatched_now():
+    """Resolved from the REAL protected record, through the production guard.
+
+    0C is the interesting half: it has an unsatisfied exit gate and real work
+    left, so it is the mission most likely to be resumed by momentum. Having
+    once been authorized must not make it dispatchable now."""
+    from portfolio_automation.engineer_worker.roadmap_guard import (
+        RoadmapAuthorization, RoadmapViolation, assert_mission_authorized)
+
+    roadmap = RoadmapAuthorization.read(REPO_ROOT)
+    assert roadmap.authoritative
+    assert roadmap.authorized_mission_id == AUTHORIZED_MISSION
+
+    assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
+
+    for refused in (AUTHORIZED_0C_MISSION, "northstar_phase_0d",
+                    "northstar_0d_certification", "", None):
+        with pytest.raises(RoadmapViolation):
+            assert_mission_authorized(roadmap, refused)
 
 
 # ── Req 9: future phases not falsely complete ──────────────────────────────
@@ -148,7 +243,8 @@ def test_no_future_phase_marked_complete_in_project_state(state):
         )
     assert phases["northstar_phase_0a"]["status"] == "complete"
     assert phases["northstar_phase_0b"]["status"] == "complete"
-    assert phases["northstar_phase_0c"]["status"] == "active"
+    assert phases["northstar_phase_0c"]["status"] == "waiting_for_evidence"
+    assert phases[AUTHORIZED_MISSION]["status"] == "active"
 
 
 def test_phase_0a_complete_with_gate_and_both_milestones(phase):
@@ -210,7 +306,7 @@ def test_engineer_runtime_points_at_the_authorized_mission(phase):
     authorized mission — never a completed one (stale) and never an
     unauthorized future phase."""
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
-    assert rt["mission_id"] == AUTHORIZED_0C_MISSION
+    assert rt["mission_id"] == AUTHORIZED_MISSION
     assert rt["c1"] == "DISABLED"
     assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
     assert rt["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
@@ -219,7 +315,7 @@ def test_engineer_runtime_points_at_the_authorized_mission(phase):
 def test_runtime_config_matches_the_authorized_mission_and_grants_nothing():
     """Activation sets WHICH mission may be dispatched. It grants no authority."""
     runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
-    assert runtime["mission_id"] == AUTHORIZED_0C_MISSION
+    assert runtime["mission_id"] == AUTHORIZED_MISSION
     assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
     assert runtime["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
     assert runtime["max_concurrent_tasks"] == 1
@@ -242,7 +338,7 @@ def test_runtime_still_refuses_out_of_mission_tasks(durable_ctx):
     # Resolved from the REAL roadmap record, so this exercises the production
     # guard rather than an in-memory stand-in.
     roadmap = RoadmapAuthorization.read(REPO_ROOT)
-    assert policy is not None and policy.mission_id == AUTHORIZED_0C_MISSION
+    assert policy is not None and policy.mission_id == AUTHORIZED_MISSION
 
     def _must_not_run(*_a, **_k):
         raise AssertionError("an out-of-mission task must never be dispatched")
@@ -274,9 +370,12 @@ def test_no_future_phase_marked_complete_in_phase_status(phase):
 # ── Phase 0C activation: authorized, NOT implemented ───────────────────────
 
 
-def test_phase_0c_is_authorized_and_active(phase):
+def test_phase_0c_authorization_is_preserved_as_history(phase):
+    """0C was really authorized once, and that record must survive the move to
+    waiting_for_evidence. Erasing it would make the durable 0C work look
+    unauthorized in hindsight."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
-    assert p0c["status"] == "active"
+    assert p0c["status"] == "waiting_for_evidence"
     assert p0c["step"] == AUTHORIZED_0C_MISSION
     auth = p0c["authorization"]
     assert auth["authorized_by"] == "operator"
@@ -384,9 +483,9 @@ def _p0c(phase):
     return phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
 
 
-def test_phase_0c_remains_active_and_is_not_complete(phase):
+def test_phase_0c_is_not_complete(phase):
     p0c = _p0c(phase)
-    assert p0c["status"] == "active"
+    assert p0c["status"] == "waiting_for_evidence"
     assert p0c["status"] != "complete"
 
 
@@ -452,9 +551,9 @@ def test_authority_and_runtime_unchanged_by_reconciliation(phase):
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
     assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
     assert rt["c1"] == "DISABLED"
-    assert rt["mission_id"] == AUTHORIZED_0C_MISSION
+    assert rt["mission_id"] == AUTHORIZED_MISSION
     runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
-    assert runtime["mission_id"] == AUTHORIZED_0C_MISSION
+    assert runtime["mission_id"] == AUTHORIZED_MISSION
     assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
     for denied in ("auto_merge", "auto_deploy", "auto_production_mutation",
                    "auto_authority_promotion", "auto_capital_action"):
