@@ -1,0 +1,189 @@
+{
+  "attempted_design": {
+    "acceptance_semantics": {
+      "binding_rule": "ECONOMIC_SKILL_EVIDENCE_PRESENT requires H1 AND H2 AND a beat against NO_ACTION AND an independent cohort count >= 10. Meeting the portfolio criterion alone yields ECONOMIC_SKILL_NOT_ESTABLISHED.",
+      "criterion_outcomes": [
+        "PREREGISTERED_CRITERIA_MET",
+        "PREREGISTERED_CRITERIA_NOT_MET",
+        "EVIDENCE_INCONCLUSIVE"
+      ],
+      "note": "VS-001 used the single word SUPPORTED, which invited exactly the conflation the operator caught. VS-002 separates the criterion from the conclusion.",
+      "skill_outcomes": [
+        "ECONOMIC_SKILL_EVIDENCE_PRESENT",
+        "ECONOMIC_SKILL_NOT_ESTABLISHED"
+      ]
+    },
+    "base_sha": "aea86d63d178a38daa2ea1225ded9edac3dd0660",
+    "experiment_id": "VS-002",
+    "hypotheses": {
+      "H1_portfolio_skill": "Risk-adjusted signal performance exceeds the frozen risk-matched benchmark after friction.",
+      "H2_ranking_skill": "Signal score is positively associated with subsequent risk-adjusted return (Spearman IC > 0).",
+      "separation_rule": "H1 and H2 are judged independently and never collapsed. VS-001 satisfied a portfolio-level criterion with IC = -0.059, which is precisely the case a single blended claim would have hidden."
+    },
+    "intended_benchmarks": [
+      "risk-matched: rf + beta_i * (r_SPY - rf)",
+      "market: SPY over the identical interval",
+      "NO_ACTION / cash: the risk-free return over the identical interval, which answers whether deploying capital beat doing nothing"
+    ],
+    "intended_friction": {
+      "commission_pct": 0.0,
+      "components": "5 bps entry + 5 bps exit (half-spread plus slippage)",
+      "execution_delay": "Zero assumed, which flatters the strategy; declared rather than hidden.",
+      "justification_for_reuse": "Carried forward from VS-001 because the instruments are unchanged - large-cap US equities and liquid ETFs, where 5 bps per side is conservative-to-realistic. It is NOT reused because it was convenient: the repository contains no measured execution cost anywhere, so any number here is an assumption and is labelled as one. It must never be reported as observed market cost.",
+      "round_trip_pct": 0.1,
+      "status": "ASSUMPTION, NOT MEASUREMENT"
+    },
+    "intended_leakage_controls": [
+      "beta estimation window ends strictly before signal_time",
+      "outcome snapshots refused by the EvidenceGateway before their resolution instant, as proven in VS-001 (440/440 refused)",
+      "no forward or contemporaneous bar may enter risk estimation",
+      "corporate-action adjusted closes required, since a split inside a 252-day beta window corrupts the estimate",
+      "survivorship: the recorded watchlist is fixed and not re-queried"
+    ],
+    "intended_metrics": [
+      "cohort-level mean risk-adjusted excess return, with interval",
+      "Spearman IC of signal_score vs risk-adjusted return",
+      "IC uncertainty (NOTE: no IC standard error exists anywhere in the repo; strat_lab_adapter.py gates promotion on ic >= 0.05 as a bare point estimate. VS-002 would have had to add one.)",
+      "excess win rate",
+      "comparison against NO_ACTION",
+      "independent cohort count reported beside every interval"
+    ],
+    "intended_risk_adjustment": {
+      "chosen_method": "historical beta-adjusted excess return",
+      "definition": "excess = r_stock - [rf + beta_i * (r_SPY - rf)], with beta_i estimated by OLS of stock daily excess returns on SPY daily excess returns over a lookback ending strictly before the signal timestamp.",
+      "estimation_window": "252 trading days ending strictly before signal_time",
+      "minimum_observations": 60,
+      "pit_boundary": "Only bars with known_at <= signal_time may enter the estimation window. Contemporaneous and forward bars are structurally excluded, enforced by the EvidenceGateway rather than by convention.",
+      "rejected_alternatives": {
+        "Fama-French factor attribution": "REJECTED as infeasible: portfolio_sim/factor_attribution.py exists and is tested but requires MONTHLY returns and gates at >= 9 months; the scored window is 9.5 DAYS. Its input data/factors/ff_monthly.csv does not exist.",
+        "beta from price_at_signal quotes": "REJECTED as not credible - see measured_feasibility. This is the option that was closest to computable, and computing it would have produced a falsely precise number from 4-6 usable point-in-time observations.",
+        "sector-matched benchmark": "REJECTED as infeasible: sector_mapping.py covers 3 of 22 tickers (XLE/XLK/XLF); the 19 single names resolve only via data/fmp_cache/profile_stable_<SYM>.json, and that cache is empty.",
+        "stock_minus_SPY (VS-001 method)": "REJECTED by the operator and by evidence - it is not a risk adjustment at all and permits beta to masquerade as skill.",
+        "volatility-matched benchmark": "REJECTED as infeasible: realized volatility needs >= 15 observations per vol_regime_advisor._MIN_OBSERVATIONS; the available series yields 10-13 non-degenerate observations, and far fewer once a pre-signal window is reserved."
+      },
+      "why_this_method": "It is the simplest adjustment that separates selection from exposure, and it directly answers the VS-001 confound: a high-beta basket beats SPY mechanically in a rising market."
+    },
+    "intended_sampling": {
+      "rejected_alternatives": {
+        "HAC / Newey-West": "REJECTED: absent from the repo, scipy and statsmodels are not installed, and a bandwidth exceeding the effective series length would dress 2 independent windows in arithmetic.",
+        "block bootstrap": "REJECTED: a block bootstrap over 2 blocks has 3 distinct resamples."
+      },
+      "rule": "Non-overlapping 7-day cohorts: a cohort may begin only after the previous cohort's outcome window has closed.",
+      "sample_count_interpretation": "The independent unit is the cohort, NOT the ticker-row and NOT the scan. Tickers within a cohort share one market interval.",
+      "why": "VS-001 clustered by scan, which fixes cross-sectional correlation within a scan but not serial correlation between scans one day apart with a 7-day horizon (~6/7 overlap)."
+    },
+    "purpose": "Attack the methodological weaknesses VS-001 exposed: no risk adjustment, heavily overlapping horizons, and a portfolio-level result being mistaken for ranking skill.",
+    "research_question": "Do the watchlist signals predict positive risk-adjusted 7-day excess returns, and does signal strength positively rank subsequent risk-adjusted outcomes, under a sampling design that does not treat overlapping horizons as independent evidence?",
+    "status": "NOT_EXECUTED_INSUFFICIENT_EVIDENCE",
+    "version": "v1-blocked"
+  },
+  "authority_statement": "This artifact grants nothing. It records that an experiment was designed and deliberately not run, and what would be required to run it.",
+  "measured_feasibility": {
+    "blockers": [
+      "only 2 non-overlapping 7-day cohort(s) exist in a 9.5-day scored window; 10 is the minimum for an interval estimate that is not wider than the effect",
+      "risk estimation has 10-13 usable joint return observations per ticker, below this repository's own volatility gate of 15 and far below its correlation gate of 30",
+      "no durable price history: outputs/backtest/historical does not exist, so no pre-signal estimation window can be constructed",
+      "observation intervals are not comparable: gaps range 0.02h to 31.39h, so consecutive 'returns' are not identically scaled and a beta over them is biased toward zero"
+    ],
+    "durable_price_data": {
+      "factor_file_path": "data/factors/ff_monthly.csv",
+      "factor_file_present": false,
+      "price_archive_path": "outputs/backtest/historical",
+      "price_archive_present": false
+    },
+    "independent_sampling": {
+      "cohort_timestamps": [
+        "2026-05-12T20:39:45.890480",
+        "2026-05-20T09:02:58.305533"
+      ],
+      "minimum_required": 10,
+      "non_overlapping_cohorts": 2
+    },
+    "risk_adjustment_credible": false,
+    "risk_estimation_inputs": {
+      "distinct_price_levels_median": 15,
+      "joint_return_observations_median": 11,
+      "joint_return_observations_min": 10,
+      "price_points_per_ticker": 33,
+      "repo_gate_correlation": 30,
+      "repo_gate_volatility": 15,
+      "scan_gap_hours": {
+        "max": 31.39,
+        "median": 18.57,
+        "min": 0.02,
+        "under_two_hours": 9
+      }
+    },
+    "schema_kind": "experimental_noncanonical",
+    "schema_version": "engineering.vertical_slice.feasibility.v0",
+    "scored_population": {
+      "distinct_calendar_dates": 11,
+      "full_file_span_days": 19.51,
+      "rows": 440,
+      "same_day_scan_clusters": {
+        "2026-05-12": {
+          "scans": 4,
+          "spread_minutes": 31.7
+        },
+        "2026-05-15": {
+          "scans": 2,
+          "spread_minutes": 476.5
+        },
+        "2026-05-18": {
+          "scans": 5,
+          "spread_minutes": 1206.2
+        },
+        "2026-05-19": {
+          "scans": 2,
+          "spread_minutes": 16.7
+        }
+      },
+      "scans": 20,
+      "span_days": 9.52
+    }
+  },
+  "minimum_evidence_contract": {
+    "corporate_actions": "REQUIRED for this contract specifically, because beta is estimated over a 252-day window. Not required for VS-001, which read a pre-computed 7-day outcome.",
+    "coverage_required": {
+      "forward": "sessions covering each signal_time + 7 calendar days, so the outcome and the risk adjustment are measured on the same calendar",
+      "history": ">= 252 trading sessions ending before the EARLIEST signal timestamp, so every signal has a full pre-signal estimation window",
+      "symbols": "all 22 recorded watchlist tickers plus SPY"
+    },
+    "deterministic_validation": [
+      "every bar tz-aware and admitted through the gateway",
+      "no gap longer than 5 sessions inside a claimed continuous window",
+      "adj_close/close ratio monotone within a corporate-action-free span",
+      "session coverage >= 252 before the earliest signal, asserted not assumed",
+      "a lookahead probe: every bar refused at an as_of before its known_at, in the style of the VS-001 refusal ledger"
+    ],
+    "explicitly_out_of_scope": [
+      "intraday bars",
+      "options",
+      "fundamentals",
+      "news",
+      "a vendor abstraction layer",
+      "a general market-data platform",
+      "paid data"
+    ],
+    "name": "minimum historical price evidence contract",
+    "pit_semantics": "Bars are admitted through the existing EvidenceGateway. A bar with known_at > as_of is refused. No bar may be synthesized, forward-filled across a gap, or back-dated.",
+    "provenance": "Each bar carries a DataSourceDescriptor with pit_capability declared honestly. A vendor endpoint that cannot state when a value became knowable is pit_capability=none and cannot back a PIT experiment.",
+    "purpose": "The narrowest durable evidence that unblocks VS-002. This is a data requirement, not a market-data platform.",
+    "required_fields_per_bar": {
+      "adj_close": "float, adjusted for splits AND dividends. REQUIRED, not optional: a split inside a 252-day beta window silently destroys the estimate, and this repository currently delegates adjustment to a vendor field it does not verify.",
+      "close": "float, unadjusted official close",
+      "known_at": "timestamp at which the bar became knowable. For a daily close this is at earliest the session close, never the session open.",
+      "known_at_basis": "one of the PointInTime basis values; source_reported preferred, derived_conservative acceptable, unknown REFUSED",
+      "session_date": "ISO date of the trading session",
+      "source_id": "DataSourceDescriptor id of the producing adapter",
+      "symbol": "str, uppercase ticker",
+      "volume": "int, for a liquidity sanity check only"
+    },
+    "storage": "Durable and queryable by (symbol, session_date) and by as_of. This is the first genuine demand for the 0C Research Store: VS-001 held 420 snapshots in memory, but a 252-day window x 23 symbols is ~5,800 bars per experiment and must not be re-fetched per run."
+  },
+  "narrowest_unblocking_task": "Implement a daily adjusted-close evidence adapter plus durable storage satisfying minimum_evidence_contract, for 23 symbols with >= 252 pre-signal sessions. That is a bounded 0C task and is NOT authorized by this mission.",
+  "schema_kind": "experimental_noncanonical",
+  "schema_version": "engineering.vertical_slice.blocked.v0",
+  "summary": "VS-002 was designed to completion and NOT executed. Four independent, measured blockers make a credible risk adjustment impossible from data durable in this repository today. Executing it anyway would have produced a falsely precise number and would have been less honest than the VS-001 result it was meant to correct.",
+  "verdict": "VERTICAL_SLICE_BLOCKED_INSUFFICIENT_RISK_DATA"
+}
