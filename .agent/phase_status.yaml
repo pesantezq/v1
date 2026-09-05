@@ -49,20 +49,34 @@ stockbot_northstar_redesign:
                                              # durable; the supervisor is NOT approved by it.
       evidence: docs/G1_SUPERVISOR_MEASUREMENT.md, evals/g1/formal/
   engineer_runtime_state:
-    mission_id: northstar_vertical_slice_and_preregistration
-                          # 2026-09-04 — repointed from Phase 0C by explicit operator
-                          # authorization, after G1 became durable on main. This value IS
-                          # the bounded mission
+    mission_id: northstar_0c_historical_price_evidence_for_vs002
+                          # 2026-09-05 — repointed by explicit operator authorization.
+                          # VS-002 proved it cannot execute without historical daily price
+                          # evidence, so Phase 0C resumes for THAT PREREQUISITE ONLY.
+                          #
+                          # STEP SEMANTICS (clarified here, not invented): within an ACTIVE
+                          # phase, `phase.step` names the currently dispatchable BOUNDED
+                          # mission for that phase. It is not required to remain the phase's
+                          # original lifetime mission identity, which survives under that
+                          # phase's `authorization` block as history. The dispatch invariant
+                          # is unchanged and still exact:
+                          #   active_phase.step == engineer_runtime_state.mission_id
+                          #                     == project_state.current_step
+                          #                     == config/ew0a_runtime.json mission_id
+                          # and exactly ONE phase may be active. roadmap_guard.py is
+                          # untouched: it still resolves this single field, fail-closed.
+                          # This value IS the bounded mission
                           # boundary: run_mission admits tasks whose mission_id matches
                           # and refuses every other phase/mission, so widening scope
                           # requires changing this field deliberately rather than drifting
                           # into it. Setting it grants NO new authority — only which
                           # mission's tasks may be dispatched.
-    last_authorized_mission: northstar_0c_pit_evidence_gateway_research_store
-                          # NOT complete: 0C is waiting_for_evidence with an unsatisfied exit
-                          # gate. Its durable milestones remain valid and are not invalidated
-                          # by this repointing. Before it: northstar_0b_decision_outcome_passport_contracts
-                          # (complete + durable).
+    last_authorized_mission: northstar_vertical_slice_and_preregistration
+                          # NOT complete: the Vertical Slice is `blocked` pending the bounded
+                          # 0C prerequisite below. VS-001 executed and is durable; VS-002 was
+                          # designed and deliberately NOT executed. Before it: northstar_0c_pit_evidence_gateway_research_store
+                          # (0C, still not complete), and before that
+                          # northstar_0b_decision_outcome_passport_contracts (complete + durable).
     prior_state: IDLE     # mission_id was "" between 0B closure and this authorization;
                           # the idle semantics remain pinned by
                           # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
@@ -210,8 +224,27 @@ stockbot_northstar_redesign:
         Local Models / Trusted Tools). Prime is superseded as orchestrator.
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
-      status: waiting_for_evidence   # 2026-09-04 — was `active` (authorized 2026-08-15). NOT complete, NOT superseded, NOT deferred, and NOT abandoned: every durable milestone below stands and every remaining_work item is preserved verbatim. The protected queue now places the Vertical Slice before the remainder of 0C, and the slice is what will establish which evidence capabilities the rest of 0C actually requires. `waiting_for_evidence` is the existing status vocabulary term for exactly that; no new status was invented. See authorization below for the original operator decision.
-      step: northstar_0c_pit_evidence_gateway_research_store
+      status: active   # 2026-09-05 — RESUMED, bounded. Authorized for the historical price evidence prerequisite ONLY (see bounded_authorization); every other remaining_work item below stays UNAUTHORIZED and undispatchable. Prior note: 2026-09-04 — was `active` (authorized 2026-08-15). NOT complete, NOT superseded, NOT deferred, and NOT abandoned: every durable milestone below stands and every remaining_work item is preserved verbatim. The protected queue now places the Vertical Slice before the remainder of 0C, and the slice is what will establish which evidence capabilities the rest of 0C actually requires. `waiting_for_evidence` is the existing status vocabulary term for exactly that; no new status was invented. See authorization below for the original operator decision.
+      step: northstar_0c_historical_price_evidence_for_vs002   # the currently dispatchable BOUNDED mission; see step semantics above
+      original_step: northstar_0c_pit_evidence_gateway_research_store   # the phase's lifetime mission identity, preserved as history and NOT currently dispatchable
+      bounded_authorization:
+        authorized_by: operator
+        authorized_at: 2026-09-05
+        authorized_mission: northstar_0c_historical_price_evidence_for_vs002
+        prerequisite_for: VS-002 (evals/vertical_slice/VS-002_blocked.json)
+        data_source: >-
+          Existing Financial Modeling Prep integration only. Preferred endpoint
+          /stable/historical-price-eod/dividend-adjusted, because adjustment semantics must be
+          explicit rather than inferred from a field named adjClose. No paid or new provider,
+          no Yahoo/yfinance fallback.
+        scope: >-
+          PIT-safe historical daily price evidence for the 22 VS-002 symbols plus SPY, with
+          durable storage and as_of query, sufficient to estimate beta over a 252-session
+          lookback and to evaluate a 7-day forward outcome. Explicitly does NOT authorize the
+          remaining 0C work items, 0D, intraday data, options, fundamentals, news, engines,
+          capital authority or C1.
+        not_yet_executed: true   # this authorization makes the mission dispatchable; no adapter
+                                 # exists, no data has been fetched, and fmp_client.py is untouched
       depends_on: northstar_phase_0b   # complete; gate NORTHSTAR_0B_CONTRACTS_READY @ main 678c73e
       implementation_started: true     # 2026-08-16 — flipped by the FIRST durable 0C implementation, exactly as the activation record said it would be. See evidence_gateway_foundation below. `active` still records that the phase is in progress, NOT that it is complete: the 0C exit gate is unsatisfied and the Research Store does not exist.
       milestones:
@@ -280,12 +313,21 @@ stockbot_northstar_redesign:
         evidence only; learning informs routing and never grants authority.
     northstar_vertical_slice_and_preregistration:
       name: "Vertical Slice & Preregistration"
-      status: active   # 2026-09-04 — the currently authorized mission for NEW work.
+      status: blocked   # 2026-09-05 — BLOCKED, not complete and not abandoned. VS-002 measured that it cannot execute credibly without historical daily price/risk evidence: 2 non-overlapping 7-day cohorts against a required 10, and 10-13 usable joint return observations against this repository's own gates of 15 and 30. The slice resumes at VS-002 once the bounded Phase 0C prerequisite below is satisfied. VS-001 remains durable and VS-002's blocked result remains durable; neither is retracted by this transition.
+      blocked_on: northstar_0c_historical_price_evidence_for_vs002
+      blocked_reason: >-
+        VS-002 requires historical price/risk evidence supplied by bounded Phase 0C work.
       step: northstar_vertical_slice_and_preregistration
       depends_on: g1_supervisor_measurement   # durable_measurements above; satisfied 2026-09-04 @ main 9d9db1f
-      executed: false   # NOTHING has been run. No preregistration, no defect/intervention
-                        # journal, no experiment, no slice code exists yet. This block records
-                        # only that the mission is dispatchable.
+      executed: false   # The PHASE is not complete. VS-001 DID execute and is durable
+                        # (freeze vsfreeze_f1c6ad41, verdict SUPPORTED, IC -0.059, economic
+                        # skill NOT established). VS-002 was designed and deliberately NOT
+                        # executed. The slice concludes only when a credible risk-adjusted
+                        # experiment has run, which is what the bounded 0C prerequisite
+                        # unblocks.
+      experiments:
+        VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
+        VS-002: not_executed_blocked  # evals/vertical_slice/VS-002_blocked.json
       objective: >-
         Build and run the smallest credible end-to-end Northstar investing research
         slice that exercises the real architecture and produces operating evidence.
