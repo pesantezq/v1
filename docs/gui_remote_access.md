@@ -2,9 +2,10 @@
 
 ## Principle: Never Expose the Dashboard Publicly
 
-The StockBot Dashboard v2 listens on port 8502, bound to all interfaces
-(`0.0.0.0`) by the systemd unit. **Do not open port 8502 to the public
-internet without a protection layer.** The dashboard contains portfolio
+The StockBot Dashboard v2 listens on port 8502, bound to loopback only
+(`127.0.0.1`) by the systemd unit, so it is not reachable from another host
+without one of the protection layers below. **Do not re-bind it to
+`0.0.0.0` to gain remote access** — use a tunnel or VPN instead. The dashboard contains portfolio
 positions, decision history, and signal metadata that should remain private.
 
 ---

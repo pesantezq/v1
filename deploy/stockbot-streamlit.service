@@ -9,7 +9,7 @@ User=root
 WorkingDirectory=/opt/stockbot
 EnvironmentFile=/opt/stockbot/.env
 ExecStart=/opt/stockbot/.venv/bin/streamlit run gui/app.py \
-    --server.address 0.0.0.0 \
+    --server.address 127.0.0.1 \
     --server.port 8501
 Restart=always
 RestartSec=10
