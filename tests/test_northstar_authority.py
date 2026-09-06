@@ -23,12 +23,16 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-09-04: repointed from 0C to the
-#: Vertical Slice after G1 became durable. 0C did not complete and was not
-#: superseded -- it is waiting_for_evidence with its durable work intact -- so
-#: both identifiers stay live here: one is the current boundary, the other is a
-#: real phase whose remaining work is deliberately NOT dispatchable yet.
-AUTHORIZED_MISSION = "northstar_vertical_slice_and_preregistration"
+#: The mission the roadmap authorizes NOW. 2026-09-05: Phase 0C resumed under a
+#: BOUNDED step after VS-002 proved it cannot execute without historical price
+#: evidence. Three identifiers stay live and must be kept apart:
+#:   AUTHORIZED_MISSION - the one bounded mission that may be dispatched today
+#:   BROAD_0C_MISSION   - 0C's lifetime identity, preserved as history and NOT
+#:                        dispatchable, so the rest of 0C cannot resume by momentum
+#:   VS_MISSION         - the Vertical Slice, now `blocked` awaiting the prerequisite
+AUTHORIZED_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
+BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
+VS_MISSION = "northstar_vertical_slice_and_preregistration"
 
 # 0C left this list on 2026-08-15 when the operator explicitly authorized it. It
 # is now the CURRENT phase, guarded by its own tests below (which additionally
@@ -93,19 +97,21 @@ def test_program_is_northstar(state):
 
 
 def test_current_phase_and_step(state):
-    # 2026-09-04: G1 became durable and the operator repointed the boundary to the
-    # Vertical Slice. The controller pointers must follow the authorized mission —
-    # a stale pointer at a phase that is no longer dispatchable is the defect this
-    # guard exists to catch, and 0C is now exactly such a phase.
-    assert state["current_phase"] == AUTHORIZED_MISSION
+    # 2026-09-05: Phase 0C resumed under a bounded step. current_phase names the
+    # PHASE; current_step names the bounded MISSION inside it. They are no longer
+    # the same string, which is the whole point of the bounded-step clarification.
+    assert state["current_phase"] == "northstar_phase_0c"
     assert state["current_step"] == AUTHORIZED_MISSION
+    assert state["current_step"] != BROAD_0C_MISSION
+    assert state["current_step"] != VS_MISSION
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: 0C really was the prior primary.
-    assert nos["prior_primary"] == AUTHORIZED_0C_MISSION
+    # History is carried forward, not erased: the Vertical Slice really was the
+    # prior primary, and it is blocked rather than finished.
+    assert nos["prior_primary"] == VS_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -137,6 +143,7 @@ def test_agent_context_check_reports_program_phase_step():
     out = result.stdout
     assert "stockbot_northstar_redesign" in out
     assert AUTHORIZED_MISSION in out
+    assert "northstar_phase_0c" in out
     # The stale claim must be gone from the summary.
     assert "Claude runs locally. Return VPS commands" not in out
 
@@ -176,15 +183,35 @@ def test_g1_is_recorded_as_a_durable_measurement_and_not_as_a_gate(phase):
 # ── the Vertical Slice is the one current mission ─────────────────────────
 
 
-def test_vertical_slice_is_the_active_mission_but_has_not_executed(phase):
-    vs = phase["stockbot_northstar_redesign"]["phases"][AUTHORIZED_MISSION]
-    assert vs["status"] == "active"
-    assert vs["step"] == AUTHORIZED_MISSION
-    # Authorized to start is not the same as started.
+def test_vertical_slice_is_blocked_and_neither_complete_nor_erased(phase):
+    """Blocked is a waiting state, not a verdict on the slice.
+
+    VS-001 really executed and is durable; VS-002 really was designed and
+    deliberately not executed. A transition that made either look like it never
+    happened would be the defect here."""
+    vs = phase["stockbot_northstar_redesign"]["phases"][VS_MISSION]
+    assert vs["status"] == "blocked"
+    assert vs["status"] not in ("complete", "superseded", "deferred", "active")
+    assert vs["blocked_on"] == AUTHORIZED_MISSION
+    assert "historical price" in vs["blocked_reason"]
+    # The phase is not finished, and both experiments remain on the record.
     assert vs["executed"] is False
-    auth = vs["authorization"]
-    assert auth["authorized_by"] == "operator"
-    assert auth["authorized_mission"] == AUTHORIZED_MISSION
+    assert vs["experiments"]["VS-001"] == "executed_durable"
+    assert vs["experiments"]["VS-002"] == "not_executed_blocked"
+    # The original slice authorization survives as history.
+    assert vs["authorization"]["authorized_mission"] == VS_MISSION
+
+
+def test_vertical_slice_history_artifacts_still_exist():
+    """The state transition must not orphan the evidence it depends on."""
+    base = REPO_ROOT / "evals" / "vertical_slice"
+    for name in ("VS-001_preregistration.json", "VS-001_result.json",
+                 "VS-002_blocked.json"):
+        assert (base / name).is_file(), name
+    v1 = json.loads((base / "VS-001_preregistration.json").read_text())
+    assert v1["freeze_digest"] == "vsfreeze_f1c6ad413651834dff1dec548394a2d1"
+    v2 = json.loads((base / "VS-002_blocked.json").read_text())
+    assert v2["attempted_design"]["status"] == "NOT_EXECUTED_INSUFFICIENT_EVIDENCE"
 
 
 def test_exactly_one_roadmap_mission_is_active(phase, state):
@@ -192,7 +219,7 @@ def test_exactly_one_roadmap_mission_is_active(phase, state):
     for phases in (phase["stockbot_northstar_redesign"]["phases"],
                    state["northstar_program"]["phases"]):
         active = [k for k, v in phases.items() if v.get("status") == "active"]
-        assert active == [AUTHORIZED_MISSION], active
+        assert active == ["northstar_phase_0c"], active
 
 
 def test_every_controller_pointer_agrees_on_the_current_mission(state, phase):
@@ -204,18 +231,29 @@ def test_every_controller_pointer_agrees_on_the_current_mission(state, phase):
     assert runtime["mission_id"] == AUTHORIZED_MISSION
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
     assert rt["mission_id"] == AUTHORIZED_MISSION
-    # No authoritative pointer may still name 0C as the CURRENT mission.
-    assert rt["mission_id"] != AUTHORIZED_0C_MISSION
-    assert runtime["mission_id"] != AUTHORIZED_0C_MISSION
-    assert state["current_step"] != AUTHORIZED_0C_MISSION
+    # No authoritative pointer may still dispatch the BROAD 0C mission or the
+    # now-blocked Vertical Slice.
+    for stale in (BROAD_0C_MISSION, VS_MISSION):
+        assert rt["mission_id"] != stale
+        assert runtime["mission_id"] != stale
+        assert state["current_step"] != stale
+        assert state["next_official_step"]["primary"] != stale
+
+    # The bounded-step invariant, stated exactly: the ACTIVE phase's step is the
+    # dispatched mission, and every mirror agrees with it.
+    active_phase = phase["stockbot_northstar_redesign"]["phases"][state["current_phase"]]
+    assert active_phase["status"] == "active"
+    assert active_phase["step"] == rt["mission_id"] == runtime["mission_id"] \
+        == state["current_step"] == AUTHORIZED_MISSION
 
 
-def test_neither_0c_nor_0d_can_be_dispatched_now():
+def test_only_the_bounded_0c_mission_is_dispatchable():
     """Resolved from the REAL protected record, through the production guard.
 
-    0C is the interesting half: it has an unsatisfied exit gate and real work
-    left, so it is the mission most likely to be resumed by momentum. Having
-    once been authorized must not make it dispatchable now."""
+    The broad 0C mission is the interesting one: the phase is now ACTIVE and has
+    five untouched remaining_work items, so it is the mission most likely to
+    resume by momentum. Making the phase active must NOT make its lifetime
+    mission dispatchable — only the bounded step is."""
     from portfolio_automation.engineer_worker.roadmap_guard import (
         RoadmapAuthorization, RoadmapViolation, assert_mission_authorized)
 
@@ -225,10 +263,25 @@ def test_neither_0c_nor_0d_can_be_dispatched_now():
 
     assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
 
-    for refused in (AUTHORIZED_0C_MISSION, "northstar_phase_0d",
+    for refused in (BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
                     "northstar_0d_certification", "", None):
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
+
+
+def test_the_rest_of_0c_remains_unauthorized_by_the_bounded_step(phase):
+    """An active phase is not a licence for everything inside it."""
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    auth = p0c["bounded_authorization"]
+    assert auth["authorized_mission"] == AUTHORIZED_MISSION
+    assert auth["authorized_by"] == "operator"
+    assert auth["not_yet_executed"] is True
+    # The bounded scope must say plainly what it does NOT open.
+    scope = auth["scope"]
+    assert "does NOT authorize" in scope.replace("Explicitly ", "")
+    # Every remaining_work item is still listed and still unauthorized.
+    assert len(p0c["remaining_work"]) == 5
+    assert all(item not in auth["authorized_mission"] for item in p0c["remaining_work"])
 
 
 # ── Req 9: future phases not falsely complete ──────────────────────────────
@@ -243,8 +296,8 @@ def test_no_future_phase_marked_complete_in_project_state(state):
         )
     assert phases["northstar_phase_0a"]["status"] == "complete"
     assert phases["northstar_phase_0b"]["status"] == "complete"
-    assert phases["northstar_phase_0c"]["status"] == "waiting_for_evidence"
-    assert phases[AUTHORIZED_MISSION]["status"] == "active"
+    assert phases["northstar_phase_0c"]["status"] == "active"
+    assert phases[VS_MISSION]["status"] == "blocked"
 
 
 def test_phase_0a_complete_with_gate_and_both_milestones(phase):
@@ -371,12 +424,14 @@ def test_no_future_phase_marked_complete_in_phase_status(phase):
 
 
 def test_phase_0c_authorization_is_preserved_as_history(phase):
-    """0C was really authorized once, and that record must survive the move to
-    waiting_for_evidence. Erasing it would make the durable 0C work look
-    unauthorized in hindsight."""
+    """0C was really authorized once, and that record must survive both the move
+    to waiting_for_evidence and the bounded resumption. Erasing it would make the
+    durable 0C work look unauthorized in hindsight."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
-    assert p0c["status"] == "waiting_for_evidence"
-    assert p0c["step"] == AUTHORIZED_0C_MISSION
+    assert p0c["status"] == "active"
+    # The lifetime identity moved to original_step; it did not vanish.
+    assert p0c["step"] == AUTHORIZED_MISSION
+    assert p0c["original_step"] == AUTHORIZED_0C_MISSION
     auth = p0c["authorization"]
     assert auth["authorized_by"] == "operator"
     assert auth["authorized_mission"] == AUTHORIZED_0C_MISSION
@@ -484,9 +539,15 @@ def _p0c(phase):
 
 
 def test_phase_0c_is_not_complete(phase):
+    """Resuming a phase says nothing about finishing it."""
     p0c = _p0c(phase)
-    assert p0c["status"] == "waiting_for_evidence"
+    assert p0c["status"] == "active"
     assert p0c["status"] != "complete"
+    assert p0c["exit_gate"]           # still recorded, still unsatisfied
+    assert p0c["implementation_started"] is True
+    foundation = p0c["milestones"]["evidence_gateway_foundation"]
+    assert foundation["status"] == "complete" and foundation["durable"] is True
+    assert foundation["merged_main_sha"]
 
 
 def test_0c_implementation_started_is_true(phase):
