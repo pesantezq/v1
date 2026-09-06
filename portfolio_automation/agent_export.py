@@ -123,6 +123,14 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("daily_memo_md",            "latest/daily_memo.md",                 False, "daily_memo",        "memo"),
     AllowlistEntry("daily_memo_txt",           "latest/daily_memo.txt",                False, "daily_memo",        "memo"),
     AllowlistEntry("memo_datasets",            "latest/memo_datasets.json",            False, "memo_datasets",     "memo"),
+    # -- VS-002 frozen research evidence ----------------------------------
+    # Three exact paths, not a directory. outputs/backtest/historical/** is
+    # deliberately NOT allowlisted: the research plane receives DERIVED daily
+    # returns, whose ratios survive a later whole-series adjustment, rather than
+    # price levels, whose vintage this archive cannot certify.
+    AllowlistEntry("vs002_signals",            "vs002_evidence/signals.json",          False, "vs002_evidence",    "research_evidence"),
+    AllowlistEntry("vs002_returns",            "vs002_evidence/returns.json",          False, "vs002_evidence",    "research_evidence"),
+    AllowlistEntry("vs002_manifest",           "vs002_evidence/manifest.json",         False, "vs002_evidence",    "research_evidence"),
 )
 
 
