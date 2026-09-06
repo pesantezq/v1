@@ -404,6 +404,33 @@ class RunHistorySummary:
         return {**_base("RunHistorySummary"), **asdict(self)}
 
 
+def _projected_failure_classes(rec: dict[str, Any]) -> list[str]:
+    """Project ``failure_classes`` or refuse the record.
+
+    ``OutcomeRecord`` declares ``list[str]``. A syntactically valid JSON row can
+    still carry any other type, and the previous comprehension simply iterated
+    whatever was there -- so ``123`` raised TypeError and ``"TEST_FAILURE"``
+    would have silently become a list of single characters. Both are corrupt
+    evidence; only one announced itself.
+
+    Absent and ``None`` stay ``[]`` because records written before the field
+    existed are legitimately shaped that way. Everything else that is not a list
+    raises ``ValueError``, which :func:`build_run_history` already converts into
+    its UNAVAILABLE envelope. Coercing a corrupt value to ``[]`` instead would
+    manufacture clean evidence out of unusable evidence, which is the failure
+    mode this whole projection layer exists to prevent."""
+    raw = rec.get("failure_classes")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        # Type name only. The corrupt payload itself is never echoed: a
+        # projection must not render content it has just declared unusable.
+        raise ValueError(
+            f"failure_classes must be a list per OutcomeRecord, got "
+            f"{type(raw).__name__}")
+    return [str(f) for f in raw]
+
+
 def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
     """One outcome record -> one projected run.
 
@@ -423,7 +450,7 @@ def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
         "attempt_count": rec.get("attempt_count"),
         "final_status": _s("final_status"),
         "supervisor_verdict": _s("supervisor_verdict"),
-        "failure_classes": [str(f) for f in (rec.get("failure_classes") or [])],
+        "failure_classes": _projected_failure_classes(rec),
         "escalated": rec.get("escalated") is True,
         "policy_violation": rec.get("policy_violation") is True,
         "human_intervention": rec.get("human_intervention") is True,
@@ -462,7 +489,19 @@ def build_run_history(repo_root: str | Path, rel: str = OUTCOME_LEDGER_REL) -> R
             verdict_counts={},
             detail=f"{rel} unreadable via ew0a.read_outcomes ({type(exc).__name__})")
 
-    runs = [_project_run(rec, i) for i, rec in enumerate(records) if isinstance(rec, dict)]
+    try:
+        runs = [_project_run(rec, i) for i, rec in enumerate(records)
+                if isinstance(rec, dict)]
+    except ValueError as exc:
+        # One schema-invalid record makes the whole history unusable. Dropping
+        # the bad row and serving the rest would be a partial-ledger semantic
+        # that no authoritative contract establishes, and the consumer could not
+        # tell a complete history from a quietly truncated one.
+        return RunHistorySummary(
+            source=rel, source_kind="engineering_outcome_ledger",
+            availability=TruthState.UNAVAILABLE.value, record_count=0, runs=[],
+            verdict_counts={},
+            detail=f"{rel} contains a schema-invalid record ({exc})")
     counts: dict[str, int] = {}
     for run in runs:
         verdict = run["supervisor_verdict"]
@@ -723,7 +762,12 @@ def _readability(path: Path) -> str:
         return "ABSENT"
     try:
         path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
+        # UnicodeDecodeError is a ValueError, NOT an OSError, so it used to
+        # escape and take the whole dashboard down. A file this projection
+        # cannot decode is exactly what UNREADABLE means. Deliberately narrow:
+        # catching Exception here would disguise a programming defect as file
+        # unreadability.
         return "UNREADABLE"
     return "READABLE"
 

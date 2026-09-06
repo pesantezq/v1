@@ -176,6 +176,13 @@ and `health_note` says so on the projection.
 proves nothing whatever about whether anything is running. It is named for what it
 measures so it cannot be re-labelled as component health later.
 
+A file that cannot be decoded as UTF-8 is `UNREADABLE`. `UnicodeDecodeError` is a
+`ValueError`, **not** an `OSError`, so it previously escaped this check and took the
+whole dashboard down. The catch is deliberately narrow (`OSError`, `UnicodeError`):
+catching `Exception` here would disguise a programming defect in this module as file
+unreadability. The authoritative config readers remain free to fail closed on their own
+terms — this is the observability boundary, and its job is to report, not to crash.
+
 ### RunHistorySummary (engineering outcome/run history)
 `dashboard["run_history"]`. New in GUI-R. The GUI previously read
 `docs/EW0A_CERTIFICATION_OUTCOMES.jsonl` itself, which is how a second, independent
@@ -206,6 +213,22 @@ therefore `UNAVAILABLE` — an operational condition — never `PENDING_BACKEND`
 would claim nobody had built it. A malformed line makes the canonical reader raise;
 this projection does not soften that into a partial list, it reports the ledger
 unusable and says why.
+
+**Schema-invalid rows are unusable too, not only unparseable ones.** A row can be valid
+JSON and still violate `OutcomeRecord`: `failure_classes` is declared `list[str]`, and a
+row carrying `123` or `"TEST_FAILURE"` is corrupt evidence. Absent and `null` remain
+`[]` — records predating the field are legitimately shaped that way — but anything else
+that is not a list makes the whole projection `UNAVAILABLE`. It is **not** coerced to
+`[]`, which would manufacture clean evidence out of corrupt evidence, and the offending
+payload is never echoed into `detail`; only its type is. One bad row invalidates the
+history rather than yielding a quietly truncated one: no authoritative contract
+establishes partial-ledger semantics, and a consumer cannot tell a complete history from
+a silently shortened one.
+
+The invariant behind both rules: **no corrupt record may escape through
+`build_dashboard()` as an uncaught projection exception.** A Mission Control page
+rendering from this projection must fail closed to an honest `UNAVAILABLE`, never to a
+stack trace.
 
 ### Active-session truth and mission consistency
 `dashboard["active_session"]`. Episode discovery belongs to the producer

@@ -961,3 +961,205 @@ def test_the_real_repo_pending_set_is_unchanged_by_the_repair():
     caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
     assert {n for n, s in caps.items() if s == PENDING_BACKEND} == _PRODUCERLESS
     assert dash["backend_truth"]["readiness"] == "PARTIAL"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R P2 HARDENING — corrupt evidence must degrade, never crash the dashboard
+#
+# Two confirmed Codex P2 findings, same architectural defect: an IMPLEMENTED
+# producer handed corrupt evidence raised straight through build_dashboard()
+# instead of degrading to a truth state. A Mission Control page rendering from
+# that projection would fail closed to a stack trace rather than to an honest
+# UNAVAILABLE -- the precise outcome this projection layer exists to prevent.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _ledger_root(tmp_path, *rows):
+    """A repo root whose outcome ledger holds exactly these rows."""
+    ledger = tmp_path / OUTCOME_LEDGER_REL
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("".join(_json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return tmp_path
+
+
+def _row(**extra):
+    base = {"task_id": "T1", "final_status": "VERIFIED"}
+    base.update(extra)
+    return base
+
+
+# ── P2 #1: schema-invalid outcome rows ──────────────────────────────────────
+def test_historical_failure_classes_shapes_keep_working(tmp_path):
+    """Records written before the field existed, and records that legitimately
+    have no failures, must not be swept up by the new validation."""
+    cases = {
+        "absent": (_row(), []),
+        "null": (_row(failure_classes=None), []),
+        "empty": (_row(failure_classes=[]), []),
+        "populated": (_row(failure_classes=["TEST_FAILURE"]), ["TEST_FAILURE"]),
+    }
+    for label, (row, expected) in cases.items():
+        history = build_run_history(_ledger_root(tmp_path / label, row))
+        assert history.availability == TruthState.LIVE.value, label
+        assert history.record_count == 1, label
+        assert history.runs[0]["failure_classes"] == expected, label
+
+
+def test_schema_invalid_failure_classes_makes_run_history_unavailable(tmp_path):
+    for label, bad in (("int", 123), ("float", 1.5), ("bool", True),
+                       ("dict", {"kind": "TEST_FAILURE"})):
+        root = _ledger_root(tmp_path / label, _row(failure_classes=bad))
+        history = build_run_history(root)
+        assert history.availability == TruthState.UNAVAILABLE.value, label
+        assert history.runs == [], label
+        assert history.record_count == 0, label
+
+
+def test_a_string_is_not_a_list_of_failure_classes(tmp_path):
+    """The quiet half of this finding. `123` announced itself with a TypeError;
+    `"TEST_FAILURE"` would have iterated into ['T','E','S','T',...] and been
+    rendered as ten separate failure classes with nothing raising at all."""
+    root = _ledger_root(tmp_path, _row(failure_classes="TEST_FAILURE"))
+    history = build_run_history(root)
+    assert history.availability == TruthState.UNAVAILABLE.value
+    assert history.runs == []
+
+
+def test_corrupt_outcome_record_never_escapes_through_build_dashboard(tmp_path):
+    """The load-bearing invariant. Mission Control renders from this call."""
+    for label, bad in (("int", 123), ("str", "TEST_FAILURE"),
+                       ("dict", {"kind": "X"}), ("float", 2.0)):
+        root = _ledger_root(tmp_path / label, _row(failure_classes=bad))
+        dash = rm.build_dashboard(root, now=_NOW)          # must not raise
+        assert dash["run_history"]["availability"] == TruthState.UNAVAILABLE.value, label
+        caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+        assert caps["run_history"] == TruthState.UNAVAILABLE.value, label
+        assert caps["run_history"] != PENDING_BACKEND, label
+
+
+def test_one_bad_record_does_not_yield_a_quietly_truncated_history(tmp_path):
+    """No partial-ledger semantics: dropping the bad row and serving the rest
+    would leave a consumer unable to tell a complete history from a truncated
+    one. No authoritative contract establishes partial-ledger reads."""
+    root = _ledger_root(tmp_path,
+                        _row(task_id="GOOD1", failure_classes=["TEST_FAILURE"]),
+                        _row(task_id="BAD", failure_classes=123),
+                        _row(task_id="GOOD2"))
+    history = build_run_history(root)
+    assert history.availability == TruthState.UNAVAILABLE.value
+    assert history.record_count == 0
+    assert history.runs == []
+
+
+def test_corrupt_payload_content_is_never_echoed_into_the_projection(tmp_path):
+    """A projection must not render content it has just declared unusable."""
+    secret = "sk-not-a-real-key-abcdef"
+    root = _ledger_root(tmp_path, _row(failure_classes={"leak": secret}))
+    history = build_run_history(root)
+    blob = _json.dumps(history.to_dict())
+    assert secret not in blob
+    assert "leak" not in blob
+    assert "dict" in history.detail        # the TYPE is enough to diagnose
+
+
+def test_failure_class_validator_raises_valueerror_not_an_incidental_typeerror():
+    """An explicit contract violation, not whatever exception iteration happens
+    to produce -- build_run_history's existing guard converts ValueError."""
+    with pytest.raises(ValueError, match="failure_classes"):
+        rm._projected_failure_classes({"failure_classes": 123})
+    assert rm._projected_failure_classes({}) == []
+    assert rm._projected_failure_classes({"failure_classes": None}) == []
+
+
+# ── P2 #2: decoding failures are unreadable, not exceptions ────────────────
+def test_readability_classifies_a_decode_failure_as_unreadable(tmp_path):
+    """UnicodeDecodeError is a ValueError, NOT an OSError, so it used to escape
+    `_readability` entirely and take the dashboard down with it."""
+    bad = tmp_path / "corrupt.json"
+    bad.write_bytes(b"\xff\xfe\x00not utf-8")
+    assert rm._readability(bad) == "UNREADABLE"
+
+
+def test_readability_preserves_its_other_three_answers(tmp_path):
+    good = tmp_path / "good.json"
+    good.write_text('{"level": "A0_DIAGNOSTIC"}', encoding="utf-8")
+    assert rm._readability(good) == "READABLE"
+    assert rm._readability(tmp_path / "missing.json") == "ABSENT"
+    # a directory exists and cannot be read as a file -> IsADirectoryError (OSError)
+    assert rm._readability(tmp_path) == "UNREADABLE"
+
+
+def test_readability_reports_an_io_failure_as_unreadable(monkeypatch, tmp_path):
+    target = tmp_path / "present.json"
+    target.write_text("{}", encoding="utf-8")
+
+    def _boom(*_a, **_k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(_Path, "read_text", _boom)
+    assert rm._readability(target) == "UNREADABLE"
+
+
+def test_readability_does_not_disguise_a_programming_defect(monkeypatch, tmp_path):
+    """Deliberately narrow. Catching Exception here would turn a bug in this
+    module into a serene 'UNREADABLE' and hide it forever."""
+    target = tmp_path / "present.json"
+    target.write_text("{}", encoding="utf-8")
+
+    def _bug(*_a, **_k):
+        raise AttributeError("programming defect")
+
+    monkeypatch.setattr(_Path, "read_text", _bug)
+    with pytest.raises(AttributeError):
+        rm._readability(target)
+
+
+def test_undecodable_protected_config_does_not_take_down_the_dashboard(tmp_path):
+    """Observability boundary, not config parsing: the authority reader is still
+    entitled to fail closed to A0. What must not happen is the READABILITY
+    projection raising through build_dashboard()."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "ew0a_authority.json").write_bytes(b"\xff\xfe\x00bad")
+
+    dash = rm.build_dashboard(tmp_path, now=_NOW)          # must not raise
+    readability = dash["system_health"]["config_readability"]
+    assert readability["authority_record"] == "UNREADABLE"
+    assert readability["runtime_policy"] == "ABSENT"
+    # and the authority projection still fails closed rather than inventing a level
+    assert dash["worker_authority"]["level"] == "A0_DIAGNOSTIC"
+    assert dash["worker_authority"]["can_merge"] is False
+
+
+def test_undecodable_outcome_ledger_degrades_rather_than_raising(tmp_path):
+    """The canonical reader's own decode failure path, checked end to end."""
+    ledger = tmp_path / OUTCOME_LEDGER_REL
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_bytes(b"\xff\xfe\x00not utf-8")
+    dash = rm.build_dashboard(tmp_path, now=_NOW)          # must not raise
+    assert dash["run_history"]["availability"] == TruthState.UNAVAILABLE.value
+
+
+# ── the invariant both findings violated ───────────────────────────────────
+def test_no_corrupt_input_in_these_two_paths_escapes_as_an_exception(tmp_path):
+    """Both P2s in one statement: an implemented producer handed corrupt
+    evidence degrades to a truth state and build_dashboard() still returns."""
+    root = tmp_path / "both"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ew0a_authority.json").write_bytes(b"\xff\xfe\x00bad")
+    (root / OUTCOME_LEDGER_REL).write_text(
+        _json.dumps(_row(failure_classes="TEST_FAILURE")) + "\n", encoding="utf-8")
+
+    dash = rm.build_dashboard(root, now=_NOW)              # must not raise
+    assert dash["system_health"]["config_readability"]["authority_record"] == "UNREADABLE"
+    assert dash["run_history"]["availability"] == TruthState.UNAVAILABLE.value
+    # still not PENDING_BACKEND: both producers exist, they just cannot answer
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    assert caps["run_history"] == TruthState.UNAVAILABLE.value
+    # Readiness correctly drops to UNAVAILABLE here rather than staying PARTIAL:
+    # an unreadable authority record means the oversight floor is not
+    # established, and the readiness contract says so. That is the honest
+    # answer, and it is reached by degrading -- not by raising.
+    assert dash["backend_truth"]["readiness"] == "UNAVAILABLE"
+    assert any("oversight floor" in r for r in dash["backend_truth"]["reasons"])
