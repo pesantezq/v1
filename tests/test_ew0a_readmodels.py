@@ -203,9 +203,16 @@ def test_missing_live_backends_stay_pending_backend():
     assert proj["supervisor_latency_ms"] == "PENDING_BACKEND"
 
 
-def test_absent_session_ledger_projects_pending_backend_not_a_fabrication(tmp_path):
+def test_absent_session_ledger_is_answered_by_the_producer_not_faked(tmp_path):
+    """Replaces a test that asserted the defect. It required an absent ledger to
+    project PENDING_BACKEND -- but `tools/ns0c_session.py` exists, so that told
+    an operator to build a backend that was already there. The producer's own
+    no-session contract is the answer, and it is still never a fabrication."""
     from portfolio_automation.engineer_worker.ew0a_readmodels import _build_active_session
-    assert _build_active_session(tmp_path) == "PENDING_BACKEND"
+    payload, status, _detail = _build_active_session(tmp_path)
+    assert status == "OK"
+    assert payload["session_state"] == "NO_SUCH_SESSION"
+    assert payload["session_id"] is None
 
 
 def test_session_projection_surfaces_the_authority_boundaries():
@@ -269,8 +276,11 @@ def _session(mission="m-runtime", session_id="s1", **extra):
 
 
 # ── A. active session: truth state and mission consistency ──────────────────
-def test_active_session_with_no_ledger_stays_pending_backend():
-    projection, state = project_active_session(PENDING_BACKEND, "m-runtime", _NOW)
+def test_active_session_pending_backend_requires_an_absent_producer():
+    """PENDING_BACKEND is now reachable only through producer ABSENCE -- not
+    through an absent ledger, an empty result, or a failure."""
+    projection, state = project_active_session(
+        PENDING_BACKEND, "m-runtime", _NOW, producer_status="ABSENT")
     assert projection == PENDING_BACKEND
     assert state is TruthState.PENDING_BACKEND
 
@@ -390,8 +400,8 @@ def test_learning_producer_failure_is_unavailable_not_pending_backend(monkeypatc
 
 
 def test_learning_missing_producer_is_pending_backend(monkeypatch):
-    monkeypatch.setitem(
-        _sys.modules, "portfolio_automation.engineer_worker.learning.readmodels", None)
+    monkeypatch.setattr(rm, "_LEARNING_PRODUCER_MODULE",
+                        "portfolio_automation.engineer_worker.learning.not_built")
     projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
     assert state is TruthState.PENDING_BACKEND
     assert projection == PENDING_BACKEND
@@ -688,3 +698,266 @@ def test_repaired_dashboard_still_carries_no_secrets():
     blob = _json.dumps(rm.build_dashboard(_REPO, now=_NOW), default=str)
     for leak in ("sk-", "Bearer", "Authorization", ".ew0a_openai_key", "api_key"):
         assert leak not in blob
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R REPAIR — PENDING_BACKEND MEANS "NOBODY BUILT THE PRODUCER"
+#
+# GPT review verdict REPAIR. The candidate still inherited the old rule that an
+# absent session ledger, and any exception from the session producer, both
+# projected PENDING_BACKEND. `tools/ns0c_session.py` exists, so both answers
+# were wrong in the same direction: they reported an operational condition, or
+# a perfectly good "there is no session", as unfinished engineering.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _no_ledger_root(tmp_path):
+    """A repo root the session producer can read and find nothing in."""
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    return tmp_path
+
+
+# ── producer classification: the shared rule ────────────────────────────────
+def test_missing_module_is_only_true_for_the_producer_itself():
+    target = "tools.ns0c_session"
+    exact = ModuleNotFoundError("no module", name=target)
+    parent = ModuleNotFoundError("no module", name="tools")
+    dependency = ModuleNotFoundError("no module", name="yaml")
+    sibling = ModuleNotFoundError("no module", name="tools.ns0c_session_other")
+    assert rm._missing_module_is(exact, target) is True
+    assert rm._missing_module_is(parent, target) is True      # producer cannot exist
+    assert rm._missing_module_is(dependency, target) is False  # producer's dependency
+    assert rm._missing_module_is(sibling, target) is False
+    assert rm._missing_module_is(ModuleNotFoundError("x"), target) is False
+
+
+def test_generic_import_failure_is_never_evidence_of_absence():
+    """The invariant the review named. An ImportError from inside a producer
+    means the producer exists and is broken."""
+    _module, status, detail = rm._import_producer("tools.ns0c_session")
+    assert status == "OK" and detail == ""
+    _m, status, detail = rm._import_producer("tools.definitely_not_a_module")
+    assert status == "ABSENT"
+
+
+def test_producer_dependency_failure_classifies_as_unavailable(monkeypatch):
+    def _raise(_name):
+        raise ModuleNotFoundError("No module named 'somedependency'",
+                                  name="somedependency")
+    monkeypatch.setattr(rm.importlib, "import_module", _raise)
+    _module, status, detail = rm._import_producer("tools.ns0c_session")
+    assert status == "UNAVAILABLE"
+    assert "somedependency" in detail
+
+
+# ── A. producer genuinely absent -> PENDING_BACKEND ─────────────────────────
+def test_absent_session_producer_is_the_only_route_to_pending_backend(monkeypatch):
+    monkeypatch.setattr(rm, "_SESSION_PRODUCER_MODULE", "tools.ns0c_session_not_built")
+    payload, status, _detail = rm._build_active_session(_REPO)
+    assert status == "ABSENT"
+    enriched, state = project_active_session(payload, "m-runtime", _NOW, status)
+    assert state is TruthState.PENDING_BACKEND
+    assert enriched == PENDING_BACKEND
+
+
+# ── B. producer answers "no session" -> LIVE, not a gap ─────────────────────
+def test_no_session_is_a_live_answer_not_missing_engineering(tmp_path):
+    dash = rm.build_dashboard(_no_ledger_root(tmp_path), now=_NOW)
+    session = dash["active_session"]
+    assert session["session_state"] == "NO_SUCH_SESSION"
+    assert session["session_present"] is False
+    assert session["truth_state"] == TruthState.LIVE.value
+    assert session["truth_state"] != PENDING_BACKEND
+    assert session["safe_to_present_as_current_work"] is False
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    assert caps["active_session"] == TruthState.LIVE.value
+
+
+def test_no_session_has_no_mission_to_compare_and_is_not_a_mismatch(tmp_path):
+    dash = rm.build_dashboard(_no_ledger_root(tmp_path), now=_NOW)
+    assert dash["active_session"]["mission_consistency"] == "UNDETERMINED"
+
+
+def test_the_no_session_constant_matches_the_producers_own_contract():
+    """Drift guard. This module duplicates the producer's sentinel so it can
+    classify before knowing the producer loaded; the duplicate must not rot."""
+    from tools.ns0c_session import NO_SESSION
+    assert rm._NO_SESSION_STATE == NO_SESSION
+
+
+# ── C. producer exists and fails -> UNAVAILABLE ─────────────────────────────
+def test_session_producer_exception_is_unavailable_not_pending_backend(monkeypatch):
+    import tools.ns0c_session as producer
+
+    def _boom(**_kwargs):
+        raise RuntimeError("ledger corrupt")
+
+    monkeypatch.setattr(producer, "session_projection", _boom)
+    payload, status, detail = rm._build_active_session(_REPO)
+    assert status == "UNAVAILABLE"
+    assert "RuntimeError" in detail
+    enriched, state = project_active_session(payload, "m-runtime", _NOW, status, detail)
+    assert state is TruthState.UNAVAILABLE
+    assert enriched["truth_state"] != PENDING_BACKEND
+    assert enriched["session_present"] is False
+
+
+def test_session_producer_failure_detail_carries_no_exception_payload(monkeypatch):
+    """Only the exception TYPE. A message can carry paths or values a projection
+    must not render."""
+    import tools.ns0c_session as producer
+
+    def _boom(**_kwargs):
+        raise RuntimeError("sk-secret-value-/home/pesan/.ew0a_openai_key")
+
+    monkeypatch.setattr(producer, "session_projection", _boom)
+    _payload, _status, detail = rm._build_active_session(_REPO)
+    assert "sk-" not in detail and ".ew0a_openai_key" not in detail
+
+
+def test_session_producer_missing_its_entry_point_is_unavailable(monkeypatch):
+    import tools.ns0c_session as producer
+    monkeypatch.delattr(producer, "session_projection")
+    _payload, status, detail = rm._build_active_session(_REPO)
+    assert status == "UNAVAILABLE"
+    assert "session_projection" in detail
+
+
+def test_session_producer_returning_garbage_is_unavailable():
+    enriched, state = project_active_session(["not", "a", "projection"],
+                                             "m-runtime", _NOW)
+    assert state is TruthState.UNAVAILABLE
+    assert enriched["session_present"] is False
+
+
+# ── D. multi-ledger regression: discovery belongs to the producer ───────────
+def test_a_session_under_another_ledger_is_found_not_called_pending_backend(tmp_path):
+    """The load-bearing regression. The read model gated on ONE concrete ledger
+    filename while the producer supports multiple ledgers and episode
+    discovery, so a perfectly discoverable session was reported as unbuilt
+    engineering."""
+    from tools.ns0c_session import ledger_path
+    docs = tmp_path / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "NORTHSTAR_0C_SESSION_other-episode.jsonl").write_text(
+        _json.dumps({"kind": "SessionStarted", "session_id": "other-episode",
+                     "mission_id": "m-x", "session_objective": "obj",
+                     "session_started_at": "2026-09-01T00:00:00+00:00"}) + "\n",
+        encoding="utf-8")
+
+    # the old gate's target really is absent, and a session really is discoverable
+    assert not ledger_path(tmp_path).exists()
+
+    dash = rm.build_dashboard(tmp_path, now=_NOW)
+    session = dash["active_session"]
+    assert session["truth_state"] != PENDING_BACKEND
+    assert session["session_present"] is True
+    assert session["session_id"] == "other-episode"
+
+
+def test_the_read_model_does_not_reimplement_episode_discovery():
+    """Delegation, structurally. The read model must not decide for itself
+    whether a session exists -- the same reason the GUI must not reimplement
+    this projection."""
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    forbidden = {"ledger_path", "ledger_paths", "load_episodes", "read_events",
+                 "split_episodes"}
+    called = set()
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.Call):
+            func = node.func
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            if name:
+                called.add(name)
+    assert not (called & forbidden), (
+        f"read model reimplements session discovery via {called & forbidden}")
+
+
+# ── E. valid session behaviour preserved ────────────────────────────────────
+def test_repair_preserves_unknown_freshness_for_a_real_session():
+    session = rm.build_dashboard(_REPO, now=_NOW)["active_session"]
+    assert session["session_present"] is True
+    assert session["truth_state"] == TruthState.UNKNOWN.value
+
+
+def test_repair_preserves_mismatch_is_not_stale():
+    session = rm.build_dashboard(_REPO, now=_NOW)["active_session"]
+    assert session["mission_consistency"] == "MISMATCH"
+    assert session["truth_state"] != TruthState.STALE.value
+    assert session["safe_to_present_as_current_work"] is False
+
+
+# ── F. learning classification, case by case ────────────────────────────────
+def test_learning_internal_import_failure_is_unavailable(monkeypatch):
+    """The producer exists; one of ITS imports failed. Reporting that as
+    PENDING_BACKEND sends an operator to write code that already exists."""
+    def _raise(_name):
+        raise ModuleNotFoundError("No module named 'somedependency'",
+                                  name="somedependency")
+    monkeypatch.setattr(rm.importlib, "import_module", _raise)
+    projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
+    assert state is TruthState.UNAVAILABLE
+    assert projection["truth_state"] == TruthState.UNAVAILABLE.value
+
+
+def test_learning_incompatible_producer_api_is_unavailable(monkeypatch):
+    from portfolio_automation.engineer_worker.learning import readmodels as lrm
+    monkeypatch.delattr(lrm, "build_learning_dashboard")
+    projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
+    assert state is TruthState.UNAVAILABLE
+    assert "build_learning_dashboard" in projection["detail"]
+
+
+def test_learning_unusable_response_shape_is_not_classified_live(monkeypatch):
+    """LIVE must be a statement about the evidence, not about the call
+    returning without raising."""
+    from portfolio_automation.engineer_worker.learning import readmodels as lrm
+    for garbage in (None, "PENDING_BACKEND", [], {"unexpected": "shape"}):
+        monkeypatch.setattr(lrm, "build_learning_dashboard",
+                            lambda *_a, **_k: garbage)
+        projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
+        assert state is TruthState.UNAVAILABLE, garbage
+        assert projection["truth_state"] == TruthState.UNAVAILABLE.value
+
+
+def test_learning_valid_projection_is_live():
+    projection, state = rm._project_learning(_REPO, "engineer.local_qwen2_5_7b", _NOW)
+    assert state is TruthState.LIVE
+    assert projection["truth_state"] == TruthState.LIVE.value
+    assert "recent_lessons" in projection
+
+
+# ── G. the structural invariant ─────────────────────────────────────────────
+#: Capabilities for which this repository genuinely contains no producer. Every
+#: other capability must reach some state OTHER than PENDING_BACKEND, whatever
+#: the data situation.
+_PRODUCERLESS = {"worker_activity", "queue_state", "component_health",
+                 "controller_since", "attention_derivation", "controller_identity"}
+
+
+def test_pending_backend_means_unimplemented_and_nothing_else(tmp_path):
+    """Run against a repo root with NO data at all -- no policy, no authority,
+    no ledgers, no learning store. Emptiness must not manufacture a single extra
+    PENDING_BACKEND: absent data is UNAVAILABLE, an absent session is a LIVE
+    'no session', and only genuinely unbuilt producers stay pending."""
+    dash = rm.build_dashboard(_no_ledger_root(tmp_path), now=_NOW)
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    pending = {name for name, state in caps.items() if state == PENDING_BACKEND}
+    assert pending == _PRODUCERLESS, (
+        f"PENDING_BACKEND no longer means 'unimplemented': {pending ^ _PRODUCERLESS}")
+
+
+def test_empty_data_is_unavailable_not_pending_backend(tmp_path):
+    dash = rm.build_dashboard(_no_ledger_root(tmp_path), now=_NOW)
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    assert caps["run_history"] == TruthState.UNAVAILABLE.value
+    assert caps["controller_state"] == TruthState.UNAVAILABLE.value
+    assert caps["active_session"] == TruthState.LIVE.value
+
+
+def test_the_real_repo_pending_set_is_unchanged_by_the_repair():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    assert {n for n, s in caps.items() if s == PENDING_BACKEND} == _PRODUCERLESS
+    assert dash["backend_truth"]["readiness"] == "PARTIAL"

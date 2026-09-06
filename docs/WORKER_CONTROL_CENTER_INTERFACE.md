@@ -208,22 +208,51 @@ this projection does not soften that into a partial list, it reports the ledger
 unusable and says why.
 
 ### Active-session truth and mission consistency
-`dashboard["active_session"]`. The projection itself is unchanged (it still comes from
-`tools/ns0c_session.session_projection`); GUI-R adds the metadata it was missing and
-moves it **before** the truth assessment so it is classified with everything else.
-Previously it was appended afterwards, which is how the one projection that answers
+`dashboard["active_session"]`. Episode discovery belongs to the producer
+(`tools/ns0c_session.session_projection`); the read model asks it and classifies the
+answer. It is built **before** the truth assessment so it is classified with everything
+else — it used to be appended afterwards, which is how the one projection that answers
 "what is happening right now" ended up as the only one carrying no truth state at all.
 
-Added keys: `truth_state`, `runtime_mission_id`, `mission_consistency`,
-`consistency_detail`, `safe_to_present_as_current_work`, `freshness_evidence`.
+Added keys: `session_present`, `truth_state`, `runtime_mission_id`,
+`mission_consistency`, `consistency_detail`, `safe_to_present_as_current_work`,
+`freshness_evidence`.
 
-**Freshness and consistency are two independent questions and are never merged.**
+#### The four producer outcomes
+
+| Situation | `session_present` | Truth state | Why |
+|---|---|---|---|
+| `tools.ns0c_session` genuinely absent | — | `PENDING_BACKEND` | nobody built the producer |
+| producer exists, import/entry-point/call fails | `false` | `UNAVAILABLE` | it exists and could not answer |
+| producer answers `NO_SUCH_SESSION` | `false` | `LIVE` | it answered the question — with "no" |
+| producer returns a session | `true` | `UNKNOWN` | see freshness below |
+
+**`PENDING_BACKEND` is reachable only through producer ABSENCE.** An earlier version
+returned it when one concrete ledger filename was missing and when the producer raised.
+Both told an operator to go build a backend that was already in the tree. "There is no
+session right now" is an *answer*, not an engineering gap, and it does not decay — there
+is no recorded value whose age would have to be inferred, so `LIVE` is correct and
+`STALE`/`UNKNOWN` would both be inventions.
+
+**The read model no longer decides whether a session exists.** It previously gated on
+`ledger_path(repo_root).exists()`, which tests ONE ledger filename while the producer
+supports multiple ledgers, episode discovery, corrected session identities and
+latest-episode selection. A perfectly discoverable session under any other ledger name
+was reported as `PENDING_BACKEND`. Discovery is delegated, never reimplemented here —
+an AST test asserts this module calls no `ledger_path`/`ledger_paths`/`load_episodes`/
+`read_events`/`split_episodes`.
+
+Failure detail carries only the exception **type** and the missing module **name** —
+never an exception payload, which can carry paths or values a projection must not
+render.
+
+#### Freshness and consistency are two independent questions, never merged
 
 *Freshness* — the session contract publishes `session_started_at` and **no
 last-activity timestamp**. A start time is not a liveness signal, and no named session
 freshness threshold exists in `FRESHNESS_SECONDS`. Age is therefore unmeasurable, and
-the lattice already has the answer for that: **`UNKNOWN`**. It is **not `STALE`** —
-`STALE` requires a valid recorded timestamp, an injected `now`, a named threshold and a
+the lattice already has the answer: **`UNKNOWN`**. It is **not `STALE`** — `STALE`
+requires a valid recorded timestamp, an injected `now`, a named threshold and a
 measured age beyond it. No arbitrary session-age threshold was invented to manufacture
 one.
 
@@ -238,19 +267,34 @@ architecture exists to prevent.
 
 ### Learning projection truth
 `dashboard["learning"]`. A learning producer **exists** (`learning/readmodels.py`, with
-lessons in the store), but the previous code wrapped the whole call in one `except` and
+lessons in the store). An earlier version wrapped the whole call in one `except` and
 returned `PENDING_BACKEND` on any failure — telling an operator that nobody had built
 learning while the package sat in the tree.
 
-Now distinguished, because they lead to different actions:
-`ImportError` → `PENDING_BACKEND` (no producer) · any other failure → `UNAVAILABLE`
-(the producer exists and could not answer) · success → `LIVE`.
+| Situation | Truth state |
+|---|---|
+| `ModuleNotFoundError` naming the producer module (or a parent package) | `PENDING_BACKEND` |
+| `ModuleNotFoundError` naming one of the producer's **dependencies** | `UNAVAILABLE` |
+| any other `ImportError`, or the module raising on import | `UNAVAILABLE` |
+| module present but exposes no `build_learning_dashboard` | `UNAVAILABLE` |
+| builder raises | `UNAVAILABLE` |
+| builder returns a shape that is not the published projection | `UNAVAILABLE` |
+| valid projection | `LIVE` |
+
+**A generic `ImportError` is not evidence that nobody built the producer.** It is
+raised just as readily when the module exists and one of *its* imports fails, or when
+its API has changed incompatibly. Only a `ModuleNotFoundError` naming the producer
+itself — or a parent package, without which it cannot exist — proves absence.
+
+**The response shape is validated.** `LIVE` must be a statement about the evidence, not
+about the call returning without raising, so a response that is not a dict carrying
+`recent_lessons` is `UNAVAILABLE`.
 
 `truth_state` is set on the projection and `freshness` is
 `NOT_APPLICABLE_HISTORICAL_EVIDENCE`. **No freshness threshold is imposed on lesson
-records** — they are historical evidence, and inventing an age limit for them would
-manufacture `STALE` out of nothing. The `learning` capability is **secondary**: the
-interface does not make learning an oversight requirement.
+records** — they are historical evidence, and inventing an age limit would manufacture
+`STALE` out of nothing. The `learning` capability is **secondary**: the interface does
+not make learning an oversight requirement.
 
 ## Status/enum semantics
 - Task/verification: `VERIFIED` (terminal success), `REPAIR_REQUIRED`,
@@ -271,8 +315,12 @@ interface does not make learning an oversight requirement.
   supervisor availability/latency/queue/outage; component health
   (controller/gpt/engineer/sandbox/bridge/control-loop); `controller_since`;
   attention derivation; controller identity.
-- **UNKNOWN:** active-session freshness — a value is held, and its age cannot be
-  measured from the evidence the session contract publishes.
+- **UNKNOWN:** active-session freshness when a session IS present — a value is held,
+  and its age cannot be measured from the evidence the session contract publishes.
+- **LIVE (no session):** when the session producer answers `NO_SUCH_SESSION`. That is
+  an answer, not a gap, and it has no age to measure.
+- **UNAVAILABLE:** an existing producer that cannot answer — an unreadable outcome
+  ledger, a session producer that raises, a learning producer whose own imports fail.
 
 ## Backend truth states (`control_center_truth.py`)
 `PENDING_BACKEND` alone was carrying at least three meanings — nobody built the
@@ -291,6 +339,14 @@ distinct. Emitted at `dashboard["backend_truth"]`.
 **Missing timestamp is `UNKNOWN`, never `STALE`.** Calling an untimestamped value stale
 asserts an age nobody measured. It looks conservative, which is why it is the tempting
 mistake.
+
+**`PENDING_BACKEND` means the producer has not been implemented — and nothing else.**
+Not: no records · an empty dataset · no currently active session · a malformed response
+· an operational failure · an internal import failure · stale evidence · unknown
+freshness. Each of those has its own state above, and each sends an operator somewhere
+different. `tests/test_ew0a_readmodels.py::test_pending_backend_means_unimplemented_and_nothing_else`
+builds the whole dashboard against a repo root with no data at all and asserts that
+emptiness manufactures not one extra `PENDING_BACKEND`.
 
 ### Freshness
 Thresholds are named in `FRESHNESS_SECONDS` (heartbeat 300s · supervisor 900s ·

@@ -34,6 +34,7 @@ record. Readiness is expected to stay ``PARTIAL``, because it is.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from dataclasses import dataclass, asdict, field
@@ -64,6 +65,60 @@ OUTCOME_LEDGER_REL = "docs/EW0A_CERTIFICATION_OUTCOMES.jsonl"
 #: (``gpt_verdict`` here, ``supervisor_verdict`` there). Collapsing the two into
 #: one supervisor number produces a count that belongs to neither.
 RECORDS_LEDGER_REL = "docs/EW0A_0B3_RECORDS.jsonl"
+
+#: Producers this module projects. Named so an import can be attempted by name
+#: and its FAILURE MODE classified, rather than every ImportError being read as
+#: proof that nobody built the thing.
+_SESSION_PRODUCER_MODULE = "tools.ns0c_session"
+_LEARNING_PRODUCER_MODULE = "portfolio_automation.engineer_worker.learning.readmodels"
+
+#: The session producer's own "there is no session" answer. Duplicated here so
+#: this module does not have to import it before it knows the producer loaded;
+#: a test pins it against `tools.ns0c_session.NO_SESSION` so it cannot drift.
+_NO_SESSION_STATE = "NO_SUCH_SESSION"
+
+# Producer status. Distinguishing these three is the whole point: only ABSENT is
+# engineering incompleteness, and only ABSENT may produce PENDING_BACKEND.
+_PRODUCER_OK = "OK"
+_PRODUCER_ABSENT = "ABSENT"
+_PRODUCER_UNAVAILABLE = "UNAVAILABLE"
+
+
+def _missing_module_is(exc: ModuleNotFoundError, target: str) -> bool:
+    """True only when the module that could not be found IS the producer.
+
+    A ``ModuleNotFoundError`` raised from INSIDE a producer names the producer's
+    missing dependency, not the producer. Treating that as absence would report
+    a broken installation as unfinished engineering and send an operator to
+    write code that already exists."""
+    name = getattr(exc, "name", None)
+    if not name:
+        return False
+    # `target` itself, or a parent package of it, genuinely being absent means
+    # the producer cannot exist. Anything else is a dependency of the producer.
+    return name == target or target.startswith(name + ".")
+
+
+def _import_producer(module_name: str) -> tuple[Any, str, str]:
+    """Import a producer by name and classify the outcome.
+
+    Returns ``(module_or_None, status, detail)``. ``detail`` carries only the
+    exception TYPE and the missing module NAME -- never an exception payload,
+    which can carry paths or values this projection must not render."""
+    try:
+        return importlib.import_module(module_name), _PRODUCER_OK, ""
+    except ModuleNotFoundError as exc:
+        if _missing_module_is(exc, module_name):
+            return None, _PRODUCER_ABSENT, f"{module_name} does not exist"
+        return None, _PRODUCER_UNAVAILABLE, (
+            f"{module_name} exists but an import inside it failed "
+            f"(ModuleNotFoundError: {exc.name})")
+    except ImportError as exc:
+        return None, _PRODUCER_UNAVAILABLE, (
+            f"{module_name} exists but failed to import ({type(exc).__name__})")
+    except Exception as exc:  # noqa: BLE001 - a producer that explodes on import exists
+        return None, _PRODUCER_UNAVAILABLE, (
+            f"{module_name} raised on import ({type(exc).__name__})")
 
 
 def _base(kind: str) -> dict[str, Any]:
@@ -548,8 +603,25 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
 _SESSION_NON_VALUES = frozenset({PENDING_BACKEND, "NO_SUCH_SESSION", ""})
 
 
+def _session_producer_failed(detail: str) -> dict[str, Any]:
+    """Truthful envelope for a session producer that exists and could not answer.
+
+    Deliberately NOT a partially-filled session shape: a consumer must not be
+    able to read half a session out of a failure."""
+    return {"read_model": "Northstar0CSessionSummary", "schema_kind": SCHEMA_KIND,
+            "session_present": False, "session_state": _PRODUCER_UNAVAILABLE,
+            "truth_state": TruthState.UNAVAILABLE.value,
+            "mission_consistency": "UNDETERMINED",
+            "consistency_detail": "the session producer could not answer",
+            "safe_to_present_as_current_work": False,
+            "freshness_evidence": "no session evidence was returned, so no age exists to measure",
+            "producer_detail": detail}
+
+
 def project_active_session(session: Any, runtime_mission: str | None,
-                           now: str | None) -> tuple[Any, TruthState]:
+                           now: str | None,
+                           producer_status: str = _PRODUCER_OK,
+                           producer_detail: str = "") -> tuple[Any, TruthState]:
     """Attach truth state and mission consistency to the session projection.
 
     TWO INDEPENDENT QUESTIONS, deliberately not merged:
@@ -567,9 +639,44 @@ def project_active_session(session: Any, runtime_mission: str | None,
 
     Only when both are satisfied may a consumer present the session as current
     work, and that conclusion is published as one boolean rather than left for
-    the GUI to re-derive."""
+    the GUI to re-derive.
+
+    PENDING_BACKEND IS RESERVED FOR AN ABSENT PRODUCER. ``tools/ns0c_session.py``
+    exists, so "there is no session right now" is an ANSWER the producer gave,
+    not a subsystem nobody built, and a producer that raises is an outage rather
+    than missing engineering. Those three used to collapse into PENDING_BACKEND,
+    which told an operator to go build something that was already there."""
+    if producer_status == _PRODUCER_ABSENT:
+        return PENDING_BACKEND, TruthState.PENDING_BACKEND
+    if producer_status == _PRODUCER_UNAVAILABLE:
+        return (_session_producer_failed(producer_detail or "producer unavailable"),
+                TruthState.UNAVAILABLE)
     if not isinstance(session, dict):
-        return session, TruthState.PENDING_BACKEND
+        # The producer loaded and returned something unusable. That is an
+        # operational condition; classifying it as PENDING_BACKEND would claim
+        # nobody had built it.
+        return (_session_producer_failed(
+            f"producer returned {type(session).__name__}, expected a projection"),
+            TruthState.UNAVAILABLE)
+
+    if session.get("session_state") == _NO_SESSION_STATE:
+        # The producer answered the question -- "is there a session?" -- with
+        # "no". A usable answer whose truth does not decay: there is no recorded
+        # session value whose age would have to be inferred.
+        enriched = dict(session)
+        enriched.update({
+            "session_present": False,
+            "truth_state": classify(producer_exists=True,
+                                    value=session.get("session_state"),
+                                    requires_freshness=False).value,
+            "runtime_mission_id": runtime_mission,
+            "mission_consistency": "UNDETERMINED",
+            "consistency_detail": "there is no session to compare against the runtime mission",
+            "safe_to_present_as_current_work": False,
+            "freshness_evidence": ("no session exists, so there is no age to measure; "
+                                   "this is an answer, not a gap"),
+        })
+        return enriched, TruthState.LIVE
 
     session_mission = session.get("mission_id")
     if not isinstance(session_mission, str) or session_mission in _SESSION_NON_VALUES:
@@ -595,6 +702,7 @@ def project_active_session(session: Any, runtime_mission: str | None,
 
     enriched = dict(session)
     enriched.update({
+        "session_present": True,
         "truth_state": state.value,
         "runtime_mission_id": runtime_mission,
         "mission_consistency": consistency,
@@ -721,27 +829,41 @@ def _project_learning(root: Path, worker_identity: str, now: str | None
 
     No freshness threshold is imposed. Lesson records are historical evidence;
     inventing an age limit for them would manufacture STALE out of nothing."""
-    try:
-        from portfolio_automation.engineer_worker.learning.readmodels import (
-            build_learning_dashboard)
-    except ImportError:
-        return PENDING_BACKEND, TruthState.PENDING_BACKEND
-
-    try:
-        dashboard = build_learning_dashboard(root, worker_identity, now or PENDING_BACKEND)
-    except Exception as exc:  # noqa: BLE001 - producer exists and failed: operational
+    def _unavailable(detail: str):
         return ({"schema_version": READMODEL_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,
                  "read_model": "LearningDashboard",
                  "truth_state": TruthState.UNAVAILABLE.value,
-                 "detail": ("the learning producer exists but could not return a usable "
-                            f"projection ({type(exc).__name__}); this is an operational "
-                            "condition, NOT missing engineering")},
+                 "detail": f"{detail}; operational condition, NOT missing engineering"},
                 TruthState.UNAVAILABLE)
 
-    if isinstance(dashboard, dict):
-        dashboard = dict(dashboard)
-        dashboard["truth_state"] = TruthState.LIVE.value
-        dashboard["freshness"] = "NOT_APPLICABLE_HISTORICAL_EVIDENCE"
+    module, status, detail = _import_producer(_LEARNING_PRODUCER_MODULE)
+    if status == _PRODUCER_ABSENT:
+        return PENDING_BACKEND, TruthState.PENDING_BACKEND
+    if status != _PRODUCER_OK:
+        return _unavailable(detail)
+
+    builder = getattr(module, "build_learning_dashboard", None)
+    if builder is None:
+        # The module is there and does not expose what this interface expects.
+        # That is an incompatible producer, not an unbuilt one.
+        return _unavailable(
+            f"{_LEARNING_PRODUCER_MODULE} exposes no build_learning_dashboard")
+
+    try:
+        dashboard = builder(root, worker_identity, now or PENDING_BACKEND)
+    except Exception as exc:  # noqa: BLE001 - producer exists and failed: operational
+        return _unavailable(
+            f"the learning producer raised {type(exc).__name__}")
+
+    # A usable answer must actually be the projection this interface publishes.
+    # Stamping LIVE on whatever came back would make the truth state a statement
+    # about the call succeeding rather than about the evidence.
+    if not isinstance(dashboard, dict) or "recent_lessons" not in dashboard:
+        return _unavailable("the learning producer returned an unusable projection shape")
+
+    dashboard = dict(dashboard)
+    dashboard["truth_state"] = TruthState.LIVE.value
+    dashboard["freshness"] = "NOT_APPLICABLE_HISTORICAL_EVIDENCE"
     return dashboard, TruthState.LIVE
 
 
@@ -815,8 +937,9 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     # Built BEFORE the truth assessment so every one of them is classified.
     run_history = build_run_history(root)
     learning, learning_state = _project_learning(root, worker.worker_identity, now)
+    session_payload, session_status, session_detail = _build_active_session(root)
     active_session, session_state = project_active_session(
-        _build_active_session(root), mission, now)
+        session_payload, mission, now, session_status, session_detail)
 
     dashboard = {
         **_base("Dashboard"),
@@ -846,15 +969,32 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     return dashboard
 
 
-def _build_active_session(repo_root: Path) -> dict[str, Any] | str:
-    """Project the current autonomous session, or PENDING_BACKEND if none.
+def _build_active_session(repo_root: Path) -> tuple[Any, str, str]:
+    """Ask the session producer; return ``(payload, producer_status, detail)``.
+
+    THE READ MODEL NO LONGER DECIDES WHETHER A SESSION EXISTS. It previously
+    gated on ``ledger_path(repo_root).exists()``, which tests ONE concrete
+    ledger filename while the producer supports multiple ledgers, episode
+    discovery, corrected session identities and latest-episode selection. A
+    perfectly discoverable session under any other ledger name was therefore
+    reported as PENDING_BACKEND -- data absence dressed up as missing
+    engineering, and in the multi-ledger case not even data absence.
+
+    Episode discovery is NOT reimplemented here; it is delegated, which is the
+    same reason the GUI must not reimplement this projection.
 
     Degrades rather than failing the dashboard: an observability problem must
     never make the engineering evidence unreadable."""
+    module, status, detail = _import_producer(_SESSION_PRODUCER_MODULE)
+    if status != _PRODUCER_OK:
+        return PENDING_BACKEND if status == _PRODUCER_ABSENT else None, status, detail
+
+    projection = getattr(module, "session_projection", None)
+    if projection is None:
+        return None, _PRODUCER_UNAVAILABLE, (
+            f"{_SESSION_PRODUCER_MODULE} exposes no session_projection")
     try:
-        from tools.ns0c_session import ledger_path, session_projection
-        if not ledger_path(repo_root).exists():
-            return PENDING_BACKEND
-        return session_projection(repo_root=repo_root)
-    except Exception:  # noqa: BLE001
-        return PENDING_BACKEND
+        return projection(repo_root=repo_root), _PRODUCER_OK, ""
+    except Exception as exc:  # noqa: BLE001 - the producer exists and failed
+        return None, _PRODUCER_UNAVAILABLE, (
+            f"session_projection raised {type(exc).__name__}")
