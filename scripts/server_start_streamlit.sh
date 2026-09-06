@@ -26,7 +26,7 @@ if [ -f "$REPO_DIR/.env" ]; then
     set +o allexport
 fi
 
-echo "==> Starting Streamlit on 0.0.0.0:8501 ..."
+echo "==> Starting Streamlit on 127.0.0.1:8501 ..."
 exec streamlit run gui/app.py \
-    --server.address 0.0.0.0 \
+    --server.address 127.0.0.1 \
     --server.port 8501
