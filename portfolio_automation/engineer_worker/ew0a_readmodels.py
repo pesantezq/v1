@@ -11,6 +11,25 @@ certify/dispatch). Projections carry NO secrets (no API key/headers/hidden
 reasoning). Fields with no authoritative backend are ``PENDING_BACKEND`` — never
 fabricated (no invented heartbeat/health/latency/queue).
 
+GUI-R REPAIR (controller read-model repair). Reconciliation found this module
+truthful about the backends nobody had built, and quietly untruthful about four
+things it did emit:
+
+  * ``active_session`` and ``learning`` were appended AFTER the truth assessment
+    and therefore carried no truth state at all — the one projection that answers
+    "what is happening now" was the one projection nobody had classified;
+  * run/outcome history was absent, which is why the GUI grew a second,
+    independent interpretation of an outcome ledger;
+  * ``attention_items = []`` was a literal, indistinguishable from a derivation
+    that had run and found nothing;
+  * ``controller="ACTIVE"`` / ``control_loop="READY"`` and five ``can_*``
+    booleans were hardcoded, presenting assertions and dataclass defaults as
+    derived truth.
+
+Every repair here either adds evidence or removes an assertion. None of them
+builds a backend: no heartbeat, no queue, no health probe, no controller-session
+record. Readiness is expected to stay ``PARTIAL``, because it is.
+
 ``experimental_noncanonical``.
 """
 from __future__ import annotations
@@ -22,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
+from portfolio_automation.engineer_worker.ew0a import read_outcomes
 from portfolio_automation.engineer_worker.ew0a_authority import (
     read_authority_level, EngineerAuthorityLevel, FORBIDDEN_OPS)
 from portfolio_automation.engineer_worker.ew0a_loop import read_runtime_policy
@@ -34,6 +54,17 @@ SCHEMA_KIND = EXPERIMENTAL_MARKER
 READMODEL_SCHEMA_VERSION = "engineering.readmodel.v0"
 PENDING_BACKEND = "PENDING_BACKEND"
 
+#: The engineering outcome/run ledger. Named here rather than left as a literal
+#: at the call site so the GUI can stop naming it itself — a consumer that has to
+#: know the path is a consumer doing its own interpretation.
+OUTCOME_LEDGER_REL = "docs/EW0A_CERTIFICATION_OUTCOMES.jsonl"
+
+#: The controller apprenticeship / certification records ledger. A DIFFERENT
+#: evidence domain from the outcome ledger above, with a different verdict field
+#: (``gpt_verdict`` here, ``supervisor_verdict`` there). Collapsing the two into
+#: one supervisor number produces a count that belongs to neither.
+RECORDS_LEDGER_REL = "docs/EW0A_0B3_RECORDS.jsonl"
+
 
 def _base(kind: str) -> dict[str, Any]:
     return {"schema_version": READMODEL_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND, "read_model": kind}
@@ -42,13 +73,23 @@ def _base(kind: str) -> dict[str, Any]:
 # --- ControllerSummary (dynamic identity — never hardcodes Claude==controller) -
 @dataclass(frozen=True)
 class ControllerSummary:
-    controller_identity: str            # e.g. "claude_code" (the CURRENT controller; may change)
+    controller_identity: str            # the CURRENT controller; see identity_basis
     controller_role: str                # "authoritative_controller"
     controller_level: str               # "C_AUTHORITATIVE" (controller ladder; Engineer C0.5 tracked separately)
     current_mission: str | None
-    operational_state: str
+    operational_state: str              # PENDING_BACKEND (no health producer exists)
     controller_since: str               # PENDING_BACKEND if not authoritatively recorded
     escalation_role: str                # who this controller escalates TO
+    #: How ``controller_identity`` was arrived at. No ControllerStateV0 producer
+    #: exists, so the identity is an implementation assumption, not an
+    #: observation — and a consumer must be able to tell the difference before
+    #: rendering "the controller is X" as a fact.
+    identity_basis: str = "ASSUMED_NOT_OBSERVED"
+    #: Fields that are constant because the INTERFACE defines them, not because
+    #: nobody got round to deriving them. Listed so the audit is machine-readable
+    #: rather than a comment.
+    contract_constants: tuple[str, ...] = (
+        "controller_role", "controller_level", "escalation_role")
     security_classification: str = "operational"
     is_current_state: bool = True
 
@@ -70,6 +111,13 @@ class SupervisorSummary:
     measured_latency_ms: str            # PENDING_BACKEND (no real latency record)
     verification_queue: str             # PENDING_BACKEND (no real queue)
     outage_state: str
+    #: Which ledger these counts came from, and under which field name. Two
+    #: legitimate ledgers record supervisor verdicts for different purposes; a
+    #: consumer must be able to say which one it is showing.
+    source: str = RECORDS_LEDGER_REL
+    source_kind: str = "controller_records_ledger"
+    verdict_field: str = "gpt_verdict"
+    evidence_domain: str = "controller_apprenticeship_and_certification"
     security_classification: str = "operational"
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,16 +125,55 @@ class SupervisorSummary:
 
 
 # --- Worker + authority ------------------------------------------------------
+#: Which forbidden operation decides each projected capability. The mapping is
+#: explicit so the derivation can be read, tested and audited. The previous
+#: version carried these as dataclass defaults, which happened to match the A1
+#: posture — and would have kept matching it after the posture changed.
+_AUTHORITY_CAPABILITY_OPS: dict[str, str] = {
+    "can_mutate_main": "MAIN_WRITE",
+    "can_merge": "MERGE",
+    "can_deploy": "DEPLOY",
+    "can_write_production": "PRODUCTION_WRITE",
+    "can_self_promote": "SELF_PROMOTION",
+}
+
+
+def effective_denied_ops(record_forbidden_ops: Any = None) -> frozenset[str]:
+    """The operations actually denied: the UNION of the module's permanent
+    boundary and whatever the authority record additionally forbids.
+
+    A union, not a substitution. ``FORBIDDEN_OPS`` is denied at EVERY level, so a
+    record that omits an operation must not thereby grant it — a record may only
+    ever be stricter. Fail-closed by construction rather than by review."""
+    extra: set[str] = set()
+    if isinstance(record_forbidden_ops, (list, tuple, set, frozenset)):
+        extra = {str(op) for op in record_forbidden_ops}
+    return frozenset(FORBIDDEN_OPS) | frozenset(extra)
+
+
+def derive_authority_capabilities(denied_ops: Any) -> dict[str, bool]:
+    """Project the capability booleans FROM the denial set.
+
+    Pure and total, so a test can prove the values are computed by varying the
+    input rather than by trusting that a default happens to be right today."""
+    denied = frozenset(str(op) for op in denied_ops)
+    return {cap: op not in denied for cap, op in _AUTHORITY_CAPABILITY_OPS.items()}
+
+
 @dataclass(frozen=True)
 class WorkerAuthoritySummary:
     level: str
     grants: list[str]
     forbidden_ops: list[str]
-    can_mutate_main: bool = False
-    can_merge: bool = False
-    can_deploy: bool = False
-    can_write_production: bool = False
-    can_self_promote: bool = False
+    # NO DEFAULTS. A default here is indistinguishable from a derivation that
+    # returned the same value, which is exactly the confusion this repair
+    # removes: the builder must compute every one of them.
+    can_mutate_main: bool
+    can_merge: bool
+    can_deploy: bool
+    can_write_production: bool
+    can_self_promote: bool
+    capabilities_derived_from: str = "FORBIDDEN_OPS | authority_record.forbidden_ops"
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("WorkerAuthoritySummary"), **asdict(self)}
@@ -106,6 +193,13 @@ class WorkerSummary:
     next_action: str                    # PENDING_BACKEND
     recent_verification_outcomes: list[str]
     escalation_state: str
+    #: EW-0A defines exactly one Engineer Worker with a persistent identity, so
+    #: this is a contract constant rather than an unbuilt lookup. It becomes a
+    #: derivation the moment a second worker exists — a later mission, and
+    #: deliberately not this one.
+    identity_basis: str = "CONTRACT_CONSTANT"
+    contract_constants: tuple[str, ...] = (
+        "worker_identity", "role", "controller_level")
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("WorkerSummary"), **asdict(self)}
@@ -185,6 +279,26 @@ class AttentionItem:
 
 
 @dataclass(frozen=True)
+class AttentionCoverage:
+    """Whether the emitted attention list is an ANSWER or merely an empty list.
+
+    ``attention_items`` was previously a literal ``[]``. A consumer could not
+    distinguish "a derivation ran and found nothing outstanding" from "nothing
+    has ever derived this", and those two license opposite operator behaviour.
+    The list stays where it was, for compatibility; this states what it means."""
+
+    items: list[dict[str, Any]]
+    item_count: int
+    derivation_state: str               # PENDING_BACKEND while no producer exists
+    #: The load-bearing field. False means: do NOT render "nothing needs you".
+    zero_items_is_authoritative: bool
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**_base("AttentionCoverage"), **asdict(self)}
+
+
+@dataclass(frozen=True)
 class SystemHealthSummary:
     controller: str
     gpt_supervisor: str
@@ -193,15 +307,122 @@ class SystemHealthSummary:
     evidence_bridge: str
     authority: str
     control_loop: str
+    #: Component liveness and configuration readability are different questions.
+    #: Readability is recorded separately and labelled, because a readable
+    #: protected config proves what the system is ALLOWED to do and proves
+    #: nothing whatever about whether anything is running.
+    config_readability: dict[str, str] = field(default_factory=dict)
+    health_note: str = ("component health requires a health producer; none exists. "
+                        "config_readability is FILE READABILITY, never liveness")
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("SystemHealthSummary"), **asdict(self)}
 
 
+# --- Run / outcome history (canonical reader, provenance preserved) ----------
+@dataclass(frozen=True)
+class RunHistorySummary:
+    """Controller-owned projection of the engineering outcome ledger.
+
+    Exists so the GUI stops parsing that ledger itself. Built on the canonical
+    domain reader (``ew0a.read_outcomes``) rather than a third hand-written JSONL
+    interpretation of the same file."""
+
+    source: str
+    source_kind: str
+    availability: str                   # LIVE | UNAVAILABLE
+    record_count: int
+    runs: list[dict[str, Any]]
+    #: Verdict counts from THIS ledger's ``supervisor_verdict`` field. Named and
+    #: sourced so they can never be mistaken for the SupervisorSummary counts,
+    #: which come from a different ledger and a different field.
+    verdict_counts: dict[str, int]
+    verdict_field: str = "supervisor_verdict"
+    evidence_domain: str = "engineering_outcome_runs"
+    ordering: str = "ledger_append_order"
+    provenance_note: str = ("mission_id is projected exactly as recorded; a record "
+                            "without one stays None. The runtime mission is NEVER "
+                            "stamped onto historical runs")
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**_base("RunHistorySummary"), **asdict(self)}
+
+
+def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
+    """One outcome record -> one projected run.
+
+    Identifiers are preserved, never synthesized: ``task_id`` is the record's own
+    identity and ``ledger_index`` disambiguates repeats without inventing a
+    composite id and presenting it as one the control plane issued."""
+    def _s(key: str) -> str | None:
+        val = rec.get(key)
+        return val if isinstance(val, str) else None
+
+    return {
+        "ledger_index": index,
+        "task_id": _s("task_id"),
+        "title": _s("title"),
+        "risk_class": _s("risk_class"),
+        "executor": _s("executor"),
+        "attempt_count": rec.get("attempt_count"),
+        "final_status": _s("final_status"),
+        "supervisor_verdict": _s("supervisor_verdict"),
+        "failure_classes": [str(f) for f in (rec.get("failure_classes") or [])],
+        "escalated": rec.get("escalated") is True,
+        "policy_violation": rec.get("policy_violation") is True,
+        "human_intervention": rec.get("human_intervention") is True,
+        "recorded_at": _s("recorded_at"),
+        # Provenance exactly as recorded. OutcomeRecord.mission_id defaults to
+        # None and the historical records predate the field, so None is the true
+        # answer — and the current runtime mission is not a substitute for it.
+        "mission_id": _s("mission_id"),
+        "candidate_sha": _s("candidate_sha"),
+        "disposition": _s("disposition"),
+    }
+
+
+def build_run_history(repo_root: str | Path, rel: str = OUTCOME_LEDGER_REL) -> RunHistorySummary:
+    """Project the outcome ledger through the canonical domain reader.
+
+    Truth states follow the lattice: the producer (the certification runner plus
+    ``ew0a.append_outcome``) exists in this repository, so an absent or unreadable
+    ledger is UNAVAILABLE — an operational condition — and never PENDING_BACKEND,
+    which would claim nobody had built it."""
+    path = Path(repo_root) / rel
+    if not path.exists():
+        return RunHistorySummary(
+            source=rel, source_kind="engineering_outcome_ledger",
+            availability=TruthState.UNAVAILABLE.value, record_count=0, runs=[],
+            verdict_counts={}, detail=f"{rel} is absent")
+    try:
+        records = read_outcomes(str(path))
+    except (OSError, ValueError) as exc:
+        # The canonical reader raises on a malformed line. That is ITS rule, and
+        # this projection does not soften it into a partial list; it reports the
+        # ledger as unusable and says why.
+        return RunHistorySummary(
+            source=rel, source_kind="engineering_outcome_ledger",
+            availability=TruthState.UNAVAILABLE.value, record_count=0, runs=[],
+            verdict_counts={},
+            detail=f"{rel} unreadable via ew0a.read_outcomes ({type(exc).__name__})")
+
+    runs = [_project_run(rec, i) for i, rec in enumerate(records) if isinstance(rec, dict)]
+    counts: dict[str, int] = {}
+    for run in runs:
+        verdict = run["supervisor_verdict"]
+        if verdict:
+            counts[verdict] = counts.get(verdict, 0) + 1
+    return RunHistorySummary(
+        source=rel, source_kind="engineering_outcome_ledger",
+        availability=TruthState.LIVE.value, record_count=len(runs), runs=runs,
+        verdict_counts=counts, detail=f"{len(runs)} record(s) via ew0a.read_outcomes")
+
+
 # ---------------------------------------------------------------------------
 # Builders over authoritative sources (READ-ONLY)
 # ---------------------------------------------------------------------------
-def _read_records(repo_root: Path, rel: str = "docs/EW0A_0B3_RECORDS.jsonl") -> list[dict[str, Any]]:
+def _read_records(repo_root: Path, rel: str = RECORDS_LEDGER_REL) -> list[dict[str, Any]]:
     p = repo_root / rel
     if not p.exists():
         return []
@@ -245,8 +466,43 @@ def build_apprenticeship_summary(records: list[dict[str, Any]]) -> Apprenticeshi
         c1_readiness="NOT_READY")
 
 
-def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[str]) -> WorkerAuthoritySummary:
-    return WorkerAuthoritySummary(level=level.value, grants=grants, forbidden_ops=sorted(FORBIDDEN_OPS))
+def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[str],
+                                   forbidden_ops: Any = None) -> WorkerAuthoritySummary:
+    """Project authority WITH its capability booleans derived from the denial set.
+
+    ``forbidden_ops`` is whatever the authority record carries; it can only make
+    the effective set stricter (see :func:`effective_denied_ops`)."""
+    denied = effective_denied_ops(forbidden_ops)
+    caps = derive_authority_capabilities(denied)
+    return WorkerAuthoritySummary(level=level.value, grants=grants,
+                                  forbidden_ops=sorted(denied), **caps)
+
+
+def build_attention_coverage(items: list[dict[str, Any]] | None = None,
+                             derivation_exists: bool = False) -> AttentionCoverage:
+    """Say whether the attention list is an answer.
+
+    No attention derivation producer exists. Deriving one from the outcome ledger
+    was considered and rejected: that ledger's only ``policy_violation`` is
+    certification mission M5 (``tools/ew0a_certify.py``), a protected-op attack
+    whose GATE WAS THAT IT BE DENIED. Promoting a passed security control into an
+    unresolved human incident is the bug the GUI has today, and it is not
+    improved by moving it upstream."""
+    entries = list(items or [])
+    if not derivation_exists:
+        return AttentionCoverage(
+            items=entries, item_count=len(entries),
+            derivation_state=TruthState.PENDING_BACKEND.value,
+            zero_items_is_authoritative=False,
+            detail=("no attention derivation producer exists; an empty list is NOT "
+                    "evidence that nothing requires the human. Ordinary REPAIR, an "
+                    "ordinary deterministic test failure, and a successfully denied "
+                    "protected-op drill are none of them human attention items"))
+    return AttentionCoverage(
+        items=entries, item_count=len(entries),
+        derivation_state=TruthState.LIVE.value,
+        zero_items_is_authoritative=True,
+        detail="derived from an authoritative attention producer")
 
 
 _NORTHSTAR_0B3 = ("ExperimentSpec", "ExperimentResult", "CapitalProposal",
@@ -286,13 +542,94 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
                           is_complete=(verified == len(required)))
 
 
+# --- active session: truth state and mission consistency ---------------------
+#: Values the session projection uses for "there is nothing here". Treated as
+#: absence of evidence, never as a mission name to compare against.
+_SESSION_NON_VALUES = frozenset({PENDING_BACKEND, "NO_SUCH_SESSION", ""})
+
+
+def project_active_session(session: Any, runtime_mission: str | None,
+                           now: str | None) -> tuple[Any, TruthState]:
+    """Attach truth state and mission consistency to the session projection.
+
+    TWO INDEPENDENT QUESTIONS, deliberately not merged:
+
+    *Freshness* — the session contract exposes ``session_started_at`` and no
+    last-activity timestamp. A start time is not a liveness signal, and no named
+    freshness threshold for session age exists in ``FRESHNESS_SECONDS``. Age is
+    therefore unmeasurable, which the lattice already answers: ``UNKNOWN``. It is
+    NOT ``STALE`` — calling it stale would assert an age nobody measured, from a
+    field that does not even mean what the assertion needs it to mean.
+
+    *Consistency* — whether the session's own recorded mission is the mission the
+    runtime is on. A mismatch is a fact about identity, not about age, so it is
+    reported separately and NEVER by downgrading freshness.
+
+    Only when both are satisfied may a consumer present the session as current
+    work, and that conclusion is published as one boolean rather than left for
+    the GUI to re-derive."""
+    if not isinstance(session, dict):
+        return session, TruthState.PENDING_BACKEND
+
+    session_mission = session.get("mission_id")
+    if not isinstance(session_mission, str) or session_mission in _SESSION_NON_VALUES:
+        consistency, consistency_detail = "UNDETERMINED", (
+            "the session records no usable mission_id")
+    elif not runtime_mission:
+        consistency, consistency_detail = "UNDETERMINED", (
+            "the runtime policy provides no mission_id to compare against")
+    elif session_mission == runtime_mission:
+        consistency, consistency_detail = "AGREES", (
+            "session mission matches the runtime mission")
+    else:
+        consistency, consistency_detail = "MISMATCH", (
+            f"session mission {session_mission!r} is NOT the runtime mission "
+            f"{runtime_mission!r}; this session is evidence about a different "
+            f"mission and must not be presented as the current one")
+
+    # recorded_at is deliberately not supplied: no last-activity timestamp exists
+    # in the session contract, so classify() reaches UNKNOWN through the same
+    # rule that governs every other unmeasurable age.
+    state = classify(producer_exists=True, value=session.get("session_id"),
+                     recorded_at=None, now=now)
+
+    enriched = dict(session)
+    enriched.update({
+        "truth_state": state.value,
+        "runtime_mission_id": runtime_mission,
+        "mission_consistency": consistency,
+        "consistency_detail": consistency_detail,
+        "safe_to_present_as_current_work": (
+            state is TruthState.LIVE and consistency == "AGREES"),
+        "freshness_evidence": (
+            "session_started_at is a START time, not a last-activity time; the "
+            "session contract publishes no last-activity timestamp and no named "
+            "session freshness threshold exists, so age is unmeasurable"),
+    })
+    return enriched, state
+
+
+def _readability(path: Path) -> str:
+    """File readability — NOT component health. Named so it cannot be mistaken."""
+    if not path.exists():
+        return "ABSENT"
+    try:
+        path.read_text(encoding="utf-8")
+    except OSError:
+        return "UNREADABLE"
+    return "READABLE"
+
+
 def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, Any]],
-                          worker: Any, now: str | None) -> ReadinessAssessment:
+                          worker: Any, now: str | None,
+                          session_state: TruthState,
+                          learning_state: TruthState,
+                          run_history: RunHistorySummary) -> ReadinessAssessment:
     """Classify every oversight capability from the evidence actually present.
 
     Each capability declares whether a PRODUCER exists. That is an engineering
-    fact about this repository, not a runtime observation, and it is what keeps
-    a missing subsystem reported as PENDING_BACKEND instead of as an outage.
+    fact about this repository, not a runtime observation, and it is what keeps a
+    missing subsystem reported as PENDING_BACKEND instead of as an outage.
 
     Nothing here builds a backend. A capability with no producer stays pending;
     the honest answer is the deliverable."""
@@ -339,11 +676,73 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
         Capability("queue_state", classify(producer_exists=False, value=None),
                    required=False, detail="no dispatch queue producer exists"),
         Capability("component_health", classify(producer_exists=False, value=None),
-                   required=False, detail="no health-probe producer exists"),
+                   required=False,
+                   detail=("no health-probe producer exists; config readability is "
+                           "reported separately and is not liveness")),
         Capability("controller_since", classify(producer_exists=False, value=None),
                    required=False, detail="no controller-session record exists"),
+        # --- GUI-R: projections that used to be emitted with no truth state ---
+        Capability("active_session", session_state, required=False,
+                   detail=("session ledger projection; freshness is UNKNOWN while the "
+                           "contract publishes no last-activity timestamp. Mission "
+                           "consistency is reported separately, never as staleness")),
+        Capability("learning", learning_state, required=False,
+                   detail=("learning store projection; lesson records are historical "
+                           "evidence, so no freshness threshold is imposed")),
+        Capability("run_history",
+                   classify(producer_exists=True,
+                            value=(run_history.record_count
+                                   if run_history.availability == TruthState.LIVE.value
+                                   else None),
+                            requires_freshness=False),
+                   required=False,
+                   detail=f"{run_history.source} via ew0a.read_outcomes"),
+        Capability("attention_derivation",
+                   classify(producer_exists=False, value=None), required=False,
+                   detail=("no attention derivation producer exists; an empty item "
+                           "list is not an authoritative 'nothing needs you'")),
+        Capability("controller_identity",
+                   classify(producer_exists=False, value=None), required=False,
+                   detail=("no ControllerStateV0 producer exists; the projected "
+                           "identity is an assumption, see controller.identity_basis")),
     ]
     return assess_readiness(caps)
+
+
+def _project_learning(root: Path, worker_identity: str, now: str | None
+                      ) -> tuple[Any, TruthState]:
+    """Project the learning dashboard with an HONEST truth state.
+
+    The previous version wrapped everything in one ``except`` and returned
+    ``PENDING_BACKEND``, which told an operator that nobody had built learning
+    while the learning package sat in the tree with lessons in it. The two cases
+    are now distinguished, because they lead to different actions: a missing
+    producer is engineering work, a failing one is an incident.
+
+    No freshness threshold is imposed. Lesson records are historical evidence;
+    inventing an age limit for them would manufacture STALE out of nothing."""
+    try:
+        from portfolio_automation.engineer_worker.learning.readmodels import (
+            build_learning_dashboard)
+    except ImportError:
+        return PENDING_BACKEND, TruthState.PENDING_BACKEND
+
+    try:
+        dashboard = build_learning_dashboard(root, worker_identity, now or PENDING_BACKEND)
+    except Exception as exc:  # noqa: BLE001 - producer exists and failed: operational
+        return ({"schema_version": READMODEL_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,
+                 "read_model": "LearningDashboard",
+                 "truth_state": TruthState.UNAVAILABLE.value,
+                 "detail": ("the learning producer exists but could not return a usable "
+                            f"projection ({type(exc).__name__}); this is an operational "
+                            "condition, NOT missing engineering")},
+                TruthState.UNAVAILABLE)
+
+    if isinstance(dashboard, dict):
+        dashboard = dict(dashboard)
+        dashboard["truth_state"] = TruthState.LIVE.value
+        dashboard["freshness"] = "NOT_APPLICABLE_HISTORICAL_EVIDENCE"
+    return dashboard, TruthState.LIVE
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
@@ -351,7 +750,13 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
 
     ``now`` is injected rather than read from the clock (the no-fabricated-time
     discipline used across the Northstar contracts); readiness assessment needs a
-    timestamp and a projection must never invent one."""
+    timestamp and a projection must never invent one.
+
+    ORDER IS LOAD-BEARING. The session, learning and run-history projections are
+    built BEFORE the truth assessment so their states can be classified with
+    everything else. They used to be appended afterwards, which is precisely how
+    the projection that answers "what is happening now" ended up as the only one
+    carrying no truth state at all."""
     root = Path(repo_root)
     level = read_authority_level(root)
     policy = read_runtime_policy(root)
@@ -365,18 +770,24 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     except Exception:  # noqa: BLE001
         present = set()
 
-    grants = []
+    grants: list[str] = []
+    record_forbidden: Any = None
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
-            grants = json.loads(ap.read_text(encoding="utf-8")).get("grants", [])
+            authority_record = json.loads(ap.read_text(encoding="utf-8"))
+            grants = authority_record.get("grants", [])
+            record_forbidden = authority_record.get("forbidden_ops")
         except (OSError, ValueError):
             grants = []
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",
         controller_level="C_AUTHORITATIVE", current_mission=mission,
-        operational_state="ACTIVE", controller_since=PENDING_BACKEND, escalation_role="human")
+        # No health producer exists. "ACTIVE" was an assertion, and the interface
+        # is explicit that liveness must not be inferred from process existence.
+        operational_state=PENDING_BACKEND,
+        controller_since=PENDING_BACKEND, escalation_role="human")
     worker = WorkerSummary(
         worker_identity="engineer.local_qwen2_5_7b", role="engineer",
         operational_state=PENDING_BACKEND, ew_authority=level.value, controller_level="C0.5_SHADOW",
@@ -385,43 +796,53 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         recent_verification_outcomes=[str(r.get("gpt_verdict")) for r in records if r.get("gpt_verdict")][-5:],
         escalation_state="none")
     health = SystemHealthSummary(
-        controller="ACTIVE", gpt_supervisor=PENDING_BACKEND, engineer_runtime=PENDING_BACKEND,
-        sandbox=PENDING_BACKEND, evidence_bridge=PENDING_BACKEND, authority=level.value,
-        control_loop="READY")
+        # Every component below needs a health producer and none exists. The two
+        # that used to read ACTIVE/READY were the only ones asserting liveness
+        # from the fact that this code was running at all.
+        controller=PENDING_BACKEND, gpt_supervisor=PENDING_BACKEND,
+        engineer_runtime=PENDING_BACKEND, sandbox=PENDING_BACKEND,
+        evidence_bridge=PENDING_BACKEND,
+        # Authority level is CONFIGURATION, not health. Kept here because the
+        # field is part of the published shape, and labelled by health_note.
+        authority=level.value, control_loop=PENDING_BACKEND,
+        config_readability={
+            "authority_record": _readability(root / "config" / "ew0a_authority.json"),
+            "runtime_policy": _readability(root / "config" / "ew0a_runtime.json"),
+            "outcome_ledger": _readability(root / OUTCOME_LEDGER_REL),
+            "records_ledger": _readability(root / RECORDS_LEDGER_REL),
+        })
+
+    # Built BEFORE the truth assessment so every one of them is classified.
+    run_history = build_run_history(root)
+    learning, learning_state = _project_learning(root, worker.worker_identity, now)
+    active_session, session_state = project_active_session(
+        _build_active_session(root), mission, now)
+
     dashboard = {
         **_base("Dashboard"),
         "controller": controller.to_dict(),
         "supervisor": build_supervisor_summary(records).to_dict(),
         "worker": worker.to_dict(),
-        "worker_authority": build_worker_authority_summary(level, grants).to_dict(),
+        "worker_authority": build_worker_authority_summary(
+            level, grants, record_forbidden).to_dict(),
         "mission": build_mission_summary(mission or "unknown", present).to_dict(),
         "apprenticeship": build_apprenticeship_summary(records).to_dict(),
-        "attention_items": [],   # only human-relevant items; none outstanding
+        # Unchanged shape for compatibility; "attention" below says what it MEANS.
+        "attention_items": [],
+        "attention": build_attention_coverage(items=[], derivation_exists=False).to_dict(),
         "system_health": health.to_dict(),
+        "run_history": run_history.to_dict(),
+        "learning": learning,
+        # Read-only and NON-AUTHORITATIVE like every other projection here. An
+        # absent session is reported as absent, never synthesized.
+        "active_session": active_session,
     }
-    # Backend truth states + capability readiness. Derived from the evidence
-    # just assembled -- never asserted, and never a LIVE percentage.
+    # Backend truth states + capability readiness. Derived from the evidence just
+    # assembled -- never asserted, and never a LIVE percentage.
     dashboard["backend_truth"] = _assess_backend_truth(
-        level=level, policy=policy, records=records, worker=worker, now=now).to_dict()
-    # Learning projections (Phase 13). Degrade to PENDING_BACKEND rather than
-    # failing the whole dashboard if the learning store is absent.
-    try:
-        from portfolio_automation.engineer_worker.learning.readmodels import (
-            build_learning_dashboard)
-        dashboard["learning"] = build_learning_dashboard(
-            root, worker.worker_identity, now or PENDING_BACKEND)
-    except Exception:  # noqa: BLE001
-        dashboard["learning"] = PENDING_BACKEND
-
-    # Active autonomous-session projection. This is what makes an unattended
-    # session WATCHABLE through the established controller-owned path:
-    #
-    #     session ledger (controller evidence) -> read model (here) -> GUI
-    #
-    # Read-only and NON-AUTHORITATIVE, like every other projection in this
-    # module. Absent when no session ledger exists — an absent session is
-    # reported as absent, never synthesized.
-    dashboard["active_session"] = _build_active_session(root)
+        level=level, policy=policy, records=records, worker=worker, now=now,
+        session_state=session_state, learning_state=learning_state,
+        run_history=run_history).to_dict()
     return dashboard
 
 
