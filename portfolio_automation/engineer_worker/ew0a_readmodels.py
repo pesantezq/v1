@@ -428,7 +428,21 @@ def _projected_failure_classes(rec: dict[str, Any]) -> list[str]:
         raise ValueError(
             f"failure_classes must be a list per OutcomeRecord, got "
             f"{type(raw).__name__}")
-    return [str(f) for f in raw]
+    for element in raw:
+        # ``list[str]`` means EVERY element is a string. Validating only the
+        # container left ``str()`` coercing the elements, and ``str()`` on a
+        # dict renders the dict -- so a row carrying
+        # ``[{"api_key": "sk-..."}]`` was projected LIVE with the key's value
+        # inside it. That defeats this module's no-secrets guarantee through a
+        # field nobody would think of as a secret carrier, which is exactly why
+        # it survived a review that was looking at the container.
+        if not isinstance(element, str):
+            raise ValueError(
+                f"failure_classes elements must be strings per OutcomeRecord, "
+                f"got {type(element).__name__}")
+    # Copied, not coerced. Nothing here calls str()/repr()/format on ledger
+    # evidence, so there is no path by which an invalid value can be rendered.
+    return list(raw)
 
 
 def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
@@ -490,8 +504,18 @@ def build_run_history(repo_root: str | Path, rel: str = OUTCOME_LEDGER_REL) -> R
             detail=f"{rel} unreadable via ew0a.read_outcomes ({type(exc).__name__})")
 
     try:
-        runs = [_project_run(rec, i) for i, rec in enumerate(records)
-                if isinstance(rec, dict)]
+        runs = []
+        for index, rec in enumerate(records):
+            if not isinstance(rec, dict):
+                # Previously this row was silently FILTERED OUT and the
+                # remainder reported LIVE, so a three-row ledger with one
+                # corrupt row projected two records as a complete history --
+                # and a ledger of nothing but corrupt rows projected an empty
+                # history as complete. Silent evidence loss is worse than a
+                # crash: a crash at least announces itself.
+                raise ValueError(
+                    f"row {index} is not a JSON object, got {type(rec).__name__}")
+            runs.append(_project_run(rec, index))
     except ValueError as exc:
         # One schema-invalid record makes the whole history unusable. Dropping
         # the bad row and serving the rest would be a partial-ledger semantic
@@ -717,6 +741,18 @@ def project_active_session(session: Any, runtime_mission: str | None,
         })
         return enriched, TruthState.LIVE
 
+    # A session may only be reported PRESENT if the producer gave it a usable
+    # identity. Without this, a corrupt SessionStarted record missing its
+    # session_id produced truth_state=UNAVAILABLE alongside
+    # session_present=true -- a contradictory half-session carrying current-work
+    # fields, which a GUI could render as a phantom active session.
+    session_id = session.get("session_id")
+    if (not isinstance(session_id, str) or not session_id.strip()
+            or session_id in _SESSION_NON_VALUES):
+        return (_session_producer_failed(
+            "the producer returned a session without a usable session_id "
+            f"({type(session_id).__name__})"), TruthState.UNAVAILABLE)
+
     session_mission = session.get("mission_id")
     if not isinstance(session_mission, str) or session_mission in _SESSION_NON_VALUES:
         consistency, consistency_detail = "UNDETERMINED", (
@@ -736,7 +772,7 @@ def project_active_session(session: Any, runtime_mission: str | None,
     # recorded_at is deliberately not supplied: no last-activity timestamp exists
     # in the session contract, so classify() reaches UNKNOWN through the same
     # rule that governs every other unmeasurable age.
-    state = classify(producer_exists=True, value=session.get("session_id"),
+    state = classify(producer_exists=True, value=session_id,
                      recorded_at=None, now=now)
 
     enriched = dict(session)

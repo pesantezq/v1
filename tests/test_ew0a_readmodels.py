@@ -1163,3 +1163,256 @@ def test_no_corrupt_input_in_these_two_paths_escapes_as_an_exception(tmp_path):
     # answer, and it is reached by degrading -- not by raising.
     assert dash["backend_truth"]["readiness"] == "UNAVAILABLE"
     assert any("oversight floor" in r for r in dash["backend_truth"]["reasons"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R CURRENT-HEAD P2 REPAIR
+#
+# The fresh Codex review of f24eb7b found three more P2s, all in code GUI-R
+# introduced, all violating a guarantee GUI-R had published:
+#
+#   1. failure_classes validated its CONTAINER but str()-coerced its ELEMENTS,
+#      so [{"api_key": "sk-..."}] projected LIVE with the secret inside it;
+#   2. non-object ledger rows were silently FILTERED and the remainder reported
+#      LIVE, so corrupt evidence became a "complete" (or empty) history;
+#   3. a session missing its session_id got truth_state=UNAVAILABLE alongside
+#      session_present=true -- a phantom active session.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: Conspicuous synthetic marker. Never a real credential; its only job is to be
+#: findable in a serialized projection if the no-secrets boundary ever leaks.
+_SECRET_MARKER = "sk-SHOULD-NEVER-RENDER-123"
+
+
+# ── P2 #1: every element must be a string ──────────────────────────────────
+def test_valid_failure_class_element_shapes_are_preserved(tmp_path):
+    cases = {
+        "absent": (_row(), []),
+        "null": (_row(failure_classes=None), []),
+        "empty": (_row(failure_classes=[]), []),
+        "one": (_row(failure_classes=["TEST_FAILURE"]), ["TEST_FAILURE"]),
+        "many": (_row(failure_classes=["A", "B"]), ["A", "B"]),
+    }
+    for label, (row, expected) in cases.items():
+        history = build_run_history(_ledger_root(tmp_path / label, row))
+        assert history.availability == TruthState.LIVE.value, label
+        assert history.runs[0]["failure_classes"] == expected, label
+
+
+def test_non_string_failure_class_elements_make_the_history_unavailable(tmp_path):
+    """`list[str]` means every element is a string. Validating only the
+    container is what left str() rendering the elements."""
+    for label, bad in (("int", [123]), ("float", [1.5]), ("bool", [True]),
+                       ("null", [None]), ("dict", [{"kind": "TEST_FAILURE"}]),
+                       ("nested", [["TEST_FAILURE"]]),
+                       ("mixed", ["TEST_FAILURE", 123])):
+        root = _ledger_root(tmp_path / f"elem_{label}", _row(failure_classes=bad))
+        history = build_run_history(root)
+        assert history.availability == TruthState.UNAVAILABLE.value, label
+        assert history.runs == [], label
+        assert history.record_count == 0, label
+
+
+def test_invalid_containers_are_still_rejected(tmp_path):
+    """The previous commit's behaviour must not regress while fixing elements."""
+    for label, bad in (("int", 123), ("str", "TEST_FAILURE"), ("dict", {})):
+        root = _ledger_root(tmp_path / f"cont_{label}", _row(failure_classes=bad))
+        assert build_run_history(root).availability == TruthState.UNAVAILABLE.value, label
+
+
+def test_a_secret_in_a_corrupt_failure_class_never_reaches_the_projection(tmp_path):
+    """THE load-bearing security regression. This is not a schema test: it pins
+    the read model's no-secret-propagation boundary.
+
+    Before the fix, `[{"api_key": "<marker>"}]` projected LIVE and rendered
+    "{'api_key': '<marker>'}" into failure_classes -- a secret arriving through
+    a field nobody thinks of as a secret carrier, which is precisely why it
+    survived a review that was looking at the container."""
+    root = _ledger_root(tmp_path, _row(failure_classes=[{"api_key": _SECRET_MARKER}]))
+
+    history = build_run_history(root)
+    assert history.availability == TruthState.UNAVAILABLE.value
+    assert history.runs == []
+    assert history.record_count == 0
+    assert _SECRET_MARKER not in _json.dumps(history.to_dict())
+
+    dash = rm.build_dashboard(root, now=_NOW)          # must not raise
+    assert _SECRET_MARKER not in _json.dumps(dash, default=str)
+    assert "api_key" not in _json.dumps(dash, default=str)
+
+
+def test_the_marker_survives_nesting_and_alternative_carriers(tmp_path):
+    """Several shapes a corrupt element could take, one marker to find."""
+    carriers = (
+        [{"nested": {"deep": _SECRET_MARKER}}],
+        [[_SECRET_MARKER]],
+        [{"Authorization": f"Bearer {_SECRET_MARKER}"}],
+    )
+    for index, carrier in enumerate(carriers):
+        root = _ledger_root(tmp_path / f"carrier{index}", _row(failure_classes=carrier))
+        history = build_run_history(root)
+        assert history.availability == TruthState.UNAVAILABLE.value, carrier
+        blob = _json.dumps(history.to_dict()) + _json.dumps(
+            rm.build_dashboard(root, now=_NOW), default=str)
+        assert _SECRET_MARKER not in blob, carrier
+
+
+def test_the_failure_class_projection_never_stringifies_ledger_evidence():
+    """Structural. The leak existed because a str() call sat on the projection
+    path; an AST check is what stops one from coming back."""
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.FunctionDef) and node.name == "_projected_failure_classes":
+            for inner in _ast.walk(node):
+                if isinstance(inner, _ast.Call):
+                    name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
+                    assert name not in ("str", "repr", "format"), (
+                        f"failure-class projection calls {name}() on ledger evidence")
+            break
+    else:                                              # pragma: no cover
+        raise AssertionError("_projected_failure_classes not found")
+
+
+def test_element_validation_reports_only_the_type():
+    with pytest.raises(ValueError, match="elements must be strings"):
+        rm._projected_failure_classes({"failure_classes": [{"api_key": _SECRET_MARKER}]})
+    try:
+        rm._projected_failure_classes({"failure_classes": [{"api_key": _SECRET_MARKER}]})
+    except ValueError as exc:
+        assert _SECRET_MARKER not in str(exc)
+        assert "dict" in str(exc)
+
+
+# ── P2 #2: a non-object row invalidates the ledger ─────────────────────────
+def test_non_object_ledger_rows_make_the_whole_history_unavailable(tmp_path):
+    for label, bad in (("array", [1, 2]), ("int", 123), ("string", "row"),
+                       ("null", None), ("bool", True)):
+        root = _ledger_root(tmp_path / f"nonobj_{label}", bad)
+        history = build_run_history(root)
+        assert history.availability == TruthState.UNAVAILABLE.value, label
+        assert history.record_count == 0, label
+        assert history.runs == [], label
+
+
+def test_a_mixed_ledger_is_not_served_as_a_complete_history(tmp_path):
+    """Before the fix this projected 2 records from a 3-row ledger and called it
+    LIVE. Silent truncation is worse than a crash: a crash announces itself."""
+    root = _ledger_root(tmp_path,
+                        _row(task_id="GOOD1"), [1, 2], _row(task_id="GOOD2"))
+    history = build_run_history(root)
+    assert history.availability == TruthState.UNAVAILABLE.value
+    assert history.record_count == 0
+    assert history.runs == []
+
+
+def test_an_all_corrupt_ledger_is_not_mistaken_for_an_empty_history(tmp_path):
+    """The sharpest form. A ledger of nothing but corrupt rows used to project
+    LIVE with zero records -- indistinguishable from 'nothing has happened yet'.
+    A genuinely empty ledger IS a legitimate empty history, and the two must not
+    collapse into the same answer."""
+    corrupt = build_run_history(_ledger_root(tmp_path / "corrupt", [1, 2], "row", 7))
+    assert corrupt.availability == TruthState.UNAVAILABLE.value
+    assert corrupt.record_count == 0
+
+    empty_dir = tmp_path / "empty"
+    (empty_dir / OUTCOME_LEDGER_REL).parent.mkdir(parents=True, exist_ok=True)
+    (empty_dir / OUTCOME_LEDGER_REL).write_text("", encoding="utf-8")
+    genuinely_empty = build_run_history(empty_dir)
+    assert genuinely_empty.availability == TruthState.LIVE.value
+    assert genuinely_empty.record_count == 0
+
+    assert corrupt.availability != genuinely_empty.availability
+
+
+def test_a_fully_valid_ledger_keeps_live_status_and_append_order(tmp_path):
+    root = _ledger_root(tmp_path, _row(task_id="A"), _row(task_id="B"),
+                        _row(task_id="C"))
+    history = build_run_history(root)
+    assert history.availability == TruthState.LIVE.value
+    assert [r["task_id"] for r in history.runs] == ["A", "B", "C"]
+    assert [r["ledger_index"] for r in history.runs] == [0, 1, 2]
+    assert history.ordering == "ledger_append_order"
+
+
+def test_non_object_rows_never_escape_through_build_dashboard(tmp_path):
+    for label, bad in (("array", [1, 2]), ("string", "row"), ("null", None)):
+        root = _ledger_root(tmp_path / f"dash_{label}", _row(), bad)
+        dash = rm.build_dashboard(root, now=_NOW)      # must not raise
+        assert dash["run_history"]["availability"] == TruthState.UNAVAILABLE.value, label
+
+
+def test_the_row_rejection_detail_reveals_only_structure(tmp_path):
+    root = _ledger_root(tmp_path, [_SECRET_MARKER])
+    detail = build_run_history(root).detail
+    assert _SECRET_MARKER not in detail
+    assert "list" in detail and "row 0" in detail
+
+
+# ── P2 #3: presence requires a usable identity ─────────────────────────────
+def _session_with_id(session_id):
+    return {"read_model": "Northstar0CSessionSummary", "session_id": session_id,
+            "mission_id": "m-runtime", "session_state": "RUNNING",
+            "session_started_at": "2026-08-16T07:17:41+00:00",
+            "current_task_id": "t1"}
+
+
+def test_a_session_without_a_usable_identity_is_never_present():
+    """truth_state=UNAVAILABLE with session_present=true was internally
+    contradictory, and a GUI could render it as a phantom active session."""
+    for label, bad in (("none", None), ("empty", ""), ("blank", "   "),
+                       ("int", 123), ("list", []), ("dict", {}),
+                       ("sentinel", "NO_SUCH_SESSION"),
+                       ("pending", PENDING_BACKEND)):
+        enriched, state = project_active_session(
+            _session_with_id(bad), "m-runtime", _NOW)
+        assert enriched["session_present"] is False, label
+        assert state is TruthState.UNAVAILABLE, label
+        assert enriched["truth_state"] == TruthState.UNAVAILABLE.value, label
+        assert enriched["safe_to_present_as_current_work"] is False, label
+        assert enriched["mission_consistency"] == "UNDETERMINED", label
+
+
+def test_a_malformed_session_carries_no_current_work_fields():
+    """Not a half-valid session dictionary: the failure envelope replaces it, so
+    a template cannot read a task id out of an unusable session."""
+    enriched, _state = project_active_session(
+        _session_with_id(None), "m-runtime", _NOW)
+    assert "current_task_id" not in enriched
+    assert enriched["session_state"] == "UNAVAILABLE"
+
+
+def test_a_valid_identity_still_reaches_the_reviewed_unknown_behaviour():
+    enriched, state = project_active_session(
+        _session_with_id("s1"), "m-runtime", _NOW)
+    assert enriched["session_present"] is True
+    assert state is TruthState.UNKNOWN
+    assert enriched["mission_consistency"] == "AGREES"
+    assert enriched["safe_to_present_as_current_work"] is False
+
+
+def test_no_such_session_keeps_its_reviewed_live_treatment(tmp_path):
+    dash = rm.build_dashboard(_no_ledger_root(tmp_path), now=_NOW)
+    session = dash["active_session"]
+    assert session["session_state"] == "NO_SUCH_SESSION"
+    assert session["session_present"] is False
+    assert session["truth_state"] == TruthState.LIVE.value
+    assert session["safe_to_present_as_current_work"] is False
+
+
+def test_identity_validation_did_not_disturb_mismatch_or_freshness():
+    enriched, state = project_active_session(
+        _session_with_id("s1") | {"mission_id": "m-other"}, "m-runtime", _NOW)
+    assert enriched["session_present"] is True
+    assert enriched["mission_consistency"] == "MISMATCH"
+    assert state is not TruthState.STALE
+    assert state is TruthState.UNKNOWN
+
+
+def test_the_real_repo_session_is_unaffected_by_identity_validation():
+    session = rm.build_dashboard(_REPO, now=_NOW)["active_session"]
+    assert session["session_present"] is True
+    assert session["session_id"] == "ns0c-revision-supersession-002"
+    assert session["truth_state"] == TruthState.UNKNOWN.value
+    assert session["mission_consistency"] == "MISMATCH"
+    assert session["safe_to_present_as_current_work"] is False

@@ -215,15 +215,30 @@ this projection does not soften that into a partial list, it reports the ledger
 unusable and says why.
 
 **Schema-invalid rows are unusable too, not only unparseable ones.** A row can be valid
-JSON and still violate `OutcomeRecord`: `failure_classes` is declared `list[str]`, and a
-row carrying `123` or `"TEST_FAILURE"` is corrupt evidence. Absent and `null` remain
-`[]` — records predating the field are legitimately shaped that way — but anything else
-that is not a list makes the whole projection `UNAVAILABLE`. It is **not** coerced to
-`[]`, which would manufacture clean evidence out of corrupt evidence, and the offending
-payload is never echoed into `detail`; only its type is. One bad row invalidates the
-history rather than yielding a quietly truncated one: no authoritative contract
-establishes partial-ledger semantics, and a consumer cannot tell a complete history from
-a silently shortened one.
+JSON and still violate `OutcomeRecord`. Two independent checks apply, and both make the
+whole projection `UNAVAILABLE`:
+
+1. **Every row must be a JSON object.** A scalar or array row is not filtered out. It
+   used to be, and the remainder was reported `LIVE` — so a three-row ledger with one
+   corrupt row projected two records as a complete history, and a ledger of nothing but
+   corrupt rows projected an *empty* history as complete. Silent evidence loss is worse
+   than a crash, because a crash announces itself. A genuinely empty ledger remains
+   `LIVE` with zero records; those two answers must never collapse into one.
+2. **`failure_classes` is `list[str]` — container *and* elements.** Absent and `null`
+   remain `[]` (records predating the field are legitimately shaped that way). A non-list
+   container is rejected, and so is any non-string element. Validating only the container
+   left `str()` coercing the elements, and `str()` on a dict renders the dict: a row
+   carrying `[{"api_key": "sk-…"}]` was projected `LIVE` with the secret inside it. That
+   defeated the no-secrets guarantee through a field nobody thinks of as a secret
+   carrier, which is why it survived a review that was looking at the container.
+
+Nothing on this path calls `str()`/`repr()`/`format` on ledger evidence — an AST test
+enforces it, because the leak existed precisely because one such call sat there. Invalid
+values are **not** coerced to `[]` or sanitised and served, which would manufacture clean
+evidence out of corrupt evidence, and the offending payload is never echoed into
+`detail`; only its type and the row index are. One bad row invalidates the whole history:
+no authoritative contract establishes partial-ledger semantics, and a consumer cannot
+tell a complete history from a silently shortened one.
 
 The invariant behind both rules: **no corrupt record may escape through
 `build_dashboard()` as an uncaught projection exception.** A Mission Control page
@@ -248,7 +263,17 @@ Added keys: `session_present`, `truth_state`, `runtime_mission_id`,
 | `tools.ns0c_session` genuinely absent | — | `PENDING_BACKEND` | nobody built the producer |
 | producer exists, import/entry-point/call fails | `false` | `UNAVAILABLE` | it exists and could not answer |
 | producer answers `NO_SUCH_SESSION` | `false` | `LIVE` | it answered the question — with "no" |
+| producer returns a session with no usable `session_id` | `false` | `UNAVAILABLE` | see identity below |
 | producer returns a session | `true` | `UNKNOWN` | see freshness below |
+
+**Presence requires a usable identity.** `session_present` is `true` only when
+`session_id` is a non-empty string that is not one of the producer's sentinels. Without
+that check a corrupt `SessionStarted` record missing its `session_id` produced
+`truth_state = UNAVAILABLE` alongside `session_present = true` — a contradictory
+half-session still carrying current-work fields such as `current_task_id`, which a GUI
+could render as a phantom active session. A malformed session now returns the same
+producer-failure envelope as any other unusable answer, so there are no current-work
+fields for a template to read out of it.
 
 **`PENDING_BACKEND` is reachable only through producer ABSENCE.** An earlier version
 returned it when one concrete ledger filename was missing and when the producer raised.
