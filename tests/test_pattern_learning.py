@@ -12,6 +12,7 @@ Covers:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import csv
 import json
 import sys
@@ -120,7 +121,7 @@ class TestAggregationOnFixtures(unittest.TestCase):
         p.write_text(json.dumps({"candidates": rows}))
 
     def _write_outcomes(self, root: Path, rows: list[dict]) -> None:
-        p = root / "outputs" / "performance" / "signal_outcomes.csv"
+        p = signal_outcomes_paths.runtime_path(root)
         p.parent.mkdir(parents=True, exist_ok=True)
         cols = [
             "ticker", "signal_time", "regime_label",

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from portfolio_automation import signal_outcomes_paths
 from watchlist_scanner.cache_manager import CacheManager
 from watchlist_scanner.outcome_evaluator import (
     _load_next_available_close,
@@ -1032,6 +1033,7 @@ def generate_signal_performance_reports(
     *,
     db_path: str | Path = "data/portfolio.db",
     output_dir: str | Path = "outputs/performance",
+    signal_outcomes_path: str | Path | None = None,
     windows: tuple[int, ...] = DEFAULT_WINDOWS,
     primary_window_days: int = PRIMARY_WINDOW_DAYS,
     feedback_config: dict[str, Any] | None = None,
@@ -1046,7 +1048,16 @@ def generate_signal_performance_reports(
     )
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = out_dir / "signal_outcomes.csv"
+    # The live CSV goes to the RUNTIME path, never to
+    # outputs/performance/signal_outcomes.csv — those bytes are VS-001's frozen
+    # evidence and are content-addressed into its preregistration. Production
+    # rewriting them invalidated a completed experiment on every run.
+    # See portfolio_automation/signal_outcomes_paths.py.
+    csv_path = (
+        Path(signal_outcomes_path) if signal_outcomes_path is not None
+        else signal_outcomes_paths.runtime_path_from_performance_dir(out_dir)
+    )
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / "performance_summary.json"
     _write_signal_outcomes_csv(csv_path, rows)
     json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -1118,6 +1129,7 @@ def run_signal_feedback_cycle(
     db_path: str | Path = "data/portfolio.db",
     cache_dir: str | Path = "data/watchlist_cache",
     output_dir: str | Path = "outputs/performance",
+    signal_outcomes_path: str | Path | None = None,
     dry_run: bool = False,
     feedback_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1138,6 +1150,7 @@ def run_signal_feedback_cycle(
         report = generate_signal_performance_reports(
             db_path=db_path,
             output_dir=output_dir,
+            signal_outcomes_path=signal_outcomes_path,
             windows=windows,
             primary_window_days=primary_window_days,
             feedback_config=feedback_cfg,

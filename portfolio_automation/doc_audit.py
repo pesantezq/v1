@@ -496,7 +496,8 @@ def apply_auto_fix(finding: Finding, root: str) -> bool:
 
 
 def write_doc_audit_status(result: dict, root: str,
-                           now: datetime | None = None) -> str:
+                           now: datetime | None = None,
+                           *, persist_state: bool = True) -> str:
     """Write JSON + compact MD via OutputNamespace.LATEST. Returns the JSON path.
 
     Uses safe_write_json with base_dir=Path(root)/"outputs" so the file lands
@@ -535,15 +536,21 @@ def write_doc_audit_status(result: dict, root: str,
 
     # Persist unresolved coverage gaps so the next run re-raises them even after
     # last_audited_sha advances past the commit that introduced them.
-    try:
-        from portfolio_automation.doc_audit_state import load_state, save_state
+    #
+    # This writes .agent/doc_audit_state.yaml, which is TRACKED. A production
+    # (non-authoring) invocation must mutate zero tracked release files, so the
+    # caller can opt out. The status artifact itself lands under
+    # outputs/latest/ and is ignored, so it is always safe to write.
+    if persist_state:
+        try:
+            from portfolio_automation.doc_audit_state import load_state, save_state
 
-        state = load_state(root)
-        state["open_coverage_gaps"] = open_gaps
-        state["coverage_gap_first_seen"] = first_seen
-        save_state(root, state)
-    except Exception:
-        pass  # observe-only: never let state bookkeeping break the audit
+            state = load_state(root)
+            state["open_coverage_gaps"] = open_gaps
+            state["coverage_gap_first_seen"] = first_seen
+            save_state(root, state)
+        except Exception:
+            pass  # observe-only: never let state bookkeeping break the audit
 
     md_lines = [
         f"# Doc Audit — {result['generated_at'][:10]}",

@@ -18,6 +18,41 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-/opt/stockbot}"
+
+# --- Git authorship gate --------------------------------------------------
+# This script used to be scheduled by production cron (Mondays 07:00 UTC) and
+# was therefore a git AUTHOR on the production host: it produced ten unpushed
+# commits between 2026-08-10 and 2026-09-07, including commits to .agent/.
+# That made `production_code_sha == approved_release_sha` decay weekly and put
+# an autonomous committer inside the protected namespace.
+#
+# The deployment contract is now PRODUCTION_RUNTIME_DOES_NOT_CREATE_GIT_COMMITS
+# (see docs/PRODUCTION_RELEASE_CONTRACT.md). Repository authorship is opt-in:
+# the audit, its status artifact and its auto-fixes all still run, but the
+# commits happen only when an engineering/control plane asks for them. An
+# accidental production invocation now audits and reports instead of
+# authoring, which is the safe failure direction.
+#
+#   STOCKBOT_DOC_AUDIT_GIT_AUTHORSHIP=1   engineering / QPC worker / CI
+#   unset or 0                            everywhere else (default)
+DOC_AUDIT_GIT_AUTHORSHIP="${STOCKBOT_DOC_AUDIT_GIT_AUTHORSHIP:-0}"
+
+doc_audit_commit() {
+    # Only ever reached in authoring mode: a non-authoring run exits before
+    # Step 4, so nothing is applied, staged or committed in the first place.
+    #
+    # An earlier version of this gate let the mutations happen and then ran
+    # `git reset` on the index. That was wrong twice over: the index reset does
+    # not undo the file writes, so the worktree was left dirty, and unstaging is
+    # not evidence that the tree is unchanged. Mutation is now gated BEFORE it
+    # occurs, and this assertion fails loudly rather than silently committing if
+    # that control flow ever changes.
+    if [ "$DOC_AUDIT_GIT_AUTHORSHIP" != "1" ]; then
+        printf 'FATAL: commit attempted without git authorship: %s\n' "$1" >&2
+        exit 2
+    fi
+    git commit -m "$1" || printf 'Commit produced no change.\n'
+}
 LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
@@ -68,14 +103,18 @@ print(load_state('.')['last_audited_sha'] or '')
 
     printf '\n-- Step 2: Run producer --\n'
     python3 - <<'PY'
-import glob, json
+import glob, json, os
 from portfolio_automation import doc_audit, doc_audit_state
 
 last = doc_audit_state.load_state('.')['last_audited_sha']
 changed = [l.strip() for l in open('/tmp/doc_audit_changed.txt') if l.strip()]
 existing = set(glob.glob('docs/**/*.md', recursive=True))
 result = doc_audit.run_doc_audit('.', last, changed, existing)
-doc_audit.write_doc_audit_status(result, '.')
+# write_doc_audit_status persists coverage-gap bookkeeping into the TRACKED
+# .agent/doc_audit_state.yaml. Without authorship this run must mutate zero
+# tracked files, so the artifact is written and the state write is skipped.
+authoring = os.environ.get('STOCKBOT_DOC_AUDIT_GIT_AUTHORSHIP') == '1'
+doc_audit.write_doc_audit_status(result, '.', persist_state=authoring)
 print(json.dumps({
     "status": result["overall_status"],
     "findings": len(result["findings"]),
@@ -83,6 +122,51 @@ print(json.dumps({
     "gaps": len(result["coverage_gaps"])
 }, indent=2))
 PY
+
+    # --- Mutation boundary -------------------------------------------------
+    # Everything above is read-only: it resolves a git range, runs the auditor,
+    # and writes outputs/latest/doc_audit_status.json, which is an ignored
+    # runtime artifact (see .gitignore "outputs/latest/"). Everything below
+    # MUTATES tracked repository state — doc auto-fixes, generated docs, and
+    # .agent/doc_audit_state.yaml.
+    #
+    # PRODUCTION_RUNTIME_DOES_NOT_CREATE_GIT_COMMITS, and more strictly
+    # PRODUCTION_RUNTIME_MUTATES_ZERO_TRACKED_RELEASE_FILES, so a run without
+    # explicit authorship stops here having changed no tracked path, no index
+    # entry and no ref. It still reports what an engineering run would fix.
+    if [ "$DOC_AUDIT_GIT_AUTHORSHIP" != "1" ]; then
+        printf '\n-- NON-AUTHORING MODE: stopping before any tracked mutation --\n'
+        printf 'STOCKBOT_DOC_AUDIT_GIT_AUTHORSHIP != 1\n'
+        printf 'Audit ran and the status artifact was written (untracked).\n'
+        printf 'NOT applied: doc auto-fixes, generated-doc rewrites, '
+        printf 'doc_audit_state advance, staging, commits.\n'
+        python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path('outputs/latest/doc_audit_status.json')
+if not path.exists():
+    print('No status artifact to report.')
+else:
+    result = json.loads(path.read_text(encoding='utf-8'))
+    cands = result.get('auto_fix_candidates') or []
+    print(f"overall_status : {result.get('overall_status')}")
+    print(f"findings       : {len(result.get('findings') or [])}")
+    print(f"coverage_gaps  : {len(result.get('coverage_gaps') or [])}")
+    print(f"auto-fixable   : {len(cands)} (suggested, NOT applied)")
+    for c in cands[:20]:
+        doc = c.get('doc') if isinstance(c, dict) else c
+        print(f"  would fix: {doc}")
+    if len(cands) > 20:
+        print(f"  ... and {len(cands) - 20} more")
+    print()
+    print('To apply and commit these, run from an engineering plane with:')
+    print('  STOCKBOT_DOC_AUDIT_GIT_AUTHORSHIP=1 scripts/run_doc_audit.sh')
+PY
+        printf '\n=== run_doc_audit PASSED (non-authoring, read-only) @ %s ===\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        exit 0
+    fi
 
     printf '\n-- Step 4: Apply guardrailed auto-fixes --\n'
     python3 - <<'PY'
@@ -130,8 +214,7 @@ for f in json.load(open('/tmp/doc_audit_applied.json')):
         print(f['doc'])
 " > /tmp/doc_audit_fix_paths.txt
         xargs -a /tmp/doc_audit_fix_paths.txt -r git add --
-        git commit -m "docs(auto): doc-audit drift fixes $(date -u +%F) (${FIX_COUNT} anchors)" \
-            || printf 'Auto-fix commit produced no change.\n'
+        doc_audit_commit "docs(auto): doc-audit drift fixes $(date -u +%F) (${FIX_COUNT} anchors)"
     else
         printf 'No auto-fixes applied — nothing to commit under doc-audit provenance.\n'
     fi
@@ -153,8 +236,7 @@ for f in json.load(open('/tmp/doc_audit_applied.json')):
     if [ -n "$(git diff --name-only -- docs/)" ]; then
         git diff --name-only -- docs/ | sed 's/^/  /'
         git add --update -- docs/
-        git commit -m "docs(generated): pipeline-regenerated docs $(date -u +%F)" \
-            || printf 'Generated-docs commit produced no change.\n'
+        doc_audit_commit "docs(generated): pipeline-regenerated docs $(date -u +%F)"
     else
         printf 'No modified generated docs.\n'
     fi
@@ -181,9 +263,8 @@ st['fixes_last_run'] = len(applied)
 doc_audit_state.save_state('.', st)
 print(f'State advanced to HEAD={head[:12]}, fixes_last_run={len(applied)}')
 PY
-    git add .agent/doc_audit_state.yaml && \
-        git commit -m "chore(doc-audit): advance audit state $(date -u +%F)" \
-        || printf 'State unchanged — no commit needed.\n'
+    git add .agent/doc_audit_state.yaml
+    doc_audit_commit "chore(doc-audit): advance audit state $(date -u +%F)"
 
     printf '\n=== run_doc_audit PASSED @ %s ===\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >> "$LOG_FILE" 2>&1

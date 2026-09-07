@@ -10,6 +10,7 @@ Covers:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import csv
 import json
 import sqlite3
@@ -138,7 +139,7 @@ def _write_fmp_top100(root: Path, symbols: list[str]) -> None:
 
 
 def _write_signal_outcomes(root: Path, rows: list[dict]) -> None:
-    p = root / "outputs" / "performance" / "signal_outcomes.csv"
+    p = signal_outcomes_paths.runtime_path(root)
     p.parent.mkdir(parents=True, exist_ok=True)
     cols = [
         "ticker", "signal_time", "outcome_return_1d", "direction_correct_1d",

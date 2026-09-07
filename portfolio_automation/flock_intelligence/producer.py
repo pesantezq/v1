@@ -14,6 +14,7 @@ Artifacts written:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import logging
 from pathlib import Path
 from typing import Any
@@ -145,7 +146,7 @@ def _ticker_flocks(gm: GroupMetrics, gf: GroupFlock,
             confidence=gf.confidence,
             explanation=f"{tk} in '{gm.group}': {gf.flock_state}.",
             evidence_refs=["outputs/sandbox/discovery/crowd_multi_source_velocity.json",
-                           "outputs/performance/signal_outcomes.csv"],
+                           signal_outcomes_paths.RUNTIME_REL],
         ))
     return out
 

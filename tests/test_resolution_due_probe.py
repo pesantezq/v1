@@ -11,6 +11,7 @@ Covers:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import csv
 import json
 import sys
@@ -126,8 +127,8 @@ class TestGroupByTicker(unittest.TestCase):
 
 class TestBuildAndRun(unittest.TestCase):
     def _write_csv(self, root: Path, rows: list[dict]) -> None:
-        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
-        path = root / "outputs" / "performance" / "signal_outcomes.csv"
+        signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
+        path = signal_outcomes_paths.runtime_path(root)
         cols = list(rows[0].keys()) if rows else ["ticker", "signal_time"]
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
@@ -189,8 +190,8 @@ class TestBuildAndRun(unittest.TestCase):
         # an unhandled exception in the wrapper stage.
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
-            csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+            signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
+            csv_path = signal_outcomes_paths.runtime_path(root)
             csv_path.write_bytes(b"\x00\xff\xfe garbage not csv")
             # csv.DictReader on this returns a single dict; the resolver
             # should not raise. Either status="ok" with stuck_count=0, or

@@ -1,6 +1,7 @@
 """Flock Intelligence — producer + data-source fallbacks + namespace isolation."""
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import json
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ from portfolio_automation.flock_intelligence.producer import run_flock_intellige
 
 def _seed(root: Path, *, themes=None, crowd=None, outcomes=None, config=None):
     (root / "outputs" / "latest").mkdir(parents=True, exist_ok=True)
-    (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
+    signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
     (root / "outputs" / "sandbox" / "discovery").mkdir(parents=True, exist_ok=True)
     (root / "config.json").write_text(json.dumps(config or {"portfolio": {"watchlist": []}}))
     if themes is not None:
@@ -25,7 +26,7 @@ def _seed(root: Path, *, themes=None, crowd=None, outcomes=None, config=None):
         for tk, series in outcomes.items():
             for i, r in enumerate(series):
                 lines.append(f"{tk},2026-06-{10 + i:02d}T09:00:00,{r}")
-        (root / "outputs" / "performance" / "signal_outcomes.csv").write_text("\n".join(lines))
+        (signal_outcomes_paths.runtime_path(root)).write_text("\n".join(lines))
 
 
 def test_missing_everything_degrades_not_raises(tmp_path):

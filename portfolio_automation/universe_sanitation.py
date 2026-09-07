@@ -54,6 +54,7 @@ from portfolio_automation.data_governance import (
     safe_write_text,
 )
 from portfolio_automation.sector_mapping import normalize_sector
+from portfolio_automation import signal_outcomes_paths
 
 logger = logging.getLogger("stockbot.portfolio_automation.universe_sanitation")
 
@@ -147,7 +148,7 @@ def _load_recent_signals(root: Path, lookback_days: int) -> dict[str, dict[str, 
     """Aggregate signal_outcomes.csv into per-ticker stats over the lookback
     window. Returns {ticker: {count, hits_1d, resolved_1d, last_signal_time}}.
     """
-    csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+    csv_path = signal_outcomes_paths.runtime_path(root)
     if not csv_path.exists():
         return {}
     cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()

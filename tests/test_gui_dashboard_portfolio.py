@@ -54,6 +54,31 @@ _FORBIDDEN_LABELS = (
 
 
 # ---------------------------------------------------------------------------
+# Snapshot fixture
+# ---------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def install_portfolio_snapshot(root: Path) -> Path:
+    """Install the deterministic snapshot fixture into a temporary repo root.
+
+    The rendering tests below need holdings to exist, but they must NOT read
+    outputs/portfolio/portfolio_snapshot.json out of the real repository: that
+    file is production runtime output, rewritten by the daily lane, and
+    depending on it made the suite pass only on a machine with a live corpus.
+    The production-shaped path is part of the behaviour under test, so the
+    fixture is installed at that exact relative path inside tmp_path.
+    """
+    snapshot = json.loads((FIXTURES / "portfolio_snapshot_sample.json").read_text(
+        encoding="utf-8"))
+    dest = root / "outputs" / "portfolio" / "portfolio_snapshot.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(snapshot), encoding="utf-8")
+    return dest
+
+
+# ---------------------------------------------------------------------------
 # Unit tests: collect_portfolio_view
 # ---------------------------------------------------------------------------
 
@@ -345,22 +370,59 @@ def test_source_of_truth_invariant_in_rendered_html(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rendered_html_has_md_hidden_mobile_card_stack():
+def test_rendered_html_has_md_hidden_mobile_card_stack(monkeypatch, tmp_path):
     """The rendered portfolio page must include a md:hidden mobile card equivalent
     for the holdings table (and watchlist table if present), so no horizontal
-    scroll is needed on mobile."""
-    from gui_v2.app import app
+    scroll is needed on mobile.
 
-    client = TestClient(app)
-    r = client.get("/dashboard/portfolio")
-    assert r.status_code == 200
-    html = r.text
+    Driven by an explicit fixture rather than the committed repository snapshot.
+    The holdings table only renders when holdings exist, so this test used to
+    depend on outputs/portfolio/portfolio_snapshot.json being present in the
+    real tree — which meant it passed only on a machine carrying live
+    production output, and failed on a clean checkout.
+    """
+    from gui_v2 import app as app_module
 
-    # The desktop table should be hidden on mobile (hidden md:block)
-    assert "hidden md:block" in html, "Desktop table wrapper (hidden md:block) not found"
+    install_portfolio_snapshot(tmp_path)
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        client = TestClient(app_module.app)
+        r = client.get("/dashboard/portfolio")
+        assert r.status_code == 200
+        html = r.text
 
-    # The mobile stacked card div must be present (md:hidden)
-    assert "md:hidden" in html, "Mobile card stack (md:hidden) not found"
+        # The fixture holdings must actually have rendered, otherwise the
+        # wrapper assertions below would pass vacuously on an empty table.
+        assert "NVDA" in html, "fixture holdings did not render"
+
+        # The desktop table should be hidden on mobile (hidden md:block)
+        assert "hidden md:block" in html, \
+            "Desktop table wrapper (hidden md:block) not found"
+
+        # The mobile stacked card div must be present (md:hidden)
+        assert "md:hidden" in html, "Mobile card stack (md:hidden) not found"
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
+
+
+def test_portfolio_page_renders_with_no_runtime_snapshot(monkeypatch, tmp_path):
+    """A clean checkout has no snapshot at all — the page must still render.
+
+    This is the other half of untracking the production snapshot: absence is a
+    supported state, not a 500.
+    """
+    from gui_v2 import app as app_module
+
+    assert not (tmp_path / "outputs" / "portfolio" / "portfolio_snapshot.json").exists()
+    original_root = app_module.REPO_ROOT
+    monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
+    try:
+        r = TestClient(app_module.app).get("/dashboard/portfolio")
+        assert r.status_code == 200
+        assert "No brokerage trade execution" in r.text
+    finally:
+        monkeypatch.setattr(app_module, "REPO_ROOT", original_root)
 
 
 # ---------------------------------------------------------------------------
@@ -522,26 +584,9 @@ def test_rendered_holdings_show_real_allocation_pct(monkeypatch, tmp_path):
     """
     from gui_v2 import app as app_module
 
-    latest = tmp_path / "outputs" / "latest"
-    latest.mkdir(parents=True)
-    portfolio_dir = tmp_path / "outputs" / "portfolio"
-    portfolio_dir.mkdir(parents=True)
-
-    snapshot = {
-        "enabled": True,
-        "observe_only": True,
-        "rows": [
-            {
-                "ticker": "NVDA",
-                "sector": "Technology",
-                "conviction_score": 0.85,
-                "conviction_band": "high_conviction",
-                "suggested_allocation": 0.03,
-                "normalized_allocation": 0.03,
-            }
-        ],
-    }
-    (portfolio_dir / "portfolio_snapshot.json").write_text(json.dumps(snapshot))
+    (tmp_path / "outputs" / "latest").mkdir(parents=True)
+    # Same fixture as the mobile-stack test: NVDA at 3.0%.
+    install_portfolio_snapshot(tmp_path)
 
     original_root = app_module.REPO_ROOT
     monkeypatch.setattr(app_module, "REPO_ROOT", tmp_path)
