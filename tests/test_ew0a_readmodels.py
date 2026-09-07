@@ -446,9 +446,9 @@ def test_run_history_missing_mission_stays_none(tmp_path):
     ledger = tmp_path / OUTCOME_LEDGER_REL
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text(
-        _json.dumps({"task_id": "T1", "final_status": "VERIFIED"}) + "\n"
-        + _json.dumps({"task_id": "T2", "final_status": "VERIFIED",
-                       "mission_id": "m-recorded"}) + "\n", encoding="utf-8")
+        _json.dumps(_row(task_id="T1")) + "\n"
+        + _json.dumps(_row(task_id="T2", mission_id="m-recorded")) + "\n",
+        encoding="utf-8")
     history = build_run_history(tmp_path)
     assert history.runs[0]["mission_id"] is None
     assert history.runs[1]["mission_id"] == "m-recorded"
@@ -982,8 +982,27 @@ def _ledger_root(tmp_path, *rows):
     return tmp_path
 
 
+#: A COMPLETE, schema-valid outcome row. The previous fixture carried only
+#: task_id and final_status -- which the unvalidated boundary happily projected
+#: as LIVE, so the fixture's own incompleteness was invisible. Every field here
+#: is present in all seven real ledger records with these types.
+_VALID_ROW = {
+    "task_id": "T1",
+    "title": "Add a unit test for the E1 default executor mapping",
+    "risk_class": "E1_ROUTINE",
+    "executor": "ENGINEER",
+    "final_status": "VERIFIED",
+    "recorded_at": "2026-08-11T12:00:03Z",
+    "disposition": "verified by deterministic gate and GPT",
+    "attempt_count": 1,
+    "escalated": False,
+    "policy_violation": False,
+    "human_intervention": False,
+}
+
+
 def _row(**extra):
-    base = {"task_id": "T1", "final_status": "VERIFIED"}
+    base = dict(_VALID_ROW)
     base.update(extra)
     return base
 
@@ -1416,3 +1435,459 @@ def test_the_real_repo_session_is_unaffected_by_identity_validation():
     assert session["truth_state"] == TruthState.UNKNOWN.value
     assert session["mission_consistency"] == "MISMATCH"
     assert session["safe_to_present_as_current_work"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R PROJECTION-BOUNDARY SCHEMA CERTIFICATION
+#
+# Three review rounds found the same class, not three bugs: schema-invalid
+# authoritative evidence crossing this boundary unvalidated, where coercion
+# leaks payload (str() on a dict renders the dict), `x is True` rewrites corrupt
+# evidence as clean False, and a one-field sentinel check admits contradictory
+# state. Field-by-field fixing could not converge. These tests certify the
+# boundary instead: an enumerable contract, swept by a matrix.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: One marker, every carrier. If the no-secret boundary leaks anywhere in the
+#: certified paths, this string shows up in a serialized projection.
+_MARKER = "sk-WCC-PROJECTION-MUST-NOT-RENDER-999"
+
+#: Representative malformed carriers. The dict/list ones carry the marker so a
+#: leak is detectable, not merely a type error.
+_CARRIERS = {
+    "marker_dict": {"api_key": _MARKER},
+    "marker_list": [_MARKER],
+    "marker_nested": {"outer": {"Authorization": f"Bearer {_MARKER}"}},
+    "int": 7,
+    "float": 1.5,
+    "bool": True,
+    "dict": {},
+    "nested_list": [["X"]],
+}
+
+#: The declared contract, mirrored independently of the module so the test does
+#: not simply agree with whatever the implementation happens to do.
+_EXPECTED_CONTRACT = {
+    "task_id": ("str", True),
+    "title": ("str", True),
+    "risk_class": ("str", True),
+    "executor": ("str", True),
+    "final_status": ("str", True),
+    "recorded_at": ("str", True),
+    "disposition": ("str", True),
+    "attempt_count": ("int", True),
+    "escalated": ("bool", True),
+    "policy_violation": ("bool", True),
+    "human_intervention": ("bool", True),
+    "failure_classes": ("list[str]", False),
+    "supervisor_verdict": ("str", False),
+    "mission_id": ("str", False),
+    "candidate_sha": ("str", False),
+}
+
+
+def _one_row_root(tmp_path, label, **override):
+    return _ledger_root(tmp_path / label, _row(**override))
+
+
+def _serialized(root):
+    """Everything a consumer could ever see from this root."""
+    return (_json.dumps(build_run_history(root).to_dict())
+            + _json.dumps(rm.build_dashboard(root, now=_NOW), default=str))
+
+
+# ── the contract itself ────────────────────────────────────────────────────
+def test_the_declared_contract_matches_the_implementation():
+    """Pins the enumerable table, so a field cannot be quietly dropped from
+    validation without this failing."""
+    actual = {f.name: (f.kind, f.required) for f in rm._OUTCOME_FIELDS}
+    assert actual == _EXPECTED_CONTRACT
+
+
+def test_the_real_ledger_satisfies_the_certified_contract():
+    """The certification must not condemn the true history. Every one of the
+    seven real records validates, and the projection stays LIVE."""
+    history = build_run_history(_REPO)
+    assert history.availability == TruthState.LIVE.value
+    assert history.record_count == 7
+    raw = [_json.loads(l) for l in
+           (_REPO / OUTCOME_LEDGER_REL).read_text(encoding="utf-8").splitlines() if l.strip()]
+    for index, rec in enumerate(raw):
+        rm.validate_outcome_record(rec, index)          # must not raise
+
+
+def test_optional_fields_may_be_absent_or_null_as_the_real_ledger_has_them():
+    """Every real record OMITS mission_id and candidate_sha and carries
+    supervisor_verdict: null. Treating those as invalid would be a certification
+    that fails on the truth."""
+    validated = rm.validate_outcome_record(_row())
+    assert validated["mission_id"] is None
+    assert validated["candidate_sha"] is None
+    assert validated["failure_classes"] == []
+    assert rm.validate_outcome_record(_row(supervisor_verdict=None))["supervisor_verdict"] is None
+
+
+# ── the matrix ─────────────────────────────────────────────────────────────
+def test_every_certified_field_rejects_every_malformed_carrier(tmp_path):
+    """The whole point of the mission: one sweep over field x carrier, rather
+    than one test per reported field."""
+    checked = 0
+    for field, (kind, _required) in _EXPECTED_CONTRACT.items():
+        for carrier_name, carrier in _CARRIERS.items():
+            if kind == "str" and isinstance(carrier, str):
+                continue                                # would be legitimate
+            if kind == "int" and type(carrier) is int:
+                continue                                # legitimate int
+            if kind == "bool" and type(carrier) is bool:
+                continue                                # legitimate bool
+            if kind == "list[str]" and carrier == [_MARKER]:
+                continue                                # legitimate list[str]
+            label = f"{field}__{carrier_name}"
+            root = _one_row_root(tmp_path, label, **{field: carrier})
+            history = build_run_history(root)
+            assert history.availability == TruthState.UNAVAILABLE.value, label
+            assert history.runs == [], label
+            assert history.record_count == 0, label
+            rm.build_dashboard(root, now=_NOW)          # must not raise
+            checked += 1
+    assert checked >= 80, f"matrix too small to be a sweep ({checked})"
+
+
+def test_required_fields_may_not_be_absent_or_null(tmp_path):
+    for field, (_kind, required) in _EXPECTED_CONTRACT.items():
+        if not required:
+            continue
+        missing = _row()
+        del missing[field]
+        assert build_run_history(
+            _ledger_root(tmp_path / f"absent_{field}", missing)
+        ).availability == TruthState.UNAVAILABLE.value, field
+        assert build_run_history(
+            _ledger_root(tmp_path / f"null_{field}", _row(**{field: None}))
+        ).availability == TruthState.UNAVAILABLE.value, field
+
+
+def test_a_malformed_required_identifier_does_not_disappear_into_none(tmp_path):
+    """The old `_s()` returned None for a non-string, so a corrupt task_id
+    vanished while the ledger still reported LIVE -- a run with no identity,
+    presented as trustworthy history."""
+    root = _one_row_root(tmp_path, "badid", task_id={"api_key": _MARKER})
+    history = build_run_history(root)
+    assert history.availability == TruthState.UNAVAILABLE.value
+    assert history.runs == []
+
+
+def test_no_raw_outcome_field_is_projected_without_validation():
+    """Structural: every key _project_run emits either comes from the validator
+    or is the index this module generates itself."""
+    projected = set(build_run_history(_REPO).runs[0])
+    assert projected - {"ledger_index"} == set(_EXPECTED_CONTRACT)
+
+
+# ── booleans and integers: the silent-rewrite direction ───────────────────
+def test_malformed_booleans_do_not_become_clean_negative_evidence(tmp_path):
+    """`rec.get(x) is True` turned "true", 1 and {} into False. For a field
+    named policy_violation that is the most dangerous possible direction: a
+    corrupt record would have read as 'no violation'."""
+    for field in ("escalated", "policy_violation", "human_intervention"):
+        for carrier in ("true", 1, 0, {"api_key": _MARKER}, [], "False"):
+            label = f"{field}_{type(carrier).__name__}_{carrier!r}"[:40]
+            root = _one_row_root(tmp_path, label, **{field: carrier})
+            assert build_run_history(root).availability == \
+                TruthState.UNAVAILABLE.value, label
+    # and the legitimate values still project faithfully
+    assert build_run_history(
+        _one_row_root(tmp_path, "pv_true", policy_violation=True)
+    ).runs[0]["policy_violation"] is True
+
+
+def test_attempt_count_requires_a_real_non_negative_integer(tmp_path):
+    assert build_run_history(
+        _one_row_root(tmp_path, "ac0", attempt_count=0)
+    ).availability == TruthState.LIVE.value
+    for bad in (True, False, "2", 1.5, -1, {"api_key": _MARKER}, [1]):
+        label = f"ac_{type(bad).__name__}_{bad!r}"[:40]
+        assert build_run_history(
+            _one_row_root(tmp_path, label, attempt_count=bad)
+        ).availability == TruthState.UNAVAILABLE.value, label
+
+
+def test_a_boolean_is_not_an_attempt_count():
+    """isinstance(True, int) is True in Python, so this needs an explicit check
+    or `true` passes as a count."""
+    with pytest.raises(ValueError, match="attempt_count"):
+        rm.validate_outcome_record(_row(attempt_count=True))
+
+
+# ── the no-secret sweep ───────────────────────────────────────────────────
+def test_the_marker_never_reaches_any_serialized_output(tmp_path):
+    """Matrix, not a single-field test. Every certified field, every carrier
+    capable of holding arbitrary JSON."""
+    swept = 0
+    for field, (kind, _required) in _EXPECTED_CONTRACT.items():
+        for carrier_name in ("marker_dict", "marker_list", "marker_nested"):
+            # `[marker]` is a legitimate list[str], so for failure_classes the
+            # marker is real evidence and SHOULD be projected. Sweeping it there
+            # would test that valid input is discarded, which is the opposite of
+            # the contract.
+            if kind == "list[str]" and carrier_name == "marker_list":
+                continue
+            label = f"sweep_{field}_{carrier_name}"
+            root = _one_row_root(tmp_path, label,
+                                 **{field: _CARRIERS[carrier_name]})
+            blob = _serialized(root)
+            assert _MARKER not in blob, label
+            assert "api_key" not in blob, label
+            assert "Authorization" not in blob, label
+            swept += 1
+    list_fields = sum(1 for k, _ in _EXPECTED_CONTRACT.values() if k == "list[str]")
+    assert swept == len(_EXPECTED_CONTRACT) * 3 - list_fields
+
+
+def test_validation_messages_carry_types_not_payloads():
+    for field in ("task_id", "attempt_count", "policy_violation", "failure_classes"):
+        try:
+            rm.validate_outcome_record(_row(**{field: {"api_key": _MARKER}}))
+        except ValueError as exc:
+            assert _MARKER not in str(exc), field
+            assert field in str(exc), field
+        else:                                            # pragma: no cover
+            raise AssertionError(f"{field} accepted a dict")
+
+
+#: Names the certified paths may interpolate into a message. Each is either a
+#: label this module constructed or a declared kind -- never source evidence.
+_SAFE_INTERPOLATIONS = {"name", "kind", "label", "where", "index", "field", "rel"}
+
+
+def test_the_certified_outcome_path_never_stringifies_evidence():
+    """AST. The leaks existed because str() sat on projection paths."""
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    tree = _ast.parse(src)
+    certified = {"validate_outcome_record", "_validated_string_list",
+                 "_validated_scalar", "_project_run", "_projected_failure_classes",
+                 "effective_denied_ops", "derive_authority_capabilities"}
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.FunctionDef) and node.name in certified:
+            for inner in _ast.walk(node):
+                if isinstance(inner, _ast.Call):
+                    name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
+                    assert name not in ("str", "repr", "format"), (
+                        f"{node.name} calls {name}() on evidence")
+                if isinstance(inner, _ast.FormattedValue):
+                    # An f-string may interpolate a label this module built or a
+                    # TYPE name. It may never interpolate a source value: that is
+                    # str() by another spelling, and it is how the payload leaks.
+                    expr = inner.value
+                    if isinstance(expr, _ast.IfExp):
+                        assert all(isinstance(b, _ast.Constant)
+                                   for b in (expr.body, expr.orelse)), (
+                            f"{node.name} interpolates a computed value")
+                        continue
+                    if isinstance(expr, _ast.Attribute):
+                        assert expr.attr in ("__name__", "name", "value"), (
+                            f"{node.name} interpolates attribute {expr.attr}")
+                        continue
+                    assert isinstance(expr, _ast.Name), (
+                        f"{node.name} interpolates a non-trivial expression")
+                    assert expr.id in _SAFE_INTERPOLATIONS, (
+                        f"{node.name} interpolates {expr.id!r}, which may be evidence")
+
+
+# ── authority: grants AND forbidden_ops ───────────────────────────────────
+def test_both_authority_list_fields_are_validated():
+    """Fixing only forbidden_ops would leave the sibling carrier open."""
+    for field in ("grants", "forbidden_ops"):
+        for carrier in ([{"api_key": _MARKER}], [123], [True], [None],
+                        [["MERGE"]], ["MERGE", {"api_key": _MARKER}],
+                        123, "MERGE", {}):
+            summary = build_worker_authority_summary(
+                Lvl.A1_ASSISTED_ENGINEERING,
+                **{"grants": [], "forbidden_ops": None} | {field: carrier})
+            label = f"{field}={carrier!r}"[:50]
+            assert summary.record_evidence == TruthState.UNAVAILABLE.value, label
+            assert _MARKER not in _json.dumps(summary.to_dict()), label
+
+
+def test_valid_authority_lists_still_project_live():
+    summary = build_worker_authority_summary(
+        Lvl.A1_ASSISTED_ENGINEERING, grants=["approved E1/E2"],
+        forbidden_ops=["MERGE", "DEPLOY"])
+    assert summary.record_evidence == TruthState.LIVE.value
+    assert summary.grants == ["approved E1/E2"]
+    assert build_worker_authority_summary(
+        Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=[]).record_evidence == \
+        TruthState.LIVE.value
+
+
+def test_a_malformed_authority_record_keeps_every_permanent_denial():
+    """Capability safety must never depend on the record being well-formed."""
+    summary = build_worker_authority_summary(
+        Lvl.A1_ASSISTED_ENGINEERING, grants=[{"api_key": _MARKER}],
+        forbidden_ops=[{"api_key": _MARKER}])
+    assert not (summary.can_merge or summary.can_deploy or summary.can_mutate_main
+                or summary.can_write_production or summary.can_self_promote)
+    for op in ("MERGE", "DEPLOY", "MAIN_WRITE", "PRODUCTION_WRITE", "SELF_PROMOTION"):
+        assert op in summary.forbidden_ops
+    assert summary.grants == []
+
+
+def test_a_malformed_authority_record_is_not_silently_filtered():
+    """Dropping the malformed entries and reporting LIVE would hide that the
+    record meant to impose restrictions nobody can now read."""
+    summary = build_worker_authority_summary(
+        Lvl.A1_ASSISTED_ENGINEERING, grants=[], forbidden_ops=["MERGE", 123])
+    assert summary.record_evidence == TruthState.UNAVAILABLE.value
+    assert "unusable" in summary.record_detail
+
+
+def test_unusable_authority_evidence_reaches_backend_truth(tmp_path):
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "ew0a_authority.json").write_text(
+        _json.dumps({"level": "A1_ASSISTED_ENGINEERING",
+                     "grants": [{"api_key": _MARKER}],
+                     "forbidden_ops": ["MERGE"]}), encoding="utf-8")
+
+    dash = rm.build_dashboard(tmp_path, now=_NOW)         # must not raise
+    assert _MARKER not in _json.dumps(dash, default=str)
+    assert dash["worker_authority"]["record_evidence"] == TruthState.UNAVAILABLE.value
+    caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+    assert caps["worker_authority"] == TruthState.UNAVAILABLE.value
+    # worker_authority is part of the oversight floor, so readiness must drop
+    assert dash["backend_truth"]["readiness"] == "UNAVAILABLE"
+    assert any("oversight floor" in r for r in dash["backend_truth"]["reasons"])
+
+
+def test_the_derivation_helpers_refuse_malformed_input_rather_than_render_it():
+    """A permissive public signature is how coercion came back last time."""
+    with pytest.raises(ValueError):
+        rm.effective_denied_ops([{"api_key": _MARKER}])
+    with pytest.raises(ValueError):
+        rm.derive_authority_capabilities([{"api_key": _MARKER}])
+    # valid input unchanged
+    assert "MERGE" in rm.effective_denied_ops(["CUSTOM"])
+    assert rm.derive_authority_capabilities(frozenset())["can_merge"] is True
+
+
+def test_the_real_authority_record_still_projects_live():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert authority["level"] == "A1_ASSISTED_ENGINEERING"
+    assert len(authority["grants"]) == 8
+    assert authority["can_merge"] is False
+    assert dash["backend_truth"]["readiness"] == "PARTIAL"
+
+
+# ── no-session must be the producer's structural envelope ─────────────────
+def _public_no_session(tmp_path):
+    """The producer's own answer, obtained publicly -- not `_no_session()`."""
+    from tools.ns0c_session import session_projection
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    return session_projection(repo_root=tmp_path)
+
+
+def test_the_legitimate_empty_envelope_is_still_live(tmp_path):
+    enriched, state = project_active_session(
+        _public_no_session(tmp_path), "m-runtime", _NOW)
+    assert state is TruthState.LIVE
+    assert enriched["session_present"] is False
+    assert enriched["safe_to_present_as_current_work"] is False
+
+
+def test_an_unknown_requested_session_id_is_still_a_valid_no_session(tmp_path):
+    """The producer legitimately echoes back a requested-but-unknown id, so the
+    envelope check must NOT require session_id is None."""
+    from tools.ns0c_session import session_projection
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    projection = session_projection(repo_root=tmp_path, session_id="does-not-exist")
+    assert projection["session_id"] == "does-not-exist"
+    enriched, state = project_active_session(projection, "m-runtime", _NOW)
+    assert state is TruthState.LIVE
+    assert enriched["session_present"] is False
+
+
+def test_every_populated_sentinel_contradiction_becomes_unavailable(tmp_path):
+    """One field at a time, starting from the real envelope. A sentinel state
+    alongside any evidence of actual work is a contradiction, not an answer."""
+    base = _public_no_session(tmp_path)
+    contradictions = (
+        {"current_task_id": "T1"},
+        {"current_task_title": "task"},
+        {"current_stage": "VERIFYING"},
+        {"tasks_attempted": 1},
+        {"tasks_verified": 1},
+        {"tasks_repaired": 1},
+        {"tasks_escalated": 1},
+        {"tasks_abstained": 1},
+        {"tasks_incomplete": 1},
+        {"blockers": ["something"]},
+        {"mission_id": "real-mission"},
+        {"session_objective": "real objective"},
+        {"session_started_at": "2026-08-16T07:17:41+00:00"},
+        {"starting_main_sha": "abc123"},
+        {"known_sessions": "not-a-list"},
+    )
+    for contradiction in contradictions:
+        forged = dict(base)
+        forged.update(contradiction)
+        enriched, state = project_active_session(forged, "m-runtime", _NOW)
+        assert state is TruthState.UNAVAILABLE, contradiction
+        assert enriched["session_present"] is False, contradiction
+        assert enriched["safe_to_present_as_current_work"] is False, contradiction
+        # nothing a GUI could mistake for live work survives
+        for leaked in ("current_task_id", "current_stage", "tasks_verified",
+                       "session_objective"):
+            assert leaked not in enriched, (contradiction, leaked)
+
+
+def test_a_false_counter_is_not_accepted_as_zero(tmp_path):
+    """`False == 0` in Python, so the counter check needs an explicit bool
+    rejection or a forged envelope slips through."""
+    forged = dict(_public_no_session(tmp_path))
+    forged["tasks_verified"] = False
+    _enriched, state = project_active_session(forged, "m-runtime", _NOW)
+    assert state is TruthState.UNAVAILABLE
+
+
+def test_valid_and_mismatched_sessions_keep_their_reviewed_behaviour():
+    session = rm.build_dashboard(_REPO, now=_NOW)["active_session"]
+    assert session["session_present"] is True
+    assert session["truth_state"] == TruthState.UNKNOWN.value
+    assert session["mission_consistency"] == "MISMATCH"
+    assert session["truth_state"] != TruthState.STALE.value
+    assert session["safe_to_present_as_current_work"] is False
+
+
+def test_the_no_session_envelope_validates_its_own_carried_fields(tmp_path):
+    """Found by the bounded projection-boundary audit, not by review. The
+    envelope legitimately carries session_id and known_sessions, and neither was
+    type-checked -- so a forged envelope with session_id={"api_key": ...} was
+    copied into a LIVE no-session projection, leaking the payload. The same
+    class as the run-history and authority leaks, inside the check written to
+    close them."""
+    base = _public_no_session(tmp_path)
+    for label, override in (
+            ("session_id_dict", {"session_id": {"api_key": _MARKER}}),
+            ("session_id_list", {"session_id": [_MARKER]}),
+            ("session_id_int", {"session_id": 7}),
+            ("known_sessions_dict", {"known_sessions": [{"api_key": _MARKER}]}),
+            ("known_sessions_int", {"known_sessions": [1, 2]}),
+            ("known_sessions_scalar", {"known_sessions": _MARKER}),
+    ):
+        forged = dict(base)
+        forged.update(override)
+        enriched, state = project_active_session(forged, "m-runtime", _NOW)
+        assert state is TruthState.UNAVAILABLE, label
+        assert enriched["session_present"] is False, label
+        assert _MARKER not in _json.dumps(enriched, default=str), label
+
+
+def test_a_string_session_id_and_string_known_sessions_remain_valid(tmp_path):
+    base = dict(_public_no_session(tmp_path))
+    base.update({"session_id": "requested-but-absent",
+                 "known_sessions": ["a", "b"]})
+    _enriched, state = project_active_session(base, "m-runtime", _NOW)
+    assert state is TruthState.LIVE

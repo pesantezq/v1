@@ -39,7 +39,7 @@ import json
 import os
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
 from portfolio_automation.engineer_worker.ew0a import read_outcomes
@@ -200,18 +200,35 @@ def effective_denied_ops(record_forbidden_ops: Any = None) -> frozenset[str]:
     A union, not a substitution. ``FORBIDDEN_OPS`` is denied at EVERY level, so a
     record that omits an operation must not thereby grant it — a record may only
     ever be stricter. Fail-closed by construction rather than by review."""
-    extra: set[str] = set()
-    if isinstance(record_forbidden_ops, (list, tuple, set, frozenset)):
-        extra = {str(op) for op in record_forbidden_ops}
-    return frozenset(FORBIDDEN_OPS) | frozenset(extra)
+    if record_forbidden_ops is None:
+        return frozenset(FORBIDDEN_OPS)
+    # Validated, not coerced. This used to be `{str(op) for op in ...}`, so a
+    # record element `{"api_key": "sk-..."}` was rendered into
+    # worker_authority.forbidden_ops -- the same leak as failure_classes, in a
+    # sibling function, fixed one round later.
+    #
+    # The container is checked BEFORE any iteration. Reaching for
+    # `list(record_forbidden_ops)` first would iterate a bare string into
+    # characters, so "MERGE" would validate as five one-letter operation names --
+    # the same string-is-not-a-list mistake, one function over.
+    if isinstance(record_forbidden_ops, (tuple, set, frozenset)):
+        record_forbidden_ops = sorted(record_forbidden_ops, key=repr)
+    return frozenset(FORBIDDEN_OPS) | frozenset(
+        _validated_string_list("forbidden_ops", record_forbidden_ops))
 
 
-def derive_authority_capabilities(denied_ops: Any) -> dict[str, bool]:
+def derive_authority_capabilities(denied_ops: Iterable[str]) -> dict[str, bool]:
     """Project the capability booleans FROM the denial set.
 
     Pure and total, so a test can prove the values are computed by varying the
-    input rather than by trusting that a default happens to be right today."""
-    denied = frozenset(str(op) for op in denied_ops)
+    input rather than by trusting that a default happens to be right today.
+
+    Takes ``Iterable[str]``, not ``Any``: the previous permissive signature
+    reintroduced coercion through ``str(op)``, which is how a public helper
+    quietly became a rendering path for arbitrary evidence."""
+    if isinstance(denied_ops, (tuple, set, frozenset)):
+        denied_ops = sorted(denied_ops, key=repr)
+    denied = frozenset(_validated_string_list("denied_ops", denied_ops))
     return {cap: op not in denied for cap, op in _AUTHORITY_CAPABILITY_OPS.items()}
 
 
@@ -229,6 +246,11 @@ class WorkerAuthoritySummary:
     can_write_production: bool
     can_self_promote: bool
     capabilities_derived_from: str = "FORBIDDEN_OPS | authority_record.forbidden_ops"
+    #: Whether the RECORD's own list fields were usable. The level itself comes
+    #: from a separate reader that fails closed to A0, so authority can be
+    #: enforceable while the record's grants/denials are unreadable.
+    record_evidence: str = "LIVE"
+    record_detail: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("WorkerAuthoritySummary"), **asdict(self)}
@@ -404,6 +426,125 @@ class RunHistorySummary:
         return {**_base("RunHistorySummary"), **asdict(self)}
 
 
+# ---------------------------------------------------------------------------
+# Projection-boundary schema certification
+#
+# Three consecutive review rounds found the same defect class rather than three
+# unrelated bugs: syntactically valid but SCHEMA-INVALID authoritative evidence
+# crossed this boundary unvalidated, where Python coercion or raw copying could
+# leak payload content (``str()`` on a dict renders the dict), silently rewrite
+# evidence (``x is True`` turns a corrupt value into a clean ``False``), or
+# produce contradictory state. Fixing the reported field each round could not
+# converge, because the hole was the boundary, not the field.
+#
+# THE RULE. Validate first; copy only validated values; never stringify
+# arbitrary evidence. Converting a Path to str, or an Enum to ``.value``, is
+# conversion of something this module owns. ``str(record_field)`` is not
+# validation and is never a substitute for it. Invalid evidence is not
+# sanitised into valid-looking evidence -- it makes the projection UNAVAILABLE.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _OutcomeField:
+    """One ``OutcomeRecord`` field as this projection consumes it.
+
+    ``required`` means present AND non-null. Optional fields may be absent or
+    explicitly null: every record in the real ledger omits ``mission_id`` and
+    ``candidate_sha`` entirely and carries ``supervisor_verdict: null``, so
+    treating those as invalid would condemn the true history."""
+
+    name: str
+    kind: str                    # "str" | "int" | "bool" | "list[str]"
+    required: bool = True
+
+
+#: The enumerable contract. Only fields ``_project_run`` actually reads are
+#: listed -- this certifies the boundary, it does not start projecting more.
+_OUTCOME_FIELDS: tuple[_OutcomeField, ...] = (
+    _OutcomeField("task_id", "str"),
+    _OutcomeField("title", "str"),
+    _OutcomeField("risk_class", "str"),
+    _OutcomeField("executor", "str"),
+    _OutcomeField("final_status", "str"),
+    _OutcomeField("recorded_at", "str"),
+    _OutcomeField("disposition", "str"),
+    _OutcomeField("attempt_count", "int"),
+    _OutcomeField("escalated", "bool"),
+    _OutcomeField("policy_violation", "bool"),
+    _OutcomeField("human_intervention", "bool"),
+    _OutcomeField("failure_classes", "list[str]", required=False),
+    _OutcomeField("supervisor_verdict", "str", required=False),
+    _OutcomeField("mission_id", "str", required=False),
+    _OutcomeField("candidate_sha", "str", required=False),
+)
+
+
+def _validated_string_list(name: str, value: Any) -> list[str]:
+    """A ``list[str]`` means the container AND every element.
+
+    Copied, never coerced. Only the type name reaches the message: a projection
+    must not render content it has just declared unusable."""
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a list of strings, got {type(value).__name__}")
+    for element in value:
+        if not isinstance(element, str):
+            raise ValueError(
+                f"{name} elements must be strings, got {type(element).__name__}")
+    return list(value)
+
+
+def _validated_scalar(name: str, kind: str, value: Any) -> Any:
+    if kind == "str":
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be a string, got {type(value).__name__}")
+        return value
+    if kind == "int":
+        # bool is a subclass of int in Python, so `isinstance(True, int)` is
+        # True. A flag is not a count, and accepting one would let `true` pass
+        # as an attempt number.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer, got {type(value).__name__}")
+        if value < 0:
+            # Every attempt_count in the real ledger is 1, 2 or 4. A negative
+            # count is not a value this contract can mean.
+            raise ValueError(f"{name} must be >= 0")
+        return value
+    if kind == "bool":
+        # NOT `value is True`. That silently turned "true", 1 and {} into a
+        # clean False -- schema-invalid evidence becoming clean NEGATIVE
+        # evidence, which is the most dangerous direction for a field named
+        # policy_violation.
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean, got {type(value).__name__}")
+        return value
+    raise ValueError(f"{name} has an unsupported declared kind {kind!r}")
+
+
+def validate_outcome_record(rec: dict[str, Any], index: int | None = None
+                            ) -> dict[str, Any]:
+    """Validate every source field this projection consumes, or refuse the row.
+
+    Raises ``ValueError``, which :func:`build_run_history` converts into its
+    whole-ledger UNAVAILABLE envelope. Nothing is dropped, defaulted or
+    stringified on the way."""
+    where = "" if index is None else f"row {index}: "
+    out: dict[str, Any] = {}
+    for spec in _OUTCOME_FIELDS:
+        label = f"{where}{spec.name}"
+        value = rec.get(spec.name)
+        if spec.name not in rec or value is None:
+            if spec.required:
+                raise ValueError(
+                    f"{label} is required by OutcomeRecord and is "
+                    f"{'absent' if spec.name not in rec else 'null'}")
+            out[spec.name] = [] if spec.kind == "list[str]" else None
+            continue
+        if spec.kind == "list[str]":
+            out[spec.name] = _validated_string_list(label, value)
+        else:
+            out[spec.name] = _validated_scalar(label, spec.kind, value)
+    return out
+
+
 def _projected_failure_classes(rec: dict[str, Any]) -> list[str]:
     """Project ``failure_classes`` or refuse the record.
 
@@ -422,27 +563,7 @@ def _projected_failure_classes(rec: dict[str, Any]) -> list[str]:
     raw = rec.get("failure_classes")
     if raw is None:
         return []
-    if not isinstance(raw, list):
-        # Type name only. The corrupt payload itself is never echoed: a
-        # projection must not render content it has just declared unusable.
-        raise ValueError(
-            f"failure_classes must be a list per OutcomeRecord, got "
-            f"{type(raw).__name__}")
-    for element in raw:
-        # ``list[str]`` means EVERY element is a string. Validating only the
-        # container left ``str()`` coercing the elements, and ``str()`` on a
-        # dict renders the dict -- so a row carrying
-        # ``[{"api_key": "sk-..."}]`` was projected LIVE with the key's value
-        # inside it. That defeats this module's no-secrets guarantee through a
-        # field nobody would think of as a secret carrier, which is exactly why
-        # it survived a review that was looking at the container.
-        if not isinstance(element, str):
-            raise ValueError(
-                f"failure_classes elements must be strings per OutcomeRecord, "
-                f"got {type(element).__name__}")
-    # Copied, not coerced. Nothing here calls str()/repr()/format on ledger
-    # evidence, so there is no path by which an invalid value can be rendered.
-    return list(raw)
+    return _validated_string_list("failure_classes", raw)
 
 
 def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
@@ -451,31 +572,17 @@ def _project_run(rec: dict[str, Any], index: int) -> dict[str, Any]:
     Identifiers are preserved, never synthesized: ``task_id`` is the record's own
     identity and ``ledger_index`` disambiguates repeats without inventing a
     composite id and presenting it as one the control plane issued."""
-    def _s(key: str) -> str | None:
-        val = rec.get(key)
-        return val if isinstance(val, str) else None
-
-    return {
-        "ledger_index": index,
-        "task_id": _s("task_id"),
-        "title": _s("title"),
-        "risk_class": _s("risk_class"),
-        "executor": _s("executor"),
-        "attempt_count": rec.get("attempt_count"),
-        "final_status": _s("final_status"),
-        "supervisor_verdict": _s("supervisor_verdict"),
-        "failure_classes": _projected_failure_classes(rec),
-        "escalated": rec.get("escalated") is True,
-        "policy_violation": rec.get("policy_violation") is True,
-        "human_intervention": rec.get("human_intervention") is True,
-        "recorded_at": _s("recorded_at"),
-        # Provenance exactly as recorded. OutcomeRecord.mission_id defaults to
-        # None and the historical records predate the field, so None is the true
-        # answer — and the current runtime mission is not a substitute for it.
-        "mission_id": _s("mission_id"),
-        "candidate_sha": _s("candidate_sha"),
-        "disposition": _s("disposition"),
-    }
+    fields = validate_outcome_record(rec, index)
+    # Every value below came out of the validator. There is no `.get()` fallback,
+    # no `_s()` that quietly turns a malformed identifier into None while the
+    # ledger still reports LIVE, no `is True` that rewrites a corrupt flag as
+    # clean False, and no str() anywhere.
+    projected = {"ledger_index": index}
+    projected.update(fields)
+    # Provenance exactly as recorded. OutcomeRecord.mission_id defaults to None
+    # and every record in the real ledger omits it, so None is the true answer —
+    # and the current runtime mission is not a substitute for it.
+    return projected
 
 
 def build_run_history(repo_root: str | Path, rel: str = OUTCOME_LEDGER_REL) -> RunHistorySummary:
@@ -584,16 +691,40 @@ def build_apprenticeship_summary(records: list[dict[str, Any]]) -> Apprenticeshi
         c1_readiness="NOT_READY")
 
 
-def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[str],
+def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: Any,
                                    forbidden_ops: Any = None) -> WorkerAuthoritySummary:
-    """Project authority WITH its capability booleans derived from the denial set.
+    """Project authority, validating the record's own ``list[str]`` fields.
 
-    ``forbidden_ops`` is whatever the authority record carries; it can only make
-    the effective set stricter (see :func:`effective_denied_ops`)."""
-    denied = effective_denied_ops(forbidden_ops)
-    caps = derive_authority_capabilities(denied)
-    return WorkerAuthoritySummary(level=level.value, grants=grants,
-                                  forbidden_ops=sorted(denied), **caps)
+    TWO OUTCOMES, and the distinction is load-bearing.
+
+    Valid record: capability booleans derived from the effective denial set,
+    which is the union of the permanent ``FORBIDDEN_OPS`` boundary with whatever
+    the record additionally forbids -- a record may only ever be stricter.
+
+    Malformed ``grants`` or ``forbidden_ops``: the record's contents are NOT
+    rendered and NOT silently filtered. Filtering would drop restrictions the
+    record meant to impose while still reporting LIVE authority evidence, which
+    is dishonest in the dangerous direction. Instead the record evidence is
+    marked UNAVAILABLE, and the permanent denial boundary is projected on its
+    own -- so every forbidden operation stays forbidden. Capability safety never
+    depends on the record being well-formed."""
+    try:
+        denied = effective_denied_ops(forbidden_ops)
+        projected_grants = ([] if grants is None
+                            else _validated_string_list("grants", grants))
+    except (ValueError, TypeError) as exc:
+        permanent = frozenset(FORBIDDEN_OPS)
+        return WorkerAuthoritySummary(
+            level=level.value, grants=[], forbidden_ops=sorted(permanent),
+            **derive_authority_capabilities(permanent),
+            record_evidence=TruthState.UNAVAILABLE.value,
+            record_detail=(
+                f"the authority record is unusable ({exc}); its contents are not "
+                "projected. The permanent FORBIDDEN_OPS boundary is still "
+                "enforced, so no operation is reported as newly allowed"))
+    return WorkerAuthoritySummary(
+        level=level.value, grants=projected_grants, forbidden_ops=sorted(denied),
+        **derive_authority_capabilities(denied))
 
 
 def build_attention_coverage(items: list[dict[str, Any]] | None = None,
@@ -723,6 +854,14 @@ def project_active_session(session: Any, runtime_mission: str | None,
             TruthState.UNAVAILABLE)
 
     if session.get("session_state") == _NO_SESSION_STATE:
+        if not _is_empty_session_envelope(session):
+            # NO_SUCH_SESSION alongside populated work evidence is not the
+            # producer's empty envelope; it is a contradiction, and accepting it
+            # would hand the GUI LIVE evidence carrying a task id.
+            return (_session_producer_failed(
+                "the producer reported NO_SUCH_SESSION alongside populated "
+                "session evidence; the shape is not its empty-session envelope"),
+                TruthState.UNAVAILABLE)
         # The producer answered the question -- "is there a session?" -- with
         # "no". A usable answer whose truth does not decay: there is no recorded
         # session value whose age would have to be inferred.
@@ -792,6 +931,54 @@ def project_active_session(session: Any, runtime_mission: str | None,
     return enriched, state
 
 
+#: The producer's empty-session envelope, field by field. Matching only
+#: ``session_state`` was not enough: a corrupted ledger whose last SessionState
+#: happens to read NO_SUCH_SESSION yields a POPULATED projection, which was then
+#: accepted as the legitimate "no session" answer and copied wholesale -- so a
+#: dashboard received session_present=false and truth_state=LIVE while the dict
+#: still carried session_id, current_task_id and current_stage.
+_NO_SESSION_SENTINELS = ("session_state", "session_objective", "mission_id",
+                         "session_started_at", "starting_main_sha")
+_NO_SESSION_NULLS = ("current_task_id", "current_task_title", "current_stage")
+_NO_SESSION_COUNTERS = ("tasks_attempted", "tasks_verified", "tasks_repaired",
+                        "tasks_escalated", "tasks_abstained", "tasks_incomplete")
+
+
+def _is_empty_session_envelope(session: dict[str, Any]) -> bool:
+    """Whether this really is the producer's no-session answer.
+
+    ``session_id`` is deliberately NOT required to be None: the producer
+    legitimately echoes back a requested-but-unknown session id in its
+    no-session envelope. Everything that would represent actual work must be
+    absent or zero."""
+    if any(session.get(name) != _NO_SESSION_STATE for name in _NO_SESSION_SENTINELS):
+        return False
+    if any(session.get(name) is not None for name in _NO_SESSION_NULLS):
+        return False
+    for name in _NO_SESSION_COUNTERS:
+        value = session.get(name)
+        # `False == 0` in Python, so an explicit bool check is required or a
+        # counter of False would pass as zero.
+        if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+            return False
+    blockers = session.get("blockers")
+    if not isinstance(blockers, list) or blockers:
+        return False
+    # The two fields the envelope legitimately carries still have declared
+    # types, and the boundary audit found both unchecked: an envelope forged
+    # with session_id={"api_key": ...} or a non-string known_sessions element
+    # was copied into a LIVE no-session projection, leaking the payload. Same
+    # class as the run-history and authority leaks, in the check written to
+    # close them.
+    session_id = session.get("session_id")
+    if session_id is not None and not isinstance(session_id, str):
+        return False
+    known = session.get("known_sessions")
+    if not isinstance(known, list):
+        return False
+    return all(isinstance(entry, str) for entry in known)
+
+
 def _readability(path: Path) -> str:
     """File readability — NOT component health. Named so it cannot be mistaken."""
     if not path.exists():
@@ -812,7 +999,8 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
                           worker: Any, now: str | None,
                           session_state: TruthState,
                           learning_state: TruthState,
-                          run_history: RunHistorySummary) -> ReadinessAssessment:
+                          run_history: RunHistorySummary,
+                          authority_evidence: str = "LIVE") -> ReadinessAssessment:
     """Classify every oversight capability from the evidence actually present.
 
     Each capability declares whether a PRODUCER exists. That is an engineering
@@ -839,10 +1027,19 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
                    detail="config/ew0a_runtime.json (protected, read-only here)"),
         Capability("worker_authority",
                    classify(producer_exists=True,
-                            value=getattr(level, "value", None),
+                            # An unusable authority RECORD makes this capability
+                            # UNAVAILABLE even though the level itself read
+                            # closed to A0. worker_authority is part of the
+                            # oversight floor, so readiness drops accordingly --
+                            # which is the honest answer when an operator cannot
+                            # see what the worker is permitted to do.
+                            value=(getattr(level, "value", None)
+                                   if authority_evidence == TruthState.LIVE.value
+                                   else None),
                             requires_freshness=False),
                    required=True,
-                   detail="config/ew0a_authority.json (protected, read-only here)"),
+                   detail=("config/ew0a_authority.json (protected, read-only here); "
+                           f"record evidence {authority_evidence}")),
         Capability("mission_state",
                    classify(producer_exists=True,
                             value=policy.mission_id if policy else None,
@@ -972,16 +1169,20 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     except Exception:  # noqa: BLE001
         present = set()
 
-    grants: list[str] = []
+    # Raw record values are passed through UNVALIDATED on purpose: the builder
+    # owns the validation, so there is exactly one place where authority record
+    # evidence is checked.
+    grants: Any = None
     record_forbidden: Any = None
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
             authority_record = json.loads(ap.read_text(encoding="utf-8"))
-            grants = authority_record.get("grants", [])
-            record_forbidden = authority_record.get("forbidden_ops")
-        except (OSError, ValueError):
-            grants = []
+            if isinstance(authority_record, dict):
+                grants = authority_record.get("grants")
+                record_forbidden = authority_record.get("forbidden_ops")
+        except (OSError, ValueError, UnicodeError):
+            grants = None
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",
@@ -1015,6 +1216,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         })
 
     # Built BEFORE the truth assessment so every one of them is classified.
+    worker_authority = build_worker_authority_summary(level, grants, record_forbidden)
     run_history = build_run_history(root)
     learning, learning_state = _project_learning(root, worker.worker_identity, now)
     session_payload, session_status, session_detail = _build_active_session(root)
@@ -1026,8 +1228,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         "controller": controller.to_dict(),
         "supervisor": build_supervisor_summary(records).to_dict(),
         "worker": worker.to_dict(),
-        "worker_authority": build_worker_authority_summary(
-            level, grants, record_forbidden).to_dict(),
+        "worker_authority": worker_authority.to_dict(),
         "mission": build_mission_summary(mission or "unknown", present).to_dict(),
         "apprenticeship": build_apprenticeship_summary(records).to_dict(),
         # Unchanged shape for compatibility; "attention" below says what it MEANS.
@@ -1045,7 +1246,8 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     dashboard["backend_truth"] = _assess_backend_truth(
         level=level, policy=policy, records=records, worker=worker, now=now,
         session_state=session_state, learning_state=learning_state,
-        run_history=run_history).to_dict()
+        run_history=run_history,
+        authority_evidence=worker_authority.record_evidence).to_dict()
     return dashboard
 
 

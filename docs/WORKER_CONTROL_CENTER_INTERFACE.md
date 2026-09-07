@@ -108,6 +108,35 @@ union, never a substitution. A record that omits an operation therefore cannot g
 it; a record may only ever be stricter. `capabilities_derived_from` records this on
 the projection itself.
 
+#### The record's own list fields are validated
+
+`grants` and `forbidden_ops` are both `list[str]`, and **both** are validated — fixing
+only `forbidden_ops` would have left the sibling carrier open to the identical leak.
+Neither is ever stringified: `{str(op) for op in …}` rendered a record element
+`{"api_key": "sk-…"}` straight into `worker_authority.forbidden_ops`. The container is
+checked before any iteration, because `list("MERGE")` would otherwise validate a bare
+string as five one-character operation names.
+
+A malformed record produces two new fields — `record_evidence` (`LIVE` | `UNAVAILABLE`)
+and `record_detail` — and behaves as follows:
+
+- the record's contents are **not** rendered;
+- the record's contents are **not** silently filtered either. Dropping the malformed
+  entries and still reporting `LIVE` would discard restrictions the record meant to
+  impose while claiming the authority evidence is good — dishonest in the dangerous
+  direction;
+- the permanent `FORBIDDEN_OPS` boundary is projected on its own, so **every forbidden
+  operation stays forbidden and all five `can_*` booleans stay false**. Capability safety
+  never depends on the record being well-formed;
+- the `worker_authority` capability becomes `UNAVAILABLE`. Because that capability is
+  part of the oversight floor, **readiness drops to `UNAVAILABLE`** — the honest answer
+  when an operator cannot see what the worker is permitted to do.
+
+The authority *level* is unaffected: it comes from a separate reader that fails closed to
+`A0_DIAGNOSTIC`, so authority can remain enforceable while the record's lists are
+unreadable. No enforcement path, `FORBIDDEN_OPS` entry, or A0/A1 semantic is changed by
+any of this.
+
 ### MissionSummary
 `deliverables` (name → `VERIFIED|NOT_STARTED`), `verified_count`, `total_required`,
 `is_complete`. **Progress is derived from VERIFIED required deliverables, never from
@@ -245,6 +274,39 @@ The invariant behind both rules: **no corrupt record may escape through
 rendering from this projection must fail closed to an honest `UNAVAILABLE`, never to a
 stack trace.
 
+#### The certified field contract
+
+`validate_outcome_record()` checks **every** `OutcomeRecord` field this projection reads,
+against an enumerable table (`_OUTCOME_FIELDS`) rather than field by field as defects are
+reported. Only fields the projection actually consumes are listed — certifying the
+boundary is not a licence to start emitting more.
+
+| Field | Declared | Required |
+|---|---|---|
+| `task_id` `title` `risk_class` `executor` `final_status` `recorded_at` `disposition` | `str` | present and non-null |
+| `attempt_count` | `int` | present and non-null |
+| `escalated` `policy_violation` `human_intervention` | `bool` | present and non-null |
+| `failure_classes` | `list[str]` | optional — absent or `null` → `[]` |
+| `supervisor_verdict` `mission_id` `candidate_sha` | `str` | optional — absent or `null` → `None` |
+
+The optional set is not a convenience: every record in the real ledger **omits**
+`mission_id` and `candidate_sha` and carries `supervisor_verdict: null`, so treating
+those as invalid would be a certification that fails on the truth. All seven real records
+validate, and a test asserts it.
+
+Three edges are load-bearing:
+
+- **`bool` is a subclass of `int` in Python**, so `attempt_count` explicitly rejects
+  `true`. A flag is not a count. Negative counts are rejected too (`>= 0`); every real
+  value is 1, 2 or 4.
+- **Booleans are type-checked, not truth-tested.** The previous `rec.get(x) is True`
+  turned `"true"`, `1` and `{}` into a clean `False` — schema-invalid evidence becoming
+  clean **negative** evidence, which for a field named `policy_violation` is the most
+  dangerous possible direction.
+- **A malformed required identifier does not disappear.** The previous `_s()` returned
+  `None` for a non-string, so a corrupt `task_id` vanished while the ledger still
+  reported `LIVE` — a run with no identity, presented as trustworthy history.
+
 ### Active-session truth and mission consistency
 `dashboard["active_session"]`. Episode discovery belongs to the producer
 (`tools/ns0c_session.session_projection`); the read model asks it and classifies the
@@ -274,6 +336,18 @@ half-session still carrying current-work fields such as `current_task_id`, which
 could render as a phantom active session. A malformed session now returns the same
 producer-failure envelope as any other unusable answer, so there are no current-work
 fields for a template to read out of it.
+
+**The no-session answer is recognised STRUCTURALLY, not by one field.** Matching only
+`session_state == NO_SUCH_SESSION` was not enough: a corrupted ledger whose last
+`SessionState` happens to read that value yields a fully **populated** projection, which
+was then accepted as the legitimate empty answer and copied wholesale — so a consumer
+received `session_present: false` and `truth_state: LIVE` from a dict still carrying
+`session_id`, `current_task_id` and `current_stage`. The whole envelope is now required:
+the five sentinel fields, the three null current-task fields, six zero counters (with an
+explicit `bool` rejection, since `False == 0`), empty `blockers`, and `known_sessions` as
+a list of strings. `session_id` may be `None` **or** a string — the producer legitimately
+echoes back a requested-but-unknown id — but not an arbitrary value. Any contradiction
+yields `UNAVAILABLE` with no current-work fields for a template to read.
 
 **`PENDING_BACKEND` is reachable only through producer ABSENCE.** An earlier version
 returned it when one concrete ledger filename was missing and when the producer raised.
@@ -387,6 +461,17 @@ distinct. Emitted at `dashboard["backend_truth"]`.
 **Missing timestamp is `UNKNOWN`, never `STALE`.** Calling an untimestamped value stale
 asserts an age nobody measured. It looks conservative, which is why it is the tempting
 mistake.
+
+**THE PROJECTION-BOUNDARY RULE.** Validate first; copy only validated values; never
+stringify arbitrary evidence. Converting a `Path` to `str` or an `Enum` to `.value` is
+conversion of something this module owns — `str(record_field)` is not validation and is
+never a substitute for it. Three consecutive review rounds found the same class rather
+than three unrelated bugs: schema-invalid authoritative evidence crossing this boundary
+unvalidated, where `str()` on a dict renders the dict (leaking payload), `x is True`
+rewrites a corrupt value as a clean `False`, and a one-field sentinel check admits
+contradictory state. Fixing the reported field each round could not converge, because
+the hole was the boundary. Invalid evidence is therefore **not** sanitised into
+valid-looking evidence — it makes the projection `UNAVAILABLE`.
 
 **`PENDING_BACKEND` means the producer has not been implemented — and nothing else.**
 Not: no records · an empty dataset · no currently active session · a malformed response
