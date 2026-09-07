@@ -457,7 +457,7 @@ learning while the package sat in the tree.
 | module present but exposes no `build_learning_dashboard` | `UNAVAILABLE` |
 | builder raises | `UNAVAILABLE` |
 | builder returns a shape that is not the published projection | `UNAVAILABLE` |
-| valid projection | `LIVE` |
+| valid projection | **`UNAVAILABLE` — see the quarantine below** |
 
 **A generic `ImportError` is not evidence that nobody built the producer.** It is
 raised just as readily when the module exists and one of *its* imports fails, or when
@@ -467,6 +467,66 @@ itself — or a parent package, without which it cannot exist — proves absence
 **The response shape is validated.** `LIVE` must be a statement about the evidence, not
 about the call returning without raising, so a response that is not a dict carrying
 `recent_lessons` is `UNAVAILABLE`.
+
+#### The learning payload is QUARANTINED
+
+The producer exists and exposes `build_learning_dashboard`, so this is **`UNAVAILABLE`,
+never `PENDING_BACKEND`** — claiming nobody built learning would send an operator to
+write code that is in the tree with lessons in it.
+
+But the payload was admitted on a shape check alone (a dict containing
+`recent_lessons`) and then emitted wholesale, so a lesson whose `principle` is
+`{"api_key": "sk-…"}` reached the dashboard as trusted GUI evidence. Validating
+`principle` would be another instance-level repair, and this interface's history shows
+where that leads: the learning dashboard carries four independently shaped projections
+(`recent_lessons`, `capability_competence`, `lesson_transfer`, `graduation_readiness`)
+which themselves derive from stored lessons, competence, retrieval and evaluation
+records. Certifying that is its own bounded mission (**GUI-L**).
+
+Until then: **no value returned by `build_learning_dashboard()` reaches this dashboard.**
+The builder is deliberately not invoked — there is no payload to discard, so there is
+nothing to leak — and the envelope carries only `read_model`, `schema_kind`,
+`schema_version`, `truth_state`, `freshness` and a module-owned `detail`. Absence by
+construction, not by sanitisation.
+
+`learning` remains a **secondary** capability, so readiness follows mechanically from the
+required gaps; it was not adjusted to preserve the previous display.
+
+#### The top-level projection inventory is executable
+
+`DASHBOARD_PROJECTION_REGISTRY` declares a boundary classification for **every**
+top-level key `build_dashboard()` emits, and a test asserts the registry equals the
+actual emitted key set — on the real repository and on an empty one. A new surface
+cannot be added without declaring who owns its boundary.
+
+| Boundary | Surfaces |
+|---|---|
+| `GUI_R_VALIDATED` | `run_history` · `worker_authority` · `active_session` |
+| `UNAVAILABLE_PENDING_CERTIFICATION` | `learning` |
+| `MODULE_OWNED` | `schema_version` · `schema_kind` · `read_model` · `attention_items` · `attention` |
+| `DERIVED_FROM_REGISTERED_INPUTS` | `backend_truth` |
+| `KNOWN_SOURCE_READER_BLOCKER` | `controller` · `mission` · `worker` · `supervisor` · `apprenticeship` · `system_health` |
+
+The registry is an **audit artifact, not a second truth engine**: it derives no
+authority, readiness, mission state, health or freshness, and it is not emitted in the
+dashboard.
+
+It deliberately does **not** claim the dashboard is certified. Six surfaces are marked
+`KNOWN_SOURCE_READER_BLOCKER` because they reach this module through canonical readers
+with known, deliberately unrepaired failure modes:
+
+- **A** — `ew0a_authority.read_authority_level` raises `TypeError` on a non-object JSON root
+- **B** — `ew0a_loop.read_runtime_policy` raises `AttributeError` on the same shape
+- **C** — `_read_records` admits non-dict rows whose `.get()` then raises in
+  `build_supervisor_summary`
+
+`NOT FIXED — SEPARATE SOURCE-READER HARDENING REQUIRED BEFORE GUI-1` (**GUI-SR**). **C
+must not be repaired by filtering**, which would recreate the silent-evidence-loss defect
+this interface fixed for run history.
+
+The reason this registry exists: `learning` escaped five review rounds because the set of
+projection paths lived in prose — including in this document's own audit tables. It is a
+test now.
 
 `truth_state` is set on the projection and `freshness` is
 `NOT_APPLICABLE_HISTORICAL_EVIDENCE`. **No freshness threshold is imposed on lesson

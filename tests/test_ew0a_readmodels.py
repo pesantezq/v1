@@ -406,11 +406,16 @@ def test_real_repo_session_mission_disagreement_is_visible_in_the_dashboard():
 
 
 # ── B. learning: a failing producer is not a missing one ────────────────────
-def test_learning_projection_is_live_and_capability_classified():
+def test_learning_projection_is_quarantined_and_capability_classified():
+    """Was: learning is LIVE. Round-5 review showed the payload was admitted on a
+    shape check alone and then emitted wholesale, so a lesson whose `principle`
+    is an object reached the dashboard as trusted evidence. The producer exists,
+    so this is UNAVAILABLE and never PENDING_BACKEND."""
     dash = rm.build_dashboard(_REPO, now=_NOW)
-    assert dash["learning"]["truth_state"] == TruthState.LIVE.value
+    assert dash["learning"]["truth_state"] == TruthState.UNAVAILABLE.value
+    assert dash["learning"]["truth_state"] != PENDING_BACKEND
     caps = {c["capability"]: c for c in dash["backend_truth"]["capabilities"]}
-    assert caps["learning"]["state"] == TruthState.LIVE.value
+    assert caps["learning"]["state"] == TruthState.UNAVAILABLE.value
     assert caps["learning"]["required"] is False
 
 
@@ -957,11 +962,13 @@ def test_learning_unusable_response_shape_is_not_classified_live(monkeypatch):
         assert projection["truth_state"] == TruthState.UNAVAILABLE.value
 
 
-def test_learning_valid_projection_is_live():
+def test_a_working_learning_producer_is_still_withheld_not_live():
+    """The producer works. It is withheld anyway, because its nested payload
+    contract is uncertified -- that is the architectural decision, not a bug."""
     projection, state = rm._project_learning(_REPO, "engineer.local_qwen2_5_7b", _NOW)
-    assert state is TruthState.LIVE
-    assert projection["truth_state"] == TruthState.LIVE.value
-    assert "recent_lessons" in projection
+    assert state is TruthState.UNAVAILABLE
+    assert projection["truth_state"] == TruthState.UNAVAILABLE.value
+    assert "recent_lessons" not in projection
 
 
 # ── G. the structural invariant ─────────────────────────────────────────────
@@ -2297,3 +2304,176 @@ def test_all_producer_derived_emitted_fields_are_in_the_validated_contract():
     # ActiveSession, populated branch
     assert set(dash["active_session"]) == (
         set(rm.SESSION_PROJECTED_SOURCE_FIELDS) | set(rm.SESSION_MODULE_FIELDS))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R FINAL CONTAINMENT AND DASHBOARD PROJECTION INVENTORY
+#
+# Round 5 found the P2 in `learning` -- a FOURTH projection, never enumerated,
+# including in my own audit tables twice. Architectural review decided against
+# certifying learning inside this PR: its four nested projections derive from
+# stored lessons, competence, retrieval and evaluation records, which is its own
+# bounded mission. So the payload is quarantined, and the set of projection
+# paths stops living in human memory.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_LEAK_MARKER = "LEAK_MARKER_sk_999"
+
+
+def _learning_root(tmp_path, field, carrier):
+    """A repo root whose lesson log carries a schema-invalid nested field."""
+    import shutil
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    for name in ("ew0a_authority.json", "ew0a_runtime.json"):
+        shutil.copy(_REPO / "config" / name, tmp_path / "config" / name)
+    rows = [_json.loads(l) for l in
+            (_REPO / "docs" / "EW0A_LEARNING_LESSONS.jsonl").read_text(
+                encoding="utf-8").splitlines() if l.strip()]
+    bad = dict(rows[0])
+    bad[field] = carrier
+    (tmp_path / "docs" / "EW0A_LEARNING_LESSONS.jsonl").write_text(
+        _json.dumps(bad) + "\n", encoding="utf-8")
+    return tmp_path
+
+
+# ── learning containment ──────────────────────────────────────────────────
+def test_the_learning_envelope_carries_no_producer_derived_key():
+    """Absence by construction. The marker cannot be sanitised out of a payload
+    that was never admitted."""
+    projection, _state = rm._project_learning(_REPO, "engineer.x", _NOW)
+    for producer_key in ("recent_lessons", "capability_competence",
+                         "lesson_transfer", "graduation_readiness"):
+        assert producer_key not in projection, producer_key
+    assert set(projection) == {"schema_version", "schema_kind", "read_model",
+                               "truth_state", "freshness", "detail"}
+    assert "not yet certified" in projection["detail"]
+
+
+def test_the_learning_builder_is_not_invoked_while_quarantined(monkeypatch):
+    """No uncertified work is executed to produce a result this module would
+    then throw away."""
+    from portfolio_automation.engineer_worker.learning import readmodels as lrm
+    calls = []
+
+    def _record(*a, **k):
+        calls.append(a)
+        return {"recent_lessons": {"recent": [{"principle": _LEAK_MARKER}]}}
+
+    monkeypatch.setattr(lrm, "build_learning_dashboard", _record)
+    projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
+    assert calls == [], "the quarantined path invoked the learning builder"
+    assert state is TruthState.UNAVAILABLE
+    assert _LEAK_MARKER not in _json.dumps(projection, default=str)
+
+
+def test_a_malformed_learning_field_never_reaches_the_dashboard(tmp_path):
+    """The round-5 reproduction, plus a second nested carrier so the test does
+    not depend on which field review happened to name."""
+    for label, (field, carrier) in {
+            "principle_dict": ("principle", {"api_key": _LEAK_MARKER}),
+            "observed_dict": ("observed_behavior", {"api_key": _LEAK_MARKER}),
+            "principle_nested": ("principle",
+                                 {"outer": {"Authorization": f"Bearer {_LEAK_MARKER}"}}),
+            "trigger_list": ("trigger", [_LEAK_MARKER]),
+    }.items():
+        root = _learning_root(tmp_path / label, field, carrier)
+        dash = rm.build_dashboard(root, now=_NOW)          # must not raise
+        caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+        assert caps["learning"] == TruthState.UNAVAILABLE.value, label
+        assert dash["learning"]["truth_state"] == TruthState.UNAVAILABLE.value, label
+        assert "recent_lessons" not in dash["learning"], label
+        blob = _json.dumps(dash, default=str)
+        assert _LEAK_MARKER not in blob, label
+        assert "api_key" not in blob and "Authorization" not in blob, label
+
+
+def test_an_absent_learning_producer_is_still_pending_backend(monkeypatch):
+    """Quarantine must not collapse the absent/exists distinction that commit 2
+    established."""
+    monkeypatch.setattr(rm, "_LEARNING_PRODUCER_MODULE",
+                        "portfolio_automation.engineer_worker.learning.not_built")
+    projection, state = rm._project_learning(_REPO, "engineer.x", _NOW)
+    assert state is TruthState.PENDING_BACKEND
+    assert projection == PENDING_BACKEND
+
+
+def test_learning_readiness_effect_is_derived_not_asserted():
+    """learning is a SECONDARY capability, so the readiness the lattice derives
+    is whatever the required gaps already dictate. Not hardcoded to preserve the
+    previous display."""
+    truth = rm.build_dashboard(_REPO, now=_NOW)["backend_truth"]
+    caps = {c["capability"]: c for c in truth["capabilities"]}
+    assert caps["learning"]["required"] is False
+    required_gaps = [c["capability"] for c in truth["capabilities"]
+                     if c["required"] and c["state"] != TruthState.LIVE.value]
+    assert required_gaps, "readiness must still be driven by required gaps"
+    assert truth["readiness"] == "PARTIAL"
+
+
+# ── the executable projection inventory ───────────────────────────────────
+def test_every_top_level_dashboard_surface_is_registered():
+    """THE control that would have caught learning before review. The set of
+    projection paths lived in prose -- including in my own audit tables, twice.
+    It is executable now."""
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    registered = set(rm.DASHBOARD_PROJECTION_REGISTRY)
+    actual = set(dash)
+    assert actual - registered == set(), (
+        f"unregistered dashboard projections: {sorted(actual - registered)}")
+    assert registered - actual == set(), (
+        f"registered but not emitted: {sorted(registered - actual)}")
+
+
+def test_the_registry_holds_on_an_empty_repository_too(tmp_path):
+    """The emitted key set must not depend on the data present."""
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    dash = rm.build_dashboard(tmp_path, now=_NOW)
+    assert set(dash) == set(rm.DASHBOARD_PROJECTION_REGISTRY)
+
+
+def test_the_three_certified_paths_are_marked_validated():
+    for name in ("run_history", "worker_authority", "active_session"):
+        entry = rm.DASHBOARD_PROJECTION_REGISTRY[name]
+        assert entry.boundary is rm.ProjectionBoundary.GUI_R_VALIDATED, name
+        assert entry.detail
+
+
+def test_learning_is_marked_pending_certification_not_validated_or_pending_backend():
+    entry = rm.DASHBOARD_PROJECTION_REGISTRY["learning"]
+    assert entry.boundary is rm.ProjectionBoundary.UNAVAILABLE_PENDING_CERTIFICATION
+    assert entry.boundary is not rm.ProjectionBoundary.GUI_R_VALIDATED
+    assert "not admitted" in entry.detail
+
+
+def test_the_registry_does_not_claim_the_whole_dashboard_is_certified():
+    """Known A/B/C source-reader debt must stay visible. A registry that marked
+    everything validated would be the confidently-wrong artifact this whole PR
+    exists to avoid."""
+    blocked = {name for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items()
+               if entry.boundary is rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER}
+    assert blocked == {"controller", "mission", "worker", "supervisor",
+                       "apprenticeship", "system_health"}
+    validated = {name for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items()
+                 if entry.boundary is rm.ProjectionBoundary.GUI_R_VALIDATED}
+    assert validated == {"run_history", "worker_authority", "active_session"}
+    # every blocked surface names which reader blocks it
+    for name in blocked:
+        assert "blocker" in rm.DASHBOARD_PROJECTION_REGISTRY[name].detail.lower(), name
+
+
+def test_every_registered_surface_carries_a_boundary_and_a_reason():
+    for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
+        assert isinstance(entry.boundary, rm.ProjectionBoundary), name
+        assert entry.detail.strip(), name
+
+
+def test_the_registry_derives_no_truth_of_its_own():
+    """An audit artifact, not a second truth engine. It must not appear in the
+    dashboard, and it must not carry truth states or readiness."""
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    assert "projection_registry" not in dash
+    assert not (set(rm.DASHBOARD_PROJECTION_REGISTRY) & {"backend_truth_registry"})
+    for entry in rm.DASHBOARD_PROJECTION_REGISTRY.values():
+        assert not hasattr(entry, "truth_state")
+        assert not hasattr(entry, "readiness")

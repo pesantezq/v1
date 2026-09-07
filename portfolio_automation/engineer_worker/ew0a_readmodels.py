@@ -38,6 +38,7 @@ import importlib
 import json
 import os
 from dataclasses import dataclass, asdict, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -1245,6 +1246,27 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
     return assess_readiness(caps)
 
 
+#: Why the learning payload is withheld. Module-owned text: nothing from the
+#: producer, and no exception message, reaches a consumer through this.
+_LEARNING_QUARANTINE_DETAIL = (
+    "the learning producer exists and exposes build_learning_dashboard, but its "
+    "nested WCC projection contract is not yet certified; the payload is "
+    "deliberately not admitted (see GUI-L)")
+
+
+def _quarantined_learning() -> dict[str, Any]:
+    """The learning envelope while the payload contract is uncertified.
+
+    Deliberately carries NO producer-derived key -- no recent_lessons, no
+    capability_competence, no lesson_transfer, no graduation_readiness. The
+    marker cannot be sanitised out of a payload that was never admitted."""
+    return {"schema_version": READMODEL_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,
+            "read_model": "LearningDashboard",
+            "truth_state": TruthState.UNAVAILABLE.value,
+            "freshness": "NOT_APPLICABLE_HISTORICAL_EVIDENCE",
+            "detail": _LEARNING_QUARANTINE_DETAIL}
+
+
 def _project_learning(root: Path, worker_identity: str, now: str | None
                       ) -> tuple[Any, TruthState]:
     """Project the learning dashboard with an HONEST truth state.
@@ -1277,22 +1299,133 @@ def _project_learning(root: Path, worker_identity: str, now: str | None
         return _unavailable(
             f"{_LEARNING_PRODUCER_MODULE} exposes no build_learning_dashboard")
 
-    try:
-        dashboard = builder(root, worker_identity, now or PENDING_BACKEND)
-    except Exception as exc:  # noqa: BLE001 - producer exists and failed: operational
-        return _unavailable(
-            f"the learning producer raised {type(exc).__name__}")
+    # QUARANTINE.
+    #
+    # The producer exists and its entry point is present, so this is NOT
+    # PENDING_BACKEND -- claiming nobody built learning would send an operator
+    # to write code that is in the tree with lessons in it. But its payload was
+    # admitted on a shape check alone (a dict containing "recent_lessons") and
+    # then emitted wholesale, so a lesson whose `principle` is
+    # {"api_key": "..."} reached the dashboard as trusted GUI evidence.
+    #
+    # Validating `principle` would be another instance-level repair, and this PR
+    # has already demonstrated where that leads: the learning dashboard carries
+    # four independently shaped projections (recent_lessons,
+    # capability_competence, lesson_transfer, graduation_readiness) which
+    # themselves derive from stored lessons, competence, retrieval and
+    # evaluation records. Certifying that is its own bounded mission (GUI-L).
+    #
+    # Until then the honest classification is: producer exists, WCC-safe
+    # projection does not. The builder is deliberately NOT INVOKED -- there is
+    # no payload to discard, so there is nothing to leak, and no uncertified
+    # work is executed to produce a result this module would throw away.
+    return _quarantined_learning(), TruthState.UNAVAILABLE
 
-    # A usable answer must actually be the projection this interface publishes.
-    # Stamping LIVE on whatever came back would make the truth state a statement
-    # about the call succeeding rather than about the evidence.
-    if not isinstance(dashboard, dict) or "recent_lessons" not in dashboard:
-        return _unavailable("the learning producer returned an unusable projection shape")
 
-    dashboard = dict(dashboard)
-    dashboard["truth_state"] = TruthState.LIVE.value
-    dashboard["freshness"] = "NOT_APPLICABLE_HISTORICAL_EVIDENCE"
-    return dashboard, TruthState.LIVE
+class ProjectionBoundary(str, Enum):
+    """Who owns a top-level dashboard surface's boundary, and whether it is certified.
+
+    An AUDIT artifact, not a second truth engine. It derives no authority, no
+    readiness, no mission state, no health and no freshness -- those stay where
+    they are. It answers only: what does build_dashboard emit, who owns that
+    boundary, and has it been certified?"""
+
+    #: Built entirely from this module's own constants and derivations.
+    MODULE_OWNED = "MODULE_OWNED"
+    #: Source evidence validated field by field against a declared contract.
+    GUI_R_VALIDATED = "GUI_R_VALIDATED"
+    #: Producer exists; its WCC payload contract is not certified, so the
+    #: payload is withheld and the projection reports UNAVAILABLE.
+    UNAVAILABLE_PENDING_CERTIFICATION = "UNAVAILABLE_PENDING_CERTIFICATION"
+    #: Reaches this module through a canonical source reader with a known,
+    #: deliberately unrepaired failure mode. NOT certified.
+    KNOWN_SOURCE_READER_BLOCKER = "KNOWN_SOURCE_READER_BLOCKER"
+    #: Computed from surfaces registered above; carries no fresh source evidence.
+    DERIVED_FROM_REGISTERED_INPUTS = "DERIVED_FROM_REGISTERED_INPUTS"
+
+
+@dataclass(frozen=True)
+class _RegisteredProjection:
+    boundary: ProjectionBoundary
+    detail: str
+
+
+#: EVERY top-level key ``build_dashboard`` emits, with its boundary status.
+#:
+#: This exists because the reason `learning` escaped five review rounds is that
+#: the set of projection paths lived in human memory and prose -- including in
+#: my own audit tables, twice. A test asserts this registry equals the actual
+#: emitted key set, so a new surface cannot be added without declaring who owns
+#: its boundary. That is the control that would have caught learning before
+#: review did.
+#:
+#: It deliberately does NOT claim the dashboard is safe. Six of these surfaces
+#: are marked as blocked on known source-reader debt, and one as withheld.
+DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
+    # --- identity -----------------------------------------------------------
+    "schema_version": _RegisteredProjection(
+        ProjectionBoundary.MODULE_OWNED, "_base() constant"),
+    "schema_kind": _RegisteredProjection(
+        ProjectionBoundary.MODULE_OWNED, "_base() constant"),
+    "read_model": _RegisteredProjection(
+        ProjectionBoundary.MODULE_OWNED, "_base() constant"),
+    # --- certified by the preceding commits ---------------------------------
+    "run_history": _RegisteredProjection(
+        ProjectionBoundary.GUI_R_VALIDATED,
+        "every consumed OutcomeRecord field validated via validate_outcome_record; "
+        "one invalid row invalidates the whole ledger"),
+    "worker_authority": _RegisteredProjection(
+        ProjectionBoundary.GUI_R_VALIDATED,
+        "grants and forbidden_ops validated as list[str]; missing/null/empty kept "
+        "distinct; permanent FORBIDDEN_OPS boundary unioned regardless"),
+    "active_session": _RegisteredProjection(
+        ProjectionBoundary.GUI_R_VALIDATED,
+        "all 26 producer fields validated and copied individually; uncontracted "
+        "producer keys are not exposed"),
+    # --- withheld pending its own certification mission ---------------------
+    "learning": _RegisteredProjection(
+        ProjectionBoundary.UNAVAILABLE_PENDING_CERTIFICATION,
+        "producer exists and exposes its entry point; its four nested projections "
+        "are uncertified for WCC consumption, so the payload is not admitted"),
+    # --- module-owned derivations -------------------------------------------
+    "attention_items": _RegisteredProjection(
+        ProjectionBoundary.MODULE_OWNED,
+        "literal empty list; attention.zero_items_is_authoritative says what it means"),
+    "attention": _RegisteredProjection(
+        ProjectionBoundary.MODULE_OWNED,
+        "AttentionCoverage; no attention producer exists, nothing is derived from "
+        "source evidence"),
+    "backend_truth": _RegisteredProjection(
+        ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS,
+        "capability truth states derived from the surfaces registered here"),
+    # --- blocked on known, deliberately unrepaired source-reader debt -------
+    # A: ew0a_authority.read_authority_level raises TypeError on a non-object
+    #    JSON root. B: ew0a_loop.read_runtime_policy raises AttributeError on the
+    #    same shape. C: _read_records admits non-dict rows whose .get() then
+    #    raises in build_supervisor_summary. None is repaired in this PR, and C
+    #    must NOT be repaired by filtering.
+    "controller": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "current_mission via read_runtime_policy (blocker B); remaining fields are "
+        "declared contract constants or PENDING_BACKEND"),
+    "mission": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "mission_id via read_runtime_policy (blocker B)"),
+    "worker": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "authority level (blocker A), mission (blocker B) and recent verdicts via "
+        "_read_records (blocker C)"),
+    "supervisor": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "verdict counts via _read_records (blocker C)"),
+    "apprenticeship": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "comparison counts via _read_records (blocker C)"),
+    "system_health": _RegisteredProjection(
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "authority level (blocker A); every component field is PENDING_BACKEND and "
+        "config_readability is file readability, not liveness"),
+}
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
