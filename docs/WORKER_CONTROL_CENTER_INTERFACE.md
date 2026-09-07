@@ -117,8 +117,22 @@ Neither is ever stringified: `{str(op) for op in …}` rendered a record element
 checked before any iteration, because `list("MERGE")` would otherwise validate a bare
 string as five one-character operation names.
 
-A malformed record produces two new fields — `record_evidence` (`LIVE` | `UNAVAILABLE`)
-and `record_detail` — and behaves as follows:
+**Both list fields are REQUIRED evidence.** `set_authority_level` always writes `grants`
+and `forbidden_ops`, so a record lacking either is not a complete authority record.
+`record.get("grants", [])` erased the difference between three states that mean three
+different things:
+
+| Record | Meaning | Result |
+|---|---|---|
+| field absent | incomplete record | `record_evidence: UNAVAILABLE` |
+| field `null` | incomplete record | `record_evidence: UNAVAILABLE` |
+| field `[]` | list-shaped evidence; A0 legitimately grants nothing | `record_evidence: LIVE` |
+
+The permanent `FORBIDDEN_OPS` boundary is unioned in regardless of which of the three
+applies, so an empty `forbidden_ops` never loosens anything.
+
+A malformed or incomplete record produces two fields — `record_evidence`
+(`LIVE` | `UNAVAILABLE`) and `record_detail` — and behaves as follows:
 
 - the record's contents are **not** rendered;
 - the record's contents are **not** silently filtered either. Dropping the malformed
@@ -386,6 +400,48 @@ identity, not about age, and is **never** reported by downgrading freshness.
 `mission_consistency` is `AGREES`. It is published as one boolean so the GUI does not
 re-derive it — a consumer inventing its own staleness rule is the frontend bypass this
 architecture exists to prevent.
+
+#### The populated session has an explicit output schema
+
+The projection used to be `dict(session)` — a wholesale copy, which made the published
+schema equal to *whatever the producer happens to return today or tomorrow*. That is not
+a certified interface, and it is how a `TaskStage.title` of `{"api_key": "sk-…"}` arrived
+in the dashboard under `current_task_title`.
+
+Every published field is now validated and copied individually, from `_SESSION_FIELDS`:
+
+| Fields | Declared | Nullable |
+|---|---|---|
+| `session_id` `mission_id` `session_objective` `session_started_at` `starting_main_sha` `session_state` `authority` `c1_status` `worker_heartbeat` `supervisor_latency_ms` | `str` | no |
+| `recorded_session_id` `current_task_id` `current_task_title` `current_stage` | `str` | yes |
+| `identity_corrected` `auto_merge` `production_mutation` `capital_action` | `bool` | no |
+| `tasks_attempted` `tasks_verified` `tasks_repaired` `tasks_escalated` `tasks_abstained` `tasks_incomplete` | `int` `>= 0`, **bool rejected** | no |
+| `blockers` `known_sessions` | `list[str]` | no |
+
+`worker_heartbeat` and `supervisor_latency_ms` legitimately carry the string
+`PENDING_BACKEND` in the producer's own contract, so `str` accepts them without this
+module inventing a sentinel rule of its own.
+
+**Schema closure.** An uncontracted producer key does **not** appear here. If the
+producer later publishes `debug_payload`, `raw_event` or `credential_context`, none of
+them is exposed until it is added to the table deliberately — and the projection does not
+reject the producer merely for publishing an extra key. `read_model` and `schema_kind`
+come from this module's constants rather than the producer's copy: a projection should
+not inherit its own identity from evidence.
+
+The closure applies to the no-session branch too, which is assembled from
+`_NO_SESSION_PROJECTED_FIELDS` rather than copied.
+
+**Any malformed contracted field** makes the answer unusable: `session_present: false`,
+`truth_state: UNAVAILABLE`, `safe_to_present_as_current_work: false`, and **no**
+current-work evidence — no `current_task_id`, `current_stage`, counters, `blockers`,
+`session_objective` or `starting_main_sha` survives from an answer declared unusable.
+
+`SESSION_PROJECTED_SOURCE_FIELDS` and `SESSION_MODULE_FIELDS` are exported so a test can
+assert *emitted keys == validated keys + module keys* mechanically. The previous audit
+lived in prose and did not cover everything emitted, which is exactly how this defect
+survived it; the relationship is now executable, and adding
+`out["new"] = session["new"]` without extending the contract fails a test.
 
 ### Learning projection truth
 `dashboard["learning"]`. A learning producer **exists** (`learning/readmodels.py`, with

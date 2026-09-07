@@ -77,6 +77,10 @@ _LEARNING_PRODUCER_MODULE = "portfolio_automation.engineer_worker.learning.readm
 #: a test pins it against `tools.ns0c_session.NO_SESSION` so it cannot drift.
 _NO_SESSION_STATE = "NO_SUCH_SESSION"
 
+#: This projection's own read-model name. Taken from a constant rather than the
+#: producer's copy of it.
+_SESSION_READ_MODEL = "Northstar0CSessionSummary"
+
 # Producer status. Distinguishing these three is the whole point: only ABSENT is
 # engineering incompleteness, and only ABSENT may produce PENDING_BACKEND.
 _PRODUCER_OK = "OK"
@@ -691,8 +695,17 @@ def build_apprenticeship_summary(records: list[dict[str, Any]]) -> Apprenticeshi
         c1_readiness="NOT_READY")
 
 
-def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: Any,
-                                   forbidden_ops: Any = None) -> WorkerAuthoritySummary:
+#: Distinguishes "the caller passed nothing" from "the record carried null".
+#: `record.get("grants", [])` erased the difference between missing, null and
+#: empty -- three states with three different meanings -- and reported an
+#: authority record with no list fields at all as good evidence.
+_MISSING = object()
+
+
+def build_worker_authority_summary(level: EngineerAuthorityLevel,
+                                   grants: Any = _MISSING,
+                                   forbidden_ops: Any = _MISSING
+                                   ) -> WorkerAuthoritySummary:
     """Project authority, validating the record's own ``list[str]`` fields.
 
     TWO OUTCOMES, and the distinction is load-bearing.
@@ -709,9 +722,19 @@ def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: Any,
     own -- so every forbidden operation stays forbidden. Capability safety never
     depends on the record being well-formed."""
     try:
+        # `set_authority_level` always writes BOTH fields, so a record lacking
+        # either is not a complete authority record. An empty list IS valid
+        # evidence (A0 legitimately grants nothing); absent and null are not.
+        if grants is _MISSING or grants is None:
+            raise ValueError(
+                f"grants is required in an authority record and is "
+                f"{'absent' if grants is _MISSING else 'null'}")
+        if forbidden_ops is _MISSING or forbidden_ops is None:
+            raise ValueError(
+                f"forbidden_ops is required in an authority record and is "
+                f"{'absent' if forbidden_ops is _MISSING else 'null'}")
         denied = effective_denied_ops(forbidden_ops)
-        projected_grants = ([] if grants is None
-                            else _validated_string_list("grants", grants))
+        projected_grants = _validated_string_list("grants", grants)
     except (ValueError, TypeError) as exc:
         permanent = frozenset(FORBIDDEN_OPS)
         return WorkerAuthoritySummary(
@@ -802,7 +825,7 @@ def _session_producer_failed(detail: str) -> dict[str, Any]:
 
     Deliberately NOT a partially-filled session shape: a consumer must not be
     able to read half a session out of a failure."""
-    return {"read_model": "Northstar0CSessionSummary", "schema_kind": SCHEMA_KIND,
+    return {"read_model": _SESSION_READ_MODEL, "schema_kind": SCHEMA_KIND,
             "session_present": False, "session_state": _PRODUCER_UNAVAILABLE,
             "truth_state": TruthState.UNAVAILABLE.value,
             "mission_consistency": "UNDETERMINED",
@@ -865,8 +888,15 @@ def project_active_session(session: Any, runtime_mission: str | None,
         # The producer answered the question -- "is there a session?" -- with
         # "no". A usable answer whose truth does not decay: there is no recorded
         # session value whose age would have to be inferred.
-        enriched = dict(session)
-        enriched.update({
+        #
+        # Assembled field by field from the structurally-verified envelope, NOT
+        # copied: an uncontracted key the producer adds later must not appear
+        # here by default, on this branch either.
+        projected = {name: session.get(name)
+                     for name in _NO_SESSION_PROJECTED_FIELDS}
+        projected.update({
+            "read_model": _SESSION_READ_MODEL,
+            "schema_kind": SCHEMA_KIND,
             "session_present": False,
             "truth_state": classify(producer_exists=True,
                                     value=session.get("session_state"),
@@ -878,7 +908,7 @@ def project_active_session(session: Any, runtime_mission: str | None,
             "freshness_evidence": ("no session exists, so there is no age to measure; "
                                    "this is an answer, not a gap"),
         })
-        return enriched, TruthState.LIVE
+        return projected, TruthState.LIVE
 
     # A session may only be reported PRESENT if the producer gave it a usable
     # identity. Without this, a corrupt SessionStarted record missing its
@@ -892,7 +922,18 @@ def project_active_session(session: Any, runtime_mission: str | None,
             "the producer returned a session without a usable session_id "
             f"({type(session_id).__name__})"), TruthState.UNAVAILABLE)
 
-    session_mission = session.get("mission_id")
+    # Every published field is validated BEFORE anything is assembled. This
+    # replaced `enriched = dict(session)`, which made the projection's schema
+    # whatever the producer returned -- so a TaskStage title of
+    # {"api_key": "sk-..."} reached the dashboard through current_task_title.
+    try:
+        fields = _validated_session_fields(session)
+    except ValueError as exc:
+        return (_session_producer_failed(
+            f"the populated session projection is unusable ({exc})"),
+            TruthState.UNAVAILABLE)
+
+    session_mission = fields["mission_id"]
     if not isinstance(session_mission, str) or session_mission in _SESSION_NON_VALUES:
         consistency, consistency_detail = "UNDETERMINED", (
             "the session records no usable mission_id")
@@ -914,8 +955,12 @@ def project_active_session(session: Any, runtime_mission: str | None,
     state = classify(producer_exists=True, value=session_id,
                      recorded_at=None, now=now)
 
-    enriched = dict(session)
-    enriched.update({
+    projected = dict(fields)
+    projected.update({
+        # read_model/schema_kind are this module's constants, not the producer's
+        # copy: a projection should not inherit its own identity from evidence.
+        "read_model": _SESSION_READ_MODEL,
+        "schema_kind": SCHEMA_KIND,
         "session_present": True,
         "truth_state": state.value,
         "runtime_mission_id": runtime_mission,
@@ -928,7 +973,7 @@ def project_active_session(session: Any, runtime_mission: str | None,
             "session contract publishes no last-activity timestamp and no named "
             "session freshness threshold exists, so age is unmeasurable"),
     })
-    return enriched, state
+    return projected, state
 
 
 #: The producer's empty-session envelope, field by field. Matching only
@@ -942,6 +987,112 @@ _NO_SESSION_SENTINELS = ("session_state", "session_objective", "mission_id",
 _NO_SESSION_NULLS = ("current_task_id", "current_task_title", "current_stage")
 _NO_SESSION_COUNTERS = ("tasks_attempted", "tasks_verified", "tasks_repaired",
                         "tasks_escalated", "tasks_abstained", "tasks_incomplete")
+
+
+@dataclass(frozen=True)
+class _SessionField:
+    """One producer-published session field, as this projection publishes it."""
+
+    name: str
+    kind: str                     # "str" | "int" | "bool" | "list[str]"
+    nullable: bool = False
+
+
+#: THE POPULATED-SESSION OUTPUT SCHEMA.
+#:
+#: The projection used to be `dict(session)` -- a wholesale copy, which made the
+#: published schema equal to "whatever the producer happens to return today or
+#: tomorrow". That is not a certified interface, and it is how a TaskStage title
+#: of `{"api_key": "sk-..."}` arrived in the dashboard under
+#: current_task_title. Every field below is validated and copied individually;
+#: anything the producer adds later does NOT appear here until it is added to
+#: this table deliberately.
+_SESSION_FIELDS: tuple[_SessionField, ...] = (
+    # identity -- the logical/recorded distinction is preserved
+    _SessionField("session_id", "str"),
+    _SessionField("recorded_session_id", "str", nullable=True),
+    _SessionField("identity_corrected", "bool"),
+    # mission, objective and provenance
+    _SessionField("mission_id", "str"),
+    _SessionField("session_objective", "str"),
+    _SessionField("session_started_at", "str"),
+    _SessionField("starting_main_sha", "str"),
+    _SessionField("session_state", "str"),
+    # current work
+    _SessionField("current_task_id", "str", nullable=True),
+    _SessionField("current_task_title", "str", nullable=True),
+    _SessionField("current_stage", "str", nullable=True),
+    # counters
+    _SessionField("tasks_attempted", "int"),
+    _SessionField("tasks_verified", "int"),
+    _SessionField("tasks_repaired", "int"),
+    _SessionField("tasks_escalated", "int"),
+    _SessionField("tasks_abstained", "int"),
+    _SessionField("tasks_incomplete", "int"),
+    # collections
+    _SessionField("blockers", "list[str]"),
+    _SessionField("known_sessions", "list[str]"),
+    # boundaries the producer surfaces deliberately. worker_heartbeat and
+    # supervisor_latency_ms legitimately carry the string "PENDING_BACKEND" in
+    # the producer's own contract, so `str` accepts them without this module
+    # inventing a sentinel rule of its own.
+    _SessionField("authority", "str"),
+    _SessionField("c1_status", "str"),
+    _SessionField("auto_merge", "bool"),
+    _SessionField("production_mutation", "bool"),
+    _SessionField("capital_action", "bool"),
+    _SessionField("worker_heartbeat", "str"),
+    _SessionField("supervisor_latency_ms", "str"),
+)
+
+#: Producer-derived keys the ActiveSession projection publishes. Exported so a
+#: test can assert emitted-keys == validated-keys mechanically instead of an
+#: audit table maintained in prose -- which is exactly what missed this defect.
+SESSION_PROJECTED_SOURCE_FIELDS: tuple[str, ...] = tuple(f.name for f in _SESSION_FIELDS)
+
+#: Keys this module adds itself. Never copied from the producer.
+SESSION_MODULE_FIELDS: tuple[str, ...] = (
+    "read_model", "schema_kind", "session_present", "truth_state",
+    "runtime_mission_id", "mission_consistency", "consistency_detail",
+    "safe_to_present_as_current_work", "freshness_evidence")
+
+#: The subset the no-session envelope publishes: identity, the sentinels, the
+#: nulled current-work fields, the zero counters and the empty collections.
+_NO_SESSION_PROJECTED_FIELDS: tuple[str, ...] = (
+    "session_id", "session_state", "session_objective", "mission_id",
+    "session_started_at", "starting_main_sha", "current_task_id",
+    "current_task_title", "current_stage", "tasks_attempted", "tasks_verified",
+    "tasks_repaired", "tasks_escalated", "tasks_abstained", "tasks_incomplete",
+    "blockers", "known_sessions")
+
+
+def _validated_session_fields(session: dict[str, Any],
+                              names: tuple[str, ...] | None = None
+                              ) -> dict[str, Any]:
+    """Validate the contracted session fields, or refuse the answer.
+
+    Raises ``ValueError``; :func:`project_active_session` converts that into the
+    unusable-producer envelope. Only field names, declared kinds and actual type
+    names ever reach the message."""
+    wanted = set(names) if names is not None else None
+    out: dict[str, Any] = {}
+    for spec in _SESSION_FIELDS:
+        if wanted is not None and spec.name not in wanted:
+            continue
+        value = session.get(spec.name)
+        if spec.name not in session or value is None:
+            if not spec.nullable:
+                raise ValueError(
+                    f"session field {spec.name} is required and is "
+                    f"{'absent' if spec.name not in session else 'null'}")
+            out[spec.name] = None
+            continue
+        if spec.kind == "list[str]":
+            out[spec.name] = _validated_string_list(f"session field {spec.name}", value)
+        else:
+            out[spec.name] = _validated_scalar(
+                f"session field {spec.name}", spec.kind, value)
+    return out
 
 
 def _is_empty_session_envelope(session: dict[str, Any]) -> bool:
@@ -1172,17 +1323,19 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     # Raw record values are passed through UNVALIDATED on purpose: the builder
     # owns the validation, so there is exactly one place where authority record
     # evidence is checked.
-    grants: Any = None
-    record_forbidden: Any = None
+    grants: Any = _MISSING
+    record_forbidden: Any = _MISSING
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
             authority_record = json.loads(ap.read_text(encoding="utf-8"))
             if isinstance(authority_record, dict):
-                grants = authority_record.get("grants")
-                record_forbidden = authority_record.get("forbidden_ops")
+                # `.get(name, _MISSING)` so an absent field stays distinguishable
+                # from an explicit null all the way to the validator.
+                grants = authority_record.get("grants", _MISSING)
+                record_forbidden = authority_record.get("forbidden_ops", _MISSING)
         except (OSError, ValueError, UnicodeError):
-            grants = None
+            grants = _MISSING
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",

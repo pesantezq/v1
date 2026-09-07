@@ -263,14 +263,46 @@ from portfolio_automation.engineer_worker.ew0a_readmodels import (
 _NOW = "2026-09-06T21:30:00+00:00"
 
 
+#: A COMPLETE, schema-valid populated session, mirroring every field
+#: tools.ns0c_session.session_projection actually publishes -- notably a
+#: session_started_at and NO last-activity timestamp. The previous fixture
+#: carried six keys and passed only because the projection copied the producer
+#: dictionary wholesale; the fixture's own incompleteness was invisible.
+_VALID_SESSION = {
+    "read_model": "Northstar0CSessionSummary",
+    "schema_kind": "experimental_noncanonical",
+    "session_id": "s1",
+    "recorded_session_id": "s1",
+    "identity_corrected": False,
+    "mission_id": "m-runtime",
+    "session_objective": "Revision / Supersession Safety Foundation",
+    "session_started_at": "2026-08-16T07:17:41+00:00",
+    "starting_main_sha": "7cdc15a6ad9b085540718817611a3db68f29d302",
+    "session_state": "RUNNING",
+    "current_task_id": "t1",
+    "current_task_title": None,
+    "current_stage": "VERIFYING",
+    "tasks_attempted": 2,
+    "tasks_verified": 1,
+    "tasks_repaired": 1,
+    "tasks_escalated": 0,
+    "tasks_abstained": 0,
+    "tasks_incomplete": 0,
+    "blockers": [],
+    "known_sessions": ["s1"],
+    "authority": "A1_ASSISTED_ENGINEERING",
+    "c1_status": "DISABLED",
+    "auto_merge": False,
+    "production_mutation": False,
+    "capital_action": False,
+    "worker_heartbeat": "PENDING_BACKEND",
+    "supervisor_latency_ms": "PENDING_BACKEND",
+}
+
+
 def _session(mission="m-runtime", session_id="s1", **extra):
-    """Minimal session projection shape. Deliberately mirrors what
-    tools.ns0c_session.session_projection actually publishes -- notably it has
-    session_started_at and NO last-activity timestamp."""
-    base = {"read_model": "Northstar0CSessionSummary", "session_id": session_id,
-            "mission_id": mission, "session_state": "RUNNING",
-            "session_started_at": "2026-08-16T07:17:41+00:00",
-            "current_task_id": "t1"}
+    base = dict(_VALID_SESSION)
+    base.update({"session_id": session_id, "mission_id": mission})
     base.update(extra)
     return base
 
@@ -352,12 +384,16 @@ def test_safe_to_present_requires_both_live_and_agreement():
     assert enriched["safe_to_present_as_current_work"] is False
 
 
-def test_active_session_preserves_every_original_projection_key():
-    """Enrichment is additive. The session's own evidence must survive intact."""
-    original = _session(mission="m-other", extra_key="kept")
-    enriched, _ = project_active_session(original, "m-runtime", _NOW)
-    for key, value in original.items():
-        assert enriched[key] == value
+def test_active_session_projects_every_contracted_field_faithfully():
+    """Replaces a test that asserted the defect. It required EVERY key of the
+    producer dict to survive into the projection -- which is the wholesale copy
+    that made the published schema equal to whatever the producer returned, and
+    is how a TaskStage title object reached the dashboard. Contracted fields
+    must still be projected faithfully; uncontracted ones must not appear."""
+    original = _session(mission="m-other")
+    projected, _state = project_active_session(original, "m-runtime", _NOW)
+    for name in rm.SESSION_PROJECTED_SOURCE_FIELDS:
+        assert projected[name] == original[name], name
 
 
 def test_real_repo_session_mission_disagreement_is_visible_in_the_dashboard():
@@ -1370,10 +1406,9 @@ def test_the_row_rejection_detail_reveals_only_structure(tmp_path):
 
 # ── P2 #3: presence requires a usable identity ─────────────────────────────
 def _session_with_id(session_id):
-    return {"read_model": "Northstar0CSessionSummary", "session_id": session_id,
-            "mission_id": "m-runtime", "session_state": "RUNNING",
-            "session_started_at": "2026-08-16T07:17:41+00:00",
-            "current_task_id": "t1"}
+    base = dict(_VALID_SESSION)
+    base["session_id"] = session_id
+    return base
 
 
 def test_a_session_without_a_usable_identity_is_never_present():
@@ -1891,3 +1926,374 @@ def test_a_string_session_id_and_string_known_sessions_remain_valid(tmp_path):
                  "known_sessions": ["a", "b"]})
     _enriched, state = project_active_session(base, "m-runtime", _NOW)
     assert state is TruthState.LIVE
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R PROJECTION CLOSURE
+#
+# Round-4 review found two structural boundary defects: the populated session
+# was still `dict(session)` -- so the published schema was whatever the producer
+# returned, and a TaskStage title object reached the dashboard -- and an
+# authority record missing or nulling grants/forbidden_ops read as usable
+# evidence because `.get()` erased the difference between missing, null and
+# empty. Both are closed here as schema defects, not as two fields.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_SESSION_MARKER = "sk-WCC-POPULATED-SESSION-MUST-NOT-RENDER-999"
+_UNKNOWN_FIELD_MARKER = "sk-UNKNOWN-FIELD-MUST-NOT-RENDER"
+
+#: Malformed carriers for the session sweep. Every one is the WRONG type for
+#: whatever field it is injected into, so a legitimate value is never mistaken
+#: for a leak.
+_SESSION_CARRIERS = {
+    "marker_dict": {"api_key": _SESSION_MARKER},
+    "marker_list": [_SESSION_MARKER],
+    "marker_nested": {"outer": {"Authorization": f"Bearer {_SESSION_MARKER}"}},
+}
+
+#: The contract, mirrored independently of the module so the test does not
+#: simply agree with whatever the implementation happens to do.
+_EXPECTED_SESSION_CONTRACT = {
+    "session_id": ("str", False),
+    "recorded_session_id": ("str", True),
+    "identity_corrected": ("bool", False),
+    "mission_id": ("str", False),
+    "session_objective": ("str", False),
+    "session_started_at": ("str", False),
+    "starting_main_sha": ("str", False),
+    "session_state": ("str", False),
+    "current_task_id": ("str", True),
+    "current_task_title": ("str", True),
+    "current_stage": ("str", True),
+    "tasks_attempted": ("int", False),
+    "tasks_verified": ("int", False),
+    "tasks_repaired": ("int", False),
+    "tasks_escalated": ("int", False),
+    "tasks_abstained": ("int", False),
+    "tasks_incomplete": ("int", False),
+    "blockers": ("list[str]", False),
+    "known_sessions": ("list[str]", False),
+    "authority": ("str", False),
+    "c1_status": ("str", False),
+    "auto_merge": ("bool", False),
+    "production_mutation": ("bool", False),
+    "capital_action": ("bool", False),
+    "worker_heartbeat": ("str", False),
+    "supervisor_latency_ms": ("str", False),
+}
+
+
+# ── the contract is executable, not prose ─────────────────────────────────
+def test_the_session_contract_matches_the_implementation():
+    """The previous audit failed because the inventory lived in prose and did
+    not cover everything emitted. This pins it in code."""
+    actual = {f.name: (f.kind, f.nullable) for f in rm._SESSION_FIELDS}
+    assert actual == _EXPECTED_SESSION_CONTRACT
+    assert set(rm.SESSION_PROJECTED_SOURCE_FIELDS) == set(_EXPECTED_SESSION_CONTRACT)
+
+
+def test_emitted_session_keys_equal_validated_plus_module_keys():
+    """THE structural guard. If someone writes `out["new"] = session["new"]`
+    without adding it to the contract, this fails."""
+    projected, _state = project_active_session(_session(), "m-runtime", _NOW)
+    expected = set(rm.SESSION_PROJECTED_SOURCE_FIELDS) | set(rm.SESSION_MODULE_FIELDS)
+    assert set(projected) == expected
+
+    live = rm.build_dashboard(_REPO, now=_NOW)["active_session"]
+    assert set(live) == expected
+
+
+def test_the_real_repository_session_satisfies_the_contract():
+    from tools.ns0c_session import session_projection
+    rm._validated_session_fields(session_projection(repo_root=_REPO))   # must not raise
+
+
+def test_the_active_session_projection_never_copies_the_producer_dict():
+    """AST guard. The defect was `enriched = dict(session)`; equivalents are
+    `session.copy()`, `{**session}` and `out.update(session)`. Scoped to the
+    active-session path -- dict construction elsewhere is untouched."""
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    for node in _ast.walk(_ast.parse(src)):
+        if not (isinstance(node, _ast.FunctionDef)
+                and node.name == "project_active_session"):
+            continue
+        for inner in _ast.walk(node):
+            if isinstance(inner, _ast.Call):
+                func = inner.func
+                if getattr(func, "id", None) == "dict":
+                    for arg in inner.args:
+                        assert getattr(arg, "id", None) != "session", "dict(session)"
+                if getattr(func, "attr", None) == "copy":
+                    assert getattr(func.value, "id", None) != "session", "session.copy()"
+                if getattr(func, "attr", None) == "update":
+                    for arg in inner.args:
+                        assert getattr(arg, "id", None) != "session", "update(session)"
+            if isinstance(inner, _ast.Dict):
+                for key, value in zip(inner.keys, inner.values):
+                    if key is None:
+                        assert getattr(value, "id", None) != "session", "{**session}"
+        break
+    else:                                                # pragma: no cover
+        raise AssertionError("project_active_session not found")
+
+
+# ── schema closure against future producer expansion ─────────────────────
+def test_an_uncontracted_producer_field_is_not_projected():
+    """Load-bearing. A producer that later publishes debug_payload,
+    raw_event or credential_context must not have it appear here by default. The
+    projection does not reject the producer for publishing an extra key -- it
+    simply does not expose uncontracted fields."""
+    session = _session()
+    session["future_unvalidated_field"] = {"api_key": _UNKNOWN_FIELD_MARKER}
+
+    projected, state = project_active_session(session, "m-runtime", _NOW)
+    assert state is TruthState.UNKNOWN                   # otherwise still valid
+    assert projected["session_present"] is True
+    assert "future_unvalidated_field" not in projected
+    assert _UNKNOWN_FIELD_MARKER not in _json.dumps(projected, default=str)
+    assert "api_key" not in _json.dumps(projected, default=str)
+
+
+def test_an_uncontracted_field_is_not_projected_on_the_no_session_branch(tmp_path):
+    """Closure applies to both branches, not only the populated one."""
+    base = dict(_public_no_session(tmp_path))
+    base["future_unvalidated_field"] = {"api_key": _UNKNOWN_FIELD_MARKER}
+    projected, state = project_active_session(base, "m-runtime", _NOW)
+    assert state is TruthState.LIVE
+    assert "future_unvalidated_field" not in projected
+    assert _UNKNOWN_FIELD_MARKER not in _json.dumps(projected, default=str)
+
+
+def test_the_unknown_field_marker_never_reaches_the_dashboard(tmp_path):
+    """Through the real producer: a TaskStage carrying an object title, which is
+    exactly how review reproduced the leak."""
+    docs = tmp_path / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "NORTHSTAR_0C_SESSION_probe.jsonl").write_text("\n".join(_json.dumps(e) for e in [
+        {"kind": "SessionStarted", "session_id": "probe", "mission_id": "m-x",
+         "session_objective": "obj", "session_started_at": "2026-09-01T00:00:00+00:00",
+         "starting_main_sha": "abc"},
+        {"kind": "TaskStage", "task_id": "T1", "title": {"api_key": _SESSION_MARKER},
+         "stage": "VERIFYING"},
+        {"kind": "CircuitBreaker", "breaker": {"api_key": _SESSION_MARKER}},
+    ]) + "\n", encoding="utf-8")
+
+    dash = rm.build_dashboard(tmp_path, now=_NOW)         # must not raise
+    session = dash["active_session"]
+    assert session["truth_state"] == TruthState.UNAVAILABLE.value
+    assert session["session_present"] is False
+    assert _SESSION_MARKER not in _json.dumps(dash, default=str)
+
+
+# ── the populated-session matrix, generated from the contract ─────────────
+def test_every_contracted_session_field_rejects_every_malformed_carrier():
+    """Derived from the same inventory the validator uses, so the two cannot
+    drift -- the failure mode of the previous prose audit."""
+    checked = 0
+    for field, (kind, _nullable) in _EXPECTED_SESSION_CONTRACT.items():
+        for carrier_name, carrier in _SESSION_CARRIERS.items():
+            if kind == "list[str]" and carrier_name == "marker_list":
+                continue                                 # legitimate list[str]
+            label = f"{field}__{carrier_name}"
+            projected, state = project_active_session(
+                _session(**{field: carrier}), "m-runtime", _NOW)
+            assert state is TruthState.UNAVAILABLE, label
+            assert projected["session_present"] is False, label
+            assert projected["safe_to_present_as_current_work"] is False, label
+            blob = _json.dumps(projected, default=str)
+            assert _SESSION_MARKER not in blob, label
+            assert "api_key" not in blob and "Authorization" not in blob, label
+            checked += 1
+    assert checked >= 70, f"matrix too small to be a sweep ({checked})"
+
+
+def test_wrong_scalar_types_are_rejected_per_declared_kind():
+    for field, (kind, _nullable) in _EXPECTED_SESSION_CONTRACT.items():
+        wrong = {"str": 7, "int": "2", "bool": "true", "list[str]": "blocked"}[kind]
+        _projected, state = project_active_session(
+            _session(**{field: wrong}), "m-runtime", _NOW)
+        assert state is TruthState.UNAVAILABLE, f"{field}={wrong!r}"
+
+
+def test_required_session_fields_may_not_be_absent_or_null():
+    for field, (_kind, nullable) in _EXPECTED_SESSION_CONTRACT.items():
+        if nullable:
+            continue
+        absent = _session()
+        del absent[field]
+        _p, state = project_active_session(absent, "m-runtime", _NOW)
+        assert state is TruthState.UNAVAILABLE, f"absent {field}"
+        _p, state = project_active_session(
+            _session(**{field: None}), "m-runtime", _NOW)
+        assert state is TruthState.UNAVAILABLE, f"null {field}"
+
+
+def test_nullable_session_fields_accept_none():
+    for field, (_kind, nullable) in _EXPECTED_SESSION_CONTRACT.items():
+        if not nullable:
+            continue
+        projected, state = project_active_session(
+            _session(**{field: None}), "m-runtime", _NOW)
+        assert state is TruthState.UNKNOWN, field
+        assert projected[field] is None, field
+
+
+def test_session_counters_reject_bool_and_negative_values():
+    for field in ("tasks_attempted", "tasks_verified", "tasks_repaired",
+                  "tasks_escalated", "tasks_abstained", "tasks_incomplete"):
+        for bad in (True, False, -1, "1", 1.0):
+            _p, state = project_active_session(
+                _session(**{field: bad}), "m-runtime", _NOW)
+            assert state is TruthState.UNAVAILABLE, f"{field}={bad!r}"
+        projected, state = project_active_session(
+            _session(**{field: 0}), "m-runtime", _NOW)
+        assert state is TruthState.UNKNOWN and projected[field] == 0, field
+
+
+def test_session_collections_validate_container_and_elements():
+    for field in ("blockers", "known_sessions"):
+        for bad in ("blocked", 1, {}, [1], [None], [{"api_key": _SESSION_MARKER}],
+                    [["x"]], ["ok", 2]):
+            _p, state = project_active_session(
+                _session(**{field: bad}), "m-runtime", _NOW)
+            assert state is TruthState.UNAVAILABLE, f"{field}={bad!r}"
+        projected, state = project_active_session(
+            _session(**{field: ["a", "b"]}), "m-runtime", _NOW)
+        assert state is TruthState.UNKNOWN and projected[field] == ["a", "b"]
+
+
+def test_an_unusable_populated_session_keeps_no_current_work_evidence():
+    projected, state = project_active_session(
+        _session(current_task_title={"api_key": _SESSION_MARKER}), "m-runtime", _NOW)
+    assert state is TruthState.UNAVAILABLE
+    for leaked in ("current_task_id", "current_task_title", "current_stage",
+                   "blockers", "tasks_verified", "session_objective",
+                   "starting_main_sha"):
+        assert leaked not in projected, leaked
+
+
+def test_session_validation_messages_carry_types_not_values():
+    try:
+        rm._validated_session_fields(
+            _session(current_task_title={"api_key": _SESSION_MARKER}))
+    except ValueError as exc:
+        assert _SESSION_MARKER not in str(exc)
+        assert "current_task_title" in str(exc) and "dict" in str(exc)
+    else:                                                # pragma: no cover
+        raise AssertionError("accepted a dict title")
+
+
+def test_read_model_identity_is_module_owned_not_producer_copied():
+    """A projection should not inherit its own identity from evidence."""
+    projected, _state = project_active_session(
+        _session(read_model="ATTACKER_CONTROLLED", schema_kind="spoofed"),
+        "m-runtime", _NOW)
+    assert projected["read_model"] == "Northstar0CSessionSummary"
+    assert projected["schema_kind"] != "spoofed"
+
+
+# ── authority record completeness ─────────────────────────────────────────
+def _authority_root(tmp_path, record):
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "ew0a_authority.json").write_text(
+        _json.dumps(record), encoding="utf-8")
+    return tmp_path
+
+
+_LEVEL = "A1_ASSISTED_ENGINEERING"
+
+
+def test_missing_and_null_authority_list_fields_are_invalid_evidence(tmp_path):
+    """`record.get("grants", [])` erased the difference between missing, null
+    and empty -- three states with three different meanings. set_authority_level
+    always writes both fields, so a record lacking either is incomplete."""
+    cases = {
+        "missing_both": {"level": _LEVEL},
+        "missing_grants": {"level": _LEVEL, "forbidden_ops": ["MERGE"]},
+        "missing_fops": {"level": _LEVEL, "grants": ["g"]},
+        "null_grants": {"level": _LEVEL, "grants": None, "forbidden_ops": ["MERGE"]},
+        "null_fops": {"level": _LEVEL, "grants": ["g"], "forbidden_ops": None},
+        "null_both": {"level": _LEVEL, "grants": None, "forbidden_ops": None},
+        "nonlist_grants": {"level": _LEVEL, "grants": "g", "forbidden_ops": ["MERGE"]},
+        "nonlist_fops": {"level": _LEVEL, "grants": ["g"], "forbidden_ops": "MERGE"},
+        "bad_grant_elem": {"level": _LEVEL, "grants": [{"api_key": _SESSION_MARKER}],
+                           "forbidden_ops": ["MERGE"]},
+        "bad_fop_elem": {"level": _LEVEL, "grants": ["g"],
+                         "forbidden_ops": [{"api_key": _SESSION_MARKER}]},
+    }
+    for label, record in cases.items():
+        dash = rm.build_dashboard(_authority_root(tmp_path / label, record), now=_NOW)
+        authority = dash["worker_authority"]
+        caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+        assert authority["record_evidence"] == TruthState.UNAVAILABLE.value, label
+        assert caps["worker_authority"] == TruthState.UNAVAILABLE.value, label
+        assert dash["backend_truth"]["readiness"] == "UNAVAILABLE", label
+        assert _SESSION_MARKER not in _json.dumps(dash, default=str), label
+        # permanent safety floor is never loosened by bad evidence
+        assert not (authority["can_merge"] or authority["can_deploy"]
+                    or authority["can_mutate_main"] or authority["can_write_production"]
+                    or authority["can_self_promote"]), label
+        for op in ("MERGE", "DEPLOY", "MAIN_WRITE", "PRODUCTION_WRITE", "SELF_PROMOTION"):
+            assert op in authority["forbidden_ops"], (label, op)
+
+
+def test_empty_lists_are_valid_list_shaped_authority_evidence(tmp_path):
+    """[] is not the same as missing or null. A0 legitimately grants nothing."""
+    dash = rm.build_dashboard(
+        _authority_root(tmp_path, {"level": "A0_DIAGNOSTIC", "grants": [],
+                                   "forbidden_ops": []}), now=_NOW)
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert authority["grants"] == []
+    # the permanent boundary is still unioned in regardless
+    for op in ("MERGE", "DEPLOY", "MAIN_WRITE"):
+        assert op in authority["forbidden_ops"]
+    assert authority["can_merge"] is False
+
+
+def test_the_missing_null_empty_distinction_is_preserved_at_the_builder():
+    permanent = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC)     # both absent
+    assert permanent.record_evidence == TruthState.UNAVAILABLE.value
+    assert "absent" in permanent.record_detail
+    nulled = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC, grants=None,
+                                            forbidden_ops=None)
+    assert nulled.record_evidence == TruthState.UNAVAILABLE.value
+    assert "null" in nulled.record_detail
+    empty = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC, grants=[],
+                                           forbidden_ops=[])
+    assert empty.record_evidence == TruthState.LIVE.value
+
+
+def test_the_real_authority_record_is_still_complete_and_live():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert len(authority["grants"]) == 8
+    assert authority["can_merge"] is False
+    assert dash["backend_truth"]["readiness"] == "PARTIAL"
+
+
+# ── executable projection audit across all three certified paths ──────────
+def test_all_producer_derived_emitted_fields_are_in_the_validated_contract():
+    """Generated from the emitted keys, not from reading the source. A field
+    that is emitted but absent from a validated contract fails here."""
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+
+    # RunHistory
+    run_keys = set(dash["run_history"]["runs"][0])
+    assert run_keys - {"ledger_index"} == {f.name for f in rm._OUTCOME_FIELDS}
+
+    # WorkerAuthority: source-derived keys only
+    authority_source = {"level", "grants", "forbidden_ops"}
+    module_owned = {"read_model", "schema_kind", "schema_version",
+                    "capabilities_derived_from",
+                    "record_evidence", "record_detail", "can_mutate_main",
+                    "can_merge", "can_deploy", "can_write_production",
+                    "can_self_promote"}
+    assert set(dash["worker_authority"]) == authority_source | module_owned
+
+    # ActiveSession, populated branch
+    assert set(dash["active_session"]) == (
+        set(rm.SESSION_PROJECTED_SOURCE_FIELDS) | set(rm.SESSION_MODULE_FIELDS))
