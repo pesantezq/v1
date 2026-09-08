@@ -59,9 +59,37 @@ proves only that scheduler strings sit beneath ``current``, never that
 Everything here is pure text analysis over caller-supplied unit and crontab
 content. It never shells out to systemd or cron and never reads the live host,
 so it is fully testable from fixtures.
+
+Responsibility split
+--------------------
+This module answers exactly one question::
+
+    what effective executable/application paths can this scheduler
+    configuration invoke, and are they aligned with the approved release?
+
+It deliberately does **not** answer "would systemd accept this unit?". Unit
+validity — service types, how many start commands a type permits, whether a
+unit without ``ExecStart`` may run — belongs to ``systemd-analyze verify``,
+run against the real host units::
+
+    systemd-analyze verify      ->  SYSTEMD_UNIT_VALIDITY
+    this scheduler certifier    ->  SCHEDULER_ALIGNMENT
+
+Certification requires **both**, and neither substitutes for the other. Note
+that the cutover runbook does **not** yet invoke the verifier; until it does,
+SYSTEMD_UNIT_VALIDITY is uncovered, and that gap is not closed by this module
+pretending to cover it.
+
+An earlier revision did emulate systemd validity. That emulation drew seven
+consecutive review findings — including two false *rejections* that would have
+blocked a correct cutover — because reproducing another program's acceptance
+semantics from documentation is a losing game when the program itself is
+available to ask. It was removed rather than extended. If a validity question
+arises, run the verifier.
 """
 from __future__ import annotations
 
+import posixpath
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -86,10 +114,63 @@ SYSTEM_TRANSITIONAL: tuple[str, ...] = (
 )
 
 #: Directives whose values are paths that affect application identity.
-EXEC_DIRECTIVES = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload")
+#: ExecStop/ExecStopPost are included because they run release code just as
+#: ExecStart does — a stop command still pointing at the legacy checkout is
+#: legacy code executing on the host, which is exactly what this module exists
+#: to detect. How MANY entries each directive may legally carry is a validity
+#: question and is deliberately not modelled here.
+EXEC_DIRECTIVES = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload",
+                   "ExecStop", "ExecStopPost")
+#: Both affect code identity, but they are INDEPENDENT settings: resetting one
+#: must not discard the other. They are tracked separately in
+#: ``parse_systemd_unit`` and both participate in the code-identity check.
 PATH_DIRECTIVES = ("WorkingDirectory", "RootDirectory")
-SECRET_DIRECTIVES = ("EnvironmentFile",)
+WORKDIR_DIRECTIVE = "WorkingDirectory"
+ROOTDIR_DIRECTIVE = "RootDirectory"
+#: ``RootDirectoryStartOnly=yes`` applies the chroot to ``ExecStart`` ONLY;
+#: ExecStartPre/Post, ExecReload, ExecStop and ExecStopPost keep resolving on
+#: the host (``systemd.service(5)``, default false).
+#:
+#: An unparseable assignment — including a BLANK one — is ignored by systemd,
+#: leaving the previous effective value in place. Verified against the
+#: installed systemd 255 by asking it rather than reading about it::
+#:
+#:     RootDirectoryStartOnly=yes + RootDirectoryStartOnly=garbage -> yes
+#:     RootDirectoryStartOnly=yes + RootDirectoryStartOnly=        -> yes
+#:     RootDirectoryStartOnly=yes + RootDirectoryStartOnly=no      -> no
+#:
+#: (``systemctl --user show -p RootDirectoryStartOnly``; the ignored lines log
+#: "Failed to parse boolean value, ignoring".) Note that blank does NOT reset
+#: this scalar to its default, so "last assignment wins" is wrong here.
+#:
+#: Getting this wrong is a false-APPROVE risk in BOTH directions, which is why
+#: the effective value has to be modelled rather than approximated. Applying a
+#: root that does not apply is not merely a false reject: ``_in_root`` rewrites
+#: a legacy host path such as ``/legacy/stop.sh`` into
+#: ``/opt/stockbot/current/legacy/stop.sh``, which sits under the release root
+#: and therefore PASSES — laundering legacy code into release-looking code.
+ROOTDIR_START_ONLY_DIRECTIVE = "RootDirectoryStartOnly"
+#: systemd's boolean vocabulary (``parse_boolean``).
+_BOOL_TRUE = frozenset({"1", "yes", "true", "on"})
+_BOOL_FALSE = frozenset({"0", "no", "false", "off"})
 
+
+def _parse_systemd_bool(value: str) -> bool | None:
+    """systemd's ``parse_boolean``: ``None`` when systemd would ignore it."""
+    token = value.strip().lower()
+    if token in _BOOL_TRUE:
+        return True
+    if token in _BOOL_FALSE:
+        return False
+    return None
+SECRET_DIRECTIVES = ("EnvironmentFile",)
+#: Every directive this module reads is a [Service] key. systemd ignores them
+#: in any other section ("Unknown key name 'ExecStart' in section 'Unit',
+#: ignoring"), so the parser must be section-aware or it will treat a directive
+#: systemd discards as a live execution surface.
+SERVICE_SECTION = "Service"
+
+_SECTION_HEADER = re.compile(r"^\[(?P<name>[^\]]+)\]$")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # A 5-field cron schedule, or an @-shortcut such as @daily.
 _CRON_SCHEDULE = re.compile(r"^(?:@\w+|(?:\S+\s+){4}\S+)\s+")
@@ -126,24 +207,62 @@ class ExecutionSurface:
     raw: str                    # the raw ExecStart / cron command
     executable: str             # resolved leading executable path
     referenced_paths: tuple[str, ...] = field(default_factory=tuple)
-    #: WorkingDirectory / RootDirectory. Decides where Python resolves a
-    #: relatively-named application module, so it is code identity.
+    #: WorkingDirectory. Decides where Python resolves a relatively-named
+    #: application module, so it is code identity.
     working_directory: str | None = None
+    #: RootDirectory. Independent of WorkingDirectory: a process chrooted under
+    #: the legacy checkout runs legacy code even when its executable and
+    #: working directory both name the release, so this is code identity too.
+    root_directory: str | None = None
     #: EnvironmentFile paths. Credentials, not release code.
     environment_files: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_system_transitional(self) -> bool:
-        return self.executable in SYSTEM_TRANSITIONAL
+        """Allowlisted host binary — compared AFTER chroot resolution.
+
+        The allowlist names host paths such as ``/usr/local/bin/cloudflared``.
+        Under ``RootDirectory=/opt/stockbot`` the binary systemd actually
+        executes is ``/opt/stockbot/usr/local/bin/cloudflared``, which lives in
+        the legacy checkout and is *not* the approved host binary. Matching the
+        lexical executable would let the allowlist short-circuit the whole
+        code-path check and certify legacy code as approved.
+        """
+        return self._in_root(self.executable) in SYSTEM_TRANSITIONAL
+
+    def _in_root(self, path: str) -> str:
+        """Resolve *path* to the host path the process actually reaches.
+
+        ``root_directory`` is the root this command EFFECTIVELY runs under —
+        ``parse_systemd_unit`` already accounts for ``RootDirectoryStartOnly=``
+        — so this method does not re-derive it.
+
+        ``RootDirectory=`` is implemented with ``chroot(2)``
+        (``systemd.exec(5)``), so a unit with ``RootDirectory=/srv/jail`` and
+        ``ExecStart=/opt/stockbot/current/scripts/x.sh`` executes the HOST path
+        ``/srv/jail/opt/stockbot/current/scripts/x.sh`` — which has nothing to
+        do with the approved release pointer. Comparing the lexical
+        ``ExecStart`` value against the release root would approve it.
+
+        ``WorkingDirectory=`` is likewise interpreted inside the root, so it
+        gets the same treatment.
+        """
+        if not self.root_directory:
+            return path
+        return posixpath.join(self.root_directory, path.lstrip("/"))
 
     def _code_paths(self) -> tuple[str, ...]:
-        """Every path that determines which application code runs.
+        """Every host path that determines which application code runs.
 
         Deliberately excludes environment_files: a credential file is not code.
         """
-        paths = [self.executable, *self.referenced_paths]
+        paths = [self._in_root(self.executable)]
+        paths += [self._in_root(p) for p in self.referenced_paths]
         if self.working_directory:
-            paths.append(self.working_directory)
+            paths.append(self._in_root(self.working_directory))
+        if self.root_directory:
+            # The root itself is a host path and is compared as one.
+            paths.append(self.root_directory)
         return tuple(paths)
 
     def legacy_paths(self, *, release_root: str) -> tuple[str, ...]:
@@ -226,40 +345,134 @@ def _logical_lines(content: str) -> list[str]:
 
 
 def parse_systemd_unit(content: str, *, origin: str) -> list[ExecutionSurface]:
-    """Extract execution surfaces from systemd unit file *content*.
+    """Extract the effective execution surfaces from systemd unit *content*.
 
-    Every Exec* directive becomes a surface, and each surface inherits the
-    unit's ``WorkingDirectory`` and ``EnvironmentFile`` values — because those
-    decide, respectively, which application code a relatively-named module
-    resolves to and which credentials it loads.
+    The question this answers is narrow and deliberate:
+
+        which executable/application paths can this unit actually invoke?
+
+    It is **not** "would systemd accept this unit?" — that is unit *validity*
+    and belongs to ``systemd-analyze verify``. See the responsibility split in
+    the module docstring.
+
+    Effective state, not textual assignments
+    ---------------------------------------
+    systemd list directives support reset::
+
+        ExecStart=/legacy/a
+        ExecStart=            <- clears the accumulated list
+        ExecStart=/opt/stockbot/current/new
+
+    which yields exactly one effective command. That is how a drop-in replaces
+    an inherited command, and it is what the production release drop-ins use.
+
+    Skipping blank assignments would be worse than mis-parsing them: on
+    concatenated ``systemctl cat`` output the inherited legacy command would
+    survive into the effective list, and the certifier would report a legacy
+    execution path that systemd does not actually run.
+
+    Reset semantics implemented:
+
+    * ``Exec*``            list directives (``ExecStart``, ``ExecStartPre``,
+                           ``ExecStartPost``, ``ExecReload``, ``ExecStop``,
+                           ``ExecStopPost``); blank clears, non-blank appends.
+                           Stop commands are included because they execute
+                           release code just as start commands do — a stop
+                           command still pointing at the legacy checkout is
+                           legacy code running on the host.
+    * ``EnvironmentFile``  list directive; blank clears, non-blank appends.
+    * ``WorkingDirectory`` and ``RootDirectory``  not lists; last non-blank
+                           wins, blank resets to unset. Tracked
+                           **independently**: resetting the working directory
+                           must not discard a still-effective root directory,
+                           or a process chrooted under the legacy checkout
+                           would certify as release-aligned.
+
+    All are ``[Service]`` keys and the parser is **section-aware**. systemd
+    ignores them elsewhere (``Unknown key name 'ExecStart' in section 'Unit',
+    ignoring``), so a directive outside ``[Service]`` must not become an
+    execution surface.
+
+    Each surface inherits the unit's effective ``WorkingDirectory``,
+    ``RootDirectory`` and ``EnvironmentFile``, because the first two decide
+    which application code a relatively-named module resolves to and the third
+    is classified separately as external configuration.
+
+    Fail-closed behaviour
+    ---------------------
+    A malformed **non-empty** command still raises: an unparseable command is
+    an unknown execution surface.
+
+    A unit that yields **no** executable surfaces — a bare ``EnvironmentFile``
+    drop-in fragment, or content whose ``Exec*`` directives all sit outside
+    ``[Service]`` — parses to an empty list rather than raising. That is
+    correct for a *parser*: a fragment genuinely declares no commands. The
+    guard that matters lives at the certification layer instead, where
+    ``certify_scheduler_identity`` requires each **expected production
+    service** to contribute at least one surface, so a service that silently
+    yields nothing cannot be aggregated into a PASS.
     """
-    entries: list[tuple[str, str]] = []
+    # (section, key, value) in file order, so only [Service] directives count.
+    entries: list[tuple[str, str, str]] = []
+    section: str | None = None
     for entry in _logical_lines(content):
+        header = _SECTION_HEADER.match(entry)
+        if header:
+            section = header.group("name").strip()
+            continue
         if "=" not in entry:
             continue
         key, _, value = entry.partition("=")
-        entries.append((key.strip(), value.strip()))
+        entries.append((section or "", key.strip(), value.strip()))
 
     working_dir: str | None = None
+    root_dir: str | None = None
+    root_start_only = False
     env_files: list[str] = []
-    for key, value in entries:
-        if key in PATH_DIRECTIVES and value:
-            working_dir = value.split()[0]
-        elif key in SECRET_DIRECTIVES and value:
-            # systemd allows a leading '-' meaning "optional".
-            env_files.append(value.lstrip("-").split()[0])
+    exec_lists: dict[str, list[str]] = {d: [] for d in EXEC_DIRECTIVES}
+
+    for entry_section, key, value in entries:
+        if entry_section != SERVICE_SECTION:
+            # systemd: "Unknown key name '<k>' in section '<s>', ignoring."
+            continue
+        if key in EXEC_DIRECTIVES:
+            if not value:
+                exec_lists[key].clear()      # reset, not an error, not a command
+            else:
+                exec_lists[key].append(value)
+        elif key == WORKDIR_DIRECTIVE:
+            working_dir = value.split()[0] if value else None
+        elif key == ROOTDIR_DIRECTIVE:
+            # Independent of WorkingDirectory — see the docstring.
+            root_dir = value.split()[0] if value else None
+        elif key == ROOTDIR_START_ONLY_DIRECTIVE:
+            parsed = _parse_systemd_bool(value)
+            if parsed is not None:
+                root_start_only = parsed
+            # else: systemd logs "Failed to parse boolean value, ignoring" and
+            # keeps the previous effective value, so this must not clobber it.
+        elif key in SECRET_DIRECTIVES:
+            if not value:
+                env_files.clear()            # EnvironmentFile is also a list
+            else:
+                # systemd allows a leading '-' meaning "optional".
+                env_files.append(value.lstrip("-").split()[0])
 
     surfaces: list[ExecutionSurface] = []
-    for key, value in entries:
-        if key not in EXEC_DIRECTIVES:
-            continue
-        if not value:
-            raise SchedulerParseError(f"{origin}: {key} has no command")
-        exe, rest = _split_command(value, origin=origin)
-        surfaces.append(ExecutionSurface(
-            origin=origin, raw=value, executable=exe, referenced_paths=rest,
-            working_directory=working_dir, environment_files=tuple(env_files),
-        ))
+    for directive in EXEC_DIRECTIVES:
+        # The EFFECTIVE root for this command, which is what the surface must
+        # carry: under RootDirectoryStartOnly=yes a non-start command is not
+        # chrooted at all, so its paths resolve on the host.
+        effective_root = (
+            None if (root_start_only and directive != "ExecStart") else root_dir
+        )
+        for value in exec_lists[directive]:
+            exe, rest = _split_command(value, origin=origin)
+            surfaces.append(ExecutionSurface(
+                origin=origin, raw=value, executable=exe, referenced_paths=rest,
+                working_directory=working_dir, root_directory=effective_root,
+                environment_files=tuple(env_files),
+            ))
     return surfaces
 
 
@@ -303,11 +516,20 @@ def unresolved_surfaces(surfaces: list[ExecutionSurface], *,
 
 
 def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
-                               release_root: str) -> dict:
+                               release_root: str,
+                               expected_origins: tuple[str, ...] | None = None,
+                               ) -> dict:
     """Report whether every surface's code paths resolve to the approved release.
 
     Fails closed on an empty surface list: "we found nothing to check" must not
     be reportable as "everything checks out".
+
+    ``expected_origins`` names the production services that MUST each
+    contribute at least one executable surface. This is where the no-surface
+    guard belongs: a parser may legitimately return nothing for a drop-in
+    fragment, but a known production service that yields nothing has been
+    misconfigured or mis-parsed and must not be aggregated silently into a PASS
+    alongside aligned surfaces from other units and cron.
 
     This certifies **path alignment only**. It cannot establish
     ``production_code_sha == approved_release_sha`` — see ``pointer`` and
@@ -317,19 +539,33 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
         return {"status": "FAILED",
                 "errors": ["no execution surfaces supplied — cannot certify"],
                 "unresolved": [], "system_transitional": [],
-                "secret_paths_outside_release": []}
+                "secret_paths_outside_release": [],
+                "missing_expected": list(expected_origins or ())}
+
+    missing_expected: list[str] = []
+    if expected_origins:
+        present = {s.origin for s in surfaces}
+        missing_expected = [
+            want for want in expected_origins
+            if not any(o == want or o.startswith(f"{want}:") for o in present)
+        ]
     unresolved = unresolved_surfaces(surfaces, release_root=release_root)
     secrets: list[str] = []
     for s in surfaces:
         for p in s.legacy_secret_paths(release_root=release_root):
             secrets.append(f"{s.origin}: {p}")
     return {
-        "status": "OK" if not unresolved else "FAILED",
+        "status": "OK" if not unresolved and not missing_expected else "FAILED",
         "errors": [
-            f"{s.origin} still binds legacy code: "
+            f"{s.origin} does not resolve to the release: "
             f"{', '.join(s.legacy_paths(release_root=release_root)) or s.executable}"
             for s in unresolved
+        ] + [
+            f"{want} contributed no executable surface — a known production "
+            f"service cannot silently contribute a PASS"
+            for want in missing_expected
         ],
+        "missing_expected": missing_expected,
         "unresolved": [s.origin for s in unresolved],
         "system_transitional": [s.origin for s in surfaces if s.is_system_transitional],
         # Surfaced, never counted as code drift: a credential file is not code,
@@ -341,14 +577,22 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
 
 def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              pointer_result: dict,
-                             release_root: str = CURRENT_POINTER) -> dict:
+                             release_root: str = CURRENT_POINTER,
+                             expected_origins: tuple[str, ...] | None = None,
+                             ) -> dict:
     """Path alignment AND pointer-target SHA together.
 
     Either alone is insufficient. Aligned schedulers under a ``current`` that
     targets an unapproved release is precisely the failure this guards, and so
     is an approved pointer that half the schedulers ignore.
+
+    ``expected_origins`` is forwarded to ``certify_scheduler_identity``. It has
+    to be: this is the real certification entry point, and a missing-service
+    guard reachable only by direct callers of the inner function is a guard
+    that production certification never actually runs.
     """
-    sched = certify_scheduler_identity(surfaces, release_root=release_root)
+    sched = certify_scheduler_identity(surfaces, release_root=release_root,
+                                       expected_origins=expected_origins)
     ok = sched["status"] == "OK" and pointer_result.get("status") == "OK"
     return {
         "status": "OK" if ok else "FAILED",
