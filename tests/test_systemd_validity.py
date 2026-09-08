@@ -582,7 +582,11 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
     combined = S.certify_release_identity(
         surfaces, pointer_result={"status": "OK", "errors": []},
         release_root="/opt/stockbot/current",
-        validity_result={"SYSTEMD_UNIT_VALIDITY": verdict},
+        expected_origins=("systemd:stockbot-daily.service",),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": verdict,
+            "verified_units": ["stockbot-daily.service"],
+        },
     )
     assert combined["production_release_identity"] == expected
 
@@ -729,3 +733,88 @@ def test_classified_units_are_declared_in_the_contracts_doc():
     contracts = (REPO / "docs" / "OUTPUT_ARTIFACT_CONTRACTS.md").read_text(
         encoding="utf-8")
     assert "classified_units" in contracts
+
+
+def _daily_surfaces():
+    from portfolio_automation.release import scheduler as S
+    return S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+        origin="systemd:stockbot-daily.service",
+    )
+
+
+def test_two_gates_passing_on_disjoint_units_is_not_three_gate_coverage():
+    """Both gates green is not enough — they must be about the same units.
+
+    A validity artifact scoped to one unit combined with scheduler evidence
+    scoped to another would otherwise claim three-gate coverage of a system
+    where no unit had actually passed both.
+    """
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "verified_units": ["stockbot-dashboard.service"],  # a DIFFERENT unit
+        },
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert "stockbot-daily.service" in combined["validity_uncovered_units"]
+    assert any("passed only one gate" in e for e in combined["errors"])
+
+
+def test_covered_units_do_establish_the_aggregate():
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "verified_units": ["stockbot-daily.service",
+                               "stockbot-dashboard.service"],
+        },
+    )
+    assert combined["production_release_identity"] == "PASS"
+    assert combined["validity_uncovered_units"] == []
+
+
+def test_without_expected_origins_there_is_nothing_to_bind():
+    """Unbound evidence cannot establish the aggregate, even when all green."""
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        validity_result={"SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]},
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("nothing to bind" in e for e in combined["errors"])
+
+
+def test_cron_origins_do_not_demand_a_systemd_unit():
+    """Cron surfaces name no unit, so they cannot be 'uncovered' by validity."""
+    from portfolio_automation.release import scheduler as S
+
+    surfaces = _daily_surfaces() + S.parse_crontab(
+        "0 9 * * * /opt/stockbot/current/scripts/run_daily_safe.sh\n",
+        origin="cron",
+    )
+    combined = S.certify_release_identity(
+        surfaces,
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service", "cron"),
+        validity_result={"SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]},
+    )
+    assert combined["validity_uncovered_units"] == []
+    assert combined["production_release_identity"] == "PASS"

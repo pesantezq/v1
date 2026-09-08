@@ -106,6 +106,10 @@ RELEASES_DIR = "/opt/stockbot/releases"
 #: broken" are different facts, and neither is eligibility.
 VALIDITY_NOT_ESTABLISHED = "NOT_ESTABLISHED"
 
+#: Execution-surface origins are ``"<kind>:<name>"``; only systemd origins name
+#: a unit that the validity gate can have verified. Cron surfaces have no unit.
+SYSTEMD_ORIGIN_PREFIX = "systemd"
+
 CURRENT_POINTER = "/opt/stockbot/current"
 LEGACY_CHECKOUT = "/opt/stockbot"
 
@@ -607,6 +611,16 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     and it is ``NOT_ESTABLISHED`` unless a validity result is actually supplied
     and passing. Absence of that evidence is never eligibility: without it this
     function cannot distinguish "the units are fine" from "nobody checked".
+
+    A passing verdict is not enough on its own, either — it has to be a verdict
+    **about the same units**. Both gates are scoped by their callers, so a
+    validity artifact covering only ``stockbot-daily.service`` could otherwise
+    be combined with scheduler evidence covering only
+    ``stockbot-dashboard.service``, and the aggregate would claim three-gate
+    coverage of a system where no unit had passed both. So the validity
+    artifact's ``verified_units`` must cover every systemd unit named by
+    ``expected_origins``, and without ``expected_origins`` there is nothing to
+    bind the two gates together — which is itself ``NOT_ESTABLISHED``.
     """
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
                                        expected_origins=expected_origins)
@@ -622,13 +636,37 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
             f"alone cannot establish it"
         )
 
+    # The two gates must be about the same units, not merely both green.
+    required_units = tuple(
+        origin.split(":", 1)[1]
+        for origin in (expected_origins or ())
+        if origin.startswith(f"{SYSTEMD_ORIGIN_PREFIX}:")
+    )
+    verified_units = set((validity_result or {}).get("verified_units") or ())
+    uncovered = tuple(u for u in required_units if u not in verified_units)
+    bound = bool(expected_origins) and not uncovered
+
+    if not expected_origins:
+        errors.append(
+            "no expected_origins supplied — there is nothing to bind the "
+            "scheduler and validity evidence together, so three-gate coverage "
+            "cannot be established"
+        )
+    for unit in uncovered:
+        errors.append(
+            f"{unit}: covered by scheduler alignment but absent from the "
+            f"validity evidence — a unit that passed only one gate cannot "
+            f"contribute to production release identity"
+        )
+
     return {
         "status": "OK" if ok else "FAILED",
         "scheduler": sched,
         "pointer": pointer_result,
         "systemd_unit_validity": validity,
+        "validity_uncovered_units": list(uncovered),
         "production_release_identity": (
-            "PASS" if (ok and validity == "PASS") else "NOT_ESTABLISHED"
+            "PASS" if (ok and validity == "PASS" and bound) else "NOT_ESTABLISHED"
         ),
         "errors": errors,
     }
