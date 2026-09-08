@@ -237,8 +237,8 @@ def certify_systemd_unit_validity(
 ) -> dict:
     """Combine inventory, loaded state and real verifier results into a verdict.
 
-    ``PASS`` requires every one of: a complete expected inventory, every
-    required unit loaded, every required unit current with PID 1, a real
+    ``PASS`` requires every one of: at least one unit actually verified, a
+    complete expected inventory, every required unit loaded, every required unit current with PID 1, a real
     verifier result for every required unit obtained with the required flag,
     every such result clean, and no relevant discovered unit left unclassified.
 
@@ -302,6 +302,18 @@ def certify_systemd_unit_validity(
     verified_units = tuple(sorted(
         set(required) | {u for u in expected if u in optional and u in set(discovered)}
     ))
+
+    # The empty-inventory guard above checks the INPUT list, but the optional
+    # mechanism can drain it afterwards: if every expected unit is optional and
+    # none is installed, nothing is required and nothing is verified, and the
+    # verdict would be PASS having run the verifier zero times. A fail-closed
+    # guard has to sit on the quantity that actually decides the verdict.
+    if expected_units and not verified_units:
+        blockers.append(
+            "no unit was verified — every expected unit is optional and absent, "
+            "so this run establishes nothing. 'Nothing to check' must never "
+            "read as 'everything checks out'."
+        )
 
     unexpected_units = tuple(
         u for u in discovered if u not in set(expected) and u not in classified

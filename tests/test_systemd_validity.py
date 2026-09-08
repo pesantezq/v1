@@ -635,3 +635,36 @@ def test_collector_emits_the_optional_section():
     parsed = _cli().parse_evidence(
         CAPTURE.replace("##EXPECTED", "##OPTIONAL\nstockbot-x.service\n##EXPECTED"))
     assert "stockbot-x.service" in parsed["optional_units"]
+
+
+def test_a_run_that_verified_no_unit_cannot_pass():
+    """Every expected unit optional and absent must not certify.
+
+    The empty-inventory guard checks the INPUT list, but the optional mechanism
+    drains it afterwards: nothing required, nothing verified, and the verifier
+    never ran. A fail-closed guard has to sit on the quantity that actually
+    decides the verdict, not on an upstream input a later step can empty.
+    """
+    optional = ("stockbot-sandbox-daily.service", "stockbot-sandbox-daily.timer")
+    result = certify(
+        expected_units=optional,
+        optional_units=optional,
+        discovered_units=(),
+        provenance={},
+        outcomes={},
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert result["verified_units"] == []
+    assert any("no unit was verified" in b for b in result["blockers"])
+
+
+def test_a_partially_optional_inventory_still_certifies_on_what_is_present():
+    """The guard must not overreact: one real unit verified is a real result."""
+    optional = "stockbot-sandbox-daily.service"
+    result = certify(
+        expected_units=UNITS + (optional,),
+        optional_units=(optional,),
+        discovered_units=UNITS,
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+    assert set(result["verified_units"]) == set(UNITS)
