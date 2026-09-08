@@ -115,3 +115,86 @@ def test_all_forbidden_ops_denied_even_at_a1():
     for op in FORBIDDEN_OPS:
         with pytest.raises(AuthorityError):
             assert_operation_allowed(Lvl.A1_ASSISTED_ENGINEERING, op)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-SR — BLOCKER A: read_authority_level must be TOTAL
+#
+# The fail-closed intent was already here, but a syntactically valid non-object
+# JSON root reached data["level"] and raised TypeError, which the guard did not
+# name. The reader threw instead of failing closed, and every caller downstream
+# of it -- including the whole WCC dashboard -- died with it.
+# ═══════════════════════════════════════════════════════════════════════════
+import json as _gsr_json
+from pathlib import Path as _GsrPath
+
+from portfolio_automation.engineer_worker.ew0a_authority import (
+    read_authority_level as _gsr_read_level, EngineerAuthorityLevel as _GsrLvl)
+
+_GSR_MARKER = "sk-GUI-SR-MUST-NOT-RENDER-999"
+
+
+def _gsr_authority_root(tmp_path, body=None, raw=None):
+    target = tmp_path / "config" / "ew0a_authority.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if raw is not None:
+        target.write_bytes(raw)
+    else:
+        target.write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_gsr_authority_reader_is_total_over_json_root_shapes(tmp_path):
+    """Every shape fails CLOSED to A0 instead of raising."""
+    for label, body in (("null", "null"), ("list", "[1,2]"), ("int", "123"),
+                        ("float", "1.5"), ("string", '"text"'), ("bool", "true"),
+                        ("empty object", "{}"),
+                        ("no level", '{"grants": []}'),
+                        ("invalid level", '{"level": "NOT_A_LEVEL"}'),
+                        ("null level", '{"level": null}'),
+                        ("dict level", _gsr_json.dumps({"level": {"api_key": _GSR_MARKER}})),
+                        ("list level", _gsr_json.dumps({"level": [_GSR_MARKER]})),
+                        ("invalid json", "{oops")):
+        root = _gsr_authority_root(tmp_path / f"a_{label.replace(' ', '_')}", body)
+        assert _gsr_read_level(root) is _GsrLvl.A0_DIAGNOSTIC, label
+
+
+def test_gsr_authority_reader_handles_io_and_decode_failures(tmp_path):
+    undecodable = _gsr_authority_root(tmp_path / "utf8", raw=b"\xff\xfebad")
+    assert _gsr_read_level(undecodable) is _GsrLvl.A0_DIAGNOSTIC
+    # absent file
+    assert _gsr_read_level(tmp_path / "nothing_here") is _GsrLvl.A0_DIAGNOSTIC
+    # a directory in place of the file -> IsADirectoryError (an OSError)
+    as_dir = tmp_path / "dir"
+    (as_dir / "config" / "ew0a_authority.json").mkdir(parents=True)
+    assert _gsr_read_level(as_dir) is _GsrLvl.A0_DIAGNOSTIC
+
+
+def test_gsr_authority_reader_still_reads_both_valid_levels(tmp_path):
+    for value, expected in (("A0_DIAGNOSTIC", _GsrLvl.A0_DIAGNOSTIC),
+                            ("A1_ASSISTED_ENGINEERING", _GsrLvl.A1_ASSISTED_ENGINEERING)):
+        root = _gsr_authority_root(tmp_path / f"ok_{value}",
+                                   _gsr_json.dumps({"level": value}))
+        assert _gsr_read_level(root) is expected
+
+
+def test_gsr_authority_semantics_are_untouched():
+    """Reader hardening only: no level, grant, denial or gate semantics moved."""
+    assert {lvl.value for lvl in _GsrLvl} == {
+        "A0_DIAGNOSTIC", "A1_ASSISTED_ENGINEERING"}
+    assert FORBIDDEN_OPS == frozenset({
+        "MAIN_WRITE", "MERGE", "AUTONOMOUS_PUSH", "PRODUCTION_WRITE",
+        "OPT_STOCKBOT_WRITE", "DEPLOY", "SERVICE_RESTART", "CREDENTIAL_ACCESS",
+        "SECURITY_POLICY_SELF_MOD", "PROTECTED_SCORING_MODIFICATION",
+        "BROKER_ACTION", "CAPITAL_DECISION", "E3_SELF_ASSIGN", "E4_SELF_ASSIGN",
+        "SELF_PROMOTION"})
+
+
+def test_gsr_a_marker_never_reaches_the_reader_result(tmp_path):
+    """The reader returns an enum, so there is no channel for payload at all --
+    pinned so a future 'helpful' error message cannot open one."""
+    root = _gsr_authority_root(tmp_path / "marker",
+                               _gsr_json.dumps({"level": {"api_key": _GSR_MARKER}}))
+    result = _gsr_read_level(root)
+    assert _GSR_MARKER not in repr(result)
+    assert result is _GsrLvl.A0_DIAGNOSTIC

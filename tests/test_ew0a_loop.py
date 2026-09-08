@@ -302,3 +302,103 @@ def test_a_real_mission_still_dispatches_after_idle_support(durable_ctx):
                       _pass_attempt, lambda t, v: _pass_attempt(t, 9), SUP_PASS(),
                       _now, _vid, certification=durable_ctx, roadmap=ROADMAP)
     assert rep.verified == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-SR — BLOCKER B: read_runtime_policy must be TOTAL and enforce its schema
+#
+# A non-object JSON root reached d.items() and raised AttributeError, which the
+# guard did not name. Separately, a dataclass holds whatever it is handed, so
+# RuntimePolicy(**json) accepted auto_merge="true" -- and
+# disabled_authorities_ok() then reads a non-empty string as True.
+# ═══════════════════════════════════════════════════════════════════════════
+import dataclasses as _gsr_dc
+import json as _gsr_json
+
+from portfolio_automation.engineer_worker.ew0a_loop import (
+    read_runtime_policy as _gsr_read_policy, RuntimePolicy as _GsrPolicy)
+
+_GSR_MARKER = "sk-GUI-SR-MUST-NOT-RENDER-999"
+
+
+def _gsr_runtime_root(tmp_path, body=None, raw=None):
+    target = tmp_path / "config" / "ew0a_runtime.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if raw is not None:
+        target.write_bytes(raw)
+    else:
+        target.write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_gsr_runtime_reader_is_total_over_json_root_shapes(tmp_path):
+    for label, body in (("null", "null"), ("list", "[1,2]"), ("int", "123"),
+                        ("float", "1.5"), ("string", '"text"'), ("bool", "true"),
+                        ("invalid json", "{oops")):
+        root = _gsr_runtime_root(tmp_path / f"b_{label.replace(' ', '_')}", body)
+        assert _gsr_read_policy(root) is None, label
+
+
+def test_gsr_runtime_reader_handles_absent_io_and_decode_failures(tmp_path):
+    assert _gsr_read_policy(tmp_path / "absent") is None
+    assert _gsr_read_policy(_gsr_runtime_root(tmp_path / "utf8", raw=b"\xff\xfebad")) is None
+
+
+def test_gsr_runtime_reader_requires_mission_id(tmp_path):
+    assert _gsr_read_policy(_gsr_runtime_root(tmp_path / "nomission", "{}")) is None
+
+
+def test_gsr_runtime_reader_enforces_declared_field_types(tmp_path):
+    """The persisted contract already declares these types; the reader simply
+    had not been enforcing them."""
+    cases = {
+        "bool_as_int": {"auto_merge": 1},
+        "bool_as_zero": {"auto_merge": 0},
+        "bool_as_string": {"auto_merge": "true"},
+        "bool_as_dict": {"auto_merge": {"api_key": _GSR_MARKER}},
+        "count_as_bool": {"max_concurrent_tasks": True},
+        "count_as_string": {"max_concurrent_tasks": "2"},
+        "count_as_float": {"max_concurrent_tasks": 1.5},
+        "str_as_int": {"engineering_mode": 7},
+        "str_as_dict": {"mission_id": {"api_key": _GSR_MARKER}},
+        "str_as_list": {"authority": [_GSR_MARKER]},
+    }
+    for label, extra in cases.items():
+        record = {"mission_id": "m-ok"}
+        record.update(extra)
+        root = _gsr_runtime_root(tmp_path / f"t_{label}", _gsr_json.dumps(record))
+        assert _gsr_read_policy(root) is None, label
+
+
+def test_gsr_runtime_reader_accepts_the_real_and_partial_records(tmp_path):
+    """A partial record is legitimate -- absent fields take dataclass defaults,
+    which is how the repository already writes them in places."""
+    partial = _gsr_read_policy(_gsr_runtime_root(
+        tmp_path / "partial", _gsr_json.dumps({"mission_id": "m-ok"})))
+    assert partial is not None and partial.mission_id == "m-ok"
+    assert partial.auto_merge is False and partial.max_concurrent_tasks == 1
+
+    full = {f.name: getattr(_GsrPolicy(mission_id="m-full"), f.name)
+            for f in _gsr_dc.fields(_GsrPolicy)}
+    loaded = _gsr_read_policy(_gsr_runtime_root(tmp_path / "full",
+                                                _gsr_json.dumps(full)))
+    assert loaded is not None and loaded.disabled_authorities_ok()
+
+
+def test_gsr_every_runtime_field_is_covered_by_the_validator():
+    """Executable coupling. If a future field introduces a new annotation, this
+    fails and the type map must be extended -- rather than the field silently
+    escaping validation, which is the failure mode that produced this mission."""
+    from portfolio_automation.engineer_worker.ew0a_loop import (
+        _UNVALIDATED_RUNTIME_FIELDS, _RUNTIME_FIELD_TYPES)
+    assert _UNVALIDATED_RUNTIME_FIELDS == ()
+    assert set(_RUNTIME_FIELD_TYPES) == {f.name for f in _gsr_dc.fields(_GsrPolicy)}
+
+
+def test_gsr_a_malformed_policy_cannot_report_authorities_enabled(tmp_path):
+    """The reason bool discipline matters: a non-empty string is truthy, so
+    auto_merge="true" would have made disabled_authorities_ok() false while the
+    record claimed to be a policy."""
+    root = _gsr_runtime_root(tmp_path, _gsr_json.dumps(
+        {"mission_id": "m", "auto_merge": "true", "auto_deploy": "yes"}))
+    assert _gsr_read_policy(root) is None

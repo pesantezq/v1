@@ -61,12 +61,28 @@ FORBIDDEN_OPS = frozenset({
 
 def read_authority_level(repo_root: str | Path, rel: str = DEFAULT_STATE_REL) -> EngineerAuthorityLevel:
     """Read the current authority level. Defaults to A0 (fail-closed) if absent
-    or malformed — the worker is never implicitly promoted."""
+    or malformed — the worker is never implicitly promoted.
+
+    TOTAL over the file and JSON shapes this contract can encounter. The
+    fail-closed intent was already here, but a syntactically valid non-object
+    root (``null``, ``[1,2]``, ``123``, ``"text"``) reached ``data["level"]`` and
+    raised ``TypeError``, which the guard did not name — so the reader threw
+    instead of failing closed, and every caller downstream of it died with it.
+    The JSON root is now checked BEFORE it is indexed."""
     p = Path(repo_root) / rel
     try:
+        # UnicodeDecodeError is a ValueError, so undecodable bytes are covered.
         data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return EngineerAuthorityLevel.A0_DIAGNOSTIC
+    if not isinstance(data, dict):
+        # A record whose root is not an object cannot state an authority level.
+        return EngineerAuthorityLevel.A0_DIAGNOSTIC
+    try:
         return EngineerAuthorityLevel(data["level"])
-    except (OSError, ValueError, KeyError):
+    except (KeyError, ValueError, TypeError):
+        # TypeError covers an unhashable level value (dict/list), which enum
+        # lookup raises rather than rejecting as a bad value.
         return EngineerAuthorityLevel.A0_DIAGNOSTIC
 
 

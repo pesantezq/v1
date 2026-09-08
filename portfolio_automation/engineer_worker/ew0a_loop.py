@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
@@ -97,12 +97,63 @@ class RuntimePolicy:
                     or self.auto_authority_promotion or self.auto_capital_action)
 
 
+#: Declared field kinds this reader knows how to enforce. Built from the
+#: dataclass rather than restated, so it cannot drift from RuntimePolicy.
+#: ``_UNVALIDATED_RUNTIME_FIELDS`` is asserted empty by a test: if a future field
+#: introduces a new annotation, that test fails and the map must be extended
+#: rather than the field silently escaping validation.
+_RUNTIME_ANNOTATION_TYPES: dict[str, type] = {"str": str, "bool": bool, "int": int}
+_RUNTIME_FIELD_TYPES: dict[str, type] = {
+    f.name: _RUNTIME_ANNOTATION_TYPES[str(f.type)]
+    for f in fields(RuntimePolicy) if str(f.type) in _RUNTIME_ANNOTATION_TYPES}
+_UNVALIDATED_RUNTIME_FIELDS: tuple[str, ...] = tuple(
+    f.name for f in fields(RuntimePolicy) if f.name not in _RUNTIME_FIELD_TYPES)
+
+
+def _runtime_field_is_valid(name: str, value: Any) -> bool:
+    """Whether one persisted field matches its declared type.
+
+    A dataclass holds whatever it is handed, so ``RuntimePolicy(**json)`` accepts
+    ``auto_merge="true"`` or ``max_concurrent_tasks=True`` without complaint —
+    and ``disabled_authorities_ok()`` then reads a non-empty string as True. The
+    persisted contract already declares these types; the reader simply had not
+    been enforcing them."""
+    expected = _RUNTIME_FIELD_TYPES.get(name)
+    if expected is None:
+        return True
+    if expected is bool:
+        # 0/1 are not booleans here. An authority flag must be a real bool.
+        return isinstance(value, bool)
+    if expected is int:
+        # bool is a subclass of int in Python; a flag is not a count or a limit.
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, expected)
+
+
 def read_runtime_policy(repo_root: str | Path, rel: str = DEFAULT_RUNTIME_REL) -> RuntimePolicy | None:
+    """Read the persisted runtime policy, or None if it cannot be trusted.
+
+    TOTAL over the file and JSON shapes this contract can encounter. A
+    syntactically valid non-object root reached ``d.items()`` and raised
+    ``AttributeError``, which the guard did not name, so the reader threw
+    instead of returning None. The root is now checked structurally before it is
+    iterated, and each recognised field is validated against its declared type —
+    absent fields still take their dataclass defaults, which is how partial
+    records are legitimately written today."""
     p = Path(repo_root) / rel
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-        return RuntimePolicy(**{k: v for k, v in d.items() if k in RuntimePolicy.__dataclass_fields__})
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    known = {k: v for k, v in d.items() if k in RuntimePolicy.__dataclass_fields__}
+    if any(not _runtime_field_is_valid(k, v) for k, v in known.items()):
+        return None
+    try:
+        return RuntimePolicy(**known)
+    except TypeError:
+        # A required field (mission_id) is absent.
         return None
 
 

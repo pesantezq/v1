@@ -61,15 +61,18 @@ class ControllerSummary:
 class SupervisorSummary:
     availability: str                   # "AVAILABLE" | "OUTAGE" | PENDING_BACKEND
     current_state: str
-    recent_pass: int
-    recent_repair: int
-    recent_escalate: int
-    recent_abstain: int
-    recent_unavailable: int
+    #: ``None`` means the records ledger could not answer -- never a measured 0.
+    recent_pass: int | None
+    recent_repair: int | None
+    recent_escalate: int | None
+    recent_abstain: int | None
+    recent_unavailable: int | None
     last_successful_verification: str | None
     measured_latency_ms: str            # PENDING_BACKEND (no real latency record)
     verification_queue: str             # PENDING_BACKEND (no real queue)
     outage_state: str
+    #: Whether the underlying records ledger was usable at all.
+    records_evidence: str = TruthState.LIVE.value
     security_classification: str = "operational"
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,6 +109,10 @@ class WorkerSummary:
     next_action: str                    # PENDING_BACKEND
     recent_verification_outcomes: list[str]
     escalation_state: str
+    #: Whether the records ledger behind recent_verification_outcomes was usable.
+    #: An empty list from an unusable ledger is not an absence of verdicts, and a
+    #: consumer reading only this summary must be able to tell the difference.
+    records_evidence: str = TruthState.LIVE.value
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("WorkerSummary"), **asdict(self)}
@@ -161,14 +168,17 @@ def project_verification(task_id: str, implementation_result: str, scope_policy_
 @dataclass(frozen=True)
 class ApprenticeshipSummary:
     controller_level: str
-    decisions_shadowed: int
-    task_selection_agreements: int
-    risk_agreements: int
-    routing_agreements: int
-    missed_escalations: int
-    unsafe_underclassifications: int
-    authority_expansion_proposals: int
+    #: ``None`` means the records ledger could not answer -- never a measured 0.
+    decisions_shadowed: int | None
+    task_selection_agreements: int | None
+    risk_agreements: int | None
+    routing_agreements: int | None
+    missed_escalations: int | None
+    unsafe_underclassifications: int | None
+    authority_expansion_proposals: int | None
     c1_readiness: str                   # NOT_READY | CANDIDATE | READY_FOR_CERTIFICATION
+    #: Whether the underlying records ledger was usable at all.
+    records_evidence: str = TruthState.LIVE.value
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("ApprenticeshipSummary"), **asdict(self)}
@@ -201,22 +211,110 @@ class SystemHealthSummary:
 # ---------------------------------------------------------------------------
 # Builders over authoritative sources (READ-ONLY)
 # ---------------------------------------------------------------------------
-def _read_records(repo_root: Path, rel: str = "docs/EW0A_0B3_RECORDS.jsonl") -> list[dict[str, Any]]:
-    p = repo_root / rel
-    if not p.exists():
-        return []
-    out = []
-    for ln in p.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if ln:
-            try:
-                out.append(json.loads(ln))
-            except json.JSONDecodeError:
-                pass
-    return out
+CONTROLLER_RECORDS_REL = "docs/EW0A_0B3_RECORDS.jsonl"
 
 
-def build_supervisor_summary(records: list[dict[str, Any]]) -> SupervisorSummary:
+@dataclass(frozen=True)
+class ControllerRecordsRead:
+    """The outcome of reading the controller records ledger.
+
+    The previous reader was unsafe in both directions at once. A malformed JSON
+    line was silently skipped, so an unreadable ledger produced a SHORTER list
+    that consumers then reported as measured history — an unparseable file became
+    ``0 PASS`` as though zero had been observed. And a syntactically valid
+    non-object row was admitted into the list, so the first ``row.get(...)``
+    downstream raised ``AttributeError`` and took the dashboard with it.
+
+    Neither is repaired by filtering: dropping bad rows is precisely how partial
+    evidence comes to masquerade as complete evidence. The ledger is either
+    usable in full or it is unusable, and a genuinely empty ledger stays
+    distinguishable from a corrupt one."""
+
+    availability: str                       # LIVE | UNAVAILABLE
+    records: list[dict[str, Any]]
+    detail: str = ""
+
+    @property
+    def is_usable(self) -> bool:
+        return self.availability == TruthState.LIVE.value
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**_base("ControllerRecordsRead"),
+                "availability": self.availability,
+                "record_count": len(self.records),
+                "source": CONTROLLER_RECORDS_REL,
+                "detail": self.detail}
+
+
+def read_controller_records(repo_root: str | Path,
+                            rel: str = CONTROLLER_RECORDS_REL) -> ControllerRecordsRead:
+    """Read the controller records ledger, or refuse it whole.
+
+    Absence is UNAVAILABLE rather than PENDING_BACKEND: the controller writes
+    these records, so a missing ledger is an operational condition and not
+    evidence that nobody built the producer."""
+    path = Path(repo_root) / rel
+    if not path.exists():
+        return ControllerRecordsRead(TruthState.UNAVAILABLE.value, [],
+                                     f"{rel} is absent")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return ControllerRecordsRead(
+            TruthState.UNAVAILABLE.value, [],
+            f"{rel} is unreadable ({type(exc).__name__})")
+
+    rows: list[dict[str, Any]] = []
+    for index, line in enumerate(text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            # NOT skipped. A ledger we cannot fully parse is not a shorter ledger.
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [],
+                f"{rel} line {index} is not valid JSON")
+        if not isinstance(row, dict):
+            # Type name only; the malformed payload is never echoed.
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [],
+                f"{rel} line {index} is not a JSON object, got {type(row).__name__}")
+        rows.append(row)
+    return ControllerRecordsRead(TruthState.LIVE.value, rows,
+                                 f"{len(rows)} record(s) from {rel}")
+
+
+def _read_records(repo_root: Path, rel: str = CONTROLLER_RECORDS_REL) -> list[dict[str, Any]]:
+    """Backward-compatible accessor: the usable rows, or none at all.
+
+    Retained so existing callers keep working. New code should use
+    :func:`read_controller_records` and consult ``availability`` -- an empty list
+    from here cannot distinguish an empty ledger from an unusable one."""
+    return read_controller_records(repo_root, rel).records
+
+
+def build_supervisor_summary(records: list[dict[str, Any]],
+                            records_evidence: str = TruthState.LIVE.value
+                            ) -> SupervisorSummary:
+    """Project supervisor verdict history.
+
+    ``records_evidence`` defaults to LIVE so existing callers passing a plain
+    list are unchanged. When the ledger is UNUSABLE the counts are ``None`` --
+    NOT zero. A measured zero and an unanswerable question look identical as
+    ``0``, and for a verdict history that difference is the whole point: an
+    operator reading ``0 REPAIR`` from an unreadable ledger would conclude
+    nothing had gone wrong."""
+    usable = records_evidence == TruthState.LIVE.value
+    if not usable:
+        return SupervisorSummary(
+            availability=PENDING_BACKEND, current_state=PENDING_BACKEND,
+            recent_pass=None, recent_repair=None, recent_escalate=None,
+            recent_abstain=None, recent_unavailable=None,
+            last_successful_verification=None, measured_latency_ms=PENDING_BACKEND,
+            verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
+            records_evidence=records_evidence)
     verdicts = [r.get("gpt_verdict") for r in records if r.get("gpt_verdict")]
     def c(v):
         return sum(1 for x in verdicts if str(x).upper() == v)
@@ -227,10 +325,26 @@ def build_supervisor_summary(records: list[dict[str, Any]]) -> SupervisorSummary
         recent_pass=c("PASS"), recent_repair=c("REPAIR"), recent_escalate=c("ESCALATE"),
         recent_abstain=c("ABSTAIN"), recent_unavailable=c("SUPERVISOR_UNAVAILABLE"),
         last_successful_verification=last_pass, measured_latency_ms=PENDING_BACKEND,
-        verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND)
+        verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
+        records_evidence=records_evidence)
 
 
-def build_apprenticeship_summary(records: list[dict[str, Any]]) -> ApprenticeshipSummary:
+def build_apprenticeship_summary(records: list[dict[str, Any]],
+                                 records_evidence: str = TruthState.LIVE.value
+                                 ) -> ApprenticeshipSummary:
+    """Project the C0.5 apprenticeship metrics.
+
+    When the ledger is unusable every count is ``None``, not zero. Zero
+    ``unsafe_underclassifications`` is the single most flattering number this
+    projection can emit, and it must never be produced by a ledger that could
+    not be read."""
+    if records_evidence != TruthState.LIVE.value:
+        return ApprenticeshipSummary(
+            controller_level="C0.5_SHADOW", decisions_shadowed=None,
+            task_selection_agreements=None, risk_agreements=None,
+            routing_agreements=None, missed_escalations=None,
+            unsafe_underclassifications=None, authority_expansion_proposals=None,
+            c1_readiness="NOT_READY", records_evidence=records_evidence)
     comps = [r for r in records if r.get("kind") == "ApprenticeshipComparison"]
     shadowed = len([r for r in records if r.get("kind") == "ControllerDecisionCandidateV0"])
     return ApprenticeshipSummary(
@@ -242,7 +356,7 @@ def build_apprenticeship_summary(records: list[dict[str, Any]]) -> Apprenticeshi
         missed_escalations=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
         unsafe_underclassifications=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
         authority_expansion_proposals=0,
-        c1_readiness="NOT_READY")
+        c1_readiness="NOT_READY", records_evidence=records_evidence)
 
 
 def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[str]) -> WorkerAuthoritySummary:
@@ -287,7 +401,9 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
 
 
 def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, Any]],
-                          worker: Any, now: str | None) -> ReadinessAssessment:
+                          worker: Any, now: str | None,
+                          records_evidence: str = TruthState.LIVE.value
+                          ) -> ReadinessAssessment:
     """Classify every oversight capability from the evidence actually present.
 
     Each capability declares whether a PRODUCER exists. That is an engineering
@@ -296,11 +412,16 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
 
     Nothing here builds a backend. A capability with no producer stays pending;
     the honest answer is the deliverable."""
+    # Every row here has been validated as an object by read_controller_records,
+    # so .get() is safe. When the ledger is unusable there is no verification to
+    # age, and supervisor_state resolves to UNAVAILABLE rather than to a
+    # freshness verdict computed over evidence nobody could read.
     last_verification = None
-    for rec in reversed(records):
-        if rec.get("gpt_verdict") and rec.get("recorded_at"):
-            last_verification = rec["recorded_at"]
-            break
+    if records_evidence == TruthState.LIVE.value:
+        for rec in reversed(records):
+            if rec.get("gpt_verdict") and rec.get("recorded_at"):
+                last_verification = rec["recorded_at"]
+                break
 
     caps = [
         # Authority and mission come from protected config files that are read
@@ -329,7 +450,9 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
                    classify(producer_exists=True, value=last_verification,
                             recorded_at=last_verification, now=now,
                             threshold="verification"),
-                   required=True, detail="recorded gpt_verdict history"),
+                   required=True,
+                   detail=(f"recorded gpt_verdict history; records ledger "
+                           f"{records_evidence}")),
         # No producer has been built for any of these. Building them is
         # explicitly out of scope for this mission.
         Capability("worker_activity",
@@ -355,7 +478,8 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     root = Path(repo_root)
     level = read_authority_level(root)
     policy = read_runtime_policy(root)
-    records = _read_records(root)
+    records_read = read_controller_records(root)
+    records = records_read.records
     mission = policy.mission_id if policy else None
 
     # authoritative contract presence -> mission progress
@@ -365,13 +489,26 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     except Exception:  # noqa: BLE001
         present = set()
 
-    grants = []
+    # A SECOND read of the same protected record, and the same defect class as
+    # blocker A:  on a non-object root raised AttributeError,
+    # which the guard did not name, so a scalar/array/null authority file took
+    # the whole dashboard down even after the canonical reader was made total.
+    # The root is checked before it is indexed, and a non-list grants value is
+    # not rendered.
+    #
+    # This makes the READ total and non-leaking. Classifying the QUALITY of this
+    # record as evidence (record_evidence LIVE/UNAVAILABLE) is PR #35 GUI-R work
+    # and is deliberately not duplicated here.
+    grants: list[str] = []
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
-            grants = json.loads(ap.read_text(encoding="utf-8")).get("grants", [])
+            record = json.loads(ap.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            grants = []
+            record = None
+        raw_grants = record.get("grants") if isinstance(record, dict) else None
+        if isinstance(raw_grants, list) and all(isinstance(g, str) for g in raw_grants):
+            grants = list(raw_grants)
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",
@@ -382,8 +519,11 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         operational_state=PENDING_BACKEND, ew_authority=level.value, controller_level="C0.5_SHADOW",
         current_mission=mission, current_task=PENDING_BACKEND, queue_size=PENDING_BACKEND,
         activity_summary=PENDING_BACKEND, next_action=PENDING_BACKEND,
-        recent_verification_outcomes=[str(r.get("gpt_verdict")) for r in records if r.get("gpt_verdict")][-5:],
-        escalation_state="none")
+        recent_verification_outcomes=(
+            [str(r.get("gpt_verdict")) for r in records if r.get("gpt_verdict")][-5:]
+            if records_read.is_usable else []),
+        escalation_state="none",
+        records_evidence=records_read.availability)
     health = SystemHealthSummary(
         controller="ACTIVE", gpt_supervisor=PENDING_BACKEND, engineer_runtime=PENDING_BACKEND,
         sandbox=PENDING_BACKEND, evidence_bridge=PENDING_BACKEND, authority=level.value,
@@ -391,18 +531,24 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     dashboard = {
         **_base("Dashboard"),
         "controller": controller.to_dict(),
-        "supervisor": build_supervisor_summary(records).to_dict(),
+        "supervisor": build_supervisor_summary(
+            records, records_read.availability).to_dict(),
         "worker": worker.to_dict(),
         "worker_authority": build_worker_authority_summary(level, grants).to_dict(),
         "mission": build_mission_summary(mission or "unknown", present).to_dict(),
-        "apprenticeship": build_apprenticeship_summary(records).to_dict(),
+        "apprenticeship": build_apprenticeship_summary(
+            records, records_read.availability).to_dict(),
         "attention_items": [],   # only human-relevant items; none outstanding
         "system_health": health.to_dict(),
+        # The ledger's own usability, stated once and authoritatively, so a
+        # consumer does not have to infer it from three separate summaries.
+        "controller_records": records_read.to_dict(),
     }
     # Backend truth states + capability readiness. Derived from the evidence
     # just assembled -- never asserted, and never a LIVE percentage.
     dashboard["backend_truth"] = _assess_backend_truth(
-        level=level, policy=policy, records=records, worker=worker, now=now).to_dict()
+        level=level, policy=policy, records=records, worker=worker, now=now,
+        records_evidence=records_read.availability).to_dict()
     # Learning projections (Phase 13). Degrade to PENDING_BACKEND rather than
     # failing the whole dashboard if the learning store is absent.
     try:
