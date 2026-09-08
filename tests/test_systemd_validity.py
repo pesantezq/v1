@@ -668,3 +668,64 @@ def test_a_partially_optional_inventory_still_certifies_on_what_is_present():
     )
     assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
     assert set(result["verified_units"]) == set(UNITS)
+
+
+def test_a_retired_streamlit_host_can_still_certify():
+    """docs/STREAMLIT_RETIREMENT.md is a SUPPORTED procedure.
+
+    It ends in `systemctl disable --now` and `rm` of the unit file, so a host
+    that completed it is correctly configured. A gate that fails there forever
+    would be the gate's bug, not the host's.
+    """
+    retired = "stockbot-streamlit.service"
+    result = certify(
+        expected_units=UNITS + (retired,),
+        optional_units=(retired,),
+        discovered_units=UNITS,
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+    assert retired not in result["missing_units"]
+
+
+def test_a_streamlit_host_that_still_runs_it_verifies_it():
+    """Tolerating absence must not mean tolerating a broken installed unit."""
+    unit = "stockbot-streamlit.service"
+    result = certify(
+        expected_units=UNITS + (unit,),
+        optional_units=(unit,),
+        discovered_units=UNITS + (unit,),
+        provenance={**{u: prov(u) for u in UNITS}, unit: prov(unit)},
+        outcomes={**{u: ok(u) for u in UNITS}, unit: ok(unit, exit_status=1)},
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.FAIL
+    assert unit in result["verified_units"]
+
+
+def test_the_collector_treats_the_retired_unit_as_optional():
+    body = COLLECTOR.read_text(encoding="utf-8")
+    optional_block = body.split("OPTIONAL=")[1].split('"')[1]
+    assert "stockbot-streamlit.service" in optional_block
+    # ...but it is still in the expected inventory, so it gets verified.
+    expected_block = body.split("UNITS=")[1].split('"')[1]
+    assert "stockbot-streamlit.service" in expected_block
+
+
+def test_operator_waivers_are_recorded_in_the_artifact():
+    """A waiver nobody can see is not evidence.
+
+    Without this, a certificate could show PASS alongside a discovered unit
+    that is neither expected nor unexpected, with no record of the decision
+    that allowed it.
+    """
+    waived = "stockbot-extra.service"
+    result = certify(discovered_units=UNITS + (waived,),
+                     classified_units=(waived,))
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+    assert result["unexpected_units"] == []
+    assert result["classified_units"] == [waived]
+
+
+def test_classified_units_are_declared_in_the_contracts_doc():
+    contracts = (REPO / "docs" / "OUTPUT_ARTIFACT_CONTRACTS.md").read_text(
+        encoding="utf-8")
+    assert "classified_units" in contracts

@@ -105,6 +105,7 @@ governed namespace, use `--namespace`, which routes through
 | `verifier_flag` | str | `--recursive-errors=no` |
 | `expected_units` | list[str] | inventory this deployment expects |
 | `optional_units` | list[str] | may be absent; verified if installed |
+| `classified_units` | list[str] | discovered units explicitly waived by an operator; recorded so the waiver is auditable |
 | `verified_units` | list[str] | units actually verified |
 | `discovered_units` | list[str] | relevant units found on the host |
 | `missing_units` | list[str] | required units absent |

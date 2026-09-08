@@ -242,6 +242,12 @@ def certify_systemd_unit_validity(
     verifier result for every required unit obtained with the required flag,
     every such result clean, and no relevant discovered unit left unclassified.
 
+    ``classified_units`` are discovered units an operator has explicitly waived
+    from the expected inventory. The waiver is recorded in the artifact: a
+    certificate that shows a discovered unit which is neither expected nor
+    unexpected, with no record of who waived it, is asking the reader to trust
+    an invisible decision.
+
     ``optional_units`` are units that some deployments install and some do not
     (the sandbox lane is the example). Absence is not a failure; **presence is
     not a free pass** — an optional unit that exists is verified exactly like a
@@ -394,6 +400,7 @@ def certify_systemd_unit_validity(
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),
         "optional_units": sorted(optional),
+        "classified_units": sorted(classified),
         "verified_units": list(verified_units),
         "discovered_units": list(discovered),
         "missing_units": list(missing_units),

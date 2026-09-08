@@ -34,12 +34,21 @@ cloudflared-stockbot.service}"
 
 # Units some deployments install and some do not. Absence is tolerated;
 # presence is NOT a free pass -- an installed optional unit is verified exactly
-# like a required one. deploy/install_systemd.sh does not install the sandbox
-# lane (docs/DAILY_SANDBOX_RUN.md describes it as optional), so requiring it
-# would make a standard install unable to reach PASS.
+# like a required one, so nothing here goes unchecked on a host that has it.
+#
+#   sandbox lane   -- deploy/install_systemd.sh does not install it and
+#                     docs/DAILY_SANDBOX_RUN.md describes it as optional, so
+#                     requiring it would make a standard install unable to PASS.
+#   streamlit      -- docs/STREAMLIT_RETIREMENT.md is a supported procedure that
+#                     ends in `systemctl disable --now stockbot-streamlit.service`
+#                     and `rm /etc/systemd/system/stockbot-streamlit.service`.
+#                     A host that has completed it is correctly configured, so a
+#                     permanently-failing gate there would be the gate's bug, not
+#                     the host's. It is still fully verified wherever it exists.
 OPTIONAL="${STOCKBOT_OPTIONAL_UNITS:-\
 stockbot-sandbox-daily.service \
-stockbot-sandbox-daily.timer}"
+stockbot-sandbox-daily.timer \
+stockbot-streamlit.service}"
 
 # Which units count as "relevant" for inventory completeness.
 PATTERN="${STOCKBOT_UNIT_PATTERN:-stockbot|cloudflared}"
