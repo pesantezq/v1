@@ -45,7 +45,8 @@ from typing import Any, Iterable
 from portfolio_automation.engineer_worker import EXPERIMENTAL_MARKER
 from portfolio_automation.engineer_worker.ew0a import read_outcomes
 from portfolio_automation.engineer_worker.ew0a_authority import (
-    read_authority_level, EngineerAuthorityLevel, FORBIDDEN_OPS)
+    read_authority_level, EngineerAuthorityLevel, FORBIDDEN_OPS,
+    grants_for_level)
 from portfolio_automation.engineer_worker.ew0a_loop import read_runtime_policy
 from portfolio_automation.engineer_worker.control_center_truth import (
     Capability, Readiness, ReadinessAssessment, TruthState, assess_readiness,
@@ -1003,6 +1004,46 @@ def _validated_raw_level(raw_level: Any, effective: EngineerAuthorityLevel) -> N
             "the protected record are inconsistent")
 
 
+def _validated_canonical_grants(projected_grants: list[str],
+                                effective: EngineerAuthorityLevel) -> None:
+    """Refuse a record whose grants could not have come from the writer.
+
+    ``_validated_string_list`` proves ``grants`` is a list of strings. It says
+    nothing about whether those strings are grants this level can hold, and that
+    gap let a structurally perfect record claim ``record_evidence: LIVE`` while
+    listing grants ``set_authority_level`` would never emit -- an A0 worker
+    advertising broker and capital grants, presented to an operator as
+    trustworthy configuration evidence through a REQUIRED capability.
+
+    THE SAME MISTAKE AS EVERY EARLIER ROUND OF THIS REVIEW, one layer deeper:
+    validating the container without validating what its contents mean.
+
+    EXACT EQUALITY, deliberately. ``set_authority_level`` emits one canonical
+    shape per level, so a differing list is not a variant of the protected state
+    -- it is a record the trusted writer did not write. Subset, superset,
+    duplicate and reordered are all refused, because certifying them as
+    equivalent would be this projection inventing an authority contract nobody
+    declared. If those variants should ever be legal, that is an authority-policy
+    decision for ``ew0a_authority``, not a leniency for a read model.
+
+    NOT filtered, NOT intersected, NOT replaced with the canonical set while
+    still reporting LIVE. Unusable evidence is reported unusable; the caller's
+    fail-closed path then projects the permanent denial boundary on its own.
+
+    Raises ``ValueError``. Only structural and semantic facts reach the message
+    -- never the unexpected grant value, never a repr of the list. A hostile
+    grant string must not become a GUI payload carrier just because validation
+    rejected it."""
+    canonical = list(grants_for_level(effective))
+    if projected_grants == canonical:
+        return
+    raise ValueError(
+        "grants do not match the canonical grant set for the effective "
+        f"authority level ({effective.value}): expected {len(canonical)} "
+        f"canonical entries, found {len(projected_grants)}; the record was not "
+        "written by set_authority_level and its contents are not projected")
+
+
 def build_worker_authority_summary(level: EngineerAuthorityLevel,
                                    grants: Any = _MISSING,
                                    forbidden_ops: Any = _MISSING,
@@ -1042,6 +1083,9 @@ def build_worker_authority_summary(level: EngineerAuthorityLevel,
                 f"{'absent' if forbidden_ops is _MISSING else 'null'}")
         denied = effective_denied_ops(forbidden_ops)
         projected_grants = _validated_string_list("grants", grants)
+        # The container is a list[str]; this asks whether its CONTENTS could
+        # have come from the trusted writer at this level.
+        _validated_canonical_grants(projected_grants, level)
     except (ValueError, TypeError) as exc:
         permanent = frozenset(FORBIDDEN_OPS)
         return WorkerAuthoritySummary(
@@ -2129,21 +2173,20 @@ WORKER_IDENTITY = "engineer.local_qwen2_5_7b"
 
 @dataclass(frozen=True)
 class _DashboardEvidence:
-    """Every source-backed input ``build_dashboard`` needs, already acquired.
+    """Every source-backed input the dashboard projection needs, already acquired.
 
-    THE ARCHITECTURAL BOUNDARY. Two earlier attempts tried to prove completeness
-    by teaching an AST guard to recognise source-access syntax, and both failed
-    the same way: a new equivalent syntax appeared and the guard silently lost
-    coverage. First the universe came from a hand-written reader enum, then from
-    a hand-written list of method names. Both were the same mistake -- asking a
-    catalogue what IO exists.
+    Source acquisition is intentionally concentrated behind named gateways and
+    frozen here before projection begins. ``build_dashboard`` delegates
+    acquisition and then projects; ``_build_dashboard_from_evidence`` has no
+    repository or path parameter, so it cannot reach the repository through its
+    parameters.
 
-    This inverts it. Rather than recognising every possible filesystem
-    expression, the assembler is architecturally prevented from containing any.
-    All acquisition happens in the collector below, whose complete call set is
-    small enough to close: every call must be a certified gateway or this
-    constructor. Whether ``.stat()`` is benign stops being a question, because
-    ``.stat()`` simply may not appear there."""
+    That is a design property backed by review and tests -- NOT a proof.
+    Earlier revisions of this docstring asserted much stronger guarantees about
+    the assembler and about the collector's call set, and review disproved them:
+    an indirect-dispatch or new-helper mutation escapes either check. **Absence
+    of arbitrary Python IO is not claimed anywhere.** The static tests over this
+    structure are defence in depth, and the audit-hook test is observational."""
 
     #: canonical reader A -- effective, fail-closed authority
     level: Any
@@ -2169,19 +2212,21 @@ class _DashboardEvidence:
 
 
 def _collect_dashboard_evidence(root: Path, now: str | None) -> _DashboardEvidence:
-    """Acquire every source-backed dashboard input. THE ONLY IO IN THIS PATH.
+    """Acquire every source-backed dashboard input, then hand it over frozen.
 
-    Deliberately dull, and deliberately the only place ``root`` is used for
-    acquisition. It coordinates certified gateways and constructs nothing else:
-    no source paths (those live inside their gateways), no conditionals, no
-    parsing, no derivation. That dullness is what makes the closed-world proof
-    possible -- a bounded test inspects EVERY call here and requires each to be
-    a certified gateway or the evidence constructor, with exact occurrence
-    counts so a duplicate acquisition cannot hide behind an identity that
-    already exists.
+    Deliberately dull, and intentionally the only place ``root`` is used for
+    acquisition. It coordinates named gateways and constructs nothing else: no
+    source paths (those live inside their gateways), no conditionals, no
+    parsing, no derivation. Keeping it dull is what makes it reviewable at a
+    glance, which is the actual control.
 
-    Semantics are unchanged from the previous assembler; this moves the reads,
-    it does not reinterpret them."""
+    A defence-in-depth test asserts the directly-named calls here are the
+    expected gateways, with the expected occurrence counts. It is a regression
+    guard, not a proof: an indirectly-dispatched callee is invisible to it, and
+    no claim is made that every possible call is discovered.
+
+    Semantics are unchanged from when these reads lived in the assembler; this
+    moved them, it did not reinterpret them."""
     records_read = read_controller_records(root)
     grants, record_forbidden, raw_level = _read_authority_record_evidence(root)
     learning, learning_state = _project_learning(root, WORKER_IDENTITY, now)

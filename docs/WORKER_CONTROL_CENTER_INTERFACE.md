@@ -736,10 +736,12 @@ defence in depth and are not claimed to constitute whole-program IO or security 
 That last sentence is a correction. Four review rounds established that the stronger
 claim this document previously made was unsound:
 
-> ~~"a bounded AST test derives every authoritative access"~~
-> ~~"the guard fails closed on every unrecognized path operation"~~
-> ~~"every gateway dependency is automatically complete"~~
-> ~~"`build_dashboard` is IO-free by construction"~~
+Four claims were withdrawn: that a bounded AST test derived every authoritative
+access; that the guard failed closed on every unrecognised path operation; that
+gateway dependencies were automatically complete; and that the assembler was
+free of source access by construction. **None of them is asserted anywhere any
+more** — the wording below is deliberately weaker and describes structure,
+review and tests rather than proof.
 
 Each round replaced one enumeration with a narrower enumeration — a reader enum, then a
 method-name list, then two `ast.Call.func` shapes, then a gateway-to-dependency map — and
@@ -856,6 +858,68 @@ It deliberately carries **no runtime self-check**. Its contract is that it never
 and an internal assertion that could raise would trade that guarantee for a redundant one.
 `config_readability` remains exactly what this document already said: **file readability
 evidence, not liveness** — declaring the probes did not turn them into health.
+
+#### Canonical grant semantics
+
+`grants` being a `list[str]` says nothing about whether those strings are grants the
+level can hold. That gap let a structurally perfect record be certified as trustworthy
+while listing grants `set_authority_level` would never emit:
+
+```json
+{"level": "A0_DIAGNOSTIC",
+ "grants": ["BROKER_ACTION", "CAPITAL_DECISION", "PRODUCTION_DEPLOY"]}
+```
+
+previously projected `record_evidence: LIVE` through a **REQUIRED** oversight capability.
+An operator would have read an A0 worker advertising broker and capital grants. It was
+never an enforcement escalation — capability booleans are derived from the denial
+boundary, never from the grant list — but it was an **operator-truth defect**, and both
+halves of that sentence stay true after the fix.
+
+**The canonical semantics stay owned by `ew0a_authority`.** One pure helper expresses
+them:
+
+| Level | Canonical grants |
+|---|---|
+| `A0_DIAGNOSTIC` | `()` — A0 is read-only diagnostics and grants nothing |
+| `A1_ASSISTED_ENGINEERING` | `A1_GRANTS` |
+
+`set_authority_level` (the trusted writer) and the read-model validator consume the
+**same** helper, so there is no second copy of authority meaning to drift. The mapping
+was previously inline in the writer, which is why nothing else could ask the question.
+The persisted payload is unchanged for both levels — proven by test — and the read model
+does not decide authority meaning; it asks the authority module.
+
+**Exact list equality**, deliberately:
+
+| Record | Evidence |
+|---|---|
+| A0 + `[]` | `LIVE` |
+| A1 + exactly `A1_GRANTS` | `LIVE` |
+| A0 + any non-empty list | `UNAVAILABLE` |
+| A1 + `[]`, subset, superset, duplicate, or reordered | `UNAVAILABLE` |
+
+The strictness is not cosmetic. The trusted writer emits **one** canonical shape per
+level, so a differing list is not a variant of the protected state — it is a record the
+writer did not write. Certifying a variant as equivalent would be a read model inventing
+an authority contract nobody declared. If those variants should ever be legal, that is a
+policy decision for `ew0a_authority`.
+
+A refused record is **not** filtered, intersected, sorted into compliance, or replaced
+with the canonical set while still reporting `LIVE`. Unusable evidence is reported
+unusable: `record_evidence: UNAVAILABLE`, `grants: []`, and the permanent denial boundary
+projected on its own — so no operation is reported as newly allowed.
+
+The refusal detail carries **structural facts only** — which level, how many canonical
+entries were expected, how many were found. Never the unexpected grant value, never a
+`repr` of the list. A hostile grant string must not become a GUI payload carrier merely
+because validation rejected it, and a marker test proves it does not.
+
+**`forbidden_ops` semantics are deliberately unchanged.** `effective_denied_ops` remains
+`FORBIDDEN_OPS ∪ record denials`: a record may be **stricter** than the writer, because
+an extra denial cannot weaken the permanent boundary. An extra *grant* has the opposite
+safety meaning. Conflating the two would be a separate authority-policy decision, and is
+not made here.
 
 #### The authority-record evidence gateway
 

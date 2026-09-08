@@ -2530,11 +2530,17 @@ def test_both_authority_list_fields_are_validated():
 
 
 def test_valid_authority_lists_still_project_live():
+    """The fixture now carries the CANONICAL A1 grant set.
+
+    It previously passed `["approved E1/E2"]` -- a plausible-looking list the
+    trusted writer would never emit -- and passed only because the projection
+    did not yet check what the grant strings mean."""
+    canonical = list(rm.grants_for_level(Lvl.A1_ASSISTED_ENGINEERING))
     summary = build_worker_authority_summary(
-        Lvl.A1_ASSISTED_ENGINEERING, grants=["approved E1/E2"],
+        Lvl.A1_ASSISTED_ENGINEERING, grants=canonical,
         forbidden_ops=["MERGE", "DEPLOY"], raw_level="A1_ASSISTED_ENGINEERING")
     assert summary.record_evidence == TruthState.LIVE.value
-    assert summary.grants == ["approved E1/E2"]
+    assert summary.grants == canonical
     assert build_worker_authority_summary(
         Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=[],
         raw_level="A0_DIAGNOSTIC").record_evidence == TruthState.LIVE.value
@@ -3337,8 +3343,11 @@ def test_a_malformed_authority_level_is_never_presented_as_live(tmp_path):
 
 def test_both_valid_levels_still_project_live_evidence(tmp_path):
     for label, value in (("a0", "A0_DIAGNOSTIC"), ("a1", "A1_ASSISTED_ENGINEERING")):
+        # Each level's own canonical grant set: A0 grants nothing, A1 grants
+        # A1_GRANTS. `grants: []` used to be accepted for BOTH.
         dash = _authority_dashboard(tmp_path, f"ok_{label}", {
-            "level": value, "grants": [], "forbidden_ops": []})
+            "level": value, "grants": list(rm.grants_for_level(Lvl(value))),
+            "forbidden_ops": []})
         assert dash["worker_authority"]["record_evidence"] == TruthState.LIVE.value, label
         assert dash["worker_authority"]["level"] == value, label
         assert dash["backend_truth"]["readiness"] == "PARTIAL", label
@@ -3391,7 +3400,11 @@ def test_only_the_consumed_authority_fields_are_validated(tmp_path):
     """Scope discipline: actor/updated_at/schema_* are not consumed by this
     projection and are deliberately not validated."""
     dash = _authority_dashboard(tmp_path, "extras", {
-        "level": "A1_ASSISTED_ENGINEERING", "grants": [], "forbidden_ops": [],
+        "level": "A1_ASSISTED_ENGINEERING",
+        # the CONSUMED fields must be genuinely valid, or this test would prove
+        # nothing about the unconsumed ones
+        "grants": list(rm.grants_for_level(Lvl.A1_ASSISTED_ENGINEERING)),
+        "forbidden_ops": [],
         "actor": {"unexpected": "shape"}, "updated_at": 12345,
         "schema_version": None})
     assert dash["worker_authority"]["record_evidence"] == TruthState.LIVE.value
@@ -4412,3 +4425,261 @@ def test_ri_backend_truth_stays_hardened_and_reader_only():
     assert len(entry.canonical_readers) == 3
     assert entry.direct_sources == ()
     assert entry.boundary is not rm.ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — CANONICAL GRANT SEMANTICS (Codex finding 3961812723)
+#
+# `_validated_string_list` proved `grants` was a list of strings. Nothing proved
+# the strings were grants the level could hold, so a structurally perfect record
+# could claim `record_evidence: LIVE` while listing grants the trusted writer
+# would never emit -- an A0 worker advertising broker and capital grants,
+# presented to an operator as trustworthy configuration through a REQUIRED
+# capability.
+#
+# The same mistake as every earlier round of this review, one layer deeper:
+# validating the container without validating what its contents MEAN.
+#
+# The canonical semantics stay owned by ew0a_authority. One pure helper,
+# `grants_for_level`, expresses them; the trusted writer and this validator
+# consume the SAME helper, so there is no second copy to drift.
+#
+# EXACT EQUALITY is deliberate. set_authority_level emits one canonical shape
+# per level, so subset / superset / duplicate / reordered are all records the
+# writer did not write. Certifying them as equivalent would be a read model
+# inventing an authority contract nobody declared.
+# ═══════════════════════════════════════════════════════════════════════════
+_T_A0 = Lvl.A0_DIAGNOSTIC
+_T_A1 = Lvl.A1_ASSISTED_ENGINEERING
+_T_IMPOSSIBLE_MARKER = "sk-IMPOSSIBLE-GRANT-MUST-NOT-RENDER-999"
+
+
+def _t_canonical(level):
+    return list(rm.grants_for_level(level))
+
+
+def test_grants_for_level_is_the_canonical_authority_semantics():
+    """A0 grants nothing; A1 grants A1_GRANTS. Owned by the authority module."""
+    from portfolio_automation.engineer_worker.ew0a_authority import A1_GRANTS
+    assert rm.grants_for_level(_T_A0) == ()
+    assert rm.grants_for_level(_T_A1) == A1_GRANTS
+    # total over the canonical enum -- there is no unknown-level branch
+    for level in Lvl:
+        assert isinstance(rm.grants_for_level(level), tuple)
+        assert all(isinstance(g, str) for g in rm.grants_for_level(level))
+
+
+def test_the_writer_and_the_read_model_consume_the_same_helper():
+    """The point of the helper: one source of truth, not two copies in step."""
+    import inspect
+    from portfolio_automation.engineer_worker import ew0a_authority as auth
+    writer = inspect.getsource(auth.set_authority_level)
+    assert "grants_for_level(level)" in writer
+    assert "A1_GRANTS) if level is" not in writer, "the writer restates the mapping"
+    validator = inspect.getsource(rm._validated_canonical_grants)
+    assert "grants_for_level(effective)" in validator
+
+
+# ── A0: grants nothing ───────────────────────────────────────────────────
+def test_a0_with_no_grants_is_live(tmp_path):
+    dash = _authority_dashboard(tmp_path, "a0_ok", {
+        "level": "A0_DIAGNOSTIC", "grants": [], "forbidden_ops": []})
+    assert dash["worker_authority"]["record_evidence"] == TruthState.LIVE.value
+    assert dash["worker_authority"]["grants"] == []
+
+
+@pytest.mark.parametrize("label,grants", [
+    ("forbidden_op", ["BROKER_ACTION"]),
+    ("capital", ["CAPITAL_DECISION"]),
+    ("arbitrary", ["arbitrary-string"]),
+    ("a1_grants_at_a0", None),          # filled in below: A1's set under A0
+])
+def test_a0_with_any_non_empty_grant_list_is_unavailable(tmp_path, label, grants):
+    """A0 is read-only diagnostics. Any grant at A0 is a record the writer could
+    not have produced, whether or not the string names a real operation."""
+    grants = _t_canonical(_T_A1) if grants is None else grants
+    dash = _authority_dashboard(tmp_path, f"a0_bad_{label}", {
+        "level": "A0_DIAGNOSTIC", "grants": grants, "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.UNAVAILABLE.value, label
+    assert authority["grants"] == [], label
+    # effective authority still comes from the canonical reader, never the record
+    assert authority["level"] == "A0_DIAGNOSTIC", label
+
+
+# ── A1: grants exactly A1_GRANTS ─────────────────────────────────────────
+def test_a1_with_the_exact_canonical_set_is_live(tmp_path):
+    dash = _authority_dashboard(tmp_path, "a1_ok", {
+        "level": "A1_ASSISTED_ENGINEERING", "grants": _t_canonical(_T_A1),
+        "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert authority["grants"] == _t_canonical(_T_A1)
+
+
+def _t_a1_variants():
+    """Non-canonical A1 grant lists.
+
+    Indexing is guarded so this stays collectable even if the canonical set
+    changes or empties: a parametrize helper that raises at COLLECTION time
+    takes the whole module down and reports as an error rather than as the
+    failures it should be. Discovered while mutation-testing `grants_for_level`.
+    """
+    canonical = _t_canonical(_T_A1)
+    variants = {
+        "empty": [],
+        "subset": canonical[:-1],
+        "extra": canonical + ["EXTRA_GRANT"],
+        "reordered": list(reversed(canonical)),
+    }
+    if canonical:
+        variants["duplicate"] = canonical + [canonical[0]]
+        variants["single"] = [canonical[0]]
+    return variants
+
+
+@pytest.mark.parametrize("label", sorted(_t_a1_variants()))
+def test_a1_with_a_non_canonical_grant_list_is_unavailable(tmp_path, label):
+    """Subset, superset, duplicate and reordered are refused alike.
+
+    Not cosmetic strictness: the trusted writer emits ONE canonical shape, so a
+    differing list means something other than the writer produced the record."""
+    dash = _authority_dashboard(tmp_path, f"a1_bad_{label}", {
+        "level": "A1_ASSISTED_ENGINEERING", "grants": _t_a1_variants()[label],
+        "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.UNAVAILABLE.value, label
+    assert authority["grants"] == [], label
+    assert authority["level"] == "A1_ASSISTED_ENGINEERING", label
+
+
+# ── carrier corruption stays covered ─────────────────────────────────────
+@pytest.mark.parametrize("label,grants", [
+    ("missing", "__ABSENT__"),
+    ("null", None),
+    ("string", "approved"),
+    ("dict", {"grants": ["a"]}),
+    ("int", 7),
+    ("non_string_element", ["ok", 7]),
+    ("nested_list", [["ok"]]),
+])
+def test_malformed_grant_carriers_remain_unavailable(tmp_path, label, grants):
+    record = {"level": "A1_ASSISTED_ENGINEERING", "forbidden_ops": []}
+    if grants != "__ABSENT__":
+        record["grants"] = grants
+    dash = _authority_dashboard(tmp_path, f"carrier_{label}", record)
+    assert dash["worker_authority"]["record_evidence"] == \
+        TruthState.UNAVAILABLE.value, label
+    assert dash["worker_authority"]["grants"] == [], label
+
+
+# ── the refusal must not become a rendering path ─────────────────────────
+def test_an_impossible_grant_never_reaches_the_projection(tmp_path):
+    """T1. A malicious grant string must not become a GUI payload carrier just
+    because validation rejected it."""
+    dash = _authority_dashboard(tmp_path, "marker", {
+        "level": "A0_DIAGNOSTIC", "grants": [_T_IMPOSSIBLE_MARKER],
+        "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.UNAVAILABLE.value
+    assert _T_IMPOSSIBLE_MARKER not in json.dumps(dash, default=str)
+    # the detail explains the refusal structurally, without quoting the value
+    assert "canonical grant set" in authority["record_detail"]
+    assert _T_IMPOSSIBLE_MARKER not in authority["record_detail"]
+
+
+def test_the_refusal_detail_carries_no_grant_content(tmp_path):
+    for label, grants in (("marker", [_T_IMPOSSIBLE_MARKER]),
+                          ("many", [f"secret-{i}" for i in range(5)])):
+        dash = _authority_dashboard(tmp_path, f"detail_{label}", {
+            "level": "A0_DIAGNOSTIC", "grants": grants, "forbidden_ops": []})
+        detail = dash["worker_authority"]["record_detail"]
+        for value in grants:
+            assert value not in detail, label
+        assert "[" not in detail and "{" not in detail, label
+
+
+# ── enforcement is unchanged: capabilities stay denial-derived ───────────
+def test_impossible_grants_never_loosen_a_capability(tmp_path):
+    """The defect was operator-truth, NOT escalation, and that must stay true.
+
+    A record advertising every forbidden operation as a grant must leave every
+    capability denied, because capabilities are derived from the denial boundary
+    and never from the grant list."""
+    from portfolio_automation.engineer_worker.ew0a_authority import FORBIDDEN_OPS
+    dash = _authority_dashboard(tmp_path, "no_escalation", {
+        "level": "A0_DIAGNOSTIC", "grants": sorted(FORBIDDEN_OPS),
+        "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.UNAVAILABLE.value
+    for capability in ("can_merge", "can_deploy", "can_mutate_main",
+                       "can_write_production", "can_self_promote"):
+        assert authority[capability] is False, capability
+    for op in FORBIDDEN_OPS:
+        assert op in authority["forbidden_ops"], op
+
+
+def test_a_stricter_record_is_still_usable_evidence(tmp_path):
+    """forbidden_ops semantics are deliberately NOT changed here.
+
+    A record may be STRICTER than the writer -- an extra denial cannot weaken
+    the permanent boundary, so it stays usable evidence. An extra GRANT has the
+    opposite safety meaning. Conflating the two would be a policy change this
+    mission is not making."""
+    dash = _authority_dashboard(tmp_path, "stricter", {
+        "level": "A1_ASSISTED_ENGINEERING", "grants": _t_canonical(_T_A1),
+        "forbidden_ops": ["EXTRA_DENIAL"]})
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert "EXTRA_DENIAL" in authority["forbidden_ops"]
+
+
+# ── the trusted writer is unchanged by the deduplication ─────────────────
+def test_set_authority_level_persists_the_same_payload_after_the_refactor(tmp_path):
+    """§12. The helper replaced an inline conditional; the bytes must not move."""
+    import json as _json
+    from portfolio_automation.engineer_worker import ew0a_authority as auth
+    from portfolio_automation.engineer_worker.ew0a_authority import (
+        A1_GRANTS, FORBIDDEN_OPS)
+
+    for level, expected_grants in ((_T_A0, []), (_T_A1, list(A1_GRANTS))):
+        root = tmp_path / f"writer_{level.value}"
+        auth.set_authority_level(root, level, actor="operator",
+                                 now="2026-09-08T00:00:00+00:00")
+        written = _json.loads(
+            (root / auth.DEFAULT_STATE_REL).read_text(encoding="utf-8"))
+        assert written["grants"] == expected_grants, level
+        assert written["level"] == level.value, level
+        assert written["forbidden_ops"] == sorted(FORBIDDEN_OPS), level
+        assert written["actor"] == "operator", level
+        assert written["updated_at"] == "2026-09-08T00:00:00+00:00", level
+        assert written["schema_version"] == auth.AUTHORITY_SCHEMA_VERSION, level
+        assert written["schema_kind"] == auth.SCHEMA_KIND, level
+        assert set(written) == {"schema_version", "schema_kind", "level", "actor",
+                                "updated_at", "grants", "forbidden_ops"}, level
+
+
+def test_what_the_writer_writes_is_what_the_read_model_certifies(tmp_path):
+    """The end-to-end point of sharing one helper: a record the trusted writer
+    produced must always read back as LIVE evidence."""
+    from portfolio_automation.engineer_worker import ew0a_authority as auth
+    for level in Lvl:
+        root = tmp_path / f"roundtrip_{level.value}"
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        (root / "docs").mkdir(parents=True, exist_ok=True)
+        auth.set_authority_level(root, level, actor="operator", now=_NOW)
+        (root / "config" / "ew0a_runtime.json").write_text(
+            json.dumps({"mission_id": "m"}), encoding="utf-8")
+        authority = rm.build_dashboard(root, now=_NOW)["worker_authority"]
+        assert authority["record_evidence"] == TruthState.LIVE.value, level
+        assert authority["level"] == level.value, level
+        assert authority["grants"] == list(rm.grants_for_level(level)), level
+
+
+def test_the_real_protected_record_is_canonical():
+    """The repository's own authority record must satisfy the new semantics --
+    if it did not, this check would be wrong rather than the record."""
+    authority = rm.build_dashboard(_REPO, now=_NOW)["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert authority["grants"] == list(
+        rm.grants_for_level(Lvl(authority["level"])))
