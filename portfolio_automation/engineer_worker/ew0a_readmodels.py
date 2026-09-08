@@ -1437,8 +1437,23 @@ def _is_empty_session_envelope(session: dict[str, Any]) -> bool:
     return all(isinstance(entry, str) for entry in known)
 
 
+#: The COMPLETE published vocabulary of _readability. Certified finite so that a
+#: regression returning file contents cannot masquerade as a state -- which is
+#: exactly what Codex finding 3960949424 showed the old guard could not detect.
+READABILITY_STATES: frozenset[str] = frozenset({"ABSENT", "UNREADABLE", "READABLE"})
+
+
 def _readability(path: Path) -> str:
-    """File readability — NOT component health. Named so it cannot be mistaken."""
+    """File readability — NOT component health. Named so it cannot be mistaken.
+
+    A direct source PROBE, not a canonical reader: it answers one structural
+    question and returns a member of :data:`READABILITY_STATES`. It must never
+    emit file contents, parsed JSON, exception text quoting the source, or a
+    repr of any payload -- see the marker proofs in the GUI-RI test block.
+
+    Deliberately carries no runtime self-check. Its contract is that it never
+    raises, and an internal assertion that could raise would trade that
+    guarantee for a redundant one."""
     if not path.exists():
         return "ABSENT"
     try:
@@ -1693,9 +1708,108 @@ class RawSourceReader(str, Enum):
     CONTROLLER_RECORDS = "C:ew0a_readmodels.read_controller_records"
 
 
+class SourceAccessKind(str, Enum):
+    """HOW a dashboard surface's evidence was acquired.
+
+    A canonical reader and a readability probe are not the same kind of thing,
+    and collapsing them into one enum is what let four direct file reads hide
+    behind a declaration naming one reader. Kind is what makes the difference
+    between them expressible."""
+
+    #: Admits and INTERPRETS evidence: validates shape, applies a contract, and
+    #: fails closed. Readers A/B/C.
+    CANONICAL_READER = "CANONICAL_READER"
+    #: Opens and PARSES an authoritative file inline, without a canonical reader.
+    #: The consuming projection owns validation.
+    DIRECT_EVIDENCE_PARSE = "DIRECT_EVIDENCE_PARSE"
+    #: Asks only whether a path exists and decodes. Emits a value from a finite
+    #: structural contract and NEVER the file's contents.
+    DIRECT_READABILITY_PROBE = "DIRECT_READABILITY_PROBE"
+    #: Asks whether an imported module exposes named attributes. Reads no file.
+    MODULE_PRESENCE_PROBE = "MODULE_PRESENCE_PROBE"
+
+
+#: The prefix each kind contributes to a source-access identity, so an access
+#: derived from the source can be matched to a declaration mechanically.
+SOURCE_ACCESS_PREFIX: dict[SourceAccessKind, str] = {
+    SourceAccessKind.CANONICAL_READER: "reader",
+    SourceAccessKind.DIRECT_EVIDENCE_PARSE: "evidence_parse",
+    SourceAccessKind.DIRECT_READABILITY_PROBE: "readability",
+    SourceAccessKind.MODULE_PRESENCE_PROBE: "module_presence",
+}
+
+#: The canonical reader each function name identifies. The AST completeness
+#: guard resolves reader calls through this, so renaming a reader without
+#: updating its identity fails rather than silently dropping a dependency.
+CANONICAL_READER_FUNCTIONS: dict[str, "RawSourceReader"] = {}
+
+
+class DirectSource(str, Enum):
+    """Authoritative sources acquired WITHOUT a canonical reader.
+
+    Deliberately separate from :class:`RawSourceReader`. Forcing these into that
+    enum -- merely because it already existed -- would say that a readability
+    probe and reader A have the same semantics. They do not: A interprets
+    evidence and fails closed, while a probe answers one structural question and
+    is forbidden from emitting content at all.
+
+    Each value is ``<kind prefix>:<target>``, which is what lets the derived
+    inventory be compared against declarations without a hand-written bridge."""
+
+    #: build_dashboard's SECOND read of the authority record, feeding
+    #: worker_authority. Values travel behind _MISSING and the CONSUMER validates.
+    AUTHORITY_RECORD_EVIDENCE = "evidence_parse:config/ew0a_authority.json"
+    #: The four system_health readability probes. File readability evidence, NOT
+    #: liveness -- the contract is explicit and these do not change that.
+    READABILITY_AUTHORITY_RECORD = "readability:config/ew0a_authority.json"
+    READABILITY_RUNTIME_POLICY = "readability:config/ew0a_runtime.json"
+    READABILITY_OUTCOME_LEDGER = "readability:docs/EW0A_CERTIFICATION_OUTCOMES.jsonl"
+    READABILITY_RECORDS_LEDGER = "readability:docs/EW0A_0B3_RECORDS.jsonl"
+    #: Northstar 0B.3 contract presence, feeding mission deliverable progress.
+    #: Neither Codex nor the repair brief named this one; the derived inventory
+    #: did, which is the point of deriving it.
+    NORTHSTAR_CONTRACT_PRESENCE = "module_presence:portfolio_automation.northstar"
+
+
+#: What each direct source targets: a repo-relative path, or a module path for a
+#: presence probe.
+DIRECT_SOURCE_TARGETS: dict[DirectSource, str] = {
+    DirectSource.AUTHORITY_RECORD_EVIDENCE: "config/ew0a_authority.json",
+    DirectSource.READABILITY_AUTHORITY_RECORD: "config/ew0a_authority.json",
+    DirectSource.READABILITY_RUNTIME_POLICY: "config/ew0a_runtime.json",
+    DirectSource.READABILITY_OUTCOME_LEDGER: OUTCOME_LEDGER_REL,
+    DirectSource.READABILITY_RECORDS_LEDGER: CONTROLLER_RECORDS_REL,
+    DirectSource.NORTHSTAR_CONTRACT_PRESENCE: "portfolio_automation.northstar",
+}
+
+DIRECT_SOURCE_KINDS: dict[DirectSource, SourceAccessKind] = {
+    DirectSource.AUTHORITY_RECORD_EVIDENCE: SourceAccessKind.DIRECT_EVIDENCE_PARSE,
+    DirectSource.READABILITY_AUTHORITY_RECORD:
+        SourceAccessKind.DIRECT_READABILITY_PROBE,
+    DirectSource.READABILITY_RUNTIME_POLICY:
+        SourceAccessKind.DIRECT_READABILITY_PROBE,
+    DirectSource.READABILITY_OUTCOME_LEDGER:
+        SourceAccessKind.DIRECT_READABILITY_PROBE,
+    DirectSource.READABILITY_RECORDS_LEDGER:
+        SourceAccessKind.DIRECT_READABILITY_PROBE,
+    DirectSource.NORTHSTAR_CONTRACT_PRESENCE: SourceAccessKind.MODULE_PRESENCE_PROBE,
+}
+
+
+def source_access_identity(kind: SourceAccessKind, target: str) -> str:
+    """The identity a derived access and a declaration must agree on."""
+    return f"{SOURCE_ACCESS_PREFIX[kind]}:{target}"
+
+
 #: Which local name in ``build_dashboard`` carries each blocked reader's raw
 #: output. Used by the registry AND by the test that proves the coupling, so the
 #: declaration and the call site cannot drift apart.
+CANONICAL_READER_FUNCTIONS.update({
+    "read_authority_level": RawSourceReader.AUTHORITY_LEVEL,
+    "read_runtime_policy": RawSourceReader.RUNTIME_POLICY,
+    "read_controller_records": RawSourceReader.CONTROLLER_RECORDS,
+})
+
 RAW_SOURCE_VARIABLES: dict[str, RawSourceReader] = {
     "level": RawSourceReader.AUTHORITY_LEVEL,
     "policy": RawSourceReader.RUNTIME_POLICY,
@@ -1717,9 +1831,24 @@ _NO_RAW_DEPENDENCY_BOUNDARIES = frozenset({
 class _RegisteredProjection:
     boundary: ProjectionBoundary
     detail: str
-    #: Raw blocked readers this surface consumes DIRECTLY, without a GUI-R
-    #: validator in between.
-    raw_sources: tuple[RawSourceReader, ...] = ()
+    #: Canonical readers (A/B/C) whose output this surface consumes.
+    canonical_readers: tuple[RawSourceReader, ...] = ()
+    #: Authoritative sources this surface reaches WITHOUT a canonical reader.
+    #: Separate from the readers above because the semantics differ; see
+    #: SourceAccessKind.
+    direct_sources: tuple[DirectSource, ...] = ()
+
+    @property
+    def source_dependencies(self) -> frozenset[str]:
+        """Every dependency as a comparable identity, readers and direct alike.
+
+        The completeness guard compares this against the inventory derived from
+        the source, in BOTH directions, so a missing declaration and a dead one
+        both fail."""
+        readers = {source_access_identity(SourceAccessKind.CANONICAL_READER,
+                                          r.value)
+                   for r in self.canonical_readers}
+        return frozenset(readers | {d.value for d in self.direct_sources})
 
 
 #: EVERY top-level key ``build_dashboard`` emits, with its boundary status.
@@ -1746,10 +1875,19 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
         ProjectionBoundary.GUI_R_VALIDATED,
         "every consumed OutcomeRecord field validated via validate_outcome_record; "
         "one invalid row invalidates the whole ledger"),
+    # Declared NOTHING before this commit, while consuming reader A's effective
+    # level AND build_dashboard's second, direct parse of the same record. The
+    # classification stays GUI_R_VALIDATED because this surface validates that
+    # evidence field by field -- a direct dependency is allowed to be validated,
+    # it is only forbidden to be undeclared.
     "worker_authority": _RegisteredProjection(
         ProjectionBoundary.GUI_R_VALIDATED,
         "grants and forbidden_ops validated as list[str]; missing/null/empty kept "
-        "distinct; permanent FORBIDDEN_OPS boundary unioned regardless"),
+        "distinct; permanent FORBIDDEN_OPS boundary unioned regardless; consumes "
+        "reader A's effective level plus the direct authority-record evidence "
+        "gateway, whose raw values it is the sole validator of",
+        canonical_readers=(RawSourceReader.AUTHORITY_LEVEL,),
+        direct_sources=(DirectSource.AUTHORITY_RECORD_EVIDENCE,)),
     "active_session": _RegisteredProjection(
         ProjectionBoundary.GUI_R_VALIDATED,
         "all 26 producer fields validated and copied individually; uncontracted "
@@ -1768,7 +1906,8 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
         "whole-ledger admission via read_controller_records; every WCC-consumed "
         "field validated before a row is admitted, the selected source carried as "
         "instance provenance, and a genuinely empty ledger kept distinguishable "
-        "from an unusable one"),
+        "from an unusable one",
+        canonical_readers=(RawSourceReader.CONTROLLER_RECORDS,)),
     # --- module-owned derivations -------------------------------------------
     "attention_items": _RegisteredProjection(
         ProjectionBoundary.MODULE_OWNED,
@@ -1777,15 +1916,6 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
         ProjectionBoundary.MODULE_OWNED,
         "AttentionCoverage; no attention producer exists, nothing is derived from "
         "source evidence"),
-    # NOT derived-only, which is what this entry used to claim. build_dashboard
-    # passes RAW level, policy and records straight into _assess_backend_truth,
-    # which reads them directly -- so a non-object records row raises there, and
-    # the authority/runtime readers can prevent this surface from being assembled
-    # at all. The optimistic classification mattered because a GUI-SR mission
-    # could have repaired the six visible blocked surfaces and signed off while
-    # this seventh dependent surface stayed unsafe. Reclassification here is
-    # deliberate; restructuring _assess_backend_truth to consume validated
-    # projections belongs to GUI-SR.
     # STILL not derived-only: build_dashboard passes level, policy and records
     # straight into _assess_backend_truth, which reads them directly rather than
     # reading already-registered projections. What changed at integration is that
@@ -1801,40 +1931,55 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
         "and records (reader C) passed directly into _assess_backend_truth, plus "
         "authority_evidence and records_evidence; total reader output, but not "
         "derived-only",
-        raw_sources=(RawSourceReader.AUTHORITY_LEVEL,
+        canonical_readers=(RawSourceReader.AUTHORITY_LEVEL,
                      RawSourceReader.RUNTIME_POLICY,
                      RawSourceReader.CONTROLLER_RECORDS)),
-    # --- blocked on known, deliberately unrepaired source-reader debt -------
-    # A: ew0a_authority.read_authority_level raises TypeError on a non-object
-    #    JSON root. B: ew0a_loop.read_runtime_policy raises AttributeError on the
-    #    same shape. C: _read_records admits non-dict rows whose .get() then
-    #    raises in build_supervisor_summary. None is repaired in this PR, and C
-    #    must NOT be repaired by filtering.
+    # --- dependent on canonical readers GUI-SR made total -------------------
+    # A, B and C were repaired in #39, so these are hardened dependencies rather
+    # than blockers. Every declaration below was checked against the actual call
+    # path, and the AST completeness guard compares this whole registry against
+    # the inventory derived from build_dashboard's source.
     "controller": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
         "current_mission via read_runtime_policy (reader B, now total); remaining fields are declared contract constants or PENDING_BACKEND",
-        raw_sources=(RawSourceReader.RUNTIME_POLICY,)),
+        canonical_readers=(RawSourceReader.RUNTIME_POLICY,)),
     "mission": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
-        "mission_id via read_runtime_policy (reader B, now total)",
-        raw_sources=(RawSourceReader.RUNTIME_POLICY,)),
+        "mission_id via read_runtime_policy (reader B, now total); deliverable "
+        "progress from Northstar 0B.3 contract presence, a module attribute probe "
+        "that opens no file and is fail-closed to the empty set",
+        canonical_readers=(RawSourceReader.RUNTIME_POLICY,),
+        direct_sources=(DirectSource.NORTHSTAR_CONTRACT_PRESENCE,)),
     "worker": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
         "authority level (reader A, now total), mission (reader B) and recent verdicts via read_controller_records (reader C, whole-ledger admission with the WCC consumed-field contract); carries records_evidence",
-        raw_sources=(RawSourceReader.AUTHORITY_LEVEL, RawSourceReader.RUNTIME_POLICY,
+        canonical_readers=(RawSourceReader.AUTHORITY_LEVEL, RawSourceReader.RUNTIME_POLICY,
                      RawSourceReader.CONTROLLER_RECORDS)),
     "supervisor": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
         "verdict counts via read_controller_records (reader C); carries records_evidence, and counts are null rather than zero when the ledger cannot answer",
-        raw_sources=(RawSourceReader.CONTROLLER_RECORDS,)),
+        canonical_readers=(RawSourceReader.CONTROLLER_RECORDS,)),
     "apprenticeship": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
         "comparison counts via read_controller_records (reader C); carries records_evidence, counts null when the ledger is unusable",
-        raw_sources=(RawSourceReader.CONTROLLER_RECORDS,)),
+        canonical_readers=(RawSourceReader.CONTROLLER_RECORDS,)),
+    # Codex P2 (finding 3960949424): this declared reader A alone while opening
+    # FOUR files directly through _readability, so the totality accounting proved
+    # nothing about them. All four are declared now, as probes rather than
+    # readers, because their semantics differ: a probe answers one structural
+    # question and is forbidden from emitting content. config_readability remains
+    # exactly what the contract says -- file readability evidence, NOT liveness.
     "system_health": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
-        "authority level (reader A, now total); every component field is PENDING_BACKEND and config_readability is file readability, not liveness",
-        raw_sources=(RawSourceReader.AUTHORITY_LEVEL,)),
+        "authority level (reader A, now total); every component field is "
+        "PENDING_BACKEND; config_readability is four direct readability probes -- "
+        "file readability evidence, not liveness -- each certified to emit only a "
+        "value from a finite structural contract and never file contents",
+        canonical_readers=(RawSourceReader.AUTHORITY_LEVEL,),
+        direct_sources=(DirectSource.READABILITY_AUTHORITY_RECORD,
+                        DirectSource.READABILITY_RUNTIME_POLICY,
+                        DirectSource.READABILITY_OUTCOME_LEDGER,
+                        DirectSource.READABILITY_RECORDS_LEDGER)),
 }
 
 
@@ -1847,12 +1992,87 @@ def registry_classification_violations() -> list[str]:
     Coupling the declaration to the classification is what makes it a control."""
     violations: list[str] = []
     for name, entry in DASHBOARD_PROJECTION_REGISTRY.items():
-        if entry.raw_sources and entry.boundary.value in _NO_RAW_DEPENDENCY_BOUNDARIES:
+        declared = entry.source_dependencies
+        if declared and entry.boundary.value in _NO_RAW_DEPENDENCY_BOUNDARIES:
             violations.append(
-                f"{name} declares raw sources "
-                f"{sorted(s.value for s in entry.raw_sources)} but is classified "
-                f"{entry.boundary.value}")
+                f"{name} declares source dependencies {sorted(declared)} but is "
+                f"classified {entry.boundary.value}")
     return violations
+
+
+def declared_source_dependencies() -> dict[str, frozenset[str]]:
+    """Every surface's declared dependency identities, for the completeness guard."""
+    return {name: entry.source_dependencies
+            for name, entry in DASHBOARD_PROJECTION_REGISTRY.items()
+            if entry.source_dependencies}
+
+
+def declared_source_dependency_union() -> frozenset[str]:
+    """The union the AST-derived inventory must equal EXACTLY.
+
+    Equality, not containment: a dependency the source performs but nothing
+    declares is a blind spot, and a dependency declared but no longer performed
+    is a dead claim that makes the registry look more coupled than it is. Both
+    are failures.
+
+    This is the inversion the source-access closure is about. The universe of
+    possible accesses is no longer ``set(RawSourceReader)`` -- a hand-maintained
+    enum that could not see ``_readability`` at all. The SOURCE decides which
+    dependencies exist; these declarations decide how each one is treated."""
+    union: set[str] = set()
+    for declared in declared_source_dependencies().values():
+        union |= declared
+    return frozenset(union)
+
+
+def _read_authority_record_evidence(root: Path) -> tuple[Any, Any, Any]:
+    """The dashboard's SECOND read of the authority record, as a named gateway.
+
+    Returns ``(grants, forbidden_ops, level)`` exactly as they appear in the
+    record, each behind the ``_MISSING`` sentinel. **This function validates
+    nothing on purpose** -- ``build_worker_authority_summary`` is the sole
+    validator of authority-record evidence, and adding a second opinion here
+    would be a second authority policy engine.
+
+    Why it exists as a function at all: GUI-RI's source-access closure requires
+    every authoritative access to be an inventoried, named dependency. This read
+    was an anonymous ``.read_text()`` embedded in the assembler, so the boundary
+    it crosses had no name to declare. The shape is now
+
+        build_dashboard -> named source gateway -> validated worker_authority
+
+    and ``DirectSource.AUTHORITY_RECORD_EVIDENCE`` is what the registry declares.
+
+    This is NOT a duplicate of ``read_authority_level``. That reader answers
+    "what authority is in force", applies the ladder and fails closed to A0.
+    This gateway answers "what does the record literally say", so the projection
+    can report the record's own evidence quality without it being able to
+    escalate authority. Both readings of the same file are deliberate.
+
+    Totality: GUI-SR made this read total -- a scalar/array/null root used to
+    raise ``AttributeError`` even after the canonical reader was fixed. The root
+    is still checked before it is indexed, and ``UnicodeError`` is still named
+    because it is a ``ValueError`` subclass that used to escape and take the
+    whole dashboard down.
+
+    Missing / null / empty stay three distinguishable states all the way to the
+    validator: ``.get(name, _MISSING)`` never collapses an absent field into an
+    explicit ``null``."""
+    grants: Any = _MISSING
+    record_forbidden: Any = _MISSING
+    raw_level: Any = _MISSING
+    ap = root / "config" / "ew0a_authority.json"
+    if ap.exists():
+        try:
+            authority_record = json.loads(ap.read_text(encoding="utf-8"))
+            if isinstance(authority_record, dict):
+                grants = authority_record.get("grants", _MISSING)
+                record_forbidden = authority_record.get("forbidden_ops", _MISSING)
+                raw_level = authority_record.get("level", _MISSING)
+        except (OSError, ValueError, UnicodeError):
+            # Fail closed to "no evidence" for ALL three, never a partial read.
+            grants = record_forbidden = raw_level = _MISSING
+    return grants, record_forbidden, raw_level
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
@@ -1881,30 +2101,10 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     except Exception:  # noqa: BLE001
         present = set()
 
-    # A SECOND read of the same protected record. GUI-SR made this read TOTAL --
-    # a scalar/array/null root used to raise AttributeError here even after the
-    # canonical reader was fixed -- and explicitly deferred classifying the
-    # record's QUALITY as evidence to GUI-R. This is that deferral fulfilled:
-    # the root is still checked before it is indexed and UnicodeError is still
-    # named, and the values now travel to the builder behind a _MISSING sentinel
-    # so absent / null / empty stay three distinguishable states. Raw values are
-    # passed through UNVALIDATED on purpose: the builder owns the validation, so
-    # there is exactly one place where authority record evidence is checked.
-    grants: Any = _MISSING
-    record_forbidden: Any = _MISSING
-    raw_level: Any = _MISSING
-    ap = root / "config" / "ew0a_authority.json"
-    if ap.exists():
-        try:
-            authority_record = json.loads(ap.read_text(encoding="utf-8"))
-            if isinstance(authority_record, dict):
-                # `.get(name, _MISSING)` so an absent field stays distinguishable
-                # from an explicit null all the way to the validator.
-                grants = authority_record.get("grants", _MISSING)
-                record_forbidden = authority_record.get("forbidden_ops", _MISSING)
-                raw_level = authority_record.get("level", _MISSING)
-        except (OSError, ValueError, UnicodeError):
-            grants = _MISSING
+    # The SECOND read of the authority record, behind a named gateway rather
+    # than an anonymous read_text() buried in the assembler. See
+    # _read_authority_record_evidence.
+    grants, record_forbidden, raw_level = _read_authority_record_evidence(root)
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",

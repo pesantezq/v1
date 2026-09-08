@@ -726,14 +726,146 @@ direct dependency on raw authoritative evidence*, and `backend_truth` still has 
 Restructuring `_assess_backend_truth` to consume validated projections remains
 deliberately out of scope: it is not needed for safety, only for the label.
 
-The classification stays **coupled to the declaration, not asserted by hand**: each entry
-declares the readers it consumes (`raw_sources`), and
-`registry_classification_violations()` reports any surface that declares one while
-claiming `MODULE_OWNED` or `DERIVED_FROM_REGISTERED_INPUTS`. `HARDENED_SOURCE_READER` is
-deliberately **not** in that forbidden set — declaring a dependency is exactly what it
-means. A bounded AST test reads the actual `build_dashboard → _assess_backend_truth` call
-and requires the registry to declare whatever variables it passes. Flipping the enum back,
-or dropping the declaration, fails tests.
+### The source decides completeness; declarations decide semantics (GUI-RI)
+
+The first version of this coupling derived its universe of possible accesses from the
+hand-written `RawSourceReader` enum. That is backwards, and Codex finding `3960949424`
+showed why: `system_health` declared reader A while opening **four** files directly
+through `_readability`, and no guard could see them, because a path reached outside the
+enum was invisible to a check that iterated the enum. A regressed `_readability` returning
+file contents leaked 898 bytes of `config/ew0a_authority.json` into the dashboard while
+every registry check still passed.
+
+The direction is now:
+
+```text
+ACTUAL SOURCE ACCESS
+        ↓
+mechanically derived inventory
+        ↓
+declared dependency + proof
+        ↓
+projection boundary classification
+```
+
+**The source decides which dependencies exist. Declarations decide how each one is
+treated.** An enum may carry a reader's identity; it may not define the universe.
+
+#### Two kinds, deliberately not conflated
+
+`SourceAccessKind` distinguishes them, because a probe and a reader do not have the same
+semantics and collapsing them is what let four file reads hide behind one declaration.
+
+| Kind | Meaning | Members |
+|---|---|---|
+| `CANONICAL_READER` | Admits and **interprets** evidence; validates shape, applies a contract, fails closed | readers A · B · C (`RawSourceReader`) |
+| `DIRECT_EVIDENCE_PARSE` | Opens and parses an authoritative file inline; the **consumer** validates | the authority-record evidence gateway |
+| `DIRECT_READABILITY_PROBE` | Answers one structural question; **forbidden** from emitting content | the four `config_readability` probes |
+| `MODULE_PRESENCE_PROBE` | Asks whether an imported module exposes named attributes; opens no file | Northstar 0B.3 contract presence |
+
+`_RegisteredProjection` carries `canonical_readers` and `direct_sources` separately.
+Identity is `<kind>:<target>` — which is what lets a derived access match a declaration
+without a hand-written bridge, and why the authority record can appear **twice** under two
+different kinds without ambiguity.
+
+#### The derived inventory
+
+Nine accesses, derived from the source, not from a list:
+
+| Access | Kind | Target | Consuming surface |
+|---|---|---|---|
+| `read_authority_level` | canonical reader | `config/ew0a_authority.json` | `worker` · `worker_authority` · `system_health` · `backend_truth` |
+| `read_runtime_policy` | canonical reader | `config/ew0a_runtime.json` | `controller` · `mission` · `worker` · `backend_truth` |
+| `read_controller_records` | canonical reader | `docs/EW0A_0B3_RECORDS.jsonl` | `supervisor` · `apprenticeship` · `worker` · `controller_records` · `backend_truth` |
+| `_read_authority_record_evidence` | direct evidence parse | `config/ew0a_authority.json` | `worker_authority` |
+| `_readability` | direct probe | `config/ew0a_authority.json` | `system_health` |
+| `_readability` | direct probe | `config/ew0a_runtime.json` | `system_health` |
+| `_readability` | direct probe | `docs/EW0A_CERTIFICATION_OUTCOMES.jsonl` | `system_health` |
+| `_readability` | direct probe | `docs/EW0A_0B3_RECORDS.jsonl` | `system_health` |
+| `hasattr(northstar, …)` | module presence probe | `portfolio_automation.northstar` | `mission` |
+
+Three of these were undeclared before GUI-RI: `system_health`'s four probes (the Codex
+finding), `worker_authority`'s **second, direct** parse of the authority record, and
+`mission`'s contract-presence probe. The last two were found by the derivation itself —
+neither the finding nor the repair brief named them — which is the point of deriving
+rather than enumerating.
+
+#### The required invariant
+
+```text
+derived source dependencies == union of dependencies declared by projections
+```
+
+**Equality, not containment.** A dependency the source performs but nothing declares is a
+blind spot; a dependency declared but no longer performed is a dead claim that makes the
+registry look more coupled than it is. Both fail. `registry_classification_violations()`
+now spans **both** kinds, so a surface can no longer claim `MODULE_OWNED` while opening a
+file through a probe.
+
+The guard fails **closed**: a content-acquiring call (`read_text`, `read_bytes`, `open`,
+`iterdir`, `glob`, `rglob`, `walk`) on a path it cannot resolve is reported as
+unclassifiable rather than skipped. Presence predicates (`exists`, `is_file`, `is_dir`)
+are recognised as non-content-bearing deliberately, not ignored silently. A separate
+bounded check fails if `build_dashboard` hands `root` to any function outside the
+certified consumer set — because the cheapest way to evade an inventory is to move the
+read into a fresh helper, which is how these four stayed invisible.
+
+#### What the guard does NOT prove
+
+Stated plainly, and as its own test, so it cannot be cited for more than it establishes:
+
+- **Proven mechanically** — the *set* of source accesses is complete (nothing undeclared)
+  and live (nothing dead).
+- **NOT proven** — *per-surface attribution*. That `system_health` rather than some other
+  surface consumes a given probe is **declared and human-reviewed**, not derived; deriving
+  it needs dataflow from access site to emitted key, i.e. the whole-program analysis this
+  is deliberately not. Each entry's `detail` therefore states its reasoning so a reviewer
+  can check it against the call path. Over-attribution is the residual risk: it can
+  overstate a dependency, but it cannot cause a leak or a crash.
+- **Boundary** — this certifies `build_dashboard`'s own acquisition plus the named gateway
+  it delegates to (`_read_authority_record_evidence`). `run_history`, `active_session` and
+  `learning` are built by separately certified producers that keep their own boundaries
+  and tests. **This is not a whole-program source graph.**
+
+#### `_readability` is certified as a probe
+
+Its published output belongs to a finite contract, `READABILITY_STATES` =
+`{ABSENT, UNREADABLE, READABLE}`. It must never emit file contents, parsed JSON, exception
+text quoting the source, or a repr of any payload. A marker-based proof puts
+`sk-READABILITY-MUST-NOT-RENDER-999` inside all four probed files, all READABLE, and
+requires the marker to be absent from the serialized dashboard; the probe is also exercised
+against an absent file, a directory in file position, an undecodable file and a
+mode-denied read.
+
+It deliberately carries **no runtime self-check**. Its contract is that it never raises,
+and an internal assertion that could raise would trade that guarantee for a redundant one.
+`config_readability` remains exactly what this document already said: **file readability
+evidence, not liveness** — declaring the probes did not turn them into health.
+
+#### The authority-record evidence gateway
+
+`build_dashboard`'s second read of `config/ew0a_authority.json` is now a named function,
+`_read_authority_record_evidence`, rather than an anonymous `.read_text()` embedded in the
+assembler — so the boundary it crosses has a name to declare:
+
+```text
+build_dashboard → named source gateway → validated worker_authority projection
+```
+
+It **validates nothing on purpose**: `build_worker_authority_summary` remains the sole
+validator of authority-record evidence, and a second opinion here would be a second
+authority policy engine. It is **not** a duplicate of `read_authority_level` — that reader
+answers *what authority is in force* and fails closed to A0, while the gateway answers
+*what the record literally says*, so the projection can report evidence quality without
+being able to escalate authority. A record claiming `A9_TOTAL_CONTROL` still yields
+`A0_DIAGNOSTIC`, proven by test. Missing / null / empty stay three distinguishable states,
+and a malformed record yields no evidence for **all three** fields rather than a partial
+read.
+
+Flipping the enum back, or dropping any declaration, fails tests. Mutation-proven:
+undeclared new probe, removed probe declaration, regressed `_readability`, new inline
+`read_text()`, a read relocated into a new helper, removed direct-parse declaration, a
+dead declaration, and a broken reader-identity mapping — eight mutations, all detected.
 
 The registry deliberately does **not** claim the dashboard is certified.
 

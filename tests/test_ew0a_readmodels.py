@@ -3408,7 +3408,7 @@ def test_backend_truth_is_classified_blocked_on_its_raw_readers():
     entry = rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"]
     assert entry.boundary is rm.ProjectionBoundary.HARDENED_SOURCE_READER
     assert entry.boundary is not rm.ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS
-    assert set(entry.raw_sources) == {
+    assert set(entry.canonical_readers) == {
         rm.RawSourceReader.AUTHORITY_LEVEL,
         rm.RawSourceReader.RUNTIME_POLICY,
         rm.RawSourceReader.CONTROLLER_RECORDS,
@@ -3447,7 +3447,7 @@ def test_the_call_site_proves_backend_truth_receives_raw_inputs():
         raise AssertionError("build_dashboard not found")
 
     assert passed, "expected _assess_backend_truth to receive raw blocked inputs"
-    declared = set(rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"].raw_sources)
+    declared = set(rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"].canonical_readers)
     assert passed <= declared, (
         f"backend_truth receives undeclared raw sources: "
         f"{sorted(s.value for s in passed - declared)}")
@@ -3468,7 +3468,7 @@ def test_every_reader_dependent_surface_declares_at_least_one_reader():
     for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
         if entry.boundary in (rm.ProjectionBoundary.HARDENED_SOURCE_READER,
                               rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER):
-            assert entry.raw_sources, f"{name} declares no reader dependency"
+            assert entry.canonical_readers, f"{name} declares no reader dependency"
 
 
 def test_the_registry_still_matches_the_emitted_surfaces():
@@ -3572,8 +3572,8 @@ def test_ri_every_hardened_surface_declares_only_proven_readers():
     for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
         if entry.boundary is not rm.ProjectionBoundary.HARDENED_SOURCE_READER:
             continue
-        assert entry.raw_sources, name
-        for reader in entry.raw_sources:
+        assert entry.canonical_readers, name
+        for reader in entry.canonical_readers:
             assert reader in _RI_READER_TOTALITY_PROOF, f"{name} -> {reader.value}"
 
 
@@ -3586,7 +3586,7 @@ def test_ri_hardened_details_name_exactly_the_readers_they_declare():
     for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
         if entry.boundary is not rm.ProjectionBoundary.HARDENED_SOURCE_READER:
             continue
-        declared = {letters[r] for r in entry.raw_sources}
+        declared = {letters[r] for r in entry.canonical_readers}
         for letter in letters.values():
             mentioned = f"reader {letter}" in entry.detail
             assert mentioned == (letter in declared), (
@@ -3636,3 +3636,581 @@ def test_ri_the_registry_still_covers_every_emitted_surface_after_reclassificati
     dash = rm.build_dashboard(_REPO, now=_NOW)
     assert set(dash) == set(rm.DASHBOARD_PROJECTION_REGISTRY)
     assert rm.registry_classification_violations() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — SOURCE-ACCESS BOUNDARY CLOSURE (Codex finding 3960949424)
+#
+# The previous guard derived its universe from the hand-written RawSourceReader
+# enum, so `system_health`'s four direct `_readability` reads were invisible to
+# it: a regressed `_readability` could leak 898 bytes of the authority record
+# into the dashboard while every registry check still passed.
+#
+# The dependency direction is inverted here:
+#
+#     ACTUAL SOURCE ACCESS -> derived inventory -> declaration + proof -> boundary
+#
+# The SOURCE decides which dependencies exist. Declarations decide how each one
+# is treated. An enum may carry a reader's identity; it may not define the
+# universe of possible accesses.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: The bounded universe this guard certifies. NOT a whole-program source graph:
+#: `build_dashboard`'s own acquisition plus the named gateway it delegates that
+#: acquisition to. `run_history`, `active_session` and `learning` are built by
+#: separately certified producers that keep their own boundaries and tests.
+_RI_ANALYSED_FUNCTIONS = ("build_dashboard", "_read_authority_record_evidence")
+
+#: Attribute calls that ACQUIRE content from a path. Reaching one of these on an
+#: unresolvable path is a failure, not something to skip.
+_RI_CONTENT_ACQUISITION = frozenset({
+    "read_text", "read_bytes", "open", "iterdir", "glob", "rglob", "walk"})
+
+#: Path predicates that reveal only presence and cannot carry content out. They
+#: are recognised deliberately rather than ignored silently.
+_RI_BENIGN_PREDICATES = frozenset({"exists", "is_file", "is_dir", "is_symlink"})
+
+#: Functions `build_dashboard` may hand `root` to. Each is a separately
+#: certified producer or the named gateway. This is not call-graph analysis --
+#: it is a fail-closed list, so relocating a raw read into a NEW helper cannot
+#: quietly escape the inventory the way `_readability` did.
+_RI_DELEGATED_ROOT_CONSUMERS = frozenset({
+    "read_authority_level", "read_runtime_policy", "read_controller_records",
+    "_read_authority_record_evidence", "_readability",
+    "build_run_history", "_project_learning", "_build_active_session",
+})
+
+
+def _ri_module_ast():
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    return _ast.parse(src)
+
+
+def _ri_resolve_path(node, local_paths):
+    """Resolve a path expression to a repo-relative string, or None.
+
+    Handles the forms that actually occur: ``root / "config" / "x.json"``,
+    ``root / MODULE_CONSTANT``, and a local name previously bound to either."""
+    if isinstance(node, _ast.Name):
+        if node.id == "root":
+            return ""
+        if node.id in local_paths:
+            return local_paths[node.id]
+        value = getattr(rm, node.id, None)          # module-level path constant
+        return value if isinstance(value, str) else None
+    if isinstance(node, _ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div):
+        left = _ri_resolve_path(node.left, local_paths)
+        right = _ri_resolve_path(node.right, local_paths)
+        if left is None or right is None:
+            return None
+        return f"{left}/{right}".strip("/")
+    return None
+
+
+def _ri_derive_source_accesses():
+    """Derive every direct authoritative-source access from the actual source.
+
+    Returns ``(accesses, unclassified)`` where accesses maps a dependency
+    identity to the set of analysed functions performing it."""
+    accesses: dict[str, set[str]] = {}
+    unclassified: list[str] = []
+    identity = rm.source_access_identity
+    kinds = rm.SourceAccessKind
+
+    def record(kind, target, where):
+        accesses.setdefault(identity(kind, target), set()).add(where)
+
+    for func in _ast.walk(_ri_module_ast()):
+        if not (isinstance(func, _ast.FunctionDef)
+                and func.name in _RI_ANALYSED_FUNCTIONS):
+            continue
+        local_paths: dict[str, str] = {}
+        module_aliases: set[str] = set()
+
+        for node in _ast.walk(func):
+            # local path bindings, so `ap = root / ...` then `ap.read_text()`
+            # resolves instead of looking unclassifiable
+            if isinstance(node, _ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], _ast.Name):
+                resolved = _ri_resolve_path(node.value, local_paths)
+                if resolved:
+                    local_paths[node.targets[0].id] = resolved
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    module_aliases.add(alias.asname or alias.name.split(".")[0])
+
+        for node in _ast.walk(func):
+            if not isinstance(node, _ast.Call):
+                continue
+            fn = node.func
+
+            # a canonical reader, by name
+            if isinstance(fn, _ast.Name) and fn.id in rm.CANONICAL_READER_FUNCTIONS:
+                record(kinds.CANONICAL_READER,
+                       rm.CANONICAL_READER_FUNCTIONS[fn.id].value, func.name)
+                continue
+
+            # a readability probe
+            if isinstance(fn, _ast.Name) and fn.id == "_readability":
+                target = _ri_resolve_path(node.args[0], local_paths) \
+                    if node.args else None
+                if target is None:
+                    unclassified.append(
+                        f"{func.name}: _readability() on an unresolvable path")
+                else:
+                    record(kinds.DIRECT_READABILITY_PROBE, target, func.name)
+                continue
+
+            # a module attribute-presence probe
+            if isinstance(fn, _ast.Name) and fn.id == "hasattr" and node.args:
+                first = node.args[0]
+                if isinstance(first, _ast.Name) and first.id in module_aliases:
+                    record(kinds.MODULE_PRESENCE_PROBE,
+                           "portfolio_automation.northstar", func.name)
+                continue
+
+            # builtin open()
+            if isinstance(fn, _ast.Name) and fn.id == "open":
+                target = _ri_resolve_path(node.args[0], local_paths) \
+                    if node.args else None
+                if target is None:
+                    unclassified.append(f"{func.name}: open() on an unresolvable path")
+                else:
+                    record(kinds.DIRECT_EVIDENCE_PARSE, target, func.name)
+                continue
+
+            # content acquisition on a path object
+            if isinstance(fn, _ast.Attribute) and fn.attr in _RI_CONTENT_ACQUISITION:
+                target = _ri_resolve_path(fn.value, local_paths)
+                if target is None:
+                    unclassified.append(
+                        f"{func.name}: .{fn.attr}() on an unresolvable path "
+                        f"({_ast.dump(fn.value)[:70]})")
+                else:
+                    record(kinds.DIRECT_EVIDENCE_PARSE, target, func.name)
+
+    return accesses, unclassified
+
+
+def test_ri_the_derived_inventory_equals_the_declared_dependencies():
+    """THE completeness control. Equality in both directions.
+
+    A dependency the source performs but nothing declares is a blind spot -- the
+    Codex finding. A dependency declared but no longer performed is a dead claim
+    that makes the registry look more coupled than it is. Both fail."""
+    accesses, unclassified = _ri_derive_source_accesses()
+    assert not unclassified, f"unclassifiable source access: {unclassified}"
+
+    derived = set(accesses)
+    declared = set(rm.declared_source_dependency_union())
+    assert derived == declared, (
+        f"undeclared derived dependencies: {sorted(derived - declared)}; "
+        f"dead declared dependencies: {sorted(declared - derived)}")
+
+
+def test_ri_the_derived_inventory_contains_what_the_repair_brief_expected():
+    """Anchors the derivation against the accesses we know exist, so a
+    derivation that silently stopped finding anything cannot pass the equality
+    test by matching an equally empty declaration set."""
+    accesses, _ = _ri_derive_source_accesses()
+    for expected in (
+            "reader:A:ew0a_authority.read_authority_level",
+            "reader:B:ew0a_loop.read_runtime_policy",
+            "reader:C:ew0a_readmodels.read_controller_records",
+            "evidence_parse:config/ew0a_authority.json",
+            "readability:config/ew0a_authority.json",
+            "readability:config/ew0a_runtime.json",
+            f"readability:{rm.OUTCOME_LEDGER_REL}",
+            f"readability:{rm.CONTROLLER_RECORDS_REL}",
+            "module_presence:portfolio_automation.northstar"):
+        assert expected in accesses, f"derivation lost {expected}"
+    assert len(accesses) == 9, sorted(accesses)
+
+
+def test_ri_the_universe_is_not_the_enum_any_more():
+    """The architectural inversion, stated as a test.
+
+    Four of the nine derived dependencies cannot be expressed as a
+    RawSourceReader at all, which is precisely why an enum must not define
+    completeness."""
+    accesses, _ = _ri_derive_source_accesses()
+    reader_identities = {rm.source_access_identity(
+        rm.SourceAccessKind.CANONICAL_READER, r.value) for r in rm.RawSourceReader}
+    beyond_the_enum = set(accesses) - reader_identities
+    assert len(beyond_the_enum) == 6, sorted(beyond_the_enum)
+    assert len(set(accesses)) > len(reader_identities)
+
+
+def test_ri_build_dashboard_delegates_root_only_to_certified_builders():
+    """Fail closed on a NEW helper receiving `root`.
+
+    Not call-graph analysis -- a bounded list. It exists because the cheapest way
+    to evade the inventory is to move a raw read into a fresh helper, which is
+    exactly how `_readability`'s reads stayed invisible."""
+    for func in _ast.walk(_ri_module_ast()):
+        if not (isinstance(func, _ast.FunctionDef) and func.name == "build_dashboard"):
+            continue
+        for node in _ast.walk(func):
+            if not (isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)):
+                continue
+            passes_root = any(isinstance(a, _ast.Name) and a.id == "root"
+                              for a in node.args)
+            if passes_root:
+                assert node.func.id in _RI_DELEGATED_ROOT_CONSUMERS, (
+                    f"build_dashboard passes root to {node.func.id}, which is not a "
+                    f"certified source consumer -- model its dependency first")
+
+
+def test_ri_the_guard_states_its_boundary_honestly():
+    """No overclaiming: this certifies two functions, not the module."""
+    assert _RI_ANALYSED_FUNCTIONS == ("build_dashboard",
+                                      "_read_authority_record_evidence")
+    for name in _RI_ANALYSED_FUNCTIONS:
+        assert callable(getattr(rm, name)), name
+    # the separately certified producers are deliberately NOT analysed here
+    for producer in ("build_run_history", "_project_learning", "_build_active_session"):
+        assert producer not in _RI_ANALYSED_FUNCTIONS
+        assert callable(getattr(rm, producer))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — _readability CERTIFIED AS A DIRECT SOURCE PROBE
+#
+# A probe is not a reader. It answers ONE structural question and is forbidden
+# from emitting content, which is the whole reason it may be declared as a
+# separate SourceAccessKind rather than forced into RawSourceReader.
+#
+# Deliberately no runtime assertion inside _readability: its contract is that it
+# NEVER raises, and a self-check that could raise would trade that guarantee for
+# a redundant one. The proof belongs here.
+# ═══════════════════════════════════════════════════════════════════════════
+_RI_MARKER = "sk-READABILITY-MUST-NOT-RENDER-999"
+
+
+def _ri_marked_root(tmp_path):
+    """A repo root whose every probed source is READABLE and marker-bearing."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    (tmp_path / "config" / "ew0a_authority.json").write_text(json.dumps({
+        "level": "A1_ASSISTED_ENGINEERING",
+        "grants": ["read"], "forbidden_ops": ["MERGE"],
+        "operator_note": _RI_MARKER}), encoding="utf-8")
+    (tmp_path / "config" / "ew0a_runtime.json").write_text(json.dumps({
+        "mission_id": "m-ri", "operator_note": _RI_MARKER}), encoding="utf-8")
+    (tmp_path / rm.OUTCOME_LEDGER_REL).write_text(
+        json.dumps({"note": _RI_MARKER}) + "\n", encoding="utf-8")
+    (tmp_path / rm.CONTROLLER_RECORDS_REL).write_text(
+        json.dumps({"kind": "X", "note": _RI_MARKER}) + "\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_ri_readability_output_belongs_to_a_finite_contract(tmp_path):
+    root = _ri_marked_root(tmp_path / "finite")
+    probes = {
+        "existing_readable": root / "config" / "ew0a_authority.json",
+        "absent": root / "config" / "does_not_exist.json",
+        "directory_in_file_position": root / "config",
+        "outcome_ledger": root / rm.OUTCOME_LEDGER_REL,
+    }
+    binary = root / "docs" / "binary.bin"
+    binary.write_bytes(b"\xff\xfe " + _RI_MARKER.encode() + b" \x00\x80")
+    probes["undecodable"] = binary
+
+    for label, path in probes.items():
+        value = rm._readability(path)                      # must not raise
+        assert value in rm.READABILITY_STATES, f"{label}: {value!r} off-contract"
+        assert _RI_MARKER not in value, f"{label}: probe rendered content"
+
+    assert rm._readability(probes["existing_readable"]) == "READABLE"
+    assert rm._readability(probes["absent"]) == "ABSENT"
+    assert rm._readability(probes["directory_in_file_position"]) == "UNREADABLE"
+    assert rm._readability(probes["undecodable"]) == "UNREADABLE"
+
+
+def test_ri_readability_reports_an_io_failure_without_quoting_the_file(tmp_path):
+    """An unreadable file must be explained as UNREADABLE, not by echoing why."""
+    root = _ri_marked_root(tmp_path / "io")
+    secret = root / "docs" / "locked.json"
+    secret.write_text(json.dumps({"api_key": _RI_MARKER}), encoding="utf-8")
+    secret.chmod(0o000)
+    try:
+        value = rm._readability(secret)
+    finally:
+        secret.chmod(0o644)
+    if value == "READABLE":
+        pytest.skip("running with privileges that ignore file mode")
+    assert value == "UNREADABLE"
+    assert _RI_MARKER not in value
+
+
+def test_ri_no_probed_source_content_reaches_the_serialized_dashboard(tmp_path):
+    """The behavioural proof the previous guard could not make.
+
+    Every one of the four probed files is READABLE and contains the marker. The
+    dashboard must report readability and nothing else."""
+    root = _ri_marked_root(tmp_path / "nonleak")
+    dash = rm.build_dashboard(root, now=_NOW)
+    blob = json.dumps(dash, default=str)
+    assert _RI_MARKER not in blob, "probed source content reached the dashboard"
+
+    readability = dash["system_health"]["config_readability"]
+    assert set(readability) == {"authority_record", "runtime_policy",
+                                "outcome_ledger", "records_ledger"}
+    for field, value in readability.items():
+        assert value in rm.READABILITY_STATES, (field, value)
+        assert value == "READABLE", field           # all four exist and decode
+
+
+def test_ri_readability_is_readability_not_liveness(tmp_path):
+    """The contract says file readability evidence, NOT liveness. Declaring the
+    probes as dependencies must not have turned them into health."""
+    root = _ri_marked_root(tmp_path / "notliveness")
+    health = rm.build_dashboard(root, now=_NOW)["system_health"]
+    for component in ("controller", "gpt_supervisor", "engineer_runtime",
+                      "sandbox", "evidence_bridge", "control_loop"):
+        assert health[component] == PENDING_BACKEND, component
+    # a READABLE config must never be reported as a live component
+    assert "READABLE" not in {health[c] for c in
+                              ("controller", "gpt_supervisor", "control_loop")}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — THE AUTHORITY-RECORD EVIDENCE GATEWAY
+#
+# Proves the gateway itself cannot cause a dashboard crash, arbitrary payload
+# exposure, or an evidence bypass. It deliberately validates nothing --
+# build_worker_authority_summary remains the sole validator, and a second
+# opinion here would be a second authority policy engine.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_ri_the_authority_gateway_is_total_over_malformed_records(tmp_path):
+    cases = {
+        "absent": None,
+        "root_null": "null", "root_list": "[1,2]", "root_int": "123",
+        "root_string": '"text"', "root_bool": "true",
+        "invalid_json": "{oops",
+        "empty_file": "",
+        "marker_root_list": json.dumps([_RI_MARKER]),
+    }
+    for label, body in cases.items():
+        root = tmp_path / f"gw_{label}"
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        if body is not None:
+            (root / "config" / "ew0a_authority.json").write_text(
+                body, encoding="utf-8")
+        grants, forbidden, level = rm._read_authority_record_evidence(root)
+        assert grants is rm._MISSING, label
+        assert forbidden is rm._MISSING, label
+        assert level is rm._MISSING, label
+
+
+def test_ri_the_authority_gateway_never_partially_reads(tmp_path):
+    """A malformed record yields no evidence for ALL three fields, so a caller
+    cannot see a half-populated record and treat it as complete."""
+    root = tmp_path / "partial"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ew0a_authority.json").write_bytes(b"\xff\xfe\x00binary")
+    triple = rm._read_authority_record_evidence(root)
+    assert all(v is rm._MISSING for v in triple)
+    assert len(triple) == 3
+
+
+def test_ri_the_authority_gateway_preserves_missing_null_and_empty(tmp_path):
+    """Three distinguishable states, all the way to the validator. Collapsing
+    them is how a projection stops being able to say 'unanswerable'."""
+    root = tmp_path / "tristate"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ew0a_authority.json").write_text(
+        json.dumps({"grants": None, "forbidden_ops": []}), encoding="utf-8")
+    grants, forbidden, level = rm._read_authority_record_evidence(root)
+    assert grants is None                    # explicit null
+    assert forbidden == []                   # measured empty
+    assert level is rm._MISSING              # absent
+    assert grants is not rm._MISSING and forbidden is not rm._MISSING
+
+
+def test_ri_the_authority_gateway_hands_over_raw_values_unvalidated(tmp_path):
+    """It is a GATEWAY, not a validator. If it started sanitising, there would be
+    two places that decide what authority evidence means."""
+    root = tmp_path / "raw"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ew0a_authority.json").write_text(json.dumps(
+        {"grants": {"nested": _RI_MARKER}, "forbidden_ops": 7,
+         "level": "NOT_A_LEVEL"}), encoding="utf-8")
+    grants, forbidden, level = rm._read_authority_record_evidence(root)
+    assert grants == {"nested": _RI_MARKER}      # handed over as-is
+    assert forbidden == 7
+    assert level == "NOT_A_LEVEL"
+
+    # ...and the CONSUMER is what keeps it out of the projection
+    dash = rm.build_dashboard(root, now=_NOW)
+    assert _RI_MARKER not in json.dumps(dash, default=str)
+    assert dash["worker_authority"]["can_merge"] is False
+
+
+def test_ri_the_gateway_cannot_escalate_authority(tmp_path):
+    """Two deliberate reads of one file. The gateway reports what the record
+    SAYS; only read_authority_level decides what is in force. A record claiming
+    a level must not become that level through the evidence path."""
+    root = tmp_path / "escalate"
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "ew0a_authority.json").write_text(json.dumps(
+        {"level": "A9_TOTAL_CONTROL", "grants": ["merge"],
+         "forbidden_ops": []}), encoding="utf-8")
+    _, _, raw_level = rm._read_authority_record_evidence(root)
+    assert raw_level == "A9_TOTAL_CONTROL"                  # the record's claim
+
+    dash = rm.build_dashboard(root, now=_NOW)
+    assert dash["worker_authority"]["level"] == "A0_DIAGNOSTIC"   # fail closed
+    assert "A9_TOTAL_CONTROL" not in json.dumps(dash["worker_authority"], default=str)
+    assert dash["worker_authority"]["can_merge"] is False
+
+
+def test_ri_the_gateway_is_not_a_duplicate_of_the_canonical_reader():
+    """Both read config/ew0a_authority.json, and the registry declares both --
+    as different kinds, because they answer different questions."""
+    entry = rm.DASHBOARD_PROJECTION_REGISTRY["worker_authority"]
+    assert rm.RawSourceReader.AUTHORITY_LEVEL in entry.canonical_readers
+    assert rm.DirectSource.AUTHORITY_RECORD_EVIDENCE in entry.direct_sources
+    assert (rm.DIRECT_SOURCE_KINDS[rm.DirectSource.AUTHORITY_RECORD_EVIDENCE]
+            is rm.SourceAccessKind.DIRECT_EVIDENCE_PARSE)
+    # same target, two kinds -- which is why identity is (kind, target)
+    assert (rm.DIRECT_SOURCE_TARGETS[rm.DirectSource.AUTHORITY_RECORD_EVIDENCE]
+            == rm.DIRECT_SOURCE_TARGETS[rm.DirectSource.READABILITY_AUTHORITY_RECORD])
+    assert (rm.DirectSource.AUTHORITY_RECORD_EVIDENCE.value
+            != rm.DirectSource.READABILITY_AUTHORITY_RECORD.value)
+
+
+def test_ri_extraction_did_not_change_authority_behaviour():
+    """The extraction was for source-boundary clarity only."""
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    live = dash["worker_authority"]
+    grants, forbidden, raw_level = rm._read_authority_record_evidence(_REPO)
+    rebuilt = build_worker_authority_summary(
+        rm.read_authority_level(_REPO), grants, forbidden, raw_level).to_dict()
+    assert live == rebuilt
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — the two concepts must stay distinct
+# ═══════════════════════════════════════════════════════════════════════════
+def test_ri_probes_were_not_forced_into_the_canonical_reader_enum():
+    reader_values = {r.value for r in rm.RawSourceReader}
+    for direct in rm.DirectSource:
+        assert direct.value not in reader_values, direct
+    assert len(rm.RawSourceReader) == 3          # A/B/C keep their identity
+    kinds = {rm.DIRECT_SOURCE_KINDS[d] for d in rm.DirectSource}
+    assert rm.SourceAccessKind.CANONICAL_READER not in kinds
+
+
+def test_ri_every_direct_source_is_typed_and_targeted():
+    for direct in rm.DirectSource:
+        kind = rm.DIRECT_SOURCE_KINDS[direct]
+        target = rm.DIRECT_SOURCE_TARGETS[direct]
+        assert direct.value == rm.source_access_identity(kind, target), direct
+    assert set(rm.DIRECT_SOURCE_KINDS) == set(rm.DirectSource)
+    assert set(rm.DIRECT_SOURCE_TARGETS) == set(rm.DirectSource)
+
+
+def test_ri_the_blocker_state_survives_with_no_claimants():
+    assert rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER in rm.ProjectionBoundary
+    claimants = [n for n, e in rm.DASHBOARD_PROJECTION_REGISTRY.items()
+                 if e.boundary is rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER]
+    assert claimants == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-RI — WHAT THE COMPLETENESS GUARD DOES *NOT* PROVE
+#
+# Stated as a test so the limitation cannot quietly be forgotten and the guard
+# cannot be cited for more than it establishes. Writing the D6 mutation is what
+# surfaced this: declaring an ALREADY-derived dependency on an additional
+# surface leaves the union unchanged, so it passes.
+#
+# Proven mechanically:  the SET of source accesses is complete (nothing
+#                       undeclared) and live (nothing dead).
+# NOT proven:           per-surface attribution -- that `system_health` rather
+#                       than some other surface is the consumer of a given
+#                       probe. Deriving that needs dataflow from access site to
+#                       emitted key, which is the whole-program analysis this
+#                       mission explicitly excludes.
+#
+# Attribution is therefore declared and human-reviewed, and each entry's
+# `detail` states its reasoning so a reviewer can check it against the call
+# path. Over-attribution is the residual risk; it cannot cause a leak or a
+# crash, only an overstated dependency.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_ri_attribution_is_declared_not_derived_and_says_so():
+    """The union guard is set-complete, not attribution-complete."""
+    baseline = rm.declared_source_dependency_union()
+
+    # moving a live dependency onto an extra surface does NOT change the union,
+    # which is exactly the blind spot being documented
+    moved = dict(rm.declared_source_dependencies())
+    moved["controller"] = frozenset(
+        moved["controller"] | {rm.DirectSource.READABILITY_RUNTIME_POLICY.value})
+    union_after = frozenset().union(*moved.values())
+    assert union_after == baseline, (
+        "if this ever differs, attribution became derivable and this test "
+        "should be replaced by a real attribution guard")
+
+    # so every attributing entry must carry reasoning a reviewer can check
+    for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
+        if entry.source_dependencies:
+            assert len(entry.detail) > 40, f"{name} attributes sources without reasoning"
+
+
+def test_ri_each_declared_dependency_is_attributed_to_at_least_one_surface():
+    """No dependency may be declared 'in general' without an owning surface."""
+    per_surface = rm.declared_source_dependencies()
+    for identity in rm.declared_source_dependency_union():
+        owners = [n for n, deps in per_surface.items() if identity in deps]
+        assert owners, f"{identity} is declared by no surface"
+
+
+def test_ri_the_registry_still_covers_every_emitted_surface():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    assert set(dash) == set(rm.DASHBOARD_PROJECTION_REGISTRY)
+    assert rm.registry_classification_violations() == []
+    assert dash["schema_version"] == "engineering.readmodel.v1"
+
+
+def test_ri_no_surface_claims_freedom_from_evidence_while_declaring_any():
+    """The violation rule now spans BOTH dependency kinds. Before this commit it
+    inspected canonical readers only, so a surface could claim MODULE_OWNED
+    while opening a file through a probe."""
+    for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
+        if entry.boundary.value in rm._NO_RAW_DEPENDENCY_BOUNDARIES:
+            assert not entry.canonical_readers, name
+            assert not entry.direct_sources, name
+            assert not entry.source_dependencies, name
+
+
+def test_ri_system_health_stays_hardened_and_that_is_honest():
+    """Its label was checked against the call path, not chosen to clear the P2.
+
+    HARDENED_SOURCE_READER means every dependency is total reader-or-probe
+    output. That now holds for all five of system_health's: reader A is total,
+    and the four probes are certified to a finite contract. The label survives
+    because it became MORE true, not because it was convenient."""
+    entry = rm.DASHBOARD_PROJECTION_REGISTRY["system_health"]
+    assert entry.boundary is rm.ProjectionBoundary.HARDENED_SOURCE_READER
+    assert entry.canonical_readers == (rm.RawSourceReader.AUTHORITY_LEVEL,)
+    assert len(entry.direct_sources) == 4
+    for direct in entry.direct_sources:
+        assert (rm.DIRECT_SOURCE_KINDS[direct]
+                is rm.SourceAccessKind.DIRECT_READABILITY_PROBE), direct
+    assert "not liveness" in entry.detail
+
+
+def test_ri_backend_truth_stays_hardened_and_reader_only():
+    """It consumes canonical reader OUTPUT directly and reaches no file itself,
+    so it declares readers and no direct sources."""
+    entry = rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"]
+    assert entry.boundary is rm.ProjectionBoundary.HARDENED_SOURCE_READER
+    assert len(entry.canonical_readers) == 3
+    assert entry.direct_sources == ()
+    assert entry.boundary is not rm.ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS
