@@ -31,7 +31,21 @@ from portfolio_automation.engineer_worker.control_center_truth import (
 )
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
-READMODEL_SCHEMA_VERSION = "engineering.readmodel.v0"
+#: v1, not v0. GUI-SR changed this contract incompatibly for any consumer that
+#: assumed the supervisor/apprenticeship count fields were always integers: they
+#: are now ``int | None``, where ``None`` means the controller-record ledger
+#: could not answer. Three ``records_evidence`` fields and a top-level
+#: ``controller_records`` surface were added at the same time. A schema version
+#: exists precisely to let a consumer tell those two contracts apart, and
+#: leaving it at v0 because the read model is experimental would defeat the one
+#: mechanism that communicates the difference.
+#:
+#: v1 rather than v2: authoritative main still publishes v0, and PR #35 -- which
+#: also changed this shape -- is frozen and unmerged. GUI-SR is therefore the
+#: first candidate to establish the next PUBLISHED contract. When GUI-R is
+#: integrated onto hardened main it should reconcile to this same v1 rather than
+#: inventing v2 because an unmerged branch also moved.
+READMODEL_SCHEMA_VERSION = "engineering.readmodel.v1"
 PENDING_BACKEND = "PENDING_BACKEND"
 
 
@@ -61,15 +75,18 @@ class ControllerSummary:
 class SupervisorSummary:
     availability: str                   # "AVAILABLE" | "OUTAGE" | PENDING_BACKEND
     current_state: str
-    recent_pass: int
-    recent_repair: int
-    recent_escalate: int
-    recent_abstain: int
-    recent_unavailable: int
+    #: ``None`` means the records ledger could not answer -- never a measured 0.
+    recent_pass: int | None
+    recent_repair: int | None
+    recent_escalate: int | None
+    recent_abstain: int | None
+    recent_unavailable: int | None
     last_successful_verification: str | None
     measured_latency_ms: str            # PENDING_BACKEND (no real latency record)
     verification_queue: str             # PENDING_BACKEND (no real queue)
     outage_state: str
+    #: Whether the underlying records ledger was usable at all.
+    records_evidence: str = TruthState.LIVE.value
     security_classification: str = "operational"
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,6 +123,10 @@ class WorkerSummary:
     next_action: str                    # PENDING_BACKEND
     recent_verification_outcomes: list[str]
     escalation_state: str
+    #: Whether the records ledger behind recent_verification_outcomes was usable.
+    #: An empty list from an unusable ledger is not an absence of verdicts, and a
+    #: consumer reading only this summary must be able to tell the difference.
+    records_evidence: str = TruthState.LIVE.value
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("WorkerSummary"), **asdict(self)}
@@ -161,14 +182,17 @@ def project_verification(task_id: str, implementation_result: str, scope_policy_
 @dataclass(frozen=True)
 class ApprenticeshipSummary:
     controller_level: str
-    decisions_shadowed: int
-    task_selection_agreements: int
-    risk_agreements: int
-    routing_agreements: int
-    missed_escalations: int
-    unsafe_underclassifications: int
-    authority_expansion_proposals: int
+    #: ``None`` means the records ledger could not answer -- never a measured 0.
+    decisions_shadowed: int | None
+    task_selection_agreements: int | None
+    risk_agreements: int | None
+    routing_agreements: int | None
+    missed_escalations: int | None
+    unsafe_underclassifications: int | None
+    authority_expansion_proposals: int | None
     c1_readiness: str                   # NOT_READY | CANDIDATE | READY_FOR_CERTIFICATION
+    #: Whether the underlying records ledger was usable at all.
+    records_evidence: str = TruthState.LIVE.value
 
     def to_dict(self) -> dict[str, Any]:
         return {**_base("ApprenticeshipSummary"), **asdict(self)}
@@ -201,48 +225,279 @@ class SystemHealthSummary:
 # ---------------------------------------------------------------------------
 # Builders over authoritative sources (READ-ONLY)
 # ---------------------------------------------------------------------------
-def _read_records(repo_root: Path, rel: str = "docs/EW0A_0B3_RECORDS.jsonl") -> list[dict[str, Any]]:
-    p = repo_root / rel
-    if not p.exists():
-        return []
-    out = []
-    for ln in p.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if ln:
-            try:
-                out.append(json.loads(ln))
-            except json.JSONDecodeError:
-                pass
-    return out
+CONTROLLER_RECORDS_REL = "docs/EW0A_0B3_RECORDS.jsonl"
 
 
-def build_supervisor_summary(records: list[dict[str, Any]]) -> SupervisorSummary:
-    verdicts = [r.get("gpt_verdict") for r in records if r.get("gpt_verdict")]
+@dataclass(frozen=True)
+class _RecordField:
+    """One controller-record field AS THE WCC READ MODEL CONSUMES IT."""
+
+    name: str
+    kind: str                    # "str" | "bool"
+    #: Present on every legitimate record. Determined from the tracked ledger,
+    #: not assumed -- the ledger is heterogeneous and most fields are not.
+    required: bool = False
+    non_empty: bool = False
+    consumers: tuple[str, ...] = ()
+
+
+#: THE WCC CONSUMED-FIELD CONTRACT.
+#:
+#: `read_controller_records` previously established "valid JSON + row is a dict"
+#: and then declared the ledger LIVE, while the projections went on to read
+#: individual FIELDS out of those rows. So a row with
+#: ``gpt_verdict: {"api_key": "..."}`` was admitted, stringified into
+#: worker.recent_verification_outcomes, and a dict-valued ``recorded_at`` on a
+#: PASS row was copied straight into supervisor.last_successful_verification --
+#: arbitrary nested payload reaching the GUI through a field nobody thinks of as
+#: a payload carrier. Validating the container and not the contents is the same
+#: mistake this repository has now recorded in two separate missions.
+#:
+#: This is a BOUNDED CONSUMPTION CONTRACT, not certification of every field of
+#: every historical record kind. Fields the WCC does not read stay opaque and
+#: unprojected, and a record is never rejected merely for carrying them.
+#:
+#: Presence semantics come from the 24 tracked records: `kind` is on all 24;
+#: `gpt_verdict` on 10; `recorded_at` on 22 (two legitimately omit it); the four
+#: apprenticeship booleans only on ApprenticeshipComparison rows. Making any of
+#: the optional ones required would condemn the true history.
+WCC_CONSUMED_RECORD_FIELDS: tuple[_RecordField, ...] = (
+    _RecordField("kind", "str", required=True, non_empty=True,
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("gpt_verdict", "str", non_empty=True,
+                 consumers=("build_supervisor_summary", "_assess_backend_truth",
+                            "_recent_verification_outcomes")),
+    _RecordField("recorded_at", "str", non_empty=True,
+                 consumers=("build_supervisor_summary", "_assess_backend_truth")),
+    _RecordField("engineer_proposed_task_relates_to_experimentspec", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("risk_agreement", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("routing_agreement", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("danger_underclassified_architecture_as_engineer", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+)
+
+#: Exported so a scoped AST test can require every constant field name the
+#: consumers actually read to be represented here. A hand-maintained list on its
+#: own is what let GUI-R omit a real dependency twice.
+WCC_CONSUMED_RECORD_FIELD_NAMES: frozenset[str] = frozenset(
+    f.name for f in WCC_CONSUMED_RECORD_FIELDS)
+
+
+def _record_field_violation(row: dict[str, Any]) -> str | None:
+    """The first WCC-consumption violation in this row, or None.
+
+    Only field names and structural type names are returned. An explicit JSON
+    null on an OPTIONAL field is treated as absence: no tracked record does it,
+    it creates no leak, and the consumers already handle a missing field. A
+    wrong TYPE is never treated as absence -- that is the distinction between
+    "not applicable to this record kind" and "malformed value that happens to be
+    falsey", and conflating them is how a corrupt boolean becomes clean negative
+    evidence."""
+    for spec in WCC_CONSUMED_RECORD_FIELDS:
+        if spec.name not in row or row[spec.name] is None:
+            if spec.required:
+                raise_reason = "absent" if spec.name not in row else "null"
+                return f"{spec.name} is required by the WCC contract and is {raise_reason}"
+            continue
+        value = row[spec.name]
+        if spec.kind == "bool":
+            # bool ONLY. Not 0/1, not "true", not [] or {} through truthiness.
+            if not isinstance(value, bool):
+                return (f"{spec.name} must be a boolean per the WCC contract, "
+                        f"got {type(value).__name__}")
+            continue
+        if not isinstance(value, str):
+            return (f"{spec.name} must be a string per the WCC contract, "
+                    f"got {type(value).__name__}")
+        if spec.non_empty and not value:
+            return f"{spec.name} must be a non-empty string per the WCC contract"
+    return None
+
+
+@dataclass(frozen=True)
+class ControllerRecordsRead:
+    """The outcome of reading the controller records ledger.
+
+    The previous reader was unsafe in both directions at once. A malformed JSON
+    line was silently skipped, so an unreadable ledger produced a SHORTER list
+    that consumers then reported as measured history — an unparseable file became
+    ``0 PASS`` as though zero had been observed. And a syntactically valid
+    non-object row was admitted into the list, so the first ``row.get(...)``
+    downstream raised ``AttributeError`` and took the dashboard with it.
+
+    Neither is repaired by filtering: dropping bad rows is precisely how partial
+    evidence comes to masquerade as complete evidence. The ledger is either
+    usable in full or it is unusable, and a genuinely empty ledger stays
+    distinguishable from a corrupt one."""
+
+    availability: str                       # LIVE | UNAVAILABLE
+    records: list[dict[str, Any]]
+    #: The ledger identifier THIS read actually used. Instance provenance, not
+    #: the module default: ``to_dict()`` hardcoded ``CONTROLLER_RECORDS_REL``, so
+    #: reading an alternate ledger produced one evidence object whose ``detail``
+    #: named the file read and whose ``source`` named a different file. An
+    #: evidence result that contradicts itself is worse than one that is merely
+    #: incomplete. Carried unchanged -- never canonicalised or synthesised.
+    source: str = CONTROLLER_RECORDS_REL
+    detail: str = ""
+
+    @property
+    def is_usable(self) -> bool:
+        return self.availability == TruthState.LIVE.value
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**_base("ControllerRecordsRead"),
+                "availability": self.availability,
+                "record_count": len(self.records),
+                "source": self.source,
+                "detail": self.detail}
+
+
+def read_controller_records(repo_root: str | Path,
+                            rel: str = CONTROLLER_RECORDS_REL) -> ControllerRecordsRead:
+    """Read the controller records ledger, or refuse it whole.
+
+    Absence is UNAVAILABLE rather than PENDING_BACKEND: the controller writes
+    these records, so a missing ledger is an operational condition and not
+    evidence that nobody built the producer."""
+    path = Path(repo_root) / rel
+    if not path.exists():
+        return ControllerRecordsRead(TruthState.UNAVAILABLE.value, [], rel,
+                                     f"{rel} is absent")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return ControllerRecordsRead(
+            TruthState.UNAVAILABLE.value, [], rel,
+            f"{rel} is unreadable ({type(exc).__name__})")
+
+    rows: list[dict[str, Any]] = []
+    for index, line in enumerate(text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            # NOT skipped. A ledger we cannot fully parse is not a shorter ledger.
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [], rel,
+                f"{rel} line {index} is not valid JSON")
+        if not isinstance(row, dict):
+            # Type name only; the malformed payload is never echoed.
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [], rel,
+                f"{rel} line {index} is not a JSON object, got {type(row).__name__}")
+        # Consumed-field validation happens HERE, before the row is admitted, so
+        # the three WCC consumers cannot receive evidence this read result has
+        # already called usable without its consumed fields being checked. It is
+        # deliberately not repeated in each consumer.
+        violation = _record_field_violation(row)
+        if violation is not None:
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [], rel,
+                f"{rel} line {index}: {violation}")
+        rows.append(row)
+    return ControllerRecordsRead(TruthState.LIVE.value, rows, rel,
+                                 f"{len(rows)} record(s) from {rel}")
+
+
+def _read_records(repo_root: Path, rel: str = CONTROLLER_RECORDS_REL) -> list[dict[str, Any]]:
+    """Backward-compatible accessor: the usable rows, or none at all.
+
+    Retained so existing callers keep working. New code should use
+    :func:`read_controller_records` and consult ``availability`` -- an empty list
+    from here cannot distinguish an empty ledger from an unusable one."""
+    return read_controller_records(repo_root, rel).records
+
+
+def build_supervisor_summary(records: list[dict[str, Any]],
+                            records_evidence: str = TruthState.LIVE.value
+                            ) -> SupervisorSummary:
+    """Project supervisor verdict history.
+
+    ``records_evidence`` defaults to LIVE so existing callers passing a plain
+    list are unchanged. When the ledger is UNUSABLE the counts are ``None`` --
+    NOT zero. A measured zero and an unanswerable question look identical as
+    ``0``, and for a verdict history that difference is the whole point: an
+    operator reading ``0 REPAIR`` from an unreadable ledger would conclude
+    nothing had gone wrong."""
+    usable = records_evidence == TruthState.LIVE.value
+    if not usable:
+        return SupervisorSummary(
+            availability=PENDING_BACKEND, current_state=PENDING_BACKEND,
+            recent_pass=None, recent_repair=None, recent_escalate=None,
+            recent_abstain=None, recent_unavailable=None,
+            last_successful_verification=None, measured_latency_ms=PENDING_BACKEND,
+            verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
+            records_evidence=records_evidence)
+    # No str() anywhere below: read_controller_records has already guaranteed
+    # that a present gpt_verdict/recorded_at is a non-empty string. Coercion was
+    # how an arbitrary object became displayable in the first place.
+    verdicts = [v for v in (r.get("gpt_verdict") for r in records) if v]
     def c(v):
-        return sum(1 for x in verdicts if str(x).upper() == v)
+        return sum(1 for x in verdicts if x.upper() == v)
     last_pass = next((r.get("recorded_at") for r in reversed(records)
-                      if str(r.get("gpt_verdict", "")).upper() == "PASS"), None)
+                      if (r.get("gpt_verdict") or "").upper() == "PASS"), None)
     return SupervisorSummary(
         availability=PENDING_BACKEND, current_state=PENDING_BACKEND,
         recent_pass=c("PASS"), recent_repair=c("REPAIR"), recent_escalate=c("ESCALATE"),
         recent_abstain=c("ABSTAIN"), recent_unavailable=c("SUPERVISOR_UNAVAILABLE"),
         last_successful_verification=last_pass, measured_latency_ms=PENDING_BACKEND,
-        verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND)
+        verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
+        records_evidence=records_evidence)
 
 
-def build_apprenticeship_summary(records: list[dict[str, Any]]) -> ApprenticeshipSummary:
+def _recent_verification_outcomes(records: list[dict[str, Any]],
+                                  limit: int = 5) -> list[str]:
+    """The last few recorded GPT verdicts, copied as strings -- not coerced.
+
+    Extracted from build_dashboard so the no-coercion guard covers a small,
+    named function instead of the whole assembler."""
+    return [v for v in (r.get("gpt_verdict") for r in records) if v][-limit:]
+
+
+def build_apprenticeship_summary(records: list[dict[str, Any]],
+                                 records_evidence: str = TruthState.LIVE.value
+                                 ) -> ApprenticeshipSummary:
+    """Project the C0.5 apprenticeship metrics.
+
+    When the ledger is unusable every count is ``None``, not zero. Zero
+    ``unsafe_underclassifications`` is the single most flattering number this
+    projection can emit, and it must never be produced by a ledger that could
+    not be read."""
+    if records_evidence != TruthState.LIVE.value:
+        return ApprenticeshipSummary(
+            controller_level="C0.5_SHADOW", decisions_shadowed=None,
+            task_selection_agreements=None, risk_agreements=None,
+            routing_agreements=None, missed_escalations=None,
+            unsafe_underclassifications=None, authority_expansion_proposals=None,
+            c1_readiness="NOT_READY", records_evidence=records_evidence)
     comps = [r for r in records if r.get("kind") == "ApprenticeshipComparison"]
     shadowed = len([r for r in records if r.get("kind") == "ControllerDecisionCandidateV0"])
+    # `is True` rather than truthiness. The values are validated booleans by the
+    # time they arrive, so the two are equivalent today -- but stating it
+    # explicitly means a later reader cannot mistake this for the truthiness test
+    # that used to turn a malformed value into clean negative evidence.
     return ApprenticeshipSummary(
         controller_level="C0.5_SHADOW",
         decisions_shadowed=shadowed,
-        task_selection_agreements=sum(1 for c in comps if c.get("engineer_proposed_task_relates_to_experimentspec")),
-        risk_agreements=sum(1 for c in comps if c.get("risk_agreement")),
-        routing_agreements=sum(1 for c in comps if c.get("routing_agreement")),
-        missed_escalations=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
-        unsafe_underclassifications=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
+        task_selection_agreements=sum(
+            1 for c in comps
+            if c.get("engineer_proposed_task_relates_to_experimentspec") is True),
+        risk_agreements=sum(1 for c in comps if c.get("risk_agreement") is True),
+        routing_agreements=sum(1 for c in comps if c.get("routing_agreement") is True),
+        missed_escalations=sum(
+            1 for c in comps
+            if c.get("danger_underclassified_architecture_as_engineer") is True),
+        unsafe_underclassifications=sum(
+            1 for c in comps
+            if c.get("danger_underclassified_architecture_as_engineer") is True),
         authority_expansion_proposals=0,
-        c1_readiness="NOT_READY")
+        c1_readiness="NOT_READY", records_evidence=records_evidence)
 
 
 def build_worker_authority_summary(level: EngineerAuthorityLevel, grants: list[str]) -> WorkerAuthoritySummary:
@@ -287,7 +542,9 @@ def build_mission_summary(mission_id: str, present: set[str]) -> MissionSummary:
 
 
 def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, Any]],
-                          worker: Any, now: str | None) -> ReadinessAssessment:
+                          worker: Any, now: str | None,
+                          records_evidence: str = TruthState.LIVE.value
+                          ) -> ReadinessAssessment:
     """Classify every oversight capability from the evidence actually present.
 
     Each capability declares whether a PRODUCER exists. That is an engineering
@@ -296,11 +553,16 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
 
     Nothing here builds a backend. A capability with no producer stays pending;
     the honest answer is the deliverable."""
+    # Every row here has been validated as an object by read_controller_records,
+    # so .get() is safe. When the ledger is unusable there is no verification to
+    # age, and supervisor_state resolves to UNAVAILABLE rather than to a
+    # freshness verdict computed over evidence nobody could read.
     last_verification = None
-    for rec in reversed(records):
-        if rec.get("gpt_verdict") and rec.get("recorded_at"):
-            last_verification = rec["recorded_at"]
-            break
+    if records_evidence == TruthState.LIVE.value:
+        for rec in reversed(records):
+            if rec.get("gpt_verdict") and rec.get("recorded_at"):
+                last_verification = rec["recorded_at"]
+                break
 
     caps = [
         # Authority and mission come from protected config files that are read
@@ -329,7 +591,9 @@ def _assess_backend_truth(*, level: Any, policy: Any, records: list[dict[str, An
                    classify(producer_exists=True, value=last_verification,
                             recorded_at=last_verification, now=now,
                             threshold="verification"),
-                   required=True, detail="recorded gpt_verdict history"),
+                   required=True,
+                   detail=(f"recorded gpt_verdict history; records ledger "
+                           f"{records_evidence}")),
         # No producer has been built for any of these. Building them is
         # explicitly out of scope for this mission.
         Capability("worker_activity",
@@ -355,7 +619,8 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     root = Path(repo_root)
     level = read_authority_level(root)
     policy = read_runtime_policy(root)
-    records = _read_records(root)
+    records_read = read_controller_records(root)
+    records = records_read.records
     mission = policy.mission_id if policy else None
 
     # authoritative contract presence -> mission progress
@@ -365,13 +630,26 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     except Exception:  # noqa: BLE001
         present = set()
 
-    grants = []
+    # A SECOND read of the same protected record, and the same defect class as
+    # blocker A:  on a non-object root raised AttributeError,
+    # which the guard did not name, so a scalar/array/null authority file took
+    # the whole dashboard down even after the canonical reader was made total.
+    # The root is checked before it is indexed, and a non-list grants value is
+    # not rendered.
+    #
+    # This makes the READ total and non-leaking. Classifying the QUALITY of this
+    # record as evidence (record_evidence LIVE/UNAVAILABLE) is PR #35 GUI-R work
+    # and is deliberately not duplicated here.
+    grants: list[str] = []
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
-            grants = json.loads(ap.read_text(encoding="utf-8")).get("grants", [])
+            record = json.loads(ap.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            grants = []
+            record = None
+        raw_grants = record.get("grants") if isinstance(record, dict) else None
+        if isinstance(raw_grants, list) and all(isinstance(g, str) for g in raw_grants):
+            grants = list(raw_grants)
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",
@@ -382,8 +660,10 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         operational_state=PENDING_BACKEND, ew_authority=level.value, controller_level="C0.5_SHADOW",
         current_mission=mission, current_task=PENDING_BACKEND, queue_size=PENDING_BACKEND,
         activity_summary=PENDING_BACKEND, next_action=PENDING_BACKEND,
-        recent_verification_outcomes=[str(r.get("gpt_verdict")) for r in records if r.get("gpt_verdict")][-5:],
-        escalation_state="none")
+        recent_verification_outcomes=(
+            _recent_verification_outcomes(records) if records_read.is_usable else []),
+        escalation_state="none",
+        records_evidence=records_read.availability)
     health = SystemHealthSummary(
         controller="ACTIVE", gpt_supervisor=PENDING_BACKEND, engineer_runtime=PENDING_BACKEND,
         sandbox=PENDING_BACKEND, evidence_bridge=PENDING_BACKEND, authority=level.value,
@@ -391,18 +671,24 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     dashboard = {
         **_base("Dashboard"),
         "controller": controller.to_dict(),
-        "supervisor": build_supervisor_summary(records).to_dict(),
+        "supervisor": build_supervisor_summary(
+            records, records_read.availability).to_dict(),
         "worker": worker.to_dict(),
         "worker_authority": build_worker_authority_summary(level, grants).to_dict(),
         "mission": build_mission_summary(mission or "unknown", present).to_dict(),
-        "apprenticeship": build_apprenticeship_summary(records).to_dict(),
+        "apprenticeship": build_apprenticeship_summary(
+            records, records_read.availability).to_dict(),
         "attention_items": [],   # only human-relevant items; none outstanding
         "system_health": health.to_dict(),
+        # The ledger's own usability, stated once and authoritatively, so a
+        # consumer does not have to infer it from three separate summaries.
+        "controller_records": records_read.to_dict(),
     }
     # Backend truth states + capability readiness. Derived from the evidence
     # just assembled -- never asserted, and never a LIVE percentage.
     dashboard["backend_truth"] = _assess_backend_truth(
-        level=level, policy=policy, records=records, worker=worker, now=now).to_dict()
+        level=level, policy=policy, records=records, worker=worker, now=now,
+        records_evidence=records_read.availability).to_dict()
     # Learning projections (Phase 13). Degrade to PENDING_BACKEND rather than
     # failing the whole dashboard if the learning store is absent.
     try:
