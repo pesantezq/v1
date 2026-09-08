@@ -549,7 +549,10 @@ def test_14g_certification_fails_closed_on_empty_input():
 
 
 @pytest.mark.parametrize("content,fn", [
-    ("[Service]\nExecStart=\n", "unit"),
+    # A blank `ExecStart=` is a systemd list RESET, not malformed content —
+    # asserting otherwise was the original defect this module fixes, so the
+    # malformed case is a genuinely unparseable non-empty command instead.
+    ('[Service]\nExecStart=/opt/stockbot/current/bin/x "unterminated\n', "unit"),
     ("not a schedule at all\n", "cron"),
 ])
 def test_14h_unparseable_content_raises(content, fn):
@@ -812,3 +815,605 @@ def test_every_registered_outputs_surface_is_regenerable():
                   for s in RS.ALL_SURFACES if s.path.startswith("outputs/")}
     assert registered
     assert set(registered.values()) == {"REGENERABLE"}, registered
+
+
+# ===========================================================================
+# EXECUTION-PATH EXTRACTION AND RELEASE ALIGNMENT
+#
+# This module certifies which executable/application paths a scheduler
+# configuration can invoke, and whether they resolve to the approved release.
+# It does NOT decide whether systemd would accept a unit — that is
+# `systemd-analyze verify`, which the cutover runbook runs directly.
+#
+# An earlier revision emulated systemd validity and drew seven consecutive
+# review findings, two of them false rejections that would have blocked a
+# correct cutover. Those rules were removed rather than extended; these tests
+# cover the retained responsibility only.
+# ===========================================================================
+
+MISSION22_DASHBOARD_UNIT = """\
+[Unit]
+Description=StockBot Dashboard
+
+[Service]
+WorkingDirectory=/opt/stockbot
+EnvironmentFile=/opt/stockbot/.env
+ExecStart=/opt/stockbot/.venv/bin/uvicorn gui_v2.app:app --host 127.0.0.1 --port 8502
+
+[Service]
+WorkingDirectory=/opt/stockbot/current
+ExecStart=
+ExecStart=/opt/stockbot/current/.venv/bin/uvicorn gui_v2.app:app --host 127.0.0.1 --port 8502
+"""
+
+PRODUCTION_CRON = """\
+SHELL=/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+0 9 * * * /opt/stockbot/current/scripts/run_daily_safe.sh >> /opt/stockbot/logs/cron.log 2>&1
+15 9 * * 1-5 /opt/stockbot/current/scripts/daily_check.sh >> /opt/stockbot/logs/daily_check_cron.log 2>&1
+30 23 * * * /opt/stockbot/current/scripts/backup_state.sh
+*/5 * * * * root /usr/local/sbin/stockbot-evidence-publish
+"""
+
+
+# --- 1. inherited legacy ExecStart replaced by a reset ---------------------
+
+def test_1_reset_replaces_inherited_legacy_execstart():
+    unit = """\
+[Service]
+ExecStart=/opt/stockbot/scripts/legacy.sh
+ExecStart=
+ExecStart=/opt/stockbot/current/scripts/run_daily.sh
+"""
+    surfaces = S.parse_systemd_unit(unit, origin="systemd:reset")
+    assert [x.executable for x in surfaces] == [
+        "/opt/stockbot/current/scripts/run_daily.sh"], [x.raw for x in surfaces]
+    assert surfaces[0].resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+# --- 2/3. stop commands are executable release surfaces -------------------
+
+@pytest.mark.parametrize("directive", ["ExecStop", "ExecStopPost"])
+def test_2_3_legacy_stop_commands_fail_alignment(directive):
+    """A stop command on the legacy checkout is legacy code running on the host."""
+    unit = ("[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n"
+            f"{directive}=/opt/stockbot/scripts/legacy-stop.sh\n")
+    surfaces = S.parse_systemd_unit(unit, origin=f"systemd:{directive}")
+    assert "/opt/stockbot/scripts/legacy-stop.sh" in [x.executable for x in surfaces]
+    report = S.certify_scheduler_identity(surfaces, release_root=S.CURRENT_POINTER)
+    assert report["status"] == "FAILED"
+    assert any("legacy-stop.sh" in e for e in report["errors"])
+
+
+def test_2b_release_bound_stop_commands_certify():
+    unit = ("[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n"
+            "ExecStop=/opt/stockbot/current/scripts/stop.sh\n"
+            "ExecStopPost=/opt/stockbot/current/scripts/cleanup.sh\n")
+    surfaces = S.parse_systemd_unit(unit, origin="systemd:stopok")
+    assert len(surfaces) == 3
+    assert S.certify_scheduler_identity(
+        surfaces, release_root=S.CURRENT_POINTER)["status"] == "OK"
+
+
+# --- 4. ExecStop reset removes the prior legacy path ----------------------
+
+def test_4_execstop_reset_removes_the_legacy_path():
+    unit = ("[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n"
+            "ExecStop=/opt/stockbot/scripts/legacy-stop.sh\n"
+            "ExecStop=\n"
+            "ExecStop=/opt/stockbot/current/scripts/stop.sh\n")
+    surfaces = S.parse_systemd_unit(unit, origin="systemd:stopreset")
+    execs = [x.executable for x in surfaces]
+    assert "/opt/stockbot/scripts/legacy-stop.sh" not in execs, execs
+    assert S.certify_scheduler_identity(
+        surfaces, release_root=S.CURRENT_POINTER)["status"] == "OK"
+
+
+# --- 5. reset semantics for the remaining Exec* directives ---------------
+
+@pytest.mark.parametrize("directive", ["ExecStartPre", "ExecStartPost", "ExecReload"])
+def test_5_reset_semantics_for_every_exec_directive(directive):
+    unit = ("[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+            f"{directive}=/opt/stockbot/scripts/old.sh\n"
+            f"{directive}=\n"
+            f"{directive}=/opt/stockbot/current/scripts/new.sh\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n")
+    execs = [x.executable for x in S.parse_systemd_unit(unit, origin="systemd:x")]
+    assert "/opt/stockbot/scripts/old.sh" not in execs, execs
+    assert "/opt/stockbot/current/scripts/new.sh" in execs
+
+
+def test_5b_multiple_commands_after_a_reset_are_all_kept():
+    unit = ("[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+            "ExecStartPre=/opt/stockbot/scripts/old.sh\n"
+            "ExecStartPre=\n"
+            "ExecStartPre=/opt/stockbot/current/scripts/a.sh\n"
+            "ExecStartPre=/opt/stockbot/current/scripts/b.sh\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n")
+    execs = sorted(x.executable for x in S.parse_systemd_unit(unit, origin="systemd:multi"))
+    assert execs == ["/opt/stockbot/current/scripts/a.sh",
+                     "/opt/stockbot/current/scripts/b.sh",
+                     "/opt/stockbot/current/scripts/run_daily.sh"], execs
+
+
+# --- 6. directives outside [Service] are not execution surfaces ----------
+
+def test_6_directives_outside_service_are_not_execution_surfaces():
+    unit = ("[Unit]\n"
+            "ExecStart=/opt/stockbot/scripts/legacy-in-unit.sh\n"
+            "WorkingDirectory=/opt/stockbot\n"
+            "EnvironmentFile=/opt/stockbot/.env\n"
+            "[Service]\n"
+            "WorkingDirectory=/opt/stockbot/current\n"
+            "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n")
+    surfaces = S.parse_systemd_unit(unit, origin="systemd:sections")
+    assert [x.executable for x in surfaces] == [
+        "/opt/stockbot/current/scripts/run_daily.sh"]
+    assert surfaces[0].working_directory == "/opt/stockbot/current"
+    assert surfaces[0].environment_files == ()
+
+
+# --- 7/8/9. WorkingDirectory and RootDirectory ---------------------------
+
+def test_7_working_directory_effective_semantics():
+    """Last non-blank wins; blank reverts to unset."""
+    last_wins = S.parse_systemd_unit(
+        "[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+        "WorkingDirectory=/opt/stockbot\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:wd")[0]
+    assert last_wins.working_directory == "/opt/stockbot"
+    assert not last_wins.resolves_to_release(release_root=S.CURRENT_POINTER), (
+        "uvicorn/streamlit name modules relatively, so a legacy working "
+        "directory means legacy application code"
+    )
+    reset = S.parse_systemd_unit(
+        "[Service]\nWorkingDirectory=/opt/stockbot\nWorkingDirectory=\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:wdreset")[0]
+    assert reset.working_directory is None
+    assert reset.resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+def test_8_root_directory_is_independent_of_working_directory():
+    """Resetting one must not discard the other."""
+    s0 = S.parse_systemd_unit(
+        "[Service]\nRootDirectory=/opt/stockbot\nWorkingDirectory=\n"
+        "ExecStart=/scripts/run_daily.sh\n", origin="systemd:rootkept")[0]
+    assert s0.working_directory is None
+    assert s0.root_directory == "/opt/stockbot"
+    s1 = S.parse_systemd_unit(
+        "[Service]\nWorkingDirectory=/opt/stockbot\nRootDirectory=\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:wdkept")[0]
+    assert s1.root_directory is None
+    assert s1.working_directory == "/opt/stockbot"
+
+
+def test_9_legacy_root_directory_fails_even_with_a_release_executable():
+    s0 = S.parse_systemd_unit(
+        "[Service]\nRootDirectory=/opt/stockbot\n"
+        "ExecStart=/current/scripts/run_daily.sh\n", origin="systemd:legacyroot")[0]
+    assert not s0.resolves_to_release(release_root=S.CURRENT_POINTER)
+    assert S.certify_scheduler_identity(
+        [s0], release_root=S.CURRENT_POINTER)["status"] == "FAILED"
+
+
+def test_9b_root_directory_is_a_chroot_so_paths_resolve_inside_it():
+    """`RootDirectory=` is chroot(2) (systemd.exec(5)).
+
+    A unit with RootDirectory=/srv/jail and a release-looking ExecStart really
+    executes /srv/jail/opt/stockbot/current/... — nothing to do with the
+    approved pointer. Comparing the lexical ExecStart would approve it.
+    """
+    s0 = S.parse_systemd_unit(
+        "[Service]\nRootDirectory=/srv/jail\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:jail")[0]
+    assert s0._in_root(s0.executable) == \
+        "/srv/jail/opt/stockbot/current/scripts/run_daily.sh"
+    assert not s0.resolves_to_release(release_root=S.CURRENT_POINTER)
+    assert S.certify_scheduler_identity(
+        [s0], release_root=S.CURRENT_POINTER)["status"] == "FAILED"
+
+
+def test_9c_a_release_rooted_chroot_with_in_root_paths_certifies():
+    """The coherent chrooted shape: paths are relative to the root."""
+    s0 = S.parse_systemd_unit(
+        "[Service]\nRootDirectory=/opt/stockbot/current\n"
+        "WorkingDirectory=/\n"
+        "ExecStart=/scripts/run_daily.sh\n", origin="systemd:relroot")[0]
+    assert s0._in_root(s0.executable) == "/opt/stockbot/current/scripts/run_daily.sh"
+    assert s0.resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+# --- 10. EnvironmentFile ---------------------------------------------------
+
+def test_10_environment_file_classification_and_reset():
+    s0 = S.parse_systemd_unit(
+        "[Service]\nEnvironmentFile=/opt/stockbot/.env\n"
+        "EnvironmentFile=-/etc/stockbot/stockbot.env\n"
+        "WorkingDirectory=/opt/stockbot/current\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:env")[0]
+    assert s0.environment_files == ("/opt/stockbot/.env", "/etc/stockbot/stockbot.env")
+    # A credential path is surfaced, never counted as code drift.
+    assert s0.legacy_paths(release_root=S.CURRENT_POINTER) == ()
+    assert s0.legacy_secret_paths(release_root=S.CURRENT_POINTER) == (
+        "/opt/stockbot/.env",)
+    report = S.certify_scheduler_identity([s0], release_root=S.CURRENT_POINTER)
+    assert report["status"] == "OK"
+    assert any(".env" in e for e in report["secret_paths_outside_release"])
+
+    cleared = S.parse_systemd_unit(
+        "[Service]\nEnvironmentFile=/opt/stockbot/.env\nEnvironmentFile=\n"
+        "EnvironmentFile=/opt/stockbot/current/.env\n"
+        "WorkingDirectory=/opt/stockbot/current\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:envreset")[0]
+    assert cleared.environment_files == ("/opt/stockbot/current/.env",)
+
+
+# --- 11. malformed non-empty command fails closed ------------------------
+
+def test_11_malformed_non_empty_command_fails_closed():
+    with pytest.raises(S.SchedulerParseError):
+        S.parse_systemd_unit(
+            '[Service]\nExecStart=/opt/stockbot/current/bin/x "unterminated\n',
+            origin="systemd:bad")
+    with pytest.raises(S.SchedulerParseError):
+        S.parse_crontab("not a schedule at all\n")
+
+
+def test_11b_a_blank_exec_is_a_reset_not_a_malformed_command():
+    """The bug that started this: a blank Exec* must not raise."""
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/scripts/legacy.sh\nExecStart=\n"
+        "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n",
+        origin="systemd:blank")
+    assert len(surfaces) == 1
+
+
+# --- 12. production-shaped units ------------------------------------------
+
+def test_12_mission22_production_unit_resolves_to_the_release():
+    surfaces = S.parse_systemd_unit(MISSION22_DASHBOARD_UNIT, origin="systemd:dashboard")
+    assert len(surfaces) == 1, [x.raw for x in surfaces]
+    s0 = surfaces[0]
+    assert s0.executable == "/opt/stockbot/current/.venv/bin/uvicorn"
+    assert s0.working_directory == "/opt/stockbot/current"
+    assert s0.legacy_paths(release_root=S.CURRENT_POINTER) == ()
+    assert "--host 127.0.0.1" in s0.raw and "--port 8502" in s0.raw
+    assert S.certify_scheduler_identity(
+        [s0], release_root=S.CURRENT_POINTER)["status"] == "OK"
+
+
+def test_12b_the_live_daily_unit_shape_resolves():
+    daily = ("[Unit]\nDescription=StockBot Daily Portfolio Run\n"
+             "[Service]\nType=oneshot\nWorkingDirectory=/opt/stockbot\n"
+             "ExecStart=/opt/stockbot/scripts/run_daily.sh\n"
+             "[Install]\nWantedBy=multi-user.target\n"
+             "[Service]\nEnvironmentFile=/opt/stockbot/.env\n"
+             "EnvironmentFile=-/etc/stockbot/stockbot.env\n"
+             "[Service]\nWorkingDirectory=/opt/stockbot/current\nExecStart=\n"
+             "ExecStart=/opt/stockbot/current/scripts/run_daily.sh\n")
+    d = S.parse_systemd_unit(daily, origin="systemd:stockbot-daily")
+    assert len(d) == 1, [x.raw for x in d]
+    assert d[0].executable == "/opt/stockbot/current/scripts/run_daily.sh"
+    assert d[0].working_directory == "/opt/stockbot/current"
+    assert d[0].resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+def test_12c_interpreter_invocation_exposes_the_real_script():
+    s0 = S.parse_systemd_unit(
+        "[Service]\nExecStart=/bin/bash /opt/stockbot/scripts/run_sandbox.sh\n",
+        origin="systemd:sandbox")[0]
+    assert s0.executable == "/opt/stockbot/scripts/run_sandbox.sh"
+    assert not s0.resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+def test_12d_sibling_directory_is_not_mistaken_for_the_release():
+    s0 = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current-old/.venv/bin/python -m x\n",
+        origin="systemd:sibling")[0]
+    assert not s0.resolves_to_release(release_root=S.CURRENT_POINTER)
+
+
+# --- 13. cron surfaces -----------------------------------------------------
+
+def test_13_cron_produces_the_expected_release_surfaces():
+    surfaces = S.parse_crontab(PRODUCTION_CRON, origin="cron")
+    assert len(surfaces) == 4
+    release = [x for x in surfaces if "/opt/stockbot/current/scripts/" in x.executable]
+    assert len(release) == 3
+    # A log redirect target is written, not executed.
+    assert "cron.log" not in " ".join(surfaces[0].referenced_paths)
+    # The /etc/cron.d user field is stripped, and the publisher is exempt.
+    publisher = surfaces[-1]
+    assert publisher.executable == "/usr/local/sbin/stockbot-evidence-publish"
+    assert publisher.is_system_transitional
+    report = S.certify_scheduler_identity(surfaces, release_root=S.CURRENT_POINTER)
+    assert report["status"] == "OK", report["errors"]
+    assert report["system_transitional"] == [publisher.origin]
+
+
+def test_13b_a_legacy_cron_entry_fails():
+    surfaces = S.parse_crontab(
+        "0 7 * * 1 /opt/stockbot/scripts/run_doc_audit.sh\n", origin="cron")
+    report = S.certify_scheduler_identity(surfaces, release_root=S.CURRENT_POINTER)
+    assert report["status"] == "FAILED"
+    assert "run_doc_audit.sh" in report["errors"][0]
+
+
+# --- 14/15. release identity requires pointer proof too -------------------
+
+def test_14_wrong_pointer_sha_fails_release_identity():
+    surfaces = S.parse_systemd_unit(MISSION22_DASHBOARD_UNIT, origin="systemd:dash")
+    good = PT.certify_pointer(_good(), approved_sha=APPROVED)
+    assert S.certify_release_identity(surfaces, pointer_result=good)["status"] == "OK"
+    stale = PT.certify_pointer(_good(target_sha=OTHER), approved_sha=APPROVED)
+    combined = S.certify_release_identity(surfaces, pointer_result=stale)
+    assert combined["status"] == "FAILED"
+    assert any("!= approved" in e for e in combined["errors"])
+
+
+def test_15_an_effective_legacy_command_fails_release_identity():
+    """Aligned pointer, legacy command: still FAILED."""
+    legacy = S.parse_systemd_unit(
+        "[Service]\nWorkingDirectory=/opt/stockbot\n"
+        "ExecStart=/opt/stockbot/.venv/bin/uvicorn gui_v2.app:app\n",
+        origin="systemd:legacy")
+    good = PT.certify_pointer(_good(), approved_sha=APPROVED)
+    assert S.certify_release_identity(
+        legacy, pointer_result=good)["status"] == "FAILED"
+
+
+def test_15b_a_forgotten_reset_leaves_the_legacy_command_effective():
+    no_reset = MISSION22_DASHBOARD_UNIT.replace("ExecStart=\n", "")
+    surfaces = S.parse_systemd_unit(no_reset, origin="systemd:noreset")
+    assert len(surfaces) == 2, [x.raw for x in surfaces]
+    assert S.certify_scheduler_identity(
+        surfaces, release_root=S.CURRENT_POINTER)["status"] == "FAILED"
+
+
+# --- 16. an expected service contributing nothing cannot pass -------------
+
+def test_16_expected_service_with_no_surface_cannot_pass_silently():
+    """A parser may return nothing for a fragment; the CERTIFIER must not
+    accept a known production service that contributes nothing."""
+    fragment = ("[Service]\nEnvironmentFile=/opt/stockbot/.env\n"
+                "EnvironmentFile=-/etc/stockbot/stockbot.env\n")
+    assert S.parse_systemd_unit(fragment, origin="systemd:override.conf") == [], (
+        "a bare drop-in legitimately declares no commands"
+    )
+    aligned = S.parse_crontab(PRODUCTION_CRON, origin="cron")
+    aligned += S.parse_systemd_unit(MISSION22_DASHBOARD_UNIT,
+                                    origin="systemd:stockbot-dashboard")
+    expected = ("systemd:stockbot-dashboard", "systemd:stockbot-streamlit")
+    report = S.certify_scheduler_identity(
+        aligned, release_root=S.CURRENT_POINTER, expected_origins=expected)
+    assert report["status"] == "FAILED", (
+        "streamlit contributed no surface yet the set certified OK"
+    )
+    assert report["missing_expected"] == ["systemd:stockbot-streamlit"]
+    assert any("no executable surface" in e for e in report["errors"])
+
+
+def test_16b_all_expected_services_present_certifies():
+    surfaces = S.parse_systemd_unit(MISSION22_DASHBOARD_UNIT,
+                                    origin="systemd:stockbot-dashboard")
+    surfaces += S.parse_systemd_unit(
+        "[Service]\nWorkingDirectory=/opt/stockbot/current\n"
+        "ExecStart=/opt/stockbot/current/.venv/bin/streamlit run gui/app.py "
+        "--server.address 127.0.0.1 --server.port 8501\n",
+        origin="systemd:stockbot-streamlit")
+    report = S.certify_scheduler_identity(
+        surfaces, release_root=S.CURRENT_POINTER,
+        expected_origins=("systemd:stockbot-dashboard", "systemd:stockbot-streamlit"))
+    assert report["status"] == "OK", report["errors"]
+    assert report["missing_expected"] == []
+
+
+def test_16c_empty_surface_list_still_fails_closed():
+    report = S.certify_scheduler_identity([], release_root=S.CURRENT_POINTER)
+    assert report["status"] == "FAILED"
+    assert report["errors"]
+
+
+# --- the responsibility split is recorded in the module ------------------
+
+def test_the_module_declares_the_responsibility_split():
+    src = (REPO / "portfolio_automation/release/scheduler.py").read_text(encoding="utf-8")
+    flat = " ".join(src.split())
+    assert "systemd-analyze verify" in flat
+    assert "SYSTEMD_UNIT_VALIDITY" in flat and "SCHEDULER_ALIGNMENT" in flat
+    # And the validity emulation is really gone, not merely unused.
+    for gone in ("SERVICE_TYPES", "MULTI_EXECSTART_TYPES", "RemainAfterExit",
+                 "SuccessAction", "DEFAULT_SERVICE_TYPE"):
+        assert gone not in src, f"{gone} survived the scope cut"
+
+
+def test_scheduler_still_declares_path_alignment_only_scope():
+    surfaces = S.parse_systemd_unit(MISSION22_DASHBOARD_UNIT, origin="systemd:dash")
+    assert S.certify_scheduler_identity(
+        surfaces, release_root=S.CURRENT_POINTER)["scope"] == "path_alignment_only"
+
+
+# ---------------------------------------------------------------------------
+# Fresh-review findings against the reduced candidate. Both are path-identity
+# defects, not validity emulation: each changes which HOST path the certifier
+# believes production executes.
+# ---------------------------------------------------------------------------
+
+REL = "/opt/stockbot/current"
+
+
+def test_root_directory_start_only_leaves_non_start_commands_on_the_host():
+    """RootDirectoryStartOnly=yes chroots ExecStart ONLY (systemd.service(5)).
+
+    ExecStartPre/Post, ExecReload, ExecStop and ExecStopPost keep resolving on
+    the host, so applying the root to them computes a host path that
+    production never executes.
+    """
+    surfaces = S.parse_systemd_unit(
+        "[Service]\n"
+        "RootDirectory=/srv/jail\n"
+        "RootDirectoryStartOnly=yes\n"
+        f"ExecStart={REL}/scripts/run.sh\n"
+        f"ExecStop={REL}/scripts/stop.sh\n",
+        origin="systemd:x.service",
+    )
+    by_raw = {surface.raw: surface for surface in surfaces}
+    start = by_raw[f"{REL}/scripts/run.sh"]
+    stop = by_raw[f"{REL}/scripts/stop.sh"]
+
+    assert start.root_directory == "/srv/jail"
+    assert stop.root_directory is None, "a non-start command is not chrooted"
+    assert start._in_root(start.executable) == f"/srv/jail{REL}/scripts/run.sh"
+    assert stop._in_root(stop.executable) == f"{REL}/scripts/stop.sh"
+    # The stop command genuinely runs release code and must certify as such.
+    assert stop.resolves_to_release(release_root=REL)
+
+
+@pytest.mark.parametrize("value", ["no", "false", "0", "off"])
+def test_root_directory_start_only_narrows_only_on_an_explicit_true(value):
+    """A parseable false, or no assignment at all, leaves the root applied.
+
+    The original rationale here claimed the two error directions were
+    asymmetric — that wrongly applying a root was merely a false reject. That
+    is wrong, and review caught it: ``_in_root`` rewrites a legacy host path
+    into one under the release root, so wrongly applying a root LAUNDERS legacy
+    code into release-looking code. Both directions can false-approve, which is
+    why the effective value is now modelled from systemd's real semantics
+    rather than approximated. See ``test_..._unparseable_boolean_...`` below.
+    """
+    surfaces = S.parse_systemd_unit(
+        "[Service]\n"
+        "RootDirectory=/srv/jail\n"
+        f"RootDirectoryStartOnly={value}\n"
+        f"ExecStop={REL}/scripts/stop.sh\n",
+        origin="systemd:x.service",
+    )
+    stop = surfaces[0]
+    assert stop.root_directory == "/srv/jail"
+    assert not stop.resolves_to_release(release_root=REL)
+
+
+def test_expected_origins_reaches_the_real_certification_entry_point():
+    """A guard only direct callers can reach is a guard production never runs.
+
+    ``certify_release_identity`` is the entry point certification uses; if it
+    cannot forward ``expected_origins`` then a known production service that
+    contributes no executable surface is silently absorbed into a PASS.
+    """
+    surfaces = S.parse_systemd_unit(
+        f"[Service]\nExecStart={REL}/scripts/run.sh\n",
+        origin="systemd:stockbot-daily.service",
+    )
+    pointer_ok = {"status": "OK", "errors": []}
+
+    result = S.certify_release_identity(
+        surfaces, pointer_result=pointer_ok, release_root=REL,
+        expected_origins=("systemd:stockbot-daily.service",
+                          "systemd:stockbot-dashboard.service"),
+    )
+
+    assert result["status"] == "FAILED", "silent absence must not certify"
+    missing = result["scheduler"]["missing_expected"]
+    assert "systemd:stockbot-dashboard.service" in missing
+    assert any("no executable surface" in e for e in result["errors"])
+
+    # And it still passes when every expected service is present.
+    ok = S.certify_release_identity(
+        surfaces, pointer_result=pointer_ok, release_root=REL,
+        expected_origins=("systemd:stockbot-daily.service",),
+    )
+    assert ok["status"] == "OK"
+
+
+
+def test_root_directory_start_only_unparseable_boolean_is_ignored_not_reset():
+    """systemd IGNORES an unparseable boolean, keeping the prior value.
+
+    Verified by asking the installed systemd 255 rather than reading about it::
+
+        RootDirectoryStartOnly=yes + =garbage -> yes
+        RootDirectoryStartOnly=yes + =        -> yes   (blank does NOT reset)
+        RootDirectoryStartOnly=yes + =no      -> no
+
+    Clobbering the effective value to False re-applies the chroot to a non-start
+    command, and because ``_in_root`` rewrites a legacy host path into one under
+    the release root, that command would then falsely certify as release-aligned.
+    """
+    legacy_stop = "/opt/stockbot/legacy-checkout/scripts/stop.sh"
+
+    for override in ("garbage", "", "   "):
+        surfaces = S.parse_systemd_unit(
+            "[Service]\n"
+            f"RootDirectory={REL}\n"
+            "RootDirectoryStartOnly=yes\n"
+            f"RootDirectoryStartOnly={override}\n"
+            f"ExecStop={legacy_stop}\n",
+            origin="systemd:x.service",
+        )
+        stop = surfaces[0]
+        assert stop.root_directory is None, (
+            f"override {override!r} must be ignored, leaving the start-only "
+            f"narrowing in force"
+        )
+        # The stop command really runs on the host at a legacy path.
+        assert stop._in_root(stop.executable) == legacy_stop
+        assert not stop.resolves_to_release(release_root=REL), (
+            "laundering a legacy host path under the release root would be a "
+            "false approve"
+        )
+
+
+def test_root_directory_start_only_parseable_false_does_override():
+    """A *valid* false must still take effect — ignoring is only for garbage."""
+    surfaces = S.parse_systemd_unit(
+        "[Service]\n"
+        f"RootDirectory={REL}\n"
+        "RootDirectoryStartOnly=yes\n"
+        "RootDirectoryStartOnly=no\n"
+        "ExecStop=/legacy/stop.sh\n",
+        origin="systemd:x.service",
+    )
+    assert surfaces[0].root_directory == REL
+
+
+def test_transitional_allowlist_does_not_launder_a_chrooted_binary():
+    """The allowlist names HOST binaries and must be applied after chroot.
+
+    Under ``RootDirectory=/opt/stockbot`` the executed binary is
+    ``/opt/stockbot/usr/local/bin/cloudflared`` — inside the legacy checkout,
+    not the approved host binary. Matching the lexical executable let the
+    allowlist short-circuit the entire code-path check.
+    """
+    chrooted = S.parse_systemd_unit(
+        "[Service]\n"
+        "RootDirectory=/opt/stockbot\n"
+        "ExecStart=/usr/local/bin/cloudflared run\n",
+        origin="systemd:cloudflared.service",
+    )[0]
+
+    assert not chrooted.is_system_transitional, "chroot changes the binary"
+    assert not chrooted.resolves_to_release(release_root=REL)
+    assert chrooted.legacy_paths(release_root=REL), "legacy binding must surface"
+
+    result = S.certify_scheduler_identity([chrooted], release_root=REL)
+    assert result["status"] == "FAILED"
+
+
+def test_transitional_allowlist_still_applies_without_a_root_directory():
+    """No regression: an un-chrooted transitional binary stays allowlisted."""
+    plain = S.parse_systemd_unit(
+        "[Service]\nExecStart=/usr/local/bin/cloudflared run\n",
+        origin="systemd:cloudflared.service",
+    )[0]
+    assert plain.is_system_transitional
+    assert plain.resolves_to_release(release_root=REL)
