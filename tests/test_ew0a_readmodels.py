@@ -700,3 +700,302 @@ def test_gsr_records_evidence_accompanies_every_dependent_summary():
     for surface in ("supervisor", "worker", "apprenticeship"):
         assert "records_evidence" in dash[surface], surface
         assert dash[surface]["records_evidence"] == "LIVE", surface
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-SR — THE WCC CONSUMED-FIELD CONTRACT
+#
+# read_controller_records established "valid JSON + row is a dict" and then
+# declared the ledger LIVE, while the projections read individual FIELDS out of
+# those rows. Validating the container and not the contents is the same mistake
+# this repository has now recorded in two separate missions, so the coupling
+# between what the consumers read and what the contract declares is executable
+# here rather than hand-maintained.
+# ═══════════════════════════════════════════════════════════════════════════
+_CR_MARKER = "sk-CONTROLLER-RECORD-MUST-NOT-RENDER-999"
+
+#: Functions that consume ControllerRecordsRead.records.
+_CR_CONSUMERS = ("build_supervisor_summary", "build_apprenticeship_summary",
+                 "_assess_backend_truth", "_recent_verification_outcomes",
+                 "build_dashboard")
+
+#: Local names inside those functions that do NOT hold a controller record, each
+#: justified. The default is that an unrecognised base IS a record, so a new
+#: consumer using a new variable name is caught rather than skipped. Asserted
+#: exactly, so widening this is a deliberate, visible act.
+_CR_NON_RECORD_BASES = {
+    "record": "the authority JSON object read in build_dashboard",
+    "dashboard": "this module's own output dict",
+}
+
+_CR_CARRIERS = {
+    "dict": {"api_key": _CR_MARKER},
+    "nested": {"outer": {"Authorization": f"Bearer {_CR_MARKER}"}},
+    "list": [_CR_MARKER],
+}
+
+_CR_GOOD = {"kind": "ApprenticeshipComparison", "gpt_verdict": "PASS",
+            "recorded_at": "2026-08-15T20:45:22+00:00", "risk_agreement": True}
+
+_CR_BOOL_FIELDS = ("engineer_proposed_task_relates_to_experimentspec",
+                   "risk_agreement", "routing_agreement",
+                   "danger_underclassified_architecture_as_engineer")
+
+
+def _cr_root(tmp_path, rows):
+    return _gsr_root(tmp_path, records="".join(
+        json.dumps(r) + _GSR_LF for r in rows))
+
+
+def _cr_consumer_field_reads():
+    """Every constant field name the consumers read off a record-bearing local.
+
+    Scoped AST over five named functions -- not a repo-wide framework."""
+    src = (_GSR_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    found = {}
+    for node in _ast.walk(_ast.parse(src)):
+        if not (isinstance(node, _ast.FunctionDef) and node.name in _CR_CONSUMERS):
+            continue
+        for inner in _ast.walk(node):
+            base = field = None
+            if (isinstance(inner, _ast.Call)
+                    and getattr(inner.func, "attr", None) == "get"
+                    and inner.args
+                    and isinstance(inner.args[0], _ast.Constant)
+                    and isinstance(inner.args[0].value, str)):
+                base = getattr(inner.func.value, "id", None)
+                field = inner.args[0].value
+            elif (isinstance(inner, _ast.Subscript)
+                  and isinstance(inner.slice, _ast.Constant)
+                  and isinstance(inner.slice.value, str)):
+                base = getattr(inner.value, "id", None)
+                field = inner.slice.value
+            if field is None or base is None:
+                continue
+            if base in _CR_NON_RECORD_BASES:
+                continue
+            found.setdefault(field, set()).add(node.name)
+    return found
+
+
+# ── the mechanical coupling ───────────────────────────────────────────────
+def test_cr_every_field_the_consumers_read_is_in_the_contract():
+    """THE control. A new consumer starting to read row.get("new_field") without
+    extending the contract fails here -- which is exactly what a hand-maintained
+    declaration failed to do twice in GUI-R."""
+    read = _cr_consumer_field_reads()
+    assert read, "the AST scope found no record field reads at all"
+    unregistered = set(read) - rm.WCC_CONSUMED_RECORD_FIELD_NAMES
+    assert unregistered == set(), (
+        f"consumed but not in the WCC field contract: {sorted(unregistered)}")
+
+
+def test_cr_the_contract_has_no_dead_entries():
+    """Honest in both directions: a declared field nobody reads is stale."""
+    read = set(_cr_consumer_field_reads())
+    unused = rm.WCC_CONSUMED_RECORD_FIELD_NAMES - read
+    assert unused == set(), f"declared but never consumed: {sorted(unused)}"
+
+
+def test_cr_the_non_record_exclusion_list_is_exactly_justified():
+    """The default is 'unknown base is a record'. Widening the exclusions must
+    be deliberate, so the set is pinned."""
+    assert set(_CR_NON_RECORD_BASES) == {"record", "dashboard"}
+    for base, reason in _CR_NON_RECORD_BASES.items():
+        assert reason.strip(), base
+
+
+def test_cr_declared_consumers_match_the_ast_scope():
+    """Each contract entry names its consuming surfaces; those must be the
+    functions the AST actually found reading it."""
+    read = _cr_consumer_field_reads()
+    for spec in rm.WCC_CONSUMED_RECORD_FIELDS:
+        assert spec.consumers, spec.name
+        assert set(spec.consumers) <= set(read.get(spec.name, set())) | {
+            "_recent_verification_outcomes"}, spec.name
+
+
+# ── no coercion of record evidence ────────────────────────────────────────
+def test_cr_record_consumers_never_coerce_evidence():
+    """Scoped to the record-consuming functions, not repo-wide. If the schema
+    validation is ever removed, a coercion fallback must not silently restore
+    arbitrary-object serialization."""
+    src = (_GSR_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    guarded = {"build_supervisor_summary", "build_apprenticeship_summary",
+               "_assess_backend_truth", "_recent_verification_outcomes"}
+    for node in _ast.walk(_ast.parse(src)):
+        if not (isinstance(node, _ast.FunctionDef) and node.name in guarded):
+            continue
+        for inner in _ast.walk(node):
+            if isinstance(inner, _ast.Call):
+                name = getattr(inner.func, "id", None) or getattr(inner.func, "attr", None)
+                assert name not in ("str", "repr", "format"), (
+                    f"{node.name} coerces evidence via {name}()")
+
+
+# ── the real ledger must still be usable ─────────────────────────────────
+def test_cr_the_tracked_ledger_satisfies_the_consumption_contract():
+    """A validator that condemns the true history is not a validator."""
+    result = rm.read_controller_records(_GSR_REPO)
+    assert result.availability == "LIVE"
+    assert len(result.records) == 24
+    for index, row in enumerate(result.records):
+        assert rm._record_field_violation(row) is None, (index, row.get("kind"))
+
+
+def test_cr_presence_semantics_match_the_tracked_ledger():
+    """Presence was derived from evidence, not assumed. Only `kind` is on every
+    record; making the rest required would condemn legitimate history."""
+    rows = rm.read_controller_records(_GSR_REPO).records
+    required = {f.name for f in rm.WCC_CONSUMED_RECORD_FIELDS if f.required}
+    assert required == {"kind"}
+    for name in required:
+        assert all(name in r for r in rows), name
+    # and the optional ones genuinely are absent on some legitimate records
+    for name in ("gpt_verdict", "recorded_at", "risk_agreement"):
+        assert any(name not in r for r in rows), name
+
+
+# ── the two reported leaks ───────────────────────────────────────────────
+def test_cr_a_wrong_typed_gpt_verdict_makes_the_whole_ledger_unavailable(tmp_path):
+    for label, carrier in _CR_CARRIERS.items():
+        dash = rm.build_dashboard(
+            _cr_root(tmp_path / f"gv_{label}", [dict(_CR_GOOD, gpt_verdict=carrier)]),
+            now=_GSR_NOW)
+        assert dash["controller_records"]["availability"] == "UNAVAILABLE", label
+        assert dash["controller_records"]["record_count"] == 0, label
+        assert dash["worker"]["recent_verification_outcomes"] == [], label
+        assert dash["supervisor"]["recent_pass"] is None, label
+        blob = json.dumps(dash, default=str)
+        assert _CR_MARKER not in blob, label
+        assert "api_key" not in blob and "Authorization" not in blob, label
+
+
+def test_cr_a_wrong_typed_recorded_at_never_reaches_last_successful(tmp_path):
+    """The exact reported case: a dict recorded_at on a PASS row was copied
+    directly into supervisor.last_successful_verification, whose declared
+    contract is str | None."""
+    for label, carrier in _CR_CARRIERS.items():
+        dash = rm.build_dashboard(
+            _cr_root(tmp_path / f"ra_{label}",
+                     [dict(_CR_GOOD, gpt_verdict="PASS", recorded_at=carrier)]),
+            now=_GSR_NOW)
+        assert dash["controller_records"]["availability"] == "UNAVAILABLE", label
+        assert dash["supervisor"]["last_successful_verification"] is None, label
+        assert dash["supervisor"]["records_evidence"] == "UNAVAILABLE", label
+        assert _CR_MARKER not in json.dumps(dash, default=str), label
+
+
+def test_cr_apprenticeship_booleans_reject_every_falsey_lookalike(tmp_path):
+    """Wrong type is unavailable evidence, not False. 0 and "false" are the
+    dangerous ones: they would have become clean negative evidence on a field
+    named unsafe_underclassifications."""
+    for field in _CR_BOOL_FIELDS:
+        for bad in (0, 1, "true", "false", [], {}, _CR_CARRIERS["dict"],
+                    _CR_CARRIERS["list"]):
+            label = f"{field}_{type(bad).__name__}_{bad!r}"[:48]
+            dash = rm.build_dashboard(
+                _cr_root(tmp_path / label.replace("/", "_"),
+                         [dict(_CR_GOOD, **{field: bad})]), now=_GSR_NOW)
+            assert dash["controller_records"]["availability"] == "UNAVAILABLE", label
+            assert dash["apprenticeship"]["unsafe_underclassifications"] is None, label
+            assert dash["apprenticeship"]["risk_agreements"] is None, label
+            assert _CR_MARKER not in json.dumps(dash, default=str), label
+
+
+def test_cr_kind_must_be_a_non_empty_string(tmp_path):
+    for label, bad in (("absent", None), ("null", None), ("empty", ""),
+                       ("int", 7), ("dict", _CR_CARRIERS["dict"])):
+        row = dict(_CR_GOOD)
+        if label == "absent":
+            del row["kind"]
+        else:
+            row["kind"] = bad
+        dash = rm.build_dashboard(_cr_root(tmp_path / f"k_{label}", [row]),
+                                  now=_GSR_NOW)
+        assert dash["controller_records"]["availability"] == "UNAVAILABLE", label
+        assert _CR_MARKER not in json.dumps(dash, default=str), label
+
+
+# ── whole-ledger policy and the zero/unavailable distinction ──────────────
+def test_cr_one_bad_field_invalidates_the_whole_ledger(tmp_path):
+    """valid, valid, malformed, valid must NOT become 3 usable rows."""
+    rows = [_CR_GOOD, _CR_GOOD, dict(_CR_GOOD, gpt_verdict=_CR_CARRIERS["dict"]),
+            _CR_GOOD]
+    dash = rm.build_dashboard(_cr_root(tmp_path, rows), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "UNAVAILABLE"
+    assert dash["controller_records"]["record_count"] == 0
+    assert dash["supervisor"]["recent_pass"] is None
+    assert dash["apprenticeship"]["decisions_shadowed"] is None
+
+
+def test_cr_a_genuinely_empty_ledger_is_still_an_authoritative_zero(tmp_path):
+    dash = rm.build_dashboard(_gsr_root(tmp_path, records=""), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "LIVE"
+    assert dash["supervisor"]["recent_pass"] == 0
+    assert dash["apprenticeship"]["unsafe_underclassifications"] == 0
+
+
+def test_cr_records_missing_optional_fields_remain_usable(tmp_path):
+    """The ledger is heterogeneous: most kinds carry neither gpt_verdict nor the
+    apprenticeship booleans."""
+    rows = [{"kind": "AuthoritativeControllerDecision"},
+            {"kind": "ExperimentResultOutcome",
+             "recorded_at": "2026-08-15T20:45:22+00:00"}]
+    dash = rm.build_dashboard(_cr_root(tmp_path, rows), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "LIVE"
+    assert dash["controller_records"]["record_count"] == 2
+    assert dash["supervisor"]["recent_pass"] == 0
+
+
+def test_cr_explicit_null_on_an_optional_field_is_treated_as_absence(tmp_path):
+    rows = [{"kind": "ExperimentResultOutcome", "gpt_verdict": None,
+             "recorded_at": None, "risk_agreement": None}]
+    dash = rm.build_dashboard(_cr_root(tmp_path, rows), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "LIVE"
+    assert dash["supervisor"]["recent_pass"] == 0
+
+
+# ── unconsumed fields stay opaque, and are not a rejection reason ────────
+def test_cr_an_unconsumed_field_is_neither_rejected_nor_projected(tmp_path):
+    """Validate what the WCC consumes; do not certify or expose what it does
+    not. If another subsystem consumes it later, its contract adds it."""
+    opaque = "sk-UNCONSUMED-OPAQUE-999"
+    rows = [dict(_CR_GOOD, future_unconsumed_field={"api_key": opaque})]
+    dash = rm.build_dashboard(_cr_root(tmp_path, rows), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "LIVE"
+    assert dash["controller_records"]["record_count"] == 1
+    blob = json.dumps(dash, default=str)
+    assert "future_unconsumed_field" not in blob
+    assert opaque not in blob
+
+
+# ── shape, not content ───────────────────────────────────────────────────
+def test_cr_a_schema_valid_string_containing_the_marker_is_still_evidence(tmp_path):
+    """No substring sanitisation. The control is rejecting wrong-SHAPED
+    evidence, not deleting strings containing particular text."""
+    rows = [dict(_CR_GOOD, gpt_verdict=_CR_MARKER)]
+    result = rm.read_controller_records(_cr_root(tmp_path, rows))
+    assert result.availability == "LIVE"
+    assert result.records[0]["gpt_verdict"] == _CR_MARKER
+    dash = rm.build_dashboard(_cr_root(tmp_path, rows), now=_GSR_NOW)
+    assert dash["worker"]["recent_verification_outcomes"] == [_CR_MARKER]
+
+
+def test_cr_violation_detail_names_the_field_and_type_not_the_value():
+    violation = rm._record_field_violation(
+        dict(_CR_GOOD, gpt_verdict=_CR_CARRIERS["dict"]))
+    assert violation is not None
+    assert "gpt_verdict" in violation and "dict" in violation
+    assert _CR_MARKER not in violation
+
+
+def test_cr_live_still_means_what_the_document_says():
+    """LIVE is now a two-part claim, and the doc must say so rather than letting
+    it read as full certification of every historical record kind."""
+    doc = (_GSR_REPO / "docs" / "WORKER_CONTROL_CENTER_INTERFACE.md").read_text(
+        encoding="utf-8")
+    assert "WCC consumption contract" in doc or "consumed by the WCC" in doc
+    assert "canonically certified" in doc

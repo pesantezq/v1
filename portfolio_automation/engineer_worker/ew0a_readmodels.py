@@ -229,6 +229,95 @@ CONTROLLER_RECORDS_REL = "docs/EW0A_0B3_RECORDS.jsonl"
 
 
 @dataclass(frozen=True)
+class _RecordField:
+    """One controller-record field AS THE WCC READ MODEL CONSUMES IT."""
+
+    name: str
+    kind: str                    # "str" | "bool"
+    #: Present on every legitimate record. Determined from the tracked ledger,
+    #: not assumed -- the ledger is heterogeneous and most fields are not.
+    required: bool = False
+    non_empty: bool = False
+    consumers: tuple[str, ...] = ()
+
+
+#: THE WCC CONSUMED-FIELD CONTRACT.
+#:
+#: `read_controller_records` previously established "valid JSON + row is a dict"
+#: and then declared the ledger LIVE, while the projections went on to read
+#: individual FIELDS out of those rows. So a row with
+#: ``gpt_verdict: {"api_key": "..."}`` was admitted, stringified into
+#: worker.recent_verification_outcomes, and a dict-valued ``recorded_at`` on a
+#: PASS row was copied straight into supervisor.last_successful_verification --
+#: arbitrary nested payload reaching the GUI through a field nobody thinks of as
+#: a payload carrier. Validating the container and not the contents is the same
+#: mistake this repository has now recorded in two separate missions.
+#:
+#: This is a BOUNDED CONSUMPTION CONTRACT, not certification of every field of
+#: every historical record kind. Fields the WCC does not read stay opaque and
+#: unprojected, and a record is never rejected merely for carrying them.
+#:
+#: Presence semantics come from the 24 tracked records: `kind` is on all 24;
+#: `gpt_verdict` on 10; `recorded_at` on 22 (two legitimately omit it); the four
+#: apprenticeship booleans only on ApprenticeshipComparison rows. Making any of
+#: the optional ones required would condemn the true history.
+WCC_CONSUMED_RECORD_FIELDS: tuple[_RecordField, ...] = (
+    _RecordField("kind", "str", required=True, non_empty=True,
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("gpt_verdict", "str", non_empty=True,
+                 consumers=("build_supervisor_summary", "_assess_backend_truth",
+                            "_recent_verification_outcomes")),
+    _RecordField("recorded_at", "str", non_empty=True,
+                 consumers=("build_supervisor_summary", "_assess_backend_truth")),
+    _RecordField("engineer_proposed_task_relates_to_experimentspec", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("risk_agreement", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("routing_agreement", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+    _RecordField("danger_underclassified_architecture_as_engineer", "bool",
+                 consumers=("build_apprenticeship_summary",)),
+)
+
+#: Exported so a scoped AST test can require every constant field name the
+#: consumers actually read to be represented here. A hand-maintained list on its
+#: own is what let GUI-R omit a real dependency twice.
+WCC_CONSUMED_RECORD_FIELD_NAMES: frozenset[str] = frozenset(
+    f.name for f in WCC_CONSUMED_RECORD_FIELDS)
+
+
+def _record_field_violation(row: dict[str, Any]) -> str | None:
+    """The first WCC-consumption violation in this row, or None.
+
+    Only field names and structural type names are returned. An explicit JSON
+    null on an OPTIONAL field is treated as absence: no tracked record does it,
+    it creates no leak, and the consumers already handle a missing field. A
+    wrong TYPE is never treated as absence -- that is the distinction between
+    "not applicable to this record kind" and "malformed value that happens to be
+    falsey", and conflating them is how a corrupt boolean becomes clean negative
+    evidence."""
+    for spec in WCC_CONSUMED_RECORD_FIELDS:
+        if spec.name not in row or row[spec.name] is None:
+            if spec.required:
+                raise_reason = "absent" if spec.name not in row else "null"
+                return f"{spec.name} is required by the WCC contract and is {raise_reason}"
+            continue
+        value = row[spec.name]
+        if spec.kind == "bool":
+            # bool ONLY. Not 0/1, not "true", not [] or {} through truthiness.
+            if not isinstance(value, bool):
+                return (f"{spec.name} must be a boolean per the WCC contract, "
+                        f"got {type(value).__name__}")
+            continue
+        if not isinstance(value, str):
+            return (f"{spec.name} must be a string per the WCC contract, "
+                    f"got {type(value).__name__}")
+        if spec.non_empty and not value:
+            return f"{spec.name} must be a non-empty string per the WCC contract"
+    return None
+
+
+@dataclass(frozen=True)
 class ControllerRecordsRead:
     """The outcome of reading the controller records ledger.
 
@@ -302,6 +391,15 @@ def read_controller_records(repo_root: str | Path,
             return ControllerRecordsRead(
                 TruthState.UNAVAILABLE.value, [], rel,
                 f"{rel} line {index} is not a JSON object, got {type(row).__name__}")
+        # Consumed-field validation happens HERE, before the row is admitted, so
+        # the three WCC consumers cannot receive evidence this read result has
+        # already called usable without its consumed fields being checked. It is
+        # deliberately not repeated in each consumer.
+        violation = _record_field_violation(row)
+        if violation is not None:
+            return ControllerRecordsRead(
+                TruthState.UNAVAILABLE.value, [], rel,
+                f"{rel} line {index}: {violation}")
         rows.append(row)
     return ControllerRecordsRead(TruthState.LIVE.value, rows, rel,
                                  f"{len(rows)} record(s) from {rel}")
@@ -336,11 +434,14 @@ def build_supervisor_summary(records: list[dict[str, Any]],
             last_successful_verification=None, measured_latency_ms=PENDING_BACKEND,
             verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
             records_evidence=records_evidence)
-    verdicts = [r.get("gpt_verdict") for r in records if r.get("gpt_verdict")]
+    # No str() anywhere below: read_controller_records has already guaranteed
+    # that a present gpt_verdict/recorded_at is a non-empty string. Coercion was
+    # how an arbitrary object became displayable in the first place.
+    verdicts = [v for v in (r.get("gpt_verdict") for r in records) if v]
     def c(v):
-        return sum(1 for x in verdicts if str(x).upper() == v)
+        return sum(1 for x in verdicts if x.upper() == v)
     last_pass = next((r.get("recorded_at") for r in reversed(records)
-                      if str(r.get("gpt_verdict", "")).upper() == "PASS"), None)
+                      if (r.get("gpt_verdict") or "").upper() == "PASS"), None)
     return SupervisorSummary(
         availability=PENDING_BACKEND, current_state=PENDING_BACKEND,
         recent_pass=c("PASS"), recent_repair=c("REPAIR"), recent_escalate=c("ESCALATE"),
@@ -348,6 +449,15 @@ def build_supervisor_summary(records: list[dict[str, Any]],
         last_successful_verification=last_pass, measured_latency_ms=PENDING_BACKEND,
         verification_queue=PENDING_BACKEND, outage_state=PENDING_BACKEND,
         records_evidence=records_evidence)
+
+
+def _recent_verification_outcomes(records: list[dict[str, Any]],
+                                  limit: int = 5) -> list[str]:
+    """The last few recorded GPT verdicts, copied as strings -- not coerced.
+
+    Extracted from build_dashboard so the no-coercion guard covers a small,
+    named function instead of the whole assembler."""
+    return [v for v in (r.get("gpt_verdict") for r in records) if v][-limit:]
 
 
 def build_apprenticeship_summary(records: list[dict[str, Any]],
@@ -368,14 +478,24 @@ def build_apprenticeship_summary(records: list[dict[str, Any]],
             c1_readiness="NOT_READY", records_evidence=records_evidence)
     comps = [r for r in records if r.get("kind") == "ApprenticeshipComparison"]
     shadowed = len([r for r in records if r.get("kind") == "ControllerDecisionCandidateV0"])
+    # `is True` rather than truthiness. The values are validated booleans by the
+    # time they arrive, so the two are equivalent today -- but stating it
+    # explicitly means a later reader cannot mistake this for the truthiness test
+    # that used to turn a malformed value into clean negative evidence.
     return ApprenticeshipSummary(
         controller_level="C0.5_SHADOW",
         decisions_shadowed=shadowed,
-        task_selection_agreements=sum(1 for c in comps if c.get("engineer_proposed_task_relates_to_experimentspec")),
-        risk_agreements=sum(1 for c in comps if c.get("risk_agreement")),
-        routing_agreements=sum(1 for c in comps if c.get("routing_agreement")),
-        missed_escalations=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
-        unsafe_underclassifications=sum(1 for c in comps if c.get("danger_underclassified_architecture_as_engineer")),
+        task_selection_agreements=sum(
+            1 for c in comps
+            if c.get("engineer_proposed_task_relates_to_experimentspec") is True),
+        risk_agreements=sum(1 for c in comps if c.get("risk_agreement") is True),
+        routing_agreements=sum(1 for c in comps if c.get("routing_agreement") is True),
+        missed_escalations=sum(
+            1 for c in comps
+            if c.get("danger_underclassified_architecture_as_engineer") is True),
+        unsafe_underclassifications=sum(
+            1 for c in comps
+            if c.get("danger_underclassified_architecture_as_engineer") is True),
         authority_expansion_proposals=0,
         c1_readiness="NOT_READY", records_evidence=records_evidence)
 
@@ -541,8 +661,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         current_mission=mission, current_task=PENDING_BACKEND, queue_size=PENDING_BACKEND,
         activity_summary=PENDING_BACKEND, next_action=PENDING_BACKEND,
         recent_verification_outcomes=(
-            [str(r.get("gpt_verdict")) for r in records if r.get("gpt_verdict")][-5:]
-            if records_read.is_usable else []),
+            _recent_verification_outcomes(records) if records_read.is_usable else []),
         escalation_state="none",
         records_evidence=records_read.availability)
     health = SystemHealthSummary(

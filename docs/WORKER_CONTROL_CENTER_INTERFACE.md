@@ -76,9 +76,49 @@ UNAVAILABLE + record_count=0   ->  the ledger could not be read; this does NOT m
                                    zero events occurred
 ```
 
-A ledger is usable in full or not at all. Any invalid JSON line, any non-object row, a
-decode failure or an I/O failure makes the whole read `UNAVAILABLE` with **no** rows
-exposed — dropping bad rows is precisely how partial evidence comes to masquerade as
+#### What `LIVE` claims
+
+```
+controller_records.availability = LIVE
+```
+
+means **both**:
+
+1. the selected ledger was fully readable as JSON objects; **and**
+2. every field consumed by the WCC read model satisfied the WCC consumption contract.
+
+It does **not** mean every field of every historical controller-record kind has been
+canonically certified. Fields the WCC does not read stay opaque and unprojected, and a
+record is never rejected merely for carrying them — if another subsystem consumes such a
+field later, its own contract must add it explicitly.
+
+The **WCC consumption contract** (`WCC_CONSUMED_RECORD_FIELDS`) covers exactly the
+fields these projections read, with presence semantics derived from the tracked ledger
+rather than assumed:
+
+| Field | Type | Presence |
+|---|---|---|
+| `kind` | non-empty `str` | **required** — on all 24 tracked records |
+| `gpt_verdict` | non-empty `str` | optional — on 10 of 24 |
+| `recorded_at` | non-empty `str` | optional — on 22 of 24; two legitimately omit it |
+| `engineer_proposed_task_relates_to_experimentspec` | `bool` | optional — `ApprenticeshipComparison` only |
+| `risk_agreement` `routing_agreement` `danger_underclassified_architecture_as_engineer` | `bool` | optional — `ApprenticeshipComparison` only |
+
+Booleans must be **real booleans**: `0`, `1`, `"true"`, `"false"`, `[]` and `{}` are
+rejected rather than read through truthiness. A wrong type is unavailable evidence, not
+`False` — conflating "not applicable to this record kind" with "malformed value that
+happens to be falsey" is how a corrupt boolean becomes clean negative evidence on a field
+named `unsafe_underclassifications`. An explicit JSON `null` on an *optional* field is
+treated as absence.
+
+Validation happens in the shared admission path before a row is accepted, so the three
+consumers cannot receive evidence this read result has already called usable. They
+consume typed values directly — no `str()`, `repr()` or `format()` on record evidence,
+enforced by a scoped test.
+
+A ledger is usable in full or not at all. Any invalid JSON line, any non-object row, any
+WCC-consumed-field violation, a decode failure or an I/O failure makes the whole read
+`UNAVAILABLE` with **no** rows exposed — dropping bad rows is precisely how partial evidence comes to masquerade as
 complete evidence. An **absent** ledger is `UNAVAILABLE`, not `PENDING_BACKEND`: the
 controller writes these records, so absence is operational and not evidence that nobody
 built the producer.
