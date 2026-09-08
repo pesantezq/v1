@@ -337,6 +337,116 @@ environment:
        portfolio_automation, watchlist_scanner, policy_evaluator, agent, theme_engine)}))'
 ```
 
+## Production identity requires three independent gates
+
+`PRODUCTION_RELEASE_IDENTITY` is eligible for PASS only when all three hold:
+
+```text
+SYSTEMD_UNIT_VALIDITY      = PASS     real systemd-analyze verify
+SCHEDULER_ALIGNMENT        = PASS     portfolio_automation.release.scheduler
+RELEASE_POINTER_IDENTITY   = PASS     portfolio_automation.release.pointer
+----------------------------------
+PRODUCTION_RELEASE_IDENTITY eligible for PASS
+```
+
+**None of the three may infer another.** They fail independently and for
+unrelated reasons:
+
+| gate | the question it answers | what it cannot tell you |
+|---|---|---|
+| `SYSTEMD_UNIT_VALIDITY` | would systemd accept and load these units? | which release the commands point at |
+| `SCHEDULER_ALIGNMENT` | do the effective executable paths resolve to the approved release? | whether the unit is loadable at all |
+| `RELEASE_POINTER_IDENTITY` | does `current` resolve to the approved SHA? | whether anything actually uses `current` |
+
+A unit can be flawless and still execute the previous release. It can name the
+release correctly and still be a unit systemd refuses to load. The pointer can
+be perfect while half the schedulers ignore it.
+
+### Why validity is delegated rather than implemented
+
+An earlier revision of the scheduler certifier emulated systemd's acceptance
+rules. That emulation drew seven consecutive review findings — including two
+false *rejections* that would have blocked a correct cutover — and was removed
+in PR #40 rather than extended. Reproducing another program's acceptance
+semantics from documentation is a losing game when the program itself is
+available to ask. Removing it left the question genuinely uncovered, which this
+gate closes with the real verifier.
+
+### The verifier invocation is fixed, and why
+
+```bash
+systemd-analyze verify --recursive-errors=no <unit>.service
+```
+
+**By unit NAME, never by path.** Verifying `FragmentPath` reports on the base
+fragment; every production application unit here carries a `zz-release.conf`
+drop-in, and `stockbot-daily.service` carries two. Name-based lookup applies
+drop-ins with normal precedence. Measured on systemd 255 in both directions: a
+valid base broken by its drop-in fails and names the drop-in's binary; a broken
+base repaired by its drop-in passes silently.
+
+**`--recursive-errors=no` is required.** It is not a weakening — it is what
+makes the exit status mean anything. Per `systemd-analyze(1)`: "If this option
+is not specified, zero is returned as the exit status regardless whether
+warnings arise during verification or not." Measured:
+
+```text
+unit                                (none)   no    one   yes
+pb-valid                              0      0     0     0
+pb-badval  (bad TimeoutStartSec)      0      1     1     1
+pb-badsec  (unknown section)          0      1     1     1
+pb-clean-with-dep                     0      0     0     1
+```
+
+Rows two and three are the trap: the verifier complains on stderr and still
+exits 0. Row four is why the mode is `no` and not `yes` — that unit is itself
+clean and merely `Requires=` a unit with a warning, so `yes` would fail our
+gate for a defect owned by an unrelated system unit.
+
+`--man=no` is deliberately **not** passed: it changed no verdict in any
+measured case, and suppressing a class of check to keep a gate green is how
+gates stop meaning anything.
+
+### Loaded-state currency is part of the verdict
+
+`systemd-analyze verify` validates unit files **on disk**. If PID 1 reports
+`NeedDaemonReload=yes`, the on-disk text is not what the manager has loaded, so
+a clean result would be evidence about a configuration that is not running:
+
+```text
+NeedDaemonReload=yes  ->  SYSTEMD_UNIT_VALIDITY = NOT_CERTIFIABLE
+```
+
+Escalate. **Do not run `systemctl daemon-reload` to make this pass** — that is
+mutating production to manufacture the answer you wanted.
+
+### Verdicts
+
+`PASS` requires all of: complete expected inventory; every required unit
+`LoadState=loaded`; every required unit `NeedDaemonReload=no`; a real verifier
+result for every required unit obtained with the required flag; every such
+result clean; no required unit skipped; no relevant discovered unit left
+unclassified.
+
+Anything preventing those facts from being established is `NOT_CERTIFIABLE`;
+anything establishing them as false is `FAIL`. **"Could not verify" is never
+`PASS`.**
+
+### How it runs — observation and decision are separated
+
+```bash
+ssh <host> 'bash -s' < scripts/collect_systemd_validity_evidence.sh \
+    | python3 scripts/certify_systemd_validity.py --out evidence.json
+```
+
+The collector only observes: `systemd-analyze --version|verify`,
+`systemctl show|list-unit-files`. It never reloads, starts, stops, enables,
+masks, or writes anything, and a test asserts that. The certifier decides and
+touches no host. So the production side of this gate is strictly read-only, and
+the decision logic stays unit-testable without a VPS, root, or systemd.
+
+A truncated capture is `NOT_CERTIFIABLE`, not a clean host.
+
 ## Backup contract — unchanged
 
 PR #37 behaviour is preserved exactly. `BACKUP_REQUIRED` is a *classification*,
