@@ -31,7 +31,21 @@ from portfolio_automation.engineer_worker.control_center_truth import (
 )
 
 SCHEMA_KIND = EXPERIMENTAL_MARKER
-READMODEL_SCHEMA_VERSION = "engineering.readmodel.v0"
+#: v1, not v0. GUI-SR changed this contract incompatibly for any consumer that
+#: assumed the supervisor/apprenticeship count fields were always integers: they
+#: are now ``int | None``, where ``None`` means the controller-record ledger
+#: could not answer. Three ``records_evidence`` fields and a top-level
+#: ``controller_records`` surface were added at the same time. A schema version
+#: exists precisely to let a consumer tell those two contracts apart, and
+#: leaving it at v0 because the read model is experimental would defeat the one
+#: mechanism that communicates the difference.
+#:
+#: v1 rather than v2: authoritative main still publishes v0, and PR #35 -- which
+#: also changed this shape -- is frozen and unmerged. GUI-SR is therefore the
+#: first candidate to establish the next PUBLISHED contract. When GUI-R is
+#: integrated onto hardened main it should reconcile to this same v1 rather than
+#: inventing v2 because an unmerged branch also moved.
+READMODEL_SCHEMA_VERSION = "engineering.readmodel.v1"
 PENDING_BACKEND = "PENDING_BACKEND"
 
 
@@ -232,6 +246,13 @@ class ControllerRecordsRead:
 
     availability: str                       # LIVE | UNAVAILABLE
     records: list[dict[str, Any]]
+    #: The ledger identifier THIS read actually used. Instance provenance, not
+    #: the module default: ``to_dict()`` hardcoded ``CONTROLLER_RECORDS_REL``, so
+    #: reading an alternate ledger produced one evidence object whose ``detail``
+    #: named the file read and whose ``source`` named a different file. An
+    #: evidence result that contradicts itself is worse than one that is merely
+    #: incomplete. Carried unchanged -- never canonicalised or synthesised.
+    source: str = CONTROLLER_RECORDS_REL
     detail: str = ""
 
     @property
@@ -242,7 +263,7 @@ class ControllerRecordsRead:
         return {**_base("ControllerRecordsRead"),
                 "availability": self.availability,
                 "record_count": len(self.records),
-                "source": CONTROLLER_RECORDS_REL,
+                "source": self.source,
                 "detail": self.detail}
 
 
@@ -255,13 +276,13 @@ def read_controller_records(repo_root: str | Path,
     evidence that nobody built the producer."""
     path = Path(repo_root) / rel
     if not path.exists():
-        return ControllerRecordsRead(TruthState.UNAVAILABLE.value, [],
+        return ControllerRecordsRead(TruthState.UNAVAILABLE.value, [], rel,
                                      f"{rel} is absent")
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         return ControllerRecordsRead(
-            TruthState.UNAVAILABLE.value, [],
+            TruthState.UNAVAILABLE.value, [], rel,
             f"{rel} is unreadable ({type(exc).__name__})")
 
     rows: list[dict[str, Any]] = []
@@ -274,15 +295,15 @@ def read_controller_records(repo_root: str | Path,
         except ValueError:
             # NOT skipped. A ledger we cannot fully parse is not a shorter ledger.
             return ControllerRecordsRead(
-                TruthState.UNAVAILABLE.value, [],
+                TruthState.UNAVAILABLE.value, [], rel,
                 f"{rel} line {index} is not valid JSON")
         if not isinstance(row, dict):
             # Type name only; the malformed payload is never echoed.
             return ControllerRecordsRead(
-                TruthState.UNAVAILABLE.value, [],
+                TruthState.UNAVAILABLE.value, [], rel,
                 f"{rel} line {index} is not a JSON object, got {type(row).__name__}")
         rows.append(row)
-    return ControllerRecordsRead(TruthState.LIVE.value, rows,
+    return ControllerRecordsRead(TruthState.LIVE.value, rows, rel,
                                  f"{len(rows)} record(s) from {rel}")
 
 

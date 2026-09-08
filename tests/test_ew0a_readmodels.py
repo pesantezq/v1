@@ -507,3 +507,196 @@ def test_gsr_the_real_repository_is_unchanged_by_the_hardening():
     assert dash["worker_authority"]["level"] == "A1_ASSISTED_ENGINEERING"
     assert dash["backend_truth"]["readiness"] == "PARTIAL"
     assert dash["supervisor"]["records_evidence"] == "LIVE"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-SR CONTRACT CLOSURE
+#
+# The source-reader architecture changed the published read-model contract in
+# four observable ways -- nullable counts, three records_evidence fields and a
+# new top-level surface -- and the first candidate shipped them while still
+# declaring engineering.readmodel.v0 and leaving the interface document
+# describing the old shape. A schema version exists precisely to let a consumer
+# tell those two contracts apart.
+# ═══════════════════════════════════════════════════════════════════════════
+_V1 = "engineering.readmodel.v1"
+_ALT_LEDGER = "alternate/x.jsonl"
+
+
+def _gsr_ledger_root(tmp_path, rel, body=None, raw=None):
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if raw is not None:
+        target.write_bytes(raw)
+    elif body is not None:
+        target.write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+# ── the declared version ──────────────────────────────────────────────────
+def test_gsr_read_model_declares_schema_v1():
+    """Not v0. The contract changed incompatibly for any consumer that assumed
+    the count fields were always integers."""
+    assert rm.READMODEL_SCHEMA_VERSION == _V1
+
+
+def test_gsr_every_projection_carries_v1():
+    dash = rm.build_dashboard(_GSR_REPO, now=_GSR_NOW)
+    assert dash["schema_version"] == _V1
+    for key in ("controller", "supervisor", "worker", "worker_authority",
+                "mission", "apprenticeship", "system_health", "controller_records"):
+        assert dash[key]["schema_version"] == _V1, key
+
+
+def test_gsr_the_interface_document_declares_the_same_version():
+    """A doc that still describes v0 leaves a consumer unable to distinguish an
+    intentional nullable contract from malformed output -- which is exactly the
+    finding this commit closes."""
+    doc = (_GSR_REPO / "docs" / "WORKER_CONTROL_CENTER_INTERFACE.md").read_text(
+        encoding="utf-8")
+    assert _V1 in doc
+    assert "engineering.readmodel.v0" not in doc
+    for documented in ("controller_records", "records_evidence"):
+        assert documented in doc, documented
+
+
+def test_gsr_the_learning_contract_was_not_swept_along():
+    """A different contract with its own version. Bumping it because a sibling
+    changed would be exactly the global rewrite the mission forbade."""
+    from portfolio_automation.engineer_worker.learning.readmodels import (
+        LEARNING_READMODEL_SCHEMA_VERSION)
+    assert LEARNING_READMODEL_SCHEMA_VERSION == "engineering.learning_readmodel.v0"
+
+
+# ── the controller_records surface ───────────────────────────────────────
+def test_gsr_controller_records_emits_its_declared_key_set():
+    result = rm.read_controller_records(_GSR_REPO).to_dict()
+    assert set(result) == {"schema_version", "schema_kind", "read_model",
+                           "availability", "record_count", "source", "detail"}
+    assert result["read_model"] == "ControllerRecordsRead"
+    assert result["availability"] == "LIVE"
+    assert isinstance(result["record_count"], int)
+
+
+def test_gsr_live_empty_and_unavailable_empty_are_different_answers(tmp_path):
+    """LIVE + 0 is an authoritative empty history. UNAVAILABLE + 0 does NOT mean
+    zero events occurred."""
+    empty = rm.read_controller_records(
+        _gsr_root(tmp_path / "empty", records="")).to_dict()
+    unusable = rm.read_controller_records(
+        _gsr_root(tmp_path / "bad", records="[1,2]" + _GSR_LF)).to_dict()
+    assert empty["availability"] == "LIVE" and empty["record_count"] == 0
+    assert unusable["availability"] == "UNAVAILABLE" and unusable["record_count"] == 0
+    assert empty["availability"] != unusable["availability"]
+
+
+# ── instance-owned provenance ────────────────────────────────────────────
+def test_gsr_the_selected_ledger_is_carried_through_every_branch(tmp_path):
+    """to_dict() hardcoded the module default, so an alternate read produced one
+    evidence object whose detail named the file read and whose source named a
+    different file. An evidence result that contradicts itself is worse than one
+    that is merely incomplete."""
+    branches = {
+        "valid": dict(body=json.dumps({"kind": "X"}) + _GSR_LF),
+        "empty": dict(body=""),
+        "invalid_json": dict(body="{oops" + _GSR_LF),
+        "non_object_row": dict(body="[1,2]" + _GSR_LF),
+        "decode_failure": dict(raw=b"\xff\xfebad"),
+    }
+    for label, kwargs in branches.items():
+        root = _gsr_ledger_root(tmp_path / f"prov_{label}", _ALT_LEDGER, **kwargs)
+        result = rm.read_controller_records(root, _ALT_LEDGER)
+        assert result.source == _ALT_LEDGER, label
+        assert result.to_dict()["source"] == _ALT_LEDGER, label
+        assert _ALT_LEDGER in result.detail, label
+        # never the module default when an alternate was selected
+        assert result.to_dict()["source"] != rm.CONTROLLER_RECORDS_REL, label
+
+    # an absent alternate ledger keeps its provenance too: a failed read does
+    # not lose the identity of what was attempted
+    absent = rm.read_controller_records(tmp_path / "nothing", _ALT_LEDGER)
+    assert absent.availability == "UNAVAILABLE"
+    assert absent.source == _ALT_LEDGER
+    assert absent.to_dict()["source"] == _ALT_LEDGER
+    assert _ALT_LEDGER in absent.detail
+
+
+def test_gsr_detail_and_source_never_disagree(tmp_path):
+    """No result may say source=default while detail names an alternate."""
+    for rel in (rm.CONTROLLER_RECORDS_REL, _ALT_LEDGER, "docs/other.jsonl"):
+        root = _gsr_ledger_root(tmp_path / f"agree_{rel.replace('/', '_')}", rel,
+                                body=json.dumps({"kind": "X"}) + _GSR_LF)
+        result = rm.read_controller_records(root, rel).to_dict()
+        assert result["source"] == rel
+        assert rel in result["detail"]
+
+
+def test_gsr_the_default_caller_still_reports_the_default_ledger():
+    result = rm.read_controller_records(_GSR_REPO).to_dict()
+    assert result["source"] == "docs/EW0A_0B3_RECORDS.jsonl"
+    assert rm.build_dashboard(_GSR_REPO, now=_GSR_NOW)["controller_records"]["source"] \
+        == "docs/EW0A_0B3_RECORDS.jsonl"
+
+
+def test_gsr_provenance_is_carried_not_canonicalised(tmp_path):
+    """Exactly the identifier the reader was given -- not resolved, absolutised
+    or normalised into something else."""
+    odd = "docs/./nested/../weird-name.jsonl"
+    root = _gsr_ledger_root(tmp_path, odd, body="")
+    assert rm.read_controller_records(root, odd).source == odd
+
+
+# ── the nullable-count contract, end to end ──────────────────────────────
+def test_gsr_v1_unavailable_ledger_nulls_every_measured_count(tmp_path):
+    dash = rm.build_dashboard(_gsr_root(tmp_path, records="{oops" + _GSR_LF),
+                              now=_GSR_NOW)
+    supervisor = dash["supervisor"]
+    assert supervisor["records_evidence"] == "UNAVAILABLE"
+    for field in ("recent_pass", "recent_repair", "recent_escalate",
+                  "recent_abstain", "recent_unavailable"):
+        assert supervisor[field] is None, field
+    assert supervisor["last_successful_verification"] is None
+    # independent from the supervisor's OWN operational availability
+    assert supervisor["availability"] == PENDING_BACKEND
+
+    apprenticeship = dash["apprenticeship"]
+    assert apprenticeship["records_evidence"] == "UNAVAILABLE"
+    for field in ("decisions_shadowed", "task_selection_agreements",
+                  "risk_agreements", "routing_agreements", "missed_escalations",
+                  "unsafe_underclassifications", "authority_expansion_proposals"):
+        assert apprenticeship[field] is None, field
+
+    assert dash["worker"]["records_evidence"] == "UNAVAILABLE"
+    assert dash["worker"]["recent_verification_outcomes"] == []
+
+
+def test_gsr_v1_usable_empty_ledger_yields_authoritative_zeros(tmp_path):
+    dash = rm.build_dashboard(_gsr_root(tmp_path, records=""), now=_GSR_NOW)
+    assert dash["controller_records"]["availability"] == "LIVE"
+    supervisor = dash["supervisor"]
+    assert supervisor["records_evidence"] == "LIVE"
+    for field in ("recent_pass", "recent_repair", "recent_escalate",
+                  "recent_abstain", "recent_unavailable"):
+        assert supervisor[field] == 0, field
+    apprenticeship = dash["apprenticeship"]
+    assert apprenticeship["records_evidence"] == "LIVE"
+    assert apprenticeship["decisions_shadowed"] == 0
+    assert apprenticeship["unsafe_underclassifications"] == 0
+
+
+def test_gsr_zero_and_null_are_never_interchanged(tmp_path):
+    """The load-bearing distinction, stated as one assertion."""
+    usable = rm.build_dashboard(_gsr_root(tmp_path / "z", records=""), now=_GSR_NOW)
+    unusable = rm.build_dashboard(_gsr_root(tmp_path / "n", records="[1,2]" + _GSR_LF),
+                                  now=_GSR_NOW)
+    assert usable["supervisor"]["recent_repair"] == 0
+    assert unusable["supervisor"]["recent_repair"] is None
+    assert usable["apprenticeship"]["unsafe_underclassifications"] == 0
+    assert unusable["apprenticeship"]["unsafe_underclassifications"] is None
+
+
+def test_gsr_records_evidence_accompanies_every_dependent_summary():
+    dash = rm.build_dashboard(_GSR_REPO, now=_GSR_NOW)
+    for surface in ("supervisor", "worker", "apprenticeship"):
+        assert "records_evidence" in dash[surface], surface
+        assert dash[surface]["records_evidence"] == "LIVE", surface

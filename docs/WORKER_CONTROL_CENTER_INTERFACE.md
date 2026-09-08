@@ -24,9 +24,100 @@ construction** — the projection module imports only read accessors and no muta
 | Mission progress | contract presence in `portfolio_automation/northstar/` + records | northstar contracts |
 
 ## Read models (projections)
-All live in `ew0a_readmodels.py`; `build_dashboard(repo_root)` assembles them. Each
-projection carries `schema_version="engineering.readmodel.v0"`. Fields with no
-authoritative backend are the string `PENDING_BACKEND` — **never fabricated**.
+All live in `ew0a_readmodels.py`; `build_dashboard(repo_root)` assembles them. Fields
+with no authoritative backend are the string `PENDING_BACKEND` — **never fabricated**.
+
+**Current read-model schema: `engineering.readmodel.v1`.** Every projection carries
+`schema_version="engineering.readmodel.v1"`.
+
+### The v0 → v1 contract delta
+
+v1 was required because the contract changed **incompatibly** for any consumer that
+assumed the supervisor and apprenticeship count fields were always integers.
+
+| Change | v0 | v1 |
+|---|---|---|
+| `SupervisorSummary.recent_pass\|repair\|escalate\|abstain\|unavailable` | `int` | **`int \| None`** |
+| `ApprenticeshipSummary` count fields | `int` | **`int \| None`** |
+| `SupervisorSummary.records_evidence` | — | **new** |
+| `WorkerSummary.records_evidence` | — | **new** |
+| `ApprenticeshipSummary.records_evidence` | — | **new** |
+| `dashboard["controller_records"]` | — | **new top-level surface** |
+
+A schema version exists precisely to let a consumer tell those two contracts apart.
+Leaving it at v0 because this read model is `experimental_noncanonical` would have
+defeated the one mechanism that communicates the difference.
+
+**v1 rather than v2:** authoritative `main` still publishes v0, and the GUI-R branch —
+which also changed this shape — is frozen and unmerged. This is therefore the first
+candidate to establish the next *published* contract. When GUI-R is integrated onto
+hardened main it should reconcile to this same v1 rather than inventing v2 because an
+unmerged branch also moved. The separate learning contract
+(`engineering.learning_readmodel.v0`) is **unchanged** — it is a different contract and
+was not touched.
+
+### `dashboard["controller_records"]`
+
+The controller-record ledger's own read outcome, stated once and authoritatively so a
+consumer does not have to infer it from three separate summaries.
+
+| Field | Meaning |
+|---|---|
+| `availability` | `LIVE` \| `UNAVAILABLE` |
+| `record_count` | integer — rows actually projected |
+| `source` | the ledger identifier **this read used**, carried unchanged; not the module default |
+| `detail` | structural, module-owned diagnostic (line index and type only — never payload) |
+
+**The two zero-count cases are not the same answer:**
+
+```
+LIVE        + record_count=0   ->  authoritative empty history; nothing has been recorded
+UNAVAILABLE + record_count=0   ->  the ledger could not be read; this does NOT mean
+                                   zero events occurred
+```
+
+A ledger is usable in full or not at all. Any invalid JSON line, any non-object row, a
+decode failure or an I/O failure makes the whole read `UNAVAILABLE` with **no** rows
+exposed — dropping bad rows is precisely how partial evidence comes to masquerade as
+complete evidence. An **absent** ledger is `UNAVAILABLE`, not `PENDING_BACKEND`: the
+controller writes these records, so absence is operational and not evidence that nobody
+built the producer.
+
+### `records_evidence`
+
+Carried by `supervisor`, `worker` and `apprenticeship`, with values from the existing
+truth lattice (`LIVE` / `UNAVAILABLE` in practice today).
+
+> `records_evidence` describes whether the controller-record ledger could answer. It is
+> **independent** from `SupervisorSummary.availability`, which is the supervisor's own
+> operational availability and remains `PENDING_BACKEND` because no health probe exists.
+
+Each summary carries its own copy deliberately: a consumer reading only `worker` must be
+able to tell that its `recent_verification_outcomes` came from an unusable ledger,
+without having to cross-reference another surface.
+
+### Nullable measured counts
+
+Under v1, these may be `integer | null`:
+
+```
+SupervisorSummary   recent_pass · recent_repair · recent_escalate ·
+                    recent_abstain · recent_unavailable
+Apprenticeship      decisions_shadowed · task_selection_agreements · risk_agreements ·
+                    routing_agreements · missed_escalations ·
+                    unsafe_underclassifications · authority_expansion_proposals
+```
+
+```
+0     = a measured zero from a USABLE ledger
+null  = the source evidence was unavailable; the question could not be answered
+```
+
+**This distinction is load-bearing, and `null` is not replaced with `0` to avoid a
+schema change.** A measured zero and an unanswerable question look identical as `0`, and
+for these fields that difference is the entire point: `0 REPAIR` read from an unreadable
+ledger reads as nothing having gone wrong, and `0 unsafe_underclassifications` is the
+single most flattering number the apprenticeship projection can emit.
 
 ### ControllerSummary
 Dynamic controller identity — **`claude_code == controller` is NOT a permanent
@@ -39,10 +130,15 @@ The GUI may **never** request an action against it.
 
 ### SupervisorSummary (GPT independent verifier)
 `availability` / `current_state` / `outage_state` (`PENDING_BACKEND` — no live health
-probe), `recent_pass|repair|escalate|abstain|unavailable` (derived counts from
-records), `last_successful_verification`, `measured_latency_ms` (`PENDING_BACKEND`),
-`verification_queue` (`PENDING_BACKEND`). **NEVER exposes** the API key, auth headers,
-request bodies, or hidden reasoning (asserted by test). Security: operational.
+probe), `recent_pass|repair|escalate|abstain|unavailable` (**`int | None`** — derived
+counts from records when the ledger is usable, `None` when it is not),
+`last_successful_verification`, `measured_latency_ms` (`PENDING_BACKEND`),
+`verification_queue` (`PENDING_BACKEND`), `records_evidence` (whether the ledger could
+answer — independent of `availability` above). **NEVER exposes** the API key, auth
+headers, request bodies, or hidden reasoning (asserted by test). Security: operational.
+
+When `records_evidence` is `UNAVAILABLE` every count is `None` and
+`last_successful_verification` is `None`. They are **not** zeroed.
 
 ### WorkerSummary (Engineer)
 Persistent identity `engineer.local_qwen2_5_7b`, `role`, `ew_authority` (A1),
@@ -73,7 +169,9 @@ PASS/FAIL). Use `project_verification(...)`.
 ### ApprenticeshipSummary (C0.5 — honest, never smoothed)
 `controller_level`, `decisions_shadowed`, `task_selection_agreements`,
 `risk_agreements`, `routing_agreements`, `missed_escalations`,
-`unsafe_underclassifications`, `authority_expansion_proposals`, `c1_readiness`.
+`unsafe_underclassifications`, `authority_expansion_proposals`, `c1_readiness`, and
+`records_evidence`. Every count is **`int | None`**: `None` when the records ledger could
+not answer, never a flattering zero.
 **Current honest evidence:** decisions_shadowed=1, task_selection AGREE,
 risk DISAGREE, routing DISAGREE, unsafe_underclassifications=1, **c1_readiness =
 NOT_READY**. Negative evidence is displayed, not hidden — it is valuable.
@@ -100,8 +198,13 @@ disagreement by itself. Currently: none outstanding.
 
 ## Fields LIVE vs PENDING_BACKEND
 - **LIVE:** authority level + grants + forbidden ops; runtime policy + mission +
-  AUTO_* flags; mission deliverable VERIFIED/NOT_STARTED; supervisor verdict counts +
-  last-pass; apprenticeship comparison metrics; verification ladder projection.
+  AUTO_* flags; mission deliverable VERIFIED/NOT_STARTED; verification ladder
+  projection.
+- **CONDITIONAL on the records ledger** — `LIVE` with measured counts when
+  `controller_records.availability` is `LIVE`, `UNAVAILABLE` with `null` counts when it
+  is not: supervisor verdict counts + last-pass; apprenticeship comparison metrics;
+  `worker.recent_verification_outcomes`. These are **not** unconditionally LIVE, and an
+  unreadable ledger is neither `PENDING_BACKEND` nor `LIVE`-with-zeros.
 - **PENDING_BACKEND (no backend yet):** worker heartbeat/online/current-task/queue;
   supervisor availability/latency/queue/outage; component health
   (gpt/engineer/sandbox/bridge); `controller_since`.
