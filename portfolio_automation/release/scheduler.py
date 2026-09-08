@@ -101,6 +101,11 @@ RECOMMENDED_MODEL = POINTER
 
 # Conventional layout on the production host.
 RELEASES_DIR = "/opt/stockbot/releases"
+#: Reported when no ``systemd-analyze verify`` evidence was supplied. It is a
+#: distinct value from FAIL on purpose: "nobody checked" and "the units are
+#: broken" are different facts, and neither is eligibility.
+VALIDITY_NOT_ESTABLISHED = "NOT_ESTABLISHED"
+
 CURRENT_POINTER = "/opt/stockbot/current"
 LEGACY_CHECKOUT = "/opt/stockbot"
 
@@ -579,6 +584,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              pointer_result: dict,
                              release_root: str = CURRENT_POINTER,
                              expected_origins: tuple[str, ...] | None = None,
+                             validity_result: dict | None = None,
                              ) -> dict:
     """Path alignment AND pointer-target SHA together.
 
@@ -590,13 +596,39 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     to be: this is the real certification entry point, and a missing-service
     guard reachable only by direct callers of the inner function is a guard
     that production certification never actually runs.
+
+    ``status`` covers SCHEDULER_ALIGNMENT and RELEASE_POINTER_IDENTITY only.
+    **It is not production release identity**, because a unit can name the
+    approved release perfectly and still be one systemd refuses to load. That
+    third gate is ``SYSTEMD_UNIT_VALIDITY``, owned by
+    ``release.systemd_validity`` and the real ``systemd-analyze verify``.
+
+    So the aggregate is reported separately in ``production_release_identity``,
+    and it is ``NOT_ESTABLISHED`` unless a validity result is actually supplied
+    and passing. Absence of that evidence is never eligibility: without it this
+    function cannot distinguish "the units are fine" from "nobody checked".
     """
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
                                        expected_origins=expected_origins)
     ok = sched["status"] == "OK" and pointer_result.get("status") == "OK"
+
+    validity = (validity_result or {}).get("SYSTEMD_UNIT_VALIDITY",
+                                           VALIDITY_NOT_ESTABLISHED)
+    errors = list(sched["errors"]) + list(pointer_result.get("errors") or [])
+    if validity != "PASS":
+        errors.append(
+            f"SYSTEMD_UNIT_VALIDITY = {validity} — production release identity "
+            f"requires all three gates; scheduler alignment and pointer identity "
+            f"alone cannot establish it"
+        )
+
     return {
         "status": "OK" if ok else "FAILED",
         "scheduler": sched,
         "pointer": pointer_result,
-        "errors": list(sched["errors"]) + list(pointer_result.get("errors") or []),
+        "systemd_unit_validity": validity,
+        "production_release_identity": (
+            "PASS" if (ok and validity == "PASS") else "NOT_ESTABLISHED"
+        ),
+        "errors": errors,
     }

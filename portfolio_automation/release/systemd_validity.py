@@ -94,6 +94,12 @@ VERIFIER_SUBCOMMAND = "verify"
 #: docstring for the measurements. A command lacking it is not this gate.
 REQUIRED_VERIFIER_FLAG = "--recursive-errors=no"
 
+#: Every artifact payload in this repository carries ``observe_only: true``
+#: (AGENTS.md, "Required Behavior Before Code Changes"). It is hardcoded, not a
+#: parameter: this gate reports on production and has no authority to change it,
+#: and a downstream consumer must be able to see that from the payload alone.
+OBSERVE_ONLY = True
+
 #: Verdicts. "Could not verify" is never PASS.
 PASS = "PASS"
 FAIL = "FAIL"
@@ -103,6 +109,9 @@ NOT_CERTIFIABLE = "NOT_CERTIFIABLE"
 #: Older versions are refused rather than assumed: --recursive-errors= was
 #: added in 250, and this gate's semantics were established on 255.
 MIN_MEASURED_SYSTEMD_MAJOR = 250
+
+#: Collection time must be a real UTC stamp, not whatever the shell produced.
+_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 _SECRET_KEY = re.compile(
     r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b\s*=\s*\S+"
@@ -224,6 +233,7 @@ def certify_systemd_unit_validity(
     host: str,
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
+    optional_units: tuple[str, ...] = (),
 ) -> dict:
     """Combine inventory, loaded state and real verifier results into a verdict.
 
@@ -232,11 +242,26 @@ def certify_systemd_unit_validity(
     verifier result for every required unit obtained with the required flag,
     every such result clean, and no relevant discovered unit left unclassified.
 
+    ``optional_units`` are units that some deployments install and some do not
+    (the sandbox lane is the example). Absence is not a failure; **presence is
+    not a free pass** — an optional unit that exists is verified exactly like a
+    required one, because a broken unit that happens to be optional is still a
+    broken unit sitting in the production manager.
+
     Anything that prevents establishing those facts is ``NOT_CERTIFIABLE``;
     anything that establishes them as false is ``FAIL``. Neither is ``PASS``.
     """
     errors: list[str] = []
     blockers: list[str] = []          # reasons we *cannot* certify
+
+    # A certificate that cannot say where or when it was taken is not evidence.
+    if not (host or "").strip():
+        blockers.append("no host recorded — the evidence has no provenance")
+    if not _TIMESTAMP.match((checked_at or "").strip()):
+        blockers.append(
+            f"checked_at {checked_at!r} is not an ISO-8601 UTC timestamp — the "
+            f"evidence has no trustworthy collection time"
+        )
 
     if not expected_units:
         blockers.append(
@@ -261,13 +286,22 @@ def certify_systemd_unit_validity(
             f"refusing to assume the exit status is meaningful"
         )
 
+    optional = set(optional_units)
     expected = tuple(sorted(set(expected_units)))
     discovered = tuple(sorted(set(discovered_units)))
     classified = set(classified_units)
 
-    missing_units = tuple(u for u in expected if u not in set(discovered))
+    # Required = expected minus the ones this deployment may legitimately lack.
+    required = tuple(u for u in expected if u not in optional)
+    missing_units = tuple(u for u in required if u not in set(discovered))
     for unit in missing_units:
         errors.append(f"{unit}: expected production unit not present on the host")
+
+    # An optional unit that IS installed is verified like any other; only its
+    # absence is tolerated.
+    verified_units = tuple(sorted(
+        set(required) | {u for u in expected if u in optional and u in set(discovered)}
+    ))
 
     unexpected_units = tuple(
         u for u in discovered if u not in set(expected) and u not in classified
@@ -279,7 +313,7 @@ def certify_systemd_unit_validity(
         )
 
     unit_records: list[dict] = []
-    for unit in expected:
+    for unit in verified_units:
         prov = provenance.get(unit)
         outcome = outcomes.get(unit)
 
@@ -341,11 +375,14 @@ def certify_systemd_unit_validity(
     return {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
+        "observe_only": OBSERVE_ONLY,
         "checked_at": checked_at,
         "host": host,
         "systemd_version": redact(systemd_version),
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),
+        "optional_units": sorted(optional),
+        "verified_units": list(verified_units),
         "discovered_units": list(discovered),
         "missing_units": list(missing_units),
         "unexpected_units": list(unexpected_units),

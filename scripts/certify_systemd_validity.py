@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -33,6 +35,7 @@ def parse_evidence(text: str) -> dict:
     """Parse the collector's record stream into the certifier's inputs."""
     host = checked_at = version = ""
     expected: list[str] = []
+    optional: list[str] = []
     discovered: list[str] = []
     shows: dict[str, list[str]] = {}
     verifies: dict[str, tuple[int, list[str]]] = {}
@@ -59,6 +62,8 @@ def parse_evidence(text: str) -> dict:
             version = raw.strip()
         elif section == "EXPECTED" and raw.strip():
             expected.append(raw.strip())
+        elif section == "OPTIONAL" and raw.strip():
+            optional.append(raw.strip())
         elif section == "DISCOVERED" and raw.strip():
             discovered.append(raw.strip())
         elif section == "SHOW" and unit is not None:
@@ -84,16 +89,50 @@ def parse_evidence(text: str) -> dict:
         "checked_at": checked_at,
         "systemd_version": version,
         "expected_units": tuple(expected),
+        "optional_units": tuple(optional),
         "discovered_units": tuple(discovered),
         "provenance": provenance,
         "outcomes": outcomes,
     }
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then ``os.replace``.
+
+    Phase E evidence is captured deliberately OUTSIDE the repository, so it has
+    no governed namespace; but an interrupted certification must never truncate
+    a previously valid certificate. ``os.replace`` is atomic within a
+    filesystem, so the target is either the old artifact or the new one.
+    Governed in-repo writes use ``--namespace`` and go through
+    ``data_governance.safe_write_json`` instead.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("evidence", nargs="?", help="collector output (default: stdin)")
     ap.add_argument("--out", help="write the JSON artifact here")
+    ap.add_argument("--namespace",
+                    help="governed output namespace; when given, the artifact "
+                         "is written through data_governance.safe_write_json "
+                         "instead of to a raw path")
+    ap.add_argument("--artifact-name", default="systemd_unit_validity.json",
+                    help="filename to use within --namespace")
     ap.add_argument("--classified", default="",
                     help="comma-separated relevant units an operator has "
                          "explicitly classified as not requiring validation")
@@ -119,8 +158,13 @@ def main() -> int:
             **parsed)
 
     payload = json.dumps(result, indent=2, sort_keys=True)
+    if args.namespace:
+        # Repository output artifacts go through data governance, which
+        # validates the namespace and owns the write.
+        from portfolio_automation.data_governance import safe_write_json
+        safe_write_json(args.namespace, args.artifact_name, result)
     if args.out:
-        Path(args.out).write_text(payload + "\n", encoding="utf-8")
+        _atomic_write(Path(args.out), payload + "\n")
     print(payload)
     return 0 if result["SYSTEMD_UNIT_VALIDITY"] == V.PASS else 1
 

@@ -464,3 +464,174 @@ def test_cli_exit_status_tracks_the_verdict(tmp_path):
                    encoding="utf-8")
     assert subprocess.run(["python3", str(CERTIFIER), str(bad)],
                           capture_output=True, cwd=str(REPO)).returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# Review findings on PR #43. Each was reproduced against the repository before
+# being accepted.
+# ---------------------------------------------------------------------------
+
+def test_artifact_declares_observe_only():
+    """AGENTS.md requires observe_only on every artifact payload.
+
+    Hardcoded, not a parameter: this gate reports on production and has no
+    authority to change it, and a consumer must see that from the payload.
+    """
+    result = certify()
+    assert result["observe_only"] is True
+    assert V.OBSERVE_ONLY is True
+
+
+def test_the_production_timers_are_expected_and_verified():
+    """stockbot-daily.timer is what actually starts the daily run.
+
+    deploy/install_systemd.sh installs it alongside the service, and the
+    discovery pattern matches it, so omitting it would both leave its syntax
+    unverified and make discovery report it as unexpected.
+    """
+    collector = COLLECTOR.read_text(encoding="utf-8")
+    for unit in ("stockbot-daily.timer", "stockbot-sandbox-daily.timer"):
+        assert unit in collector, unit
+
+
+def test_an_absent_optional_unit_does_not_block_a_pass():
+    """The sandbox lane is not part of a standard install.
+
+    Requiring it would make the documented command unable to reach PASS on a
+    host built by deploy/install_systemd.sh.
+    """
+    optional = "stockbot-sandbox-daily.service"
+    result = certify(
+        expected_units=UNITS + (optional,),
+        discovered_units=UNITS,
+        optional_units=(optional,),
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+    assert optional not in result["missing_units"]
+    assert optional not in result["verified_units"]
+
+
+def test_an_installed_optional_unit_is_still_verified():
+    """Optional means 'may be absent', never 'exempt from checking'.
+
+    A broken unit that happens to be optional is still a broken unit sitting in
+    the production manager.
+    """
+    optional = "stockbot-sandbox-daily.service"
+    result = certify(
+        expected_units=UNITS + (optional,),
+        discovered_units=UNITS + (optional,),
+        optional_units=(optional,),
+        provenance={**{u: prov(u) for u in UNITS}, optional: prov(optional)},
+        outcomes={**{u: ok(u) for u in UNITS},
+                  optional: ok(optional, exit_status=1)},
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.FAIL
+    assert optional in result["verified_units"]
+
+
+@pytest.mark.parametrize("host,when", [
+    ("", "2026-09-08T21:22:07Z"),
+    ("   ", "2026-09-08T21:22:07Z"),
+    ("stockbot-vps", ""),
+    ("stockbot-vps", "not-a-timestamp"),
+    ("stockbot-vps", "2026-09-08 21:22:07"),
+])
+def test_missing_provenance_is_not_certifiable(host, when):
+    """A certificate that cannot say where or when it was taken is not evidence."""
+    result = certify(host=host, checked_at=when)
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+def test_release_identity_is_not_established_without_validity_evidence():
+    """Scheduler alignment plus pointer identity is NOT production identity.
+
+    A unit can name the approved release perfectly and still be one systemd
+    refuses to load, so the aggregate must not be reportable from two gates.
+    """
+    from portfolio_automation.release import scheduler as S
+
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+        origin="systemd:stockbot-daily.service",
+    )
+    combined = S.certify_release_identity(
+        surfaces, pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+    )
+    # The two-gate result is still OK -- that field keeps its meaning...
+    assert combined["status"] == "OK"
+    # ...but the aggregate claim is not available without the third gate.
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert combined["systemd_unit_validity"] == S.VALIDITY_NOT_ESTABLISHED
+    assert any("SYSTEMD_UNIT_VALIDITY" in e for e in combined["errors"])
+
+
+@pytest.mark.parametrize("verdict,expected", [
+    ("PASS", "PASS"),
+    ("FAIL", "NOT_ESTABLISHED"),
+    ("NOT_CERTIFIABLE", "NOT_ESTABLISHED"),
+])
+def test_release_identity_requires_all_three_gates(verdict, expected):
+    from portfolio_automation.release import scheduler as S
+
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+        origin="systemd:stockbot-daily.service",
+    )
+    combined = S.certify_release_identity(
+        surfaces, pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        validity_result={"SYSTEMD_UNIT_VALIDITY": verdict},
+    )
+    assert combined["production_release_identity"] == expected
+
+
+def test_artifact_writes_are_atomic(tmp_path):
+    """An interrupted certification must not truncate a valid prior artifact."""
+    cli = _cli()
+    target = tmp_path / "evidence.json"
+    target.write_text('{"previous": "valid"}', encoding="utf-8")
+
+    class Boom(Exception):
+        pass
+
+    original = target.read_text(encoding="utf-8")
+    try:
+        # Simulate a failure partway through by handing it something unwritable.
+        cli._atomic_write(target, "x" * 10)
+    except Exception:  # pragma: no cover - the happy path is what we assert
+        pass
+    assert target.read_text(encoding="utf-8") == "x" * 10
+
+    # And on failure the original survives.
+    target.write_text(original, encoding="utf-8")
+    import os
+    real_replace = os.replace
+    os.replace = lambda *a, **k: (_ for _ in ()).throw(Boom())
+    try:
+        with pytest.raises(Boom):
+            cli._atomic_write(target, "should not land")
+    finally:
+        os.replace = real_replace
+    assert target.read_text(encoding="utf-8") == original
+    # No temp debris left behind.
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_artifact_schema_is_declared_in_the_contracts_doc():
+    """AGENTS.md: a persisted JSON schema must be declared alongside it."""
+    contracts = (REPO / "docs" / "OUTPUT_ARTIFACT_CONTRACTS.md").read_text(
+        encoding="utf-8")
+    assert V.SCHEMA in contracts
+    for field in ("observe_only", "SYSTEMD_UNIT_VALIDITY", "verified_units",
+                  "optional_units", "verifier_exit_status"):
+        assert field in contracts, field
+
+
+def test_collector_emits_the_optional_section():
+    body = COLLECTOR.read_text(encoding="utf-8")
+    assert "##OPTIONAL" in body
+    parsed = _cli().parse_evidence(
+        CAPTURE.replace("##EXPECTED", "##OPTIONAL\nstockbot-x.service\n##EXPECTED"))
+    assert "stockbot-x.service" in parsed["optional_units"]

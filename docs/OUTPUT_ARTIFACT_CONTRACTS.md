@@ -85,6 +85,44 @@ System summary, memo, and GUI health messaging should use severity-aware wording
 
 ## Current Stable JSON Artifacts
 
+### `northstar.systemd_unit_validity` (release certification evidence)
+
+Produced by `scripts/certify_systemd_validity.py` from evidence captured by
+`scripts/collect_systemd_validity_evidence.sh`. Written outside the repository
+by default (Phase E evidence is deliberately out-of-tree); when written into a
+governed namespace, use `--namespace`, which routes through
+`data_governance.safe_write_json`. Raw `--out` writes are atomic
+(temp + `os.replace`) so an interrupted run cannot truncate a valid artifact.
+
+| field | type | meaning |
+|---|---|---|
+| `schema` | str | `northstar.systemd_unit_validity` |
+| `schema_version` | int | currently `1` |
+| `observe_only` | bool | always `true` — this gate reports, it never changes production |
+| `checked_at` | str | ISO-8601 UTC (`...Z`); validated, absence is `NOT_CERTIFIABLE` |
+| `host` | str | host the evidence came from; absence is `NOT_CERTIFIABLE` |
+| `systemd_version` | str | the manager actually asked |
+| `verifier_flag` | str | `--recursive-errors=no` |
+| `expected_units` | list[str] | inventory this deployment expects |
+| `optional_units` | list[str] | may be absent; verified if installed |
+| `verified_units` | list[str] | units actually verified |
+| `discovered_units` | list[str] | relevant units found on the host |
+| `missing_units` | list[str] | required units absent |
+| `unexpected_units` | list[str] | relevant units neither expected nor classified |
+| `units[]` | list[obj] | per unit: `fragment_path`, `drop_in_paths`, `load_state`, `need_daemon_reload`, `verifier_command`, `verifier_exit_status`, `verifier_result`, `verifier_messages` (redacted, bounded) |
+| `errors` | list[str] | facts established as false |
+| `blockers` | list[str] | reasons certification was impossible |
+| `SYSTEMD_UNIT_VALIDITY` | str | `PASS` / `FAIL` / `NOT_CERTIFIABLE` |
+
+Rules:
+
+- `verifier_messages` are redacted and bounded; the artifact must never carry
+  secrets or unbounded host output.
+- The verdict derives from `verifier_exit_status` only. Verifier text is never
+  consulted in either direction.
+- `NOT_CERTIFIABLE` must never be collapsed into `PASS` by a consumer.
+
+
 ### `outputs/latest/data_quality_report.json`
 
 Observe-only data quality report. Written with `safe_write_json(OutputNamespace.LATEST, ...)` by `write_data_quality_report()`.

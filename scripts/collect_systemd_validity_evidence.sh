@@ -18,12 +18,28 @@
 # for the measurements behind both choices.
 set -u
 
+# The .timer units are listed deliberately. They are production execution
+# surfaces -- stockbot-daily.timer is what actually starts the daily run, and
+# deploy/install_systemd.sh installs it alongside the service. Omitting them
+# would both leave their syntax unverified and make discovery report them as
+# unexpected, since the discovery pattern matches them.
 UNITS="${STOCKBOT_EXPECTED_UNITS:-\
 stockbot-streamlit.service \
 stockbot-dashboard.service \
 stockbot-daily.service \
+stockbot-daily.timer \
 stockbot-sandbox-daily.service \
+stockbot-sandbox-daily.timer \
 cloudflared-stockbot.service}"
+
+# Units some deployments install and some do not. Absence is tolerated;
+# presence is NOT a free pass -- an installed optional unit is verified exactly
+# like a required one. deploy/install_systemd.sh does not install the sandbox
+# lane (docs/DAILY_SANDBOX_RUN.md describes it as optional), so requiring it
+# would make a standard install unable to reach PASS.
+OPTIONAL="${STOCKBOT_OPTIONAL_UNITS:-\
+stockbot-sandbox-daily.service \
+stockbot-sandbox-daily.timer}"
 
 # Which units count as "relevant" for inventory completeness.
 PATTERN="${STOCKBOT_UNIT_PATTERN:-stockbot|cloudflared}"
@@ -37,6 +53,8 @@ systemd-analyze --version 2>/dev/null | head -1
 
 echo "##EXPECTED"
 for u in $UNITS; do echo "$u"; done
+echo "##OPTIONAL"
+for u in $OPTIONAL; do echo "$u"; done
 
 # Discovery is over unit FILES, so a relevant unit that exists but failed to
 # load is still discovered — being unloaded must surface as a failure rather
@@ -53,6 +71,13 @@ for u in $UNITS; do
 done
 
 for u in $UNITS; do
+  # An optional unit that is not installed is skipped here rather than being
+  # recorded as a verifier failure; the certifier decides whether its absence
+  # matters. Anything installed is verified, optional or not.
+  if ! systemctl list-unit-files "$u" --no-pager --no-legend 2>/dev/null \
+       | grep -q .; then
+    case " $OPTIONAL " in *" $u "*) continue;; esac
+  fi
   out=$(systemd-analyze verify --recursive-errors=no "$u" 2>&1)
   rc=$?
   echo "##VERIFY $u $rc"
