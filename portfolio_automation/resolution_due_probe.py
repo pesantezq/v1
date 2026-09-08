@@ -57,6 +57,7 @@ from portfolio_automation.data_governance import (
     safe_write_text,
 )
 from portfolio_automation.market_session import is_trading_day
+from portfolio_automation import signal_outcomes_paths
 
 logger = logging.getLogger("stockbot.portfolio_automation.resolution_due_probe")
 
@@ -73,7 +74,9 @@ _TRADING_DAY_MULTIPLIER = 2.0
 # Windows tracked (must match outcome_return_Nd columns in signal_outcomes.csv).
 _WINDOWS = (1, 3, 7)
 
-_SIGNAL_OUTCOMES_REL = ("outputs", "performance", "signal_outcomes.csv")
+#: Derived from the single source of truth so the runtime/frozen split
+#: cannot drift here. NOT the VS-001 frozen evidence path.
+_SIGNAL_OUTCOMES_REL = tuple(signal_outcomes_paths.RUNTIME_REL.split("/"))
 _OUTPUT_JSON_REL = "decisions_due_for_resolution.json"
 _OUTPUT_MD_REL = "decisions_due_for_resolution.md"
 

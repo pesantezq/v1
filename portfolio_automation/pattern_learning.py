@@ -27,6 +27,7 @@ Public API:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import csv
 import json
 import logging
@@ -131,7 +132,7 @@ def _load_outcomes_window(
 ) -> dict[str, list[dict[str, Any]]]:
     """Read signal_outcomes.csv, return {ticker: [row_dict, ...]} for rows
     whose signal_time >= start_iso. Pre-parses outcome fields."""
-    csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+    csv_path = signal_outcomes_paths.runtime_path(root)
     out: dict[str, list[dict[str, Any]]] = defaultdict(list)
     if not csv_path.exists():
         return {}

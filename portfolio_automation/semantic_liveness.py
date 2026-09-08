@@ -21,6 +21,7 @@ from typing import Any, Iterable
 
 from portfolio_automation.data_governance import OutputNamespace, safe_write_json
 from portfolio_automation.next_stage.contracts import observe_only_envelope
+from portfolio_automation import signal_outcomes_paths
 
 __all__ = [
     "detect_single_value_collapse", "detect_excessive_default",
@@ -143,7 +144,7 @@ def run_semantic_liveness(root: Path | str = ".", now: str | None = None) -> dic
     # regime label collapse (legitimately-calm "neutral" is an allowed single
     # state per the documented producer-ordering fix; only flag a NON-allowed
     # collapse). Cross-checks the known manual:regime_classifier_neutral_collapse.
-    regimes = _read_csv_col(root / "outputs" / "performance" / "signal_outcomes.csv", "regime_label")
+    regimes = _read_csv_col(signal_outcomes_paths.runtime_path(root), "regime_label")
     f = detect_single_value_collapse(regimes, probe="regime_label", min_sample=30,
                                      allowed_single_values={"neutral", ""})
     if f:

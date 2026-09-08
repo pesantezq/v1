@@ -60,6 +60,7 @@ from portfolio_automation.data_governance import (
     safe_write_text,
 )
 from portfolio_automation.sector_mapping import normalize_sector
+from portfolio_automation import signal_outcomes_paths
 
 logger = logging.getLogger("stockbot.portfolio_automation.retune_impact_tracker")
 
@@ -139,7 +140,9 @@ _TRACKED_KNOBS = {
 _HISTORY_REL = ("data", "gauge_versions.jsonl")
 
 # Source for outcome attribution.
-_SIGNAL_OUTCOMES_REL = ("outputs", "performance", "signal_outcomes.csv")
+#: Derived from the single source of truth so the runtime/frozen split
+#: cannot drift here. NOT the VS-001 frozen evidence path.
+_SIGNAL_OUTCOMES_REL = tuple(signal_outcomes_paths.RUNTIME_REL.split("/"))
 
 # Sentinel for signals that predate the gauge_versions ledger (we cannot
 # attribute them retroactively without git-history walking).

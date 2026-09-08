@@ -52,6 +52,7 @@ outputs/portfolio/portfolio_summary.md
 test
 
 # Runtime output artifacts (regenerated every run)
+outputs/runtime/
 outputs/performance/
 outputs/portfolio/
 outputs/regime/

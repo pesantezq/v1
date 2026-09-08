@@ -1,0 +1,64 @@
+{
+  "_fixture_note": "Deterministic sample of outputs/portfolio/portfolio_snapshot.json. Shaped from the real producer keys so dashboard rendering tests do not depend on the mutable repository runtime copy. Two rows is enough to render both the desktop table and the mobile card stack.",
+  "enabled": true,
+  "observe_only": true,
+  "generated_at": "2026-01-02T00:00:00+00:00",
+  "summary_label": "fixture",
+  "summary_line": "Deterministic fixture snapshot for dashboard rendering tests.",
+  "normalization_scale": 1.0,
+  "total_suggested_allocation": 0.05,
+  "total_normalized_allocation": 0.05,
+  "top_3_ticker_concentration_pct": 5.0,
+  "top_sector": "Technology",
+  "sectors_capped": [],
+  "capped_positions": [],
+  "warnings": [],
+  "degraded_mode_impact": {},
+  "allocation_by_sector": {
+    "Technology": 0.03,
+    "Healthcare": 0.02
+  },
+  "allocation_by_conviction_band": {
+    "high_conviction": 0.03,
+    "normal": 0.02
+  },
+  "groupings": {},
+  "market_regime": {
+    "label": "neutral",
+    "confidence": 0.8,
+    "data_quality": "full"
+  },
+  "config": {},
+  "rows": [
+    {
+      "ticker": "NVDA",
+      "sector": "Technology",
+      "themes": ["AI"],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.85,
+      "conviction_band": "high_conviction",
+      "sizing_recommendation": "normal",
+      "suggested_allocation": 0.03,
+      "normalized_allocation": 0.03,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    },
+    {
+      "ticker": "JNJ",
+      "sector": "Healthcare",
+      "themes": [],
+      "market_cap_bucket": "mega",
+      "conviction_score": 0.72,
+      "conviction_band": "normal",
+      "sizing_recommendation": "normal",
+      "suggested_allocation": 0.02,
+      "normalized_allocation": 0.02,
+      "allocation_capped": false,
+      "allocation_cap_reason": "",
+      "data_mode": "live",
+      "degraded_mode": false
+    }
+  ]
+}

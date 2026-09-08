@@ -8,7 +8,9 @@ result, never raises. Reused upstream artifacts (no new paid data):
                                   public-knowledge velocity artifacts.
   * theme grouping             -> outputs/latest/theme_signals.json  (themes[].tickers)
   * sector grouping            -> data/fmp_cache/profile_stable_<TICKER>.json (data[0].sector)
-  * price returns              -> outputs/performance/signal_outcomes.csv (outcome_return_1d)
+  * price returns              -> outputs/runtime/performance/signal_outcomes.csv
+                                  (outcome_return_1d; the LIVE projection, not
+                                  VS-001's frozen evidence)
   * prior flock states/vol     -> outputs/simulation/flock_state_history.json (this layer writes it)
 
 Crowd-source preference (2026-06-16): ``load_crowd_metrics`` now PREFERS the
@@ -29,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from portfolio_automation.crowd_intelligence.unified_loader import read_unified_crowd
+from portfolio_automation import signal_outcomes_paths
 
 
 def _read_json(path: Path) -> Any:
@@ -233,7 +236,7 @@ def _load_unified_crowd_metrics(root: Path) -> dict[str, dict[str, float]] | Non
 
 def load_returns(root: Path, return_col: str = "outcome_return_1d") -> dict[str, dict[str, float]]:
     """Per-ticker {date: return} from signal_outcomes.csv (non-null rows only)."""
-    path = root / "outputs" / "performance" / "signal_outcomes.csv"
+    path = signal_outcomes_paths.runtime_path(root)
     out: dict[str, dict[str, float]] = {}
     if not path.exists():
         return out

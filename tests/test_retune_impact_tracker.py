@@ -9,6 +9,7 @@ Covers:
 """
 from __future__ import annotations
 
+from portfolio_automation import signal_outcomes_paths
 import json
 import sys
 import tempfile
@@ -145,8 +146,8 @@ class TestOutcomeAttribution(unittest.TestCase):
         history.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
     def _write_signal_outcomes(self, root: Path, rows: list[dict]) -> None:
-        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
-        csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+        signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
+        csv_path = signal_outcomes_paths.runtime_path(root)
         # Use the minimal columns the attribution reads.
         cols = [
             "ticker", "signal_time",
@@ -249,8 +250,8 @@ class TestSectorComposition(unittest.TestCase):
         )
 
     def _write_signal_outcomes(self, root: Path, rows: list[dict]) -> None:
-        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
-        csv_path = root / "outputs" / "performance" / "signal_outcomes.csv"
+        signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
+        csv_path = signal_outcomes_paths.runtime_path(root)
         cols = [
             "ticker", "signal_time",
             "outcome_return_1d", "direction_correct_1d",
@@ -425,10 +426,10 @@ class TestSectorCompositionMembership(unittest.TestCase):
         (root / "data").mkdir(parents=True, exist_ok=True)
         (root / "data" / "gauge_versions.jsonl").write_text(json.dumps(
             {"first_seen_at": "2026-05-19T00:00:00+00:00", "fingerprint": "AAAA"}) + "\n")
-        (root / "outputs" / "performance").mkdir(parents=True, exist_ok=True)
+        signal_outcomes_paths.runtime_path(root).parent.mkdir(parents=True, exist_ok=True)
         import csv as _csv
         cols = ["ticker", "signal_time", "outcome_return_1d", "direction_correct_1d"]
-        with (root / "outputs" / "performance" / "signal_outcomes.csv").open(
+        with (signal_outcomes_paths.runtime_path(root)).open(
                 "w", encoding="utf-8-sig", newline="") as f:
             w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
             w.writeheader()

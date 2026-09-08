@@ -53,6 +53,7 @@ from gui_insight_cards import render_insight_cards
 from gui_insights import generate_insights as _generate_insights
 from tools.weekly_report import generate_weekly_summary, markdown_to_plain_text
 from watchlist_scanner.approved_config_loader import load_approved_weights
+from portfolio_automation import signal_outcomes_paths
 
 # -- Paths -------------------------------------------------------------------
 ROOT             = Path(__file__).parent.parent.resolve()
@@ -740,7 +741,8 @@ def _render_portfolio_health_row(bundle: dict, mc: dict) -> None:
 
 def _load_signal_outcomes_df() -> pd.DataFrame:
     """Load signal_outcomes.csv — tracks every signal from emission to resolution."""
-    return _csv_to_df(ROOT / "outputs" / "performance" / "signal_outcomes.csv")
+    # Live outcomes, not VS-001 frozen evidence. See signal_outcomes_paths.
+    return _csv_to_df(signal_outcomes_paths.runtime_path(ROOT))
 
 
 def _load_profit_attribution() -> dict:
@@ -4226,7 +4228,10 @@ def _render_outcomes_tab(mc: dict, perf_summary: dict, outcomes_df: pd.DataFrame
         return
 
     if outcomes_df.empty:
-        st.info("Signal outcomes file not found or empty — check `outputs/performance/signal_outcomes.csv`.")
+        st.info(
+            "Signal outcomes file not found or empty — check "
+            f"`{signal_outcomes_paths.RUNTIME_REL}`."
+        )
         return
 
     has_outcome = "outcome_return_3d" in outcomes_df.columns
