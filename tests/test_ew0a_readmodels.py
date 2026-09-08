@@ -642,7 +642,8 @@ def test_an_authority_record_can_only_ever_be_stricter():
 
 def test_a_stricter_record_narrows_the_projected_capabilities():
     summary = build_worker_authority_summary(
-        Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=["CUSTOM_DENIED_OP"])
+        Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=["CUSTOM_DENIED_OP"],
+        raw_level="A0_DIAGNOSTIC")
     assert "CUSTOM_DENIED_OP" in summary.forbidden_ops
     assert summary.can_merge is False
 
@@ -1755,12 +1756,12 @@ def test_both_authority_list_fields_are_validated():
 def test_valid_authority_lists_still_project_live():
     summary = build_worker_authority_summary(
         Lvl.A1_ASSISTED_ENGINEERING, grants=["approved E1/E2"],
-        forbidden_ops=["MERGE", "DEPLOY"])
+        forbidden_ops=["MERGE", "DEPLOY"], raw_level="A1_ASSISTED_ENGINEERING")
     assert summary.record_evidence == TruthState.LIVE.value
     assert summary.grants == ["approved E1/E2"]
     assert build_worker_authority_summary(
-        Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=[]).record_evidence == \
-        TruthState.LIVE.value
+        Lvl.A0_DIAGNOSTIC, grants=[], forbidden_ops=[],
+        raw_level="A0_DIAGNOSTIC").record_evidence == TruthState.LIVE.value
 
 
 def test_a_malformed_authority_record_keeps_every_permanent_denial():
@@ -2261,15 +2262,20 @@ def test_empty_lists_are_valid_list_shaped_authority_evidence(tmp_path):
 
 
 def test_the_missing_null_empty_distinction_is_preserved_at_the_builder():
-    permanent = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC)     # both absent
+    # a valid raw_level is supplied so the level check passes and this test
+    # still exercises the grants/forbidden_ops distinction it is about
+    permanent = build_worker_authority_summary(
+        Lvl.A0_DIAGNOSTIC, raw_level="A0_DIAGNOSTIC")               # both absent
     assert permanent.record_evidence == TruthState.UNAVAILABLE.value
-    assert "absent" in permanent.record_detail
+    assert "grants" in permanent.record_detail and "absent" in permanent.record_detail
     nulled = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC, grants=None,
-                                            forbidden_ops=None)
+                                            forbidden_ops=None,
+                                            raw_level="A0_DIAGNOSTIC")
     assert nulled.record_evidence == TruthState.UNAVAILABLE.value
-    assert "null" in nulled.record_detail
+    assert "grants" in nulled.record_detail and "null" in nulled.record_detail
     empty = build_worker_authority_summary(Lvl.A0_DIAGNOSTIC, grants=[],
-                                           forbidden_ops=[])
+                                           forbidden_ops=[],
+                                           raw_level="A0_DIAGNOSTIC")
     assert empty.record_evidence == TruthState.LIVE.value
 
 
@@ -2453,7 +2459,7 @@ def test_the_registry_does_not_claim_the_whole_dashboard_is_certified():
     blocked = {name for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items()
                if entry.boundary is rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER}
     assert blocked == {"controller", "mission", "worker", "supervisor",
-                       "apprenticeship", "system_health"}
+                       "apprenticeship", "system_health", "backend_truth"}
     validated = {name for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items()
                  if entry.boundary is rm.ProjectionBoundary.GUI_R_VALIDATED}
     assert validated == {"run_history", "worker_authority", "active_session"}
@@ -2477,3 +2483,211 @@ def test_the_registry_derives_no_truth_of_its_own():
     for entry in rm.DASHBOARD_PROJECTION_REGISTRY.values():
         assert not hasattr(entry, "truth_state")
         assert not hasattr(entry, "readiness")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUI-R FINAL BOUNDARY CORRECTION
+#
+# Round-6 review found two more instances of the pattern that has run through
+# this whole PR: closing the set I was handed rather than deriving it from the
+# code. For authority I validated the two fields review had named and left
+# `level` -- the third field in the same record -- unvalidated. For the registry
+# I classified backend_truth by reading the intent of the enum name instead of
+# checking what build_dashboard actually passes into _assess_backend_truth.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_LEVEL_MARKER = "sk-LEVEL-MARKER-999"
+
+
+def _authority_dashboard(tmp_path, label, record):
+    import shutil
+    root = tmp_path / label
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    shutil.copy(_REPO / "config" / "ew0a_runtime.json",
+                root / "config" / "ew0a_runtime.json")
+    (root / "config" / "ew0a_authority.json").write_text(
+        _json.dumps(record), encoding="utf-8")
+    return rm.build_dashboard(root, now=_NOW)
+
+
+# ── P2 #1: the record's own level is evidence ─────────────────────────────
+def test_a_malformed_authority_level_is_never_presented_as_live(tmp_path):
+    """`read_authority_level` failing closed to A0 is the ENFORCEMENT result. It
+    is not evidence that the stored record says A0. Certifying the two list
+    fields while ignoring `level` let a corrupt protected record report
+    record_evidence LIVE through a REQUIRED capability."""
+    cases = {
+        "missing": {},
+        "null": {"level": None},
+        "invalid_str": {"level": "NOT_A_LEVEL"},
+        "empty_str": {"level": ""},
+        "dict": {"level": {"api_key": _LEVEL_MARKER}},
+        "list": {"level": [_LEVEL_MARKER]},
+        "int": {"level": 1},
+        "bool": {"level": True},
+    }
+    for label, extra in cases.items():
+        record = {"grants": [], "forbidden_ops": []}
+        record.update(extra)
+        dash = _authority_dashboard(tmp_path, f"lvl_{label}", record)
+        authority = dash["worker_authority"]
+        caps = {c["capability"]: c["state"] for c in dash["backend_truth"]["capabilities"]}
+
+        assert authority["record_evidence"] == TruthState.UNAVAILABLE.value, label
+        assert caps["worker_authority"] == TruthState.UNAVAILABLE.value, label
+        assert dash["backend_truth"]["readiness"] == "UNAVAILABLE", label
+        # effective fail-closed enforcement result is preserved and visible
+        assert authority["level"] == "A0_DIAGNOSTIC", label
+        # permanent safety never depends on record quality
+        assert not (authority["can_merge"] or authority["can_deploy"]
+                    or authority["can_mutate_main"] or authority["can_write_production"]
+                    or authority["can_self_promote"]), label
+        for op in ("MERGE", "DEPLOY", "MAIN_WRITE", "PRODUCTION_WRITE", "SELF_PROMOTION"):
+            assert op in authority["forbidden_ops"], (label, op)
+        # the raw malformed value is never rendered
+        blob = _json.dumps(dash, default=str)
+        assert _LEVEL_MARKER not in blob, label
+        assert "api_key" not in blob, label
+
+
+def test_both_valid_levels_still_project_live_evidence(tmp_path):
+    for label, value in (("a0", "A0_DIAGNOSTIC"), ("a1", "A1_ASSISTED_ENGINEERING")):
+        dash = _authority_dashboard(tmp_path, f"ok_{label}", {
+            "level": value, "grants": [], "forbidden_ops": []})
+        assert dash["worker_authority"]["record_evidence"] == TruthState.LIVE.value, label
+        assert dash["worker_authority"]["level"] == value, label
+        assert dash["backend_truth"]["readiness"] == "PARTIAL", label
+
+
+def test_effective_level_and_record_evidence_are_reported_separately(tmp_path):
+    """Not a contradiction: A0 is the safe enforcement fallback, UNAVAILABLE says
+    the stored record cannot be trusted as evidence of intended configuration.
+    An operator must be able to read both."""
+    dash = _authority_dashboard(tmp_path, "separate", {
+        "level": "NOT_A_LEVEL", "grants": [], "forbidden_ops": []})
+    authority = dash["worker_authority"]
+    assert authority["level"] == "A0_DIAGNOSTIC"
+    assert authority["record_evidence"] == TruthState.UNAVAILABLE.value
+    assert "level" in authority["record_detail"]
+
+
+def test_two_disagreeing_reads_of_the_record_are_not_resolved_silently():
+    """If the raw level and the canonical reader ever disagree, picking one and
+    reporting LIVE would hide that the protected record is inconsistent."""
+    for label, (effective, raw) in {
+            "raw_a0_canon_a1": (Lvl.A1_ASSISTED_ENGINEERING, "A0_DIAGNOSTIC"),
+            "raw_a1_canon_a0": (Lvl.A0_DIAGNOSTIC, "A1_ASSISTED_ENGINEERING"),
+    }.items():
+        summary = build_worker_authority_summary(
+            effective, grants=[], forbidden_ops=[], raw_level=raw)
+        assert summary.record_evidence == TruthState.UNAVAILABLE.value, label
+        assert "disagrees" in summary.record_detail, label
+        assert summary.can_merge is False, label
+
+
+def test_the_level_validator_reports_facts_not_values():
+    with pytest.raises(ValueError, match="absent"):
+        rm._validated_raw_level(rm._MISSING, Lvl.A0_DIAGNOSTIC)
+    with pytest.raises(ValueError, match="null"):
+        rm._validated_raw_level(None, Lvl.A0_DIAGNOSTIC)
+    with pytest.raises(ValueError, match="invalid type dict"):
+        rm._validated_raw_level({"api_key": _LEVEL_MARKER}, Lvl.A0_DIAGNOSTIC)
+    try:
+        rm._validated_raw_level({"api_key": _LEVEL_MARKER}, Lvl.A0_DIAGNOSTIC)
+    except ValueError as exc:
+        assert _LEVEL_MARKER not in str(exc)
+    with pytest.raises(ValueError, match="not a recognized authority enum value"):
+        rm._validated_raw_level("NOT_A_LEVEL", Lvl.A0_DIAGNOSTIC)
+    # membership is checked against the canonical enum, not a copied list
+    assert rm._AUTHORITY_LEVEL_VALUES == {lvl.value for lvl in Lvl}
+
+
+def test_only_the_consumed_authority_fields_are_validated(tmp_path):
+    """Scope discipline: actor/updated_at/schema_* are not consumed by this
+    projection and are deliberately not validated."""
+    dash = _authority_dashboard(tmp_path, "extras", {
+        "level": "A1_ASSISTED_ENGINEERING", "grants": [], "forbidden_ops": [],
+        "actor": {"unexpected": "shape"}, "updated_at": 12345,
+        "schema_version": None})
+    assert dash["worker_authority"]["record_evidence"] == TruthState.LIVE.value
+
+
+def test_the_real_authority_record_is_unaffected_by_level_validation():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    authority = dash["worker_authority"]
+    assert authority["record_evidence"] == TruthState.LIVE.value
+    assert authority["level"] == "A1_ASSISTED_ENGINEERING"
+    assert dash["backend_truth"]["readiness"] == "PARTIAL"
+
+
+# ── P2 #2: raw dependency declared AND coupled to classification ─────────
+def test_backend_truth_is_classified_blocked_on_its_raw_readers():
+    entry = rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"]
+    assert entry.boundary is rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER
+    assert entry.boundary is not rm.ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS
+    assert set(entry.raw_sources) == {
+        rm.RawSourceReader.AUTHORITY_LEVEL,
+        rm.RawSourceReader.RUNTIME_POLICY,
+        rm.RawSourceReader.CONTROLLER_RECORDS,
+    }
+    for blocker in ("A", "B", "C"):
+        assert f"blocker {blocker}" in entry.detail
+
+
+def test_no_surface_claims_freedom_from_raw_evidence_while_declaring_it():
+    """THE executable coupling. The registry alone was a hand-maintained
+    assertion and shipped with backend_truth marked derived-only while it
+    consumed three raw readers -- an optimistic entry in the artifact built to
+    prevent optimistic entries."""
+    assert rm.registry_classification_violations() == []
+
+
+def test_the_call_site_proves_backend_truth_receives_raw_inputs():
+    """Bounded AST over one call, not repo-wide analysis. Reads the actual
+    build_dashboard -> _assess_backend_truth call and requires the registry to
+    declare whatever raw variables it passes."""
+    src = (_REPO / "portfolio_automation" / "engineer_worker"
+           / "ew0a_readmodels.py").read_text(encoding="utf-8")
+    passed: set = set()
+    for node in _ast.walk(_ast.parse(src)):
+        if not (isinstance(node, _ast.FunctionDef) and node.name == "build_dashboard"):
+            continue
+        for inner in _ast.walk(node):
+            if (isinstance(inner, _ast.Call)
+                    and getattr(inner.func, "id", None) == "_assess_backend_truth"):
+                for keyword in inner.keywords:
+                    name = getattr(keyword.value, "id", None)
+                    if name in rm.RAW_SOURCE_VARIABLES:
+                        passed.add(rm.RAW_SOURCE_VARIABLES[name])
+        break
+    else:                                                # pragma: no cover
+        raise AssertionError("build_dashboard not found")
+
+    assert passed, "expected _assess_backend_truth to receive raw blocked inputs"
+    declared = set(rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"].raw_sources)
+    assert passed <= declared, (
+        f"backend_truth receives undeclared raw sources: "
+        f"{sorted(s.value for s in passed - declared)}")
+    assert rm.DASHBOARD_PROJECTION_REGISTRY["backend_truth"].boundary is \
+        rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER
+
+
+def test_derived_from_registered_inputs_is_now_claimed_by_nobody():
+    """It may only mean 'introduces no direct dependency on raw authoritative
+    evidence'. Nothing in this dashboard qualifies today; a future mission may
+    legitimately reclassify backend_truth after GUI-SR restructures its inputs."""
+    claiming = {name for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items()
+                if entry.boundary is rm.ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS}
+    assert claiming == set()
+
+
+def test_every_blocked_surface_declares_at_least_one_raw_source():
+    for name, entry in rm.DASHBOARD_PROJECTION_REGISTRY.items():
+        if entry.boundary is rm.ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER:
+            assert entry.raw_sources, f"{name} is blocked but declares no raw source"
+
+
+def test_the_registry_still_matches_the_emitted_surfaces():
+    dash = rm.build_dashboard(_REPO, now=_NOW)
+    assert set(dash) == set(rm.DASHBOARD_PROJECTION_REGISTRY)

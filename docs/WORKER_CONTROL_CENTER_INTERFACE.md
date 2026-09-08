@@ -128,6 +128,26 @@ different things:
 | field `null` | incomplete record | `record_evidence: UNAVAILABLE` |
 | field `[]` | list-shaped evidence; A0 legitimately grants nothing | `record_evidence: LIVE` |
 
+**`level` is projection-relevant evidence as well**, and validating only the two lists
+was a defect: `read_authority_level` fails closed to `A0_DIAGNOSTIC` on a corrupt
+record, and certifying the lists while ignoring `level` let a record with an absent or
+unrecognised level report `record_evidence: LIVE` through a **required** capability. The
+record's `level` must be present, a string, and an exact `EngineerAuthorityLevel`
+member, and it must agree with the canonical reader — two disagreeing reads of the same
+protected record are not resolved by picking one and reporting `LIVE`.
+
+**Effective level and record evidence are different questions**, and reporting both is
+not a contradiction:
+
+```
+worker_authority.level            A0_DIAGNOSTIC     <- the safe enforcement fallback
+worker_authority.record_evidence  UNAVAILABLE       <- the stored record is untrustworthy
+```
+
+A0 is what enforcement does; `UNAVAILABLE` is what the evidence is worth. Only the
+fields this projection consumes are certified — `actor`, `updated_at` and `schema_*` are
+not consumed and are deliberately not validated here.
+
 The permanent `FORBIDDEN_OPS` boundary is unioned in regardless of which of the three
 applies, so an empty `forbidden_ops` never loosens anything.
 
@@ -449,24 +469,25 @@ lessons in the store). An earlier version wrapped the whole call in one `except`
 returned `PENDING_BACKEND` on any failure — telling an operator that nobody had built
 learning while the package sat in the tree.
 
+**Reachable today**, while the quarantine below is active:
+
 | Situation | Truth state |
 |---|---|
 | `ModuleNotFoundError` naming the producer module (or a parent package) | `PENDING_BACKEND` |
 | `ModuleNotFoundError` naming one of the producer's **dependencies** | `UNAVAILABLE` |
 | any other `ImportError`, or the module raising on import | `UNAVAILABLE` |
 | module present but exposes no `build_learning_dashboard` | `UNAVAILABLE` |
-| builder raises | `UNAVAILABLE` |
-| builder returns a shape that is not the published projection | `UNAVAILABLE` |
-| valid projection | **`UNAVAILABLE` — see the quarantine below** |
+| module **and** entry point present | `UNAVAILABLE` — payload not invoked, not admitted |
 
 **A generic `ImportError` is not evidence that nobody built the producer.** It is
 raised just as readily when the module exists and one of *its* imports fails, or when
 its API has changed incompatibly. Only a `ModuleNotFoundError` naming the producer
 itself — or a parent package, without which it cannot exist — proves absence.
 
-**The response shape is validated.** `LIVE` must be a statement about the evidence, not
-about the call returning without raising, so a response that is not a dict carrying
-`recent_lessons` is `UNAVAILABLE`.
+**NOT reachable through the WCC today**, because the builder is deliberately not
+invoked: *builder raises* · *builder returns a malformed shape* · *valid payload →
+`LIVE`*. Those become GUI-L concerns when learning is certified; they are not current
+runtime branches and must not be read as such.
 
 #### The learning payload is QUARANTINED
 
@@ -504,14 +525,37 @@ cannot be added without declaring who owns its boundary.
 | `GUI_R_VALIDATED` | `run_history` · `worker_authority` · `active_session` |
 | `UNAVAILABLE_PENDING_CERTIFICATION` | `learning` |
 | `MODULE_OWNED` | `schema_version` · `schema_kind` · `read_model` · `attention_items` · `attention` |
-| `DERIVED_FROM_REGISTERED_INPUTS` | `backend_truth` |
-| `KNOWN_SOURCE_READER_BLOCKER` | `controller` · `mission` · `worker` · `supervisor` · `apprenticeship` · `system_health` |
+| `DERIVED_FROM_REGISTERED_INPUTS` | *(nothing today — see below)* |
+| `KNOWN_SOURCE_READER_BLOCKER` | `controller` · `mission` · `worker` · `supervisor` · `apprenticeship` · `system_health` · `backend_truth` |
 
 The registry is an **audit artifact, not a second truth engine**: it derives no
 authority, readiness, mission state, health or freshness, and it is not emitted in the
 dashboard.
 
-It deliberately does **not** claim the dashboard is certified. Six surfaces are marked
+**`backend_truth` is blocked, not derived-only.** It first claimed
+`DERIVED_FROM_REGISTERED_INPUTS`, which was an optimistic entry in the very artifact
+built to prevent optimistic entries: `build_dashboard` passes **raw** `level`, `policy`
+and `records` straight into `_assess_backend_truth`, which reads them directly — so a
+non-object records row raises there, and the authority/runtime readers can prevent the
+surface from being assembled at all. The classification mattered because a GUI-SR
+mission could have repaired the six visible blocked surfaces and signed off while this
+seventh dependent surface stayed unsafe.
+
+`DERIVED_FROM_REGISTERED_INPUTS` may only mean *this surface introduces no direct
+dependency on raw authoritative evidence*. **Nothing in this dashboard qualifies today.**
+A future mission may legitimately reclassify `backend_truth` once GUI-SR restructures its
+inputs — restructuring `_assess_backend_truth` to consume validated projections is
+deliberately out of scope here.
+
+The classification is **coupled to the declaration, not asserted by hand**: each entry
+declares the raw blocked readers it consumes (`raw_sources`), and
+`registry_classification_violations()` reports any surface that declares a raw source
+while claiming `MODULE_OWNED` or `DERIVED_FROM_REGISTERED_INPUTS`. A bounded AST test
+reads the actual `build_dashboard → _assess_backend_truth` call and requires the registry
+to declare whatever raw variables it passes. Flipping the enum back, or dropping the
+declaration, fails tests.
+
+It deliberately does **not** claim the dashboard is certified. Seven surfaces are marked
 `KNOWN_SOURCE_READER_BLOCKER` because they reach this module through canonical readers
 with known, deliberately unrepaired failure modes:
 
@@ -528,11 +572,12 @@ The reason this registry exists: `learning` escaped five review rounds because t
 projection paths lived in prose — including in this document's own audit tables. It is a
 test now.
 
-`truth_state` is set on the projection and `freshness` is
+`truth_state` is set on the envelope and `freshness` is
 `NOT_APPLICABLE_HISTORICAL_EVIDENCE`. **No freshness threshold is imposed on lesson
 records** — they are historical evidence, and inventing an age limit would manufacture
-`STALE` out of nothing. The `learning` capability is **secondary**: the interface does
-not make learning an oversight requirement.
+`STALE` out of nothing (this remains the rule GUI-L inherits). The `learning`
+capability is **secondary**: the interface does not make learning an oversight
+requirement, so readiness follows from the required gaps whatever learning reports.
 
 ## Status/enum semantics
 - Task/verification: `VERIFIED` (terminal success), `REPAIR_REQUIRED`,
@@ -547,8 +592,8 @@ not make learning an oversight requirement.
 - **LIVE:** authority level + grants + forbidden ops + the derived `can_*` capability
   booleans; runtime policy + mission + AUTO_* flags; mission deliverable
   VERIFIED/NOT_STARTED; supervisor verdict counts + last-pass (records ledger);
-  apprenticeship comparison metrics; verification ladder projection; learning
-  projection; run/outcome history (outcome ledger, via `ew0a.read_outcomes`).
+  apprenticeship comparison metrics; verification ladder projection; run/outcome
+  history (outcome ledger, via `ew0a.read_outcomes`).
 - **PENDING_BACKEND (no backend yet):** worker heartbeat/online/current-task/queue;
   supervisor availability/latency/queue/outage; component health
   (controller/gpt/engineer/sandbox/bridge/control-loop); `controller_since`;
@@ -558,7 +603,9 @@ not make learning an oversight requirement.
 - **LIVE (no session):** when the session producer answers `NO_SUCH_SESSION`. That is
   an answer, not a gap, and it has no age to measure.
 - **UNAVAILABLE:** an existing producer that cannot answer — an unreadable outcome
-  ledger, a session producer that raises, a learning producer whose own imports fail.
+  ledger, a session producer that raises, a learning producer whose own imports fail,
+  an authority record whose `level`/`grants`/`forbidden_ops` evidence is malformed, and
+  the **learning projection while its payload contract is uncertified**.
 
 ## Backend truth states (`control_center_truth.py`)
 `PENDING_BACKEND` alone was carrying at least three meanings — nobody built the
@@ -623,9 +670,10 @@ Required: `controller_state`, `worker_authority`, `mission_state`, `supervisor_s
 Derived, not asserted (`tests/test_control_center_truth.py`). `controller_state`,
 `worker_authority` and `mission_state` are LIVE from protected config;
 `supervisor_state` ages against recorded verdicts and can legitimately go STALE.
-`learning` and `run_history` are LIVE from producers that exist. `active_session` is
-`UNKNOWN` — see the active-session section: its age is unmeasurable, which is not the
-same as old.
+`run_history` is LIVE from a producer that exists. `learning` is **`UNAVAILABLE`** —
+its producer exists but its payload contract is uncertified, and it is a **secondary**
+capability, so it does not by itself move readiness. `active_session` is `UNKNOWN` — see
+the active-session section: its age is unmeasurable, which is not the same as old.
 
 **Remaining `PENDING_BACKEND` capabilities** — no producer exists for any of these, and
 building them was explicitly out of scope for this mission and for the GUI-R repair:

@@ -703,9 +703,48 @@ def build_apprenticeship_summary(records: list[dict[str, Any]]) -> Apprenticeshi
 _MISSING = object()
 
 
+#: The authority levels the enum recognises. Membership is checked against the
+#: canonical enum rather than a copied list, so it cannot drift from it.
+_AUTHORITY_LEVEL_VALUES = frozenset(lvl.value for lvl in EngineerAuthorityLevel)
+
+
+def _validated_raw_level(raw_level: Any, effective: EngineerAuthorityLevel) -> None:
+    """Validate the RECORD's own ``level`` field, or refuse the record.
+
+    EFFECTIVE LEVEL AND RECORD EVIDENCE ARE DIFFERENT QUESTIONS, and conflating
+    them was the defect. ``read_authority_level`` fails closed to A0 on a corrupt
+    record -- correct, and enforcement depends on it -- but that fallback is not
+    evidence that the stored record says A0. Certifying the two list fields while
+    ignoring ``level`` let a record with an absent or garbage level report
+    ``record_evidence: LIVE``, so a corrupt protected record was presented as
+    trustworthy configuration evidence through a REQUIRED capability.
+
+    Raises ``ValueError``. Only field names, type names and enum-membership facts
+    reach the message; the raw value never does."""
+    if raw_level is _MISSING:
+        raise ValueError("level is required in an authority record and is absent")
+    if raw_level is None:
+        raise ValueError("level is required in an authority record and is null")
+    if not isinstance(raw_level, str):
+        raise ValueError(f"level has invalid type {type(raw_level).__name__}")
+    if not raw_level:
+        raise ValueError("level is empty")
+    if raw_level not in _AUTHORITY_LEVEL_VALUES:
+        # Deliberately does not echo the value: an unrecognised level is exactly
+        # the kind of arbitrary record content this projection must not render.
+        raise ValueError("level is not a recognized authority enum value")
+    if raw_level != effective.value:
+        # Two reads of the same protected record disagreeing is not something to
+        # resolve by picking one and reporting LIVE.
+        raise ValueError(
+            "level disagrees with the canonical reader result; the two reads of "
+            "the protected record are inconsistent")
+
+
 def build_worker_authority_summary(level: EngineerAuthorityLevel,
                                    grants: Any = _MISSING,
-                                   forbidden_ops: Any = _MISSING
+                                   forbidden_ops: Any = _MISSING,
+                                   raw_level: Any = _MISSING
                                    ) -> WorkerAuthoritySummary:
     """Project authority, validating the record's own ``list[str]`` fields.
 
@@ -723,6 +762,11 @@ def build_worker_authority_summary(level: EngineerAuthorityLevel,
     own -- so every forbidden operation stays forbidden. Capability safety never
     depends on the record being well-formed."""
     try:
+        # The record's own level is projection-relevant evidence, so it is
+        # validated alongside the lists. This certifies the fields THIS
+        # projection consumes -- actor/updated_at/schema_* are not consumed and
+        # are deliberately not validated here.
+        _validated_raw_level(raw_level, level)
         # `set_authority_level` always writes BOTH fields, so a record lacking
         # either is not a complete authority record. An empty list IS valid
         # evidence (A0 legitimately grants nothing); absent and null are not.
@@ -1344,10 +1388,43 @@ class ProjectionBoundary(str, Enum):
     DERIVED_FROM_REGISTERED_INPUTS = "DERIVED_FROM_REGISTERED_INPUTS"
 
 
+class RawSourceReader(str, Enum):
+    """Canonical readers with known, deliberately unrepaired failure modes.
+
+    Named A/B/C to match the deferred GUI-SR mission, so a surface's exposure is
+    machine-readable rather than described in a comment."""
+
+    #: A -- raises TypeError on a non-object JSON root.
+    AUTHORITY_LEVEL = "A:ew0a_authority.read_authority_level"
+    #: B -- raises AttributeError on a non-object JSON root.
+    RUNTIME_POLICY = "B:ew0a_loop.read_runtime_policy"
+    #: C -- admits non-dict rows whose .get() then raises downstream.
+    CONTROLLER_RECORDS = "C:ew0a_readmodels._read_records"
+
+
+#: Which local name in ``build_dashboard`` carries each blocked reader's raw
+#: output. Used by the registry AND by the test that proves the coupling, so the
+#: declaration and the call site cannot drift apart.
+RAW_SOURCE_VARIABLES: dict[str, RawSourceReader] = {
+    "level": RawSourceReader.AUTHORITY_LEVEL,
+    "policy": RawSourceReader.RUNTIME_POLICY,
+    "records": RawSourceReader.CONTROLLER_RECORDS,
+}
+
+#: Classifications that assert a surface introduces no direct dependency on raw
+#: authoritative evidence. Declaring a raw source while claiming one of these is
+#: a contradiction, and :func:`registry_classification_violations` reports it.
+_NO_RAW_DEPENDENCY_BOUNDARIES = frozenset({
+    "MODULE_OWNED", "DERIVED_FROM_REGISTERED_INPUTS"})
+
+
 @dataclass(frozen=True)
 class _RegisteredProjection:
     boundary: ProjectionBoundary
     detail: str
+    #: Raw blocked readers this surface consumes DIRECTLY, without a GUI-R
+    #: validator in between.
+    raw_sources: tuple[RawSourceReader, ...] = ()
 
 
 #: EVERY top-level key ``build_dashboard`` emits, with its boundary status.
@@ -1395,9 +1472,23 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
         ProjectionBoundary.MODULE_OWNED,
         "AttentionCoverage; no attention producer exists, nothing is derived from "
         "source evidence"),
+    # NOT derived-only, which is what this entry used to claim. build_dashboard
+    # passes RAW level, policy and records straight into _assess_backend_truth,
+    # which reads them directly -- so a non-object records row raises there, and
+    # the authority/runtime readers can prevent this surface from being assembled
+    # at all. The optimistic classification mattered because a GUI-SR mission
+    # could have repaired the six visible blocked surfaces and signed off while
+    # this seventh dependent surface stayed unsafe. Reclassification here is
+    # deliberate; restructuring _assess_backend_truth to consume validated
+    # projections belongs to GUI-SR.
     "backend_truth": _RegisteredProjection(
-        ProjectionBoundary.DERIVED_FROM_REGISTERED_INPUTS,
-        "capability truth states derived from the surfaces registered here"),
+        ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
+        "capability truth states assembled from RAW level (blocker A), RAW policy "
+        "(blocker B) and RAW records (blocker C) passed directly into "
+        "_assess_backend_truth; not derived-only",
+        raw_sources=(RawSourceReader.AUTHORITY_LEVEL,
+                     RawSourceReader.RUNTIME_POLICY,
+                     RawSourceReader.CONTROLLER_RECORDS)),
     # --- blocked on known, deliberately unrepaired source-reader debt -------
     # A: ew0a_authority.read_authority_level raises TypeError on a non-object
     #    JSON root. B: ew0a_loop.read_runtime_policy raises AttributeError on the
@@ -1407,25 +1498,49 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
     "controller": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
         "current_mission via read_runtime_policy (blocker B); remaining fields are "
-        "declared contract constants or PENDING_BACKEND"),
+        "declared contract constants or PENDING_BACKEND",
+        raw_sources=(RawSourceReader.RUNTIME_POLICY,)),
     "mission": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
-        "mission_id via read_runtime_policy (blocker B)"),
+        "mission_id via read_runtime_policy (blocker B)",
+        raw_sources=(RawSourceReader.RUNTIME_POLICY,)),
     "worker": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
         "authority level (blocker A), mission (blocker B) and recent verdicts via "
-        "_read_records (blocker C)"),
+        "_read_records (blocker C)",
+        raw_sources=(RawSourceReader.AUTHORITY_LEVEL, RawSourceReader.RUNTIME_POLICY,
+                     RawSourceReader.CONTROLLER_RECORDS)),
     "supervisor": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
-        "verdict counts via _read_records (blocker C)"),
+        "verdict counts via _read_records (blocker C)",
+        raw_sources=(RawSourceReader.CONTROLLER_RECORDS,)),
     "apprenticeship": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
-        "comparison counts via _read_records (blocker C)"),
+        "comparison counts via _read_records (blocker C)",
+        raw_sources=(RawSourceReader.CONTROLLER_RECORDS,)),
     "system_health": _RegisteredProjection(
         ProjectionBoundary.KNOWN_SOURCE_READER_BLOCKER,
         "authority level (blocker A); every component field is PENDING_BACKEND and "
-        "config_readability is file readability, not liveness"),
+        "config_readability is file readability, not liveness",
+        raw_sources=(RawSourceReader.AUTHORITY_LEVEL,)),
 }
+
+
+def registry_classification_violations() -> list[str]:
+    """Surfaces claiming freedom from raw evidence while declaring a raw source.
+
+    The registry alone was a hand-maintained assertion, and it shipped with
+    ``backend_truth`` marked derived-only while it consumed three raw readers --
+    an optimistic entry in the very artifact built to prevent optimistic entries.
+    Coupling the declaration to the classification is what makes it a control."""
+    violations: list[str] = []
+    for name, entry in DASHBOARD_PROJECTION_REGISTRY.items():
+        if entry.raw_sources and entry.boundary.value in _NO_RAW_DEPENDENCY_BOUNDARIES:
+            violations.append(
+                f"{name} declares raw sources "
+                f"{sorted(s.value for s in entry.raw_sources)} but is classified "
+                f"{entry.boundary.value}")
+    return violations
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
@@ -1458,6 +1573,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
     # evidence is checked.
     grants: Any = _MISSING
     record_forbidden: Any = _MISSING
+    raw_level: Any = _MISSING
     ap = root / "config" / "ew0a_authority.json"
     if ap.exists():
         try:
@@ -1467,6 +1583,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
                 # from an explicit null all the way to the validator.
                 grants = authority_record.get("grants", _MISSING)
                 record_forbidden = authority_record.get("forbidden_ops", _MISSING)
+                raw_level = authority_record.get("level", _MISSING)
         except (OSError, ValueError, UnicodeError):
             grants = _MISSING
 
@@ -1502,7 +1619,8 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         })
 
     # Built BEFORE the truth assessment so every one of them is classified.
-    worker_authority = build_worker_authority_summary(level, grants, record_forbidden)
+    worker_authority = build_worker_authority_summary(
+        level, grants, record_forbidden, raw_level)
     run_history = build_run_history(root)
     learning, learning_state = _project_learning(root, worker.worker_identity, now)
     session_payload, session_status, session_detail = _build_active_session(root)
