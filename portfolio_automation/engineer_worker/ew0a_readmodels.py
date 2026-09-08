@@ -1812,7 +1812,7 @@ def source_access_identity(kind: SourceAccessKind, target: str) -> str:
     return f"{SOURCE_ACCESS_PREFIX[kind]}:{target}"
 
 
-#: Which local name in ``build_dashboard`` carries each blocked reader's raw
+#: Which local name in ``_build_dashboard_from_evidence`` carries each reader's
 #: output. Used by the registry AND by the test that proves the coupling, so the
 #: declaration and the call site cannot drift apart.
 CANONICAL_READER_FUNCTIONS.update({
@@ -2204,32 +2204,46 @@ def _collect_dashboard_evidence(root: Path, now: str | None) -> _DashboardEviden
 
 
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
-    """Assemble the full read-only dashboard from already-acquired evidence.
-
-    **IO-FREE BY CONSTRUCTION.** This function performs no authoritative source
-    acquisition: no reads, no path probing, no parsing, no module probing. It
-    receives evidence from :func:`_collect_dashboard_evidence` and does nothing
-    but project, classify and assemble. ``root`` exists here only to be handed
-    to the collector, and an architectural test fails if it reaches anything
-    else.
-
-    That invariant is the point. Proving "this function performs no IO" is
-    tractable; proving "this AST recognises every way Python can touch a file"
-    is not, and two attempts at the latter each shipped a guard that silently
-    lost coverage.
+    """Acquire evidence, then project it. The two phases are separate functions.
 
     ``now`` is injected rather than read from the clock (the no-fabricated-time
     discipline used across the Northstar contracts); readiness assessment needs a
-    timestamp and a projection must never invent one.
+    timestamp and a projection must never invent one."""
+    evidence = _collect_dashboard_evidence(Path(repo_root), now)
+    return _build_dashboard_from_evidence(evidence, now)
+
+
+def _build_dashboard_from_evidence(evidence: _DashboardEvidence,
+                                   now: str | None) -> dict[str, Any]:
+    """Project already-acquired evidence into the dashboard. NO SOURCE INPUT.
+
+    This function takes no ``repo_root``, no ``Path``, no source filename and no
+    ledger filename. It cannot reach the repository through its parameters, and
+    it contains no intentional source acquisition in the reviewed
+    implementation. Its responsibility is projection, classification, readiness
+    and DTO assembly.
+
+    **What that is NOT.** It is not proven pure, not mechanically proven
+    incapable of IO, and not sandboxed. Four review rounds established that the
+    stronger claim -- that a bounded static analyzer proves arbitrary source IO
+    cannot escape this boundary -- is unsound: Python is too expressive for a
+    small AST test to establish it. Each round replaced one enumeration with a
+    narrower enumeration (a reader enum, then a method-name list, then two
+    callee shapes, then a gateway-to-dependency map) and each time the residue
+    was still an enumeration.
+
+    So the honest statement is the structural one: **source acquisition is
+    concentrated in named gateways and frozen into a _DashboardEvidence before
+    projection begins.** That is a design property, reviewed and regression
+    tested -- not a whole-program proof. The static guards over this function
+    are defence in depth against accidental regression, and are labelled as
+    such.
 
     ORDER IS LOAD-BEARING. The session, learning and run-history projections are
     classified BEFORE the truth assessment so their states are assessed with
     everything else. They used to be appended afterwards, which is precisely how
     the projection that answers "what is happening now" ended up as the only one
     carrying no truth state at all."""
-    root = Path(repo_root)
-    evidence = _collect_dashboard_evidence(root, now)
-
     level = evidence.level
     policy = evidence.policy
     records_read = evidence.records_read

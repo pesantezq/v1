@@ -726,106 +726,121 @@ direct dependency on raw authoritative evidence*, and `backend_truth` still has 
 Restructuring `_assess_backend_truth` to consume validated projections remains
 deliberately out of scope: it is not needed for safety, only for the label.
 
-### Certified gateways, one collector, an IO-free assembler (GUI-RI)
+### Source acquisition is concentrated behind named gateways (GUI-RI)
 
-Two earlier attempts proved source-access completeness by teaching an AST guard to
-recognise source-access **syntax**. Both failed the same way:
+WCC source acquisition is concentrated behind named gateways and converted into a frozen
+evidence object before projection. Gateway dependencies are explicit architectural
+contracts backed by targeted tests and review. **Static and behavioural guards are
+defence in depth and are not claimed to constitute whole-program IO or security proofs.**
 
-```text
-known syntax set → a new equivalent syntax appears → coverage lost silently
-```
-
-First the universe came from the hand-written `RawSourceReader` enum, so
-`system_health`'s four `_readability` reads were invisible (Codex `3960949424`) — a
-regressed `_readability` leaked 898 bytes of `config/ew0a_authority.json` into the
-dashboard while every check passed. Then the universe came from
-`_RI_CONTENT_ACQUISITION`, a hand-written list of method names — so `.stat()` was
-invisible, a second access site collapsed under an existing dependency identity, and a
-keyword-passed `root` escaped the delegation check (three further P2s).
-
-Both were the same mistake: **asking a catalogue what IO exists.** Two claims this
-document previously made were false and have been removed:
+That last sentence is a correction. Four review rounds established that the stronger
+claim this document previously made was unsound:
 
 > ~~"a bounded AST test derives every authoritative access"~~
 > ~~"the guard fails closed on every unrecognized path operation"~~
+> ~~"every gateway dependency is automatically complete"~~
+> ~~"`build_dashboard` is IO-free by construction"~~
 
-The analyzer is **retired, not extended** — and deliberately not kept as a
-"diagnostic", because a mechanism that lost coverage three times should not sit next to
-the real boundary inviting reuse. A test asserts nothing binds its names any more.
+Each round replaced one enumeration with a narrower enumeration — a reader enum, then a
+method-name list, then two `ast.Call.func` shapes, then a gateway-to-dependency map — and
+each time the residue was still an enumeration. Python is too expressive for a small
+bounded analyzer to establish absence of arbitrary behaviour. **The repeated defect was
+the completeness claim itself, not a missing case.** The analyzers are retired; a test
+asserts nothing binds their names.
 
-#### The boundary is now structural
+#### Structure
 
 ```text
-certified source gateways
-        ↓
-one bounded evidence collector
-        ↓
-IO-free dashboard assembler
+source acquisition → named gateways → _DashboardEvidence → projection / assembly
 ```
 
-The objective is **not** to understand every possible Python filesystem expression. It
-is to architecturally prevent arbitrary filesystem expressions from appearing in the
-dashboard assembler at all. "Does this function perform IO?" is tractable; "does this
-AST recognise every way Python can touch a file?" is not.
+```python
+def build_dashboard(repo_root, now=None):
+    evidence = _collect_dashboard_evidence(Path(repo_root), now)
+    return _build_dashboard_from_evidence(evidence, now)
+```
 
-We no longer ask whether `.stat()` is benign. It simply may not appear in the collector.
+**What is claimed, and enforced:**
 
-| Invariant | Enforced by |
+| Claim | How |
 |---|---|
-| `build_dashboard` performs **no** authoritative acquisition — no read, probe, parse, module import, or gateway call | absence test over its AST |
-| `build_dashboard` constructs **no** source path (`Path()` exactly once, to normalise the argument) | no `/` BinOp in its body |
-| `root` reaches **only** `_collect_dashboard_evidence`, positionally **or** by keyword, alias-aware | delegation test |
-| the collector calls **nothing** but certified gateways and the evidence constructor — *every* call checked, not only ones that look like IO | closed-world test |
-| gateway call **multiplicity** is exact — a second call to an existing gateway fails | `Counter` equality, not `set` |
-| the collector constructs **no** source path | no `/` BinOp, no `Path()`, no import |
+| `_build_dashboard_from_evidence` takes no `repo_root`, `Path`, or source filename — it cannot reach the repository *through its parameters* | signature test; a structural property, not a syntax survey |
+| `build_dashboard` is collect-then-project, nothing else | AST test on a ≤4-statement body |
+| every source-backed input is frozen into `_DashboardEvidence` before projection | frozen dataclass, 14 declared fields |
+| gateway dependencies agree with the registry declarations | consistency test between two reviewed artifacts |
 
-#### The certified gateways
+**What is NOT claimed:** that the projection layer is pure, sandboxed, or mechanically
+incapable of IO; that every possible collector call is discovered; that gateway interiors
+are proven to acquire only what they declare. Those are review-and-test properties.
 
-| Gateway | Acquires | Contract |
-|---|---|---|
-| `read_authority_level` | `config/ew0a_authority.json` | effective, fail-closed authority (canonical reader A) |
-| `read_runtime_policy` | `config/ew0a_runtime.json` | typed runtime policy or `None` (reader B) |
-| `read_controller_records` | `docs/EW0A_0B3_RECORDS.jsonl` | whole-ledger admission + WCC field contract (reader C) |
-| `_read_authority_record_evidence` | `config/ew0a_authority.json` | what the record **says**, behind `_MISSING`; consumer validates |
-| `_read_system_config_readability` | four config sources | `config_readability` map of `READABILITY_STATES` |
-| `_read_northstar_contract_presence` | `portfolio_automation.northstar` | contract-name set, fail-closed to empty |
-| `build_run_history` · `_project_learning` · `_build_active_session` | own sources | separately certified producers, own boundaries retained |
+#### Gateway contracts
 
-`read_authority_level` and `_read_authority_record_evidence` both read the authority
-record and are **deliberately not collapsed**: one answers *what authority is in force*
-and fails closed to A0, the other answers *what the stored record says* so the
-projection can report evidence quality without being able to escalate authority.
+Explicit, human-reviewable, regression-tested. No claim is made that Python introspection
+proves a gateway could never acquire another source.
 
-`_collect_dashboard_evidence` returns a frozen `_DashboardEvidence` carrying all
-fourteen source-backed inputs. After that call the assembler needs `root` for nothing.
+| Gateway | Source | Returns | On failure |
+|---|---|---|---|
+| `read_authority_level` | `config/ew0a_authority.json` | effective `EngineerAuthorityLevel` | `A0_DIAGNOSTIC` (fail closed) |
+| `read_runtime_policy` | `config/ew0a_runtime.json` | typed runtime policy or `None` | `None`; malformed fields rejected by declared type |
+| `read_controller_records` | `docs/EW0A_0B3_RECORDS.jsonl` | `ControllerRecordsRead` (whole-ledger) | `UNAVAILABLE`; never a filtered partial ledger |
+| `_read_authority_record_evidence` | `config/ew0a_authority.json` | raw `grants`/`forbidden_ops`/`level` behind `_MISSING` | `_MISSING` for all three; validation owned by `build_worker_authority_summary` |
+| `_read_system_config_readability` | the four config sources | finite readability states | per-source `ABSENT`/`UNREADABLE`; never contents or liveness |
+| `_read_northstar_contract_presence` | `portfolio_automation.northstar` | present contract names | empty set (fail closed) |
+| `build_run_history` · `_project_learning` · `_build_active_session` | own sources | own DTOs | separately certified producers, own boundaries |
 
-#### Completeness is now sound by construction
+`read_authority_level` and `_read_authority_record_evidence` are **deliberately not
+collapsed**: one answers *what authority is in force* and fails closed to A0, the other
+answers *what the stored record says*, so the projection can report evidence quality
+without being able to escalate authority. The two reads disagreeing is itself refused
+rather than resolved by picking one.
 
-Because the gateway set is **closed** (mechanically proven), enumerating what a closed
-set acquires is complete — unlike enumerating the syntax by which acquisition might be
-written. The registry's dependency declarations are checked against that enumeration
-with equality in both directions, so an undeclared dependency and a dead declaration
-both fail. The four readability identities are derived from
-`SYSTEM_CONFIG_READABILITY_SOURCES` — the gateway's **own executable mapping**, which
-drives the actual probes — so a probe cannot be claimed without being performed, nor
-performed without being declared.
+For `_read_system_config_readability` the contract is **executable**:
+`SYSTEM_CONFIG_READABILITY_SOURCES` drives the actual probes, so a probe cannot be claimed
+without being performed.
+
+#### Supplemental behavioural observation
+
+A subprocess test installs a CPython audit hook and observes that the projection phase
+raises no filesystem, import, network or process audit events while the collection phase
+does. It carries a **positive control** — without one, an empty event list would be
+ambiguous between "no IO happened" and "the hook never fired".
+
+**CPython audit events are observational and do not prove absence of all IO or provide a
+sandbox.** Hooks cannot be removed, see only events the interpreter raises, and can be
+bypassed at C level. This is supplemental evidence only; nothing depends on it for
+correctness. It is included because it observes *effects* rather than recognising syntax,
+so it catches a regression the static guards structurally cannot — demonstrated: a helper
+added to the projection layer that reads a file passes every static guard and is caught
+here.
+
+#### The real security and truth boundary
+
+The source-inventory tests are **not** the security boundary, and that distinction
+matters. What actually prevents malformed evidence from becoming clean-looking GUI state:
+
+- typed reader admission (readers A/B/C total and fail-closed)
+- whole-ledger refusal — a partial ledger is never silently filtered
+- field-level validation of every WCC-consumed record field
+- fail-closed authority; the record can only ever be stricter
+- no arbitrary evidence coercion — no `str()` of unvalidated payloads
+- measured zero kept distinguishable from unanswerable
+- learning quarantine — the uncertified payload is not admitted
+- the GUI receives controller projections only, with no shell, Git or production authority
+
+Those are behavioural and mutation-tested. GUI-RI is read-only and non-authoritative — no
+Git mutation, no production mutation, no capital action, no trading — and its job is
+exactly the one those contracts defend. **Mission Control does not require solving
+general Python program analysis first.**
 
 #### Where mechanical enforcement stops
 
-- **Enforced** — the assembler acquires nothing; the collector's complete call multiset
-  is closed and exact; every dependency a gateway acquires is declared and vice versa.
-- **NOT enforced — per-surface attribution.** That `system_health` rather than some
-  other surface consumes a given probe is a **declared, human-reviewed architectural
-  contract**, not inferred through dataflow from acquisition site to dashboard key.
-  Each entry's `detail` states its reasoning so a reviewer can check it against the call
-  path. Over-attribution is the residual risk: it can overstate a dependency, but it
-  cannot admit an unacquired one or hide an acquired one — the gateway boundary covers
-  both.
-
-`SourceAccessKind` and `DirectSource` remain as **semantic identity and documentation**:
-they classify permitted dependencies. They do **not** discover arbitrary Python IO —
-that is the gateway boundary's job, and conflating the two is what produced four
-findings.
+`DASHBOARD_PROJECTION_REGISTRY` is an architectural/audit declaration describing the
+source dependencies each projection is designed to consume. **It is not a security sandbox
+or a whole-program dependency derivation engine.** Per-surface attribution remains
+human-reviewed plus tested; each entry's `detail` states its reasoning so a reviewer can
+check it against the call path. `SourceAccessKind` and `DirectSource` classify *permitted*
+dependencies — they do not discover arbitrary Python IO, and conflating those two jobs is
+what produced every finding on this PR.
 
 #### `_readability` is certified as a probe
 
@@ -864,19 +879,28 @@ read.
 
 Flipping the enum back, or dropping any declaration, fails tests.
 
-**Mutation-proven, 17 mutations, all detected.** Declaration layer (8): undeclared new
-probe · removed probe declaration · regressed `_readability` · new inline `read_text()`
-· a read relocated into a new helper · removed direct-parse declaration · a dead
-declaration · a broken reader-identity mapping. Gateway boundary (9): a duplicated
-gateway call · `.stat()` in the collector · `.readlink()` in the collector · a new
-helper given `root` positionally · the same helper given `root` **by keyword** · a
-direct read in the assembler · that read relocated into a collector-called helper · a
-certified-gateway declaration dropped while its call remains · a gateway call removed
-while its declaration remains.
+**Mutation-proven — the safety properties, which is what matters.** Each mutation below
+was applied and reverted; the failure count is how many tests caught it.
 
-Note what the collector mutations do **not** require: nobody had to decide whether
-`.stat()` or `.readlink()` is dangerous. They fail because they are not certified
-gateways, which is the whole reason this boundary replaced syntax recognition.
+| | Mutation | Caught by |
+|---|---|---|
+| S1 | `_readability` returns file contents | 20 |
+| S2 | authority record evidence bypasses validation | 3 |
+| S3 | a non-dict controller-record row is admitted | 3 |
+| S4 | `str()` coercion of controller evidence reintroduced | 9 |
+| S5 | learning quarantine lifted — uncertified payload reported LIVE | 6 |
+| S6 | runtime policy accepts a malformed bool | 3 |
+| S7b | the unvalidated record level published as effective authority | 4 |
+
+**S7 as originally specified is an equivalent mutant and is reported as such rather than
+as a pass.** Publishing `str(raw_level)` on the valid-record branch changes nothing,
+because `_validated_raw_level` already refuses any record whose `level` disagrees with
+the canonical reader — the two values are provably equal there. S7b removes that guard as
+well, which is the property the mutation was reaching for, and it is caught.
+
+Earlier rounds also mutation-tested the retired static analyzers. Those results are
+historical: the mechanism they exercised has been retired, and the guards that remain are
+labelled defence in depth rather than proofs.
 
 The registry deliberately does **not** claim the dashboard is certified.
 
