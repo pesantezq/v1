@@ -82,6 +82,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 #: Schema identity for the durable artifact. Bump when the shape changes.
 SCHEMA = "northstar.systemd_unit_validity"
@@ -111,7 +112,15 @@ NOT_CERTIFIABLE = "NOT_CERTIFIABLE"
 MIN_MEASURED_SYSTEMD_MAJOR = 250
 
 #: Collection time must be a real UTC stamp, not whatever the shell produced.
-_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+#: Parsed as a calendar date rather than pattern-matched: ``2026-99-99T99:99:99Z``
+#: is shape-correct and impossible, and an impossible collection time cannot
+#: establish when a certificate was taken.
+def _is_utc_timestamp(value: str) -> bool:
+    try:
+        datetime.strptime(value.strip(), "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return False
+    return True
 
 _SECRET_KEY = re.compile(
     r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b\s*=\s*\S+"
@@ -263,7 +272,7 @@ def certify_systemd_unit_validity(
     # A certificate that cannot say where or when it was taken is not evidence.
     if not (host or "").strip():
         blockers.append("no host recorded — the evidence has no provenance")
-    if not _TIMESTAMP.match((checked_at or "").strip()):
+    if not _is_utc_timestamp(checked_at or ""):
         blockers.append(
             f"checked_at {checked_at!r} is not an ISO-8601 UTC timestamp — the "
             f"evidence has no trustworthy collection time"

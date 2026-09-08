@@ -387,6 +387,8 @@ FragmentPath=/etc/systemd/system/stockbot-daily.service
 DropInPaths=/etc/systemd/system/stockbot-daily.service.d/zz-release.conf
 NeedDaemonReload=no
 LoadError=
+##VERIFYCMD stockbot-daily.service
+systemd-analyze verify --recursive-errors=no stockbot-daily.service
 ##VERIFY stockbot-daily.service 0
 ##END
 """
@@ -420,7 +422,9 @@ def test_collector_invokes_the_verifier_by_name_with_the_required_flag():
         # directory rather than the unit's effective configuration.
         assert "/etc/systemd" not in call, call
         assert "FragmentPath" not in call, call
-        assert '"$u"' in call, call
+        assert "$u" in call, call
+    # Invoked through an argv array, so a unit name is never word-split.
+    assert 'out=$("${CMD[@]}" 2>&1)' in body
 
 
 def test_cli_round_trips_a_capture_into_a_pass():
@@ -818,3 +822,68 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
     )
     assert combined["validity_uncovered_units"] == []
     assert combined["production_release_identity"] == "PASS"
+
+
+def test_the_capture_supplies_the_command_that_actually_ran():
+    """The certifier must not reconstruct the ideal invocation.
+
+    A capture taken by a collector revision that omitted the required flag
+    would otherwise be credited with an invocation it never used, and without
+    that flag a zero exit status means nothing.
+    """
+    parsed = _cli().parse_evidence(CAPTURE)
+    outcome = parsed["outcomes"]["stockbot-daily.service"]
+    assert outcome.command == ("systemd-analyze", "verify",
+                               "--recursive-errors=no",
+                               "stockbot-daily.service")
+    assert outcome.uses_required_flag
+
+
+def test_a_capture_without_a_recorded_command_fails_closed():
+    capture = "\n".join(
+        line for line in CAPTURE.splitlines()
+        if "VERIFYCMD" not in line and not line.startswith("systemd-analyze")
+    ) + "\n"
+    parsed = _cli().parse_evidence(capture)
+    outcome = parsed["outcomes"]["stockbot-daily.service"]
+    assert outcome.command == ()
+    assert not outcome.uses_required_flag
+    verdict = V.certify_systemd_unit_validity(classified_units=(), **parsed)
+    assert verdict["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+def test_a_capture_taken_without_the_required_flag_fails_closed():
+    """The exact scenario: an older collector that ran a bare verify."""
+    capture = CAPTURE.replace(
+        "systemd-analyze verify --recursive-errors=no stockbot-daily.service",
+        "systemd-analyze verify stockbot-daily.service")
+    parsed = _cli().parse_evidence(capture)
+    assert not parsed["outcomes"]["stockbot-daily.service"].uses_required_flag
+    verdict = V.certify_systemd_unit_validity(classified_units=(), **parsed)
+    assert verdict["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any(V.REQUIRED_VERIFIER_FLAG in b for b in verdict["blockers"])
+
+
+def test_the_collector_emits_the_command_it_ran():
+    body = COLLECTOR.read_text(encoding="utf-8")
+    assert "##VERIFYCMD" in body
+
+
+@pytest.mark.parametrize("stamp", [
+    "2026-99-99T99:99:99Z",   # shape-correct, impossible
+    "2026-13-01T00:00:00Z",   # month 13
+    "2026-02-30T00:00:00Z",   # never existed
+    "2026-09-08T25:00:00Z",   # hour 25
+    "2026-09-08T00:60:00Z",   # minute 60
+])
+def test_an_impossible_timestamp_is_not_a_timestamp(stamp):
+    """An impossible collection time cannot establish certificate freshness."""
+    assert certify(checked_at=stamp)["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+@pytest.mark.parametrize("stamp", [
+    "2026-09-08T21:22:07Z",
+    "2024-02-29T23:59:59Z",   # a real leap day
+])
+def test_real_timestamps_are_accepted(stamp):
+    assert certify(checked_at=stamp)["SYSTEMD_UNIT_VALIDITY"] == V.PASS

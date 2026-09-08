@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -39,6 +40,7 @@ def parse_evidence(text: str) -> dict:
     discovered: list[str] = []
     shows: dict[str, list[str]] = {}
     verifies: dict[str, tuple[int, list[str]]] = {}
+    commands: dict[str, list[str]] = {}
 
     section = None
     unit = None
@@ -52,6 +54,8 @@ def parse_evidence(text: str) -> dict:
                 verifies[unit] = (status, [])
             elif section == "SHOW" and unit is not None:
                 shows[unit] = []
+            elif section == "VERIFYCMD" and unit is not None:
+                commands[unit] = []
             continue
 
         if section == "HOST" and raw.strip():
@@ -66,6 +70,8 @@ def parse_evidence(text: str) -> dict:
             optional.append(raw.strip())
         elif section == "DISCOVERED" and raw.strip():
             discovered.append(raw.strip())
+        elif section == "VERIFYCMD" and unit is not None and raw.strip():
+            commands[unit].extend(shlex.split(raw.strip()))
         elif section == "SHOW" and unit is not None:
             shows[unit].append(raw)
         elif section == "VERIFY" and unit is not None:
@@ -75,10 +81,14 @@ def parse_evidence(text: str) -> dict:
         u: V.provenance_from_show("\n".join(lines), unit=u)
         for u, lines in shows.items()
     }
+    # The command comes from the capture. If a capture does not say what ran,
+    # the command is empty, `uses_required_flag` is False, and the certifier
+    # blocks -- rather than crediting the run with an invocation it may never
+    # have used.
     outcomes = {
         u: V.VerifierOutcome(
             unit=u,
-            command=V.build_verifier_command(u),
+            command=tuple(commands.get(u, ())),
             exit_status=status,
             output="\n".join(lines),
         )

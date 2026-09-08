@@ -87,8 +87,15 @@ for u in $UNITS; do
        | grep -q .; then
     case " $OPTIONAL " in *" $u "*) continue;; esac
   fi
-  out=$(systemd-analyze verify --recursive-errors=no "$u" 2>&1)
+  # The command is emitted as evidence, not reconstructed by the reader. A
+  # certifier that assumes the ideal invocation cannot tell a capture taken
+  # WITH the required flag from one taken without it -- and without the flag a
+  # zero exit status means nothing (systemd-analyze(1)).
+  CMD=(systemd-analyze verify --recursive-errors=no "$u")
+  out=$("${CMD[@]}" 2>&1)
   rc=$?
+  echo "##VERIFYCMD $u"
+  echo "${CMD[*]}"
   echo "##VERIFY $u $rc"
   # Bounded here as well as in the certifier: an evidence stream is not a log.
   echo "$out" | head -20
