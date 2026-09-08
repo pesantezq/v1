@@ -726,106 +726,106 @@ direct dependency on raw authoritative evidence*, and `backend_truth` still has 
 Restructuring `_assess_backend_truth` to consume validated projections remains
 deliberately out of scope: it is not needed for safety, only for the label.
 
-### The source decides completeness; declarations decide semantics (GUI-RI)
+### Certified gateways, one collector, an IO-free assembler (GUI-RI)
 
-The first version of this coupling derived its universe of possible accesses from the
-hand-written `RawSourceReader` enum. That is backwards, and Codex finding `3960949424`
-showed why: `system_health` declared reader A while opening **four** files directly
-through `_readability`, and no guard could see them, because a path reached outside the
-enum was invisible to a check that iterated the enum. A regressed `_readability` returning
-file contents leaked 898 bytes of `config/ew0a_authority.json` into the dashboard while
-every registry check still passed.
-
-The direction is now:
+Two earlier attempts proved source-access completeness by teaching an AST guard to
+recognise source-access **syntax**. Both failed the same way:
 
 ```text
-ACTUAL SOURCE ACCESS
-        ↓
-mechanically derived inventory
-        ↓
-declared dependency + proof
-        ↓
-projection boundary classification
+known syntax set → a new equivalent syntax appears → coverage lost silently
 ```
 
-**The source decides which dependencies exist. Declarations decide how each one is
-treated.** An enum may carry a reader's identity; it may not define the universe.
+First the universe came from the hand-written `RawSourceReader` enum, so
+`system_health`'s four `_readability` reads were invisible (Codex `3960949424`) — a
+regressed `_readability` leaked 898 bytes of `config/ew0a_authority.json` into the
+dashboard while every check passed. Then the universe came from
+`_RI_CONTENT_ACQUISITION`, a hand-written list of method names — so `.stat()` was
+invisible, a second access site collapsed under an existing dependency identity, and a
+keyword-passed `root` escaped the delegation check (three further P2s).
 
-#### Two kinds, deliberately not conflated
+Both were the same mistake: **asking a catalogue what IO exists.** Two claims this
+document previously made were false and have been removed:
 
-`SourceAccessKind` distinguishes them, because a probe and a reader do not have the same
-semantics and collapsing them is what let four file reads hide behind one declaration.
+> ~~"a bounded AST test derives every authoritative access"~~
+> ~~"the guard fails closed on every unrecognized path operation"~~
 
-| Kind | Meaning | Members |
+The analyzer is **retired, not extended** — and deliberately not kept as a
+"diagnostic", because a mechanism that lost coverage three times should not sit next to
+the real boundary inviting reuse. A test asserts nothing binds its names any more.
+
+#### The boundary is now structural
+
+```text
+certified source gateways
+        ↓
+one bounded evidence collector
+        ↓
+IO-free dashboard assembler
+```
+
+The objective is **not** to understand every possible Python filesystem expression. It
+is to architecturally prevent arbitrary filesystem expressions from appearing in the
+dashboard assembler at all. "Does this function perform IO?" is tractable; "does this
+AST recognise every way Python can touch a file?" is not.
+
+We no longer ask whether `.stat()` is benign. It simply may not appear in the collector.
+
+| Invariant | Enforced by |
+|---|---|
+| `build_dashboard` performs **no** authoritative acquisition — no read, probe, parse, module import, or gateway call | absence test over its AST |
+| `build_dashboard` constructs **no** source path (`Path()` exactly once, to normalise the argument) | no `/` BinOp in its body |
+| `root` reaches **only** `_collect_dashboard_evidence`, positionally **or** by keyword, alias-aware | delegation test |
+| the collector calls **nothing** but certified gateways and the evidence constructor — *every* call checked, not only ones that look like IO | closed-world test |
+| gateway call **multiplicity** is exact — a second call to an existing gateway fails | `Counter` equality, not `set` |
+| the collector constructs **no** source path | no `/` BinOp, no `Path()`, no import |
+
+#### The certified gateways
+
+| Gateway | Acquires | Contract |
 |---|---|---|
-| `CANONICAL_READER` | Admits and **interprets** evidence; validates shape, applies a contract, fails closed | readers A · B · C (`RawSourceReader`) |
-| `DIRECT_EVIDENCE_PARSE` | Opens and parses an authoritative file inline; the **consumer** validates | the authority-record evidence gateway |
-| `DIRECT_READABILITY_PROBE` | Answers one structural question; **forbidden** from emitting content | the four `config_readability` probes |
-| `MODULE_PRESENCE_PROBE` | Asks whether an imported module exposes named attributes; opens no file | Northstar 0B.3 contract presence |
+| `read_authority_level` | `config/ew0a_authority.json` | effective, fail-closed authority (canonical reader A) |
+| `read_runtime_policy` | `config/ew0a_runtime.json` | typed runtime policy or `None` (reader B) |
+| `read_controller_records` | `docs/EW0A_0B3_RECORDS.jsonl` | whole-ledger admission + WCC field contract (reader C) |
+| `_read_authority_record_evidence` | `config/ew0a_authority.json` | what the record **says**, behind `_MISSING`; consumer validates |
+| `_read_system_config_readability` | four config sources | `config_readability` map of `READABILITY_STATES` |
+| `_read_northstar_contract_presence` | `portfolio_automation.northstar` | contract-name set, fail-closed to empty |
+| `build_run_history` · `_project_learning` · `_build_active_session` | own sources | separately certified producers, own boundaries retained |
 
-`_RegisteredProjection` carries `canonical_readers` and `direct_sources` separately.
-Identity is `<kind>:<target>` — which is what lets a derived access match a declaration
-without a hand-written bridge, and why the authority record can appear **twice** under two
-different kinds without ambiguity.
+`read_authority_level` and `_read_authority_record_evidence` both read the authority
+record and are **deliberately not collapsed**: one answers *what authority is in force*
+and fails closed to A0, the other answers *what the stored record says* so the
+projection can report evidence quality without being able to escalate authority.
 
-#### The derived inventory
+`_collect_dashboard_evidence` returns a frozen `_DashboardEvidence` carrying all
+fourteen source-backed inputs. After that call the assembler needs `root` for nothing.
 
-Nine accesses, derived from the source, not from a list:
+#### Completeness is now sound by construction
 
-| Access | Kind | Target | Consuming surface |
-|---|---|---|---|
-| `read_authority_level` | canonical reader | `config/ew0a_authority.json` | `worker` · `worker_authority` · `system_health` · `backend_truth` |
-| `read_runtime_policy` | canonical reader | `config/ew0a_runtime.json` | `controller` · `mission` · `worker` · `backend_truth` |
-| `read_controller_records` | canonical reader | `docs/EW0A_0B3_RECORDS.jsonl` | `supervisor` · `apprenticeship` · `worker` · `controller_records` · `backend_truth` |
-| `_read_authority_record_evidence` | direct evidence parse | `config/ew0a_authority.json` | `worker_authority` |
-| `_readability` | direct probe | `config/ew0a_authority.json` | `system_health` |
-| `_readability` | direct probe | `config/ew0a_runtime.json` | `system_health` |
-| `_readability` | direct probe | `docs/EW0A_CERTIFICATION_OUTCOMES.jsonl` | `system_health` |
-| `_readability` | direct probe | `docs/EW0A_0B3_RECORDS.jsonl` | `system_health` |
-| `hasattr(northstar, …)` | module presence probe | `portfolio_automation.northstar` | `mission` |
+Because the gateway set is **closed** (mechanically proven), enumerating what a closed
+set acquires is complete — unlike enumerating the syntax by which acquisition might be
+written. The registry's dependency declarations are checked against that enumeration
+with equality in both directions, so an undeclared dependency and a dead declaration
+both fail. The four readability identities are derived from
+`SYSTEM_CONFIG_READABILITY_SOURCES` — the gateway's **own executable mapping**, which
+drives the actual probes — so a probe cannot be claimed without being performed, nor
+performed without being declared.
 
-Three of these were undeclared before GUI-RI: `system_health`'s four probes (the Codex
-finding), `worker_authority`'s **second, direct** parse of the authority record, and
-`mission`'s contract-presence probe. The last two were found by the derivation itself —
-neither the finding nor the repair brief named them — which is the point of deriving
-rather than enumerating.
+#### Where mechanical enforcement stops
 
-#### The required invariant
+- **Enforced** — the assembler acquires nothing; the collector's complete call multiset
+  is closed and exact; every dependency a gateway acquires is declared and vice versa.
+- **NOT enforced — per-surface attribution.** That `system_health` rather than some
+  other surface consumes a given probe is a **declared, human-reviewed architectural
+  contract**, not inferred through dataflow from acquisition site to dashboard key.
+  Each entry's `detail` states its reasoning so a reviewer can check it against the call
+  path. Over-attribution is the residual risk: it can overstate a dependency, but it
+  cannot admit an unacquired one or hide an acquired one — the gateway boundary covers
+  both.
 
-```text
-derived source dependencies == union of dependencies declared by projections
-```
-
-**Equality, not containment.** A dependency the source performs but nothing declares is a
-blind spot; a dependency declared but no longer performed is a dead claim that makes the
-registry look more coupled than it is. Both fail. `registry_classification_violations()`
-now spans **both** kinds, so a surface can no longer claim `MODULE_OWNED` while opening a
-file through a probe.
-
-The guard fails **closed**: a content-acquiring call (`read_text`, `read_bytes`, `open`,
-`iterdir`, `glob`, `rglob`, `walk`) on a path it cannot resolve is reported as
-unclassifiable rather than skipped. Presence predicates (`exists`, `is_file`, `is_dir`)
-are recognised as non-content-bearing deliberately, not ignored silently. A separate
-bounded check fails if `build_dashboard` hands `root` to any function outside the
-certified consumer set — because the cheapest way to evade an inventory is to move the
-read into a fresh helper, which is how these four stayed invisible.
-
-#### What the guard does NOT prove
-
-Stated plainly, and as its own test, so it cannot be cited for more than it establishes:
-
-- **Proven mechanically** — the *set* of source accesses is complete (nothing undeclared)
-  and live (nothing dead).
-- **NOT proven** — *per-surface attribution*. That `system_health` rather than some other
-  surface consumes a given probe is **declared and human-reviewed**, not derived; deriving
-  it needs dataflow from access site to emitted key, i.e. the whole-program analysis this
-  is deliberately not. Each entry's `detail` therefore states its reasoning so a reviewer
-  can check it against the call path. Over-attribution is the residual risk: it can
-  overstate a dependency, but it cannot cause a leak or a crash.
-- **Boundary** — this certifies `build_dashboard`'s own acquisition plus the named gateway
-  it delegates to (`_read_authority_record_evidence`). `run_history`, `active_session` and
-  `learning` are built by separately certified producers that keep their own boundaries
-  and tests. **This is not a whole-program source graph.**
+`SourceAccessKind` and `DirectSource` remain as **semantic identity and documentation**:
+they classify permitted dependencies. They do **not** discover arbitrary Python IO —
+that is the gateway boundary's job, and conflating the two is what produced four
+findings.
 
 #### `_readability` is certified as a probe
 
@@ -862,10 +862,21 @@ being able to escalate authority. A record claiming `A9_TOTAL_CONTROL` still yie
 and a malformed record yields no evidence for **all three** fields rather than a partial
 read.
 
-Flipping the enum back, or dropping any declaration, fails tests. Mutation-proven:
-undeclared new probe, removed probe declaration, regressed `_readability`, new inline
-`read_text()`, a read relocated into a new helper, removed direct-parse declaration, a
-dead declaration, and a broken reader-identity mapping — eight mutations, all detected.
+Flipping the enum back, or dropping any declaration, fails tests.
+
+**Mutation-proven, 17 mutations, all detected.** Declaration layer (8): undeclared new
+probe · removed probe declaration · regressed `_readability` · new inline `read_text()`
+· a read relocated into a new helper · removed direct-parse declaration · a dead
+declaration · a broken reader-identity mapping. Gateway boundary (9): a duplicated
+gateway call · `.stat()` in the collector · `.readlink()` in the collector · a new
+helper given `root` positionally · the same helper given `root` **by keyword** · a
+direct read in the assembler · that read relocated into a collector-called helper · a
+certified-gateway declaration dropped while its call remains · a gateway call removed
+while its declaration remains.
+
+Note what the collector mutations do **not** require: nobody had to decide whether
+`.stat()` or `.readlink()` is dangerous. They fail because they are not certified
+gateways, which is the whole reason this boundary replaced syntax recognition.
 
 The registry deliberately does **not** claim the dashboard is certified.
 

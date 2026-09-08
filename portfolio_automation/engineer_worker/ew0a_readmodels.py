@@ -1437,6 +1437,17 @@ def _is_empty_session_envelope(session: dict[str, Any]) -> bool:
     return all(isinstance(entry, str) for entry in known)
 
 
+#: Logical ``config_readability`` key -> repo-relative source. THIS MAPPING IS
+#: THE CONTRACT: it drives the actual probes, so there is no second list for the
+#: implementation to drift away from. Adding a source here adds a probe; there is
+#: no way to claim one without performing it.
+SYSTEM_CONFIG_READABILITY_SOURCES: dict[str, str] = {
+    "authority_record": "config/ew0a_authority.json",
+    "runtime_policy": "config/ew0a_runtime.json",
+    "outcome_ledger": OUTCOME_LEDGER_REL,
+    "records_ledger": CONTROLLER_RECORDS_REL,
+}
+
 #: The COMPLETE published vocabulary of _readability. Certified finite so that a
 #: regression returning file contents cannot masquerade as a state -- which is
 #: exactly what Codex finding 3960949424 showed the old guard could not detect.
@@ -2025,6 +2036,41 @@ def declared_source_dependency_union() -> frozenset[str]:
     return frozenset(union)
 
 
+def _read_system_config_readability(root: Path) -> dict[str, str]:
+    """Probe every system config source's readability. A CERTIFIED GATEWAY.
+
+    Extracted from the assembler because four anonymous ``_readability`` calls
+    inside ``build_dashboard`` were exactly the accesses that Codex finding
+    3960949424 showed no guard could see. Source paths belong inside a gateway,
+    not inside the thing that assembles projections.
+
+    Driven by :data:`SYSTEM_CONFIG_READABILITY_SOURCES`, so the mapping and the
+    calls cannot disagree.
+
+    Returns readability evidence and NOTHING else -- never file contents, never
+    parsed evidence, and never liveness. ``config_readability`` has always meant
+    "can this projection read the file", and declaring these probes as
+    dependencies did not turn them into health."""
+    return {key: _readability(root / rel)
+            for key, rel in SYSTEM_CONFIG_READABILITY_SOURCES.items()}
+
+
+def _read_northstar_contract_presence() -> frozenset[str]:
+    """Which Northstar 0B.3 contracts this build exposes. A CERTIFIED GATEWAY.
+
+    A module attribute-presence probe, not filesystem evidence: it opens no file
+    and reads no path. Behind a gateway anyway, because it is still authoritative
+    evidence acquisition and the assembler must contain none.
+
+    Fail-closed to the empty set exactly as before -- an import failure means
+    "no contracts proven present", never "contracts absent from the milestone"."""
+    try:
+        import portfolio_automation.northstar as ns
+        return frozenset(n for n in _NORTHSTAR_0B3 if hasattr(ns, n))
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
 def _read_authority_record_evidence(root: Path) -> tuple[Any, Any, Any]:
     """The dashboard's SECOND read of the authority record, as a named gateway.
 
@@ -2075,36 +2121,124 @@ def _read_authority_record_evidence(root: Path) -> tuple[Any, Any, Any]:
     return grants, record_forbidden, raw_level
 
 
+#: The persistent worker identity. Hoisted out of the assembler so the evidence
+#: collector can pass it to the learning producer without depending on a summary
+#: object the assembler has not built yet.
+WORKER_IDENTITY = "engineer.local_qwen2_5_7b"
+
+
+@dataclass(frozen=True)
+class _DashboardEvidence:
+    """Every source-backed input ``build_dashboard`` needs, already acquired.
+
+    THE ARCHITECTURAL BOUNDARY. Two earlier attempts tried to prove completeness
+    by teaching an AST guard to recognise source-access syntax, and both failed
+    the same way: a new equivalent syntax appeared and the guard silently lost
+    coverage. First the universe came from a hand-written reader enum, then from
+    a hand-written list of method names. Both were the same mistake -- asking a
+    catalogue what IO exists.
+
+    This inverts it. Rather than recognising every possible filesystem
+    expression, the assembler is architecturally prevented from containing any.
+    All acquisition happens in the collector below, whose complete call set is
+    small enough to close: every call must be a certified gateway or this
+    constructor. Whether ``.stat()`` is benign stops being a question, because
+    ``.stat()`` simply may not appear there."""
+
+    #: canonical reader A -- effective, fail-closed authority
+    level: Any
+    #: canonical reader B -- runtime policy, or None
+    policy: Any
+    #: canonical reader C -- whole-ledger controller-record admission result
+    records_read: Any
+    #: the authority record's OWN evidence, behind _MISSING; consumer validates
+    authority_grants: Any
+    authority_forbidden_ops: Any
+    authority_raw_level: Any
+    #: module attribute presence, fail-closed to empty
+    contract_presence: frozenset[str]
+    #: readability evidence per system config source -- NOT liveness
+    config_readability: dict[str, str]
+    #: separately certified producers, each keeping its own boundary
+    run_history: Any
+    learning: Any
+    learning_state: Any
+    session_payload: Any
+    session_status: str
+    session_detail: str
+
+
+def _collect_dashboard_evidence(root: Path, now: str | None) -> _DashboardEvidence:
+    """Acquire every source-backed dashboard input. THE ONLY IO IN THIS PATH.
+
+    Deliberately dull, and deliberately the only place ``root`` is used for
+    acquisition. It coordinates certified gateways and constructs nothing else:
+    no source paths (those live inside their gateways), no conditionals, no
+    parsing, no derivation. That dullness is what makes the closed-world proof
+    possible -- a bounded test inspects EVERY call here and requires each to be
+    a certified gateway or the evidence constructor, with exact occurrence
+    counts so a duplicate acquisition cannot hide behind an identity that
+    already exists.
+
+    Semantics are unchanged from the previous assembler; this moves the reads,
+    it does not reinterpret them."""
+    records_read = read_controller_records(root)
+    grants, record_forbidden, raw_level = _read_authority_record_evidence(root)
+    learning, learning_state = _project_learning(root, WORKER_IDENTITY, now)
+    session_payload, session_status, session_detail = _build_active_session(root)
+    return _DashboardEvidence(
+        level=read_authority_level(root),
+        policy=read_runtime_policy(root),
+        records_read=records_read,
+        authority_grants=grants,
+        authority_forbidden_ops=record_forbidden,
+        authority_raw_level=raw_level,
+        contract_presence=_read_northstar_contract_presence(),
+        config_readability=_read_system_config_readability(root),
+        run_history=build_run_history(root),
+        learning=learning,
+        learning_state=learning_state,
+        session_payload=session_payload,
+        session_status=session_status,
+        session_detail=session_detail)
+
+
 def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, Any]:
-    """Assemble the full read-only dashboard from authoritative sources.
+    """Assemble the full read-only dashboard from already-acquired evidence.
+
+    **IO-FREE BY CONSTRUCTION.** This function performs no authoritative source
+    acquisition: no reads, no path probing, no parsing, no module probing. It
+    receives evidence from :func:`_collect_dashboard_evidence` and does nothing
+    but project, classify and assemble. ``root`` exists here only to be handed
+    to the collector, and an architectural test fails if it reaches anything
+    else.
+
+    That invariant is the point. Proving "this function performs no IO" is
+    tractable; proving "this AST recognises every way Python can touch a file"
+    is not, and two attempts at the latter each shipped a guard that silently
+    lost coverage.
 
     ``now`` is injected rather than read from the clock (the no-fabricated-time
     discipline used across the Northstar contracts); readiness assessment needs a
     timestamp and a projection must never invent one.
 
     ORDER IS LOAD-BEARING. The session, learning and run-history projections are
-    built BEFORE the truth assessment so their states can be classified with
+    classified BEFORE the truth assessment so their states are assessed with
     everything else. They used to be appended afterwards, which is precisely how
     the projection that answers "what is happening now" ended up as the only one
     carrying no truth state at all."""
     root = Path(repo_root)
-    level = read_authority_level(root)
-    policy = read_runtime_policy(root)
-    records_read = read_controller_records(root)
+    evidence = _collect_dashboard_evidence(root, now)
+
+    level = evidence.level
+    policy = evidence.policy
+    records_read = evidence.records_read
     records = records_read.records
     mission = policy.mission_id if policy else None
-
-    # authoritative contract presence -> mission progress
-    try:
-        import portfolio_automation.northstar as ns
-        present = {n for n in _NORTHSTAR_0B3 if hasattr(ns, n)}
-    except Exception:  # noqa: BLE001
-        present = set()
-
-    # The SECOND read of the authority record, behind a named gateway rather
-    # than an anonymous read_text() buried in the assembler. See
-    # _read_authority_record_evidence.
-    grants, record_forbidden, raw_level = _read_authority_record_evidence(root)
+    present = evidence.contract_presence
+    grants = evidence.authority_grants
+    record_forbidden = evidence.authority_forbidden_ops
+    raw_level = evidence.authority_raw_level
 
     controller = ControllerSummary(
         controller_identity="claude_code", controller_role="authoritative_controller",
@@ -2114,7 +2248,7 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         operational_state=PENDING_BACKEND,
         controller_since=PENDING_BACKEND, escalation_role="human")
     worker = WorkerSummary(
-        worker_identity="engineer.local_qwen2_5_7b", role="engineer",
+        worker_identity=WORKER_IDENTITY, role="engineer",
         operational_state=PENDING_BACKEND, ew_authority=level.value, controller_level="C0.5_SHADOW",
         current_mission=mission, current_task=PENDING_BACKEND, queue_size=PENDING_BACKEND,
         activity_summary=PENDING_BACKEND, next_action=PENDING_BACKEND,
@@ -2132,21 +2266,17 @@ def build_dashboard(repo_root: str | Path, now: str | None = None) -> dict[str, 
         # Authority level is CONFIGURATION, not health. Kept here because the
         # field is part of the published shape, and labelled by health_note.
         authority=level.value, control_loop=PENDING_BACKEND,
-        config_readability={
-            "authority_record": _readability(root / "config" / "ew0a_authority.json"),
-            "runtime_policy": _readability(root / "config" / "ew0a_runtime.json"),
-            "outcome_ledger": _readability(root / OUTCOME_LEDGER_REL),
-            "records_ledger": _readability(root / CONTROLLER_RECORDS_REL),
-        })
+        # Acquired by _read_system_config_readability, not probed here.
+        config_readability=evidence.config_readability)
 
     # Built BEFORE the truth assessment so every one of them is classified.
     worker_authority = build_worker_authority_summary(
         level, grants, record_forbidden, raw_level)
-    run_history = build_run_history(root)
-    learning, learning_state = _project_learning(root, worker.worker_identity, now)
-    session_payload, session_status, session_detail = _build_active_session(root)
+    run_history = evidence.run_history
+    learning, learning_state = evidence.learning, evidence.learning_state
     active_session, session_state = project_active_session(
-        session_payload, mission, now, session_status, session_detail)
+        evidence.session_payload, mission, now,
+        evidence.session_status, evidence.session_detail)
 
     dashboard = {
         **_base("Dashboard"),

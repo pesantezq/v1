@@ -3639,241 +3639,332 @@ def test_ri_the_registry_still_covers_every_emitted_surface_after_reclassificati
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GUI-RI — SOURCE-ACCESS BOUNDARY CLOSURE (Codex finding 3960949424)
+# GUI-RI — EVIDENCE GATEWAY BOUNDARY
 #
-# The previous guard derived its universe from the hand-written RawSourceReader
-# enum, so `system_health`'s four direct `_readability` reads were invisible to
-# it: a regressed `_readability` could leak 898 bytes of the authority record
-# into the dashboard while every registry check still passed.
+# Two earlier attempts proved completeness by teaching an AST guard to recognise
+# source-access syntax. Both failed the same way:
 #
-# The dependency direction is inverted here:
+#     known syntax set -> new equivalent syntax appears -> coverage lost silently
 #
-#     ACTUAL SOURCE ACCESS -> derived inventory -> declaration + proof -> boundary
+# First the universe came from the hand-written RawSourceReader enum, so
+# `_readability`'s four reads were invisible (finding 3960949424). Then it came
+# from `_RI_CONTENT_ACQUISITION`, a hand-written list of method names, so
+# `.stat()` was invisible, a second access site collapsed under an existing
+# identity, and a keyword-passed `root` escaped (three further P2s).
 #
-# The SOURCE decides which dependencies exist. Declarations decide how each one
-# is treated. An enum may carry a reader's identity; it may not define the
-# universe of possible accesses.
+# Both were the same mistake: asking a catalogue what IO exists.
+#
+# The analyzer is RETIRED, not extended. It is not kept as a "diagnostic",
+# because a mechanism that lost coverage three times should not be sitting next
+# to the real boundary inviting reuse. The boundary is now structural:
+#
+#     certified source gateways -> one bounded collector -> IO-free assembler
+#
+# We no longer ask whether `.stat()` is benign. It simply may not appear in the
+# collector, and the assembler may not acquire anything at all.
 # ═══════════════════════════════════════════════════════════════════════════
 
-#: The bounded universe this guard certifies. NOT a whole-program source graph:
-#: `build_dashboard`'s own acquisition plus the named gateway it delegates that
-#: acquisition to. `run_history`, `active_session` and `learning` are built by
-#: separately certified producers that keep their own boundaries and tests.
-_RI_ANALYSED_FUNCTIONS = ("build_dashboard", "_read_authority_record_evidence")
-
-#: Attribute calls that ACQUIRE content from a path. Reaching one of these on an
-#: unresolvable path is a failure, not something to skip.
-_RI_CONTENT_ACQUISITION = frozenset({
-    "read_text", "read_bytes", "open", "iterdir", "glob", "rglob", "walk"})
-
-#: Path predicates that reveal only presence and cannot carry content out. They
-#: are recognised deliberately rather than ignored silently.
-_RI_BENIGN_PREDICATES = frozenset({"exists", "is_file", "is_dir", "is_symlink"})
-
-#: Functions `build_dashboard` may hand `root` to. Each is a separately
-#: certified producer or the named gateway. This is not call-graph analysis --
-#: it is a fail-closed list, so relocating a raw read into a NEW helper cannot
-#: quietly escape the inventory the way `_readability` did.
-_RI_DELEGATED_ROOT_CONSUMERS = frozenset({
-    "read_authority_level", "read_runtime_policy", "read_controller_records",
-    "_read_authority_record_evidence", "_readability",
-    "build_run_history", "_project_learning", "_build_active_session",
+#: Attribute calls that touch the filesystem or parse acquired bytes. Used ONLY
+#: to assert the assembler contains none -- never as a completeness catalogue,
+#: which is the failure this redesign exists to end. Over-inclusion here is free;
+#: under-inclusion cannot hide an access, because the assembler is separately
+#: forbidden from calling any gateway or constructing any source path.
+_RI_FORBIDDEN_IN_ASSEMBLER = frozenset({
+    "read_text", "read_bytes", "open", "exists", "stat", "lstat", "readlink",
+    "iterdir", "glob", "rglob", "walk", "resolve", "is_file", "is_dir",
+    "is_symlink", "load", "loads", "samefile", "owner", "group",
 })
 
+#: Every function the evidence collector is permitted to call, with the EXACT
+#: number of times. A multiset, not a set: a second acquisition must not vanish
+#: because its identity already exists (fresh P2 #1).
+_RI_CERTIFIED_GATEWAY_CALLS = {
+    "read_authority_level": 1,
+    "read_runtime_policy": 1,
+    "read_controller_records": 1,
+    "_read_authority_record_evidence": 1,
+    "_read_system_config_readability": 1,
+    "_read_northstar_contract_presence": 1,
+    "build_run_history": 1,
+    "_project_learning": 1,
+    "_build_active_session": 1,
+    "_DashboardEvidence": 1,
+}
 
-def _ri_module_ast():
+#: What each certified gateway acquires, as registry dependency identities. This
+#: replaces syntax derivation with something sound: the gateway set is CLOSED
+#: (proven below), so enumerating what a closed set acquires is complete by
+#: construction. The four readability identities are derived from the gateway's
+#: own executable source mapping, so they cannot be claimed without being
+#: performed. The three separately certified producers contribute nothing here --
+#: they keep their own boundaries and their own tests.
+def _ri_gateway_dependencies():
+    ident = rm.source_access_identity
+    kinds = rm.SourceAccessKind
+    return {
+        "read_authority_level": {
+            ident(kinds.CANONICAL_READER, rm.RawSourceReader.AUTHORITY_LEVEL.value)},
+        "read_runtime_policy": {
+            ident(kinds.CANONICAL_READER, rm.RawSourceReader.RUNTIME_POLICY.value)},
+        "read_controller_records": {
+            ident(kinds.CANONICAL_READER, rm.RawSourceReader.CONTROLLER_RECORDS.value)},
+        "_read_authority_record_evidence": {
+            rm.DirectSource.AUTHORITY_RECORD_EVIDENCE.value},
+        # derived from the implementation's own mapping, not restated
+        "_read_system_config_readability": {
+            ident(kinds.DIRECT_READABILITY_PROBE, rel)
+            for rel in rm.SYSTEM_CONFIG_READABILITY_SOURCES.values()},
+        "_read_northstar_contract_presence": {
+            rm.DirectSource.NORTHSTAR_CONTRACT_PRESENCE.value},
+        "build_run_history": set(),
+        "_project_learning": set(),
+        "_build_active_session": set(),
+        "_DashboardEvidence": set(),
+    }
+
+
+def _ri_function_ast(name):
     src = (_REPO / "portfolio_automation" / "engineer_worker"
            / "ew0a_readmodels.py").read_text(encoding="utf-8")
-    return _ast.parse(src)
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found")
 
 
-def _ri_resolve_path(node, local_paths):
-    """Resolve a path expression to a repo-relative string, or None.
-
-    Handles the forms that actually occur: ``root / "config" / "x.json"``,
-    ``root / MODULE_CONSTANT``, and a local name previously bound to either."""
-    if isinstance(node, _ast.Name):
-        if node.id == "root":
-            return ""
-        if node.id in local_paths:
-            return local_paths[node.id]
-        value = getattr(rm, node.id, None)          # module-level path constant
-        return value if isinstance(value, str) else None
-    if isinstance(node, _ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, _ast.BinOp) and isinstance(node.op, _ast.Div):
-        left = _ri_resolve_path(node.left, local_paths)
-        right = _ri_resolve_path(node.right, local_paths)
-        if left is None or right is None:
-            return None
-        return f"{left}/{right}".strip("/")
-    return None
-
-
-def _ri_derive_source_accesses():
-    """Derive every direct authoritative-source access from the actual source.
-
-    Returns ``(accesses, unclassified)`` where accesses maps a dependency
-    identity to the set of analysed functions performing it."""
-    accesses: dict[str, set[str]] = {}
-    unclassified: list[str] = []
-    identity = rm.source_access_identity
-    kinds = rm.SourceAccessKind
-
-    def record(kind, target, where):
-        accesses.setdefault(identity(kind, target), set()).add(where)
-
-    for func in _ast.walk(_ri_module_ast()):
-        if not (isinstance(func, _ast.FunctionDef)
-                and func.name in _RI_ANALYSED_FUNCTIONS):
+def _ri_called_names(func):
+    """Every call in `func` as (bare_name, attribute_name) occurrence lists."""
+    bare, attrs = [], []
+    for node in _ast.walk(func):
+        if not isinstance(node, _ast.Call):
             continue
-        local_paths: dict[str, str] = {}
-        module_aliases: set[str] = set()
-
-        for node in _ast.walk(func):
-            # local path bindings, so `ap = root / ...` then `ap.read_text()`
-            # resolves instead of looking unclassifiable
-            if isinstance(node, _ast.Assign) and len(node.targets) == 1 \
-                    and isinstance(node.targets[0], _ast.Name):
-                resolved = _ri_resolve_path(node.value, local_paths)
-                if resolved:
-                    local_paths[node.targets[0].id] = resolved
-            elif isinstance(node, _ast.Import):
-                for alias in node.names:
-                    module_aliases.add(alias.asname or alias.name.split(".")[0])
-
-        for node in _ast.walk(func):
-            if not isinstance(node, _ast.Call):
-                continue
-            fn = node.func
-
-            # a canonical reader, by name
-            if isinstance(fn, _ast.Name) and fn.id in rm.CANONICAL_READER_FUNCTIONS:
-                record(kinds.CANONICAL_READER,
-                       rm.CANONICAL_READER_FUNCTIONS[fn.id].value, func.name)
-                continue
-
-            # a readability probe
-            if isinstance(fn, _ast.Name) and fn.id == "_readability":
-                target = _ri_resolve_path(node.args[0], local_paths) \
-                    if node.args else None
-                if target is None:
-                    unclassified.append(
-                        f"{func.name}: _readability() on an unresolvable path")
-                else:
-                    record(kinds.DIRECT_READABILITY_PROBE, target, func.name)
-                continue
-
-            # a module attribute-presence probe
-            if isinstance(fn, _ast.Name) and fn.id == "hasattr" and node.args:
-                first = node.args[0]
-                if isinstance(first, _ast.Name) and first.id in module_aliases:
-                    record(kinds.MODULE_PRESENCE_PROBE,
-                           "portfolio_automation.northstar", func.name)
-                continue
-
-            # builtin open()
-            if isinstance(fn, _ast.Name) and fn.id == "open":
-                target = _ri_resolve_path(node.args[0], local_paths) \
-                    if node.args else None
-                if target is None:
-                    unclassified.append(f"{func.name}: open() on an unresolvable path")
-                else:
-                    record(kinds.DIRECT_EVIDENCE_PARSE, target, func.name)
-                continue
-
-            # content acquisition on a path object
-            if isinstance(fn, _ast.Attribute) and fn.attr in _RI_CONTENT_ACQUISITION:
-                target = _ri_resolve_path(fn.value, local_paths)
-                if target is None:
-                    unclassified.append(
-                        f"{func.name}: .{fn.attr}() on an unresolvable path "
-                        f"({_ast.dump(fn.value)[:70]})")
-                else:
-                    record(kinds.DIRECT_EVIDENCE_PARSE, target, func.name)
-
-    return accesses, unclassified
+        if isinstance(node.func, _ast.Name):
+            bare.append(node.func.id)
+        elif isinstance(node.func, _ast.Attribute):
+            attrs.append(node.func.attr)
+    return bare, attrs
 
 
-def test_ri_the_derived_inventory_equals_the_declared_dependencies():
-    """THE completeness control. Equality in both directions.
+# ── the primary invariant: the assembler acquires nothing ────────────────
+def test_ri_the_assembler_performs_no_authoritative_io():
+    """build_dashboard must contain no source acquisition of any kind.
 
-    A dependency the source performs but nothing declares is a blind spot -- the
-    Codex finding. A dependency declared but no longer performed is a dead claim
-    that makes the registry look more coupled than it is. Both fail."""
-    accesses, unclassified = _ri_derive_source_accesses()
-    assert not unclassified, f"unclassifiable source access: {unclassified}"
+    This is tractable in a way "recognise every filesystem expression" is not:
+    the assembler is small, and we assert absence rather than trying to
+    enumerate presence."""
+    func = _ri_function_ast("build_dashboard")
+    bare, attrs = _ri_called_names(func)
 
-    derived = set(accesses)
-    declared = set(rm.declared_source_dependency_union())
-    assert derived == declared, (
-        f"undeclared derived dependencies: {sorted(derived - declared)}; "
-        f"dead declared dependencies: {sorted(declared - derived)}")
+    leaked = sorted(set(attrs) & _RI_FORBIDDEN_IN_ASSEMBLER)
+    assert not leaked, f"build_dashboard performs IO via {leaked}"
 
+    # nor may it call any gateway itself -- only the collector may
+    gateways = set(_RI_CERTIFIED_GATEWAY_CALLS) - {"_DashboardEvidence"}
+    called_gateways = sorted(set(bare) & gateways)
+    assert not called_gateways, (
+        f"build_dashboard calls gateways directly: {called_gateways}; "
+        f"acquisition belongs in _collect_dashboard_evidence")
 
-def test_ri_the_derived_inventory_contains_what_the_repair_brief_expected():
-    """Anchors the derivation against the accesses we know exist, so a
-    derivation that silently stopped finding anything cannot pass the equality
-    test by matching an equally empty declaration set."""
-    accesses, _ = _ri_derive_source_accesses()
-    for expected in (
-            "reader:A:ew0a_authority.read_authority_level",
-            "reader:B:ew0a_loop.read_runtime_policy",
-            "reader:C:ew0a_readmodels.read_controller_records",
-            "evidence_parse:config/ew0a_authority.json",
-            "readability:config/ew0a_authority.json",
-            "readability:config/ew0a_runtime.json",
-            f"readability:{rm.OUTCOME_LEDGER_REL}",
-            f"readability:{rm.CONTROLLER_RECORDS_REL}",
-            "module_presence:portfolio_automation.northstar"):
-        assert expected in accesses, f"derivation lost {expected}"
-    assert len(accesses) == 9, sorted(accesses)
+    assert "open" not in bare, "build_dashboard calls open()"
+    assert "hasattr" not in bare, "build_dashboard probes module presence"
+    assert "_readability" not in bare, "build_dashboard probes readability"
+
+    # and it may not import anything -- an import is acquisition too
+    for node in _ast.walk(func):
+        assert not isinstance(node, (_ast.Import, _ast.ImportFrom)), (
+            "build_dashboard imports at runtime; move it behind a gateway")
+
+    # exactly one collector call
+    assert bare.count("_collect_dashboard_evidence") == 1
 
 
-def test_ri_the_universe_is_not_the_enum_any_more():
-    """The architectural inversion, stated as a test.
-
-    Four of the nine derived dependencies cannot be expressed as a
-    RawSourceReader at all, which is precisely why an enum must not define
-    completeness."""
-    accesses, _ = _ri_derive_source_accesses()
-    reader_identities = {rm.source_access_identity(
-        rm.SourceAccessKind.CANONICAL_READER, r.value) for r in rm.RawSourceReader}
-    beyond_the_enum = set(accesses) - reader_identities
-    assert len(beyond_the_enum) == 6, sorted(beyond_the_enum)
-    assert len(set(accesses)) > len(reader_identities)
+def test_ri_the_assembler_constructs_no_source_paths():
+    """A `root / "..."` in the assembler is acquisition waiting to happen."""
+    func = _ri_function_ast("build_dashboard")
+    divisions = [n for n in _ast.walk(func)
+                 if isinstance(n, _ast.BinOp) and isinstance(n.op, _ast.Div)]
+    assert not divisions, "build_dashboard builds a path with /"
+    # Path() is permitted exactly once, to normalise the argument
+    bare, _ = _ri_called_names(func)
+    assert bare.count("Path") == 1
 
 
-def test_ri_build_dashboard_delegates_root_only_to_certified_builders():
-    """Fail closed on a NEW helper receiving `root`.
+def test_ri_root_reaches_only_the_collector():
+    """Closes fresh P2 #3 structurally: positional OR keyword, `root` may only
+    be handed to the collector.
 
-    Not call-graph analysis -- a bounded list. It exists because the cheapest way
-    to evade the inventory is to move a raw read into a fresh helper, which is
-    exactly how `_readability`'s reads stayed invisible."""
-    for func in _ast.walk(_ri_module_ast()):
-        if not (isinstance(func, _ast.FunctionDef) and func.name == "build_dashboard"):
+    Alias-aware, but deliberately not dataflow analysis -- the function is kept
+    shaped so simple aliasing is enough."""
+    func = _ri_function_ast("build_dashboard")
+    aliases = {"root"}
+    for node in _ast.walk(func):
+        if isinstance(node, _ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], _ast.Name) \
+                and isinstance(node.value, _ast.Name) and node.value.id in aliases:
+            aliases.add(node.targets[0].id)
+
+    for node in _ast.walk(func):
+        if not isinstance(node, _ast.Call):
             continue
-        for node in _ast.walk(func):
-            if not (isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name)):
-                continue
-            passes_root = any(isinstance(a, _ast.Name) and a.id == "root"
-                              for a in node.args)
-            if passes_root:
-                assert node.func.id in _RI_DELEGATED_ROOT_CONSUMERS, (
-                    f"build_dashboard passes root to {node.func.id}, which is not a "
-                    f"certified source consumer -- model its dependency first")
+        passes_root = any(isinstance(a, _ast.Name) and a.id in aliases
+                          for a in node.args)
+        passes_root = passes_root or any(
+            isinstance(kw.value, _ast.Name) and kw.value.id in aliases
+            for kw in node.keywords)
+        if not passes_root:
+            continue
+        name = node.func.id if isinstance(node.func, _ast.Name) else \
+            getattr(node.func, "attr", "<expr>")
+        assert name == "_collect_dashboard_evidence", (
+            f"build_dashboard hands root to {name}; only the evidence "
+            f"collector may receive it")
 
 
-def test_ri_the_guard_states_its_boundary_honestly():
-    """No overclaiming: this certifies two functions, not the module."""
-    assert _RI_ANALYSED_FUNCTIONS == ("build_dashboard",
-                                      "_read_authority_record_evidence")
-    for name in _RI_ANALYSED_FUNCTIONS:
+# ── the collector is a closed world ──────────────────────────────────────
+def test_ri_the_collector_calls_nothing_but_certified_gateways():
+    """Closes fresh P2 #2 WITHOUT cataloguing Path APIs.
+
+    Every call is checked, not only the ones that "look like IO". So `.stat()`
+    fails not because we classified it as dangerous, but because it is not a
+    certified gateway and therefore may not appear."""
+    func = _ri_function_ast("_collect_dashboard_evidence")
+    bare, attrs = _ri_called_names(func)
+
+    assert not attrs, (
+        f"the collector makes attribute calls {sorted(set(attrs))}; it may only "
+        f"call certified gateways by name")
+    unapproved = sorted(set(bare) - set(_RI_CERTIFIED_GATEWAY_CALLS))
+    assert not unapproved, f"the collector calls uncertified {unapproved}"
+
+
+def test_ri_the_collector_gateway_call_counts_are_exact():
+    """Closes fresh P2 #1: a multiset, so a SECOND call to an existing gateway
+    fails instead of disappearing under an identity that already exists."""
+    from collections import Counter
+    bare, _ = _ri_called_names(_ri_function_ast("_collect_dashboard_evidence"))
+    assert Counter(bare) == Counter(_RI_CERTIFIED_GATEWAY_CALLS), (
+        f"gateway call multiset drifted: actual={dict(Counter(bare))} "
+        f"declared={_RI_CERTIFIED_GATEWAY_CALLS}")
+
+
+def test_ri_the_collector_constructs_no_source_paths():
+    """Source paths belong inside their gateways. The collector coordinates."""
+    func = _ri_function_ast("_collect_dashboard_evidence")
+    divisions = [n for n in _ast.walk(func)
+                 if isinstance(n, _ast.BinOp) and isinstance(n.op, _ast.Div)]
+    assert not divisions, "the collector builds a source path with /"
+    bare, _ = _ri_called_names(func)
+    assert "Path" not in bare, "the collector constructs a Path"
+    for node in _ast.walk(func):
+        assert not isinstance(node, (_ast.Import, _ast.ImportFrom)), (
+            "the collector imports at runtime")
+
+
+def test_ri_every_certified_gateway_exists_and_is_callable():
+    for name in _RI_CERTIFIED_GATEWAY_CALLS:
         assert callable(getattr(rm, name)), name
-    # the separately certified producers are deliberately NOT analysed here
-    for producer in ("build_run_history", "_project_learning", "_build_active_session"):
-        assert producer not in _RI_ANALYSED_FUNCTIONS
-        assert callable(getattr(rm, producer))
+
+
+# ── the gateway world accounts for every declared dependency ─────────────
+def test_ri_the_gateway_world_accounts_for_every_declared_dependency():
+    """Sound because the gateway set is CLOSED, proven above.
+
+    Enumerating what a closed set of gateways acquires is complete by
+    construction -- unlike enumerating the syntax by which acquisition might be
+    written, which is what failed twice. Equality in both directions, so an
+    undeclared dependency and a dead declaration both fail."""
+    acquired = set()
+    for deps in _ri_gateway_dependencies().values():
+        acquired |= deps
+    declared = set(rm.declared_source_dependency_union())
+    assert acquired == declared, (
+        f"gateways acquire but nothing declares: {sorted(acquired - declared)}; "
+        f"declared but no gateway acquires: {sorted(declared - acquired)}")
+
+
+def test_ri_the_gateway_dependency_map_covers_the_closed_gateway_set():
+    """The two declarations must describe the same world."""
+    assert set(_ri_gateway_dependencies()) == set(_RI_CERTIFIED_GATEWAY_CALLS)
+
+
+def test_ri_the_readability_contract_is_the_implementation_mapping():
+    """The gateway's source mapping IS the contract -- there is no second list.
+
+    The registry's four readability DirectSources must be exactly the mapping's
+    targets, so adding a probe to the implementation forces a declaration."""
+    mapped = set(rm.SYSTEM_CONFIG_READABILITY_SOURCES.values())
+    declared = {rm.DIRECT_SOURCE_TARGETS[d] for d in rm.DirectSource
+                if rm.DIRECT_SOURCE_KINDS[d]
+                is rm.SourceAccessKind.DIRECT_READABILITY_PROBE}
+    assert mapped == declared
+    assert len(rm.SYSTEM_CONFIG_READABILITY_SOURCES) == 4
+    # and the gateway's output keys come from that same mapping
+    health = rm.build_dashboard(_REPO, now=_NOW)["system_health"]
+    assert set(health["config_readability"]) == set(rm.SYSTEM_CONFIG_READABILITY_SOURCES)
+
+
+def test_ri_the_retired_analyzer_is_gone():
+    """The unsound mechanism must not survive as a 'diagnostic' next to the real
+    boundary, where it would invite reuse and re-earn the same finding.
+
+    Checks BINDINGS, not mentions: the banner above deliberately names the
+    retired pieces to record why the redesign happened, and that history is
+    worth keeping. What must not exist is anything that binds those names, since
+    nothing can use an identifier nothing binds."""
+    retired = {"_RI_CONTENT_ACQUISITION", "_RI_BENIGN_PREDICATES",
+               "_RI_ANALYSED_FUNCTIONS", "_RI_DELEGATED_ROOT_CONSUMERS",
+               "_ri_derive_source_accesses", "_ri_resolve_path"}
+
+    def bound_names(source):
+            names = set()
+            for node in _ast.walk(_ast.parse(source)):
+                if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef,
+                                     _ast.ClassDef)):
+                    names.add(node.name)
+                elif isinstance(node, _ast.Assign):
+                    names |= {t.id for t in node.targets
+                              if isinstance(t, _ast.Name)}
+                elif isinstance(node, _ast.AnnAssign) and isinstance(
+                        node.target, _ast.Name):
+                    names.add(node.target.id)
+            return names
+
+    import pathlib
+    for label, source in (
+            ("test module", pathlib.Path(__file__).read_text(encoding="utf-8")),
+            ("read model", (_REPO / "portfolio_automation" / "engineer_worker"
+                            / "ew0a_readmodels.py").read_text(encoding="utf-8"))):
+        survived = sorted(retired & bound_names(source))
+        assert not survived, f"{label} still binds {survived}"
+
+
+def test_ri_the_evidence_boundary_is_frozen_and_complete():
+    """Every source-backed input the assembler needs travels through it."""
+    import dataclasses
+    assert dataclasses.is_dataclass(rm._DashboardEvidence)
+    assert rm._DashboardEvidence.__dataclass_params__.frozen
+    fields = {f.name for f in dataclasses.fields(rm._DashboardEvidence)}
+    assert fields == {
+        "level", "policy", "records_read", "authority_grants",
+        "authority_forbidden_ops", "authority_raw_level", "contract_presence",
+        "config_readability", "run_history", "learning", "learning_state",
+        "session_payload", "session_status", "session_detail"}
+
+
+def test_ri_collecting_evidence_twice_is_stable():
+    """A read-only collector: same root, same evidence."""
+    a = rm._collect_dashboard_evidence(_REPO, _NOW)
+    b = rm._collect_dashboard_evidence(_REPO, _NOW)
+    assert a.level == b.level
+    assert a.config_readability == b.config_readability
+    assert a.contract_presence == b.contract_presence
+    assert a.records_read.availability == b.records_read.availability
+
+
+def test_ri_the_northstar_gateway_fails_closed():
+    presence = rm._read_northstar_contract_presence()
+    assert isinstance(presence, frozenset)
+    assert presence <= set(rm._NORTHSTAR_0B3)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -4123,28 +4214,29 @@ def test_ri_the_blocker_state_survives_with_no_claimants():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# GUI-RI — WHAT THE COMPLETENESS GUARD DOES *NOT* PROVE
+# GUI-RI — WHERE MECHANICAL ENFORCEMENT STOPS
 #
-# Stated as a test so the limitation cannot quietly be forgotten and the guard
-# cannot be cited for more than it establishes. Writing the D6 mutation is what
-# surfaced this: declaring an ALREADY-derived dependency on an additional
-# surface leaves the union unchanged, so it passes.
+# Stated as a test so the boundary cannot quietly be forgotten and the registry
+# cannot be cited for more than it establishes.
 #
-# Proven mechanically:  the SET of source accesses is complete (nothing
-#                       undeclared) and live (nothing dead).
-# NOT proven:           per-surface attribution -- that `system_health` rather
-#                       than some other surface is the consumer of a given
-#                       probe. Deriving that needs dataflow from access site to
-#                       emitted key, which is the whole-program analysis this
-#                       mission explicitly excludes.
+# ENFORCED MECHANICALLY, at the evidence-gateway boundary:
+#     build_dashboard performs no acquisition; the collector's complete call
+#     multiset is closed and exact; every dependency a certified gateway
+#     acquires is declared, and every declaration is acquired by one.
 #
-# Attribution is therefore declared and human-reviewed, and each entry's
-# `detail` states its reasoning so a reviewer can check it against the call
-# path. Over-attribution is the residual risk; it cannot cause a leak or a
-# crash, only an overstated dependency.
+# NOT ENFORCED — per-surface attribution:
+#     that `system_health` rather than some other surface consumes a given
+#     probe is a DECLARED, HUMAN-REVIEWED architectural contract. It is not
+#     inferred through dataflow from acquisition site to dashboard key, and
+#     this deliberately does not attempt that.
+#
+# Each entry's `detail` therefore states its reasoning so a reviewer can check
+# it against the call path. Over-attribution is the residual risk: it can
+# overstate a dependency, but it cannot admit an unacquired one or hide an
+# acquired one -- the gateway boundary covers both of those.
 # ═══════════════════════════════════════════════════════════════════════════
 def test_ri_attribution_is_declared_not_derived_and_says_so():
-    """The union guard is set-complete, not attribution-complete."""
+    """The gateway boundary is set-complete, not attribution-complete."""
     baseline = rm.declared_source_dependency_union()
 
     # moving a live dependency onto an extra surface does NOT change the union,
