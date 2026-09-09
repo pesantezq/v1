@@ -29,6 +29,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+#: Stands in for an exit status that could not be read. Non-zero so it can
+#: never be mistaken for success even if a later change stopped checking
+#: `malformed` explicitly.
+MALFORMED_STATUS = 255
+
 from portfolio_automation.release import systemd_validity as V  # noqa: E402
 
 
@@ -42,6 +47,7 @@ def parse_evidence(text: str) -> dict:
     verifies: dict[str, tuple[int, list[str]]] = {}
     commands: dict[str, list[str]] = {}
 
+    malformed: list[str] = []
     section = None
     unit = None
     for raw in text.splitlines():
@@ -50,7 +56,17 @@ def parse_evidence(text: str) -> dict:
             section = parts[0] if parts else ""
             unit = parts[1] if len(parts) > 1 else None
             if section == "VERIFY" and unit is not None:
-                status = int(parts[2]) if len(parts) > 2 else 1
+                # An unreadable status is malformed evidence, not a passing
+                # unit. Raising here would abort before the certifier could
+                # emit its structured NOT_CERTIFIABLE artifact, so operators
+                # would lose the blockers that distinguish an unreadable
+                # capture from an established unit failure.
+                try:
+                    status = int(parts[2]) if len(parts) > 2 else 1
+                except ValueError:
+                    status = MALFORMED_STATUS
+                    malformed.append(f"{unit}: unreadable exit status "
+                                     f"{parts[2]!r}")
                 verifies[unit] = (status, [])
             elif section == "SHOW" and unit is not None:
                 shows[unit] = []
@@ -95,6 +111,7 @@ def parse_evidence(text: str) -> dict:
         for u, (status, lines) in verifies.items()
     }
     return {
+        "malformed_evidence": tuple(malformed),
         "host": host,
         "checked_at": checked_at,
         "systemd_version": version,

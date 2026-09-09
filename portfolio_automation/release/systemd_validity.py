@@ -122,14 +122,25 @@ def _is_utc_timestamp(value: str) -> bool:
         return False
     return True
 
-#: Quoted values are consumed WHOLE. ``\S+`` stopped at the first space, so
-#: systemd echoing ``API_KEY="alpha beta gamma"`` into verifier output left
-#: ``beta gamma"`` in the artifact. Malformed units are exactly what this gate
-#: processes, so their echoed text is the likeliest place for a leak.
+#: Redaction is driven by assignment SHAPE, not by variable name. A keyword
+#: allowlist cannot enumerate every credential: ``DATABASE_URL=`` carries a
+#: password and matches no keyword, and its value may contain spaces and
+#: punctuation that defeat an opaque-token heuristic. So ANY quoted assignment
+#: value is redacted whole, whatever it is called.
+#:
+#: Deliberately scoped to *assignments*: a bare quoted string elsewhere in a
+#: diagnostic (``Unknown section 'Bogus'. Ignoring.``) is not a value and is
+#: left readable, because a gate whose evidence says nothing is its own problem.
+_QUOTED_ASSIGNMENT = re.compile(
+    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*')"""
+)
+#: Named-secret assignments with BARE values (no quotes to delimit them).
 _SECRET_KEY = re.compile(
     r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b"
-    r"\s*=\s*(\"[^\"]*\"|'[^']*'|\S+)"
+    r"\s*=\s*(\S+)"
 )
+#: Credentials embedded in a URL, which carry the secret in the value itself.
+_CREDENTIAL_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/@]*:[^\s/@]*@\S*")
 _LONG_OPAQUE = re.compile(r"\b[A-Za-z0-9+/_-]{32,}={0,2}\b")
 _REDACTED = "<redacted>"
 
@@ -145,7 +156,9 @@ def redact(text: str) -> str:
     never become a side channel for credentials. Verifier output is diagnostic
     text from the host, so it is treated as untrusted for this purpose.
     """
-    cleaned = _SECRET_KEY.sub(_REDACTED, text)
+    cleaned = _QUOTED_ASSIGNMENT.sub(_REDACTED, text)
+    cleaned = _CREDENTIAL_URL.sub(_REDACTED, cleaned)
+    cleaned = _SECRET_KEY.sub(_REDACTED, cleaned)
     return _LONG_OPAQUE.sub(_REDACTED, cleaned)
 
 
@@ -260,6 +273,7 @@ def certify_systemd_unit_validity(
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
     optional_units: tuple[str, ...] = (),
+    malformed_evidence: tuple[str, ...] = (),
 ) -> dict:
     """Combine inventory, loaded state and real verifier results into a verdict.
 
@@ -285,6 +299,13 @@ def certify_systemd_unit_validity(
     """
     errors: list[str] = []
     blockers: list[str] = []          # reasons we *cannot* certify
+
+    # Evidence the reader could not make sense of. This is deliberately a
+    # blocker and not a failure: an unreadable capture and an established unit
+    # failure are different facts, and collapsing them would tell an operator
+    # to go fix a unit that may be perfectly fine.
+    for entry in malformed_evidence:
+        blockers.append(f"malformed evidence — {entry}")
 
     # A certificate that cannot say where or when it was taken is not evidence.
     if not (host or "").strip():

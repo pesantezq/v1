@@ -1075,3 +1075,79 @@ def test_a_genuinely_considered_optional_absence_is_still_tolerated():
         },
     )
     assert combined["production_release_identity"] == "PASS"
+
+
+@pytest.mark.parametrize("leak,secret", [
+    ('EnvironmentFile=DATABASE_URL="postgres://user:secret pass@host/db"',
+     "secret pass"),
+    ("DATABASE_URL=postgres://user:hunter2@host/db", "hunter2"),
+    ('CONNECTION="mongodb://admin:p@ss w0rd@cluster/db"', "p@ss w0rd"),
+    ('SMTP_URI="smtps://mailer:letmein@smtp.example.com"', "letmein"),
+])
+def test_credentials_without_secret_keywords_are_redacted(leak, secret):
+    """A keyword allowlist cannot enumerate every credential name.
+
+    DATABASE_URL carries a password and matches no keyword, and its value can
+    contain spaces and punctuation that defeat an opaque-token heuristic. So
+    redaction is driven by assignment SHAPE instead of by name.
+    """
+    outcomes = {u: ok(u) for u in UNITS}
+    outcomes[UNITS[0]] = ok(
+        UNITS[0], exit_status=1,
+        output=f"unit is malformed, ignoring: {leak}")
+    assert secret not in repr(certify(outcomes=outcomes))
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "pb-noexec.service: Service has no ExecStart=, ExecStop=, or "
+    "SuccessAction=. Refusing.",
+    "/run/systemd/system/x.service:6: Unknown section 'Bogus'. Ignoring.",
+    "x.service: Command /definitely/not/here is not executable: No such file",
+    "/x.service:6: Failed to parse TimeoutStartSec= parameter, ignoring: "
+    "not-a-time",
+])
+def test_redaction_leaves_real_diagnostics_readable(diagnostic):
+    """Evidence that says nothing is its own kind of failure.
+
+    Redaction is scoped to assignment values, so bare quoted names and
+    empty-valued directives in systemd's own messages survive intact.
+    """
+    assert V.redact(diagnostic) == diagnostic
+
+
+def test_malformed_exit_status_fails_closed_through_the_result_path(tmp_path):
+    """An unreadable status is malformed evidence, not a passing unit.
+
+    Raising would abort before the structured artifact could be emitted, so
+    operators would lose the blockers that distinguish an unreadable capture
+    from an established unit failure.
+    """
+    import json
+    import subprocess
+
+    capture = CAPTURE.replace("##VERIFY stockbot-daily.service 0",
+                              "##VERIFY stockbot-daily.service interrupted")
+    path = tmp_path / "malformed.txt"
+    path.write_text(capture, encoding="utf-8")
+
+    proc = subprocess.run(["python3", str(CERTIFIER), str(path)],
+                          capture_output=True, text=True, cwd=str(REPO))
+    assert proc.returncode != 0
+    assert "Traceback" not in proc.stderr, "must not crash"
+    payload = json.loads(proc.stdout)
+    assert payload["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("unreadable exit status" in b for b in payload["blockers"])
+
+
+def test_a_missing_exit_status_is_still_a_failure(tmp_path):
+    import json
+    import subprocess
+
+    capture = CAPTURE.replace("##VERIFY stockbot-daily.service 0",
+                              "##VERIFY stockbot-daily.service")
+    path = tmp_path / "nostatus.txt"
+    path.write_text(capture, encoding="utf-8")
+    proc = subprocess.run(["python3", str(CERTIFIER), str(path)],
+                          capture_output=True, text=True, cwd=str(REPO))
+    assert proc.returncode != 0
+    assert json.loads(proc.stdout)["SYSTEMD_UNIT_VALIDITY"] != V.PASS
