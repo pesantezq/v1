@@ -589,6 +589,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              release_root: str = CURRENT_POINTER,
                              expected_origins: tuple[str, ...] | None = None,
                              validity_result: dict | None = None,
+                             expected_validity_units: tuple[str, ...] | None = None,
                              ) -> dict:
     """Path alignment AND pointer-target SHA together.
 
@@ -621,6 +622,20 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     artifact's ``verified_units`` must cover every systemd unit named by
     ``expected_origins``, and without ``expected_origins`` there is nothing to
     bind the two gates together — which is itself ``NOT_ESTABLISHED``.
+
+    Scheduler origins are not sufficient on their own, though, because they
+    only ever name units that bind a *path*. A ``[Timer]`` unit produces no
+    execution surface, so ``stockbot-daily.timer`` — which is what actually
+    starts the daily run — can never appear in ``expected_origins`` and could
+    therefore never be demanded of the validity evidence. So the deployment's
+    systemd inventory is declared separately in ``expected_validity_units``,
+    and the aggregate requires that too: without it, a validity artifact
+    collected with a narrowed inventory could satisfy every path-bearing origin
+    while leaving the timers entirely unverified.
+
+    A declared unit counts as covered if the artifact verified it, or if the
+    artifact lists it as optional — an optional unit that is installed is
+    verified anyway, so only a tolerated absence passes this way.
     """
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
                                        expected_origins=expected_origins)
@@ -637,20 +652,34 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         )
 
     # The two gates must be about the same units, not merely both green.
-    required_units = tuple(
+    origin_units = {
         origin.split(":", 1)[1]
         for origin in (expected_origins or ())
         if origin.startswith(f"{SYSTEMD_ORIGIN_PREFIX}:")
-    )
+    }
+    declared_units = set(expected_validity_units or ())
+    required_units = tuple(sorted(origin_units | declared_units))
+
     verified_units = set((validity_result or {}).get("verified_units") or ())
-    uncovered = tuple(u for u in required_units if u not in verified_units)
-    bound = bool(expected_origins) and not uncovered
+    # An optional unit that is installed is verified anyway, so tolerating it
+    # here only ever tolerates a genuine, declared absence.
+    tolerated = set((validity_result or {}).get("optional_units") or ())
+    uncovered = tuple(
+        u for u in required_units if u not in verified_units and u not in tolerated
+    )
+    bound = bool(expected_origins) and bool(declared_units) and not uncovered
 
     if not expected_origins:
         errors.append(
             "no expected_origins supplied — there is nothing to bind the "
             "scheduler and validity evidence together, so three-gate coverage "
             "cannot be established"
+        )
+    if not declared_units:
+        errors.append(
+            "no expected_validity_units supplied — scheduler origins name only "
+            "path-bearing units, so timers and other non-path units would go "
+            "undemanded and a narrowed validity inventory would pass unnoticed"
         )
     for unit in uncovered:
         errors.append(

@@ -587,6 +587,7 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
         surfaces, pointer_result={"status": "OK", "errors": []},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
         validity_result={
             "SYSTEMD_UNIT_VALIDITY": verdict,
             "verified_units": ["stockbot-daily.service"],
@@ -761,6 +762,7 @@ def test_two_gates_passing_on_disjoint_units_is_not_three_gate_coverage():
         pointer_result={"status": "OK", "errors": []},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
         validity_result={
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-dashboard.service"],  # a DIFFERENT unit
@@ -779,6 +781,7 @@ def test_covered_units_do_establish_the_aggregate():
         pointer_result={"status": "OK", "errors": []},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
         validity_result={
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-daily.service",
@@ -817,6 +820,7 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
         pointer_result={"status": "OK", "errors": []},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service", "cron"),
+        expected_validity_units=("stockbot-daily.service",),
         validity_result={"SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]},
     )
@@ -887,3 +891,134 @@ def test_an_impossible_timestamp_is_not_a_timestamp(stamp):
 ])
 def test_real_timestamps_are_accepted(stamp):
     assert certify(checked_at=stamp)["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+
+
+def test_a_timer_that_was_never_verified_blocks_the_aggregate():
+    """Scheduler origins only ever name units that bind a PATH.
+
+    A [Timer] unit produces no execution surface, so stockbot-daily.timer --
+    which is what actually starts the daily run -- can never appear in
+    expected_origins and could never be demanded of the validity evidence.
+    """
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",
+                                 "stockbot-daily.timer"),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            # A narrowed collection: the service was verified, the timer wasn't.
+            "verified_units": ["stockbot-daily.service"],
+        },
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
+
+
+def test_a_verified_timer_satisfies_the_binding():
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",
+                                 "stockbot-daily.timer"),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "verified_units": ["stockbot-daily.service",
+                               "stockbot-daily.timer"],
+        },
+    )
+    assert combined["production_release_identity"] == "PASS"
+
+
+def test_a_tolerated_optional_absence_still_binds():
+    """An optional unit that is installed is verified anyway.
+
+    So tolerating it here can only ever tolerate a genuine declared absence,
+    not an unchecked installed unit.
+    """
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",
+                                 "stockbot-sandbox-daily.timer"),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "verified_units": ["stockbot-daily.service"],
+            "optional_units": ["stockbot-sandbox-daily.timer"],
+        },
+    )
+    assert combined["production_release_identity"] == "PASS"
+
+
+def test_without_a_declared_inventory_the_aggregate_is_not_established():
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        validity_result={"SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]},
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("expected_validity_units" in e for e in combined["errors"])
+
+
+@pytest.mark.parametrize("command,reason", [
+    (("true", "--recursive-errors=no", "stockbot-daily.service"), "not the verifier"),
+    (("systemd-analyze", "verify", "--recursive-errors=no", "another.service"),
+     "verified a different unit"),
+    (("systemd-analyze", "verify", "--recursive-errors=no"), "no target at all"),
+])
+def test_only_the_exact_expected_command_certifies(command, reason):
+    """Flag membership is not command identity.
+
+    `true --recursive-errors=no` exits 0 having verified nothing, and a command
+    naming another unit says nothing about this one. The operand is material:
+    systemd-analyze documents the subcommand as `verify FILE...`.
+    """
+    unit = "stockbot-daily.service"
+    result = certify(
+        expected_units=(unit,),
+        discovered_units=(unit,),
+        provenance={unit: prov(unit)},
+        outcomes={unit: V.VerifierOutcome(unit=unit, command=command,
+                                          exit_status=0)},
+    )
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE, reason
+    assert any("only certifies the command that produced it" in b
+               or V.REQUIRED_VERIFIER_FLAG in b for b in result["blockers"])
+
+
+@pytest.mark.parametrize("leak", [
+    'API_KEY="alpha beta gamma"',
+    "TOKEN='one two three'",
+    'STOCKBOT_SECRET="s p a c e d"',
+])
+def test_quoted_secret_values_are_redacted_whole(leak):
+    """systemd echoes malformed assignments back, quotes and all.
+
+    The previous pattern stopped at the first space, leaving the tail of a
+    quoted value in the artifact. Malformed units are exactly what this gate
+    processes, so their echoed text is the likeliest place for a leak.
+    """
+    tail = leak.split("=", 1)[1].strip("\"'").split(" ", 1)[1]
+    outcomes = {u: ok(u) for u in UNITS}
+    outcomes[UNITS[0]] = ok(
+        UNITS[0], exit_status=1,
+        output=f"EnvironmentFile= path is not absolute, ignoring: {leak}")
+    result = certify(outcomes=outcomes)
+    assert tail not in repr(result)

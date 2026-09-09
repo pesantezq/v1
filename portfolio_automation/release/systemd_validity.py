@@ -122,8 +122,13 @@ def _is_utc_timestamp(value: str) -> bool:
         return False
     return True
 
+#: Quoted values are consumed WHOLE. ``\S+`` stopped at the first space, so
+#: systemd echoing ``API_KEY="alpha beta gamma"`` into verifier output left
+#: ``beta gamma"`` in the artifact. Malformed units are exactly what this gate
+#: processes, so their echoed text is the likeliest place for a leak.
 _SECRET_KEY = re.compile(
-    r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b\s*=\s*\S+"
+    r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b"
+    r"\s*=\s*(\"[^\"]*\"|'[^']*'|\S+)"
 )
 _LONG_OPAQUE = re.compile(r"\b[A-Za-z0-9+/_-]{32,}={0,2}\b")
 _REDACTED = "<redacted>"
@@ -194,6 +199,18 @@ class VerifierOutcome:
     @property
     def uses_required_flag(self) -> bool:
         return REQUIRED_VERIFIER_FLAG in self.command
+
+    @property
+    def is_the_expected_command(self) -> bool:
+        """The whole argv must match, not merely contain the required flag.
+
+        Membership alone would accept ``true --recursive-errors=no`` (which
+        exits 0 having verified nothing) or a command that verified a DIFFERENT
+        unit and was filed under this one. The operand is material: on systemd
+        255 ``systemd-analyze --help`` documents ``verify FILE...``, so the
+        target is part of what the exit status is about.
+        """
+        return tuple(self.command) == build_verifier_command(self.unit)
 
 
 def parse_show_properties(text: str) -> dict[str, str]:
@@ -371,6 +388,12 @@ def certify_systemd_unit_validity(
                 blockers.append(
                     f"{unit}: verifier ran without {REQUIRED_VERIFIER_FLAG}, so a "
                     f"zero exit status does not mean the unit is clean"
+                )
+            elif not outcome.is_the_expected_command:
+                blockers.append(
+                    f"{unit}: recorded command {' '.join(outcome.command)!r} is "
+                    f"not {' '.join(build_verifier_command(unit))!r} — an exit "
+                    f"status only certifies the command that produced it"
                 )
             elif not outcome.succeeded:
                 errors.append(
