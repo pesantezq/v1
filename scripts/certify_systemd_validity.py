@@ -87,7 +87,14 @@ def parse_evidence(text: str) -> dict:
         elif section == "DISCOVERED" and raw.strip():
             discovered.append(raw.strip())
         elif section == "VERIFYCMD" and unit is not None and raw.strip():
-            commands[unit].extend(shlex.split(raw.strip()))
+            # A damaged command record (an unmatched quote, say) is malformed
+            # evidence like any other. Raising would lose the whole structured
+            # result over one unreadable line.
+            try:
+                commands[unit].extend(shlex.split(raw.strip()))
+            except ValueError as exc:
+                malformed.append(f"{unit}: unreadable verifier command ({exc})")
+                commands[unit] = []
         elif section == "SHOW" and unit is not None:
             shows[unit].append(raw)
         elif section == "VERIFY" and unit is not None:

@@ -134,10 +134,13 @@ def _is_utc_timestamp(value: str) -> bool:
 _QUOTED_ASSIGNMENT = re.compile(
     r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*')"""
 )
-#: Named-secret assignments with BARE values (no quotes to delimit them).
-_SECRET_KEY = re.compile(
-    r"(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|KEY)\b"
-    r"\s*=\s*(\S+)"
+#: BARE assignment values, redacted without consulting a name vocabulary:
+#: ``AUTH=hunter2`` is a credential and matches no keyword list worth
+#: maintaining. The negative lookahead keeps systemd's own prose intact, where
+#: a directive name is followed by punctuation rather than a value --
+#: ``Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing.``
+_BARE_ASSIGNMENT = re.compile(
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=(?![\s,.;:)\]}])(\S+)"
 )
 #: Credentials embedded in a URL, which carry the secret in the value itself.
 _CREDENTIAL_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/@]*:[^\s/@]*@\S*")
@@ -158,7 +161,7 @@ def redact(text: str) -> str:
     """
     cleaned = _QUOTED_ASSIGNMENT.sub(_REDACTED, text)
     cleaned = _CREDENTIAL_URL.sub(_REDACTED, cleaned)
-    cleaned = _SECRET_KEY.sub(_REDACTED, cleaned)
+    cleaned = _BARE_ASSIGNMENT.sub(_REDACTED, cleaned)
     return _LONG_OPAQUE.sub(_REDACTED, cleaned)
 
 
@@ -183,7 +186,11 @@ class UnitProvenance:
     load_state: str
     fragment_path: str = ""
     drop_in_paths: tuple[str, ...] = field(default_factory=tuple)
-    need_daemon_reload: bool = False
+    #: Tri-state on purpose. ``None`` means the capture never established the
+    #: fact, which is not the same as establishing that no reload is pending.
+    #: Defaulting absence to ``False`` would let a partial capture certify the
+    #: very property this gate exists to prove.
+    need_daemon_reload: bool | None = None
     load_error: str = ""
 
     @property
@@ -250,9 +257,21 @@ def provenance_from_show(text: str, *, unit: str) -> UnitProvenance:
         load_state=props.get("LoadState", ""),
         fragment_path=props.get("FragmentPath", ""),
         drop_in_paths=drop_ins,
-        need_daemon_reload=props.get("NeedDaemonReload", "no") == "yes",
+        need_daemon_reload=_tri_state_bool(props.get("NeedDaemonReload")),
         load_error=props.get("LoadError", ""),
     )
+
+
+def _tri_state_bool(value: str | None) -> bool | None:
+    """``yes``/``no`` to a bool; anything else (including absence) to ``None``."""
+    if value is None:
+        return None
+    token = value.strip().lower()
+    if token == "yes":
+        return True
+    if token == "no":
+        return False
+    return None
 
 
 def systemd_major(version: str) -> int | None:
@@ -391,7 +410,13 @@ def certify_systemd_unit_validity(
                     f"(required: loaded)"
                     + (f" — {prov.load_error}" if prov.load_error else "")
                 )
-            if prov.need_daemon_reload:
+            if prov.need_daemon_reload is None:
+                blockers.append(
+                    f"{unit}: NeedDaemonReload was not captured — the evidence "
+                    f"never established that the on-disk unit is what PID 1 has "
+                    f"loaded, and an unproven fact is not a proven one"
+                )
+            elif prov.need_daemon_reload:
                 blockers.append(
                     f"{unit}: NeedDaemonReload=yes — the on-disk unit is not what "
                     f"PID 1 has loaded, so a clean verifier result would describe "

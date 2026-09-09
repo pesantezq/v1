@@ -1151,3 +1151,70 @@ def test_a_missing_exit_status_is_still_a_failure(tmp_path):
                           capture_output=True, text=True, cwd=str(REPO))
     assert proc.returncode != 0
     assert json.loads(proc.stdout)["SYSTEMD_UNIT_VALIDITY"] != V.PASS
+
+
+def test_absent_need_daemon_reload_is_unknown_not_no():
+    """A partial capture must not certify the property this gate exists to prove.
+
+    Defaulting absence to `no` would let evidence that never established
+    loaded-state currency produce a PASS.
+    """
+    captured = (
+        "Id=stockbot-daily.service\n"
+        "LoadState=loaded\n"
+        "FragmentPath=/etc/systemd/system/stockbot-daily.service\n"
+        # NeedDaemonReload deliberately absent
+    )
+    p = V.provenance_from_show(captured, unit="stockbot-daily.service")
+    assert p.need_daemon_reload is None
+
+    result = certify(provenance={**{u: prov(u) for u in UNITS}, UNITS[0]: p})
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("NeedDaemonReload was not captured" in b
+               for b in result["blockers"])
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("no", False), ("yes", True),
+    ("", None), ("maybe", None), ("NO", False), ("Yes", True),
+])
+def test_need_daemon_reload_is_tri_state(value, expected):
+    captured = f"Id=x.service\nLoadState=loaded\nNeedDaemonReload={value}\n"
+    assert V.provenance_from_show(captured, unit="x.service").need_daemon_reload \
+        is expected
+
+
+@pytest.mark.parametrize("leak,secret", [
+    ("EnvironmentFile= path is not absolute, ignoring: AUTH=hunter2", "hunter2"),
+    ("DB=short1", "short1"),
+    ("X=abc", "abc"),
+])
+def test_bare_assignment_values_are_redacted_without_a_keyword_list(leak, secret):
+    """`AUTH` matches no keyword list worth maintaining.
+
+    Redaction covers bare assignment values by shape, so short, unremarkable
+    variable names do not become the gap.
+    """
+    outcomes = {u: ok(u) for u in UNITS}
+    outcomes[UNITS[0]] = ok(UNITS[0], exit_status=1, output=leak)
+    assert secret not in repr(certify(outcomes=outcomes))
+
+
+def test_a_damaged_verifier_command_record_does_not_abort_certification(tmp_path):
+    """One unreadable line must not cost the whole structured result."""
+    import json
+    import subprocess
+
+    capture = CAPTURE.replace(
+        "systemd-analyze verify --recursive-errors=no stockbot-daily.service",
+        'systemd-analyze verify --recursive-errors=no "unterminated')
+    path = tmp_path / "badcmd.txt"
+    path.write_text(capture, encoding="utf-8")
+
+    proc = subprocess.run(["python3", str(CERTIFIER), str(path)],
+                          capture_output=True, text=True, cwd=str(REPO))
+    assert proc.returncode != 0
+    assert "Traceback" not in proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("unreadable verifier command" in b for b in payload["blockers"])
