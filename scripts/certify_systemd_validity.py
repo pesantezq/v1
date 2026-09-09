@@ -34,7 +34,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 #: `malformed` explicitly.
 MALFORMED_STATUS = 255
 
+#: Namespaces this artifact may be written to. Containment is not belonging:
+#: `safe_write_json` proves a write stays inside the namespace it was given, not
+#: that a production release certificate belongs there. Writing one into the
+#: replay-only tree (`historical` -> `outputs/backtest/`) would contaminate it
+#: with live-lane evidence, which the artifact contract forbids.
+APPROVED_NAMESPACES = frozenset({"policy"})
+
 from portfolio_automation.release import systemd_validity as V  # noqa: E402
+
+
+END_MARKER = "##END"
+
+
+def stream_defects(text: str) -> list[str]:
+    """Structural checks on the capture as a whole.
+
+    The capture is untrusted text -- it can be stored, edited, concatenated or
+    truncated between collection and certification -- so its shape is checked
+    before its contents are believed. A substring search for the terminator is
+    not enough: a complete run followed by a truncated retry contains an
+    ``##END`` in the middle, and reading that as "the capture completed" would
+    attribute the first run's unit evidence to the second run's host and time.
+    """
+    defects: list[str] = []
+    lines = [line for line in text.splitlines() if line.strip()]
+    markers = [i for i, line in enumerate(lines) if line.strip() == END_MARKER]
+
+    if not markers:
+        defects.append("evidence stream is truncated — the capture did not "
+                       "complete")
+    elif len(markers) > 1:
+        defects.append(f"evidence stream contains {len(markers)} terminators — "
+                       f"it is more than one capture concatenated")
+    elif markers[0] != len(lines) - 1:
+        defects.append("evidence stream continues past its terminator — "
+                       "records after ##END are not part of a completed capture")
+    return defects
 
 
 def parse_evidence(text: str) -> dict:
@@ -161,7 +197,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("evidence", nargs="?", help="collector output (default: stdin)")
     ap.add_argument("--out", help="write the JSON artifact here")
-    ap.add_argument("--namespace",
+    ap.add_argument("--namespace", choices=sorted(APPROVED_NAMESPACES),
                     help="governed output namespace; when given, the artifact "
                          "is written through data_governance.safe_write_json "
                          "instead of to a raw path")
@@ -176,20 +212,18 @@ def main() -> int:
             if args.evidence else sys.stdin.read())
 
     parsed = parse_evidence(text)
-    # A truncated or failed capture must not look like a clean host.
-    if "##END" not in text:
-        parsed["expected_units"] = tuple(parsed["expected_units"])
+    defects = stream_defects(text)
+    classified = tuple(u.strip() for u in args.classified.split(",") if u.strip())
+
+    # A truncated, doubled or edited capture must not look like a clean host.
+    if defects:
         result = V.certify_systemd_unit_validity(
-            classified_units=tuple(
-                u for u in args.classified.split(",") if u.strip()),
-            verifier_available=False, **parsed)
-        result["blockers"].insert(0, "evidence stream is truncated — the "
-                                     "capture did not complete")
+            classified_units=classified, verifier_available=False, **parsed)
+        for defect in reversed(defects):
+            result["blockers"].insert(0, defect)
     else:
         result = V.certify_systemd_unit_validity(
-            classified_units=tuple(
-                u.strip() for u in args.classified.split(",") if u.strip()),
-            **parsed)
+            classified_units=classified, **parsed)
 
     payload = json.dumps(result, indent=2, sort_keys=True)
     if args.namespace:

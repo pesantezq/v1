@@ -1218,3 +1218,86 @@ def test_a_damaged_verifier_command_record_does_not_abort_certification(tmp_path
     payload = json.loads(proc.stdout)
     assert payload["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
     assert any("unreadable verifier command" in b for b in payload["blockers"])
+
+
+def test_escaped_quotes_do_not_end_a_redacted_value():
+    """An escaped quote is part of the value, not the end of it."""
+    leak = 'EnvironmentFile=API_KEY="alpha\\" beta gamma"'
+    outcomes = {u: ok(u) for u in UNITS}
+    outcomes[UNITS[0]] = ok(UNITS[0], exit_status=1, output=leak)
+    assert "beta gamma" not in repr(certify(outcomes=outcomes))
+
+
+def test_a_concatenated_capture_is_not_a_completed_one():
+    """A complete run followed by a truncated retry contains ##END in the middle.
+
+    Reading that as 'the capture completed' would attribute the first run's
+    unit evidence to the second run's host and time.
+    """
+    cli = _cli()
+    doubled = CAPTURE + "##HOST\nother-host\n##CHECKED_AT\n2026-09-09T01:00:00Z\n"
+    defects = cli.stream_defects(doubled)
+    assert defects, "records after the terminator must be rejected"
+    assert any("past its terminator" in d or "more than one capture" in d
+               for d in defects)
+
+
+def test_two_terminators_are_rejected():
+    cli = _cli()
+    assert cli.stream_defects(CAPTURE + CAPTURE)
+
+
+def test_a_complete_capture_has_no_stream_defects():
+    """The structural check must not reject a legitimate capture."""
+    assert _cli().stream_defects(CAPTURE) == []
+
+
+def test_a_concatenated_capture_cannot_pass_through_the_cli(tmp_path):
+    import json
+    import subprocess
+
+    doubled = CAPTURE + "##HOST\nother-host\n##CHECKED_AT\n2026-09-09T01:00:00Z\n"
+    path = tmp_path / "doubled.txt"
+    path.write_text(doubled, encoding="utf-8")
+    proc = subprocess.run(["python3", str(CERTIFIER), str(path)],
+                          capture_output=True, text=True, cwd=str(REPO))
+    assert proc.returncode != 0
+    assert json.loads(proc.stdout)["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+def test_provenance_for_one_unit_cannot_certify_another():
+    """Whatever section it was filed under, the Id is what it describes."""
+    mismatched = V.provenance_from_show(
+        "Id=stockbot-dashboard.service\nLoadState=loaded\n"
+        "NeedDaemonReload=no\n",
+        unit=UNITS[0],
+    )
+    result = certify(provenance={**{u: prov(u) for u in UNITS},
+                                 UNITS[0]: mismatched})
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("cannot certify another" in b for b in result["blockers"])
+
+
+def test_release_evidence_is_restricted_to_an_approved_namespace():
+    """Containment is not belonging.
+
+    safe_write_json proves a write stays inside the namespace it was given, not
+    that a production release certificate belongs there. `historical` maps to
+    outputs/backtest/, the replay-only tree.
+    """
+    cli = _cli()
+    assert "policy" in cli.APPROVED_NAMESPACES
+    for forbidden in ("historical", "sandbox", "latest", "portfolio"):
+        assert forbidden not in cli.APPROVED_NAMESPACES, forbidden
+
+
+def test_the_cli_rejects_an_unapproved_namespace(tmp_path):
+    import subprocess
+
+    path = tmp_path / "c.txt"
+    path.write_text(CAPTURE, encoding="utf-8")
+    proc = subprocess.run(
+        ["python3", str(CERTIFIER), str(path), "--namespace", "historical"],
+        capture_output=True, text=True, cwd=str(REPO))
+    assert proc.returncode != 0
+    assert "invalid choice" in proc.stderr or "historical" in proc.stderr

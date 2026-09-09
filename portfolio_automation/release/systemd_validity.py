@@ -131,8 +131,10 @@ def _is_utc_timestamp(value: str) -> bool:
 #: Deliberately scoped to *assignments*: a bare quoted string elsewhere in a
 #: diagnostic (``Unknown section 'Bogus'. Ignoring.``) is not a value and is
 #: left readable, because a gate whose evidence says nothing is its own problem.
+#: Escape-aware: ``API_KEY="alpha\\" beta gamma"`` is ONE value, and a pattern
+#: that stops at the escaped quote leaves ``beta gamma"`` behind.
 _QUOTED_ASSIGNMENT = re.compile(
-    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*')"""
+    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')"""
 )
 #: BARE assignment values, redacted without consulting a name vocabulary:
 #: ``AUTH=hunter2`` is a credential and matches no keyword list worth
@@ -404,6 +406,12 @@ def certify_systemd_unit_validity(
         if prov is None:
             errors.append(f"{unit}: no loaded-state provenance captured")
         else:
+            if prov.unit and prov.unit != unit:
+                blockers.append(
+                    f"{unit}: provenance records Id={prov.unit} — evidence for "
+                    f"one unit cannot certify another, whatever section it was "
+                    f"filed under"
+                )
             if not prov.is_loaded:
                 errors.append(
                     f"{unit}: LoadState={prov.load_state or '<empty>'} "
