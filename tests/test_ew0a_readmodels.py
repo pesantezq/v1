@@ -156,16 +156,19 @@ def test_active_session_is_visible_through_the_controller_owned_dashboard():
     """Observability is proven only when the ESTABLISHED read-model path carries
     it — which is what a standalone projection function did not do."""
     from portfolio_automation.engineer_worker.ew0a_readmodels import build_dashboard
-    from tools.ns0c_session import SESSION2_ID
+    from tools.ns0c_session import load_episodes
     dash = build_dashboard(_REPO, now="2026-08-16T05:00:00+00:00")
     session = dash["active_session"]
     assert session != "PENDING_BACKEND", "session ledger exists but is not projected"
     assert session["mission_id"] == _C0_MISSION
     # The ACTIVE session is the most recent bounded episode, not whichever
-    # SessionStarted happens to be first in the file. Two bounded sessions share
-    # this ledger, and the dashboard must show the current one.
-    assert session["session_id"] == SESSION2_ID
-    assert session["session_objective"] == "Revision / Supersession Safety Foundation"
+    # SessionStarted happens to be first. Asserted against the ledgers rather
+    # than a pinned id: the invariant must keep holding as sessions are added,
+    # and a hardcoded constant has to be edited every time — which is how a
+    # guard quietly decays into a formality.
+    episodes = load_episodes(_REPO)
+    assert session["session_id"] == episodes[-1].session_id
+    assert session["session_objective"], "the episode must name its own objective"
     assert session["current_task_id"]
 
 
@@ -173,26 +176,35 @@ def test_session_projection_reports_verified_only_from_recorded_evidence():
     """A task counts VERIFIED only from a recorded TaskOutcome final_status, never
     from absence of error or from a task merely finishing.
 
-    Counted per EPISODE. The ledger holds two bounded sessions, so summing every
-    TaskOutcome in the file would credit each session with the other's work —
-    the merge this projection was repaired to prevent."""
-    from tools.ns0c_session import (SESSION1_ID, SESSION2_ID, load_episodes,
-                                    session_projection)
-    episodes = {e.session_id: e for e in load_episodes(repo_root=_REPO)}
-    for session_id in (SESSION1_ID, SESSION2_ID):
-        proj = session_projection(repo_root=_REPO, session_id=session_id)
-        recorded = [o for o in episodes[session_id].of_kind("TaskOutcome")
+    Counted per EPISODE. Summing every TaskOutcome in the ledgers would credit
+    each session with the others' work — the merge this projection was repaired
+    to prevent.
+
+    Asserted over EVERY episode rather than a pinned pair. The pinned form broke
+    the moment a third bounded session appeared: it summed two sessions and
+    compared that against the whole file. Worse, it broke on an evidence-only
+    commit, because appending a TaskOutcome changes what this test observes even
+    though no implementation, test or config file changed — a certification tail
+    can be provably evidence-only and still move a test that reads the
+    evidence."""
+    from tools.ns0c_session import load_episodes, session_projection
+    episodes = load_episodes(repo_root=_REPO)
+    assert len(episodes) >= 2, "the merge risk only exists with multiple episodes"
+
+    per_session = []
+    for episode in episodes:
+        proj = session_projection(repo_root=_REPO, session_id=episode.session_id)
+        recorded = [o for o in episode.of_kind("TaskOutcome")
                     if o.get("final_status") == "VERIFIED"]
         assert proj["tasks_verified"] == len(recorded)
+        per_session.append(proj["tasks_verified"])
 
-    total_in_file = sum(1 for e in load_episodes(repo_root=_REPO)
-                        for o in e.of_kind("TaskOutcome")
+    total_in_file = sum(1 for e in episodes for o in e.of_kind("TaskOutcome")
                         if o.get("final_status") == "VERIFIED")
-    per_session = [session_projection(repo_root=_REPO, session_id=s)["tasks_verified"]
-                   for s in (SESSION1_ID, SESSION2_ID)]
-    assert sum(per_session) == total_in_file
+    assert sum(per_session) == total_in_file, (
+        "every verified task belongs to exactly one episode")
     assert all(count < total_in_file for count in per_session), (
-        "neither session may claim the whole file's verified work")
+        "no session may claim the whole file's verified work")
 
 
 def test_missing_live_backends_stay_pending_backend():
