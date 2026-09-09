@@ -634,8 +634,12 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     while leaving the timers entirely unverified.
 
     A declared unit counts as covered if the artifact verified it, or if the
-    artifact lists it as optional — an optional unit that is installed is
-    verified anyway, so only a tolerated absence passes this way.
+    artifact both **expected** it and lists it as optional. Both halves matter:
+    "optional and installed implies verified" only holds for units the artifact
+    actually considered, so a name that appears in ``optional_units`` while
+    missing from the artifact's ``expected_units`` was never a candidate for
+    verification, and treating it as covered would let a narrowed collection
+    wave a unit through simply by calling it optional.
     """
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
                                        expected_origins=expected_origins)
@@ -661,9 +665,15 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     required_units = tuple(sorted(origin_units | declared_units))
 
     verified_units = set((validity_result or {}).get("verified_units") or ())
-    # An optional unit that is installed is verified anyway, so tolerating it
-    # here only ever tolerates a genuine, declared absence.
-    tolerated = set((validity_result or {}).get("optional_units") or ())
+    # "Optional and installed implies verified" only holds for units the
+    # artifact actually CONSIDERED. A name listed as optional but absent from
+    # the artifact's expected inventory was never a candidate for verification,
+    # so treating it as covered would let a narrowed collection wave a unit
+    # through by naming it optional. Tolerance therefore requires BOTH.
+    validity_expected = set((validity_result or {}).get("expected_units") or ())
+    tolerated = (
+        set((validity_result or {}).get("optional_units") or ()) & validity_expected
+    )
     uncovered = tuple(
         u for u in required_units if u not in verified_units and u not in tolerated
     )

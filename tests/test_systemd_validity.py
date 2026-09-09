@@ -955,6 +955,8 @@ def test_a_tolerated_optional_absence_still_binds():
                                  "stockbot-sandbox-daily.timer"),
         validity_result={
             "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "expected_units": ["stockbot-daily.service",
+                               "stockbot-sandbox-daily.timer"],
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
         },
@@ -1022,3 +1024,54 @@ def test_quoted_secret_values_are_redacted_whole(leak):
         output=f"EnvironmentFile= path is not absolute, ignoring: {leak}")
     result = certify(outcomes=outcomes)
     assert tail not in repr(result)
+
+
+def test_a_narrowed_collection_cannot_wave_a_unit_through_as_optional():
+    """'Optional and installed implies verified' only holds if it was considered.
+
+    A unit named in optional_units but missing from the artifact's expected
+    inventory was never a candidate for verification, so tolerating it would
+    let a narrowed collection excuse a unit it never looked at.
+    """
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",
+                                 "stockbot-daily.timer"),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            # Collection was narrowed: the timer is not in expected_units...
+            "expected_units": ["stockbot-daily.service"],
+            "verified_units": ["stockbot-daily.service"],
+            # ...but it is still named optional, which must not excuse it.
+            "optional_units": ["stockbot-daily.timer"],
+        },
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
+
+
+def test_a_genuinely_considered_optional_absence_is_still_tolerated():
+    """The guard must not reject a legitimate declared-and-absent optional."""
+    from portfolio_automation.release import scheduler as S
+
+    combined = S.certify_release_identity(
+        _daily_surfaces(),
+        pointer_result={"status": "OK", "errors": []},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",
+                                 "stockbot-sandbox-daily.timer"),
+        validity_result={
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "expected_units": ["stockbot-daily.service",
+                               "stockbot-sandbox-daily.timer"],
+            "verified_units": ["stockbot-daily.service"],
+            "optional_units": ["stockbot-sandbox-daily.timer"],
+        },
+    )
+    assert combined["production_release_identity"] == "PASS"
