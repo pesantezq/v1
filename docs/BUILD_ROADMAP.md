@@ -163,3 +163,112 @@ declared namespace. Replay/backtest never writes to `outputs/latest/`.
 > [`TECH_DEBT_AUDIT.md`](TECH_DEBT_AUDIT.md) ·
 > [`PRODUCTION_READINESS_PLAN.md`](PRODUCTION_READINESS_PLAN.md) ·
 > [`PATTERN_LOOP_IMPLEMENTATION_SPEC.md`](PATTERN_LOOP_IMPLEMENTATION_SPEC.md)
+
+---
+
+## 9. Northstar agent engineering skills & model-pluggable worker setup 🔲
+
+Build a shared, versioned engineering-skill layer that can be consumed by both
+**Claude Code** and the future local **Engineer Llama (or successor model)** without
+creating a second authority system. The deterministic controller continues to own
+risk routing, task admission, tool permissions, verification state, and all authority.
+Skills provide procedure and institutional knowledge; they never grant merge, deploy,
+production, authority-promotion, capital, or trading capability.
+
+### Operating model
+
+Keep four concepts separate and machine-readable:
+
+- **Agent / worker profile** — who is doing the reasoning (for example the local Engineer or Claude Code).
+- **Skill** — how to perform a bounded class of work.
+- **Tool profile** — what mechanical operations are available in the isolated worktree.
+- **Authority** — what consequences the deterministic controller permits.
+
+Use the existing engineering risk route rather than introducing a parallel agent
+framework:
+
+```
+E1 / E2  -> local Engineer (Llama/successor)
+E3       -> Claude Code
+E4       -> Human
+             |
+             v
+      deterministic verification
+             |
+             v
+      independent GPT review
+             |
+      PASS / REPAIR / ESCALATE
+```
+
+A more capable model must not automatically receive greater authority.
+
+### Initial shared skill pack — build before GUI-1
+
+Store the Claude-native copies under `.claude/skills/<skill>/SKILL.md` and design the
+future local-worker skill resolver to consume the same versioned skill content rather
+than maintaining a separate Llama handbook.
+
+1. `northstar-gui-contract` — controller projection boundary, truth lattice, no competing GUI authority.
+2. `northstar-gui-surface` — route/view/component/template conventions and shared presentation patterns.
+3. `northstar-gui-fixtures` — deterministic LIVE/empty/PENDING_BACKEND/UNAVAILABLE/UNKNOWN/STALE fixture matrix.
+4. `northstar-gui-schema-change` — producer/consumer compatibility and explicit schema-version decisions.
+5. `northstar-gui-review` — pre-PR truth, boundary, security, state, and regression checklist.
+6. `northstar-bounded-change` — worktree/scope/protected-path discipline shared by all engineering agents.
+7. `northstar-evidence-packet` — structured candidate/test/provenance evidence rather than prose-only completion claims.
+
+Add domain skills only when their producers/contracts exist: `northstar-worker-ui`
+after claim/lease/heartbeat semantics, `northstar-human-attention` with
+`PARKED_FOR_HUMAN` / DecisionRecord, `northstar-evidence-ui` with evidence admission,
+and `northstar-system-ui` when real component-health producers exist.
+
+### Controller / provenance integration timing
+
+| Roadmap point | Agent-skill integration |
+|---|---|
+| **GUI truth foundation / GUI-RI** | Finish the truthful read-model boundary first; do not refactor the agent platform inside the GUI-RI repair stream. |
+| **Before GUI-1** | Land the initial seven shared skills and fixture/review conventions. |
+| **CP-0** | Define `AgentProfile`, `SkillRef`, and `ToolProfile` concepts; preserve authority as a separate deterministic contract. Do not create a second job/task authority beside `rd_control`. |
+| **CP-1** | Expose worker/model/skill provenance read-only where it already exists; missing capability remains `PENDING_BACKEND`. |
+| **GUI-1** | Begin using the local Engineer for routine bounded WCC implementation with selected skills; Claude remains the E3 integration/architecture escalation path. |
+| **CP-2 / CP-3** | Introduce real worker identity/task ownership/claim/lease/heartbeat. Separate conceptual worker identity from underlying model identity so Qwen -> Llama -> successor does not rename the worker. |
+| **CP-4 ResultPacket** | Persist the exact worker profile, model identity, tool profile, skill IDs/versions/digests, candidate SHA, and verification evidence for each execution. |
+| **CP-5** | Route unresolved work to Claude or `PARKED_FOR_HUMAN` deterministically; skills cannot self-escalate authority. |
+| **CP-6** | Expose safe controller/agent read APIs without allowing GUI or worker clients to become authoritative. |
+| **CP-9** | Scale to multiple specialized workers (GUI, tests, finance research, quant research) using task class + skill set + tool profile + authority rather than model-specific hard-coded agents. |
+
+### Skill governance and learning
+
+Treat skills as versioned engineering artifacts. Each execution should eventually be
+attributable to a `skill_id`, version, and digest so the learning system can answer
+whether a failure came from the model, the task specification, the tools, or the skill
+procedure. Evolve skills from observed failure classes and mutation/review evidence,
+not from speculative documentation. Learning may **recommend** a skill revision but
+must never self-promote authority or silently replace a controller-approved skill.
+
+Suggested execution lineage:
+
+```
+mission
+  -> deterministic task/risk classification
+  -> select agent + skill set + tool profile
+  -> isolated worktree implementation
+  -> deterministic tests / policy gates
+  -> structured evidence packet
+  -> independent GPT review
+  -> bounded repair or Claude escalation
+  -> PR + exact-head CI
+  -> human merge
+```
+
+### Exit criteria
+
+This roadmap item is considered operationally established when:
+
+- the initial shared skill pack is durable and used by Claude Code;
+- the local Engineer can consume the same skill definitions through a bounded resolver;
+- worker identity is decoupled from model identity;
+- ResultPackets record skill/model/tool provenance;
+- the controller, not the model or skill, selects authority and escalation;
+- representative GUI E1/E2 tasks can be completed by the local Engineer, independently reviewed by GPT, and escalated to Claude when the deterministic risk/repair rules require it;
+- no skill, hook, subagent, or local model can merge, deploy, mutate production, promote its own authority, or perform capital/trading actions.
