@@ -649,6 +649,81 @@ ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
     | python3 scripts/certify_systemd_validity.py --out evidence.json
 ```
 
+### One bracketed collection, not three co-located ones
+
+A shared `(host, observation_id)` proves the collectors were *told* they belong
+to one run. It cannot prove the system held still during it, and the three
+gates read different things: the pointer gate reads the release pointer, the
+scheduler gate reads unit `ExecStart` text and cron, the validity gate reads
+unit files through `systemd-analyze`.
+
+Unit files under `/etc/systemd/system` are **not part of the release**, so
+binding the gates to a release SHA leaves this open:
+
+```text
+scheduler evidence collected     unit A is aligned
+fragment replaced                unit B, syntactically valid, NOT aligned
+validity evidence collected      unit B verifies
+pointer SHA                      unchanged throughout
+                                 ->  three green gates, and B is installed
+```
+
+Scheduler certified A. B is what production runs. Measured on systemd 255 with
+the real flow: with the swap injected between the scheduler leg and the
+validity leg, `SCHEDULER_ALIGNMENT = PASS` and the pointer stays `OK`, and only
+the bracket refuses.
+
+So `scripts/collect_release_observation.sh` brackets the whole collection:
+
+```text
+A. establish host + one observation_id
+B. capture configuration_anchor_before      <- before ANY gate evidence
+C. scheduler alignment evidence
+D. release pointer identity evidence
+E. systemd unit validity evidence
+F. capture configuration_anchor_after       <- after ALL gates complete
+G. all three artifacts carry that pair
+H. aggregate only after the bracket validates
+```
+
+The anchor digests every mutable input the gates depend on: the release pointer
+and what it resolves to, every unit load directory and every applicable
+drop-in directory, the unit fragments and their drop-ins, and cron.
+
+**The collection flow owns the anchors, not the aggregate's caller.** They are
+read back off the artifacts and are deliberately *not* a parameter of
+`certify_release_identity` — a caller who could supply an anchor could supply
+the very agreement the bracket exists to check, exactly as a caller-minted
+observation id would be. A test pins that no such parameter exists.
+
+`production_release_identity` is `PASS` only when all of these hold:
+
+| requirement | why |
+|---|---|
+| all three artifact contracts valid | a verdict is a claim about evidence |
+| all three agree on `host` | three green gates, two machines |
+| all three agree on `observation_id` | three green gates, two runs |
+| release-state bindings agree | pointer and validity saw one release |
+| all three carry the **same** bracket | they came from one collection |
+| `anchor_before == anchor_after` | nothing they depend on moved during it |
+| each gate's own verdict passes | — |
+| complete-unit-coverage still passes | — |
+
+Missing, malformed or inconsistent bracket evidence is `NOT_ESTABLISHED` /
+`NOT_CERTIFIABLE`. The aggregate never invents, repairs, normalizes into
+agreement, or post-stamps provenance its inputs did not carry.
+
+**What the bracket claims.** Not a filesystem snapshot, and not a transactional
+one. It establishes that the measured witnesses — inode, size, nanosecond
+mtime/ctime, and the directory entries of every applicable unit load and
+drop-in directory, plus the release pointer — read identically at both
+endpoints. Those witnesses are not restorable by ordinary means, which is what
+makes endpoint sampling sound about the interval rather than only its ends; the
+limits documented above still apply unchanged. It does **not** defend against a
+privileged actor forging evidence, moving the system clock, or mutating state
+through a path outside the measured set.
+
+
 ### The aggregate checks the artifact, not just its verdict
 
 `SYSTEMD_UNIT_VALIDITY: PASS` is a conclusion the artifact asserts **about

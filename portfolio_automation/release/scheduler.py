@@ -96,7 +96,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 from .observation import (ObservationContext, bind_observations,
-                          observation_of)
+                          observation_of, ConfigurationBracket, bracket_of, bind_brackets)
 
 DIRECT = "DIRECT"
 POINTER = "POINTER"
@@ -113,6 +113,14 @@ VALIDITY_NOT_ESTABLISHED = "NOT_ESTABLISHED"
 #: same field names for different meanings.
 VALIDITY_SCHEMA = "northstar.systemd_unit_validity"
 VALIDITY_SCHEMA_VERSION = 3
+#: The scheduler leg used to have no artifact at all: `surfaces` was raw
+#: parsed unit text handed straight to the aggregate, so its provenance
+#: was an ASSERTION by the caller and the aggregate could not detect a
+#: caller that mislabelled where the surfaces came from. It now emits a
+#: stamped artifact like the other two legs, which is what makes the
+#: cross-gate binding checkable rather than merely declared.
+SCHEDULER_SCHEMA = "northstar.scheduler_alignment"
+SCHEDULER_SCHEMA_VERSION = 1
 
 #: Execution-surface origins are ``"<kind>:<name>"``; only systemd origins name
 #: a unit that the validity gate can have verified. Cron surfaces have no unit.
@@ -600,6 +608,147 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
     }
 
 
+def scheduler_alignment_artifact(surfaces: list[ExecutionSurface], *,
+                                 release_root: str,
+                                 checked_at: str,
+                                 observation: ObservationContext | None = None,
+                                 expected_origins: tuple[str, ...] | None = None,
+                                 approved_sha: str = "",
+                                 configuration_anchor_before: str = "",
+                                 configuration_anchor_after: str = "",
+                                 ) -> dict:
+    """The scheduler leg's durable, self-describing evidence.
+
+    Observation-only by contract, like the other two gates: this records what
+    the scheduler configuration WAS, and changes nothing.
+
+    The point of the artifact is that the aggregate can check it instead of
+    trusting it. A caller-supplied ``SCHEDULER_ALIGNMENT: PASS`` string is a
+    claim about evidence nobody else can see; an artifact carries the
+    normalized surfaces the verdict was computed from, the host and run it was
+    collected on, and the configuration bracket it was collected inside — so a
+    reader can tell whether it describes the same system the other gates saw.
+
+    ``surfaces`` are recorded NORMALIZED. Environment files are listed by path
+    only: a credential path is release-identity evidence, its contents are not,
+    and an artifact meant to be read by a GUI must not become a place secrets
+    accumulate. Nothing here reads those files.
+    """
+    result = certify_scheduler_identity(
+        surfaces, release_root=release_root,
+        expected_origins=expected_origins, observation=observation)
+    return {
+        "schema": SCHEDULER_SCHEMA,
+        "schema_version": SCHEDULER_SCHEMA_VERSION,
+        # This gate reports; it never changes what production runs.
+        "observe_only": True,
+        "checked_at": checked_at,
+        "release_root": release_root,
+        "approved_sha": approved_sha,
+        "expected_origins": list(expected_origins or ()),
+        # What the verdict was actually computed from, in a form another
+        # process can re-derive rather than take on faith.
+        "surfaces": [
+            {
+                "origin": s_.origin,
+                "executable": s_.executable,
+                "referenced_paths": list(s_.referenced_paths),
+                "working_directory": s_.working_directory,
+                "root_directory": s_.root_directory,
+                # paths only -- never contents
+                "environment_files": list(s_.environment_files),
+                "is_system_transitional": s_.is_system_transitional,
+            }
+            for s_ in surfaces
+        ],
+        "SCHEDULER_ALIGNMENT": ("PASS" if result["status"] == "OK" else "FAILED"),
+        "errors": list(result["errors"]),
+        "unresolved": list(result["unresolved"]),
+        "missing_expected": list(result["missing_expected"]),
+        "system_transitional": list(result["system_transitional"]),
+        "secret_paths_outside_release": list(
+            result["secret_paths_outside_release"]),
+        "scope": result["scope"],
+        # The bracket this evidence was collected inside. Supplied by the
+        # COLLECTION FLOW, which owns the anchors; this function does not
+        # measure them and cannot invent them.
+        **ConfigurationBracket(configuration_anchor_before,
+                               configuration_anchor_after).as_dict(),
+        **(observation or ObservationContext("", "")).as_dict(),
+    }
+
+
+def scheduler_contract_defects(scheduler_result: dict | None) -> list[str]:
+    """Ways a scheduler artifact contradicts itself, and so cannot be trusted.
+
+    Same standard the validity artifact is held to, and for the same reason:
+    ``SCHEDULER_ALIGNMENT`` is a conclusion the artifact asserts about itself,
+    and this artifact travels between processes, hosts and runs.
+    """
+    if not scheduler_result:
+        return ["no scheduler alignment artifact supplied — the scheduler leg "
+                "cannot be composed from a verdict alone, and an absent "
+                "artifact is not a passing one"]
+
+    defects: list[str] = []
+    verdict = scheduler_result.get("SCHEDULER_ALIGNMENT")
+
+    schema = scheduler_result.get("schema")
+    if schema != SCHEDULER_SCHEMA:
+        defects.append(
+            f"scheduler artifact declares schema {schema!r}, not "
+            f"{SCHEDULER_SCHEMA!r} — an artifact this gate cannot claim to "
+            f"understand cannot certify through it"
+        )
+    version = scheduler_result.get("schema_version")
+    if version != SCHEDULER_SCHEMA_VERSION:
+        defects.append(
+            f"scheduler artifact declares schema_version {version!r}, not "
+            f"{SCHEDULER_SCHEMA_VERSION} — its fields may not mean what this "
+            f"aggregate reads them to mean"
+        )
+    if scheduler_result.get("observe_only") is not True:
+        defects.append(
+            "scheduler artifact does not declare observe_only — this gate is "
+            "observation-only by contract, so an artifact that says otherwise "
+            "did not come from it"
+        )
+    if not str(scheduler_result.get("checked_at") or "").strip():
+        defects.append(
+            "scheduler artifact records no collection time — evidence that "
+            "cannot say when it was taken cannot be shown to belong to the "
+            "bracket it claims"
+        )
+
+    # A verdict cannot outrank the reasons recorded against it.
+    recorded = scheduler_result.get("errors") or []
+    if recorded and verdict == "PASS":
+        defects.append(
+            f"scheduler artifact claims PASS while recording {len(recorded)} "
+            f"errors — a verdict cannot outrank the evidence it was supposedly "
+            f"derived from (first: {str(recorded[0])[:120]})"
+        )
+    for field_ in ("unresolved", "missing_expected"):
+        listed = scheduler_result.get(field_) or []
+        if listed and verdict == "PASS":
+            defects.append(
+                f"scheduler artifact claims PASS while listing {len(listed)} "
+                f"{field_} surfaces — the verdict contradicts its own findings"
+            )
+
+    # ...nor stand with no evidence behind it. A verdict with no surfaces is
+    # the "we found nothing to check" failure the scheduler gate already
+    # refuses; it must not be reintroducible by handing in a bare artifact.
+    if verdict == "PASS" and not (scheduler_result.get("surfaces") or ()):
+        defects.append(
+            "scheduler artifact claims PASS while recording no execution "
+            "surfaces — nothing was checked, and an empty inventory cannot "
+            "certify"
+        )
+
+    return defects
+
+
 def validity_contract_defects(validity_result: dict | None) -> list[str]:
     """Ways a validity artifact contradicts itself, and so cannot be trusted.
 
@@ -729,6 +878,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              release_root: str = CURRENT_POINTER,
                              expected_origins: tuple[str, ...] | None = None,
                              validity_result: dict | None = None,
+                             scheduler_result: dict | None = None,
                              expected_validity_units: tuple[str, ...] | None = None,
                              observation: ObservationContext | None = None,
                              ) -> dict:
@@ -801,10 +951,22 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     verification, and treating it as covered would let a narrowed collection
     wave a unit through simply by calling it optional.
     """
+    # The scheduler leg is now evidence, not an assertion. When the collection
+    # flow supplies its artifact, THAT is what is bound and checked; the raw
+    # surfaces remain accepted so existing callers keep working, but a flow
+    # without an artifact cannot satisfy the bracket and therefore cannot
+    # establish identity -- which is the point.
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
                                        expected_origins=expected_origins,
                                        observation=observation)
-    ok = sched["status"] == "OK" and pointer_result.get("status") == "OK"
+    if scheduler_result is not None:
+        # Prefer the artifact's own verdict over one recomputed here: the
+        # aggregate must not be able to launder a failing artifact by
+        # re-deriving a pass from surfaces it was handed separately.
+        sched_verdict_ok = scheduler_result.get("SCHEDULER_ALIGNMENT") == "PASS"
+    else:
+        sched_verdict_ok = sched["status"] == "OK"
+    ok = sched_verdict_ok and pointer_result.get("status") == "OK"
 
     validity = (validity_result or {}).get("SYSTEMD_UNIT_VALIDITY",
                                            VALIDITY_NOT_ESTABLISHED)
@@ -816,7 +978,8 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     # by asserting its own conclusion. So the contract is checked here, and an
     # artifact that contradicts itself is not merely reported -- it cannot
     # establish identity.
-    contract_defects = validity_contract_defects(validity_result)
+    contract_defects = (validity_contract_defects(validity_result)
+                        + scheduler_contract_defects(scheduler_result))
     errors.extend(contract_defects)
     if validity != "PASS":
         errors.append(
@@ -837,10 +1000,26 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     # manufactured itself would be no proof at all. Evidence that cannot say
     # which run it came from is NOT_ESTABLISHED, not assumed co-located.
     unbound = bind_observations({
-        "scheduler alignment": observation_of(sched),
+        "scheduler alignment": observation_of(scheduler_result
+                                              if scheduler_result is not None
+                                              else sched),
         "release pointer identity": observation_of(pointer_result),
         "systemd unit validity": observation_of(validity_result),
     })
+    # ...and by the bracket that spans the WHOLE collection. The observation id
+    # binds the gates to one run; the bracket binds them to one CONFIGURATION.
+    # Unit files are not part of the release, so without this a fragment
+    # replaced between the scheduler reading and the unit verification leaves
+    # both gates individually truthful and the aggregate wrong.
+    #
+    # The anchors are read off the ARTIFACTS. They are deliberately not a
+    # parameter: a caller who could supply an anchor could supply agreement,
+    # and this is the check that agreement is supposed to survive.
+    unbound.extend(bind_brackets({
+        "scheduler alignment": bracket_of(scheduler_result),
+        "release pointer identity": bracket_of(pointer_result),
+        "systemd unit validity": bracket_of(validity_result),
+    }))
     # A shared observation id proves the collectors were TOLD they belong to
     # one run. It cannot prove the system held still during it: if a deployment
     # lands between the pointer reading and the unit verification, both still
@@ -939,6 +1118,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     return {
         "status": "OK" if ok else "FAILED",
         "scheduler": sched,
+        "scheduler_artifact": scheduler_result,
         "pointer": pointer_result,
         "systemd_unit_validity": validity,
         "validity_uncovered_units": list(uncovered),
@@ -949,6 +1129,9 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         # Empty when the three gates are provably one observation; otherwise
         # the reasons they are not, which is why the aggregate is withheld.
         "provenance_conflicts": list(unbound),
+        # The bracket all three legs agreed on, empty when they did not.
+        **(bracket_of(validity_result).as_dict() if not unbound
+           else ConfigurationBracket("", "").as_dict()),
         **(observation or ObservationContext("", "")).as_dict(),
         "production_release_identity": (
             "PASS" if (ok and validity == "PASS" and bound) else "NOT_ESTABLISHED"

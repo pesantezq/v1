@@ -171,6 +171,44 @@ Rules:
   `verified_units` is internally inconsistent and cannot waive it.
 
 
+### `scheduler_alignment.json`
+
+Produced by the bracketed three-gate collection flow. Observation-only.
+
+The scheduler leg used to have no artifact at all: `surfaces` was raw parsed
+unit text handed straight to the aggregate, so its provenance was an
+**assertion by the caller** and a caller that mislabelled where the surfaces
+came from could not be detected. It is now stamped like the other two legs,
+which is what makes the cross-gate binding checkable rather than declared.
+
+| field | type | meaning |
+|---|---|---|
+| `schema` | str | `northstar.scheduler_alignment` |
+| `schema_version` | int | currently `1` |
+| `observe_only` | bool | always `true` |
+| `host` / `observation_id` | str | which host, and which collection run |
+| `checked_at` | str | ISO-8601 UTC |
+| `release_root` / `approved_sha` | str | the release context the verdict was computed against |
+| `expected_origins` | list[str] | services that must each contribute a surface |
+| `surfaces` | list[obj] | the normalized execution surfaces the verdict came from — origin, executable, referenced paths, working/root directory, environment-file **paths**, transitional flag |
+| `SCHEDULER_ALIGNMENT` | str | `PASS` / `FAILED` |
+| `errors`, `unresolved`, `missing_expected`, `system_transitional`, `secret_paths_outside_release` | list | the findings behind the verdict |
+| `configuration_anchor_before` / `_after` | str | the bracket this evidence was collected inside |
+
+Rules:
+
+- Environment files are recorded by **path only**. A credential path is
+  release-identity evidence; its contents are not, and an artifact meant to be
+  read by a GUI must not become a place secrets accumulate. Nothing in the
+  flow reads those files.
+- A verdict cannot outrank its own findings: `PASS` alongside a non-empty
+  `errors`, `unresolved` or `missing_expected` is an internal contradiction and
+  fails closed.
+- `PASS` with no `surfaces` is the "we found nothing to check" failure the
+  scheduler gate already refuses, and it must not be reintroducible by handing
+  in a bare artifact.
+
+
 ### `outputs/latest/data_quality_report.json`
 
 Observe-only data quality report. Written with `safe_write_json(OutputNamespace.LATEST, ...)` by `write_data_quality_report()`.

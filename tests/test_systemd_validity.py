@@ -16,6 +16,7 @@ import re
 import pytest
 
 import hashlib
+import json
 
 from portfolio_automation.release import systemd_validity as V
 from portfolio_automation.release.observation import ObservationContext
@@ -28,7 +29,15 @@ SEARCH_PATH = "/etc/systemd/system /run/systemd/system /usr/lib/systemd/system"
 #: The single production observation these fixtures are taken from. Gate
 #: results must all carry it before they can be aggregated; tests that care
 #: about MIS-matched provenance override it explicitly.
+#: The configuration bracket one collection flow measures. Fixtures carry
+#: it because a real artifact does: the aggregate reads the anchors off
+#: the artifacts, never from its caller.
+ANCHOR_QUIET = "7e489a3bd4e5f60718a1b2c3d4e5f607"
+BRACKET = {"configuration_anchor_before": ANCHOR_QUIET,
+           "configuration_anchor_after": ANCHOR_QUIET}
 OBS = ObservationContext(host="stockbot-vps", observation_id="obs-m23d-000001")
+#: The collection time the fixtures use, matching certify()'s default.
+CHECKED_AT = "2026-09-08T21:00:00Z"
 
 #: The release the fixture host is running. Gate evidence must agree on it, not
 #: merely on the observation token: a shared id survives a deployment landing
@@ -38,7 +47,7 @@ RELEASE = "1130da80832140c9ec4bc165c48b2768c84a8dbe"
 
 def bound(result: dict) -> dict:
     """Tag a pointer-gate result with the shared observation AND release."""
-    return {"target_sha": RELEASE, **result, **OBS.as_dict()}
+    return {"target_sha": RELEASE, **BRACKET, **result, **OBS.as_dict()}
 
 
 #: The envelope every real validity artifact carries. The aggregate checks it
@@ -49,6 +58,7 @@ VALIDITY_ENVELOPE = {
     "schema": V.SCHEMA,
     "schema_version": V.SCHEMA_VERSION,
     "observe_only": True,
+    **BRACKET,
 }
 
 
@@ -677,6 +687,7 @@ def test_release_identity_is_not_established_without_validity_evidence():
         surfaces, observation=OBS,
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
+        scheduler_result=_flow_scheduler(),
     )
     # The two-gate result is still OK -- that field keeps its meaning...
     assert combined["status"] == "OK"
@@ -709,6 +720,7 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
             "SYSTEMD_UNIT_VALIDITY": verdict,
             "verified_units": ["stockbot-daily.service"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == expected
 
@@ -857,6 +869,31 @@ def test_classified_units_are_declared_in_the_contracts_doc():
     assert "classified_units" in contracts
 
 
+def _flow_scheduler(observation=None, **over):
+    """A scheduler artifact as the collection flow would emit it.
+
+    The scheduler leg used to be raw surfaces handed straight in, with its
+    provenance asserted by the caller. It is now a stamped artifact like the
+    other two, so fixtures that omit it are no longer realistic stand-ins for
+    anything a bracketed collection produces.
+    """
+    from portfolio_automation.release import scheduler as S
+    root = "/opt/stockbot/current"
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=%s/scripts/run.sh\nWorkingDirectory=%s\n"
+        % (root, root),
+        origin="systemd:stockbot-daily.service")
+    artifact = S.scheduler_alignment_artifact(
+        surfaces, release_root=root, checked_at=CHECKED_AT,
+        observation=observation or OBS,
+        expected_origins=("systemd:stockbot-daily.service",),
+        approved_sha=RELEASE,
+        configuration_anchor_before=ANCHOR_QUIET,
+        configuration_anchor_after=ANCHOR_QUIET)
+    artifact.update(over)
+    return artifact
+
+
 def _daily_surfaces():
     from portfolio_automation.release import scheduler as S
     return S.parse_systemd_unit(
@@ -886,6 +923,7 @@ def test_two_gates_passing_on_disjoint_units_is_not_three_gate_coverage():
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-dashboard.service"],  # a DIFFERENT unit
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.service" in combined["validity_uncovered_units"]
@@ -908,6 +946,7 @@ def test_covered_units_do_establish_the_aggregate():
             "verified_units": ["stockbot-daily.service",
                                "stockbot-dashboard.service"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
     assert combined["validity_uncovered_units"] == []
@@ -926,6 +965,7 @@ def test_without_expected_origins_there_is_nothing_to_bind():
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]}),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("nothing to bind" in e for e in combined["errors"])
@@ -950,6 +990,7 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]}),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["validity_uncovered_units"] == []
     assert combined["production_release_identity"] == "PASS"
@@ -1043,6 +1084,7 @@ def test_a_timer_that_was_never_verified_blocks_the_aggregate():
             # A narrowed collection: the service was verified, the timer wasn't.
             "verified_units": ["stockbot-daily.service"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
@@ -1065,6 +1107,7 @@ def test_a_verified_timer_satisfies_the_binding():
             "verified_units": ["stockbot-daily.service",
                                "stockbot-daily.timer"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1093,6 +1136,7 @@ def test_a_tolerated_optional_absence_still_binds():
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1110,6 +1154,7 @@ def test_without_a_declared_inventory_the_aggregate_is_not_established():
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]}),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("expected_validity_units" in e for e in combined["errors"])
@@ -1188,6 +1233,7 @@ def test_a_narrowed_collection_cannot_wave_a_unit_through_as_optional():
             # ...but it is still named optional, which must not excuse it.
             "optional_units": ["stockbot-daily.timer"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
@@ -1213,6 +1259,7 @@ def test_a_genuinely_considered_optional_absence_is_still_tolerated():
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
         }),
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1608,7 +1655,7 @@ def _aggregate(*, validity_obs=OBS, pointer_obs=OBS, aggregate_obs=OBS):
             "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
             origin="systemd:" + unit),
         pointer_result={"status": "OK", "errors": [], "target_sha": RELEASE,
-                        **pointer_obs.as_dict()},
+                        **BRACKET, **pointer_obs.as_dict()},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:" + unit,),
         expected_validity_units=(unit,),
@@ -1617,6 +1664,7 @@ def _aggregate(*, validity_obs=OBS, pointer_obs=OBS, aggregate_obs=OBS):
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": [unit]}),
+        scheduler_result=_flow_scheduler(aggregate_obs),
         observation=aggregate_obs,
     )
 
@@ -1675,6 +1723,7 @@ def test_evidence_with_no_provenance_at_all_is_not_established():
         expected_validity_units=(unit,),
         validity_result={**VALIDITY_ENVELOPE, "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": [unit]},
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("no observation id" in c for c in combined["provenance_conflicts"])
@@ -1806,6 +1855,7 @@ def _combine(artifact):
         expected_validity_units=(svc, "stockbot-daily.timer"),
         validity_result=artifact,
         observation=OBS,
+        scheduler_result=_flow_scheduler(),
     )
 
 
@@ -1896,7 +1946,7 @@ def test_a_deployment_between_two_gates_breaks_the_binding():
             "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
             origin="systemd:" + svc),
         pointer_result={"status": "OK", "errors": [], "target_sha": RELEASE,
-                        **OBS.as_dict()},
+                        **BRACKET, **OBS.as_dict()},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:" + svc,),
         expected_validity_units=(svc,),
@@ -1904,6 +1954,7 @@ def test_a_deployment_between_two_gates_breaks_the_binding():
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": [svc]},
         observation=OBS,
+        scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("a deployment landed between the two observations" in c
@@ -2003,6 +2054,7 @@ def _optional_aggregate(*, discovered, verified):
             "discovered_units": list(discovered),
             "verified_units": list(verified),
         }),
+        scheduler_result=_flow_scheduler(),
     )
 
 
@@ -2119,11 +2171,12 @@ def _contract_aggregate(**over):
             origin="systemd:" + unit),
         observation=OBS,
         pointer_result={"status": "OK", "errors": [], "target_sha": RELEASE,
-                        **OBS.as_dict()},
+                        **BRACKET, **OBS.as_dict()},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:" + unit,),
         expected_validity_units=(unit,),
-        validity_result=artifact)
+        validity_result=artifact,
+        scheduler_result=_flow_scheduler())
 
 
 def test_a_contract_complete_artifact_still_certifies():
@@ -2409,3 +2462,292 @@ def test_every_applicable_drop_in_directory_is_anchored(unit, expected):
 def test_the_unapplied_bare_dash_directory_is_not_anchored():
     """`-.service.d/` was measured NOT to apply, so it is not generated."""
     assert "-.service.d" not in _collector_dropin_dirs("stockbot-daily.service")
+
+
+# ===========================================================================
+# The three-gate configuration bracket
+#
+# A shared (host, observation_id) proves the collectors were TOLD they belong
+# to one run. It cannot prove the system held still during it, and unit files
+# are not part of the release -- so binding to a release SHA leaves scheduler
+# certifies-A / validity-verifies-B open. The bracket closes it by measuring
+# the configuration before the FIRST gate and after the LAST one.
+# ===========================================================================
+
+ANCHOR_A = "a1b2c3d4e5f60718" * 2
+ANCHOR_B = "0f1e2d3c4b5a6978" * 2
+
+
+def _sched_artifact(*, anchor_before=ANCHOR_A, anchor_after=ANCHOR_A,
+                    observation=None, aligned=True, **over):
+    """A scheduler artifact as the collection flow would emit it."""
+    from portfolio_automation.release import scheduler as S
+    obs = observation or OBS
+    root = "/opt/stockbot/current"
+    target = root if aligned else "/opt/stockbot/legacy"
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=%s/scripts/run.sh\nWorkingDirectory=%s\n"
+        % (target, target),
+        origin="systemd:stockbot-daily.service")
+    artifact = S.scheduler_alignment_artifact(
+        surfaces, release_root=root, checked_at=CHECKED_AT, observation=obs,
+        expected_origins=("systemd:stockbot-daily.service",),
+        approved_sha=RELEASE,
+        configuration_anchor_before=anchor_before,
+        configuration_anchor_after=anchor_after)
+    artifact.update(over)
+    return artifact
+
+
+def _bracketed(*, sched=None, pointer_anchor=None, validity_anchor=None,
+               sched_kw=None, observation=None):
+    """The three artifacts as ONE bracketed collection would produce them."""
+    from portfolio_automation.release import scheduler as S
+    obs = observation or OBS
+    scheduler_artifact = sched if sched is not None else _sched_artifact(
+        observation=obs, **(sched_kw or {}))
+    pb, pa = pointer_anchor or (ANCHOR_A, ANCHOR_A)
+    vb, va = validity_anchor or (ANCHOR_A, ANCHOR_A)
+    pointer = {**bound({"status": "OK", "errors": []}),
+               "configuration_anchor_before": pb,
+               "configuration_anchor_after": pa}
+    validity = with_records({
+        **obs.as_dict(), **VALIDITY_ENVELOPE,
+        "release_pointer": RELEASE,
+        "SYSTEMD_UNIT_VALIDITY": "PASS",
+        "expected_units": ["stockbot-daily.service"],
+        "discovered_units": ["stockbot-daily.service"],
+        "verified_units": ["stockbot-daily.service"],
+        "configuration_anchor_before": vb,
+        "configuration_anchor_after": va,
+    })
+    return S.certify_release_identity(
+        _daily_surfaces(), observation=obs,
+        pointer_result=pointer,
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
+        validity_result=validity, scheduler_result=scheduler_artifact)
+
+
+# --- 2. the legitimate case must still be reachable ------------------------
+
+def test_a_quiet_bracketed_collection_still_certifies():
+    """The control. A tightening that certifies nothing proves nothing."""
+    combined = _bracketed()
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+    assert combined["provenance_conflicts"] == []
+    assert combined["configuration_anchor_before"] == ANCHOR_A
+    assert combined["configuration_anchor_after"] == ANCHOR_A
+
+
+# --- 1 & 9. scheduler saw A, validity verified B ---------------------------
+
+def test_a_unit_replaced_between_two_gates_cannot_certify():
+    """The finding: scheduler certifies A while validity verifies B.
+
+    Both gates are individually truthful and the pointer SHA never moves,
+    because unit files are not part of the release. Only an anchor spanning
+    the whole collection can see it.
+    """
+    combined = _bracketed(validity_anchor=(ANCHOR_A, ANCHOR_B),
+                          pointer_anchor=(ANCHOR_A, ANCHOR_B))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("configuration changed during collection" in c
+               for c in combined["provenance_conflicts"]), \
+        combined["provenance_conflicts"]
+
+
+def test_individually_passing_gates_from_opposite_sides_of_a_swap_fail():
+    """Each leg green, each leg honest, and jointly describing two systems."""
+    sched = _sched_artifact(anchor_before=ANCHOR_A, anchor_after=ANCHOR_A)
+    assert sched["SCHEDULER_ALIGNMENT"] == "PASS"
+    combined = _bracketed(sched=sched,
+                          validity_anchor=(ANCHOR_B, ANCHOR_B),
+                          pointer_anchor=(ANCHOR_B, ANCHOR_B))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("more than one configuration bracket" in c
+               for c in combined["provenance_conflicts"]), \
+        combined["provenance_conflicts"]
+
+
+# --- 3. A -> B -> A anywhere inside the bracket ----------------------------
+
+def test_a_change_and_return_inside_the_bracket_is_still_caught():
+    """Endpoint EQUALITY is not the claim; endpoint WITNESSES are.
+
+    The anchors hash inode, size and nanosecond mtime/ctime, none of which a
+    restore puts back, so a configuration that returns to its original bytes
+    still reads differently at the closing endpoint.
+    """
+    returned = ANCHOR_B          # same content, different witnesses
+    combined = _bracketed(validity_anchor=(ANCHOR_A, returned),
+                          pointer_anchor=(ANCHOR_A, returned))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+
+
+# --- 4. same observation id, different configuration -----------------------
+
+def test_a_shared_observation_id_cannot_rescue_a_broken_bracket():
+    """The id names the run; the bracket names the configuration."""
+    combined = _bracketed(validity_anchor=(ANCHOR_B, ANCHOR_B))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    # the observation binding itself is clean -- only the bracket objects
+    assert not any("observation" in c and "bracket" not in c
+                   for c in combined["provenance_conflicts"])
+
+
+# --- 5. matching release SHA, differing systemd configuration --------------
+
+def test_a_matching_release_sha_does_not_imply_matching_units():
+    """Unit files live outside the release, so the SHA cannot speak for them."""
+    combined = _bracketed(validity_anchor=(ANCHOR_A, ANCHOR_B))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    # the release binding agreed; the configuration did not
+    assert not any("different release" in c for c in combined["errors"])
+
+
+# --- 6. a caller cannot supply the agreement -------------------------------
+
+def test_the_aggregate_takes_no_anchor_from_its_caller():
+    """Pinned structurally: an anchor parameter would be agreement by fiat.
+
+    A caller who could hand in a bracket could hand in the very consistency
+    the bracket exists to check, exactly as a caller-minted observation id
+    would be.
+    """
+    import inspect
+    from portfolio_automation.release import scheduler as S
+    params = inspect.signature(S.certify_release_identity).parameters
+    assert not [p for p in params if "anchor" in p.lower()]
+
+
+def test_a_fabricated_anchor_without_artifacts_cannot_certify():
+    """Anchors are read off artifacts; there is nowhere else to put them."""
+    from portfolio_automation.release import scheduler as S
+    combined = S.certify_release_identity(
+        _daily_surfaces(), observation=OBS,
+        pointer_result=bound({"status": "OK", "errors": []}),
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
+        validity_result=with_records({
+            **OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "expected_units": ["stockbot-daily.service"],
+            "discovered_units": ["stockbot-daily.service"],
+            "verified_units": ["stockbot-daily.service"]}),
+        scheduler_result=None)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("no scheduler alignment artifact" in e for e in combined["errors"])
+
+
+# --- 7. the scheduler artifact is held to a contract -----------------------
+
+@pytest.mark.parametrize("override, expected", [
+    ({"schema": "something.else"}, "schema"),
+    ({"schema_version": 99}, "schema_version"),
+    ({"observe_only": False}, "observe_only"),
+    ({"observe_only": None}, "observe_only"),
+    ({"checked_at": ""}, "collection time"),
+    ({"errors": ["unresolved surface"]}, "errors"),
+    ({"unresolved": ["systemd:x.service"]}, "unresolved"),
+    ({"surfaces": []}, "no execution surfaces"),
+])
+def test_a_self_contradicting_scheduler_artifact_cannot_certify(override, expected):
+    """Same standard the validity artifact is held to, for the same reason."""
+    combined = _bracketed(sched=_sched_artifact(**override))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any(expected in d for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_a_missing_scheduler_artifact_is_not_a_passing_one():
+    from portfolio_automation.release import scheduler as S
+    for empty in (None, {}):
+        defects = S.scheduler_contract_defects(empty)
+        assert defects and any("no scheduler alignment artifact" in d
+                               for d in defects)
+
+
+# --- 8. the scheduler artifact must belong to this observation -------------
+
+@pytest.mark.parametrize("other", [
+    ObservationContext(host="staging-vps", observation_id="obs-m23d-000001"),
+    ObservationContext(host="stockbot-vps", observation_id="obs-m23d-999999"),
+])
+def test_a_scheduler_artifact_from_another_observation_cannot_certify(other):
+    """The leg that used to be caller-asserted is now genuinely checked."""
+    combined = _bracketed(sched=_sched_artifact(observation=other))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert combined["provenance_conflicts"], combined["errors"]
+
+
+def test_the_scheduler_artifact_records_what_it_certified():
+    """A verdict string is a claim; the surfaces are the evidence behind it."""
+    artifact = _sched_artifact()
+    assert artifact["schema"] == "northstar.scheduler_alignment"
+    assert artifact["observe_only"] is True
+    assert artifact["surfaces"], "no surfaces recorded"
+    surface = artifact["surfaces"][0]
+    assert surface["origin"] == "systemd:stockbot-daily.service"
+    assert surface["executable"].startswith("/opt/stockbot/current")
+
+
+def test_an_unaligned_scheduler_artifact_reports_its_own_failure():
+    artifact = _sched_artifact(aligned=False)
+    assert artifact["SCHEDULER_ALIGNMENT"] == "FAILED"
+    assert artifact["errors"]
+    combined = _bracketed(sched=artifact)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+
+
+def test_the_scheduler_artifact_records_env_paths_but_never_contents():
+    """A credential path is release-identity evidence; its contents are not."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n"
+        "EnvironmentFile=/opt/stockbot/.env\n",
+        origin="systemd:stockbot-daily.service")
+    artifact = S.scheduler_alignment_artifact(
+        surfaces, release_root="/opt/stockbot/current", checked_at=CHECKED_AT,
+        observation=OBS, expected_origins=("systemd:stockbot-daily.service",),
+        configuration_anchor_before=ANCHOR_A, configuration_anchor_after=ANCHOR_A)
+    assert artifact["surfaces"][0]["environment_files"] == ["/opt/stockbot/.env"]
+    assert "SECRET" not in json.dumps(artifact)
+
+
+# --- the collection flow owns the anchors ----------------------------------
+
+def test_the_observation_collector_brackets_the_whole_collection():
+    """The anchor must close AFTER the last gate, not after the first."""
+    flow = (REPO / "scripts" / "collect_release_observation.sh").read_text(
+        encoding="utf-8")
+    before = flow.index("##CONFIGURATION_ANCHOR_BEFORE")
+    scheduler = flow.index("##SCHEDULER_UNIT")
+    validity = flow.index("##VALIDITY_END")
+    after = flow.index("##CONFIGURATION_ANCHOR_AFTER")
+    assert before < scheduler < validity < after, (
+        "the bracket must open before the first gate and close after the last")
+
+
+def test_the_observation_collector_is_observation_only():
+    """The one flow that touches production must not be able to change it."""
+    text = (REPO / "scripts" / "collect_release_observation.sh").read_text(
+        encoding="utf-8")
+    body = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#"))
+    for forbidden in ("daemon-reload", "systemctl start", "systemctl stop",
+                      "systemctl restart", "systemctl reload",
+                      "systemctl enable", "systemctl disable",
+                      "systemctl mask", "systemctl unmask", "systemctl edit",
+                      "crontab -r", "rm ", "mv ", "cp ", "ln -", "chmod",
+                      "chown", "tee ", ">>"):
+        assert forbidden not in body, f"collector must not {forbidden!r}"
+
+
+def test_the_flow_reuses_the_validity_collector_rather_than_copying_it():
+    """Two implementations of one measurement would drift apart silently."""
+    flow = (REPO / "scripts" / "collect_release_observation.sh").read_text(
+        encoding="utf-8")
+    assert "collect_systemd_validity_evidence.sh" in flow
