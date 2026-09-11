@@ -198,10 +198,38 @@ _statsig() {
 # anchors structurally cannot. A path that does not exist is recorded as
 # "absent" rather than skipped, so a directory that appears and vanishes
 # cannot read as unchanged either. `stat` is read-only.
+# Every drop-in directory systemd would apply to this unit, not just the exact
+# one. Measured on systemd 255 -- for `stockbot-probe-x.service` the verifier
+# applied drop-ins from ALL of:
+#
+#   service.d/                     the unit TYPE
+#   stockbot-.service.d/           dash-truncated prefixes
+#   stockbot-probe-.service.d/
+#   stockbot-probe-x.service.d/    the exact unit
+#
+# (`-.service.d/` was NOT applied, so it is deliberately not generated.)
+# Anchoring only the exact directory leaves the generalized ones unwatched: a
+# transient invalid drop-in added to and removed from an existing `service.d/`
+# changes only that directory's metadata, so the verifier reads it while every
+# anchor -- and endpoint DropInPaths -- stays unchanged.
+_dropin_dirs() {
+  local u="$1" type="${1##*.}" stem="${1%.*}" prefix
+  echo "$type.d"
+  echo "$u.d"
+  # repeatedly truncate after each dash, skipping the empty prefix
+  prefix="$stem"
+  while [ "${prefix%-*}" != "$prefix" ]; do
+    prefix="${prefix%-*}"
+    [ -n "$prefix" ] && echo "$prefix-.$type.d"
+  done
+  # templates: foo@bar.service also takes foo@.service.d
+  case "$stem" in *@*) echo "${stem%%@*}@.$type.d";; esac
+}
+
 _diranchor() {
   local u="$1" d p out=""
   for d in $SEARCH_PATH; do
-    for p in "$d" "$d/$u.d"; do
+    for p in "$d" $(for sub in $(_dropin_dirs "$u"); do echo "$d/$sub"; done); do
       if [ -e "$p" ]; then
         out="$out$(stat -c '%n|%i|%.9Y|%.9Z' "$p" 2>/dev/null || echo "$p|unreadable")
 "

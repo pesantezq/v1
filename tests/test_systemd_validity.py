@@ -2308,3 +2308,104 @@ def test_the_collector_records_the_effective_path_even_when_overridden():
     # the effective path is asked of systemd unconditionally, outside the
     # branch that honours the override
     assert "systemd-analyze unit-paths" in body[marker:marker + 200]
+
+
+# ---------------------------------------------------------------------------
+# A verified record must STATE its success
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("record", [
+    {"unit": "stockbot-daily.service"},                       # no fields at all
+    {"unit": "stockbot-daily.service", "verifier_exit_status": 0},
+    {"unit": "stockbot-daily.service", "verifier_result": "PASS"},
+    {"unit": "stockbot-daily.service", "verifier_exit_status": None,
+     "verifier_result": None},
+])
+def test_a_record_that_does_not_state_success_cannot_certify(record):
+    """Absence of a denial is not evidence of success.
+
+    Treating a missing field as "not a failure" lets a record carrying neither
+    an exit status nor a verifier result satisfy a claim of verification.
+    """
+    combined = _contract_aggregate(units=[record])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("does not state that the verifier succeeded" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_a_record_that_states_success_still_certifies():
+    """The control."""
+    combined = _contract_aggregate(units=[
+        {"unit": "stockbot-daily.service", "verifier_exit_status": 0,
+         "verifier_result": "PASS"}])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+
+
+# ---------------------------------------------------------------------------
+# A capture records each unit once
+# ---------------------------------------------------------------------------
+
+def test_a_single_capture_has_no_per_unit_defects():
+    """The control: a real capture must not trip the per-unit check."""
+    assert _cert_module().per_unit_defects(CAPTURE) == []
+
+
+@pytest.mark.parametrize("section", ["SHOW", "RECHECK", "VERIFYCMD", "VERIFY"])
+def test_duplicate_per_unit_sections_are_rejected(section):
+    """`parse_evidence` keeps the LAST value, so ordering would decide.
+
+    A capture carrying a failing ##VERIFY followed by a passing one for the
+    same unit silently resolves its own contradiction, and run-level
+    uniqueness cannot see it because it counts only run-level markers.
+    """
+    unit = "stockbot-daily.service"
+    if section == "VERIFY":
+        doctored = CAPTURE.replace("##VERIFY %s 0" % unit,
+                                   "##VERIFY %s 1\n##VERIFY %s 0" % (unit, unit), 1)
+    else:
+        marker = "##%s %s" % (section, unit)
+        doctored = CAPTURE.replace(marker, marker + "\n" + marker, 1)
+    defects = _cert_module().per_unit_defects(doctored)
+    assert defects, section
+    assert any(unit in d for d in defects)
+
+
+# ---------------------------------------------------------------------------
+# Generalized drop-in directories are anchored too
+# ---------------------------------------------------------------------------
+
+def _collector_dropin_dirs(unit):
+    """Run the collector's own _dropin_dirs, so the test pins real behaviour."""
+    import subprocess, re
+    body = COLLECTOR.read_text(encoding="utf-8")
+    fn = re.search(r"^_dropin_dirs\(\) \{.*?^\}", body, re.S | re.M).group(0)
+    out = subprocess.run(["bash", "-c", fn + '\n_dropin_dirs "%s"' % unit],
+                         capture_output=True, text=True)
+    return [line for line in out.stdout.split() if line]
+
+
+@pytest.mark.parametrize("unit, expected", [
+    ("stockbot-probe-x.service",
+     {"service.d", "stockbot-probe-x.service.d",
+      "stockbot-probe-.service.d", "stockbot-.service.d"}),
+    ("stockbot-daily.timer",
+     {"timer.d", "stockbot-daily.timer.d", "stockbot-.timer.d"}),
+    ("simple.service", {"service.d", "simple.service.d"}),
+    ("foo@bar.service", {"service.d", "foo@bar.service.d", "foo@.service.d"}),
+])
+def test_every_applicable_drop_in_directory_is_anchored(unit, expected):
+    """Measured against systemd 255, which applied drop-ins from all of these.
+
+    Anchoring only the exact `<unit>.d` leaves the generalized directories
+    unwatched: a transient invalid drop-in added to and removed from an
+    existing `service.d/` changes only that directory's metadata, so the
+    verifier reads it while every other anchor -- and endpoint DropInPaths --
+    stays unchanged.
+    """
+    assert set(_collector_dropin_dirs(unit)) == expected
+
+
+def test_the_unapplied_bare_dash_directory_is_not_anchored():
+    """`-.service.d/` was measured NOT to apply, so it is not generated."""
+    assert "-.service.d" not in _collector_dropin_dirs("stockbot-daily.service")

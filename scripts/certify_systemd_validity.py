@@ -88,6 +88,34 @@ RUN_LEVEL_SECTIONS = (
 )
 
 
+#: Sections that describe ONE UNIT within the run. Each may appear exactly
+#: once per unit, for the same reason the run-level sections may appear once
+#: per capture: `parse_evidence` keeps the LAST value it sees, so a capture
+#: carrying a failing ``##VERIFY`` followed by a passing one for the same unit
+#: silently resolves the contradiction by ordering. Evidence that says two
+#: different things about one unit is not evidence about that unit.
+PER_UNIT_SECTIONS = ("SHOW", "RECHECK", "VERIFYCMD", "VERIFY")
+
+
+def per_unit_defects(text: str) -> list[str]:
+    """Ways a capture says more than one thing about a single unit."""
+    seen: dict[tuple[str, str], int] = {}
+    for line in (text or "").splitlines():
+        if not line.startswith("##"):
+            continue
+        parts = line[2:].split()
+        if len(parts) >= 2 and parts[0] in PER_UNIT_SECTIONS:
+            key = (parts[0], parts[1])
+            seen[key] = seen.get(key, 0) + 1
+    return [
+        f"evidence contains {count} ##{section} sections for {unit} — a "
+        f"capture records each unit once, so a stream carrying several "
+        f"contradicts itself about that unit and the contradiction would "
+        f"otherwise be resolved by ordering alone"
+        for (section, unit), count in sorted(seen.items()) if count > 1
+    ]
+
+
 def run_level_defects(text: str) -> list[str]:
     """Ways a stream is not one complete, ordered capture."""
     seen: dict[str, int] = {}
@@ -282,7 +310,8 @@ def main() -> int:
             if args.evidence else sys.stdin.read())
 
     parsed = parse_evidence(text)
-    defects = stream_defects(text) + run_level_defects(text)
+    defects = (stream_defects(text) + run_level_defects(text)
+               + per_unit_defects(text))
     classified = tuple(u.strip() for u in args.classified.split(",") if u.strip())
 
     # A truncated, doubled or edited capture must not look like a clean host.

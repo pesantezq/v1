@@ -686,11 +686,28 @@ def validity_contract_defects(validity_result: dict | None) -> list[str]:
     # while no exit status was ever recorded for that unit. A claim of
     # verification requires exactly one successful record.
     records: dict[str, int] = {}
+    succeeded: dict[str, bool] = {}
     for unit in validity_result.get("units") or ():
         if isinstance(unit, dict) and unit.get("unit"):
             name = str(unit["unit"])
             records[name] = records.get(name, 0) + 1
+            # Success must be STATED, not inferred from the absence of a
+            # denial. Treating a missing field as "not a failure" lets a
+            # record of `{"unit": "x"}` -- which contains no exit status and
+            # no verifier result at all -- satisfy a claim of verification.
+            # A record that does not say the verifier succeeded is not
+            # evidence that it did.
+            ok_here = (unit.get("verifier_exit_status") == 0
+                       and unit.get("verifier_result") == "PASS")
+            succeeded[name] = succeeded.get(name, True) and ok_here
     for name in sorted(verified):
+        if name in records and not succeeded.get(name, False):
+            defects.append(
+                f"{name}: listed in verified_units while its record does not "
+                f"state that the verifier succeeded — a claim of verification "
+                f"requires an explicit exit status of 0 and a PASS result, "
+                f"not merely the absence of a recorded failure"
+            )
         if name not in records:
             defects.append(
                 f"{name}: listed in verified_units with no per-unit record — "
