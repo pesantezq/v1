@@ -76,6 +76,7 @@ def stream_defects(text: str) -> list[str]:
 def parse_evidence(text: str) -> dict:
     """Parse the collector's record stream into the certifier's inputs."""
     host = checked_at = version = observation_id = ""
+    release_before = release_after = ""
     expected: list[str] = []
     optional: list[str] = []
     discovered: list[str] = []
@@ -121,6 +122,10 @@ def parse_evidence(text: str) -> dict:
             host = raw.strip()
         elif section == "OBSERVATION_ID" and raw.strip():
             observation_id = raw.strip()
+        elif section == "RELEASE_POINTER_BEFORE" and raw.strip():
+            release_before = raw.strip()
+        elif section == "RELEASE_POINTER_AFTER" and raw.strip():
+            release_after = raw.strip()
         elif section == "CHECKED_AT" and raw.strip():
             checked_at = raw.strip()
         elif section == "SYSTEMD_VERSION" and raw.strip():
@@ -172,6 +177,8 @@ def parse_evidence(text: str) -> dict:
         "malformed_evidence": tuple(malformed),
         "host": host,
         "observation_id": observation_id,
+        "release_pointer_before": release_before,
+        "release_pointer_after": release_after,
         "checked_at": checked_at,
         "systemd_version": version,
         "expected_units": tuple(expected),

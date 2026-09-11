@@ -86,7 +86,7 @@ from datetime import datetime
 
 #: Schema identity for the durable artifact. Bump when the shape changes.
 SCHEMA = "northstar.systemd_unit_validity"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: The verifier this gate is defined in terms of.
 VERIFIER = "systemd-analyze"
@@ -153,6 +153,17 @@ _QUOTED_ASSIGNMENT = re.compile(
 _BARE_ASSIGNMENT = re.compile(
     r"\b[A-Za-z_][A-Za-z0-9_]*\s*=(?![\s,.;:)\]}])((?:\\.|\S)+)"
 )
+#: An assignment whose quote is never closed. Malformed units are this gate's
+#: primary input, so this is not an exotic case: on systemd 255 a unit
+#: containing ``EnvironmentFile=AUTH="alpha beta gamma`` is echoed back
+#: verbatim, and the terminated-quote pattern above cannot match it. The bare
+#: fallback then stops at the first space, redacting ``AUTH="alpha`` and
+#: persisting ``beta gamma``. An unterminated quote has no value boundary left
+#: to find, so the only safe reading is that the value runs to end of line.
+_UNTERMINATED_QUOTED = re.compile(
+    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*|'[^']*)$""",
+    re.MULTILINE,
+)
 #: Credentials embedded in a URL, which carry the secret in the value itself.
 _CREDENTIAL_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/@]*:[^\s/@]*@\S*")
 _LONG_OPAQUE = re.compile(r"\b[A-Za-z0-9+/_-]{32,}={0,2}\b")
@@ -178,6 +189,9 @@ def redact(text: str) -> str:
     text from the host, so it is treated as untrusted for this purpose.
     """
     cleaned = _QUOTED_ASSIGNMENT.sub(_REDACTED, text)
+    # Before the bare fallback: an unterminated quote must swallow the rest of
+    # the line, or the bare pattern truncates it at the first space.
+    cleaned = _UNTERMINATED_QUOTED.sub(_REDACTED, cleaned)
     cleaned = _CREDENTIAL_URL.sub(_REDACTED, cleaned)
     cleaned = _BARE_ASSIGNMENT.sub(_REDACTED, cleaned)
     return _LONG_OPAQUE.sub(_REDACTED, cleaned)
@@ -218,6 +232,14 @@ class UnitProvenance:
     #: times while the verifier read bytes PID 1 never had.
     fragment_digest: str = ""
     drop_in_digest: str = ""
+    #: inode/size/mtime/ctime signature of the same files. Content digests
+    #: cannot see a change that RETURNS: a deployment that moves a unit A -> B
+    #: and restores A before the re-observation leaves both endpoint digests
+    #: equal to A while the verifier read B. Rewriting a file advances its
+    #: mtime and ctime even when the bytes are identical, so this catches what
+    #: the digest structurally cannot.
+    fragment_stat: str = ""
+    drop_in_stat: str = ""
 
     @property
     def is_loaded(self) -> bool:
@@ -234,7 +256,8 @@ class UnitProvenance:
         legitimately differ between two observations of an unchanged unit.
         """
         return (self.fragment_path, self.drop_in_paths,
-                self.fragment_digest, self.drop_in_digest)
+                self.fragment_digest, self.drop_in_digest,
+                self.fragment_stat, self.drop_in_stat)
 
 
 @dataclass(frozen=True)
@@ -300,6 +323,8 @@ def provenance_from_show(text: str, *, unit: str) -> UnitProvenance:
         load_error=props.get("LoadError", ""),
         fragment_digest=props.get("NorthstarFragmentDigest", ""),
         drop_in_digest=props.get("NorthstarDropInDigest", ""),
+        fragment_stat=props.get("NorthstarFragmentStat", ""),
+        drop_in_stat=props.get("NorthstarDropInStat", ""),
     )
 
 
@@ -371,7 +396,9 @@ def _snapshot_consistency(unit: str,
 
     for label, provenance_ in (("before", before), ("after", after)):
         for what, digest in (("fragment", provenance_.fragment_digest),
-                             ("drop-in", provenance_.drop_in_digest)):
+                             ("drop-in", provenance_.drop_in_digest),
+                             ("fragment stat", provenance_.fragment_stat),
+                             ("drop-in stat", provenance_.drop_in_stat)):
             if not digest:
                 problems.append(
                     f"{unit}: no {what} digest recorded {label} verification — "
@@ -404,6 +431,8 @@ def certify_systemd_unit_validity(
     checked_at: str,
     host: str,
     observation_id: str = "",
+    release_pointer_before: str = "",
+    release_pointer_after: str = "",
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
     optional_units: tuple[str, ...] = (),
@@ -448,6 +477,21 @@ def certify_systemd_unit_validity(
         blockers.append(
             f"checked_at {checked_at!r} is not an ISO-8601 UTC timestamp — the "
             f"evidence has no trustworthy collection time"
+        )
+
+    # The release the host was running, observed at both ends of the run. A
+    # deployment landing mid-collection means the unit evidence spans two
+    # releases, which is a snapshot-consistency failure of this capture -- the
+    # same class as a unit changing under the verifier.
+    release_before = (release_pointer_before or "").strip()
+    release_after = (release_pointer_after or "").strip()
+    release_pointer = release_before if release_before == release_after else ""
+    if release_before and release_after and release_before != release_after:
+        blockers.append(
+            f"the release pointer moved during collection "
+            f"({release_before[:12]} -> {release_after[:12]}) — this capture "
+            f"spans two releases, so its unit evidence does not describe a "
+            f"single deployed system"
         )
 
     if not expected_units:
@@ -609,6 +653,13 @@ def certify_systemd_unit_validity(
         # composing evidence from separate runs actually does harm --
         # see release.observation.
         "observation_id": observation_id,
+        # The release this evidence was taken against, when both ends of the
+        # run agreed. Empty when it could not be established or moved. Like
+        # observation_id it does not gate THIS verdict -- whether systemd would
+        # accept these units is true of the host regardless -- but the
+        # three-gate aggregate requires it to match what the pointer gate
+        # certified, which is what detects a deployment between two gates.
+        "release_pointer": release_pointer,
         "systemd_version": redact(systemd_version),
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),

@@ -703,6 +703,33 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         "release pointer identity": observation_of(pointer_result),
         "systemd unit validity": observation_of(validity_result),
     })
+    # A shared observation id proves the collectors were TOLD they belong to
+    # one run. It cannot prove the system held still during it: if a deployment
+    # lands between the pointer reading and the unit verification, both still
+    # carry the same id while describing different releases. So the gates are
+    # bound to observed STATE as well as to a token -- the release the validity
+    # collector saw must be the release the pointer gate certified.
+    validity_release = str((validity_result or {}).get("release_pointer") or "").strip()
+    pointer_release = str((pointer_result or {}).get("target_sha") or "").strip()
+    if not validity_release:
+        unbound.append(
+            "systemd unit validity: evidence records no release pointer, so a "
+            "deployment between it and the pointer gate could not be detected"
+        )
+    if not pointer_release:
+        unbound.append(
+            "release pointer identity: evidence records no target SHA, so there "
+            "is no release state to bind the other gates against"
+        )
+    if validity_release and pointer_release and validity_release != pointer_release:
+        unbound.append(
+            f"the validity evidence was taken against release "
+            f"{validity_release[:12]} while the pointer gate certified "
+            f"{pointer_release[:12]} — a deployment landed between the two "
+            f"observations, so they describe different systems however they "
+            f"were labelled"
+        )
+
     errors.extend(unbound)
 
     # The two gates must be about the same units, not merely both green.
@@ -721,9 +748,23 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     # so treating it as covered would let a narrowed collection wave a unit
     # through by naming it optional. Tolerance therefore requires BOTH.
     validity_expected = set((validity_result or {}).get("expected_units") or ())
-    tolerated = (
-        set((validity_result or {}).get("optional_units") or ()) & validity_expected
-    )
+    validity_discovered = set((validity_result or {}).get("discovered_units") or ())
+    # ...and only where the unit is genuinely ABSENT. "Optional" licenses a
+    # missing unit, never an unverified one: an optional unit that is installed
+    # is verified exactly like a required one. An artifact that lists a unit as
+    # discovered AND optional AND expected while omitting it from
+    # verified_units is internally inconsistent -- stale, narrowed or edited --
+    # and reading its optional flag as coverage would let it waive an installed
+    # unit that nothing checked.
+    tolerated = {
+        u for u in (set((validity_result or {}).get("optional_units") or ())
+                    & validity_expected)
+        if u not in validity_discovered
+    }
+    installed_but_unverified = tuple(sorted(
+        u for u in required_units
+        if u not in verified_units and u in validity_discovered
+    ))
     uncovered = tuple(
         u for u in required_units if u not in verified_units and u not in tolerated
     )
@@ -743,11 +784,19 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
             "undemanded and a narrowed validity inventory would pass unnoticed"
         )
     for unit in uncovered:
-        errors.append(
-            f"{unit}: covered by scheduler alignment but absent from the "
-            f"validity evidence — a unit that passed only one gate cannot "
-            f"contribute to production release identity"
-        )
+        if unit in installed_but_unverified:
+            errors.append(
+                f"{unit}: present on the host according to the validity "
+                f"evidence's own discovery, yet absent from its verified_units "
+                f"— an installed unit is verified whether or not it is "
+                f"optional, so this artifact cannot waive it"
+            )
+        else:
+            errors.append(
+                f"{unit}: covered by scheduler alignment but absent from the "
+                f"validity evidence — a unit that passed only one gate cannot "
+                f"contribute to production release identity"
+            )
 
     return {
         "status": "OK" if ok else "FAILED",
@@ -755,6 +804,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         "pointer": pointer_result,
         "systemd_unit_validity": validity,
         "validity_uncovered_units": list(uncovered),
+        "validity_installed_but_unverified": list(installed_but_unverified),
         # Empty when the three gates are provably one observation; otherwise
         # the reasons they are not, which is why the aggregate is withheld.
         "provenance_conflicts": list(unbound),

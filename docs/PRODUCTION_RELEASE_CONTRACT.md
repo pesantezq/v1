@@ -464,6 +464,23 @@ imports nothing that could generate one, and a test pins that.
 export STOCKBOT_OBSERVATION_ID="obs-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 ```
 
+**A shared token is not a snapshot.** The id proves the collectors were told
+they belong to one run; it cannot prove the system held still during it. If a
+deployment lands between the pointer gate's reading and the unit verification,
+both legitimately carry the same id while describing different releases. So the
+gates are bound to observed **state** as well: the collector records the release
+the host was running, bracketing its whole run, and the aggregate requires it to
+equal the pointer gate's `target_sha`.
+
+```text
+validity evidence saw release X
+pointer gate certified release Y
+X != Y  ->  production_release_identity = NOT_ESTABLISHED
+```
+
+A deployment landing *inside* the validity collection makes that capture
+`NOT_CERTIFIABLE` outright — its unit evidence spans two releases.
+
 Evidence that cannot say which run it belongs to is **not** assumed to be
 co-located:
 
@@ -500,6 +517,12 @@ Certification requires the two observations to agree, and requires
 | nothing | `no` / `no` | — (PASS) |
 | unit rewritten, not reloaded | `no` / `yes` | reload-state recheck |
 | unit rewritten **and** reloaded | `no` / `no` | configuration digest |
+| unit changed **and restored** (A→B→A) | `no` / `no` | inode/mtime/ctime signature |
+
+The fourth row is why content hashing alone is not enough: restoring identical
+bytes leaves both endpoint digests equal while the verifier read the transient.
+Each observation therefore also records inode, size and nanosecond mtime/ctime
+via `stat`, and a rewrite advances ctime even when the content is unchanged.
 
 The third row is why the digest exists. Each observation is internally
 consistent, so reload state reads `no` at both ends while
@@ -543,7 +566,8 @@ ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
 ```
 
 The collector only observes: `systemd-analyze --version|verify`,
-`systemctl show|list-unit-files`, `sha256sum`. It never reloads, starts, stops, enables,
+`systemctl show|list-unit-files`, `sha256sum`, `stat`, `readlink -f`,
+`git rev-parse`. It never reloads, starts, stops, enables,
 masks, or writes anything, and a test asserts that. The certifier decides and
 touches no host. So the production side of this gate is strictly read-only, and
 the decision logic stays unit-testable without a VPS, root, or systemd.

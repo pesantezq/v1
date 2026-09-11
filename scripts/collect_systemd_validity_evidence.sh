@@ -23,6 +23,17 @@ set -u
 # deploy/install_systemd.sh installs it alongside the service. Omitting them
 # would both leave their syntax unverified and make discovery report them as
 # unexpected, since the discovery pattern matches them.
+RELEASE_POINTER="${STOCKBOT_RELEASE_POINTER:-/opt/stockbot/current}"
+
+_release_state() {
+  local resolved sha
+  resolved=$(readlink -f "$RELEASE_POINTER" 2>/dev/null)
+  if [ -z "$resolved" ]; then echo "unreadable"; return; fi
+  sha=$(git -C "$resolved" rev-parse HEAD 2>/dev/null)
+  if [ -z "$sha" ]; then echo "unreadable"; return; fi
+  echo "$sha"
+}
+
 UNITS="${STOCKBOT_EXPECTED_UNITS:-\
 stockbot-streamlit.service \
 stockbot-dashboard.service \
@@ -65,6 +76,16 @@ echo "##OBSERVATION_ID"
 echo "${STOCKBOT_OBSERVATION_ID:-}"
 echo "##CHECKED_AT"
 date -u +%Y-%m-%dT%H:%M:%SZ
+
+# Which release this host was running when the evidence was taken. A shared
+# observation id proves the collectors were TOLD they belong to one run; it
+# cannot prove the system held still during it. If a deployment lands between
+# the pointer gate's reading and this one, both still carry the same id while
+# describing different releases. The release the collector actually observed is
+# therefore recorded, bracketing the whole run, and the aggregate compares it
+# against what the pointer gate certified. Both commands are read-only.
+echo "##RELEASE_POINTER_BEFORE"
+_release_state
 echo "##SYSTEMD_VERSION"
 systemd-analyze --version 2>/dev/null | head -1
 
@@ -100,6 +121,24 @@ _digest() {
   printf '%s\n' "$out" | sha256sum | awk '{print $1}'
 }
 
+# Content alone cannot see a change that RETURNS. A deployment that moves a
+# unit A -> B and is rolled back to A before the re-observation leaves both
+# endpoint digests equal to A while the verifier actually read B. So each
+# observation also records inode, size and nanosecond mtime/ctime: restoring
+# identical bytes still rewrites the file, and ctime in particular cannot be
+# moved backwards by an ordinary write. Measured locally -- rewriting a file
+# with identical content keeps the inode but advances mtime and ctime.
+_statsig() {
+  local paths=() p out rc
+  for p in "$@"; do
+    if [ -n "$p" ]; then paths+=("$p"); fi
+  done
+  if [ "${#paths[@]}" -eq 0 ]; then echo "none"; return; fi
+  out=$(stat -c '%n|%i|%s|%.9Y|%.9Z' "${paths[@]}" 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then echo "unreadable"; return; fi
+  printf '%s\n' "$out" | sha256sum | awk '{print $1}'
+}
+
 # One observation of a unit's loaded state and of the bytes behind it. Emitted
 # once before verification and once after; the certifier requires them to
 # agree before it will treat the verifier's result as describing the running
@@ -117,6 +156,8 @@ _snapshot() {
   echo "NorthstarFragmentDigest=$(_digest "$frag")"
   # Unquoted on purpose: DropInPaths is a space-separated list.
   echo "NorthstarDropInDigest=$(_digest $drops)"
+  echo "NorthstarFragmentStat=$(_statsig "$frag")"
+  echo "NorthstarDropInStat=$(_statsig $drops)"
 }
 
 for u in $UNITS; do
@@ -157,5 +198,8 @@ for u in $UNITS; do
   echo "##RECHECK $u"
   _snapshot "$u"
 done
+
+echo "##RELEASE_POINTER_AFTER"
+_release_state
 
 echo "##END"

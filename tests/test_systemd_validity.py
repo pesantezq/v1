@@ -28,10 +28,15 @@ VERSION = "systemd 255 (255.4-1ubuntu8.17)"
 #: about MIS-matched provenance override it explicitly.
 OBS = ObservationContext(host="stockbot-vps", observation_id="obs-m23d-000001")
 
+#: The release the fixture host is running. Gate evidence must agree on it, not
+#: merely on the observation token: a shared id survives a deployment landing
+#: mid-flow, an observed release does not.
+RELEASE = "1130da80832140c9ec4bc165c48b2768c84a8dbe"
+
 
 def bound(result: dict) -> dict:
-    """Tag a gate result as belonging to the shared test observation."""
-    return {**result, **OBS.as_dict()}
+    """Tag a pointer-gate result with the shared observation AND release."""
+    return {"target_sha": RELEASE, **result, **OBS.as_dict()}
 
 
 def digest(*parts) -> str:
@@ -40,7 +45,8 @@ def digest(*parts) -> str:
 
 
 def prov(unit, *, load_state="loaded", reload_needed=False, drop_ins=("/d/zz.conf",),
-         fragment_digest=None, drop_in_digest=None):
+         fragment_digest=None, drop_in_digest=None,
+         fragment_stat=None, drop_in_stat=None):
     return V.UnitProvenance(
         unit=unit,
         load_state=load_state,
@@ -52,6 +58,11 @@ def prov(unit, *, load_state="loaded", reload_needed=False, drop_ins=("/d/zz.con
         drop_in_digest=(drop_in_digest if drop_in_digest is not None
                         else (digest("dropins", unit, *drop_ins) if drop_ins
                               else V.DIGEST_NONE)),
+        fragment_stat=(fragment_stat if fragment_stat is not None
+                       else digest("fragstat", unit)),
+        drop_in_stat=(drop_in_stat if drop_in_stat is not None
+                      else (digest("dropstat", unit, *drop_ins) if drop_ins
+                            else V.DIGEST_NONE)),
     )
 
 
@@ -74,6 +85,8 @@ def certify(**kw):
         checked_at="2026-09-08T21:00:00Z",
         host=OBS.host,
         observation_id=OBS.observation_id,
+        release_pointer_before=RELEASE,
+        release_pointer_after=RELEASE,
     )
     base.update(kw)
     # A quiet host is the default: the configuration observed after the
@@ -406,6 +419,8 @@ CAPTURE = """##HOST
 stockbot-vps
 ##OBSERVATION_ID
 obs-m23d-000001
+##RELEASE_POINTER_BEFORE
+1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##CHECKED_AT
 2026-09-08T21:22:07Z
 ##SYSTEMD_VERSION
@@ -423,6 +438,8 @@ NeedDaemonReload=no
 LoadError=
 NorthstarFragmentDigest=3f1c2b7a9d4e5068a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718
 NorthstarDropInDigest=b7e6d5c4a39281706f5e4d3c2b1a09876f5e4d3c2b1a09876f5e4d3c2b1a0987
+NorthstarFragmentStat=9c8b7a6d5e4f30291827364554637281900aabbccddeeff00112233445566778
+NorthstarDropInStat=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
 ##VERIFYCMD stockbot-daily.service
 systemd-analyze verify --recursive-errors=no stockbot-daily.service
 ##VERIFY stockbot-daily.service 0
@@ -435,6 +452,10 @@ NeedDaemonReload=no
 LoadError=
 NorthstarFragmentDigest=3f1c2b7a9d4e5068a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718
 NorthstarDropInDigest=b7e6d5c4a39281706f5e4d3c2b1a09876f5e4d3c2b1a09876f5e4d3c2b1a0987
+NorthstarFragmentStat=9c8b7a6d5e4f30291827364554637281900aabbccddeeff00112233445566778
+NorthstarDropInStat=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
+##RELEASE_POINTER_AFTER
+1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##END
 """
 
@@ -635,7 +656,7 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": verdict,
             "verified_units": ["stockbot-daily.service"],
         },
@@ -811,7 +832,7 @@ def test_two_gates_passing_on_disjoint_units_is_not_three_gate_coverage():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-dashboard.service"],  # a DIFFERENT unit
         },
@@ -831,7 +852,7 @@ def test_covered_units_do_establish_the_aggregate():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-daily.service",
                                "stockbot-dashboard.service"],
@@ -850,7 +871,7 @@ def test_without_expected_origins_there_is_nothing_to_bind():
         observation=OBS,
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
-        validity_result={**OBS.as_dict(),"SYSTEMD_UNIT_VALIDITY": "PASS",
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]},
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
@@ -872,7 +893,7 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service", "cron"),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(),"SYSTEMD_UNIT_VALIDITY": "PASS",
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]},
     )
     assert combined["validity_uncovered_units"] == []
@@ -961,7 +982,7 @@ def test_a_timer_that_was_never_verified_blocks_the_aggregate():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             # A narrowed collection: the service was verified, the timer wasn't.
             "verified_units": ["stockbot-daily.service"],
@@ -982,7 +1003,7 @@ def test_a_verified_timer_satisfies_the_binding():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-daily.service",
                                "stockbot-daily.timer"],
@@ -1007,7 +1028,7 @@ def test_a_tolerated_optional_absence_still_binds():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-sandbox-daily.timer"),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
@@ -1027,7 +1048,7 @@ def test_without_a_declared_inventory_the_aggregate_is_not_established():
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
-        validity_result={**OBS.as_dict(),"SYSTEMD_UNIT_VALIDITY": "PASS",
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]},
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
@@ -1098,7 +1119,7 @@ def test_a_narrowed_collection_cannot_wave_a_unit_through_as_optional():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             # Collection was narrowed: the timer is not in expected_units...
             "expected_units": ["stockbot-daily.service"],
@@ -1123,7 +1144,7 @@ def test_a_genuinely_considered_optional_absence_is_still_tolerated():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-sandbox-daily.timer"),
-        validity_result={**OBS.as_dict(),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
@@ -1524,11 +1545,13 @@ def _aggregate(*, validity_obs=OBS, pointer_obs=OBS, aggregate_obs=OBS):
         S.parse_systemd_unit(
             "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
             origin="systemd:" + unit),
-        pointer_result={"status": "OK", "errors": [], **pointer_obs.as_dict()},
+        pointer_result={"status": "OK", "errors": [], "target_sha": RELEASE,
+                        **pointer_obs.as_dict()},
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:" + unit,),
         expected_validity_units=(unit,),
         validity_result={**validity_obs.as_dict(),
+                         "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": [unit]},
         observation=aggregate_obs,
@@ -1592,6 +1615,7 @@ def test_evidence_with_no_provenance_at_all_is_not_established():
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("no observation id" in c for c in combined["provenance_conflicts"])
+    assert any("no release pointer" in c for c in combined["provenance_conflicts"])
 
 
 def test_one_host_and_one_run_does_establish_the_aggregate():
@@ -1640,3 +1664,208 @@ def test_the_collector_passes_the_observation_id_through_rather_than_inventing_o
     assert "STOCKBOT_OBSERVATION_ID" in body
     for minted in ("uuidgen", "$RANDOM", "/proc/sys/kernel/random"):
         assert minted not in body, "the collector must not mint an id: " + minted
+
+
+# ---------------------------------------------------------------------------
+# M23D review round 6 — findings raised against 5ced770, each reproduced
+# against real systemd 255 before it was fixed.
+# ---------------------------------------------------------------------------
+
+# --- N4. an assignment whose quote is never closed -------------------------
+
+def test_an_unterminated_quoted_value_is_redacted_to_end_of_line():
+    """Reproduced on the host: systemd 255 echoes the malformed value back.
+
+    A unit containing ``EnvironmentFile=AUTH="alpha beta gamma`` is reported
+    verbatim. The terminated-quote pattern cannot match it, and the bare
+    fallback stopped at the first space -- redacting ``AUTH="alpha`` and
+    persisting ``beta gamma``. Malformed units are this gate's primary input,
+    so this is the common case, not an exotic one.
+    """
+    line = ('/etc/systemd/system/x.service:6: EnvironmentFile= path is not '
+            'absolute, ignoring: AUTH="alpha beta gamma')
+    cleaned = V.redact(line)
+    for fragment in ("alpha", "beta", "gamma"):
+        assert fragment not in cleaned, (fragment, cleaned)
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_both_quote_styles_redact_when_unterminated(quote):
+    cleaned = V.redact(f"ignoring: SECRET={quote}alpha beta gamma")
+    for fragment in ("alpha", "beta", "gamma"):
+        assert fragment not in cleaned, (fragment, cleaned)
+
+
+def test_a_terminated_value_still_ends_at_its_closing_quote():
+    """The end-of-line rule must not swallow text after a CLOSED value."""
+    cleaned = V.redact('AUTH="alpha beta" and then prose')
+    assert "alpha" not in cleaned and "beta" not in cleaned
+    assert "and then prose" in cleaned
+
+
+def test_balanced_quotes_in_ordinary_diagnostics_still_survive():
+    """Redaction that eats systemd's own prose makes the evidence useless."""
+    for diagnostic in (
+        "Unknown section 'Bogus'. Ignoring.",
+        "/etc/systemd/system/x.service:5: Unknown key name 'Frobnicate' in "
+        "section 'Service', ignoring.",
+    ):
+        assert V.redact(diagnostic) == diagnostic
+
+
+# --- N3. an installed optional unit can never be waived --------------------
+
+def _artifact_with(**over):
+    base = {
+        **OBS.as_dict(),
+        "release_pointer": RELEASE,
+        "SYSTEMD_UNIT_VALIDITY": "PASS",
+        "expected_units": ["stockbot-daily.service", "stockbot-daily.timer"],
+        "optional_units": ["stockbot-daily.timer"],
+        "discovered_units": ["stockbot-daily.service"],
+        "verified_units": ["stockbot-daily.service"],
+    }
+    base.update(over)
+    return base
+
+
+def _combine(artifact):
+    from portfolio_automation.release import scheduler as S
+    svc = "stockbot-daily.service"
+    return S.certify_release_identity(
+        S.parse_systemd_unit(
+            "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+            origin="systemd:" + svc),
+        pointer_result=bound({"status": "OK", "errors": []}),
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:" + svc,),
+        expected_validity_units=(svc, "stockbot-daily.timer"),
+        validity_result=artifact,
+        observation=OBS,
+    )
+
+
+def test_an_installed_optional_unit_cannot_be_waived_as_absent():
+    """'Optional' licenses a MISSING unit, never an unverified installed one.
+
+    An artifact listing a timer as expected, optional and discovered while
+    omitting it from verified_units is internally inconsistent -- stale,
+    narrowed or edited -- and must not be read as coverage.
+    """
+    combined = _combine(_artifact_with(
+        discovered_units=["stockbot-daily.service", "stockbot-daily.timer"]))
+    assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
+    assert "stockbot-daily.timer" in combined["validity_installed_but_unverified"]
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("installed unit is verified whether or not it is optional" in e
+               for e in combined["errors"])
+
+
+def test_a_genuinely_absent_optional_unit_is_still_tolerated():
+    """The fix must not break the documented optional-and-absent case."""
+    combined = _combine(_artifact_with())
+    assert combined["validity_uncovered_units"] == []
+    assert combined["validity_installed_but_unverified"] == []
+    assert combined["production_release_identity"] == "PASS"
+
+
+def test_an_installed_optional_unit_that_was_verified_is_covered():
+    combined = _combine(_artifact_with(
+        discovered_units=["stockbot-daily.service", "stockbot-daily.timer"],
+        verified_units=["stockbot-daily.service", "stockbot-daily.timer"]))
+    assert combined["production_release_identity"] == "PASS"
+
+
+# --- N2. a configuration that changes and returns --------------------------
+
+def test_a_change_and_return_during_verification_is_caught_by_stat():
+    """The case the CONTENT digest structurally cannot see.
+
+    A deployment that moves a unit A -> B and restores A before the
+    re-observation leaves both endpoint digests equal to A, while the verifier
+    actually read B. Confirmed against real systemd 255 by splicing three
+    genuine captures (A, B, restored-A). Rewriting a file advances its mtime
+    and ctime even when the bytes are identical, so the stat signature differs
+    where the digest does not.
+    """
+    after = {u: prov(u) for u in UNITS}
+    after[UNITS[0]] = prov(UNITS[0], fragment_stat=digest("fragstat", "RESTORED"))
+    result = certify(recheck=after)
+
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("configuration changed while the verifier ran" in b
+               for b in result["blockers"])
+    # Content was identical at both ends, so the digest cannot be what caught it.
+    before = certify()["units"][0]
+    assert before["configuration_stable"] is True
+
+
+@pytest.mark.parametrize("stat_value", ["", V.DIGEST_UNREADABLE])
+def test_a_configuration_whose_stat_is_unusable_is_not_certifiable(stat_value):
+    before = {u: prov(u) for u in UNITS}
+    before[UNITS[0]] = prov(UNITS[0], fragment_stat=stat_value)
+    result = certify(provenance=before, recheck=before)
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+def test_the_collector_records_a_stat_signature_as_well_as_a_digest():
+    body = COLLECTOR.read_text(encoding="utf-8")
+    assert "NorthstarFragmentStat" in body and "NorthstarDropInStat" in body
+    assert "stat -c" in body, "the stat signature must come from real stat(1)"
+
+
+# --- N1. binding gates to observed state, not only to a token --------------
+
+def test_a_deployment_between_two_gates_breaks_the_binding():
+    """A shared observation id survives a mid-flow deployment; state does not.
+
+    One collection flow issues one id. If the pointer gate reads before a
+    deployment and the unit evidence is taken after it, both legitimately carry
+    the same id while describing different releases.
+    """
+    from portfolio_automation.release import scheduler as S
+    svc = "stockbot-daily.service"
+    other = "ddf4ebe57ecd75b90dfe35b319651952ac34f136"
+    combined = S.certify_release_identity(
+        S.parse_systemd_unit(
+            "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+            origin="systemd:" + svc),
+        pointer_result={"status": "OK", "errors": [], "target_sha": RELEASE,
+                        **OBS.as_dict()},
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:" + svc,),
+        expected_validity_units=(svc,),
+        validity_result={**OBS.as_dict(), "release_pointer": other,
+                         "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": [svc]},
+        observation=OBS,
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("a deployment landed between the two observations" in c
+               for c in combined["provenance_conflicts"])
+
+
+def test_a_deployment_during_the_collection_itself_is_not_certifiable():
+    """The collector brackets its run, so a mid-run deploy cannot pass."""
+    result = certify(release_pointer_before=RELEASE,
+                     release_pointer_after="ddf4ebe57ecd75b90dfe35b319651952ac34f136")
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("release pointer moved during collection" in b
+               for b in result["blockers"])
+    assert result["release_pointer"] == ""
+
+
+def test_a_quiet_run_records_the_release_it_observed():
+    result = certify()
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.PASS
+    assert result["release_pointer"] == RELEASE
+
+
+def test_the_collector_brackets_its_run_with_the_release_pointer():
+    body = COLLECTOR.read_text(encoding="utf-8")
+    assert "##RELEASE_POINTER_BEFORE" in body
+    assert "##RELEASE_POINTER_AFTER" in body
+    assert body.index("##RELEASE_POINTER_BEFORE") < body.index("##VERIFY ")
+    assert body.index("##VERIFY ") < body.index("##RELEASE_POINTER_AFTER")
+    # Read-only: resolving a symlink and reading a git HEAD change nothing.
+    assert "readlink -f" in body and "rev-parse HEAD" in body

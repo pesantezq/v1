@@ -97,11 +97,12 @@ governed namespace, use `--namespace`, which routes through
 | field | type | meaning |
 |---|---|---|
 | `schema` | str | `northstar.systemd_unit_validity` |
-| `schema_version` | int | currently `2` (v2 added `observation_id` and the per-unit `configuration_stable`) |
+| `schema_version` | int | currently `3` (v2 added `observation_id` and per-unit `configuration_stable`; v3 added `release_pointer`) |
 | `observe_only` | bool | always `true` — this gate reports, it never changes production |
 | `checked_at` | str | ISO-8601 UTC (`...Z`); validated, absence is `NOT_CERTIFIABLE` |
 | `host` | str | host the evidence came from; absence is `NOT_CERTIFIABLE` |
 | `observation_id` | str | which collection run produced this evidence. Issued by the collection flow (`STOCKBOT_OBSERVATION_ID`), never by the collector or the certifier. Recorded but not required by *this* gate's verdict; **required** by the three-gate aggregate |
+| `release_pointer` | str | the release the host was running, observed at BOTH ends of the run. Empty when the two ends disagreed (a deployment landed mid-collection, which is also a blocker) or when it could not be read. The aggregate requires it to equal the pointer gate's `target_sha` |
 | `systemd_version` | str | the manager actually asked |
 | `verifier_flag` | str | `--recursive-errors=no` |
 | `expected_units` | list[str] | inventory this deployment expects |
@@ -137,6 +138,22 @@ Rules:
   another is how three green gates certify a system that never existed, so the
   aggregate reports `NOT_ESTABLISHED` unless all three agree on
   `(host, observation_id)`. A consumer must never substitute a default.
+- A shared `observation_id` proves the collectors were *told* they belong to
+  one run; it cannot prove the system held still during it. `release_pointer`
+  is the state binding: if a deployment lands between the pointer gate's
+  reading and this one, both still carry the same id while describing
+  different releases, and the mismatch is what catches it.
+- `configuration_stable` compares a CONTENT digest **and** an inode/size/
+  nanosecond-mtime/ctime signature at both ends. Content alone cannot see a
+  change that returns: a unit moved A -> B and restored to A before the
+  re-observation has identical digests at both endpoints while the verifier
+  read B. Rewriting a file advances its mtime and ctime even when the bytes
+  are unchanged.
+- An optional unit is tolerated only when the artifact's own
+  `discovered_units` shows it **absent**. Optional licenses a missing unit,
+  never an unverified installed one; an artifact that lists a unit as
+  discovered *and* optional *and* expected while omitting it from
+  `verified_units` is internally inconsistent and cannot waive it.
 
 
 ### `outputs/latest/data_quality_report.json`
