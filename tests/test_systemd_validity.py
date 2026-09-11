@@ -869,7 +869,7 @@ def test_classified_units_are_declared_in_the_contracts_doc():
     assert "classified_units" in contracts
 
 
-def _flow_scheduler(observation=None, **over):
+def _flow_scheduler(observation=None, *, cron=False, origins=None, **over):
     """A scheduler artifact as the collection flow would emit it.
 
     The scheduler leg used to be raw surfaces handed straight in, with its
@@ -883,10 +883,17 @@ def _flow_scheduler(observation=None, **over):
         "[Service]\nExecStart=%s/scripts/run.sh\nWorkingDirectory=%s\n"
         % (root, root),
         origin="systemd:stockbot-daily.service")
+    demanded = origins or ("systemd:stockbot-daily.service",)
+    if cron:
+        # A flow that demands the cron origin must also have COLLECTED cron,
+        # or the artifact demands coverage it never gathered.
+        surfaces = surfaces + S.parse_crontab(
+            "0 9 * * * %s/scripts/run_daily_safe.sh\n" % root, origin="cron")
+        demanded = tuple(demanded) + ("cron",)
     artifact = S.scheduler_alignment_artifact(
         surfaces, release_root=root, checked_at=CHECKED_AT,
         observation=observation or OBS,
-        expected_origins=("systemd:stockbot-daily.service",),
+        expected_origins=demanded,
         approved_sha=RELEASE,
         configuration_anchor_before=ANCHOR_QUIET,
         configuration_anchor_after=ANCHOR_QUIET)
@@ -990,7 +997,7 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
                          "verified_units": ["stockbot-daily.service"]}),
-        scheduler_result=_flow_scheduler(),
+        scheduler_result=_flow_scheduler(cron=True),
     )
     assert combined["validity_uncovered_units"] == []
     assert combined["production_release_identity"] == "PASS"
@@ -2751,3 +2758,224 @@ def test_the_flow_reuses_the_validity_collector_rather_than_copying_it():
     flow = (REPO / "scripts" / "collect_release_observation.sh").read_text(
         encoding="utf-8")
     assert "collect_systemd_validity_evidence.sh" in flow
+
+
+# ===========================================================================
+# Artifacts carry facts; the aggregate re-derives the conclusions it relies on.
+#
+# A stored top-level verdict is a reporting convenience, never authority. If an
+# artifact's own recorded facts imply FAILED, a claimed PASS is an internal
+# inconsistency.
+# ===========================================================================
+
+LEGACY_SURFACE = {
+    "origin": "systemd:stockbot-daily.service",
+    "executable": "/opt/stockbot/legacy/scripts/run.sh",
+    "referenced_paths": ["/opt/stockbot/legacy/scripts/run.sh"],
+    "working_directory": "/opt/stockbot/legacy",
+    "root_directory": None,
+    "environment_files": [],
+    "is_system_transitional": False,
+}
+
+
+def test_a_stored_artifact_cannot_claim_pass_over_legacy_surfaces():
+    """Codex's stored-artifact attack: PASS claimed over legacy surfaces.
+
+    The artifact is contract-valid in every other respect -- right schema,
+    observe_only, host, run, bracket -- and only its recorded surfaces betray
+    it. Reading the verdict string certifies a claim; re-deriving it certifies
+    evidence.
+    """
+    combined = _bracketed(sched=_sched_artifact(surfaces=[LEGACY_SURFACE]))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("re-deriving the verdict from its OWN recorded surfaces" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_the_rederived_verdict_is_reported_for_audit():
+    combined = _bracketed(sched=_sched_artifact(surfaces=[LEGACY_SURFACE]))
+    assert combined["scheduler_rederivation_defects"]
+
+
+def test_a_stored_artifact_cannot_hide_its_own_unresolved_surface():
+    """Recorded findings must describe the recorded evidence."""
+    artifact = _sched_artifact(surfaces=[LEGACY_SURFACE], unresolved=[],
+                               errors=[])
+    combined = _bracketed(sched=artifact)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("do not describe its recorded evidence" in d
+               for d in combined["validity_contract_defects"])
+
+
+def test_an_artifact_cannot_choose_the_release_it_is_measured_against():
+    """A lowered bar is not evidence about this release."""
+    combined = _bracketed(sched=_sched_artifact(
+        release_root="/opt/stockbot/legacy"))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("chooses its own bar" in d
+               for d in combined["validity_contract_defects"])
+
+
+def test_an_artifact_cannot_narrow_the_origins_it_demanded():
+    combined = _bracketed(sched=_sched_artifact(expected_origins=[]))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("did not demand" in d
+               for d in combined["validity_contract_defects"])
+
+
+@pytest.mark.parametrize("surfaces", [
+    "not-a-list",
+    [{"origin": "systemd:x.service"}],                       # no executable
+    [{"executable": "/opt/stockbot/current/x.sh"}],          # no origin
+    [{"origin": "systemd:x.service", "executable": "/x",
+      "referenced_paths": "not-a-list"}],
+    ["not-a-record"],
+])
+def test_a_malformed_surface_record_fails_closed(surfaces):
+    """Evidence that cannot be read can never be counted as evidence that passed."""
+    combined = _bracketed(sched=_sched_artifact(surfaces=surfaces))
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+
+
+def test_a_faithful_artifact_still_certifies():
+    """The control: re-derivation must agree with an honest artifact."""
+    combined = _bracketed()
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+    assert combined["scheduler_rederivation_defects"] == []
+
+
+# ---------------------------------------------------------------------------
+# One canonical executable-directive contract, not two lists
+# ---------------------------------------------------------------------------
+
+def test_the_directive_manifest_equals_the_python_authority():
+    """The shell collector and the Python certifier cannot drift apart.
+
+    They drifted once: the collector captured only ExecStart while the
+    certifier treated six directives as release-identity surfaces, so a legacy
+    ExecStartPre never reached the surfaces and could execute outside the
+    approved release with nothing to object.
+    """
+    from portfolio_automation.release import exec_manifest as M
+    from portfolio_automation.release.scheduler import EXEC_DIRECTIVES
+    text = M.MANIFEST.read_text(encoding="utf-8")
+    assert M.directives_in_manifest(text) == EXEC_DIRECTIVES
+    # ...and the file on disk is exactly what the generator would write, so it
+    # cannot have been hand-edited into agreement-looking disagreement.
+    assert text == M.render()
+
+
+def test_the_collector_reads_the_manifest_rather_than_restating_it():
+    flow = (REPO / "scripts" / "collect_release_observation.sh").read_text(
+        encoding="utf-8")
+    assert "exec_directives.manifest" in flow
+    from portfolio_automation.release.scheduler import EXEC_DIRECTIVES
+    for directive in EXEC_DIRECTIVES:
+        # a hardcoded `-p ExecStartPre` style list would be the drift itself
+        assert f"-p {directive}" not in flow, (
+            f"{directive} is restated in the collector instead of coming from "
+            f"the manifest")
+
+
+@pytest.mark.parametrize("directive", [
+    "ExecStart", "ExecStartPre", "ExecStartPost",
+    "ExecReload", "ExecStop", "ExecStopPost",
+])
+def test_a_legacy_path_in_any_executable_hook_is_unresolved(directive):
+    """Every hook class systemd can execute is release identity."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\n"
+        "ExecStart=/opt/stockbot/current/scripts/run.sh\n"
+        f"{directive}=/opt/stockbot/legacy/scripts/hook.sh\n",
+        origin="systemd:stockbot-daily.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",))
+    assert result["status"] == "FAILED", directive
+    assert any("legacy" in e for e in result["errors"]), directive
+
+
+# ---------------------------------------------------------------------------
+# The observation's SHAPE is evidence
+# ---------------------------------------------------------------------------
+
+def _observation_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cro", str(REPO / "scripts" / "certify_release_observation.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ordered_stream(order=None):
+    """A minimal well-formed observation, or a re-ordered one."""
+    names = [n for n, _ in _observation_module().OBSERVATION_ORDER]
+    if order is not None:
+        names = order
+    return "".join(f"##{n}\nvalue\n" for n in names)
+
+
+def test_a_well_ordered_stream_has_no_order_defects():
+    mod = _observation_module()
+    assert mod.order_defects(_ordered_stream()) == []
+
+
+def test_anchors_moved_after_the_gates_are_rejected():
+    """Codex's attack: every section present once, neither anchor bracketing.
+
+    Section counts prove the pieces exist. Only order proves they bracketed
+    anything, so the stream is parsed as a sequence and never sorted into a
+    valid one afterwards.
+    """
+    mod = _observation_module()
+    names = [n for n, _ in mod.OBSERVATION_ORDER]
+    anchors = ["CONFIGURATION_ANCHOR_BEFORE", "CONFIGURATION_ANCHOR_AFTER"]
+    moved = [n for n in names if n not in anchors]
+    moved = moved[:-1] + anchors + moved[-1:]          # both just before END
+    assert sorted(moved) == sorted(names), "the attack must not drop a section"
+    defects = mod.order_defects(_ordered_stream(moved))
+    assert defects, "reordered stream was accepted"
+    assert any("out of order" in d for d in defects)
+
+
+def test_evidence_after_the_terminal_marker_is_rejected():
+    mod = _observation_module()
+    stream = _ordered_stream() + "##SCHEDULER_CRON\nlate\n"
+    assert any("continues after" in d for d in mod.order_defects(stream))
+
+
+def test_a_missing_bracket_section_is_rejected():
+    mod = _observation_module()
+    names = [n for n, _ in mod.OBSERVATION_ORDER
+             if n != "CONFIGURATION_ANCHOR_BEFORE"]
+    assert mod.order_defects(_ordered_stream(names))
+
+
+# ---------------------------------------------------------------------------
+# Governed destinations
+# ---------------------------------------------------------------------------
+
+def test_the_observation_certifier_has_no_raw_output_path():
+    """A single path argument meaning both destinations is how a production
+    bundle became writable into a replay tree."""
+    text = (REPO / "scripts" / "certify_release_observation.py").read_text(
+        encoding="utf-8")
+    assert '"--out"' not in text
+    assert "--namespace" in text and "--external-evidence-dir" in text
+
+
+def test_in_repository_writes_go_through_data_governance():
+    text = (REPO / "scripts" / "certify_release_observation.py").read_text(
+        encoding="utf-8")
+    assert "safe_write_json" in text
+
+
+def test_the_external_destination_is_bounded_to_outside_the_repository():
+    text = (REPO / "scripts" / "certify_release_observation.py").read_text(
+        encoding="utf-8")
+    assert "must be outside the repository" in text
+    assert "must be an absolute path" in text

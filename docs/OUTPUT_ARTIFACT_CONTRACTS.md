@@ -207,6 +207,25 @@ Rules:
 - `PASS` with no `surfaces` is the "we found nothing to check" failure the
   scheduler gate already refuses, and it must not be reintroducible by handing
   in a bare artifact.
+- **`SCHEDULER_ALIGNMENT` is not authority.** It is a reporting convenience.
+  The aggregate rebuilds canonical `ExecutionSurface` objects from the recorded
+  `surfaces` and re-runs the *existing* scheduler certifier against them — no
+  second validator — and a claimed `PASS` that the recorded facts do not
+  support is an internal inconsistency. An artifact recording
+  `/opt/stockbot/legacy/...` surfaces cannot certify however green its verdict
+  string is. `release_root` and `expected_origins` come from the certification
+  request, not the artifact, so an artifact cannot lower its own bar or narrow
+  the origins it demanded.
+- `surfaces` must record every directive in the canonical `EXEC_DIRECTIVES`
+  contract, not just `ExecStart`: `ExecStartPre`, `ExecStartPost`,
+  `ExecReload`, `ExecStop` and `ExecStopPost` all execute code and are all
+  release identity. The shell collector reads that set from
+  `portfolio_automation/release/exec_directives.manifest`, which the scheduler
+  module **generates**; a test asserts the file equals `EXEC_DIRECTIVES`
+  exactly and is byte-identical to what the generator would write, so the two
+  sides of the shell/Python boundary cannot drift apart again.
+- Malformed surface records fail closed. A record nobody can read is never
+  counted as one that resolved.
 
 
 ### `outputs/latest/data_quality_report.json`

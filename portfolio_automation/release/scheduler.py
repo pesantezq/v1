@@ -678,6 +678,171 @@ def scheduler_alignment_artifact(surfaces: list[ExecutionSurface], *,
     }
 
 
+def surfaces_from_artifact(
+        scheduler_result: dict | None) -> tuple[list[ExecutionSurface], list[str]]:
+    """Rebuild canonical surfaces from an artifact's recorded facts.
+
+    The artifact records what the collection flow observed; this turns those
+    records back into the exact objects the scheduler certifier already
+    understands, so the verdict can be RE-DERIVED rather than believed. There
+    is deliberately no second validator here -- reconstructing the input and
+    re-running the canonical logic is the whole point, because a parallel
+    implementation would be a new place for the two to disagree.
+
+    ``raw`` is reconstructed rather than stored: it is display-only in the
+    resolution logic, and persisting a full command line would put ExecStart
+    arguments -- which can carry credentials -- into a durable artifact for no
+    analytical gain.
+
+    Returns ``(surfaces, defects)``. A malformed record produces a defect and
+    contributes no surface, so a record nobody can read can never be counted as
+    one that resolved.
+    """
+    records = (scheduler_result or {}).get("surfaces")
+    defects: list[str] = []
+    surfaces: list[ExecutionSurface] = []
+
+    if records is None:
+        return surfaces, ["scheduler artifact records no surfaces list — there "
+                          "is nothing to re-derive its verdict from"]
+    if not isinstance(records, (list, tuple)):
+        return surfaces, [f"scheduler artifact's surfaces field is "
+                          f"{type(records).__name__}, not a list — evidence "
+                          f"that cannot be read cannot be trusted"]
+
+    def _str_list(value, field_: str, where: str) -> tuple[str, ...] | None:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)) or not all(
+                isinstance(v, str) for v in value):
+            defects.append(
+                f"{where}: {field_} is not a list of strings — a malformed "
+                f"surface record cannot be certified, so it fails closed")
+            return None
+        return tuple(value)
+
+    for index, record in enumerate(records):
+        where = f"scheduler artifact surface #{index}"
+        if not isinstance(record, dict):
+            defects.append(
+                f"{where} is {type(record).__name__}, not a record — evidence "
+                f"that cannot be read cannot be trusted")
+            continue
+        origin = record.get("origin")
+        if not isinstance(origin, str) or not origin.strip():
+            defects.append(f"{where} records no origin — a surface that cannot "
+                           f"say which unit it came from cannot be bound to "
+                           f"an expected origin")
+            continue
+        where = f"{origin} (surface #{index})"
+        executable = record.get("executable")
+        if not isinstance(executable, str) or not executable.strip():
+            defects.append(f"{where}: records no executable — nothing to "
+                           f"resolve against the release")
+            continue
+        referenced = _str_list(record.get("referenced_paths"),
+                               "referenced_paths", where)
+        env_files = _str_list(record.get("environment_files"),
+                              "environment_files", where)
+        if referenced is None or env_files is None:
+            continue
+        bad_dir = False
+        for field_ in ("working_directory", "root_directory"):
+            value = record.get(field_)
+            if value is not None and not isinstance(value, str):
+                defects.append(f"{where}: {field_} is "
+                               f"{type(value).__name__}, not a path")
+                bad_dir = True
+        if bad_dir:
+            continue
+        surfaces.append(ExecutionSurface(
+            origin=origin,
+            # Display only; the resolution logic never reads it.
+            raw=executable,
+            executable=executable,
+            referenced_paths=referenced,
+            working_directory=record.get("working_directory") or None,
+            root_directory=record.get("root_directory") or None,
+            environment_files=env_files,
+        ))
+    return surfaces, defects
+
+
+def rederived_scheduler_defects(scheduler_result: dict | None, *,
+                                release_root: str,
+                                expected_origins: tuple[str, ...] | None = None,
+                                ) -> list[str]:
+    """Ways the artifact's own recorded facts contradict the verdict it claims.
+
+    ``SCHEDULER_ALIGNMENT`` is a convenience field, not authority. An artifact
+    can record surfaces resolving to the legacy checkout and still say PASS --
+    through staleness, narrowing, or editing -- and a reader that takes the
+    string is certifying a claim rather than evidence. So the recorded surfaces
+    are run back through the canonical certifier and the two verdicts must
+    agree.
+
+    ``release_root`` and ``expected_origins`` come from the CERTIFICATION
+    REQUEST, not from the artifact: an artifact that could choose the release
+    it is measured against could pass by lowering the bar. The artifact's own
+    recorded values are cross-checked against them instead.
+    """
+    if not scheduler_result:
+        return []          # absence is reported by scheduler_contract_defects
+
+    defects: list[str] = []
+    claimed = scheduler_result.get("SCHEDULER_ALIGNMENT")
+
+    recorded_root = str(scheduler_result.get("release_root") or "").strip()
+    if recorded_root and recorded_root != release_root:
+        defects.append(
+            f"scheduler artifact was certified against release root "
+            f"{recorded_root!r}, not the {release_root!r} this aggregate "
+            f"requires — an artifact that chooses its own bar is not evidence "
+            f"about this release")
+    recorded_origins = scheduler_result.get("expected_origins")
+    if expected_origins and isinstance(recorded_origins, (list, tuple)):
+        missing = set(expected_origins) - set(recorded_origins)
+        if missing:
+            defects.append(
+                f"scheduler artifact did not demand {sorted(missing)} — a "
+                f"narrowed inventory cannot certify origins it never required")
+
+    surfaces, malformed = surfaces_from_artifact(scheduler_result)
+    defects.extend(malformed)
+    if malformed:
+        # A verdict cannot stand on records that could not be read.
+        return defects
+
+    derived = certify_scheduler_identity(
+        surfaces, release_root=release_root,
+        expected_origins=expected_origins,
+        observation=observation_of(scheduler_result))
+    derived_verdict = "PASS" if derived["status"] == "OK" else "FAILED"
+
+    if claimed == "PASS" and derived_verdict != "PASS":
+        detail = "; ".join(derived["errors"][:3]) or "no reason recorded"
+        defects.append(
+            f"scheduler artifact claims PASS, but re-deriving the verdict from "
+            f"its OWN recorded surfaces yields {derived_verdict}: {detail}")
+    elif claimed != derived_verdict:
+        defects.append(
+            f"scheduler artifact claims {claimed!r} while its recorded "
+            f"surfaces yield {derived_verdict!r} — the artifact disagrees with "
+            f"itself")
+
+    # The findings must match too, or a PASS could be claimed alongside a
+    # surface the artifact itself lists as unresolved.
+    for field_, key in (("unresolved", "unresolved"),
+                        ("missing_expected", "missing_expected")):
+        recorded = set(scheduler_result.get(field_) or ())
+        if set(derived[key]) - recorded:
+            defects.append(
+                f"scheduler artifact omits {sorted(set(derived[key]) - recorded)} "
+                f"from its {field_} while its own surfaces produce them — its "
+                f"recorded findings do not describe its recorded evidence")
+    return defects
+
+
 def scheduler_contract_defects(scheduler_result: dict | None) -> list[str]:
     """Ways a scheduler artifact contradicts itself, and so cannot be trusted.
 
@@ -960,9 +1125,13 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                                        expected_origins=expected_origins,
                                        observation=observation)
     if scheduler_result is not None:
-        # Prefer the artifact's own verdict over one recomputed here: the
-        # aggregate must not be able to launder a failing artifact by
-        # re-deriving a pass from surfaces it was handed separately.
+        # The artifact's claimed verdict is necessary but not sufficient: a
+        # claimed FAILED is believed immediately (an artifact confessing a
+        # failure needs no corroboration), while a claimed PASS only survives
+        # if re-deriving it from the artifact's own recorded surfaces agrees.
+        # That re-derivation runs in `rederived_scheduler_defects`, and any
+        # disagreement lands in `contract_defects`, which withholds the
+        # aggregate below.
         sched_verdict_ok = scheduler_result.get("SCHEDULER_ALIGNMENT") == "PASS"
     else:
         sched_verdict_ok = sched["status"] == "OK"
@@ -978,8 +1147,15 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     # by asserting its own conclusion. So the contract is checked here, and an
     # artifact that contradicts itself is not merely reported -- it cannot
     # establish identity.
+    # Artifacts carry facts; the aggregate validates those facts and
+    # RE-DERIVES any conclusion it relies upon. A stored top-level verdict is a
+    # reporting convenience, never authority: if the recorded facts imply
+    # FAILED, a claimed PASS is an internal inconsistency and is rejected.
     contract_defects = (validity_contract_defects(validity_result)
-                        + scheduler_contract_defects(scheduler_result))
+                        + scheduler_contract_defects(scheduler_result)
+                        + rederived_scheduler_defects(
+                            scheduler_result, release_root=release_root,
+                            expected_origins=expected_origins))
     errors.extend(contract_defects)
     if validity != "PASS":
         errors.append(
@@ -1119,6 +1295,12 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         "status": "OK" if ok else "FAILED",
         "scheduler": sched,
         "scheduler_artifact": scheduler_result,
+        # Ways the scheduler artifact's recorded facts contradict the
+        # verdict it claims. Non-empty means its PASS was not believed.
+        "scheduler_rederivation_defects": list(
+            rederived_scheduler_defects(
+                scheduler_result, release_root=release_root,
+                expected_origins=expected_origins)),
         "pointer": pointer_result,
         "systemd_unit_validity": validity,
         "validity_uncovered_units": list(uncovered),

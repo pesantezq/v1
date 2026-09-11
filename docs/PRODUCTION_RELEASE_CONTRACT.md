@@ -713,6 +713,64 @@ Missing, malformed or inconsistent bracket evidence is `NOT_ESTABLISHED` /
 `NOT_CERTIFIABLE`. The aggregate never invents, repairs, normalizes into
 agreement, or post-stamps provenance its inputs did not carry.
 
+### The bracket's other inputs
+
+**The release worktree, not just the commit it names.** `HEAD == approved_sha`
+is not `worktree == committed release`. The observation records
+`git status --porcelain` and the **maximum ctime across tracked files** at both
+endpoints. The first answers "is the tree dirty at this instant"; the second is
+needed because a tracked file modified and restored to its committed content
+reads clean in porcelain at *both* ends — measured — while its ctime advances
+and cannot be put back.
+
+Which dirty paths matter is decided by the canonical release-immutability
+contract (`portfolio_automation.release.contracts.classify_path`), not
+restated here: production writes under the runtime roots (`data/`, `outputs/`,
+`logs/`) by design, so dirt there is expected operation, while a modified
+`RELEASE_IMMUTABLE` path is exactly the drift this gate exists to catch.
+Untracked files follow that same contract; this gate invents no new rule.
+
+**Cron's backing store, not just its rendered content.** `crontab -l` content
+is blind to A→B→A exactly as file content is everywhere else. The observation
+also stats the backing file for the crontab being certified — on the reference
+host `/var/spool/cron/crontabs/<user>` — scoped to that one file rather than
+the spool directory, whose timestamps move when any unrelated user's cron
+changes. Measured: content identical across A→B→A, inode/ctime different.
+
+The spool directory is `drwx-wx--T root:crontab`, so an ordinary user **cannot**
+stat its own file there. When the witness cannot be observed the collector
+records that and certification **fails closed**, because content equality does
+not prove interval stability.
+
+**Ordering is evidence.** Section counts prove the pieces exist; only order
+proves the anchors bracketed anything. A stream with both anchors moved to the
+end contains exactly one of every required section while neither precedes a
+single gate — measured, and it certified. The observation is therefore parsed
+as an ordered sequence, and is never sorted into a valid shape after the fact.
+
+### Where this evidence may be written
+
+The bundle is production-certification evidence, so it has two destinations and
+they are named separately — one generic path argument meaning both is how a
+production bundle became writable into a replay tree.
+
+| destination | rule |
+|---|---|
+| `--namespace policy` | in-repository; the write is owned by `data_governance.safe_write_json` |
+| `--external-evidence-dir <abs>` | Phase-E evidence outside the production checkout; must be absolute, must resolve outside the repository, written atomically |
+
+There is no raw output path. `outputs/backtest/`, `outputs/latest/`, sandbox
+and historical trees are all rejected.
+
+### The documented witness policy, including its false negatives
+
+The configuration anchor covers whole unit **load directories**, so *any*
+change within one closes the observation as not-quiet — including installing an
+unrelated service. That is deliberate and conservative: a directory stamp says
+**that** something changed, never **what**, and narrowing it to per-unit paths
+would reopen the transient-drop-in case this gate already proved. The remedy
+for unrelated churn is to re-run the observation, not to weaken the witness.
+
 **What the bracket claims.** Not a filesystem snapshot, and not a transactional
 one. It establishes that the measured witnesses — inode, size, nanosecond
 mtime/ctime, and the directory entries of every applicable unit load and
