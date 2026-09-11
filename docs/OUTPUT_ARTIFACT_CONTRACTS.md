@@ -97,10 +97,11 @@ governed namespace, use `--namespace`, which routes through
 | field | type | meaning |
 |---|---|---|
 | `schema` | str | `northstar.systemd_unit_validity` |
-| `schema_version` | int | currently `1` |
+| `schema_version` | int | currently `2` (v2 added `observation_id` and the per-unit `configuration_stable`) |
 | `observe_only` | bool | always `true` — this gate reports, it never changes production |
 | `checked_at` | str | ISO-8601 UTC (`...Z`); validated, absence is `NOT_CERTIFIABLE` |
 | `host` | str | host the evidence came from; absence is `NOT_CERTIFIABLE` |
+| `observation_id` | str | which collection run produced this evidence. Issued by the collection flow (`STOCKBOT_OBSERVATION_ID`), never by the collector or the certifier. Recorded but not required by *this* gate's verdict; **required** by the three-gate aggregate |
 | `systemd_version` | str | the manager actually asked |
 | `verifier_flag` | str | `--recursive-errors=no` |
 | `expected_units` | list[str] | inventory this deployment expects |
@@ -110,7 +111,7 @@ governed namespace, use `--namespace`, which routes through
 | `discovered_units` | list[str] | relevant units found on the host |
 | `missing_units` | list[str] | required units absent |
 | `unexpected_units` | list[str] | relevant units neither expected nor classified |
-| `units[]` | list[obj] | per unit: `fragment_path`, `drop_in_paths`, `load_state`, `need_daemon_reload`, `verifier_command`, `verifier_exit_status`, `verifier_result`, `verifier_messages` (redacted, bounded) |
+| `units[]` | list[obj] | per unit: `fragment_path`, `drop_in_paths`, `load_state`, `need_daemon_reload`, `configuration_stable`, `verifier_command`, `verifier_exit_status`, `verifier_result`, `verifier_messages` (redacted, bounded) |
 | `errors` | list[str] | facts established as false |
 | `blockers` | list[str] | reasons certification was impossible |
 | `SYSTEMD_UNIT_VALIDITY` | str | `PASS` / `FAIL` / `NOT_CERTIFIABLE` |
@@ -122,6 +123,20 @@ Rules:
 - The verdict derives from `verifier_exit_status` only. Verifier text is never
   consulted in either direction.
 - `NOT_CERTIFIABLE` must never be collapsed into `PASS` by a consumer.
+- `configuration_stable` records whether the unit's effective on-disk
+  configuration was identical before and after the verifier ran. The collector
+  observes each unit twice — `##SHOW` before verification and `##RECHECK`
+  after — and each observation carries a digest of the fragment and its
+  drop-ins. `false`, or a missing second observation, is `NOT_CERTIFIABLE`:
+  `systemd-analyze verify` reads files on DISK, so a configuration that moved
+  mid-run leaves an exit status describing bytes that are no longer in place.
+  `NeedDaemonReload` alone cannot establish this — a deployment that writes
+  *and* reloads inside the window reports `no` at both ends.
+- `observation_id` binds this artifact to one evidence run. Composing a
+  genuine `PASS` from one host or run with scheduler/pointer evidence from
+  another is how three green gates certify a system that never existed, so the
+  aggregate reports `NOT_ESTABLISHED` unless all three agree on
+  `(host, observation_id)`. A consumer must never substitute a default.
 
 
 ### `outputs/latest/data_quality_report.json`

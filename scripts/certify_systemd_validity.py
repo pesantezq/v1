@@ -75,11 +75,16 @@ def stream_defects(text: str) -> list[str]:
 
 def parse_evidence(text: str) -> dict:
     """Parse the collector's record stream into the certifier's inputs."""
-    host = checked_at = version = ""
+    host = checked_at = version = observation_id = ""
     expected: list[str] = []
     optional: list[str] = []
     discovered: list[str] = []
     shows: dict[str, list[str]] = {}
+    # The post-verification pass. Kept separate from ``shows`` rather than
+    # merged into it: the whole point of the second observation is that it can
+    # DISAGREE with the first, and a merge would silently resolve exactly the
+    # conflict the gate needs to see.
+    rechecks: dict[str, list[str]] = {}
     verifies: dict[str, tuple[int, list[str]]] = {}
     commands: dict[str, list[str]] = {}
 
@@ -106,12 +111,16 @@ def parse_evidence(text: str) -> dict:
                 verifies[unit] = (status, [])
             elif section == "SHOW" and unit is not None:
                 shows[unit] = []
+            elif section == "RECHECK" and unit is not None:
+                rechecks[unit] = []
             elif section == "VERIFYCMD" and unit is not None:
                 commands[unit] = []
             continue
 
         if section == "HOST" and raw.strip():
             host = raw.strip()
+        elif section == "OBSERVATION_ID" and raw.strip():
+            observation_id = raw.strip()
         elif section == "CHECKED_AT" and raw.strip():
             checked_at = raw.strip()
         elif section == "SYSTEMD_VERSION" and raw.strip():
@@ -133,12 +142,18 @@ def parse_evidence(text: str) -> dict:
                 commands[unit] = []
         elif section == "SHOW" and unit is not None:
             shows[unit].append(raw)
+        elif section == "RECHECK" and unit is not None:
+            rechecks[unit].append(raw)
         elif section == "VERIFY" and unit is not None:
             verifies[unit][1].append(raw)
 
     provenance = {
         u: V.provenance_from_show("\n".join(lines), unit=u)
         for u, lines in shows.items()
+    }
+    recheck = {
+        u: V.provenance_from_show("\n".join(lines), unit=u)
+        for u, lines in rechecks.items()
     }
     # The command comes from the capture. If a capture does not say what ran,
     # the command is empty, `uses_required_flag` is False, and the certifier
@@ -156,12 +171,14 @@ def parse_evidence(text: str) -> dict:
     return {
         "malformed_evidence": tuple(malformed),
         "host": host,
+        "observation_id": observation_id,
         "checked_at": checked_at,
         "systemd_version": version,
         "expected_units": tuple(expected),
         "optional_units": tuple(optional),
         "discovered_units": tuple(discovered),
         "provenance": provenance,
+        "recheck": recheck,
         "outcomes": outcomes,
     }
 

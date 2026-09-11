@@ -420,13 +420,110 @@ NeedDaemonReload=yes  ->  SYSTEMD_UNIT_VALIDITY = NOT_CERTIFIABLE
 Escalate. **Do not run `systemctl daemon-reload` to make this pass** — that is
 mutating production to manufacture the answer you wanted.
 
+### The three gates must describe one observation
+
+Being green is not enough. The three results must be *about the same
+observation of the same host*, because each is collected separately:
+
+```text
+production observation begins
+        ↓
+observation_id = immutable identifier for this evidence run
+host           = the observed production host
+        ↓
+pointer evidence    -> host + observation_id
+scheduler evidence  -> host + observation_id
+systemd validity    -> host + observation_id
+        ↓
+aggregate requires an exact match on (host, observation_id)
+```
+
+Without this, a *genuine* `SYSTEMD_UNIT_VALIDITY = PASS` collected on a staging
+box covers the same unit **names** as production, so name-level coverage cannot
+tell the two apart:
+
+```text
+staging    systemd validity     PASS
+production scheduler alignment  PASS   ->  false production_release_identity PASS
+production pointer identity     PASS
+```
+
+Host identity alone does not fix it, and neither does a timestamp. Two
+observations of the same production host minutes apart are still two
+observations: a pointer read taken before a deploy and a unit verification
+taken after it are each individually truthful and jointly describe a system
+that never existed. So the binding is `(host, observation_id)`.
+
+**The id is issued by the collection flow and passed to each collector.** It is
+never minted by a collector and never stamped onto results by the aggregator —
+an aggregator that invents a shared id would be manufacturing exactly the
+agreement it is supposed to be checking. `release.observation` therefore
+imports nothing that could generate one, and a test pins that.
+
+```bash
+export STOCKBOT_OBSERVATION_ID="obs-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+```
+
+Evidence that cannot say which run it belongs to is **not** assumed to be
+co-located:
+
+```text
+missing / malformed / mismatched provenance
+    ->  production_release_identity = NOT_ESTABLISHED
+```
+
+That is a deliberate cost. A flow that does not yet thread one observation id
+through all three gates cannot certify production identity until it does. The
+individual gates are unaffected — whether systemd would accept these units is
+true of the host regardless of what else was observed alongside, so
+`SYSTEMD_UNIT_VALIDITY` does not require the id for its own verdict.
+
+### Loaded-state currency must hold ACROSS the verification window
+
+`NeedDaemonReload=no` captured before the verifier runs is not enough. The
+collector observes each unit **twice** — once before verification (`##SHOW`)
+and once after (`##RECHECK`) — and each observation records a digest of the
+unit's fragment and its drop-ins:
+
+```text
+##SHOW <unit>      LoadState, NeedDaemonReload, FragmentPath, DropInPaths,
+                   NorthstarFragmentDigest, NorthstarDropInDigest
+      systemd-analyze verify --recursive-errors=no <unit>
+##RECHECK <unit>   the same properties, observed again
+```
+
+Certification requires the two observations to agree, and requires
+`NeedDaemonReload=no` in both. Measured on systemd 255:
+
+| what happened in the window | `NeedDaemonReload` before / after | caught by |
+|---|---|---|
+| nothing | `no` / `no` | — (PASS) |
+| unit rewritten, not reloaded | `no` / `yes` | reload-state recheck |
+| unit rewritten **and** reloaded | `no` / `no` | configuration digest |
+
+The third row is why the digest exists. Each observation is internally
+consistent, so reload state reads `no` at both ends while
+`systemd-analyze verify` read bytes PID 1 never loaded. Hashing the effective
+configuration is what pins *which* bytes the exit status describes.
+
+A configuration that moved while the gate was looking at it is
+`NOT_CERTIFIABLE`. **Collect again once the deployment has settled — do not
+`daemon-reload`**, which would be mutating production to produce the answer we
+wanted.
+
+`sha256sum` is read-only, like every other command the collector runs.
+
 ### Verdicts
 
 `PASS` requires all of: complete expected inventory; every required unit
-`LoadState=loaded`; every required unit `NeedDaemonReload=no`; a real verifier
-result for every required unit obtained with the required flag; every such
-result clean; no required unit skipped; no relevant discovered unit left
-unclassified.
+`LoadState=loaded`; every required unit `NeedDaemonReload=no` **both before and
+after verification**; every required unit's effective configuration digest
+**unchanged across the verification window**; a real verifier result for every
+required unit obtained with the required flag; every such result clean; no
+required unit skipped; no relevant discovered unit left unclassified.
+
+`production_release_identity` additionally requires all three gates to carry a
+matching `(host, observation_id)`.
 
 Anything preventing those facts from being established is `NOT_CERTIFIABLE`;
 anything establishing them as false is `FAIL`. **"Could not verify" is never
@@ -435,12 +532,18 @@ anything establishing them as false is `FAIL`. **"Could not verify" is never
 ### How it runs — observation and decision are separated
 
 ```bash
-ssh <host> 'bash -s' < scripts/collect_systemd_validity_evidence.sh \
+# One id per observation, issued here and reused by every gate collected in
+# this run. Without it the three gates cannot be bound and the aggregate is
+# NOT_ESTABLISHED.
+export STOCKBOT_OBSERVATION_ID="obs-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+
+ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
+    < scripts/collect_systemd_validity_evidence.sh \
     | python3 scripts/certify_systemd_validity.py --out evidence.json
 ```
 
 The collector only observes: `systemd-analyze --version|verify`,
-`systemctl show|list-unit-files`. It never reloads, starts, stops, enables,
+`systemctl show|list-unit-files`, `sha256sum`. It never reloads, starts, stops, enables,
 masks, or writes anything, and a test asserts that. The certifier decides and
 touches no host. So the production side of this gate is strictly read-only, and
 the decision logic stays unit-testable without a VPS, root, or systemd.

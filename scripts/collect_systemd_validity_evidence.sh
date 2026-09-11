@@ -55,6 +55,14 @@ PATTERN="${STOCKBOT_UNIT_PATTERN:-stockbot|cloudflared}"
 
 echo "##HOST"
 hostname
+# Issued by the collection FLOW and passed in, never invented here. The whole
+# purpose of the id is that the same value appears on the pointer and scheduler
+# evidence gathered in the same run, so a value this script made up could only
+# ever match itself. Absent means the three-gate aggregate cannot bind the
+# evidence together and must report NOT_ESTABLISHED -- which is the correct
+# outcome, not a defect to be papered over with a generated default.
+echo "##OBSERVATION_ID"
+echo "${STOCKBOT_OBSERVATION_ID:-}"
 echo "##CHECKED_AT"
 date -u +%Y-%m-%dT%H:%M:%SZ
 echo "##SYSTEMD_VERSION"
@@ -72,11 +80,48 @@ echo "##DISCOVERED"
 systemctl list-unit-files --no-pager --no-legend 2>/dev/null \
   | awk '{print $1}' | grep -E "$PATTERN" | sort -u
 
-for u in $UNITS; do
-  echo "##SHOW $u"
+# The effective on-disk configuration is DIGESTED as well as described, so a
+# change during this run is detectable afterwards. `systemctl show` alone
+# cannot establish that: NeedDaemonReload compares loaded state to disk at the
+# instant it is asked, so a unit rewritten AND reloaded inside the collection
+# window reports `no` at both ends while the verifier read bytes PID 1 never
+# had loaded. Hashing the fragment and its drop-ins pins WHICH bytes the
+# verifier saw. Both sha256sum and `systemctl show` are read-only.
+_digest() {
+  local paths=() p out rc
+  for p in "$@"; do
+    if [ -n "$p" ]; then paths+=("$p"); fi
+  done
+  if [ "${#paths[@]}" -eq 0 ]; then echo "none"; return; fi
+  out=$(sha256sum "${paths[@]}" 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then echo "unreadable"; return; fi
+  # Hash of the per-file hashes AND their paths, so a drop-in appearing,
+  # vanishing or being reordered changes the value too.
+  printf '%s\n' "$out" | sha256sum | awk '{print $1}'
+}
+
+# One observation of a unit's loaded state and of the bytes behind it. Emitted
+# once before verification and once after; the certifier requires them to
+# agree before it will treat the verifier's result as describing the running
+# configuration.
+_snapshot() {
+  local u="$1" frag drops
   systemctl show "$u" \
     -p Id -p LoadState -p FragmentPath -p DropInPaths \
     -p NeedDaemonReload -p LoadError --no-pager 2>/dev/null
+  frag=$(systemctl show "$u" -p FragmentPath --value --no-pager 2>/dev/null)
+  drops=$(systemctl show "$u" -p DropInPaths --value --no-pager 2>/dev/null)
+  # Synthetic records, deliberately in the same KEY=VALUE shape the reader
+  # already parses. Prefixed so they cannot collide with a real systemd
+  # property now or in a future version.
+  echo "NorthstarFragmentDigest=$(_digest "$frag")"
+  # Unquoted on purpose: DropInPaths is a space-separated list.
+  echo "NorthstarDropInDigest=$(_digest $drops)"
+}
+
+for u in $UNITS; do
+  echo "##SHOW $u"
+  _snapshot "$u"
 done
 
 for u in $UNITS; do
@@ -99,6 +144,18 @@ for u in $UNITS; do
   echo "##VERIFY $u $rc"
   # Bounded here as well as in the certifier: an evidence stream is not a log.
   echo "$out" | head -20
+done
+
+# Re-observe AFTER verification. `systemd-analyze verify` reads unit files on
+# DISK; this pass is what establishes that those files, and their relationship
+# to what PID 1 has loaded, did not change while it ran. Without it the stream
+# can pair a NeedDaemonReload captured before a concurrent deployment with a
+# clean verifier result produced after it, and so certify a configuration that
+# is not the one running. A change here must make the run NOT_CERTIFIABLE --
+# never a PASS, and never a daemon-reload to tidy it up.
+for u in $UNITS; do
+  echo "##RECHECK $u"
+  _snapshot "$u"
 done
 
 echo "##END"

@@ -86,7 +86,7 @@ from datetime import datetime
 
 #: Schema identity for the durable artifact. Bump when the shape changes.
 SCHEMA = "northstar.systemd_unit_validity"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: The verifier this gate is defined in terms of.
 VERIFIER = "systemd-analyze"
@@ -141,13 +141,29 @@ _QUOTED_ASSIGNMENT = re.compile(
 #: maintaining. The negative lookahead keeps systemd's own prose intact, where
 #: a directive name is followed by punctuation rather than a value --
 #: ``Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing.``
+#:
+#: Escape-aware for the same reason the quoted form is. systemd unit syntax
+#: escapes whitespace inside an unquoted value, and the verifier echoes the
+#: value back verbatim: on systemd 255 an ``EnvironmentFile=AUTH=alpha\ beta``
+#: is reported as ``... ignoring: AUTH=alpha\ beta``. A value pattern of
+#: ``\S+`` stops at the escaped space and leaves ``beta`` -- the tail of the
+#: credential -- in the artifact. Consuming the escape AND the character it
+#: protects takes the whole value. Ordering matters: the escape alternative is
+#: tried first, because ``\S`` would otherwise match the backslash alone.
 _BARE_ASSIGNMENT = re.compile(
-    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=(?![\s,.;:)\]}])(\S+)"
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=(?![\s,.;:)\]}])((?:\\.|\S)+)"
 )
 #: Credentials embedded in a URL, which carry the secret in the value itself.
 _CREDENTIAL_URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s/@]*:[^\s/@]*@\S*")
 _LONG_OPAQUE = re.compile(r"\b[A-Za-z0-9+/_-]{32,}={0,2}\b")
 _REDACTED = "<redacted>"
+
+#: Values the collector reports in place of a digest. Neither is a hash, so
+#: neither can collide with one. ``none`` means there was nothing to hash (a
+#: unit with no drop-ins); ``unreadable`` means the bytes could not be read,
+#: which is missing evidence and therefore a blocker, not a passing state.
+DIGEST_NONE = "none"
+DIGEST_UNREADABLE = "unreadable"
 
 #: Verifier output is diagnostic only and is bounded before it is recorded.
 MAX_MESSAGE_LINES = 12
@@ -194,10 +210,31 @@ class UnitProvenance:
     #: very property this gate exists to prove.
     need_daemon_reload: bool | None = None
     load_error: str = ""
+    #: Digest of the unit's own fragment, and of its drop-ins, as recorded by
+    #: the collector. These exist so that two observations taken either side of
+    #: the verifier can be compared: NeedDaemonReload only describes the
+    #: loaded-vs-disk relationship at the instant it is asked, so a unit
+    #: rewritten AND reloaded inside the collection window reports ``no`` both
+    #: times while the verifier read bytes PID 1 never had.
+    fragment_digest: str = ""
+    drop_in_digest: str = ""
 
     @property
     def is_loaded(self) -> bool:
         return self.load_state == "loaded"
+
+    @property
+    def config_fingerprint(self) -> tuple:
+        """Identity of the effective on-disk configuration.
+
+        Paths as well as digests: a drop-in that appears or vanishes changes
+        what systemd would load even when every surviving file is byte-identical.
+        Deliberately excludes LoadState and load_error, which describe the
+        manager's current condition rather than the configuration, and may
+        legitimately differ between two observations of an unchanged unit.
+        """
+        return (self.fragment_path, self.drop_in_paths,
+                self.fragment_digest, self.drop_in_digest)
 
 
 @dataclass(frozen=True)
@@ -261,6 +298,8 @@ def provenance_from_show(text: str, *, unit: str) -> UnitProvenance:
         drop_in_paths=drop_ins,
         need_daemon_reload=_tri_state_bool(props.get("NeedDaemonReload")),
         load_error=props.get("LoadError", ""),
+        fragment_digest=props.get("NorthstarFragmentDigest", ""),
+        drop_in_digest=props.get("NorthstarDropInDigest", ""),
     )
 
 
@@ -282,15 +321,89 @@ def systemd_major(version: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _snapshot_consistency(unit: str,
+                          before: UnitProvenance | None,
+                          after: UnitProvenance | None) -> list[str]:
+    """Blockers from comparing the observations taken either side of the verifier.
+
+    ``systemd-analyze verify`` reads unit files on DISK, while the gate's claim
+    is about the configuration PID 1 is actually running. A single observation
+    cannot connect the two across the verification window: measured on systemd
+    255, a unit rewritten between ``systemctl show`` and the verifier yields
+    ``NeedDaemonReload=no`` describing the OLD loaded-vs-disk relationship and
+    a clean exit status describing the NEW file, and the gate passes having
+    verified something that is not running.
+
+    Everything here is fail-closed. A configuration that moved while the gate
+    was looking at it is ``NOT_CERTIFIABLE`` -- the remedy is to collect again
+    once the deployment has settled, never to reconcile it with a reload.
+    """
+    if before is None:
+        # Absent initial provenance is already reported by the caller; adding
+        # a second complaint about the same gap would only obscure it.
+        return []
+    if after is None:
+        return [
+            f"{unit}: loaded state was not re-observed after verification — the "
+            f"capture cannot establish that the configuration stayed still while "
+            f"the verifier ran, and an unproven fact is not a proven one"
+        ]
+
+    problems: list[str] = []
+    if after.unit and after.unit != unit:
+        problems.append(
+            f"{unit}: re-observation records Id={after.unit} — evidence for one "
+            f"unit cannot establish another's stability"
+        )
+    if after.need_daemon_reload is None:
+        problems.append(
+            f"{unit}: NeedDaemonReload was not captured on re-observation — the "
+            f"evidence never established that the verified files are still what "
+            f"PID 1 has loaded"
+        )
+    elif after.need_daemon_reload:
+        problems.append(
+            f"{unit}: NeedDaemonReload=yes when re-observed after verification — "
+            f"the unit changed on disk while the gate was running, so the clean "
+            f"verifier result describes a configuration PID 1 has not loaded. "
+            f"Collect again once the deployment has settled; do not daemon-reload."
+        )
+
+    for label, provenance_ in (("before", before), ("after", after)):
+        for what, digest in (("fragment", provenance_.fragment_digest),
+                             ("drop-in", provenance_.drop_in_digest)):
+            if not digest:
+                problems.append(
+                    f"{unit}: no {what} digest recorded {label} verification — "
+                    f"without it a change during the run cannot be ruled out"
+                )
+            elif digest == DIGEST_UNREADABLE:
+                problems.append(
+                    f"{unit}: {what} bytes were unreadable {label} verification — "
+                    f"the effective configuration could not be pinned"
+                )
+
+    if before.config_fingerprint != after.config_fingerprint:
+        problems.append(
+            f"{unit}: the effective on-disk configuration changed while the "
+            f"verifier ran — the recorded exit status describes bytes that are "
+            f"no longer in place, so it certifies nothing about the unit now "
+            f"installed"
+        )
+    return problems
+
+
 def certify_systemd_unit_validity(
     *,
     expected_units: tuple[str, ...],
     discovered_units: tuple[str, ...],
     provenance: dict[str, UnitProvenance],
     outcomes: dict[str, VerifierOutcome],
+    recheck: dict[str, UnitProvenance] | None = None,
     systemd_version: str,
     checked_at: str,
     host: str,
+    observation_id: str = "",
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
     optional_units: tuple[str, ...] = (),
@@ -399,9 +512,13 @@ def certify_systemd_unit_validity(
         )
 
     unit_records: list[dict] = []
+    rechecked = recheck or {}
     for unit in verified_units:
         prov = provenance.get(unit)
         outcome = outcomes.get(unit)
+        post = rechecked.get(unit)
+        instability = _snapshot_consistency(unit, prov, post)
+        blockers.extend(instability)
 
         if prov is None:
             errors.append(f"{unit}: no loaded-state provenance captured")
@@ -467,6 +584,9 @@ def certify_systemd_unit_validity(
                 None if outcome is None else (PASS if outcome.succeeded else FAIL)
             ),
             "verifier_messages": list(_messages(outcome.output)) if outcome else [],
+            # None when there was no initial provenance to compare against;
+            # False whenever the two observations disagree or one is missing.
+            "configuration_stable": (None if prov is None else not instability),
         })
 
     if blockers:
@@ -482,6 +602,13 @@ def certify_systemd_unit_validity(
         "observe_only": OBSERVE_ONLY,
         "checked_at": checked_at,
         "host": host,
+        # Which collection run produced this certificate. Recorded but NOT
+        # required for this gate's own verdict: whether systemd would accept
+        # these units is true of the host regardless of what else was observed
+        # alongside. It is required by the three-gate aggregate, which is where
+        # composing evidence from separate runs actually does harm --
+        # see release.observation.
+        "observation_id": observation_id,
         "systemd_version": redact(systemd_version),
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),

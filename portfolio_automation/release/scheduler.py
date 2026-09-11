@@ -95,6 +95,9 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from .observation import (ObservationContext, bind_observations,
+                          observation_of)
+
 DIRECT = "DIRECT"
 POINTER = "POINTER"
 RECOMMENDED_MODEL = POINTER
@@ -527,6 +530,7 @@ def unresolved_surfaces(surfaces: list[ExecutionSurface], *,
 def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
                                release_root: str,
                                expected_origins: tuple[str, ...] | None = None,
+                               observation: ObservationContext | None = None,
                                ) -> dict:
     """Report whether every surface's code paths resolve to the approved release.
 
@@ -544,12 +548,18 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
     ``production_code_sha == approved_release_sha`` — see ``pointer`` and
     ``certify_release_identity``.
     """
+    # Provenance rides along with the verdict rather than beside it, so a
+    # result cannot be separated from the observation that produced it while
+    # being passed between processes, files or hosts.
+    provenance = (observation or ObservationContext("", "")).as_dict()
+
     if not surfaces:
         return {"status": "FAILED",
                 "errors": ["no execution surfaces supplied — cannot certify"],
                 "unresolved": [], "system_transitional": [],
                 "secret_paths_outside_release": [],
-                "missing_expected": list(expected_origins or ())}
+                "missing_expected": list(expected_origins or ()),
+                **provenance}
 
     missing_expected: list[str] = []
     if expected_origins:
@@ -581,6 +591,7 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
         # but the cutover still has to re-provision it.
         "secret_paths_outside_release": secrets,
         "scope": "path_alignment_only",
+        **provenance,
     }
 
 
@@ -590,6 +601,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              expected_origins: tuple[str, ...] | None = None,
                              validity_result: dict | None = None,
                              expected_validity_units: tuple[str, ...] | None = None,
+                             observation: ObservationContext | None = None,
                              ) -> dict:
     """Path alignment AND pointer-target SHA together.
 
@@ -642,7 +654,8 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     wave a unit through simply by calling it optional.
     """
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
-                                       expected_origins=expected_origins)
+                                       expected_origins=expected_origins,
+                                       observation=observation)
     ok = sched["status"] == "OK" and pointer_result.get("status") == "OK"
 
     validity = (validity_result or {}).get("SYSTEMD_UNIT_VALIDITY",
@@ -654,6 +667,24 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
             f"requires all three gates; scheduler alignment and pointer identity "
             f"alone cannot establish it"
         )
+
+    # Three green gates are not one certified system unless the evidence
+    # describes one observation of one host. A genuine validity PASS collected
+    # on staging covers the same unit NAMES as production, so name-level
+    # coverage above cannot detect it; only provenance can. Host alone is not
+    # enough either -- a pointer read before a deploy and a unit verification
+    # after it are both truthful about the same host and jointly describe a
+    # system that never existed.
+    #
+    # Nothing here mints or copies an id: the aggregator proving agreement it
+    # manufactured itself would be no proof at all. Evidence that cannot say
+    # which run it came from is NOT_ESTABLISHED, not assumed co-located.
+    unbound = bind_observations({
+        "scheduler alignment": observation_of(sched),
+        "release pointer identity": observation_of(pointer_result),
+        "systemd unit validity": observation_of(validity_result),
+    })
+    errors.extend(unbound)
 
     # The two gates must be about the same units, not merely both green.
     origin_units = {
@@ -677,7 +708,8 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     uncovered = tuple(
         u for u in required_units if u not in verified_units and u not in tolerated
     )
-    bound = bool(expected_origins) and bool(declared_units) and not uncovered
+    bound = (bool(expected_origins) and bool(declared_units)
+             and not uncovered and not unbound)
 
     if not expected_origins:
         errors.append(
@@ -704,6 +736,10 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         "pointer": pointer_result,
         "systemd_unit_validity": validity,
         "validity_uncovered_units": list(uncovered),
+        # Empty when the three gates are provably one observation; otherwise
+        # the reasons they are not, which is why the aggregate is withheld.
+        "provenance_conflicts": list(unbound),
+        **(observation or ObservationContext("", "")).as_dict(),
         "production_release_identity": (
             "PASS" if (ok and validity == "PASS" and bound) else "NOT_ESTABLISHED"
         ),
