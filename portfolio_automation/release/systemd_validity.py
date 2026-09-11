@@ -462,6 +462,7 @@ def certify_systemd_unit_validity(
     release_pointer_after: str = "",
     search_path_source: str = "",
     search_path: str = "",
+    search_path_effective: str = "",
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
     optional_units: tuple[str, ...] = (),
@@ -521,6 +522,34 @@ def certify_systemd_unit_validity(
             f"({release_before[:12]} -> {release_after[:12]}) — this capture "
             f"spans two releases, so its unit evidence does not describe a "
             f"single deployed system"
+        )
+
+    # An anchor set narrower than the load path systemd actually resolves from
+    # is a blind spot: the verifier reads the whole path, so a transient
+    # drop-in under a directory the anchors never looked at is invisible.
+    # Recording which set was used is not enough -- an unnoticed blind spot
+    # that is merely documented still certifies. So it blocks.
+    anchored = {p for p in (search_path or "").split() if p}
+    effective = {p for p in (search_path_effective or "").split() if p}
+    if not anchored:
+        blockers.append(
+            "the capture records no anchored unit search path — there is no "
+            "way to tell which directories a configuration change would have "
+            "been visible in"
+        )
+    elif not effective:
+        blockers.append(
+            "the capture records no effective unit search path — without what "
+            "systemd itself resolves units from, an anchor set cannot be shown "
+            "to be complete"
+        )
+    elif effective - anchored:
+        missed = ", ".join(sorted(effective - anchored))
+        blockers.append(
+            f"the anchors covered a NARROWER set than systemd's effective unit "
+            f"load path (missing: {missed}) — the verifier reads the whole "
+            f"path, so a transient drop-in under an unanchored directory would "
+            f"not have been seen"
         )
 
     if not expected_units:
@@ -696,6 +725,8 @@ def certify_systemd_unit_validity(
         # this host -- which a reader must be able to see.
         "search_path_source": search_path_source,
         "search_path": [p for p in (search_path or "").split() if p],
+        "search_path_effective": [p for p in (search_path_effective or "").split()
+                                  if p],
         "systemd_version": redact(systemd_version),
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),

@@ -569,6 +569,24 @@ overflow, and — because ctime and inode are not restorable — answers the
 interval question rather than the endpoint question. So the mechanism is
 endpoint-*sampled* but interval-*sound*.
 
+**A narrowed anchor set blocks rather than being merely noted.**
+`STOCKBOT_UNIT_SEARCH_PATH` changes only which directories the anchors
+observe — it cannot constrain where the verifier actually resolves units from.
+So the collector records systemd's effective path (`search_path_effective`)
+*unconditionally*, alongside what the anchors covered, and certification fails
+closed when the anchored set is narrower. A documented blind spot still
+certifies unless it blocks.
+
+**A capture is one run, and one terminator does not prove it.** A run
+truncated before its `##END` can be prepended to a complete capture: the
+combined stream has exactly one terminal marker, so a terminator count sees
+nothing, while the reader keeps units from both runs and lets the later
+scalars overwrite the earlier host, id and release — attributing one host's
+unit evidence to another. Run-level sections (`HOST`, `OBSERVATION_ID`,
+`CHECKED_AT`, `SYSTEMD_VERSION`, the release pointers, the search paths, and
+the inventories) may therefore appear exactly once, and a duplicate is a
+defect regardless of how the stream terminates.
+
 **The anchored directories are asked of systemd, not assumed.** The effective
 unit load path is wider than the three obvious directories: on systemd 255
 `systemd-analyze unit-paths` also lists `/etc/systemd/system.control`,
@@ -647,6 +665,7 @@ is trusted, the aggregate requires the artifact to be self-consistent:
 | `blockers` / `errors` empty when PASS | a verdict cannot outrank the reasons recorded against it |
 | per-unit exit status agrees with `verified_units` | nor outrank its own per-unit results |
 | artifact present at all | missing evidence is a defect, not silence |
+| one successful record per `verified_units` entry | otherwise an artifact can *assert* verification with no exit status recorded anywhere, and there is nothing to contradict |
 
 Every item is an **internal** inconsistency — the artifact disagreeing with
 itself — which is why each fails closed rather than warning: evidence that

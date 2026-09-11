@@ -73,11 +73,47 @@ def stream_defects(text: str) -> list[str]:
     return defects
 
 
+#: Sections that describe the RUN rather than a unit. Each may appear exactly
+#: once in a capture. Counting terminators is not enough: a run truncated
+#: before its ``##END`` can be prepended to a complete one, leaving exactly one
+#: terminal marker while the reader silently keeps units from both runs and
+#: lets the later scalars overwrite the earlier host, id and release. The
+#: result attributes one host's unit evidence to another. A capture is one
+#: ordered run or it is not evidence.
+RUN_LEVEL_SECTIONS = (
+    "HOST", "OBSERVATION_ID", "CHECKED_AT", "SYSTEMD_VERSION",
+    "RELEASE_POINTER_BEFORE", "RELEASE_POINTER_AFTER",
+    "SEARCH_PATH_SOURCE", "SEARCH_PATH", "SEARCH_PATH_EFFECTIVE",
+    "EXPECTED", "OPTIONAL", "DISCOVERED",
+)
+
+
+def run_level_defects(text: str) -> list[str]:
+    """Ways a stream is not one complete, ordered capture."""
+    seen: dict[str, int] = {}
+    for line in (text or "").splitlines():
+        if not line.startswith("##"):
+            continue
+        name = line[2:].split(" ", 1)[0].strip()
+        if name in RUN_LEVEL_SECTIONS:
+            seen[name] = seen.get(name, 0) + 1
+    defects = []
+    for name, count in sorted(seen.items()):
+        if count > 1:
+            defects.append(
+                f"evidence contains {count} ##{name} sections — a capture is "
+                f"ONE run, so a stream carrying several has been concatenated, "
+                f"and its unit evidence cannot be attributed to a single host "
+                f"or release however the later values overwrite the earlier"
+            )
+    return defects
+
+
 def parse_evidence(text: str) -> dict:
     """Parse the collector's record stream into the certifier's inputs."""
     host = checked_at = version = observation_id = ""
     release_before = release_after = ""
-    search_path_source = search_path = ""
+    search_path_source = search_path = search_path_effective = ""
     expected: list[str] = []
     optional: list[str] = []
     discovered: list[str] = []
@@ -127,6 +163,8 @@ def parse_evidence(text: str) -> dict:
             search_path_source = raw.strip()
         elif section == "SEARCH_PATH" and raw.strip():
             search_path = raw.strip()
+        elif section == "SEARCH_PATH_EFFECTIVE" and raw.strip():
+            search_path_effective = raw.strip()
         elif section == "RELEASE_POINTER_BEFORE" and raw.strip():
             release_before = raw.strip()
         elif section == "RELEASE_POINTER_AFTER" and raw.strip():
@@ -184,6 +222,7 @@ def parse_evidence(text: str) -> dict:
         "observation_id": observation_id,
         "search_path_source": search_path_source,
         "search_path": search_path,
+        "search_path_effective": search_path_effective,
         "release_pointer_before": release_before,
         "release_pointer_after": release_after,
         "checked_at": checked_at,
@@ -243,7 +282,7 @@ def main() -> int:
             if args.evidence else sys.stdin.read())
 
     parsed = parse_evidence(text)
-    defects = stream_defects(text)
+    defects = stream_defects(text) + run_level_defects(text)
     classified = tuple(u.strip() for u in args.classified.split(",") if u.strip())
 
     # A truncated, doubled or edited capture must not look like a clean host.

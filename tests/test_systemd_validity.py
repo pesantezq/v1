@@ -22,6 +22,8 @@ from portfolio_automation.release.observation import ObservationContext
 
 UNITS = ("stockbot-daily.service", "stockbot-dashboard.service")
 VERSION = "systemd 255 (255.4-1ubuntu8.17)"
+#: A complete unit load path, as `systemd-analyze unit-paths` reports it.
+SEARCH_PATH = "/etc/systemd/system /run/systemd/system /usr/lib/systemd/system"
 
 #: The single production observation these fixtures are taken from. Gate
 #: results must all carry it before they can be aggregated; tests that care
@@ -48,6 +50,22 @@ VALIDITY_ENVELOPE = {
     "schema_version": V.SCHEMA_VERSION,
     "observe_only": True,
 }
+
+
+def with_records(artifact: dict) -> dict:
+    """Give an artifact the per-unit records a real capture would carry.
+
+    A claim of verification needs a result behind it: the aggregate requires
+    exactly one successful per-unit record for every name in
+    ``verified_units``, because an artifact that merely asserts verification
+    with no exit status recorded anywhere has nothing to contradict it.
+    """
+    if "units" in artifact:
+        return artifact
+    return {**artifact, "units": [
+        {"unit": u, "verifier_exit_status": 0, "verifier_result": "PASS"}
+        for u in (artifact.get("verified_units") or ())
+    ]}
 
 
 def digest(*parts) -> str:
@@ -103,6 +121,12 @@ def certify(**kw):
         observation_id=OBS.observation_id,
         release_pointer_before=RELEASE,
         release_pointer_after=RELEASE,
+        # The anchors must cover everything systemd resolves units from; a
+        # narrower set is a blind spot, so the default fixture is a complete
+        # one and tests about narrowing pass an explicit mismatch.
+        search_path_source="systemd-analyze unit-paths",
+        search_path=SEARCH_PATH,
+        search_path_effective=SEARCH_PATH,
     )
     base.update(kw)
     # A quiet host is the default: the configuration observed after the
@@ -439,6 +463,12 @@ obs-m23d-000001
 1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##CHECKED_AT
 2026-09-08T21:22:07Z
+##SEARCH_PATH_SOURCE
+systemd-analyze unit-paths
+##SEARCH_PATH
+/etc/systemd/system /run/systemd/system /usr/lib/systemd/system
+##SEARCH_PATH_EFFECTIVE
+/etc/systemd/system /run/systemd/system /usr/lib/systemd/system
 ##SYSTEMD_VERSION
 systemd 255 (255.4-1ubuntu8.17)
 ##EXPECTED
@@ -674,10 +704,11 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": verdict,
             "verified_units": ["stockbot-daily.service"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == expected
 
@@ -850,10 +881,11 @@ def test_two_gates_passing_on_disjoint_units_is_not_three_gate_coverage():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-dashboard.service"],  # a DIFFERENT unit
-        },
+        }),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.service" in combined["validity_uncovered_units"]
@@ -870,11 +902,12 @@ def test_covered_units_do_establish_the_aggregate():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-daily.service",
                                "stockbot-dashboard.service"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "PASS"
     assert combined["validity_uncovered_units"] == []
@@ -889,8 +922,10 @@ def test_without_expected_origins_there_is_nothing_to_bind():
         observation=OBS,
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
-                         "verified_units": ["stockbot-daily.service"]},
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+                         "release_pointer": RELEASE,
+                         "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]}),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("nothing to bind" in e for e in combined["errors"])
@@ -911,8 +946,10 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service", "cron"),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
-                         "verified_units": ["stockbot-daily.service"]},
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+                         "release_pointer": RELEASE,
+                         "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]}),
     )
     assert combined["validity_uncovered_units"] == []
     assert combined["production_release_identity"] == "PASS"
@@ -1000,11 +1037,12 @@ def test_a_timer_that_was_never_verified_blocks_the_aggregate():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             # A narrowed collection: the service was verified, the timer wasn't.
             "verified_units": ["stockbot-daily.service"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
@@ -1021,11 +1059,12 @@ def test_a_verified_timer_satisfies_the_binding():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "verified_units": ["stockbot-daily.service",
                                "stockbot-daily.timer"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1046,13 +1085,14 @@ def test_a_tolerated_optional_absence_still_binds():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-sandbox-daily.timer"),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1066,8 +1106,10 @@ def test_without_a_declared_inventory_the_aggregate_is_not_established():
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,"SYSTEMD_UNIT_VALIDITY": "PASS",
-                         "verified_units": ["stockbot-daily.service"]},
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+                         "release_pointer": RELEASE,
+                         "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "verified_units": ["stockbot-daily.service"]}),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("expected_validity_units" in e for e in combined["errors"])
@@ -1137,14 +1179,15 @@ def test_a_narrowed_collection_cannot_wave_a_unit_through_as_optional():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-daily.timer"),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             # Collection was narrowed: the timer is not in expected_units...
             "expected_units": ["stockbot-daily.service"],
             "verified_units": ["stockbot-daily.service"],
             # ...but it is still named optional, which must not excuse it.
             "optional_units": ["stockbot-daily.timer"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
     assert "stockbot-daily.timer" in combined["validity_uncovered_units"]
@@ -1162,13 +1205,14 @@ def test_a_genuinely_considered_optional_absence_is_still_tolerated():
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",
                                  "stockbot-sandbox-daily.timer"),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
-        },
+        }),
     )
     assert combined["production_release_identity"] == "PASS"
 
@@ -1568,10 +1612,11 @@ def _aggregate(*, validity_obs=OBS, pointer_obs=OBS, aggregate_obs=OBS):
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:" + unit,),
         expected_validity_units=(unit,),
-        validity_result={**validity_obs.as_dict(), **VALIDITY_ENVELOPE,
+        validity_result=with_records({**validity_obs.as_dict(),
+                         **VALIDITY_ENVELOPE,
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
-                         "verified_units": [unit]},
+                         "verified_units": [unit]}),
         observation=aggregate_obs,
     )
 
@@ -1745,7 +1790,7 @@ def _artifact_with(**over):
         "verified_units": ["stockbot-daily.service"],
     }
     base.update(over)
-    return base
+    return with_records(base)
 
 
 def _combine(artifact):
@@ -1950,13 +1995,14 @@ def _optional_aggregate(*, discovered, verified):
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
         expected_validity_units=("stockbot-daily.service",),
-        validity_result={**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-daily.service"],
             "discovered_units": list(discovered),
             "verified_units": list(verified),
-        },
+        }),
     )
 
 
@@ -2065,6 +2111,7 @@ def _contract_aggregate(**over):
     artifact = {**OBS.as_dict(), **VALIDITY_ENVELOPE, "release_pointer": RELEASE,
                 "SYSTEMD_UNIT_VALIDITY": "PASS", "expected_units": [unit],
                 "discovered_units": [unit], "verified_units": [unit]}
+    artifact = with_records(artifact)
     artifact.update(over)
     return S.certify_release_identity(
         S.parse_systemd_unit(
@@ -2149,3 +2196,115 @@ def test_an_escaped_quote_does_not_terminate_an_unterminated_value(line, secret)
     out = V.redact(line)
     for fragment in secret:
         assert fragment not in out, out
+
+
+# ---------------------------------------------------------------------------
+# One capture is ONE run -- counting terminators is not enough
+# ---------------------------------------------------------------------------
+
+def _cert_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cert_cli", str(REPO / "scripts" / "certify_systemd_validity.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_single_capture_has_no_run_level_defects():
+    """The control: a real capture must not trip the concatenation check."""
+    assert _cert_module().run_level_defects(CAPTURE) == []
+
+
+@pytest.mark.parametrize("label", ["prepended", "appended", "doubled"])
+def test_a_concatenated_capture_is_rejected_however_it_terminates(label):
+    """A run truncated before its ##END leaves exactly ONE terminal marker.
+
+    Prepended to a complete capture it therefore passes a terminator count,
+    while the reader keeps units from both runs and lets the later scalars
+    overwrite the earlier host, id and release -- attributing one host's unit
+    evidence to another.
+    """
+    truncated = CAPTURE.split("##END")[0].replace(OBS.host, "OLD-HOST")
+    stream = {"prepended": truncated + CAPTURE,
+              "appended": CAPTURE + truncated,
+              "doubled": CAPTURE + CAPTURE}[label]
+    defects = _cert_module().run_level_defects(stream)
+    assert defects, label
+    assert any("ONE run" in d for d in defects)
+
+
+# ---------------------------------------------------------------------------
+# A claim of verification needs a result behind it
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("units", [None, []])
+def test_a_verified_unit_with_no_record_cannot_certify(units):
+    """An artifact can ASSERT verification with no exit status recorded.
+
+    Checking only the records that happen to exist never looks at the reverse
+    mapping, so a schema-correct artifact naming a unit in verified_units
+    while `units` is absent or empty has nothing to contradict it.
+    """
+    over = {"units": units}
+    combined = _contract_aggregate(**over)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("no per-unit record" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_duplicate_records_for_one_verified_unit_cannot_certify():
+    combined = _contract_aggregate(units=[
+        {"unit": "stockbot-daily.service", "verifier_exit_status": 0,
+         "verifier_result": "PASS"},
+        {"unit": "stockbot-daily.service", "verifier_exit_status": 0,
+         "verifier_result": "PASS"},
+    ])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("more than once" in d
+               for d in combined["validity_contract_defects"])
+
+
+# ---------------------------------------------------------------------------
+# An anchor set narrower than the real load path is a blind spot
+# ---------------------------------------------------------------------------
+
+def test_an_anchor_set_narrower_than_the_load_path_cannot_certify():
+    """An override changes what the ANCHORS see, never where the verifier looks.
+
+    So a capture whose anchors covered only /etc/systemd/system could not have
+    seen a transient drop-in under /usr/local/lib/systemd/system, and recording
+    that it was narrowed is not enough -- a documented blind spot still
+    certifies unless it blocks.
+    """
+    result = certify(search_path="/etc/systemd/system",
+                     search_path_effective=SEARCH_PATH,
+                     search_path_source="STOCKBOT_UNIT_SEARCH_PATH override")
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("NARROWER" in b for b in result["blockers"]), result["blockers"]
+    assert any("/usr/lib/systemd/system" in b for b in result["blockers"])
+
+
+def test_a_complete_anchor_set_still_certifies():
+    """The control: anchors covering the whole effective path must pass."""
+    assert certify()["SYSTEMD_UNIT_VALIDITY"] == "PASS"
+
+
+@pytest.mark.parametrize("anchored, effective", [
+    ("", SEARCH_PATH),
+    (SEARCH_PATH, ""),
+])
+def test_missing_search_path_evidence_is_not_a_pass(anchored, effective):
+    result = certify(search_path=anchored, search_path_effective=effective)
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+
+
+def test_the_collector_records_the_effective_path_even_when_overridden():
+    """The override must not be able to hide what systemd really resolves."""
+    body = COLLECTOR.read_text(encoding="utf-8")
+    assert "##SEARCH_PATH_EFFECTIVE" in body
+    marker = body.index("##SEARCH_PATH_EFFECTIVE")
+    # the effective path is asked of systemd unconditionally, outside the
+    # branch that honours the override
+    assert "systemd-analyze unit-paths" in body[marker:marker + 200]

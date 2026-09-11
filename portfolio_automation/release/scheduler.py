@@ -679,6 +679,31 @@ def validity_contract_defects(validity_result: dict | None) -> list[str]:
                 f"verifier result for this unit"
             )
 
+    # ...and the reverse mapping. Checking only the records that happen to
+    # exist lets an artifact ASSERT verification with no evidence behind it:
+    # a schema-correct artifact naming a unit in verified_units while `units`
+    # is absent or empty has nothing to contradict, so it would pass unexamined
+    # while no exit status was ever recorded for that unit. A claim of
+    # verification requires exactly one successful record.
+    records: dict[str, int] = {}
+    for unit in validity_result.get("units") or ():
+        if isinstance(unit, dict) and unit.get("unit"):
+            name = str(unit["unit"])
+            records[name] = records.get(name, 0) + 1
+    for name in sorted(verified):
+        if name not in records:
+            defects.append(
+                f"{name}: listed in verified_units with no per-unit record — "
+                f"the artifact asserts the unit was verified while carrying no "
+                f"verifier result for it, so nothing was actually checked"
+            )
+        elif records[name] > 1:
+            defects.append(
+                f"{name}: {records[name]} per-unit records for one verified "
+                f"unit — evidence that describes the same unit more than once "
+                f"cannot say which result is being relied on"
+            )
+
     return defects
 
 

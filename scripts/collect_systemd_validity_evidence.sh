@@ -120,6 +120,16 @@ echo "##SEARCH_PATH_SOURCE"
 echo "$SEARCH_PATH_SOURCE"
 echo "##SEARCH_PATH"
 echo "$SEARCH_PATH"
+# What systemd says the load path REALLY is, recorded even when an override
+# narrowed what the anchors observed. An override changes only which
+# directories `_diranchor` looks at -- it cannot constrain where the verifier
+# actually resolves units from, so an anchor set narrower than the effective
+# path is a blind spot, not a configuration choice. Recording both lets the
+# certifier refuse rather than trust a capture that could not have seen a
+# transient drop-in under a directory it never looked at.
+echo "##SEARCH_PATH_EFFECTIVE"
+systemd-analyze unit-paths 2>/dev/null | tr '\n' ' '
+echo
 echo "##SYSTEMD_VERSION"
 systemd-analyze --version 2>/dev/null | head -1
 
