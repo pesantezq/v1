@@ -1784,8 +1784,8 @@ class SourceAccessKind(str, Enum):
     MODULE_PRESENCE_PROBE = "MODULE_PRESENCE_PROBE"
 
 
-#: The prefix each kind contributes to a source-access identity, so an access
-#: derived from the source can be matched to a declaration mechanically.
+#: Each kind contributes a stable prefix to the comparable dependency identity
+#: used by the reviewed registry and gateway contracts.
 SOURCE_ACCESS_PREFIX: dict[SourceAccessKind, str] = {
     SourceAccessKind.CANONICAL_READER: "reader",
     SourceAccessKind.DIRECT_EVIDENCE_PARSE: "evidence_parse",
@@ -1793,9 +1793,9 @@ SOURCE_ACCESS_PREFIX: dict[SourceAccessKind, str] = {
     SourceAccessKind.MODULE_PRESENCE_PROBE: "module_presence",
 }
 
-#: The canonical reader each function name identifies. The AST completeness
-#: guard resolves reader calls through this, so renaming a reader without
-#: updating its identity fails rather than silently dropping a dependency.
+#: The canonical reader each function name identifies. Retained as reviewed
+#: metadata shared by registry/test consistency checks; it is not an exhaustive
+#: call-discovery mechanism.
 CANONICAL_READER_FUNCTIONS: dict[str, "RawSourceReader"] = {}
 
 
@@ -1808,8 +1808,9 @@ class DirectSource(str, Enum):
     evidence and fails closed, while a probe answers one structural question and
     is forbidden from emitting content at all.
 
-    Each value is ``<kind prefix>:<target>``, which is what lets the derived
-    inventory be compared against declarations without a hand-written bridge."""
+    Each value is ``<kind prefix>:<target>``, giving reviewed dependency
+    declarations and gateway contracts a shared comparable identity. This does
+    not imply that arbitrary runtime acquisitions are mechanically discovered."""
 
     #: build_dashboard's SECOND read of the authority record, feeding
     #: worker_authority. Values travel behind _MISSING and the CONSUMER validates.
@@ -1821,8 +1822,8 @@ class DirectSource(str, Enum):
     READABILITY_OUTCOME_LEDGER = "readability:docs/EW0A_CERTIFICATION_OUTCOMES.jsonl"
     READABILITY_RECORDS_LEDGER = "readability:docs/EW0A_0B3_RECORDS.jsonl"
     #: Northstar 0B.3 contract presence, feeding mission deliverable progress.
-    #: Neither Codex nor the repair brief named this one; the derived inventory
-    #: did, which is the point of deriving it.
+    #: Earlier review surfaced this dependency even though the original brief
+    #: omitted it; it remains explicitly declared here for auditability.
     NORTHSTAR_CONTRACT_PRESENCE = "module_presence:portfolio_automation.northstar"
 
 
@@ -1852,7 +1853,7 @@ DIRECT_SOURCE_KINDS: dict[DirectSource, SourceAccessKind] = {
 
 
 def source_access_identity(kind: SourceAccessKind, target: str) -> str:
-    """The identity a derived access and a declaration must agree on."""
+    """Return the stable identity used by reviewed dependency declarations."""
     return f"{SOURCE_ACCESS_PREFIX[kind]}:{target}"
 
 
@@ -1895,11 +1896,11 @@ class _RegisteredProjection:
 
     @property
     def source_dependencies(self) -> frozenset[str]:
-        """Every dependency as a comparable identity, readers and direct alike.
+        """The surface's reviewed dependency declarations as comparable identities.
 
-        The completeness guard compares this against the inventory derived from
-        the source, in BOTH directions, so a missing declaration and a dead one
-        both fail."""
+        Used for consistency checks against reviewed gateway contracts. This is
+        architectural metadata, not a whole-program inventory of source
+        operations or a proof of gateway-interior completeness."""
         readers = {source_access_identity(SourceAccessKind.CANONICAL_READER,
                                           r.value)
                    for r in self.canonical_readers}
@@ -1915,8 +1916,8 @@ class _RegisteredProjection:
 #: its boundary. That is the control that would have caught learning before
 #: review did.
 #:
-#: It deliberately does NOT claim the dashboard is safe. Six of these surfaces
-#: are marked as blocked on known source-reader debt, and one as withheld.
+#: It deliberately does NOT claim the dashboard is safe. Each surface's boundary
+#: classification states what has and has not been certified.
 DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
     # --- identity -----------------------------------------------------------
     "schema_version": _RegisteredProjection(
@@ -1991,9 +1992,9 @@ DASHBOARD_PROJECTION_REGISTRY: dict[str, _RegisteredProjection] = {
                      RawSourceReader.CONTROLLER_RECORDS)),
     # --- dependent on canonical readers GUI-SR made total -------------------
     # A, B and C were repaired in #39, so these are hardened dependencies rather
-    # than blockers. Every declaration below was checked against the actual call
-    # path, and the AST completeness guard compares this whole registry against
-    # the inventory derived from build_dashboard's source.
+    # than blockers. Every declaration below was reviewed against the known call
+    # path and participates in consistency checks against reviewed gateway
+    # contracts; those checks are defence in depth, not exhaustive discovery.
     "controller": _RegisteredProjection(
         ProjectionBoundary.HARDENED_SOURCE_READER,
         "current_mission via read_runtime_policy (reader B, now total); remaining fields are declared contract constants or PENDING_BACKEND",
@@ -2056,24 +2057,19 @@ def registry_classification_violations() -> list[str]:
 
 
 def declared_source_dependencies() -> dict[str, frozenset[str]]:
-    """Every surface's declared dependency identities, for the completeness guard."""
+    """Each registered surface's reviewed source-dependency declarations."""
     return {name: entry.source_dependencies
             for name, entry in DASHBOARD_PROJECTION_REGISTRY.items()
             if entry.source_dependencies}
 
 
 def declared_source_dependency_union() -> frozenset[str]:
-    """The union the AST-derived inventory must equal EXACTLY.
+    """Return the union of reviewed projection dependency declarations.
 
-    Equality, not containment: a dependency the source performs but nothing
-    declares is a blind spot, and a dependency declared but no longer performed
-    is a dead claim that makes the registry look more coupled than it is. Both
-    are failures.
-
-    This is the inversion the source-access closure is about. The universe of
-    possible accesses is no longer ``set(RawSourceReader)`` -- a hand-maintained
-    enum that could not see ``_readability`` at all. The SOURCE decides which
-    dependencies exist; these declarations decide how each one is treated."""
+    This architectural metadata is used for consistency checks against the
+    reviewed gateway contracts. It is not an exhaustive inventory of source
+    operations, does not inspect gateway interiors, and does not prove that
+    arbitrary Python code can acquire only these sources."""
     union: set[str] = set()
     for declared in declared_source_dependencies().values():
         union |= declared
@@ -2103,8 +2099,8 @@ def _read_northstar_contract_presence() -> frozenset[str]:
     """Which Northstar 0B.3 contracts this build exposes. A CERTIFIED GATEWAY.
 
     A module attribute-presence probe, not filesystem evidence: it opens no file
-    and reads no path. Behind a gateway anyway, because it is still authoritative
-    evidence acquisition and the assembler must contain none.
+    and reads no path. It stays behind a named gateway so the reviewed assembler
+    remains acquisition-free by design.
 
     Fail-closed to the empty set exactly as before -- an import failure means
     "no contracts proven present", never "contracts absent from the milestone"."""
@@ -2124,14 +2120,16 @@ def _read_authority_record_evidence(root: Path) -> tuple[Any, Any, Any]:
     validator of authority-record evidence, and adding a second opinion here
     would be a second authority policy engine.
 
-    Why it exists as a function at all: GUI-RI's source-access closure requires
-    every authoritative access to be an inventoried, named dependency. This read
-    was an anonymous ``.read_text()`` embedded in the assembler, so the boundary
-    it crosses had no name to declare. The shape is now
+    Why it exists as a function at all: this second authority read used to be an
+    anonymous ``.read_text()`` embedded in the assembler. Extracting it gives the
+    read a named, reviewable gateway and dependency declaration. The shape is
 
         build_dashboard -> named source gateway -> validated worker_authority
 
-    and ``DirectSource.AUTHORITY_RECORD_EVIDENCE`` is what the registry declares.
+    and ``DirectSource.AUTHORITY_RECORD_EVIDENCE`` is the registry's reviewed
+    declaration for this gateway. Naming the boundary improves auditability; it
+    is not a claim that every possible authoritative access is mechanically
+    inventoried.
 
     This is NOT a duplicate of ``read_authority_level``. That reader answers
     "what authority is in force", applies the ladder and fails closed to A0.
@@ -2173,7 +2171,7 @@ WORKER_IDENTITY = "engineer.local_qwen2_5_7b"
 
 @dataclass(frozen=True)
 class _DashboardEvidence:
-    """Every source-backed input the dashboard projection needs, already acquired.
+    """Source-backed inputs used by the reviewed dashboard path, already acquired.
 
     Source acquisition is intentionally concentrated behind named gateways and
     frozen here before projection begins. ``build_dashboard`` delegates
@@ -2212,11 +2210,10 @@ class _DashboardEvidence:
 
 
 def _collect_dashboard_evidence(root: Path, now: str | None) -> _DashboardEvidence:
-    """Acquire every source-backed dashboard input, then hand it over frozen.
+    """Collect the source-backed inputs used by the reviewed dashboard path.
 
-    Deliberately dull, and intentionally the only place ``root`` is used for
-    acquisition. It coordinates named gateways and constructs nothing else: no
-    source paths (those live inside their gateways), no conditionals, no
+    Deliberately dull: it coordinates named gateways and constructs nothing else:
+    no source paths (those live inside their gateways), no conditionals, no
     parsing, no derivation. Keeping it dull is what makes it reviewable at a
     glance, which is the actual control.
 
