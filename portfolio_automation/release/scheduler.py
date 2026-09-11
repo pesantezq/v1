@@ -95,12 +95,37 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from .observation import (ObservationContext, bind_observations,
+                          observation_of, ConfigurationBracket, bracket_of, bind_brackets)
+
 DIRECT = "DIRECT"
 POINTER = "POINTER"
 RECOMMENDED_MODEL = POINTER
 
 # Conventional layout on the production host.
 RELEASES_DIR = "/opt/stockbot/releases"
+#: Reported when no ``systemd-analyze verify`` evidence was supplied. It is a
+#: distinct value from FAIL on purpose: "nobody checked" and "the units are
+#: broken" are different facts, and neither is eligibility.
+VALIDITY_NOT_ESTABLISHED = "NOT_ESTABLISHED"
+#: The artifact contract this aggregate is written against. Checked
+#: rather than assumed: a differently-versioned artifact may use the
+#: same field names for different meanings.
+VALIDITY_SCHEMA = "northstar.systemd_unit_validity"
+VALIDITY_SCHEMA_VERSION = 3
+#: The scheduler leg used to have no artifact at all: `surfaces` was raw
+#: parsed unit text handed straight to the aggregate, so its provenance
+#: was an ASSERTION by the caller and the aggregate could not detect a
+#: caller that mislabelled where the surfaces came from. It now emits a
+#: stamped artifact like the other two legs, which is what makes the
+#: cross-gate binding checkable rather than merely declared.
+SCHEDULER_SCHEMA = "northstar.scheduler_alignment"
+SCHEDULER_SCHEMA_VERSION = 1
+
+#: Execution-surface origins are ``"<kind>:<name>"``; only systemd origins name
+#: a unit that the validity gate can have verified. Cron surfaces have no unit.
+SYSTEMD_ORIGIN_PREFIX = "systemd"
+
 CURRENT_POINTER = "/opt/stockbot/current"
 LEGACY_CHECKOUT = "/opt/stockbot"
 
@@ -518,6 +543,7 @@ def unresolved_surfaces(surfaces: list[ExecutionSurface], *,
 def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
                                release_root: str,
                                expected_origins: tuple[str, ...] | None = None,
+                               observation: ObservationContext | None = None,
                                ) -> dict:
     """Report whether every surface's code paths resolve to the approved release.
 
@@ -535,12 +561,18 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
     ``production_code_sha == approved_release_sha`` — see ``pointer`` and
     ``certify_release_identity``.
     """
+    # Provenance rides along with the verdict rather than beside it, so a
+    # result cannot be separated from the observation that produced it while
+    # being passed between processes, files or hosts.
+    provenance = (observation or ObservationContext("", "")).as_dict()
+
     if not surfaces:
         return {"status": "FAILED",
                 "errors": ["no execution surfaces supplied — cannot certify"],
                 "unresolved": [], "system_transitional": [],
                 "secret_paths_outside_release": [],
-                "missing_expected": list(expected_origins or ())}
+                "missing_expected": list(expected_origins or ()),
+                **provenance}
 
     missing_expected: list[str] = []
     if expected_origins:
@@ -572,13 +604,448 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
         # but the cutover still has to re-provision it.
         "secret_paths_outside_release": secrets,
         "scope": "path_alignment_only",
+        **provenance,
     }
+
+
+def scheduler_alignment_artifact(surfaces: list[ExecutionSurface], *,
+                                 release_root: str,
+                                 checked_at: str,
+                                 observation: ObservationContext | None = None,
+                                 expected_origins: tuple[str, ...] | None = None,
+                                 approved_sha: str = "",
+                                 configuration_anchor_before: str = "",
+                                 configuration_anchor_after: str = "",
+                                 ) -> dict:
+    """The scheduler leg's durable, self-describing evidence.
+
+    Observation-only by contract, like the other two gates: this records what
+    the scheduler configuration WAS, and changes nothing.
+
+    The point of the artifact is that the aggregate can check it instead of
+    trusting it. A caller-supplied ``SCHEDULER_ALIGNMENT: PASS`` string is a
+    claim about evidence nobody else can see; an artifact carries the
+    normalized surfaces the verdict was computed from, the host and run it was
+    collected on, and the configuration bracket it was collected inside — so a
+    reader can tell whether it describes the same system the other gates saw.
+
+    ``surfaces`` are recorded NORMALIZED. Environment files are listed by path
+    only: a credential path is release-identity evidence, its contents are not,
+    and an artifact meant to be read by a GUI must not become a place secrets
+    accumulate. Nothing here reads those files.
+    """
+    result = certify_scheduler_identity(
+        surfaces, release_root=release_root,
+        expected_origins=expected_origins, observation=observation)
+    return {
+        "schema": SCHEDULER_SCHEMA,
+        "schema_version": SCHEDULER_SCHEMA_VERSION,
+        # This gate reports; it never changes what production runs.
+        "observe_only": True,
+        "checked_at": checked_at,
+        "release_root": release_root,
+        "approved_sha": approved_sha,
+        "expected_origins": list(expected_origins or ()),
+        # What the verdict was actually computed from, in a form another
+        # process can re-derive rather than take on faith.
+        "surfaces": [
+            {
+                "origin": s_.origin,
+                "executable": s_.executable,
+                "referenced_paths": list(s_.referenced_paths),
+                "working_directory": s_.working_directory,
+                "root_directory": s_.root_directory,
+                # paths only -- never contents
+                "environment_files": list(s_.environment_files),
+                "is_system_transitional": s_.is_system_transitional,
+            }
+            for s_ in surfaces
+        ],
+        "SCHEDULER_ALIGNMENT": ("PASS" if result["status"] == "OK" else "FAILED"),
+        "errors": list(result["errors"]),
+        "unresolved": list(result["unresolved"]),
+        "missing_expected": list(result["missing_expected"]),
+        "system_transitional": list(result["system_transitional"]),
+        "secret_paths_outside_release": list(
+            result["secret_paths_outside_release"]),
+        "scope": result["scope"],
+        # The bracket this evidence was collected inside. Supplied by the
+        # COLLECTION FLOW, which owns the anchors; this function does not
+        # measure them and cannot invent them.
+        **ConfigurationBracket(configuration_anchor_before,
+                               configuration_anchor_after).as_dict(),
+        **(observation or ObservationContext("", "")).as_dict(),
+    }
+
+
+def surfaces_from_artifact(
+        scheduler_result: dict | None) -> tuple[list[ExecutionSurface], list[str]]:
+    """Rebuild canonical surfaces from an artifact's recorded facts.
+
+    The artifact records what the collection flow observed; this turns those
+    records back into the exact objects the scheduler certifier already
+    understands, so the verdict can be RE-DERIVED rather than believed. There
+    is deliberately no second validator here -- reconstructing the input and
+    re-running the canonical logic is the whole point, because a parallel
+    implementation would be a new place for the two to disagree.
+
+    ``raw`` is reconstructed rather than stored: it is display-only in the
+    resolution logic, and persisting a full command line would put ExecStart
+    arguments -- which can carry credentials -- into a durable artifact for no
+    analytical gain.
+
+    Returns ``(surfaces, defects)``. A malformed record produces a defect and
+    contributes no surface, so a record nobody can read can never be counted as
+    one that resolved.
+    """
+    records = (scheduler_result or {}).get("surfaces")
+    defects: list[str] = []
+    surfaces: list[ExecutionSurface] = []
+
+    if records is None:
+        return surfaces, ["scheduler artifact records no surfaces list — there "
+                          "is nothing to re-derive its verdict from"]
+    if not isinstance(records, (list, tuple)):
+        return surfaces, [f"scheduler artifact's surfaces field is "
+                          f"{type(records).__name__}, not a list — evidence "
+                          f"that cannot be read cannot be trusted"]
+
+    def _str_list(value, field_: str, where: str) -> tuple[str, ...] | None:
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple)) or not all(
+                isinstance(v, str) for v in value):
+            defects.append(
+                f"{where}: {field_} is not a list of strings — a malformed "
+                f"surface record cannot be certified, so it fails closed")
+            return None
+        return tuple(value)
+
+    for index, record in enumerate(records):
+        where = f"scheduler artifact surface #{index}"
+        if not isinstance(record, dict):
+            defects.append(
+                f"{where} is {type(record).__name__}, not a record — evidence "
+                f"that cannot be read cannot be trusted")
+            continue
+        origin = record.get("origin")
+        if not isinstance(origin, str) or not origin.strip():
+            defects.append(f"{where} records no origin — a surface that cannot "
+                           f"say which unit it came from cannot be bound to "
+                           f"an expected origin")
+            continue
+        where = f"{origin} (surface #{index})"
+        executable = record.get("executable")
+        if not isinstance(executable, str) or not executable.strip():
+            defects.append(f"{where}: records no executable — nothing to "
+                           f"resolve against the release")
+            continue
+        referenced = _str_list(record.get("referenced_paths"),
+                               "referenced_paths", where)
+        env_files = _str_list(record.get("environment_files"),
+                              "environment_files", where)
+        if referenced is None or env_files is None:
+            continue
+        bad_dir = False
+        for field_ in ("working_directory", "root_directory"):
+            value = record.get(field_)
+            if value is not None and not isinstance(value, str):
+                defects.append(f"{where}: {field_} is "
+                               f"{type(value).__name__}, not a path")
+                bad_dir = True
+        if bad_dir:
+            continue
+        surfaces.append(ExecutionSurface(
+            origin=origin,
+            # Display only; the resolution logic never reads it.
+            raw=executable,
+            executable=executable,
+            referenced_paths=referenced,
+            working_directory=record.get("working_directory") or None,
+            root_directory=record.get("root_directory") or None,
+            environment_files=env_files,
+        ))
+    return surfaces, defects
+
+
+def rederived_scheduler_defects(scheduler_result: dict | None, *,
+                                release_root: str,
+                                expected_origins: tuple[str, ...] | None = None,
+                                ) -> list[str]:
+    """Ways the artifact's own recorded facts contradict the verdict it claims.
+
+    ``SCHEDULER_ALIGNMENT`` is a convenience field, not authority. An artifact
+    can record surfaces resolving to the legacy checkout and still say PASS --
+    through staleness, narrowing, or editing -- and a reader that takes the
+    string is certifying a claim rather than evidence. So the recorded surfaces
+    are run back through the canonical certifier and the two verdicts must
+    agree.
+
+    ``release_root`` and ``expected_origins`` come from the CERTIFICATION
+    REQUEST, not from the artifact: an artifact that could choose the release
+    it is measured against could pass by lowering the bar. The artifact's own
+    recorded values are cross-checked against them instead.
+    """
+    if not scheduler_result:
+        return []          # absence is reported by scheduler_contract_defects
+
+    defects: list[str] = []
+    claimed = scheduler_result.get("SCHEDULER_ALIGNMENT")
+
+    recorded_root = str(scheduler_result.get("release_root") or "").strip()
+    if recorded_root and recorded_root != release_root:
+        defects.append(
+            f"scheduler artifact was certified against release root "
+            f"{recorded_root!r}, not the {release_root!r} this aggregate "
+            f"requires — an artifact that chooses its own bar is not evidence "
+            f"about this release")
+    recorded_origins = scheduler_result.get("expected_origins")
+    if expected_origins and isinstance(recorded_origins, (list, tuple)):
+        missing = set(expected_origins) - set(recorded_origins)
+        if missing:
+            defects.append(
+                f"scheduler artifact did not demand {sorted(missing)} — a "
+                f"narrowed inventory cannot certify origins it never required")
+
+    surfaces, malformed = surfaces_from_artifact(scheduler_result)
+    defects.extend(malformed)
+    if malformed:
+        # A verdict cannot stand on records that could not be read.
+        return defects
+
+    derived = certify_scheduler_identity(
+        surfaces, release_root=release_root,
+        expected_origins=expected_origins,
+        observation=observation_of(scheduler_result))
+    derived_verdict = "PASS" if derived["status"] == "OK" else "FAILED"
+
+    if claimed == "PASS" and derived_verdict != "PASS":
+        detail = "; ".join(derived["errors"][:3]) or "no reason recorded"
+        defects.append(
+            f"scheduler artifact claims PASS, but re-deriving the verdict from "
+            f"its OWN recorded surfaces yields {derived_verdict}: {detail}")
+    elif claimed != derived_verdict:
+        defects.append(
+            f"scheduler artifact claims {claimed!r} while its recorded "
+            f"surfaces yield {derived_verdict!r} — the artifact disagrees with "
+            f"itself")
+
+    # The findings must match too, or a PASS could be claimed alongside a
+    # surface the artifact itself lists as unresolved.
+    for field_, key in (("unresolved", "unresolved"),
+                        ("missing_expected", "missing_expected")):
+        recorded = set(scheduler_result.get(field_) or ())
+        if set(derived[key]) - recorded:
+            defects.append(
+                f"scheduler artifact omits {sorted(set(derived[key]) - recorded)} "
+                f"from its {field_} while its own surfaces produce them — its "
+                f"recorded findings do not describe its recorded evidence")
+    return defects
+
+
+def scheduler_contract_defects(scheduler_result: dict | None) -> list[str]:
+    """Ways a scheduler artifact contradicts itself, and so cannot be trusted.
+
+    Same standard the validity artifact is held to, and for the same reason:
+    ``SCHEDULER_ALIGNMENT`` is a conclusion the artifact asserts about itself,
+    and this artifact travels between processes, hosts and runs.
+    """
+    if not scheduler_result:
+        return ["no scheduler alignment artifact supplied — the scheduler leg "
+                "cannot be composed from a verdict alone, and an absent "
+                "artifact is not a passing one"]
+
+    defects: list[str] = []
+    verdict = scheduler_result.get("SCHEDULER_ALIGNMENT")
+
+    schema = scheduler_result.get("schema")
+    if schema != SCHEDULER_SCHEMA:
+        defects.append(
+            f"scheduler artifact declares schema {schema!r}, not "
+            f"{SCHEDULER_SCHEMA!r} — an artifact this gate cannot claim to "
+            f"understand cannot certify through it"
+        )
+    version = scheduler_result.get("schema_version")
+    if version != SCHEDULER_SCHEMA_VERSION:
+        defects.append(
+            f"scheduler artifact declares schema_version {version!r}, not "
+            f"{SCHEDULER_SCHEMA_VERSION} — its fields may not mean what this "
+            f"aggregate reads them to mean"
+        )
+    if scheduler_result.get("observe_only") is not True:
+        defects.append(
+            "scheduler artifact does not declare observe_only — this gate is "
+            "observation-only by contract, so an artifact that says otherwise "
+            "did not come from it"
+        )
+    if not str(scheduler_result.get("checked_at") or "").strip():
+        defects.append(
+            "scheduler artifact records no collection time — evidence that "
+            "cannot say when it was taken cannot be shown to belong to the "
+            "bracket it claims"
+        )
+
+    # A verdict cannot outrank the reasons recorded against it.
+    recorded = scheduler_result.get("errors") or []
+    if recorded and verdict == "PASS":
+        defects.append(
+            f"scheduler artifact claims PASS while recording {len(recorded)} "
+            f"errors — a verdict cannot outrank the evidence it was supposedly "
+            f"derived from (first: {str(recorded[0])[:120]})"
+        )
+    for field_ in ("unresolved", "missing_expected"):
+        listed = scheduler_result.get(field_) or []
+        if listed and verdict == "PASS":
+            defects.append(
+                f"scheduler artifact claims PASS while listing {len(listed)} "
+                f"{field_} surfaces — the verdict contradicts its own findings"
+            )
+
+    # ...nor stand with no evidence behind it. A verdict with no surfaces is
+    # the "we found nothing to check" failure the scheduler gate already
+    # refuses; it must not be reintroducible by handing in a bare artifact.
+    if verdict == "PASS" and not (scheduler_result.get("surfaces") or ()):
+        defects.append(
+            "scheduler artifact claims PASS while recording no execution "
+            "surfaces — nothing was checked, and an empty inventory cannot "
+            "certify"
+        )
+
+    return defects
+
+
+def validity_contract_defects(validity_result: dict | None) -> list[str]:
+    """Ways a validity artifact contradicts itself, and so cannot be trusted.
+
+    ``SYSTEMD_UNIT_VALIDITY`` is a conclusion the artifact asserts about
+    itself. This gate consumes artifacts that were written by another process,
+    on another host, at another time, so the assertion is checked against the
+    fields it is supposed to summarise. Every defect here is an INTERNAL
+    inconsistency -- the artifact disagreeing with itself -- which is why it
+    fails closed rather than being reported as a mere warning: evidence that
+    cannot be self-consistent cannot be selectively believed.
+    """
+    if not validity_result:
+        return ["no systemd validity artifact supplied — there is no evidence "
+                "to aggregate, and an absent artifact is not a passing one"]
+
+    defects: list[str] = []
+    verdict = validity_result.get("SYSTEMD_UNIT_VALIDITY")
+
+    schema = validity_result.get("schema")
+    if schema != VALIDITY_SCHEMA:
+        defects.append(
+            f"systemd validity artifact declares schema {schema!r}, not "
+            f"{VALIDITY_SCHEMA!r} — an artifact this gate cannot claim to "
+            f"understand cannot certify through it"
+        )
+    version = validity_result.get("schema_version")
+    if version != VALIDITY_SCHEMA_VERSION:
+        defects.append(
+            f"systemd validity artifact declares schema_version {version!r}, "
+            f"not {VALIDITY_SCHEMA_VERSION} — its fields may not mean what "
+            f"this aggregate reads them to mean"
+        )
+
+    # This gate is observation-only by contract. An artifact saying otherwise
+    # was produced by something that is not this gate.
+    if validity_result.get("observe_only") is not True:
+        defects.append(
+            "systemd validity artifact does not declare observe_only — this "
+            "gate is observation-only by contract, so an artifact that says "
+            "otherwise did not come from it"
+        )
+
+    # A verdict cannot outrank the reasons recorded against it.
+    for field in ("blockers", "errors"):
+        recorded = validity_result.get(field) or []
+        if recorded and verdict == "PASS":
+            defects.append(
+                f"systemd validity artifact claims PASS while recording "
+                f"{len(recorded)} {field} — a verdict cannot outrank the "
+                f"evidence it was supposedly derived from (first: "
+                f"{str(recorded[0])[:120]})"
+            )
+
+    # ...nor outrank its own per-unit results.
+    verified = set(validity_result.get("verified_units") or ())
+    for unit in validity_result.get("units") or ():
+        if not isinstance(unit, dict):
+            defects.append(
+                "systemd validity artifact contains a malformed per-unit "
+                "record — evidence that cannot be read cannot be trusted"
+            )
+            continue
+        name = unit.get("unit", "<unnamed>")
+        failed = (unit.get("verifier_exit_status") not in (0, None)
+                  or unit.get("verifier_result") not in ("PASS", None))
+        if failed and name in verified:
+            defects.append(
+                f"{name}: listed in verified_units while its own record shows "
+                f"the verifier failed (exit "
+                f"{unit.get('verifier_exit_status')!r}, result "
+                f"{unit.get('verifier_result')!r}) — the artifact contradicts "
+                f"itself about the unit it is being trusted for"
+            )
+        if failed and verdict == "PASS":
+            defects.append(
+                f"{name}: the artifact claims PASS while recording a failed "
+                f"verifier result for this unit"
+            )
+
+    # ...and the reverse mapping. Checking only the records that happen to
+    # exist lets an artifact ASSERT verification with no evidence behind it:
+    # a schema-correct artifact naming a unit in verified_units while `units`
+    # is absent or empty has nothing to contradict, so it would pass unexamined
+    # while no exit status was ever recorded for that unit. A claim of
+    # verification requires exactly one successful record.
+    records: dict[str, int] = {}
+    succeeded: dict[str, bool] = {}
+    for unit in validity_result.get("units") or ():
+        if isinstance(unit, dict) and unit.get("unit"):
+            name = str(unit["unit"])
+            records[name] = records.get(name, 0) + 1
+            # Success must be STATED, not inferred from the absence of a
+            # denial. Treating a missing field as "not a failure" lets a
+            # record of `{"unit": "x"}` -- which contains no exit status and
+            # no verifier result at all -- satisfy a claim of verification.
+            # A record that does not say the verifier succeeded is not
+            # evidence that it did.
+            ok_here = (unit.get("verifier_exit_status") == 0
+                       and unit.get("verifier_result") == "PASS")
+            succeeded[name] = succeeded.get(name, True) and ok_here
+    for name in sorted(verified):
+        if name in records and not succeeded.get(name, False):
+            defects.append(
+                f"{name}: listed in verified_units while its record does not "
+                f"state that the verifier succeeded — a claim of verification "
+                f"requires an explicit exit status of 0 and a PASS result, "
+                f"not merely the absence of a recorded failure"
+            )
+        if name not in records:
+            defects.append(
+                f"{name}: listed in verified_units with no per-unit record — "
+                f"the artifact asserts the unit was verified while carrying no "
+                f"verifier result for it, so nothing was actually checked"
+            )
+        elif records[name] > 1:
+            defects.append(
+                f"{name}: {records[name]} per-unit records for one verified "
+                f"unit — evidence that describes the same unit more than once "
+                f"cannot say which result is being relied on"
+            )
+
+    return defects
 
 
 def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              pointer_result: dict,
                              release_root: str = CURRENT_POINTER,
                              expected_origins: tuple[str, ...] | None = None,
+                             validity_result: dict | None = None,
+                             scheduler_result: dict | None = None,
+                             expected_validity_units: tuple[str, ...] | None = None,
+                             observation: ObservationContext | None = None,
                              ) -> dict:
     """Path alignment AND pointer-target SHA together.
 
@@ -590,13 +1057,266 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     to be: this is the real certification entry point, and a missing-service
     guard reachable only by direct callers of the inner function is a guard
     that production certification never actually runs.
+
+    ``status`` covers SCHEDULER_ALIGNMENT and RELEASE_POINTER_IDENTITY only.
+    **It is not production release identity**, because a unit can name the
+    approved release perfectly and still be one systemd refuses to load. That
+    third gate is ``SYSTEMD_UNIT_VALIDITY``, owned by
+    ``release.systemd_validity`` and the real ``systemd-analyze verify``.
+
+    So the aggregate is reported separately in ``production_release_identity``,
+    and it is ``NOT_ESTABLISHED`` unless a validity result is actually supplied
+    and passing. Absence of that evidence is never eligibility: without it this
+    function cannot distinguish "the units are fine" from "nobody checked".
+
+    A passing verdict is not enough on its own, either — it has to be a verdict
+    **about the same units**. Both gates are scoped by their callers, so a
+    validity artifact covering only ``stockbot-daily.service`` could otherwise
+    be combined with scheduler evidence covering only
+    ``stockbot-dashboard.service``, and the aggregate would claim three-gate
+    coverage of a system where no unit had passed both. So the validity
+    artifact's ``verified_units`` must cover every systemd unit named by
+    ``expected_origins``, and without ``expected_origins`` there is nothing to
+    bind the two gates together — which is itself ``NOT_ESTABLISHED``.
+
+    Scheduler origins are not sufficient on their own, though, because they
+    only ever name units that bind a *path*. A ``[Timer]`` unit produces no
+    execution surface, so ``stockbot-daily.timer`` — which is what actually
+    starts the daily run — can never appear in ``expected_origins`` and could
+    therefore never be demanded of the validity evidence. So the deployment's
+    systemd inventory is declared separately in ``expected_validity_units``,
+    and the aggregate requires that too: without it, a validity artifact
+    collected with a narrowed inventory could satisfy every path-bearing origin
+    while leaving the timers entirely unverified.
+
+    ``observation`` declares which production observation THIS call's inputs
+    were taken from, and the aggregate refuses to combine gate results that do
+    not agree on it. The three legs are not symmetric, and deliberately so:
+
+    * ``validity_result`` and ``pointer_result`` are separately-collected
+      artifacts that travel between processes, files and hosts, so each carries
+      its own ``(host, observation_id)`` and is genuinely *checked* here. This
+      is the leg that caught a real staging certificate.
+    * the scheduler leg has no artifact to check — ``surfaces`` is raw parsed
+      unit text handed straight in, so its provenance IS this parameter. The
+      comparison for that leg is therefore an assertion by the caller, not an
+      independent verification, and it cannot detect a caller that mislabels
+      where the surfaces came from.
+
+    That asymmetry is a property of the evidence, not an oversight: there is no
+    scheduler artifact to stamp at collection time. What the binding does
+    guarantee is that separately-collected evidence cannot be composed across
+    hosts or runs without the mismatch surfacing.
+
+    A declared unit counts as covered if the artifact verified it, or if the
+    artifact both **expected** it and lists it as optional. Both halves matter:
+    "optional and installed implies verified" only holds for units the artifact
+    actually considered, so a name that appears in ``optional_units`` while
+    missing from the artifact's ``expected_units`` was never a candidate for
+    verification, and treating it as covered would let a narrowed collection
+    wave a unit through simply by calling it optional.
     """
+    # The scheduler leg is now evidence, not an assertion. When the collection
+    # flow supplies its artifact, THAT is what is bound and checked; the raw
+    # surfaces remain accepted so existing callers keep working, but a flow
+    # without an artifact cannot satisfy the bracket and therefore cannot
+    # establish identity -- which is the point.
     sched = certify_scheduler_identity(surfaces, release_root=release_root,
-                                       expected_origins=expected_origins)
-    ok = sched["status"] == "OK" and pointer_result.get("status") == "OK"
+                                       expected_origins=expected_origins,
+                                       observation=observation)
+    if scheduler_result is not None:
+        # The artifact's claimed verdict is necessary but not sufficient: a
+        # claimed FAILED is believed immediately (an artifact confessing a
+        # failure needs no corroboration), while a claimed PASS only survives
+        # if re-deriving it from the artifact's own recorded surfaces agrees.
+        # That re-derivation runs in `rederived_scheduler_defects`, and any
+        # disagreement lands in `contract_defects`, which withholds the
+        # aggregate below.
+        sched_verdict_ok = scheduler_result.get("SCHEDULER_ALIGNMENT") == "PASS"
+    else:
+        sched_verdict_ok = sched["status"] == "OK"
+    ok = sched_verdict_ok and pointer_result.get("status") == "OK"
+
+    validity = (validity_result or {}).get("SYSTEMD_UNIT_VALIDITY",
+                                           VALIDITY_NOT_ESTABLISHED)
+    errors = list(sched["errors"]) + list(pointer_result.get("errors") or [])
+    # A verdict field is a CLAIM, and this artifact is a file that travels
+    # between processes, hosts and runs. Reading "PASS" without checking the
+    # evidence it was supposedly derived from would let a stale, truncated,
+    # hand-edited or differently-versioned artifact certify production purely
+    # by asserting its own conclusion. So the contract is checked here, and an
+    # artifact that contradicts itself is not merely reported -- it cannot
+    # establish identity.
+    # Artifacts carry facts; the aggregate validates those facts and
+    # RE-DERIVES any conclusion it relies upon. A stored top-level verdict is a
+    # reporting convenience, never authority: if the recorded facts imply
+    # FAILED, a claimed PASS is an internal inconsistency and is rejected.
+    contract_defects = (validity_contract_defects(validity_result)
+                        + scheduler_contract_defects(scheduler_result)
+                        + rederived_scheduler_defects(
+                            scheduler_result, release_root=release_root,
+                            expected_origins=expected_origins))
+    errors.extend(contract_defects)
+    if validity != "PASS":
+        errors.append(
+            f"SYSTEMD_UNIT_VALIDITY = {validity} — production release identity "
+            f"requires all three gates; scheduler alignment and pointer identity "
+            f"alone cannot establish it"
+        )
+
+    # Three green gates are not one certified system unless the evidence
+    # describes one observation of one host. A genuine validity PASS collected
+    # on staging covers the same unit NAMES as production, so name-level
+    # coverage above cannot detect it; only provenance can. Host alone is not
+    # enough either -- a pointer read before a deploy and a unit verification
+    # after it are both truthful about the same host and jointly describe a
+    # system that never existed.
+    #
+    # Nothing here mints or copies an id: the aggregator proving agreement it
+    # manufactured itself would be no proof at all. Evidence that cannot say
+    # which run it came from is NOT_ESTABLISHED, not assumed co-located.
+    unbound = bind_observations({
+        "scheduler alignment": observation_of(scheduler_result
+                                              if scheduler_result is not None
+                                              else sched),
+        "release pointer identity": observation_of(pointer_result),
+        "systemd unit validity": observation_of(validity_result),
+    })
+    # ...and by the bracket that spans the WHOLE collection. The observation id
+    # binds the gates to one run; the bracket binds them to one CONFIGURATION.
+    # Unit files are not part of the release, so without this a fragment
+    # replaced between the scheduler reading and the unit verification leaves
+    # both gates individually truthful and the aggregate wrong.
+    #
+    # The anchors are read off the ARTIFACTS. They are deliberately not a
+    # parameter: a caller who could supply an anchor could supply agreement,
+    # and this is the check that agreement is supposed to survive.
+    unbound.extend(bind_brackets({
+        "scheduler alignment": bracket_of(scheduler_result),
+        "release pointer identity": bracket_of(pointer_result),
+        "systemd unit validity": bracket_of(validity_result),
+    }))
+    # A shared observation id proves the collectors were TOLD they belong to
+    # one run. It cannot prove the system held still during it: if a deployment
+    # lands between the pointer reading and the unit verification, both still
+    # carry the same id while describing different releases. So the gates are
+    # bound to observed STATE as well as to a token -- the release the validity
+    # collector saw must be the release the pointer gate certified.
+    validity_release = str((validity_result or {}).get("release_pointer") or "").strip()
+    pointer_release = str((pointer_result or {}).get("target_sha") or "").strip()
+    if not validity_release:
+        unbound.append(
+            "systemd unit validity: evidence records no release pointer, so a "
+            "deployment between it and the pointer gate could not be detected"
+        )
+    if not pointer_release:
+        unbound.append(
+            "release pointer identity: evidence records no target SHA, so there "
+            "is no release state to bind the other gates against"
+        )
+    if validity_release and pointer_release and validity_release != pointer_release:
+        unbound.append(
+            f"the validity evidence was taken against release "
+            f"{validity_release[:12]} while the pointer gate certified "
+            f"{pointer_release[:12]} — a deployment landed between the two "
+            f"observations, so they describe different systems however they "
+            f"were labelled"
+        )
+
+    errors.extend(unbound)
+
+    # The two gates must be about the same units, not merely both green.
+    origin_units = {
+        origin.split(":", 1)[1]
+        for origin in (expected_origins or ())
+        if origin.startswith(f"{SYSTEMD_ORIGIN_PREFIX}:")
+    }
+    declared_units = set(expected_validity_units or ())
+    required_units = tuple(sorted(origin_units | declared_units))
+
+    verified_units = set((validity_result or {}).get("verified_units") or ())
+    # "Optional and installed implies verified" only holds for units the
+    # artifact actually CONSIDERED. A name listed as optional but absent from
+    # the artifact's expected inventory was never a candidate for verification,
+    # so treating it as covered would let a narrowed collection wave a unit
+    # through by naming it optional. Tolerance therefore requires BOTH.
+    validity_expected = set((validity_result or {}).get("expected_units") or ())
+    validity_discovered = set((validity_result or {}).get("discovered_units") or ())
+    # ...and only where the unit is genuinely ABSENT. "Optional" licenses a
+    # missing unit, never an unverified one: an optional unit that is installed
+    # is verified exactly like a required one. An artifact that lists a unit as
+    # discovered AND optional AND expected while omitting it from
+    # verified_units is internally inconsistent -- stale, narrowed or edited --
+    # and reading its optional flag as coverage would let it waive an installed
+    # unit that nothing checked.
+    tolerated = {
+        u for u in (set((validity_result or {}).get("optional_units") or ())
+                    & validity_expected)
+        if u not in validity_discovered
+    }
+    installed_but_unverified = tuple(sorted(
+        u for u in required_units
+        if u not in verified_units and u in validity_discovered
+    ))
+    uncovered = tuple(
+        u for u in required_units if u not in verified_units and u not in tolerated
+    )
+    bound = (bool(expected_origins) and bool(declared_units)
+             and not uncovered and not unbound and not contract_defects)
+
+    if not expected_origins:
+        errors.append(
+            "no expected_origins supplied — there is nothing to bind the "
+            "scheduler and validity evidence together, so three-gate coverage "
+            "cannot be established"
+        )
+    if not declared_units:
+        errors.append(
+            "no expected_validity_units supplied — scheduler origins name only "
+            "path-bearing units, so timers and other non-path units would go "
+            "undemanded and a narrowed validity inventory would pass unnoticed"
+        )
+    for unit in uncovered:
+        if unit in installed_but_unverified:
+            errors.append(
+                f"{unit}: present on the host according to the validity "
+                f"evidence's own discovery, yet absent from its verified_units "
+                f"— an installed unit is verified whether or not it is "
+                f"optional, so this artifact cannot waive it"
+            )
+        else:
+            errors.append(
+                f"{unit}: covered by scheduler alignment but absent from the "
+                f"validity evidence — a unit that passed only one gate cannot "
+                f"contribute to production release identity"
+            )
+
     return {
         "status": "OK" if ok else "FAILED",
         "scheduler": sched,
+        "scheduler_artifact": scheduler_result,
+        # Ways the scheduler artifact's recorded facts contradict the
+        # verdict it claims. Non-empty means its PASS was not believed.
+        "scheduler_rederivation_defects": list(
+            rederived_scheduler_defects(
+                scheduler_result, release_root=release_root,
+                expected_origins=expected_origins)),
         "pointer": pointer_result,
-        "errors": list(sched["errors"]) + list(pointer_result.get("errors") or []),
+        "systemd_unit_validity": validity,
+        "validity_uncovered_units": list(uncovered),
+        "validity_installed_but_unverified": list(installed_but_unverified),
+        # Ways the validity artifact contradicts itself. Non-empty means
+        # its verdict was not trusted, whatever that verdict claimed.
+        "validity_contract_defects": list(contract_defects),
+        # Empty when the three gates are provably one observation; otherwise
+        # the reasons they are not, which is why the aggregate is withheld.
+        "provenance_conflicts": list(unbound),
+        # The bracket all three legs agreed on, empty when they did not.
+        **(bracket_of(validity_result).as_dict() if not unbound
+           else ConfigurationBracket("", "").as_dict()),
+        **(observation or ObservationContext("", "")).as_dict(),
+        "production_release_identity": (
+            "PASS" if (ok and validity == "PASS" and bound) else "NOT_ESTABLISHED"
+        ),
+        "errors": errors,
     }

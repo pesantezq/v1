@@ -85,6 +85,149 @@ System summary, memo, and GUI health messaging should use severity-aware wording
 
 ## Current Stable JSON Artifacts
 
+### `northstar.systemd_unit_validity` (release certification evidence)
+
+Produced by `scripts/certify_systemd_validity.py` from evidence captured by
+`scripts/collect_systemd_validity_evidence.sh`. Written outside the repository
+by default (Phase E evidence is deliberately out-of-tree); when written into a
+governed namespace, use `--namespace`, which routes through
+`data_governance.safe_write_json`. Raw `--out` writes are atomic
+(temp + `os.replace`) so an interrupted run cannot truncate a valid artifact.
+
+| field | type | meaning |
+|---|---|---|
+| `schema` | str | `northstar.systemd_unit_validity` |
+| `schema_version` | int | currently `3` (v2 added `observation_id` and per-unit `configuration_stable`; v3 added `release_pointer`) |
+| `observe_only` | bool | always `true` — this gate reports, it never changes production |
+| `checked_at` | str | ISO-8601 UTC (`...Z`); validated, absence is `NOT_CERTIFIABLE` |
+| `host` | str | host the evidence came from; absence is `NOT_CERTIFIABLE` |
+| `observation_id` | str | which collection run produced this evidence. Issued by the collection flow (`STOCKBOT_OBSERVATION_ID`), never by the collector or the certifier. Recorded but not required by *this* gate's verdict; **required** by the three-gate aggregate |
+| `release_pointer` | str | the release the host was running, observed at BOTH ends of the run. Empty when the two ends disagreed (a deployment landed mid-collection, which is also a blocker) or when it could not be read. The aggregate requires it to equal the pointer gate's `target_sha` |
+| `systemd_version` | str | the manager actually asked |
+| `verifier_flag` | str | `--recursive-errors=no` |
+| `expected_units` | list[str] | inventory this deployment expects |
+| `optional_units` | list[str] | may be absent; verified if installed |
+| `classified_units` | list[str] | discovered units explicitly waived by an operator; recorded so the waiver is auditable |
+| `verified_units` | list[str] | units actually verified |
+| `discovered_units` | list[str] | relevant units found on the host |
+| `missing_units` | list[str] | required units absent |
+| `unexpected_units` | list[str] | relevant units neither expected nor classified |
+| `units[]` | list[obj] | per unit: `fragment_path`, `drop_in_paths`, `load_state`, `need_daemon_reload`, `configuration_stable`, `verifier_command`, `verifier_exit_status`, `verifier_result`, `verifier_messages` (redacted, bounded) |
+| `errors` | list[str] | facts established as false |
+| `blockers` | list[str] | reasons certification was impossible |
+| `SYSTEMD_UNIT_VALIDITY` | str | `PASS` / `FAIL` / `NOT_CERTIFIABLE` |
+
+Rules:
+
+- `verifier_messages` are redacted and bounded; the artifact must never carry
+  secrets or unbounded host output.
+- The verdict derives from `verifier_exit_status` only. Verifier text is never
+  consulted in either direction.
+- `NOT_CERTIFIABLE` must never be collapsed into `PASS` by a consumer.
+- `configuration_stable` records whether the unit's effective on-disk
+  configuration was identical before and after the verifier ran. The collector
+  observes each unit twice — `##SHOW` before verification and `##RECHECK`
+  after — and each observation carries a digest of the fragment and its
+  drop-ins. `false`, or a missing second observation, is `NOT_CERTIFIABLE`:
+  `systemd-analyze verify` reads files on DISK, so a configuration that moved
+  mid-run leaves an exit status describing bytes that are no longer in place.
+  `NeedDaemonReload` alone cannot establish this — a deployment that writes
+  *and* reloads inside the window reports `no` at both ends.
+- `observation_id` binds this artifact to one evidence run. Composing a
+  genuine `PASS` from one host or run with scheduler/pointer evidence from
+  another is how three green gates certify a system that never existed, so the
+  aggregate reports `NOT_ESTABLISHED` unless all three agree on
+  `(host, observation_id)`. A consumer must never substitute a default.
+- A shared `observation_id` proves the collectors were *told* they belong to
+  one run; it cannot prove the system held still during it. `release_pointer`
+  is the state binding: if a deployment lands between the pointer gate's
+  reading and this one, both still carry the same id while describing
+  different releases, and the mismatch is what catches it.
+- `configuration_stable` compares three anchors at both ends of the run: a
+  CONTENT digest, an inode/size/nanosecond-mtime/ctime signature, and a
+  SEARCH-PATH anchor over the unit directories.
+  - Content alone cannot see a change that returns: a unit moved A -> B and
+    restored to A before the re-observation has identical digests at both
+    endpoints while the verifier read B. Rewriting a file advances its mtime
+    and ctime even when the bytes are unchanged, and `ctime` cannot be moved
+    backwards from userspace the way `mtime` can (`touch -r` restores mtime
+    and leaves ctime advanced), so the stat signature witnesses the mutation
+    rather than merely comparing the state.
+  - The per-file anchors are in turn blind to a file that appears and
+    *disappears*. A drop-in added before verification and removed before the
+    re-observation is absent from `DropInPaths` at BOTH ends, so its digest
+    and its stat signature each read `none` twice -- while `systemd-analyze
+    verify`, which reads the search path from DISK rather than from the loaded
+    manager state, demonstrably parsed it. Measured on systemd 255. The
+    containing DIRECTORY is what witnesses it: adding or removing an entry
+    advances that directory's mtime and ctime. `search_path_anchor` therefore
+    stats each unit search directory and each unit's `<unit>.d` directory,
+    recording a non-existent path as `absent` so a directory that appears and
+    vanishes cannot read as unchanged either.
+- An optional unit is tolerated only when the artifact's own
+  `discovered_units` shows it **absent**. Optional licenses a missing unit,
+  never an unverified installed one; an artifact that lists a unit as
+  discovered *and* optional *and* expected while omitting it from
+  `verified_units` is internally inconsistent and cannot waive it.
+
+
+### `scheduler_alignment.json`
+
+Produced by the bracketed three-gate collection flow. Observation-only.
+
+The scheduler leg used to have no artifact at all: `surfaces` was raw parsed
+unit text handed straight to the aggregate, so its provenance was an
+**assertion by the caller** and a caller that mislabelled where the surfaces
+came from could not be detected. It is now stamped like the other two legs,
+which is what makes the cross-gate binding checkable rather than declared.
+
+| field | type | meaning |
+|---|---|---|
+| `schema` | str | `northstar.scheduler_alignment` |
+| `schema_version` | int | currently `1` |
+| `observe_only` | bool | always `true` |
+| `host` / `observation_id` | str | which host, and which collection run |
+| `checked_at` | str | ISO-8601 UTC |
+| `release_root` / `approved_sha` | str | the release context the verdict was computed against |
+| `expected_origins` | list[str] | services that must each contribute a surface |
+| `surfaces` | list[obj] | the normalized execution surfaces the verdict came from — origin, executable, referenced paths, working/root directory, environment-file **paths**, transitional flag |
+| `SCHEDULER_ALIGNMENT` | str | `PASS` / `FAILED` |
+| `errors`, `unresolved`, `missing_expected`, `system_transitional`, `secret_paths_outside_release` | list | the findings behind the verdict |
+| `configuration_anchor_before` / `_after` | str | the bracket this evidence was collected inside |
+
+Rules:
+
+- Environment files are recorded by **path only**. A credential path is
+  release-identity evidence; its contents are not, and an artifact meant to be
+  read by a GUI must not become a place secrets accumulate. Nothing in the
+  flow reads those files.
+- A verdict cannot outrank its own findings: `PASS` alongside a non-empty
+  `errors`, `unresolved` or `missing_expected` is an internal contradiction and
+  fails closed.
+- `PASS` with no `surfaces` is the "we found nothing to check" failure the
+  scheduler gate already refuses, and it must not be reintroducible by handing
+  in a bare artifact.
+- **`SCHEDULER_ALIGNMENT` is not authority.** It is a reporting convenience.
+  The aggregate rebuilds canonical `ExecutionSurface` objects from the recorded
+  `surfaces` and re-runs the *existing* scheduler certifier against them — no
+  second validator — and a claimed `PASS` that the recorded facts do not
+  support is an internal inconsistency. An artifact recording
+  `/opt/stockbot/legacy/...` surfaces cannot certify however green its verdict
+  string is. `release_root` and `expected_origins` come from the certification
+  request, not the artifact, so an artifact cannot lower its own bar or narrow
+  the origins it demanded.
+- `surfaces` must record every directive in the canonical `EXEC_DIRECTIVES`
+  contract, not just `ExecStart`: `ExecStartPre`, `ExecStartPost`,
+  `ExecReload`, `ExecStop` and `ExecStopPost` all execute code and are all
+  release identity. The shell collector reads that set from
+  `portfolio_automation/release/exec_directives.manifest`, which the scheduler
+  module **generates**; a test asserts the file equals `EXEC_DIRECTIVES`
+  exactly and is byte-identical to what the generator would write, so the two
+  sides of the shell/Python boundary cannot drift apart again.
+- Malformed surface records fail closed. A record nobody can read is never
+  counted as one that resolved.
+
+
 ### `outputs/latest/data_quality_report.json`
 
 Observe-only data quality report. Written with `safe_write_json(OutputNamespace.LATEST, ...)` by `write_data_quality_report()`.

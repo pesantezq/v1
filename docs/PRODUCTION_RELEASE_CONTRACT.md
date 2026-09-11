@@ -337,6 +337,486 @@ environment:
        portfolio_automation, watchlist_scanner, policy_evaluator, agent, theme_engine)}))'
 ```
 
+## Production identity requires three independent gates
+
+`PRODUCTION_RELEASE_IDENTITY` is eligible for PASS only when all three hold:
+
+```text
+SYSTEMD_UNIT_VALIDITY      = PASS     real systemd-analyze verify
+SCHEDULER_ALIGNMENT        = PASS     portfolio_automation.release.scheduler
+RELEASE_POINTER_IDENTITY   = PASS     portfolio_automation.release.pointer
+----------------------------------
+PRODUCTION_RELEASE_IDENTITY eligible for PASS
+```
+
+**None of the three may infer another.** They fail independently and for
+unrelated reasons:
+
+| gate | the question it answers | what it cannot tell you |
+|---|---|---|
+| `SYSTEMD_UNIT_VALIDITY` | would systemd accept and load these units? | which release the commands point at |
+| `SCHEDULER_ALIGNMENT` | do the effective executable paths resolve to the approved release? | whether the unit is loadable at all |
+| `RELEASE_POINTER_IDENTITY` | does `current` resolve to the approved SHA? | whether anything actually uses `current` |
+
+A unit can be flawless and still execute the previous release. It can name the
+release correctly and still be a unit systemd refuses to load. The pointer can
+be perfect while half the schedulers ignore it.
+
+### Why validity is delegated rather than implemented
+
+An earlier revision of the scheduler certifier emulated systemd's acceptance
+rules. That emulation drew seven consecutive review findings — including two
+false *rejections* that would have blocked a correct cutover — and was removed
+in PR #40 rather than extended. Reproducing another program's acceptance
+semantics from documentation is a losing game when the program itself is
+available to ask. Removing it left the question genuinely uncovered, which this
+gate closes with the real verifier.
+
+### The verifier invocation is fixed, and why
+
+```bash
+systemd-analyze verify --recursive-errors=no <unit>.service
+```
+
+**By unit NAME, never by path.** Verifying `FragmentPath` reports on the base
+fragment; every production application unit here carries a `zz-release.conf`
+drop-in, and `stockbot-daily.service` carries two. Name-based lookup applies
+drop-ins with normal precedence. Measured on systemd 255 in both directions: a
+valid base broken by its drop-in fails and names the drop-in's binary; a broken
+base repaired by its drop-in passes silently.
+
+**`--recursive-errors=no` is required.** It is not a weakening — it is what
+makes the exit status mean anything. Per `systemd-analyze(1)`: "If this option
+is not specified, zero is returned as the exit status regardless whether
+warnings arise during verification or not." Measured:
+
+```text
+unit                                (none)   no    one   yes
+pb-valid                              0      0     0     0
+pb-badval  (bad TimeoutStartSec)      0      1     1     1
+pb-badsec  (unknown section)          0      1     1     1
+pb-clean-with-dep                     0      0     0     1
+```
+
+Rows two and three are the trap: the verifier complains on stderr and still
+exits 0. Row four is why the mode is `no` and not `yes` — that unit is itself
+clean and merely `Requires=` a unit with a warning, so `yes` would fail our
+gate for a defect owned by an unrelated system unit.
+
+`--man=no` is deliberately **not** passed: it changed no verdict in any
+measured case, and suppressing a class of check to keep a gate green is how
+gates stop meaning anything.
+
+### Loaded-state currency is part of the verdict
+
+`systemd-analyze verify` validates unit files **on disk**. If PID 1 reports
+`NeedDaemonReload=yes`, the on-disk text is not what the manager has loaded, so
+a clean result would be evidence about a configuration that is not running:
+
+```text
+NeedDaemonReload=yes  ->  SYSTEMD_UNIT_VALIDITY = NOT_CERTIFIABLE
+```
+
+Escalate. **Do not run `systemctl daemon-reload` to make this pass** — that is
+mutating production to manufacture the answer you wanted.
+
+### The three gates must describe one observation
+
+Being green is not enough. The three results must be *about the same
+observation of the same host*, because each is collected separately:
+
+```text
+production observation begins
+        ↓
+observation_id = immutable identifier for this evidence run
+host           = the observed production host
+        ↓
+pointer evidence    -> host + observation_id
+scheduler evidence  -> host + observation_id
+systemd validity    -> host + observation_id
+        ↓
+aggregate requires an exact match on (host, observation_id)
+```
+
+Without this, a *genuine* `SYSTEMD_UNIT_VALIDITY = PASS` collected on a staging
+box covers the same unit **names** as production, so name-level coverage cannot
+tell the two apart:
+
+```text
+staging    systemd validity     PASS
+production scheduler alignment  PASS   ->  false production_release_identity PASS
+production pointer identity     PASS
+```
+
+Host identity alone does not fix it, and neither does a timestamp. Two
+observations of the same production host minutes apart are still two
+observations: a pointer read taken before a deploy and a unit verification
+taken after it are each individually truthful and jointly describe a system
+that never existed. So the binding is `(host, observation_id)`.
+
+**The id is issued by the collection flow and passed to each collector.** It is
+never minted by a collector and never stamped onto results by the aggregator —
+an aggregator that invents a shared id would be manufacturing exactly the
+agreement it is supposed to be checking. `release.observation` therefore
+imports nothing that could generate one, and a test pins that.
+
+```bash
+export STOCKBOT_OBSERVATION_ID="obs-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+```
+
+**A shared token is not a snapshot.** The id proves the collectors were told
+they belong to one run; it cannot prove the system held still during it. If a
+deployment lands between the pointer gate's reading and the unit verification,
+both legitimately carry the same id while describing different releases. So the
+gates are bound to observed **state** as well: the collector records the release
+the host was running, bracketing its whole run, and the aggregate requires it to
+equal the pointer gate's `target_sha`.
+
+```text
+validity evidence saw release X
+pointer gate certified release Y
+X != Y  ->  production_release_identity = NOT_ESTABLISHED
+```
+
+A deployment landing *inside* the validity collection makes that capture
+`NOT_CERTIFIABLE` outright — its unit evidence spans two releases.
+
+Evidence that cannot say which run it belongs to is **not** assumed to be
+co-located:
+
+```text
+missing / malformed / mismatched provenance
+    ->  production_release_identity = NOT_ESTABLISHED
+```
+
+That is a deliberate cost. A flow that does not yet thread one observation id
+through all three gates cannot certify production identity until it does. The
+individual gates are unaffected — whether systemd would accept these units is
+true of the host regardless of what else was observed alongside, so
+`SYSTEMD_UNIT_VALIDITY` does not require the id for its own verdict.
+
+### Loaded-state currency must hold ACROSS the verification window
+
+`NeedDaemonReload=no` captured before the verifier runs is not enough. The
+collector observes each unit **twice** — once before verification (`##SHOW`)
+and once after (`##RECHECK`) — and each observation records a digest of the
+unit's fragment and its drop-ins:
+
+```text
+##SHOW <unit>      LoadState, NeedDaemonReload, FragmentPath, DropInPaths,
+                   NorthstarFragmentDigest, NorthstarDropInDigest
+      systemd-analyze verify --recursive-errors=no <unit>
+##RECHECK <unit>   the same properties, observed again
+```
+
+Certification requires the two observations to agree, and requires
+`NeedDaemonReload=no` in both. Measured on systemd 255:
+
+| what happened in the window | `NeedDaemonReload` before / after | caught by |
+|---|---|---|
+| nothing | `no` / `no` | — (PASS) |
+| unit rewritten, not reloaded | `no` / `yes` | reload-state recheck |
+| unit rewritten **and** reloaded | `no` / `no` | configuration digest |
+| unit changed **and restored** (A→B→A) | `no` / `no` | inode/mtime/ctime signature |
+| drop-in added **and removed** | `no` / `no` | search-path directory anchor |
+
+The fourth row is why content hashing alone is not enough: restoring identical
+bytes leaves both endpoint digests equal while the verifier read the transient.
+Each observation therefore also records inode, size and nanosecond mtime/ctime
+via `stat`, and a rewrite advances ctime even when the content is unchanged.
+
+The fifth row is why per-file anchors are not enough either. A drop-in that
+appears and disappears inside the window is absent from `DropInPaths` at both
+ends, so its digest and its stat signature each read `none` twice — while
+`systemd-analyze verify` reads the search path from **disk**, not from the
+loaded manager state, and parsed it. Measured on systemd 255. Each observation
+therefore also stats the unit search directories and each unit's `<unit>.d`
+directory, recording a non-existent path as `absent`.
+
+### Why endpoint anchors, and not a change monitor
+
+The question this has to answer is not "is the state the same at both ends" —
+it is "did the relevant state mutate at any point while the three gates were
+collected". Those differ, and only the second is sound.
+
+Endpoint anchoring answers the second question **when the quantity compared is
+a mutation witness rather than a state value**, which is what these three
+anchors are chosen to be:
+
+| witness | what it proves | why it cannot be restored |
+|---|---|---|
+| `ctime` (ns) | the inode was modified | no userspace API sets ctime; `touch`/`utimensat` set atime/mtime only |
+| inode number | the file was replaced | an atomic rename installs a different inode |
+| directory mtime/ctime | an entry was added or removed | the containing directory is stamped by the kernel on link/unlink |
+
+Each was measured on this host rather than assumed: rewriting a file with
+identical bytes keeps the inode and advances mtime and ctime; `touch -r`
+restores mtime and leaves ctime advanced; an atomic rename changes the inode;
+creating and removing a drop-in advances the containing directory's timestamps.
+
+A filesystem change monitor (`inotify`) was considered and **rejected**:
+
+* `inotifywait` is not installed on the reference host, so it would become an
+  unproven production dependency — and the rule is to prove availability
+  before depending on a tool, not to assume it;
+* it requires a concurrent long-lived process inside what is otherwise a
+  strictly read-only single-shot SSH collection;
+* it has a silent-loss failure mode (`IN_Q_OVERFLOW`) that must be detected
+  and handled or events are simply missed.
+
+`stat` is already a dependency of this collector, needs no daemon, cannot
+overflow, and — because ctime and inode are not restorable — answers the
+interval question rather than the endpoint question. So the mechanism is
+endpoint-*sampled* but interval-*sound*.
+
+**A narrowed anchor set blocks rather than being merely noted.**
+`STOCKBOT_UNIT_SEARCH_PATH` changes only which directories the anchors
+observe — it cannot constrain where the verifier actually resolves units from.
+So the collector records systemd's effective path (`search_path_effective`)
+*unconditionally*, alongside what the anchors covered, and certification fails
+closed when the anchored set is narrower. A documented blind spot still
+certifies unless it blocks.
+
+**A capture is one run, and one terminator does not prove it.** A run
+truncated before its `##END` can be prepended to a complete capture: the
+combined stream has exactly one terminal marker, so a terminator count sees
+nothing, while the reader keeps units from both runs and lets the later
+scalars overwrite the earlier host, id and release — attributing one host's
+unit evidence to another. Run-level sections (`HOST`, `OBSERVATION_ID`,
+`CHECKED_AT`, `SYSTEMD_VERSION`, the release pointers, the search paths, and
+the inventories) may therefore appear exactly once, and a duplicate is a
+defect regardless of how the stream terminates.
+
+**The anchored directories are asked of systemd, not assumed.** The effective
+unit load path is wider than the three obvious directories: on systemd 255
+`systemd-analyze unit-paths` also lists `/etc/systemd/system.control`,
+`/run/systemd/system.control`, `/run/systemd/transient`, the `.attached` and
+generator directories, and `/usr/local/lib/systemd/system`. Measured: a
+transient drop-in created under `/usr/local/lib/systemd/system` is read by the
+verifier while a three-directory anchor stays **unchanged** — a false PASS. The
+collector therefore asks `systemd-analyze unit-paths` (read-only) and anchors
+the complete set; if systemd cannot be asked it falls back to the full static
+list *and records that it did*, so a narrowed anchor set is visible in the
+artifact (`search_path_source`, `search_path`) rather than silent.
+
+**Stated limits.** This detects mutation, not intent, and its soundness rests
+on the kernel maintaining ctime monotonically. It does not cover: an actor with
+root who moves the system clock backwards (which would itself surface as a
+mismatch, since the endpoints would differ); mutation through a path outside
+the anchored set; or a change to state this gate does not claim to cover. The
+anchored set is derived from the certification inputs — the release pointer,
+the unit fragments, their drop-ins, and the unit search directories — not from
+watching the filesystem wholesale.
+
+The third row is why the digest exists. Each observation is internally
+consistent, so reload state reads `no` at both ends while
+`systemd-analyze verify` read bytes PID 1 never loaded. Hashing the effective
+configuration is what pins *which* bytes the exit status describes.
+
+A configuration that moved while the gate was looking at it is
+`NOT_CERTIFIABLE`. **Collect again once the deployment has settled — do not
+`daemon-reload`**, which would be mutating production to produce the answer we
+wanted.
+
+`sha256sum` is read-only, like every other command the collector runs.
+
+### Verdicts
+
+`PASS` requires all of: complete expected inventory; every required unit
+`LoadState=loaded`; every required unit `NeedDaemonReload=no` **both before and
+after verification**; every required unit's effective configuration digest
+**unchanged across the verification window**; a real verifier result for every
+required unit obtained with the required flag; every such result clean; no
+required unit skipped; no relevant discovered unit left unclassified.
+
+`production_release_identity` additionally requires all three gates to carry a
+matching `(host, observation_id)`.
+
+Anything preventing those facts from being established is `NOT_CERTIFIABLE`;
+anything establishing them as false is `FAIL`. **"Could not verify" is never
+`PASS`.**
+
+### How it runs — observation and decision are separated
+
+```bash
+# One id per observation, issued here and reused by every gate collected in
+# this run. Without it the three gates cannot be bound and the aggregate is
+# NOT_ESTABLISHED.
+export STOCKBOT_OBSERVATION_ID="obs-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+
+ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
+    < scripts/collect_systemd_validity_evidence.sh \
+    | python3 scripts/certify_systemd_validity.py --out evidence.json
+```
+
+### One bracketed collection, not three co-located ones
+
+A shared `(host, observation_id)` proves the collectors were *told* they belong
+to one run. It cannot prove the system held still during it, and the three
+gates read different things: the pointer gate reads the release pointer, the
+scheduler gate reads unit `ExecStart` text and cron, the validity gate reads
+unit files through `systemd-analyze`.
+
+Unit files under `/etc/systemd/system` are **not part of the release**, so
+binding the gates to a release SHA leaves this open:
+
+```text
+scheduler evidence collected     unit A is aligned
+fragment replaced                unit B, syntactically valid, NOT aligned
+validity evidence collected      unit B verifies
+pointer SHA                      unchanged throughout
+                                 ->  three green gates, and B is installed
+```
+
+Scheduler certified A. B is what production runs. Measured on systemd 255 with
+the real flow: with the swap injected between the scheduler leg and the
+validity leg, `SCHEDULER_ALIGNMENT = PASS` and the pointer stays `OK`, and only
+the bracket refuses.
+
+So `scripts/collect_release_observation.sh` brackets the whole collection:
+
+```text
+A. establish host + one observation_id
+B. capture configuration_anchor_before      <- before ANY gate evidence
+C. scheduler alignment evidence
+D. release pointer identity evidence
+E. systemd unit validity evidence
+F. capture configuration_anchor_after       <- after ALL gates complete
+G. all three artifacts carry that pair
+H. aggregate only after the bracket validates
+```
+
+The anchor digests every mutable input the gates depend on: the release pointer
+and what it resolves to, every unit load directory and every applicable
+drop-in directory, the unit fragments and their drop-ins, and cron.
+
+**The collection flow owns the anchors, not the aggregate's caller.** They are
+read back off the artifacts and are deliberately *not* a parameter of
+`certify_release_identity` — a caller who could supply an anchor could supply
+the very agreement the bracket exists to check, exactly as a caller-minted
+observation id would be. A test pins that no such parameter exists.
+
+`production_release_identity` is `PASS` only when all of these hold:
+
+| requirement | why |
+|---|---|
+| all three artifact contracts valid | a verdict is a claim about evidence |
+| all three agree on `host` | three green gates, two machines |
+| all three agree on `observation_id` | three green gates, two runs |
+| release-state bindings agree | pointer and validity saw one release |
+| all three carry the **same** bracket | they came from one collection |
+| `anchor_before == anchor_after` | nothing they depend on moved during it |
+| each gate's own verdict passes | — |
+| complete-unit-coverage still passes | — |
+
+Missing, malformed or inconsistent bracket evidence is `NOT_ESTABLISHED` /
+`NOT_CERTIFIABLE`. The aggregate never invents, repairs, normalizes into
+agreement, or post-stamps provenance its inputs did not carry.
+
+### The bracket's other inputs
+
+**The release worktree, not just the commit it names.** `HEAD == approved_sha`
+is not `worktree == committed release`. The observation records
+`git status --porcelain` and the **maximum ctime across tracked files** at both
+endpoints. The first answers "is the tree dirty at this instant"; the second is
+needed because a tracked file modified and restored to its committed content
+reads clean in porcelain at *both* ends — measured — while its ctime advances
+and cannot be put back.
+
+Which dirty paths matter is decided by the canonical release-immutability
+contract (`portfolio_automation.release.contracts.classify_path`), not
+restated here: production writes under the runtime roots (`data/`, `outputs/`,
+`logs/`) by design, so dirt there is expected operation, while a modified
+`RELEASE_IMMUTABLE` path is exactly the drift this gate exists to catch.
+Untracked files follow that same contract; this gate invents no new rule.
+
+**Cron's backing store, not just its rendered content.** `crontab -l` content
+is blind to A→B→A exactly as file content is everywhere else. The observation
+also stats the backing file for the crontab being certified — on the reference
+host `/var/spool/cron/crontabs/<user>` — scoped to that one file rather than
+the spool directory, whose timestamps move when any unrelated user's cron
+changes. Measured: content identical across A→B→A, inode/ctime different.
+
+The spool directory is `drwx-wx--T root:crontab`, so an ordinary user **cannot**
+stat its own file there. When the witness cannot be observed the collector
+records that and certification **fails closed**, because content equality does
+not prove interval stability.
+
+**Ordering is evidence.** Section counts prove the pieces exist; only order
+proves the anchors bracketed anything. A stream with both anchors moved to the
+end contains exactly one of every required section while neither precedes a
+single gate — measured, and it certified. The observation is therefore parsed
+as an ordered sequence, and is never sorted into a valid shape after the fact.
+
+### Where this evidence may be written
+
+The bundle is production-certification evidence, so it has two destinations and
+they are named separately — one generic path argument meaning both is how a
+production bundle became writable into a replay tree.
+
+| destination | rule |
+|---|---|
+| `--namespace policy` | in-repository; the write is owned by `data_governance.safe_write_json` |
+| `--external-evidence-dir <abs>` | Phase-E evidence outside the production checkout; must be absolute, must resolve outside the repository, written atomically |
+
+There is no raw output path. `outputs/backtest/`, `outputs/latest/`, sandbox
+and historical trees are all rejected.
+
+### The documented witness policy, including its false negatives
+
+The configuration anchor covers whole unit **load directories**, so *any*
+change within one closes the observation as not-quiet — including installing an
+unrelated service. That is deliberate and conservative: a directory stamp says
+**that** something changed, never **what**, and narrowing it to per-unit paths
+would reopen the transient-drop-in case this gate already proved. The remedy
+for unrelated churn is to re-run the observation, not to weaken the witness.
+
+**What the bracket claims.** Not a filesystem snapshot, and not a transactional
+one. It establishes that the measured witnesses — inode, size, nanosecond
+mtime/ctime, and the directory entries of every applicable unit load and
+drop-in directory, plus the release pointer — read identically at both
+endpoints. Those witnesses are not restorable by ordinary means, which is what
+makes endpoint sampling sound about the interval rather than only its ends; the
+limits documented above still apply unchanged. It does **not** defend against a
+privileged actor forging evidence, moving the system clock, or mutating state
+through a path outside the measured set.
+
+
+### The aggregate checks the artifact, not just its verdict
+
+`SYSTEMD_UNIT_VALIDITY: PASS` is a conclusion the artifact asserts **about
+itself**, and that artifact is a file that travels between processes, hosts and
+runs. Reading the verdict without checking the fields it was supposedly derived
+from would let a stale, truncated, hand-edited or differently-versioned artifact
+certify production purely by asserting its own conclusion. So before the verdict
+is trusted, the aggregate requires the artifact to be self-consistent:
+
+| checked | why |
+|---|---|
+| `schema` / `schema_version` | a differently-versioned artifact may use the same field names for different meanings |
+| `observe_only` is `true` | this gate is observation-only by contract, so an artifact saying otherwise did not come from it |
+| `blockers` / `errors` empty when PASS | a verdict cannot outrank the reasons recorded against it |
+| per-unit exit status agrees with `verified_units` | nor outrank its own per-unit results |
+| artifact present at all | missing evidence is a defect, not silence |
+| one successful record per `verified_units` entry | otherwise an artifact can *assert* verification with no exit status recorded anywhere, and there is nothing to contradict |
+
+Every item is an **internal** inconsistency — the artifact disagreeing with
+itself — which is why each fails closed rather than warning: evidence that
+cannot be self-consistent cannot be selectively believed. The reasons are
+reported in `validity_contract_defects`.
+
+The collector only observes: `systemd-analyze --version|verify|unit-paths`,
+`systemctl show|list-unit-files`, `sha256sum`, `stat`, `readlink -f`,
+`git rev-parse`. Every one of those is read-only, and no new tool was
+introduced to establish snapshot consistency — which is also why choosing this
+mechanism required no reconnaissance against production. It never reloads,
+starts, stops, enables,
+masks, or writes anything, and a test asserts that. The certifier decides and
+touches no host. So the production side of this gate is strictly read-only, and
+the decision logic stays unit-testable without a VPS, root, or systemd.
+
+A truncated capture is `NOT_CERTIFIABLE`, not a clean host.
+
 ## Backup contract — unchanged
 
 PR #37 behaviour is preserved exactly. `BACKUP_REQUIRED` is a *classification*,

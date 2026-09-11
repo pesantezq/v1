@@ -1,0 +1,18 @@
+# GENERATED -- the authority is EXEC_DIRECTIVES in
+# portfolio_automation/release/scheduler.py. Do not edit by hand.
+#
+# This exists because the evidence collector is shell and the certifier is
+# Python, and two hand-maintained lists of the same contract drift: the
+# collector captured only ExecStart while the certifier treated six
+# directives as release-identity surfaces, so a legacy ExecStartPre was
+# invisible to the scheduler artifact and could execute outside the
+# approved release without anything objecting. A test asserts this file
+# equals EXEC_DIRECTIVES exactly, so the two cannot separate again.
+#
+# Regenerate with: python -m portfolio_automation.release.exec_manifest
+ExecStart
+ExecStartPre
+ExecStartPost
+ExecReload
+ExecStop
+ExecStopPost
