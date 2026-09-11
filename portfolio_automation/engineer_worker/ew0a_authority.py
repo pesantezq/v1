@@ -59,6 +59,31 @@ FORBIDDEN_OPS = frozenset({
 })
 
 
+def grants_for_level(level: EngineerAuthorityLevel) -> tuple[str, ...]:
+    """The canonical grant set for an authority level. Pure and total.
+
+    THIS MODULE ALREADY OWNED THESE SEMANTICS -- they were just expressed inline
+    inside ``set_authority_level``, so nothing else could ask the question. The
+    Worker Control Center needed to, in order to tell a genuine authority record
+    apart from a structurally valid but semantically impossible one: a record
+    saying ``A0_DIAGNOSTIC`` while listing broker or capital grants is not
+    something the trusted writer could ever have produced.
+
+    Exposing one helper is deliberately preferred over copying the mapping into
+    the read model. A second copy of authority semantics is a second thing to
+    keep in step, and the read model must never become a place where authority
+    meaning is decided.
+
+    Total by construction: the parameter is the canonical enum, so there is no
+    unknown-level branch to fail closed from.
+
+    A0 grants nothing. That is the contract, not an oversight -- A0 is read-only
+    diagnostics."""
+    if level is EngineerAuthorityLevel.A1_ASSISTED_ENGINEERING:
+        return A1_GRANTS
+    return ()
+
+
 def read_authority_level(repo_root: str | Path, rel: str = DEFAULT_STATE_REL) -> EngineerAuthorityLevel:
     """Read the current authority level. Defaults to A0 (fail-closed) if absent
     or malformed — the worker is never implicitly promoted.
@@ -94,7 +119,11 @@ def set_authority_level(repo_root: str | Path, level: EngineerAuthorityLevel,
     p.parent.mkdir(parents=True, exist_ok=True)
     payload = {"schema_version": AUTHORITY_SCHEMA_VERSION, "schema_kind": SCHEMA_KIND,
                "level": level.value, "actor": actor, "updated_at": now,
-               "grants": list(A1_GRANTS) if level is EngineerAuthorityLevel.A1_ASSISTED_ENGINEERING else [],
+               # Semantic deduplication only: grants_for_level IS the mapping
+               # this line used to restate, so the persisted payload is
+               # unchanged for both levels and the read-model validator now
+               # compares against the same source of truth.
+               "grants": list(grants_for_level(level)),
                "forbidden_ops": sorted(FORBIDDEN_OPS)}
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
