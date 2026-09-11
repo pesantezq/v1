@@ -77,6 +77,7 @@ def parse_evidence(text: str) -> dict:
     """Parse the collector's record stream into the certifier's inputs."""
     host = checked_at = version = observation_id = ""
     release_before = release_after = ""
+    search_path_source = search_path = ""
     expected: list[str] = []
     optional: list[str] = []
     discovered: list[str] = []
@@ -122,6 +123,10 @@ def parse_evidence(text: str) -> dict:
             host = raw.strip()
         elif section == "OBSERVATION_ID" and raw.strip():
             observation_id = raw.strip()
+        elif section == "SEARCH_PATH_SOURCE" and raw.strip():
+            search_path_source = raw.strip()
+        elif section == "SEARCH_PATH" and raw.strip():
+            search_path = raw.strip()
         elif section == "RELEASE_POINTER_BEFORE" and raw.strip():
             release_before = raw.strip()
         elif section == "RELEASE_POINTER_AFTER" and raw.strip():
@@ -177,6 +182,8 @@ def parse_evidence(text: str) -> dict:
         "malformed_evidence": tuple(malformed),
         "host": host,
         "observation_id": observation_id,
+        "search_path_source": search_path_source,
+        "search_path": search_path,
         "release_pointer_before": release_before,
         "release_pointer_after": release_after,
         "checked_at": checked_at,

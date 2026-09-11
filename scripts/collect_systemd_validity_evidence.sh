@@ -25,14 +25,35 @@ set -u
 # unexpected, since the discovery pattern matches them.
 RELEASE_POINTER="${STOCKBOT_RELEASE_POINTER:-/opt/stockbot/current}"
 
-# The unit search directories this gate anchors. Derived from the directories
-# systemd itself resolves fragments and drop-ins from, highest precedence
-# first -- not a filesystem-wide watch, which would be both noisy and beside
-# the point. Overridable only to make the mechanism testable without root.
-SEARCH_PATH="${STOCKBOT_UNIT_SEARCH_PATH:-\
-/etc/systemd/system \
-/run/systemd/system \
-/usr/lib/systemd/system}"
+# The unit load directories this gate anchors. ASKED OF SYSTEMD rather than
+# hardcoded: `systemd-analyze unit-paths` lists the load directories for
+# units, and the effective path on the reference host (systemd 255) is wider
+# than the three obvious ones -- it also includes /etc/systemd/system.control,
+# /run/systemd/system.control, /run/systemd/transient, the .attached and
+# generator directories, and /usr/local/lib/systemd/system. A transient
+# fragment or drop-in created and removed under an omitted directory would be
+# read by the verifier while every anchor stayed unchanged, so anchoring a
+# subset is a false PASS waiting to happen.
+#
+# Still not a filesystem-wide watch: this is exactly the set systemd itself
+# resolves units from. `unit-paths` is read-only. If it cannot be asked, the
+# static fallback is used AND the evidence says so, so a narrowed anchor set
+# is visible to the certifier rather than silent.
+SEARCH_PATH_SOURCE="systemd-analyze unit-paths"
+SEARCH_PATH="${STOCKBOT_UNIT_SEARCH_PATH:-}"
+if [ -z "$SEARCH_PATH" ]; then
+  SEARCH_PATH=$(systemd-analyze unit-paths 2>/dev/null | tr '\n' ' ')
+  if [ -z "$SEARCH_PATH" ]; then
+    SEARCH_PATH_SOURCE="static fallback (unit-paths unavailable)"
+    SEARCH_PATH="/etc/systemd/system.control /run/systemd/system.control \
+/run/systemd/transient /run/systemd/generator.early /etc/systemd/system \
+/etc/systemd/system.attached /run/systemd/system /run/systemd/system.attached \
+/run/systemd/generator /usr/local/lib/systemd/system /usr/lib/systemd/system \
+/run/systemd/generator.late"
+  fi
+else
+  SEARCH_PATH_SOURCE="STOCKBOT_UNIT_SEARCH_PATH override"
+fi
 
 _release_state() {
   local resolved sha
@@ -95,6 +116,10 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 # against what the pointer gate certified. Both commands are read-only.
 echo "##RELEASE_POINTER_BEFORE"
 _release_state
+echo "##SEARCH_PATH_SOURCE"
+echo "$SEARCH_PATH_SOURCE"
+echo "##SEARCH_PATH"
+echo "$SEARCH_PATH"
 echo "##SYSTEMD_VERSION"
 systemd-analyze --version 2>/dev/null | head -1
 

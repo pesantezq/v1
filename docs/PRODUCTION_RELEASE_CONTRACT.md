@@ -569,6 +569,18 @@ overflow, and — because ctime and inode are not restorable — answers the
 interval question rather than the endpoint question. So the mechanism is
 endpoint-*sampled* but interval-*sound*.
 
+**The anchored directories are asked of systemd, not assumed.** The effective
+unit load path is wider than the three obvious directories: on systemd 255
+`systemd-analyze unit-paths` also lists `/etc/systemd/system.control`,
+`/run/systemd/system.control`, `/run/systemd/transient`, the `.attached` and
+generator directories, and `/usr/local/lib/systemd/system`. Measured: a
+transient drop-in created under `/usr/local/lib/systemd/system` is read by the
+verifier while a three-directory anchor stays **unchanged** — a false PASS. The
+collector therefore asks `systemd-analyze unit-paths` (read-only) and anchors
+the complete set; if systemd cannot be asked it falls back to the full static
+list *and records that it did*, so a narrowed anchor set is visible in the
+artifact (`search_path_source`, `search_path`) rather than silent.
+
 **Stated limits.** This detects mutation, not intent, and its soundness rests
 on the kernel maintaining ctime monotonically. It does not cover: an actor with
 root who moves the system clock backwards (which would itself surface as a
@@ -619,7 +631,29 @@ ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
     | python3 scripts/certify_systemd_validity.py --out evidence.json
 ```
 
-The collector only observes: `systemd-analyze --version|verify`,
+### The aggregate checks the artifact, not just its verdict
+
+`SYSTEMD_UNIT_VALIDITY: PASS` is a conclusion the artifact asserts **about
+itself**, and that artifact is a file that travels between processes, hosts and
+runs. Reading the verdict without checking the fields it was supposedly derived
+from would let a stale, truncated, hand-edited or differently-versioned artifact
+certify production purely by asserting its own conclusion. So before the verdict
+is trusted, the aggregate requires the artifact to be self-consistent:
+
+| checked | why |
+|---|---|
+| `schema` / `schema_version` | a differently-versioned artifact may use the same field names for different meanings |
+| `observe_only` is `true` | this gate is observation-only by contract, so an artifact saying otherwise did not come from it |
+| `blockers` / `errors` empty when PASS | a verdict cannot outrank the reasons recorded against it |
+| per-unit exit status agrees with `verified_units` | nor outrank its own per-unit results |
+| artifact present at all | missing evidence is a defect, not silence |
+
+Every item is an **internal** inconsistency — the artifact disagreeing with
+itself — which is why each fails closed rather than warning: evidence that
+cannot be self-consistent cannot be selectively believed. The reasons are
+reported in `validity_contract_defects`.
+
+The collector only observes: `systemd-analyze --version|verify|unit-paths`,
 `systemctl show|list-unit-files`, `sha256sum`, `stat`, `readlink -f`,
 `git rev-parse`. Every one of those is read-only, and no new tool was
 introduced to establish snapshot consistency — which is also why choosing this

@@ -108,6 +108,11 @@ RELEASES_DIR = "/opt/stockbot/releases"
 #: distinct value from FAIL on purpose: "nobody checked" and "the units are
 #: broken" are different facts, and neither is eligibility.
 VALIDITY_NOT_ESTABLISHED = "NOT_ESTABLISHED"
+#: The artifact contract this aggregate is written against. Checked
+#: rather than assumed: a differently-versioned artifact may use the
+#: same field names for different meanings.
+VALIDITY_SCHEMA = "northstar.systemd_unit_validity"
+VALIDITY_SCHEMA_VERSION = 3
 
 #: Execution-surface origins are ``"<kind>:<name>"``; only systemd origins name
 #: a unit that the validity gate can have verified. Cron surfaces have no unit.
@@ -595,6 +600,88 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
     }
 
 
+def validity_contract_defects(validity_result: dict | None) -> list[str]:
+    """Ways a validity artifact contradicts itself, and so cannot be trusted.
+
+    ``SYSTEMD_UNIT_VALIDITY`` is a conclusion the artifact asserts about
+    itself. This gate consumes artifacts that were written by another process,
+    on another host, at another time, so the assertion is checked against the
+    fields it is supposed to summarise. Every defect here is an INTERNAL
+    inconsistency -- the artifact disagreeing with itself -- which is why it
+    fails closed rather than being reported as a mere warning: evidence that
+    cannot be self-consistent cannot be selectively believed.
+    """
+    if not validity_result:
+        return ["no systemd validity artifact supplied — there is no evidence "
+                "to aggregate, and an absent artifact is not a passing one"]
+
+    defects: list[str] = []
+    verdict = validity_result.get("SYSTEMD_UNIT_VALIDITY")
+
+    schema = validity_result.get("schema")
+    if schema != VALIDITY_SCHEMA:
+        defects.append(
+            f"systemd validity artifact declares schema {schema!r}, not "
+            f"{VALIDITY_SCHEMA!r} — an artifact this gate cannot claim to "
+            f"understand cannot certify through it"
+        )
+    version = validity_result.get("schema_version")
+    if version != VALIDITY_SCHEMA_VERSION:
+        defects.append(
+            f"systemd validity artifact declares schema_version {version!r}, "
+            f"not {VALIDITY_SCHEMA_VERSION} — its fields may not mean what "
+            f"this aggregate reads them to mean"
+        )
+
+    # This gate is observation-only by contract. An artifact saying otherwise
+    # was produced by something that is not this gate.
+    if validity_result.get("observe_only") is not True:
+        defects.append(
+            "systemd validity artifact does not declare observe_only — this "
+            "gate is observation-only by contract, so an artifact that says "
+            "otherwise did not come from it"
+        )
+
+    # A verdict cannot outrank the reasons recorded against it.
+    for field in ("blockers", "errors"):
+        recorded = validity_result.get(field) or []
+        if recorded and verdict == "PASS":
+            defects.append(
+                f"systemd validity artifact claims PASS while recording "
+                f"{len(recorded)} {field} — a verdict cannot outrank the "
+                f"evidence it was supposedly derived from (first: "
+                f"{str(recorded[0])[:120]})"
+            )
+
+    # ...nor outrank its own per-unit results.
+    verified = set(validity_result.get("verified_units") or ())
+    for unit in validity_result.get("units") or ():
+        if not isinstance(unit, dict):
+            defects.append(
+                "systemd validity artifact contains a malformed per-unit "
+                "record — evidence that cannot be read cannot be trusted"
+            )
+            continue
+        name = unit.get("unit", "<unnamed>")
+        failed = (unit.get("verifier_exit_status") not in (0, None)
+                  or unit.get("verifier_result") not in ("PASS", None))
+        if failed and name in verified:
+            defects.append(
+                f"{name}: listed in verified_units while its own record shows "
+                f"the verifier failed (exit "
+                f"{unit.get('verifier_exit_status')!r}, result "
+                f"{unit.get('verifier_result')!r}) — the artifact contradicts "
+                f"itself about the unit it is being trusted for"
+            )
+        if failed and verdict == "PASS":
+            defects.append(
+                f"{name}: the artifact claims PASS while recording a failed "
+                f"verifier result for this unit"
+            )
+
+    return defects
+
+
 def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              pointer_result: dict,
                              release_root: str = CURRENT_POINTER,
@@ -680,6 +767,15 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     validity = (validity_result or {}).get("SYSTEMD_UNIT_VALIDITY",
                                            VALIDITY_NOT_ESTABLISHED)
     errors = list(sched["errors"]) + list(pointer_result.get("errors") or [])
+    # A verdict field is a CLAIM, and this artifact is a file that travels
+    # between processes, hosts and runs. Reading "PASS" without checking the
+    # evidence it was supposedly derived from would let a stale, truncated,
+    # hand-edited or differently-versioned artifact certify production purely
+    # by asserting its own conclusion. So the contract is checked here, and an
+    # artifact that contradicts itself is not merely reported -- it cannot
+    # establish identity.
+    contract_defects = validity_contract_defects(validity_result)
+    errors.extend(contract_defects)
     if validity != "PASS":
         errors.append(
             f"SYSTEMD_UNIT_VALIDITY = {validity} — production release identity "
@@ -769,7 +865,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         u for u in required_units if u not in verified_units and u not in tolerated
     )
     bound = (bool(expected_origins) and bool(declared_units)
-             and not uncovered and not unbound)
+             and not uncovered and not unbound and not contract_defects)
 
     if not expected_origins:
         errors.append(
@@ -805,6 +901,9 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
         "systemd_unit_validity": validity,
         "validity_uncovered_units": list(uncovered),
         "validity_installed_but_unverified": list(installed_but_unverified),
+        # Ways the validity artifact contradicts itself. Non-empty means
+        # its verdict was not trusted, whatever that verdict claimed.
+        "validity_contract_defects": list(contract_defects),
         # Empty when the three gates are provably one observation; otherwise
         # the reasons they are not, which is why the aggregate is withheld.
         "provenance_conflicts": list(unbound),

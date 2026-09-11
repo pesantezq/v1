@@ -164,8 +164,17 @@ _BARE_ASSIGNMENT = re.compile(
 #: newline too, so a single stray quote would redact every following line of
 #: an otherwise readable diagnostic. End of line is the correct boundary --
 #: it is where systemd's own echo of the offending value stops.
+#:
+#: Escape-aware for the same reason the terminated form is, and it matters
+#: more here: in ``AUTH="alpha\\" beta gamma`` the escaped quote is part of
+#: the value, not its terminator. A pattern of ``[^"\n]*`` stops dead at that
+#: quote, fails its end-of-line match, and hands the line to the bare fallback
+#: -- which redacts only the first token and persists ``beta gamma``. Consuming
+#: the escape AND the character it protects takes the whole value. The escape
+#: alternative is tried first, because ``[^"\n]`` would otherwise match the
+#: backslash alone and leave the quote to terminate the class.
 _UNTERMINATED_QUOTED = re.compile(
-    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"\n]*|'[^'\n]*)$""",
+    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("(?:\\.|[^"\\\n])*|'(?:\\.|[^'\\\n])*)$""",
     re.MULTILINE,
 )
 #: Credentials embedded in a URL, which carry the secret in the value itself.
@@ -451,6 +460,8 @@ def certify_systemd_unit_validity(
     observation_id: str = "",
     release_pointer_before: str = "",
     release_pointer_after: str = "",
+    search_path_source: str = "",
+    search_path: str = "",
     verifier_available: bool = True,
     classified_units: tuple[str, ...] = (),
     optional_units: tuple[str, ...] = (),
@@ -678,6 +689,13 @@ def certify_systemd_unit_validity(
         # three-gate aggregate requires it to match what the pointer gate
         # certified, which is what detects a deployment between two gates.
         "release_pointer": release_pointer,
+        # Which unit load directories the anchors actually covered, and where
+        # that list came from. Recorded rather than assumed: the effective
+        # load path is asked of `systemd-analyze unit-paths`, and a capture
+        # that fell back to the static list covered a set that may not match
+        # this host -- which a reader must be able to see.
+        "search_path_source": search_path_source,
+        "search_path": [p for p in (search_path or "").split() if p],
         "systemd_version": redact(systemd_version),
         "verifier_flag": REQUIRED_VERIFIER_FLAG,
         "expected_units": list(expected),
