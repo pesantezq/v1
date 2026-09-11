@@ -65,18 +65,6 @@ class ObservationContext:
     host: str
     observation_id: str
 
-    @property
-    def is_usable(self) -> bool:
-        """Whether this context can participate in a binding at all.
-
-        A context that fails this is not evidence of anything: it cannot be
-        matched against another, and treating two unusable contexts as equal
-        would let missing provenance certify itself.
-        """
-        return bool((self.host or "").strip()) and bool(
-            OBSERVATION_ID.match((self.observation_id or "").strip())
-        )
-
     def as_dict(self) -> dict:
         return {HOST_KEY: self.host, OBSERVATION_ID_KEY: self.observation_id}
 

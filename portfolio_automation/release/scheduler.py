@@ -645,6 +645,25 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     collected with a narrowed inventory could satisfy every path-bearing origin
     while leaving the timers entirely unverified.
 
+    ``observation`` declares which production observation THIS call's inputs
+    were taken from, and the aggregate refuses to combine gate results that do
+    not agree on it. The three legs are not symmetric, and deliberately so:
+
+    * ``validity_result`` and ``pointer_result`` are separately-collected
+      artifacts that travel between processes, files and hosts, so each carries
+      its own ``(host, observation_id)`` and is genuinely *checked* here. This
+      is the leg that caught a real staging certificate.
+    * the scheduler leg has no artifact to check — ``surfaces`` is raw parsed
+      unit text handed straight in, so its provenance IS this parameter. The
+      comparison for that leg is therefore an assertion by the caller, not an
+      independent verification, and it cannot detect a caller that mislabels
+      where the surfaces came from.
+
+    That asymmetry is a property of the evidence, not an oversight: there is no
+    scheduler artifact to stamp at collection time. What the binding does
+    guarantee is that separately-collected evidence cannot be composed across
+    hosts or runs without the mismatch surfacing.
+
     A declared unit counts as covered if the artifact verified it, or if the
     artifact both **expected** it and lists it as optional. Both halves matter:
     "optional and installed implies verified" only holds for units the artifact
