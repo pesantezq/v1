@@ -160,8 +160,12 @@ _BARE_ASSIGNMENT = re.compile(
 #: fallback then stops at the first space, redacting ``AUTH="alpha`` and
 #: persisting ``beta gamma``. An unterminated quote has no value boundary left
 #: to find, so the only safe reading is that the value runs to end of line.
+#: The value runs to END OF LINE, not to end of text: ``[^"]`` would match a
+#: newline too, so a single stray quote would redact every following line of
+#: an otherwise readable diagnostic. End of line is the correct boundary --
+#: it is where systemd's own echo of the offending value stops.
 _UNTERMINATED_QUOTED = re.compile(
-    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*|'[^']*)$""",
+    r"""\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"\n]*|'[^'\n]*)$""",
     re.MULTILINE,
 )
 #: Credentials embedded in a URL, which carry the secret in the value itself.
@@ -240,6 +244,16 @@ class UnitProvenance:
     #: the digest structurally cannot.
     fragment_stat: str = ""
     drop_in_stat: str = ""
+    #: inode/mtime/ctime of the unit SEARCH DIRECTORIES and of this unit's
+    #: drop-in directory, with a non-existent path recorded as ``absent``.
+    #: The per-file anchors above cannot see a file that appears and
+    #: disappears inside the window: such a drop-in is absent from
+    #: DropInPaths at both ends, so its digest and stat each read ``none``
+    #: twice, while ``systemd-analyze verify`` -- which reads the search path
+    #: from DISK, not from the loaded manager state -- parsed it. Measured on
+    #: systemd 255. Adding or removing a directory entry advances the
+    #: containing directory's mtime and ctime, which is what witnesses it.
+    search_path_anchor: str = ""
 
     @property
     def is_loaded(self) -> bool:
@@ -257,7 +271,8 @@ class UnitProvenance:
         """
         return (self.fragment_path, self.drop_in_paths,
                 self.fragment_digest, self.drop_in_digest,
-                self.fragment_stat, self.drop_in_stat)
+                self.fragment_stat, self.drop_in_stat,
+                self.search_path_anchor)
 
 
 @dataclass(frozen=True)
@@ -325,6 +340,7 @@ def provenance_from_show(text: str, *, unit: str) -> UnitProvenance:
         drop_in_digest=props.get("NorthstarDropInDigest", ""),
         fragment_stat=props.get("NorthstarFragmentStat", ""),
         drop_in_stat=props.get("NorthstarDropInStat", ""),
+        search_path_anchor=props.get("NorthstarSearchPathAnchor", ""),
     )
 
 
@@ -398,7 +414,9 @@ def _snapshot_consistency(unit: str,
         for what, digest in (("fragment", provenance_.fragment_digest),
                              ("drop-in", provenance_.drop_in_digest),
                              ("fragment stat", provenance_.fragment_stat),
-                             ("drop-in stat", provenance_.drop_in_stat)):
+                             ("drop-in stat", provenance_.drop_in_stat),
+                             ("search path anchor",
+                              provenance_.search_path_anchor)):
             if not digest:
                 problems.append(
                     f"{unit}: no {what} digest recorded {label} verification — "

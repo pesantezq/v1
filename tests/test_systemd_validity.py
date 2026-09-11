@@ -46,7 +46,7 @@ def digest(*parts) -> str:
 
 def prov(unit, *, load_state="loaded", reload_needed=False, drop_ins=("/d/zz.conf",),
          fragment_digest=None, drop_in_digest=None,
-         fragment_stat=None, drop_in_stat=None):
+         fragment_stat=None, drop_in_stat=None, search_path_anchor=None):
     return V.UnitProvenance(
         unit=unit,
         load_state=load_state,
@@ -63,6 +63,11 @@ def prov(unit, *, load_state="loaded", reload_needed=False, drop_ins=("/d/zz.con
         drop_in_stat=(drop_in_stat if drop_in_stat is not None
                       else (digest("dropstat", unit, *drop_ins) if drop_ins
                             else V.DIGEST_NONE)),
+        # Always present: the search-path anchor is recorded per unit whether
+        # or not that unit has drop-ins, because its job is to witness a
+        # drop-in that did not exist at either endpoint.
+        search_path_anchor=(search_path_anchor if search_path_anchor is not None
+                            else digest("searchpath", unit)),
     )
 
 
@@ -440,6 +445,7 @@ NorthstarFragmentDigest=3f1c2b7a9d4e5068a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4
 NorthstarDropInDigest=b7e6d5c4a39281706f5e4d3c2b1a09876f5e4d3c2b1a09876f5e4d3c2b1a0987
 NorthstarFragmentStat=9c8b7a6d5e4f30291827364554637281900aabbccddeeff00112233445566778
 NorthstarDropInStat=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
+NorthstarSearchPathAnchor=4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
 ##VERIFYCMD stockbot-daily.service
 systemd-analyze verify --recursive-errors=no stockbot-daily.service
 ##VERIFY stockbot-daily.service 0
@@ -454,6 +460,7 @@ NorthstarFragmentDigest=3f1c2b7a9d4e5068a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4
 NorthstarDropInDigest=b7e6d5c4a39281706f5e4d3c2b1a09876f5e4d3c2b1a09876f5e4d3c2b1a0987
 NorthstarFragmentStat=9c8b7a6d5e4f30291827364554637281900aabbccddeeff00112233445566778
 NorthstarDropInStat=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
+NorthstarSearchPathAnchor=4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c
 ##RELEASE_POINTER_AFTER
 1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##END
@@ -1811,6 +1818,7 @@ def test_a_configuration_whose_stat_is_unusable_is_not_certifiable(stat_value):
 def test_the_collector_records_a_stat_signature_as_well_as_a_digest():
     body = COLLECTOR.read_text(encoding="utf-8")
     assert "NorthstarFragmentStat" in body and "NorthstarDropInStat" in body
+    assert "NorthstarSearchPathAnchor" in body
     assert "stat -c" in body, "the stat signature must come from real stat(1)"
 
 
@@ -1869,3 +1877,135 @@ def test_the_collector_brackets_its_run_with_the_release_pointer():
     assert body.index("##VERIFY ") < body.index("##RELEASE_POINTER_AFTER")
     # Read-only: resolving a symlink and reading a git HEAD change nothing.
     assert "readlink -f" in body and "rev-parse HEAD" in body
+
+
+# ---------------------------------------------------------------------------
+# P1-2: a change that leaves no trace at either endpoint
+# ---------------------------------------------------------------------------
+
+def test_a_transient_drop_in_is_caught_by_the_search_path_anchor():
+    """A drop-in that appears and vanishes inside the window must fail closed.
+
+    This is the case the per-file anchors are structurally blind to. Measured
+    on systemd 255: a drop-in added before ``systemd-analyze verify`` and
+    removed before the re-observation is absent from ``DropInPaths`` at BOTH
+    ends, so its content digest and its stat signature each read the same
+    value twice, while the verifier -- which reads the search path from DISK
+    rather than from the loaded manager state -- demonstrably parsed it. Only
+    the containing DIRECTORY witnesses it, because adding or removing an entry
+    advances that directory's mtime and ctime.
+    """
+    unit = UNITS[0]
+    quiet = {u: prov(u, drop_ins=()) for u in UNITS}
+    moved = dict(quiet)
+    moved[unit] = prov(unit, drop_ins=(),
+                       search_path_anchor=digest("searchpath", unit, "TRANSIENT"))
+    result = certify(provenance=quiet, recheck=moved)
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any(unit in b for b in result["blockers"]), result["blockers"]
+    # ...and every per-file anchor was identical across the window, which is
+    # exactly why nothing else could have caught it.
+    assert quiet[unit].fragment_digest == moved[unit].fragment_digest
+    assert quiet[unit].fragment_stat == moved[unit].fragment_stat
+    assert quiet[unit].drop_in_digest == moved[unit].drop_in_digest
+    assert quiet[unit].drop_in_stat == moved[unit].drop_in_stat
+
+
+def test_a_missing_search_path_anchor_is_not_a_pass():
+    """An absent anchor is missing evidence, not a quiet host."""
+    blank = {u: prov(u, search_path_anchor="") for u in UNITS}
+    result = certify(provenance=blank, recheck=dict(blank))
+    assert result["SYSTEMD_UNIT_VALIDITY"] == V.NOT_CERTIFIABLE
+    assert any("search path anchor" in b for b in result["blockers"]), \
+        result["blockers"]
+
+
+def test_a_quiet_window_keeps_the_anchor_stable():
+    """The control: an untouched window must still certify."""
+    assert certify()["SYSTEMD_UNIT_VALIDITY"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# P1-3: optional never waives an INSTALLED unit
+# ---------------------------------------------------------------------------
+
+def _optional_aggregate(*, discovered, verified):
+    from portfolio_automation.release import scheduler as S
+    return S.certify_release_identity(
+        _daily_surfaces(),
+        observation=OBS,
+        pointer_result=bound({"status": "OK", "errors": []}),
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",),
+        validity_result={**OBS.as_dict(), "release_pointer": RELEASE,
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "expected_units": ["stockbot-daily.service"],
+            "optional_units": ["stockbot-daily.service"],
+            "discovered_units": list(discovered),
+            "verified_units": list(verified),
+        },
+    )
+
+
+def test_optional_cannot_waive_a_unit_the_evidence_says_is_installed():
+    """expected + optional + DISCOVERED + unverified must not certify.
+
+    A unit that appears in the artifact's own discovery is present on the
+    host. "Optional" licenses a MISSING unit, never an unverified installed
+    one -- an artifact that says a unit is both installed and optional while
+    omitting it from ``verified_units`` is internally inconsistent, and
+    reading its optional flag as coverage would wave through a unit nothing
+    checked.
+    """
+    combined = _optional_aggregate(
+        discovered=["stockbot-daily.service"], verified=[])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert "stockbot-daily.service" in combined["validity_installed_but_unverified"]
+    assert any("cannot waive it" in e for e in combined["errors"]), \
+        combined["errors"]
+
+
+def test_optional_still_waives_a_unit_that_is_genuinely_absent():
+    """The legitimate case must keep working: expected + optional + ABSENT."""
+    combined = _optional_aggregate(discovered=[], verified=[])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+    assert combined["validity_installed_but_unverified"] == []
+
+
+def test_an_installed_optional_unit_that_was_verified_still_certifies():
+    combined = _optional_aggregate(
+        discovered=["stockbot-daily.service"],
+        verified=["stockbot-daily.service"])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+
+
+# ---------------------------------------------------------------------------
+# P1-4: an unterminated quote has no closing boundary to stop at
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line, secret", [
+    ('EnvironmentFile=AUTH="alpha beta gamma', ("alpha", "beta", "gamma")),
+    ("EnvironmentFile=AUTH='alpha beta gamma", ("alpha", "beta", "gamma")),
+    ('x.service:5: Ignoring invalid environment assignment: AUTH="hunter2 more',
+     ("hunter2", "more")),
+    ('A="alpha" B="beta gamma', ("alpha", "beta", "gamma")),
+])
+def test_an_unterminated_quoted_value_does_not_leak_its_tail(line, secret):
+    """The bare fallback stops at the first space and persists the rest.
+
+    With no closing quote there is no value boundary left to find, so the only
+    safe reading is that the value runs to end of line.
+    """
+    out = V.redact(line)
+    for fragment in secret:
+        assert fragment not in out, out
+
+
+def test_redaction_stops_at_end_of_line_not_end_of_text():
+    """One stray quote must not blind every diagnostic that follows it."""
+    blob = ('x.service:3: Ignoring invalid environment assignment: AUTH="s3cr3t\n'
+            "x.service:4: Unknown section 'Bogus'. Ignoring.\n")
+    out = V.redact(blob)
+    assert "s3cr3t" not in out
+    assert "Unknown section 'Bogus'" in out

@@ -143,12 +143,27 @@ Rules:
   is the state binding: if a deployment lands between the pointer gate's
   reading and this one, both still carry the same id while describing
   different releases, and the mismatch is what catches it.
-- `configuration_stable` compares a CONTENT digest **and** an inode/size/
-  nanosecond-mtime/ctime signature at both ends. Content alone cannot see a
-  change that returns: a unit moved A -> B and restored to A before the
-  re-observation has identical digests at both endpoints while the verifier
-  read B. Rewriting a file advances its mtime and ctime even when the bytes
-  are unchanged.
+- `configuration_stable` compares three anchors at both ends of the run: a
+  CONTENT digest, an inode/size/nanosecond-mtime/ctime signature, and a
+  SEARCH-PATH anchor over the unit directories.
+  - Content alone cannot see a change that returns: a unit moved A -> B and
+    restored to A before the re-observation has identical digests at both
+    endpoints while the verifier read B. Rewriting a file advances its mtime
+    and ctime even when the bytes are unchanged, and `ctime` cannot be moved
+    backwards from userspace the way `mtime` can (`touch -r` restores mtime
+    and leaves ctime advanced), so the stat signature witnesses the mutation
+    rather than merely comparing the state.
+  - The per-file anchors are in turn blind to a file that appears and
+    *disappears*. A drop-in added before verification and removed before the
+    re-observation is absent from `DropInPaths` at BOTH ends, so its digest
+    and its stat signature each read `none` twice -- while `systemd-analyze
+    verify`, which reads the search path from DISK rather than from the loaded
+    manager state, demonstrably parsed it. Measured on systemd 255. The
+    containing DIRECTORY is what witnesses it: adding or removing an entry
+    advances that directory's mtime and ctime. `search_path_anchor` therefore
+    stats each unit search directory and each unit's `<unit>.d` directory,
+    recording a non-existent path as `absent` so a directory that appears and
+    vanishes cannot read as unchanged either.
 - An optional unit is tolerated only when the artifact's own
   `discovered_units` shows it **absent**. Optional licenses a missing unit,
   never an unverified installed one; an artifact that lists a unit as

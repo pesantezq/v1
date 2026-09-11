@@ -25,6 +25,15 @@ set -u
 # unexpected, since the discovery pattern matches them.
 RELEASE_POINTER="${STOCKBOT_RELEASE_POINTER:-/opt/stockbot/current}"
 
+# The unit search directories this gate anchors. Derived from the directories
+# systemd itself resolves fragments and drop-ins from, highest precedence
+# first -- not a filesystem-wide watch, which would be both noisy and beside
+# the point. Overridable only to make the mechanism testable without root.
+SEARCH_PATH="${STOCKBOT_UNIT_SEARCH_PATH:-\
+/etc/systemd/system \
+/run/systemd/system \
+/usr/lib/systemd/system}"
+
 _release_state() {
   local resolved sha
   resolved=$(readlink -f "$RELEASE_POINTER" 2>/dev/null)
@@ -139,6 +148,37 @@ _statsig() {
   printf '%s\n' "$out" | sha256sum | awk '{print $1}'
 }
 
+# The per-file anchors above cover bytes that CHANGE. They are structurally
+# blind to a file that APPEARS AND DISAPPEARS: a drop-in added before
+# verification and removed before the re-observation is absent from
+# DropInPaths at BOTH ends, so its digest and its stat signature each read
+# "none" twice -- while `systemd-analyze verify`, which reads the search path
+# from DISK rather than from the loaded manager state, demonstrably parsed it.
+# Measured on systemd 255: the verifier reports the transient drop-in's
+# contents while every per-file anchor is byte-identical across the window.
+#
+# What witnesses that is the DIRECTORY. Adding or removing an entry advances
+# the containing directory's mtime and ctime, so anchoring the unit search
+# directories and each unit's drop-in directory closes the case the per-file
+# anchors structurally cannot. A path that does not exist is recorded as
+# "absent" rather than skipped, so a directory that appears and vanishes
+# cannot read as unchanged either. `stat` is read-only.
+_diranchor() {
+  local u="$1" d p out=""
+  for d in $SEARCH_PATH; do
+    for p in "$d" "$d/$u.d"; do
+      if [ -e "$p" ]; then
+        out="$out$(stat -c '%n|%i|%.9Y|%.9Z' "$p" 2>/dev/null || echo "$p|unreadable")
+"
+      else
+        out="$out$p|absent
+"
+      fi
+    done
+  done
+  printf '%s' "$out" | sha256sum | awk '{print $1}'
+}
+
 # One observation of a unit's loaded state and of the bytes behind it. Emitted
 # once before verification and once after; the certifier requires them to
 # agree before it will treat the verifier's result as describing the running
@@ -158,6 +198,7 @@ _snapshot() {
   echo "NorthstarDropInDigest=$(_digest $drops)"
   echo "NorthstarFragmentStat=$(_statsig "$frag")"
   echo "NorthstarDropInStat=$(_statsig $drops)"
+  echo "NorthstarSearchPathAnchor=$(_diranchor "$u")"
 }
 
 for u in $UNITS; do

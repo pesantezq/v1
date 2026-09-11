@@ -518,11 +518,65 @@ Certification requires the two observations to agree, and requires
 | unit rewritten, not reloaded | `no` / `yes` | reload-state recheck |
 | unit rewritten **and** reloaded | `no` / `no` | configuration digest |
 | unit changed **and restored** (A→B→A) | `no` / `no` | inode/mtime/ctime signature |
+| drop-in added **and removed** | `no` / `no` | search-path directory anchor |
 
 The fourth row is why content hashing alone is not enough: restoring identical
 bytes leaves both endpoint digests equal while the verifier read the transient.
 Each observation therefore also records inode, size and nanosecond mtime/ctime
 via `stat`, and a rewrite advances ctime even when the content is unchanged.
+
+The fifth row is why per-file anchors are not enough either. A drop-in that
+appears and disappears inside the window is absent from `DropInPaths` at both
+ends, so its digest and its stat signature each read `none` twice — while
+`systemd-analyze verify` reads the search path from **disk**, not from the
+loaded manager state, and parsed it. Measured on systemd 255. Each observation
+therefore also stats the unit search directories and each unit's `<unit>.d`
+directory, recording a non-existent path as `absent`.
+
+### Why endpoint anchors, and not a change monitor
+
+The question this has to answer is not "is the state the same at both ends" —
+it is "did the relevant state mutate at any point while the three gates were
+collected". Those differ, and only the second is sound.
+
+Endpoint anchoring answers the second question **when the quantity compared is
+a mutation witness rather than a state value**, which is what these three
+anchors are chosen to be:
+
+| witness | what it proves | why it cannot be restored |
+|---|---|---|
+| `ctime` (ns) | the inode was modified | no userspace API sets ctime; `touch`/`utimensat` set atime/mtime only |
+| inode number | the file was replaced | an atomic rename installs a different inode |
+| directory mtime/ctime | an entry was added or removed | the containing directory is stamped by the kernel on link/unlink |
+
+Each was measured on this host rather than assumed: rewriting a file with
+identical bytes keeps the inode and advances mtime and ctime; `touch -r`
+restores mtime and leaves ctime advanced; an atomic rename changes the inode;
+creating and removing a drop-in advances the containing directory's timestamps.
+
+A filesystem change monitor (`inotify`) was considered and **rejected**:
+
+* `inotifywait` is not installed on the reference host, so it would become an
+  unproven production dependency — and the rule is to prove availability
+  before depending on a tool, not to assume it;
+* it requires a concurrent long-lived process inside what is otherwise a
+  strictly read-only single-shot SSH collection;
+* it has a silent-loss failure mode (`IN_Q_OVERFLOW`) that must be detected
+  and handled or events are simply missed.
+
+`stat` is already a dependency of this collector, needs no daemon, cannot
+overflow, and — because ctime and inode are not restorable — answers the
+interval question rather than the endpoint question. So the mechanism is
+endpoint-*sampled* but interval-*sound*.
+
+**Stated limits.** This detects mutation, not intent, and its soundness rests
+on the kernel maintaining ctime monotonically. It does not cover: an actor with
+root who moves the system clock backwards (which would itself surface as a
+mismatch, since the endpoints would differ); mutation through a path outside
+the anchored set; or a change to state this gate does not claim to cover. The
+anchored set is derived from the certification inputs — the release pointer,
+the unit fragments, their drop-ins, and the unit search directories — not from
+watching the filesystem wholesale.
 
 The third row is why the digest exists. Each observation is internally
 consistent, so reload state reads `no` at both ends while
@@ -567,7 +621,10 @@ ssh <host> "STOCKBOT_OBSERVATION_ID=$STOCKBOT_OBSERVATION_ID bash -s" \
 
 The collector only observes: `systemd-analyze --version|verify`,
 `systemctl show|list-unit-files`, `sha256sum`, `stat`, `readlink -f`,
-`git rev-parse`. It never reloads, starts, stops, enables,
+`git rev-parse`. Every one of those is read-only, and no new tool was
+introduced to establish snapshot consistency — which is also why choosing this
+mechanism required no reconnaissance against production. It never reloads,
+starts, stops, enables,
 masks, or writes anything, and a test asserts that. The certifier decides and
 touches no host. So the production side of this gate is strictly read-only, and
 the decision logic stays unit-testable without a VPS, root, or systemd.
