@@ -205,17 +205,41 @@ KNOWN_SECTIONS = (frozenset(RUN_LEVEL_SECTIONS)
 
 
 def unknown_marker_defects(text: str) -> list[str]:
-    """Markers the collector never emits. Evidence that cannot be attributed
-    to a known section must fail closed, not silence what follows it."""
-    return [
-        f"evidence contains unknown section marker {line.strip()!r} — the "
-        f"collector never emits it, and treating it as a section change would "
-        f"silently discard every following record until the next recognised "
-        f"marker"
-        for line in (text or "").splitlines()
-        if line.startswith("##")
-        and line[2:].split(" ", 1)[0].strip() not in KNOWN_SECTIONS
-    ]
+    """Markers the collector never emits — by NAME or by SHAPE.
+
+    A known name with the wrong arity is as malformed as an unknown one: a
+    bare ``##SHOW`` switches parsing to a unitless section and every following
+    record is silently discarded, exactly the truncation the name check exists
+    to prevent. So each marker's complete collector-emitted shape is required:
+    per-unit markers carry their unit (and ``VERIFY`` its exit status);
+    run-level markers carry nothing.
+    """
+    defects: list[str] = []
+    for line in (text or "").splitlines():
+        if not line.startswith("##"):
+            continue
+        tokens = line[2:].split()
+        name = tokens[0] if tokens else ""
+        if name not in KNOWN_SECTIONS:
+            defects.append(
+                f"evidence contains unknown section marker {line.strip()!r} — "
+                f"the collector never emits it, and treating it as a section "
+                f"change would silently discard every following record until "
+                f"the next recognised marker")
+            continue
+        if name == "VERIFY":
+            expected_arity = 3          # VERIFY <unit> <exit status>
+        elif name in PER_UNIT_SECTIONS:
+            expected_arity = 2          # SHOW/RECHECK/VERIFYCMD <unit>
+        else:
+            expected_arity = 1          # run-level markers carry no operand
+        if len(tokens) != expected_arity:
+            defects.append(
+                f"evidence contains malformed section marker {line.strip()!r} "
+                f"— the collector emits ##{name} with "
+                f"{expected_arity - 1} operand(s), and a differently-shaped "
+                f"marker silently redirects every following record")
+    return defects
 
 
 def run_level_defects(text: str) -> list[str]:

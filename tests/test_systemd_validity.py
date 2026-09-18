@@ -3984,3 +3984,92 @@ def test_an_unknown_marker_cannot_hide_a_contradictory_validity_fact():
         "##IGNORED\nNeedDaemonReload=yes", 1)
     defects = mod.unknown_marker_defects(doctored)
     assert any("##IGNORED" in d for d in defects), defects
+
+
+# ---------------------------------------------------------------------------
+# A known marker with the wrong shape is as malformed as an unknown one
+# ---------------------------------------------------------------------------
+
+def test_a_bare_scheduler_unit_marker_cannot_truncate_evidence():
+    """A bare ##SCHEDULER_UNIT sets the unit to empty and every following
+    property — including a legacy ExecStop — is silently discarded."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service", "LoadState=loaded",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ]).replace(
+        "##POINTER_PATH",
+        "##SCHEDULER_UNIT\nExecStop={ path=/opt/stockbot/legacy-stop ; "
+        "argv[]=/opt/stockbot/legacy-stop ; ignore_errors=no }\n"
+        "##POINTER_PATH", 1)
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("malformed section marker" in d
+               for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
+
+
+@pytest.mark.parametrize("marker", [
+    "##SHOW", "##RECHECK", "##VERIFYCMD",
+    "##VERIFY stockbot-daily.service",          # missing exit status
+    "##VERIFY stockbot-daily.service 0 extra",  # too many operands
+    "##HOST extra-operand",
+])
+def test_a_malformed_validity_marker_is_rejected(marker):
+    """Inserting a bare ##SHOW before a contradictory NeedDaemonReload=yes
+    discarded the fact and restored PASS — the marker's complete
+    collector-emitted shape is required, not just its name."""
+    mod = _cert_module()
+    doctored = CAPTURE.replace("##RELEASE_POINTER_AFTER",
+                               marker + "\n##RELEASE_POINTER_AFTER", 1)
+    defects = mod.unknown_marker_defects(doctored)
+    assert any("malformed section marker" in d for d in defects), (marker, defects)
+
+
+def test_the_real_capture_has_no_malformed_markers():
+    mod = _cert_module()
+    assert mod.unknown_marker_defects(CAPTURE) == []
+
+
+# ---------------------------------------------------------------------------
+# A scheduler-observed unit cannot be waived as absent
+# ---------------------------------------------------------------------------
+
+def test_a_scheduler_observed_unit_cannot_be_waived_as_absent():
+    """The scheduler artifact proves the unit contributed an execution
+    surface; a validity artifact declaring the same unit optional-and-absent
+    is the original cross-gate composition wearing the optional mechanism as
+    a disguise."""
+    from portfolio_automation.release import scheduler as S
+    helper = "stockbot-helper.service"
+    combined = S.certify_release_identity(
+        _daily_surfaces(),                     # scheduler observed daily.service
+        observation=OBS,
+        pointer_result=bound({"status": "OK", "errors": []}),
+        release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service", helper),
+        validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
+            "release_pointer": RELEASE,
+            "SYSTEMD_UNIT_VALIDITY": "PASS",
+            "expected_units": ["stockbot-daily.service", helper],
+            "optional_units": ["stockbot-daily.service"],   # waived as absent
+            "discovered_units": [helper],
+            "verified_units": [helper],
+        }),
+        scheduler_result=_flow_scheduler(),
+    )
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("contradict each other about the host" in e
+               for e in combined["errors"]), combined["errors"]
+
+
+def test_a_validity_only_optional_absence_is_still_tolerated():
+    """The control: the waiver survives for units the scheduler never claims."""
+    combined = _optional_aggregate(discovered=[], verified=[])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]

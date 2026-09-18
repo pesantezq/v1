@@ -223,13 +223,25 @@ def flow_defects(outer: str) -> list[str]:
     known = frozenset(FLOW_SECTIONS) | {"SCHEDULER_UNIT"}
     for line in outer.splitlines():
         if line.startswith("##"):
-            name = line[2:].split(" ", 1)[0].strip()
+            tokens = line[2:].split()
+            name = tokens[0] if tokens else ""
             if name not in known:
                 defects.append(
                     f"observation contains unknown section marker "
                     f"{line.strip()!r} — the collector never emits it, and "
                     f"treating it as a section change would silently truncate "
                     f"the evidence around it")
+                continue
+            # a known name with the wrong SHAPE is equally malformed: a bare
+            # ##SCHEDULER_UNIT sets the unit to empty and every following
+            # property is silently discarded
+            expected_arity = 2 if name == "SCHEDULER_UNIT" else 1
+            if len(tokens) != expected_arity:
+                defects.append(
+                    f"observation contains malformed section marker "
+                    f"{line.strip()!r} — the collector emits ##{name} with "
+                    f"{expected_arity - 1} operand(s), and a differently-"
+                    f"shaped marker silently redirects the evidence after it")
 
     # One scheduler block per unit. `parse_flow` appends, so two blocks for
     # one unit would MERGE -- an old aligned block compensating for a later

@@ -1478,6 +1478,20 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
                     & validity_expected)
         if u not in validity_discovered
     }
+    # ...and never for a unit the SCHEDULER leg observed. A unit that
+    # contributed an execution surface demonstrably exists on the host, so a
+    # validity artifact declaring the same unit optional-and-absent is not a
+    # waiver -- it is the two artifacts contradicting each other about the
+    # host, which is the original cross-gate composition wearing the optional
+    # mechanism as a disguise.
+    contradicted = tuple(sorted(tolerated & origin_units))
+    tolerated -= origin_units
+    for unit in contradicted:
+        errors.append(
+            f"{unit}: the scheduler evidence proves this unit contributed an "
+            f"execution surface while the validity artifact declares it "
+            f"absent — two artifacts that contradict each other about the "
+            f"host cannot jointly certify it")
     installed_but_unverified = tuple(sorted(
         u for u in required_units
         if u not in verified_units and u in validity_discovered
