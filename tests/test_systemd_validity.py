@@ -488,10 +488,10 @@ CAPTURE = """##HOST
 stockbot-vps
 ##OBSERVATION_ID
 obs-m23d-000001
-##RELEASE_POINTER_BEFORE
-1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##CHECKED_AT
 2026-09-08T21:22:07Z
+##RELEASE_POINTER_BEFORE
+1130da80832140c9ec4bc165c48b2768c84a8dbe
 ##SEARCH_PATH_SOURCE
 systemd-analyze unit-paths
 ##SEARCH_PATH
@@ -2708,7 +2708,8 @@ def test_a_fabricated_anchor_without_artifacts_cannot_certify():
     ({"schema_version": 99}, "schema_version"),
     ({"observe_only": False}, "observe_only"),
     ({"observe_only": None}, "observe_only"),
-    ({"checked_at": ""}, "collection time"),
+    ({"checked_at": ""}, "checked_at"),
+    ({"checked_at": "not-a-timestamp"}, "checked_at"),
     ({"errors": ["unresolved surface"]}, "errors"),
     ({"unresolved": ["systemd:x.service"]}, "unresolved"),
     ({"surfaces": []}, "no execution surfaces"),
@@ -3405,6 +3406,7 @@ def test_a_scheduler_block_with_a_foreign_id_cannot_certify():
     mod = _observation_module()
     stream = _observation_with_unit_block([
         "Id=some-other.service",
+        "RootDirectoryStartOnly=no",
         "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
         "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
     ])
@@ -3652,3 +3654,111 @@ def test_per_unit_sections_are_in_collection_order():
 def test_the_canonical_capture_order_is_declared():
     mod = _cert_module()
     assert mod.PER_UNIT_SECTIONS == ("SHOW", "VERIFYCMD", "VERIFY", "RECHECK")
+
+
+# ---------------------------------------------------------------------------
+# Dot segments cannot escape release containment
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", [
+    "/opt/stockbot/current/../legacy/run.sh",
+    "/opt/stockbot/current/./../legacy/run.sh",
+    "/opt/stockbot/current/x/../../legacy/run.sh",
+])
+def test_a_dot_segment_cannot_escape_release_containment(path):
+    """PurePosixPath does not normalize `..`, so the lexical parents check read
+    current/../legacy as beneath current while the host executes legacy. A
+    path carrying dot segments is simply NOT under the release: no legitimate
+    release path carries one, and failing closed cannot be steered."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        f"[Service]\nExecStart={path}\n", origin="systemd:x.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))
+    assert result["status"] == "FAILED", path
+
+
+def test_a_clean_release_path_still_resolves():
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+        origin="systemd:x.service")
+    assert S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))["status"] == "OK"
+
+
+# ---------------------------------------------------------------------------
+# The chroot-scope scalar must be recorded, never defaulted
+# ---------------------------------------------------------------------------
+
+def test_a_scheduler_block_without_the_chroot_scope_cannot_certify():
+    """The collector always requests RootDirectoryStartOnly; a block without
+    exactly one usable value did not come from it, and defaulting would supply
+    chroot semantics the evidence never recorded."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("RootDirectoryStartOnly" in d
+               for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
+
+
+# ---------------------------------------------------------------------------
+# The pointer readings must bracket the unit evidence
+# ---------------------------------------------------------------------------
+
+def test_a_relocated_closing_pointer_reading_is_rejected():
+    """##RELEASE_POINTER_AFTER moved before the first ##SHOW appears exactly
+    once while the two pointer readings no longer bracket verification — a
+    deployment during the run would hide between them."""
+    mod = _cert_module()
+    assert mod.run_order_defects(CAPTURE) == []
+    lines = CAPTURE.splitlines(True)
+    grabbed, rebuilt, index = [], [], 0
+    while index < len(lines):
+        if lines[index].startswith("##RELEASE_POINTER_AFTER"):
+            grabbed = lines[index:index + 2]
+            index += 2
+            continue
+        rebuilt.append(lines[index])
+        index += 1
+    moved = "".join(rebuilt).replace(
+        "##SHOW", "".join(grabbed) + "##SHOW", 1)
+    defects = mod.run_order_defects(moved)
+    assert any("RELEASE_POINTER_AFTER" in d for d in defects), defects
+
+
+# ---------------------------------------------------------------------------
+# Governed writes are anchored to the repository, not the process CWD
+# ---------------------------------------------------------------------------
+
+def test_the_governed_write_is_anchored_to_the_repository(tmp_path):
+    """base_dir defaults to a CWD-relative "outputs"; launched from elsewhere,
+    "governed" evidence would land in <cwd>/outputs while advertising an
+    in-repository destination."""
+    import subprocess, sys
+    capture = tmp_path / "capture.txt"
+    capture.write_text(CAPTURE, encoding="utf-8")
+    name = "m23e-anchoring-probe.json"
+    target = REPO / "outputs" / "policy" / name
+    try:
+        subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "certify_systemd_validity.py"),
+             str(capture), "--namespace", "policy", "--artifact-name", name],
+            capture_output=True, text=True, cwd=str(tmp_path))
+        assert not (tmp_path / "outputs").exists(), (
+            "the governed write landed relative to the process CWD")
+        assert target.exists(), "the governed write did not reach the repository"
+    finally:
+        if target.exists():
+            target.unlink()

@@ -224,6 +224,16 @@ def _under(path: str, root: str) -> bool:
     """
     p = PurePosixPath(path)
     r = PurePosixPath(str(root).rstrip("/"))
+    # PurePosixPath does not normalize dot segments, so
+    # /opt/stockbot/current/../legacy/run.sh reads as "beneath current"
+    # lexically while the host executes /opt/stockbot/legacy/run.sh. Resolving
+    # ".." lexically is not filesystem-accurate either (a symlinked directory
+    # makes ".." land somewhere the string never names), so a path carrying
+    # dot segments is simply NOT under the release: no legitimate release path
+    # carries one, and failing closed is the only reading that cannot be
+    # steered.
+    if any(part in (".", "..") for part in p.parts):
+        return False
     return p == r or r in p.parents
 
 
@@ -889,11 +899,13 @@ def scheduler_contract_defects(scheduler_result: dict | None) -> list[str]:
             "observation-only by contract, so an artifact that says otherwise "
             "did not come from it"
         )
-    if not str(scheduler_result.get("checked_at") or "").strip():
+    if not _validity._is_utc_timestamp(
+            str(scheduler_result.get("checked_at") or "")):
         defects.append(
-            "scheduler artifact records no collection time — evidence that "
-            "cannot say when it was taken cannot be shown to belong to the "
-            "bracket it claims"
+            f"scheduler artifact records checked_at="
+            f"{scheduler_result.get('checked_at')!r} — the declared field is "
+            f"ISO-8601 UTC provenance, and evidence that cannot say when it "
+            f"was taken cannot be shown to belong to the bracket it claims"
         )
 
     # A verdict cannot outrank the reasons recorded against it.

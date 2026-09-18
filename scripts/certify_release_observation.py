@@ -468,6 +468,21 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                 f"that cannot say which unit it describes cannot be bound to "
                 f"one")
             continue
+        # The chroot-scope property must be RECORDED. The collector always
+        # requests it, so a block without exactly one usable value did not
+        # come from the collector -- and reconstructing without it would
+        # supply systemd semantics (StartOnly=false) that the evidence never
+        # recorded, treating a legacy host-path hook as chrooted beneath the
+        # release.
+        start_only = [line.split("=", 1)[1].strip() for line in props
+                      if line.startswith("RootDirectoryStartOnly=")]
+        if len(start_only) != 1 or start_only[0] not in ("yes", "no"):
+            defects.append(
+                f"##SCHEDULER_UNIT {unit}: the block records "
+                f"{start_only!r} for RootDirectoryStartOnly — the collector "
+                f"always requests this scalar, and defaulting it would supply "
+                f"chroot semantics the evidence never recorded")
+            continue
         if any(recorded != unit for recorded in recorded_ids):
             defects.append(
                 f"##SCHEDULER_UNIT {unit}: the block's own Id says "
@@ -603,7 +618,13 @@ def main() -> int:
         # certification evidence; it must never land in a replay, sandbox or
         # historical tree, and data governance owns that decision.
         from portfolio_automation.data_governance import safe_write_json
-        safe_write_json(args.namespace, args.artifact_name, bundle)
+        # base_dir defaults to a CWD-relative "outputs"; anchored to the
+        # repository explicitly, or a CLI launched from elsewhere would write
+        # "governed" evidence into <cwd>/outputs while advertising an
+        # in-repository destination.
+        safe_write_json(args.namespace, args.artifact_name, bundle,
+                        base_dir=Path(__file__).resolve().parent.parent
+                        / "outputs")
 
     if args.external_evidence_dir:
         # Phase E needs evidence OUTSIDE the production checkout. That remains

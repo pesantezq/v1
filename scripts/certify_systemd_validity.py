@@ -145,6 +145,57 @@ def per_unit_defects(text: str) -> list[str]:
     return defects
 
 
+#: The validity capture's run-level sections, in COLLECTION order. Uniqueness
+#: alone lets a unique section MOVE: a ##RELEASE_POINTER_AFTER relocated
+#: before the first ##SHOW still appears exactly once while the two pointer
+#: readings no longer bracket verification -- a deployment during the run
+#: would hide between them.
+RUN_LEVEL_ORDER = (
+    "HOST", "OBSERVATION_ID", "CHECKED_AT", "RELEASE_POINTER_BEFORE",
+    "SEARCH_PATH_SOURCE", "SEARCH_PATH", "SEARCH_PATH_EFFECTIVE",
+    "SYSTEMD_VERSION", "EXPECTED", "DISCOVERED",
+    "RELEASE_POINTER_AFTER", "END",
+)
+
+
+def run_order_defects(text: str) -> list[str]:
+    """Ways the capture's SHAPE is wrong: sections out of collection order,
+    or unit evidence outside the pointer bracket."""
+    seen = [line[2:].split(" ", 1)[0].strip()
+            for line in (text or "").splitlines() if line.startswith("##")]
+    positions: dict[str, int] = {}
+    for index, name in enumerate(seen):
+        positions.setdefault(name, index)
+
+    defects: list[str] = []
+    present = [name for name in RUN_LEVEL_ORDER if name in positions]
+    for earlier, later in zip(present, present[1:]):
+        if positions[earlier] > positions[later]:
+            defects.append(
+                f"evidence has ##{later} before ##{earlier} — the run-level "
+                f"sections are out of collection order, and a pointer reading "
+                f"that does not bracket the unit evidence conceals a "
+                f"deployment during the run")
+
+    # every per-unit observation must lie between the two pointer readings
+    before_at = positions.get("RELEASE_POINTER_BEFORE")
+    after_at = positions.get("RELEASE_POINTER_AFTER")
+    if before_at is not None and after_at is not None:
+        for index, name in enumerate(seen):
+            if name in PER_UNIT_SECTIONS and not before_at < index < after_at:
+                side = ("before ##RELEASE_POINTER_BEFORE" if index <= before_at
+                        else "after ##RELEASE_POINTER_AFTER")
+                defects.append(
+                    f"evidence has unit section ##{name} {side} — unit "
+                    f"evidence outside the pointer bracket was not proven to "
+                    f"describe a single release")
+    if "END" in positions and seen and seen[-1] != "END":
+        defects.append(
+            "evidence continues after ##END — records past the terminal "
+            "marker were not part of the capture")
+    return defects
+
+
 def run_level_defects(text: str) -> list[str]:
     """Ways a stream is not one complete, ordered capture."""
     seen: dict[str, int] = {}
@@ -369,7 +420,7 @@ def main() -> int:
 
     parsed = parse_evidence(text)
     defects = (stream_defects(text) + run_level_defects(text)
-               + per_unit_defects(text))
+               + run_order_defects(text) + per_unit_defects(text))
     classified = tuple(u.strip() for u in args.classified.split(",") if u.strip())
 
     # A truncated, doubled or edited capture must not look like a clean host.
@@ -387,7 +438,13 @@ def main() -> int:
         # Repository output artifacts go through data governance, which
         # validates the namespace and owns the write.
         from portfolio_automation.data_governance import safe_write_json
-        safe_write_json(args.namespace, args.artifact_name, result)
+        # base_dir defaults to a CWD-relative "outputs"; anchored to the
+        # repository explicitly, or a CLI launched from elsewhere would write
+        # "governed" evidence into <cwd>/outputs while advertising an
+        # in-repository destination.
+        safe_write_json(args.namespace, args.artifact_name, result,
+                        base_dir=Path(__file__).resolve().parent.parent
+                        / "outputs")
     if args.external_evidence_dir:
         destination = Path(args.external_evidence_dir)
         if not destination.is_absolute():
