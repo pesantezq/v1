@@ -62,42 +62,47 @@ def evaluate(snap: ValidatedSnapshot) -> Readiness:
             reasons.append(
                 f"{sym} excluded for a reason outside the universal rule: {why}")
 
-    # ---- historical returns, per eligible signal --------------------------
-    bench_dates = {r["session_date"] for r in snap.returns_for(C.BENCHMARK)}
-    short_history: list[str] = []
-    thin_overlap: list[str] = []
-    leaked: list[str] = []
+    # Legacy return-panel history is only a fallback: when a
+    # dividend-adjusted bar panel is present it is the authoritative
+    # VS-002 risk evidence, so legacy short-history / thin-overlap /
+    # archive-close convention insufficiency must NOT veto readiness.
+    if not snap.has_bars:
+        # ---- historical returns, per eligible signal --------------------------
+        bench_dates = {r["session_date"] for r in snap.returns_for(C.BENCHMARK)}
+        short_history: list[str] = []
+        thin_overlap: list[str] = []
+        leaked: list[str] = []
 
-    for sym in sorted(eligible):
-        sym_returns = snap.returns_for(sym)
-        sym_dates = {r["session_date"] for r in sym_returns}
-        for sig in snap.signals_for(sym):
-            boundary = sig["signal_time"][:10]
-            prior = snap.returns_before(sym, boundary)
-            if len(prior) < C.MIN_PRIOR_SESSIONS:
-                short_history.append(f"{sym}@{boundary}:{len(prior)}")
-                continue
-            window = {r["session_date"] for r in prior[-C.MIN_PRIOR_SESSIONS:]}
-            joint = len(window & bench_dates)
-            if joint < C.MIN_JOINT_OBSERVATIONS:
-                thin_overlap.append(f"{sym}@{boundary}:{joint}")
-            # Strict pre-signal boundary. A same-day or later session inside the
-            # estimation window is the leak this experiment must not contain.
-            if any(d >= boundary for d in window):
-                leaked.append(f"{sym}@{boundary}")
+        for sym in sorted(eligible):
+            sym_returns = snap.returns_for(sym)
+            sym_dates = {r["session_date"] for r in sym_returns}
+            for sig in snap.signals_for(sym):
+                boundary = sig["signal_time"][:10]
+                prior = snap.returns_before(sym, boundary)
+                if len(prior) < C.MIN_PRIOR_SESSIONS:
+                    short_history.append(f"{sym}@{boundary}:{len(prior)}")
+                    continue
+                window = {r["session_date"] for r in prior[-C.MIN_PRIOR_SESSIONS:]}
+                joint = len(window & bench_dates)
+                if joint < C.MIN_JOINT_OBSERVATIONS:
+                    thin_overlap.append(f"{sym}@{boundary}:{joint}")
+                # Strict pre-signal boundary. A same-day or later session inside the
+                # estimation window is the leak this experiment must not contain.
+                if any(d >= boundary for d in window):
+                    leaked.append(f"{sym}@{boundary}")
 
-    if short_history:
-        reasons.append(
-            f"{len(short_history)} signal(s) lack a {C.MIN_PRIOR_SESSIONS}-session "
-            f"lookback, e.g. {short_history[:3]}")
-    if thin_overlap:
-        reasons.append(
-            f"{len(thin_overlap)} signal(s) have < {C.MIN_JOINT_OBSERVATIONS} "
-            f"aligned stock/benchmark observations, e.g. {thin_overlap[:3]}")
-    if leaked:
-        reasons.append(
-            f"{len(leaked)} signal(s) would admit a session at or after the "
-            f"signal boundary into beta estimation, e.g. {leaked[:3]}")
+        if short_history:
+            reasons.append(
+                f"{len(short_history)} signal(s) lack a {C.MIN_PRIOR_SESSIONS}-session "
+                f"lookback, e.g. {short_history[:3]}")
+        if thin_overlap:
+            reasons.append(
+                f"{len(thin_overlap)} signal(s) have < {C.MIN_JOINT_OBSERVATIONS} "
+                f"aligned stock/benchmark observations, e.g. {thin_overlap[:3]}")
+        if leaked:
+            reasons.append(
+                f"{len(leaked)} signal(s) would admit a session at or after the "
+                f"signal boundary into beta estimation, e.g. {leaked[:3]}")
 
     # ---- the dividend-adjusted bar panel: the risk evidence itself --------
     if not snap.has_bars:
@@ -164,10 +169,14 @@ def evaluate(snap: ValidatedSnapshot) -> Readiness:
             reasons.append(f"{sym} return series is not chronologically ordered")
             break
 
-    if m.get("pit_certification") != C.PIT_CERTIFICATION:
-        reasons.append("manifest lacks the narrow PIT certification for returns")
-    if m.get("beta_convention") != C.BETA_CONVENTION:
-        reasons.append("beta convention is not the declared archive-close convention")
+    # These certify the LEGACY archive-close return surface. In adjusted-bar
+    # mode that surface is not built, so the adjusted convention/PIT (checked
+    # in the bar block above) governs and these must not add NOT_READY.
+    if not snap.has_bars:
+        if m.get("pit_certification") != C.PIT_CERTIFICATION:
+            reasons.append("manifest lacks the narrow PIT certification for returns")
+        if m.get("beta_convention") != C.BETA_CONVENTION:
+            reasons.append("beta convention is not the declared archive-close convention")
 
     detail = {
         "eligible_symbols": sorted(eligible),

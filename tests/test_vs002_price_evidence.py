@@ -179,15 +179,22 @@ def test_251_prior_sessions_do_not_satisfy_the_252_gate():
     assert eligible == ["AAPL"]
 
 
-def test_thin_joint_overlap_is_not_ready(tmp_path: Path):
-    """A symbol whose sessions barely intersect the benchmark's cannot back a
-    beta; the gap rule refuses the panel before readiness even sees it."""
-    def decimate(sym, rows):
+def test_kept_symbol_with_a_mid_series_gap_refuses_the_build(tmp_path: Path):
+    """The gap check is deferred to the KEPT (bar-eligible) panel, but it must
+    still fire there: a symbol with an ample >=252-session history yet a real
+    hole wider than MAX_SESSION_GAP would force a forward-fill that invents
+    sessions, so the build fails closed. (A symbol that is merely too short is
+    excluded instead of gap-vetoed -- see the eligibility tests.)"""
+    def punch_hole(sym, rows):
         if sym != "MSFT":
             return rows
-        return [r for i, r in enumerate(rows) if i % 10 == 0]
+        # Drop a contiguous mid-series run: 400 - (MAX_SESSION_GAP+15) rows is
+        # still well above 252, so MSFT stays bar-eligible and thus KEPT, and
+        # the surviving rows straddle a benchmark gap far wider than allowed.
+        hole = set(range(150, 150 + C.MAX_SESSION_GAP + 15))
+        return [r for i, r in enumerate(rows) if i not in hole]
     with pytest.raises(B.BuildError, match="gap of"):
-        _package(tmp_path, provider=SyntheticAdjustedProvider(mutate=decimate))
+        _package(tmp_path, provider=SyntheticAdjustedProvider(mutate=punch_hole))
 
 
 def test_missing_benchmark_bars_refuse_the_build(tmp_path: Path):
@@ -370,8 +377,19 @@ def test_byte_identical_package_validates_to_identical_identities(tmp_path):
 def test_raw_provider_input_is_frozen_in_the_package(built_dir):
     root, manifest = built_dir
     raw = json.loads((root / "bars_raw.json").read_text())
-    # exactly the kept symbols, benchmark included
-    assert set(raw) == set(manifest["bar_eligible_universe"]) | {BENCH}
+    # Finding 2: the raw is frozen for the ENTIRE fetched frozen universe, not
+    # merely the kept symbols -- so an excluded-symbol decision is replayable.
+    fetched = set(manifest["bar_fetched_universe"])
+    assert set(raw) == fetched
+    assert set(manifest["bar_raw_response_digests"]) == fetched
+    assert set(manifest["bar_retrieved_at"]) == fetched
+    # the fetched universe strictly contains the kept set, and every excluded
+    # symbol is present in the frozen raw with a recomputable digest
+    kept = set(manifest["bar_eligible_universe"]) | {BENCH}
+    excluded = set(manifest["bar_excluded_symbols"])
+    assert kept <= fetched and excluded <= fetched and excluded
+    for sym in excluded:
+        assert sym in raw, f"{sym} excluded but its raw was discarded"
     # and each per-symbol raw digest recomputes from the persisted raw
     for sym, digest in manifest["bar_raw_response_digests"].items():
         assert C.artifact_digest(raw[sym]) == digest
@@ -432,7 +450,8 @@ def test_normalized_bars_must_reproduce_from_frozen_raw(tmp_path):
 def test_retrieval_time_is_bound_to_the_package(built_dir):
     root, manifest = built_dir
     stamps = manifest["bar_retrieved_at"]
-    assert set(stamps) == set(manifest["bar_eligible_universe"]) | {BENCH}
+    # retrieval time is bound for every fetched frozen symbol (Finding 2)
+    assert set(stamps) == set(manifest["bar_fetched_universe"])
     # snapshot known_at == the package retrieval fact, for every symbol
     snap = CON.validate(root)
     retrieved = SN.parse_retrieved_at(stamps)
@@ -571,3 +590,220 @@ def test_the_production_provider_is_bound_to_the_authorized_endpoint():
             raise AssertionError("network path must not be exercised offline")
     provider = B.FMPDividendAdjustedProvider(Sentinel())
     assert provider.endpoint == C.AUTHORIZED_ENDPOINT
+
+
+# ===========================================================================
+# AUTHORITATIVE RISK-EVIDENCE HANDOFF (Finding 1) + REPLAYABLE EXCLUSIONS
+# (Finding 2). The dividend-adjusted bar panel owns eligibility, the return
+# series and readiness whenever it is present; the legacy archive can neither
+# veto nor rescue it, and every excluded-symbol decision replays from frozen
+# raw. Fixtures remain synthetic and offline.
+# ===========================================================================
+
+import sqlite3
+
+
+def _seed_signals(tmp: Path, rows: list[tuple[str, str]],
+                  score: float = 0.5) -> None:
+    """Write watchlist_signal_feedback from explicit (symbol, YYYY-MM-DD)
+    pairs, so different symbols can carry different signal dates."""
+    d = tmp / "data"
+    d.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(d / "portfolio.db")
+    con.execute("""CREATE TABLE watchlist_signal_feedback (
+        ticker TEXT, signal_time TEXT, signal_score REAL, price_at_signal REAL,
+        outcome_return_7d REAL, outcome_price_7d REAL, evaluated_at_7d TEXT,
+        prediction_intent TEXT, data_mode TEXT)""")
+    for sym, day in rows:
+        con.execute("INSERT INTO watchlist_signal_feedback VALUES (?,?,?,?,?,?,?,?,?)",
+                    (sym, day + "T09:00:00", score, 100.0, 1.5, 101.5,
+                     day + "T09:00:00", "up", "live"))
+    con.commit()
+    con.close()
+
+
+def test_legacy_archive_missing_does_not_block_a_valid_adjusted_build(tmp_path):
+    """END-TO-END UNBLOCK. A valid dividend-adjusted package with >= MIN_COHORTS
+    cohorts is VS002_READY even when the legacy /full archive is entirely
+    ABSENT. In adjusted-bar mode the legacy archive is never consulted, so its
+    insufficiency cannot add NOT_READY -- the exact veto the handoff removes."""
+    _db(tmp_path, scans=_scan_dates(12))          # 12 non-overlapping cohorts
+    # deliberately DO NOT write any outputs/backtest/historical archives
+    manifest = B.build(tmp_path, code_sha="testsha",
+                       generated_at="2026-09-06T00:00:00Z",
+                       bar_provider=SyntheticAdjustedProvider(),
+                       bar_clock=fixed_clock())
+    root = tmp_path / B.DEFAULT_OUT_REL
+    assert manifest["risk_return_source"] == "dividend_adjusted_bars"
+    assert manifest["non_overlapping_cohort_count"] >= C.MIN_COHORTS
+    res = R.evaluate(CON.validate(root))
+    assert res.status == R.READY, res.reasons
+
+
+def test_legacy_archive_thin_does_not_block_a_valid_adjusted_build(tmp_path):
+    """Same unblock, but with a THIN (5-row) legacy archive present. A legacy
+    return panel far too short for the 252/60 rule must not veto a valid
+    adjusted build."""
+    _db(tmp_path, scans=_scan_dates(12))
+    for sym in SYMBOLS + (BENCH,):
+        _archive(tmp_path, sym, 5)                # laughably short legacy panel
+    manifest = B.build(tmp_path, code_sha="testsha",
+                       generated_at="2026-09-06T00:00:00Z",
+                       bar_provider=SyntheticAdjustedProvider(),
+                       bar_clock=fixed_clock())
+    res = R.evaluate(CON.validate(tmp_path / B.DEFAULT_OUT_REL))
+    assert res.status == R.READY, res.reasons
+
+
+def test_excellent_legacy_cannot_rescue_a_thin_adjusted_panel(tmp_path):
+    """CONVERSE. The adjusted panel is authoritative: when it is too thin to
+    support the experiment (the symbol carrying most signal dates is
+    bar-excluded for short adjusted history, leaving < MIN_COHORTS cohorts),
+    readiness is VS002_NOT_READY EVEN THOUGH a full, excellent legacy archive
+    exists for that symbol. Legacy cannot rescue what the adjusted evidence
+    cannot support."""
+    scans = _scan_dates(12)
+    # AAPL carries 9 signal dates, MSFT only 3. If AAPL is bar-excluded, only
+    # MSFT's 3 dates survive -> 3 cohorts < MIN_COHORTS.
+    rows = [("AAPL", d) for d in scans[:9]] + [("MSFT", d) for d in scans[9:]]
+    _seed_signals(tmp_path, rows)
+    # An EXCELLENT legacy archive for AAPL (full history) — which bar mode
+    # must ignore. MSFT full too.
+    _archive(tmp_path, "AAPL", SESSIONS)
+    _archive(tmp_path, "MSFT", SESSIONS)
+    _archive(tmp_path, BENCH, SESSIONS)
+    # The adjusted provider gives AAPL only its newest 60 sessions -> its
+    # earliest signal lacks a 252-session adjusted lookback -> bar-excluded.
+    def starve_aapl(sym, rowset):
+        return rowset[:60] if sym == "AAPL" else rowset
+    manifest = B.build(tmp_path, code_sha="testsha",
+                       generated_at="2026-09-06T00:00:00Z",
+                       bar_provider=SyntheticAdjustedProvider(mutate=starve_aapl),
+                       bar_clock=fixed_clock())
+    assert "AAPL" in manifest["bar_excluded_symbols"]
+    assert "MSFT" in manifest["bar_eligible_universe"]
+    assert manifest["non_overlapping_cohort_count"] < C.MIN_COHORTS
+    res = R.evaluate(CON.validate(tmp_path / B.DEFAULT_OUT_REL))
+    assert res.status == R.NOT_READY
+    assert any("cohort" in r for r in res.reasons), res.reasons
+
+
+# ---------------------------------------------------------------------------
+# Replay / exclusion mutation battery. Every excluded-symbol decision must be
+# reproducible from the frozen raw; each mutation breaks one invariant and the
+# consumer must refuse. NASA is the frozen universe's short-history exclusion.
+# ---------------------------------------------------------------------------
+
+def _full_rows(n: int) -> list[dict]:
+    """n valid ascending adjusted rows over the last n synthetic sessions,
+    provider newest-first convention."""
+    days = _dates(SESSIONS)[-n:]
+    out = [{"date": d, "close": round(100.0 + i * 0.5, 6),
+            "adjClose": round(100.0 + i * 0.5, 6), "volume": 1000 + i}
+           for i, d in enumerate(days)]
+    return list(reversed(out))
+
+
+def _reseal_raw(root, manifest, raw):
+    """Persist a mutated bars_raw.json, refresh its artifact digest, reseal."""
+    (root / "bars_raw.json").write_text(json.dumps(raw, indent=2, sort_keys=True))
+    manifest["artifact_digests"]["bars_raw.json"] = C.artifact_digest(raw)
+    _reseal(root, manifest)
+
+
+def test_mutation_1_excluded_symbol_raw_dropped_is_refused(built_dir):
+    """M1: an excluded symbol's frozen raw is removed while the manifest still
+    declares its digest -> the decision can no longer be replayed."""
+    root, manifest = built_dir
+    raw = json.loads((root / "bars_raw.json").read_text())
+    assert "NASA" in manifest["bar_excluded_symbols"] and "NASA" in raw
+    del raw["NASA"]
+    _reseal_raw(root, manifest, raw)
+    with pytest.raises(CON.SnapshotInvalid, match="NASA"):
+        CON.validate(root)
+
+
+def test_mutation_2_excluded_symbol_raw_tampered_digest_stale_is_refused(built_dir):
+    """M2: an excluded symbol's frozen raw bytes are altered but its recorded
+    digest is left stale -> the recompute over frozen bytes refuses it."""
+    root, manifest = built_dir
+    raw = json.loads((root / "bars_raw.json").read_text())
+    raw["NASA"][0]["adjClose"] = raw["NASA"][0]["adjClose"] * 1.25
+    # refresh the whole-artifact digest (so the top-level check passes) but
+    # NOT the per-symbol declared digest -> Finding-A recompute must catch it.
+    (root / "bars_raw.json").write_text(json.dumps(raw, indent=2, sort_keys=True))
+    manifest["artifact_digests"]["bars_raw.json"] = C.artifact_digest(raw)
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid, match="raw-response digest mismatch"):
+        CON.validate(root)
+
+
+def test_mutation_3_excluded_symbol_extended_to_eligible_is_refused(built_dir):
+    """M3 (the authority-arithmetic attack): an excluded short-history symbol's
+    frozen raw is extended to a full >=252 history, digests kept consistent, so
+    the recomputed universal rule now finds it ELIGIBLE -- disagreeing with the
+    manifest's recorded eligibility. The consumer replays and refuses."""
+    root, manifest = built_dir
+    raw = json.loads((root / "bars_raw.json").read_text())
+    raw["NASA"] = _full_rows(SESSIONS)
+    manifest["bar_raw_response_digests"]["NASA"] = C.artifact_digest(raw["NASA"])
+    _reseal_raw(root, manifest, raw)
+    with pytest.raises(CON.SnapshotInvalid, match="not reproducible from frozen raw"):
+        CON.validate(root)
+
+
+def test_mutation_4_tampered_earliest_signal_flips_eligibility_is_refused(built_dir):
+    """M4: the frozen earliest-signal fact for a KEPT symbol is pushed far
+    earlier, so its recomputed prior-session count falls below the rule and it
+    would be excluded -- contradicting the manifest. Refused."""
+    root, manifest = built_dir
+    kept = sorted(set(manifest["bar_eligible_universe"]))
+    victim = kept[0]
+    manifest["bar_earliest_signal"][victim] = _dates(SESSIONS)[0]  # oldest date
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid, match="not reproducible from frozen raw"):
+        CON.validate(root)
+
+
+def test_mutation_5_phantom_eligible_symbol_is_refused(built_dir):
+    """M5: the manifest claims a symbol eligible that the frozen raw cannot
+    support. The recomputed eligible set omits it -> refuse."""
+    root, manifest = built_dir
+    manifest["bar_eligible_universe"] = sorted(
+        set(manifest["bar_eligible_universe"]) | {"ZZZZ"})
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid,
+                       match="bar_eligible_universe not reproducible"):
+        CON.validate(root)
+
+
+def test_mutation_6_hidden_exclusion_is_refused(built_dir):
+    """M6: the manifest silently drops a real exclusion. The frozen raw still
+    proves that symbol is excluded -> recomputed excluded disagrees -> refuse."""
+    root, manifest = built_dir
+    excl = dict(manifest["bar_excluded_symbols"])
+    assert "NASA" in excl
+    del excl["NASA"]
+    manifest["bar_excluded_symbols"] = excl
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid,
+                       match="bar_excluded_symbols not reproducible"):
+        CON.validate(root)
+
+
+def test_mutation_7_demoting_a_truly_eligible_symbol_is_refused(built_dir):
+    """M7: the manifest demotes a genuinely eligible symbol into the excluded
+    map with a fabricated reason. The frozen raw still supports its
+    eligibility -> both the eligible and excluded recomputations disagree ->
+    refuse."""
+    root, manifest = built_dir
+    victim = sorted(set(manifest["bar_eligible_universe"]))[0]
+    manifest["bar_eligible_universe"] = sorted(
+        set(manifest["bar_eligible_universe"]) - {victim})
+    excl = dict(manifest["bar_excluded_symbols"])
+    excl[victim] = ("only 3 prior sessions before first signal 1900-01-01; "
+                    "universal rule requires >= 252")
+    manifest["bar_excluded_symbols"] = excl
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid, match="not reproducible"):
+        CON.validate(root)

@@ -25,7 +25,8 @@ from typing import Any, Optional
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence.builder import (
     BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, MANIFEST_REL, RETURNS_REL,
-    SIGNALS_REL, reconstruct_bars_from_raw, verify_adjustment_semantics)
+    SIGNALS_REL, reconstruct_bars_from_raw, verify_adjustment_semantics,
+    full_panel_from_raw, bar_eligibility)
 from portfolio_automation.vs002_evidence import snapshots as SN
 
 EXPECTED_ARTIFACTS = frozenset({SIGNALS_REL, RETURNS_REL, MANIFEST_REL})
@@ -260,6 +261,44 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
                 errors.append(
                     f"{sym}: raw-response digest mismatch — manifest "
                     f"{declared_raw[sym]} != recomputed {recomputed}")
+
+        # Finding 2: independently REPLAY the excluded-symbol decision. Rebuild
+        # the full normalized candidate panel from the frozen full-universe raw
+        # and recompute the universal >=252-prior-session rule from the frozen
+        # earliest-signal facts. The recomputed eligible/excluded sets must
+        # equal the manifest's — otherwise the raw does not actually justify
+        # the recorded exclusions, and the decision is not reproducible.
+        if not errors:
+            fetched = set(manifest.get("bar_fetched_universe") or [])
+            earliest = {k: str(v) for k, v in
+                        (manifest.get("bar_earliest_signal") or {}).items()}
+            missing_raw = sorted(fetched - set(bars_raw))
+            if missing_raw:
+                errors.append(
+                    f"fetched symbols absent from frozen raw, cannot replay "
+                    f"exclusions: {missing_raw}")
+            else:
+                try:
+                    full = full_panel_from_raw(bars_raw, fetched)
+                    re_elig, re_excl = bar_eligibility(full, earliest)
+                except Exception as exc:  # noqa: BLE001
+                    re_elig, re_excl = None, None
+                    errors.append(
+                        f"bar eligibility could not be replayed from frozen "
+                        f"raw: {type(exc).__name__}: {exc}")
+                if re_elig is not None:
+                    m_elig = sorted(manifest.get("bar_eligible_universe") or [])
+                    m_excl = dict(manifest.get("bar_excluded_symbols") or {})
+                    if sorted(re_elig) != m_elig:
+                        errors.append(
+                            f"bar_eligible_universe not reproducible from frozen "
+                            f"raw: recomputed {sorted(re_elig)} != manifest "
+                            f"{m_elig}")
+                    if re_excl != m_excl:
+                        errors.append(
+                            "bar_excluded_symbols not reproducible from frozen "
+                            "raw: the recorded exclusion arithmetic does not "
+                            "match the frozen provider input")
 
         # Raw -> normalized binding: re-derive the normalized panel from the
         # FROZEN raw input, through the same normalization + windowing the
