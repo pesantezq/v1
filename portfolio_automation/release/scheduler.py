@@ -97,6 +97,7 @@ from pathlib import PurePosixPath
 
 from .observation import (ObservationContext, bind_observations,
                           observation_of, ConfigurationBracket, bracket_of, bind_brackets)
+from . import systemd_validity as _validity
 
 DIRECT = "DIRECT"
 POINTER = "POINTER"
@@ -142,10 +143,16 @@ SYSTEM_TRANSITIONAL: tuple[str, ...] = (
 #: ExecStop/ExecStopPost are included because they run release code just as
 #: ExecStart does — a stop command still pointing at the legacy checkout is
 #: legacy code executing on the host, which is exactly what this module exists
-#: to detect. How MANY entries each directive may legally carry is a validity
-#: question and is deliberately not modelled here.
+#: to detect. ExecCondition is included for the same reason: systemd executes
+#: it before the start hooks (``systemd.service(5)``), so a condition program
+#: in the legacy checkout is legacy code deciding whether the release runs.
+#: Like the other non-ExecStart hooks it resolves on the HOST under
+#: ``RootDirectoryStartOnly=yes``, which the parser already models generically
+#: — membership in this tuple is the only change ExecCondition needs. How MANY
+#: entries each directive may legally carry is a validity question and is
+#: deliberately not modelled here.
 EXEC_DIRECTIVES = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload",
-                   "ExecStop", "ExecStopPost")
+                   "ExecStop", "ExecStopPost", "ExecCondition")
 #: Both affect code identity, but they are INDEPENDENT settings: resetting one
 #: must not discard the other. They are tracked separately in
 #: ``parse_systemd_unit`` and both participate in the code-identity check.
@@ -1038,6 +1045,75 @@ def validity_contract_defects(validity_result: dict | None) -> list[str]:
     return defects
 
 
+def rederived_validity_defects(validity_result: dict | None) -> list[str]:
+    """Ways the validity artifact's recorded facts contradict its verdict.
+
+    ``SYSTEMD_UNIT_VALIDITY`` is a reporting field, exactly as
+    ``SCHEDULER_ALIGNMENT`` is. The canonical certifier only reaches PASS when
+    every unit was loaded, current, configuration-stable and verified with the
+    exact required command -- and the artifact RECORDS each of those facts per
+    unit, so a stored verdict that its own records do not support is an
+    internal inconsistency.
+
+    Deliberately NOT a second run of ``certify_systemd_unit_validity``: that
+    function consumes the before/after provenance observations, and the
+    artifact summarizes those into ``configuration_stable`` rather than
+    carrying both endpoints. Re-invoking it would mean synthesizing the digests
+    it compares -- manufacturing the very evidence this gate exists to check.
+    So each verdict-bearing recorded fact is validated against the canonical
+    requirement instead, using the validity module's own contract
+    (``build_verifier_command``) rather than a restated one.
+
+    Absence of a fact is a defect, not a pass: a record that does not SAY the
+    unit was loaded is not evidence that it was, which is the same rule the
+    exit-status check already follows.
+    """
+    if not validity_result:
+        return []          # absence is reported by validity_contract_defects
+
+    defects: list[str] = []
+    verified = set(validity_result.get("verified_units") or ())
+    records: dict[str, dict] = {}
+    for unit in validity_result.get("units") or ():
+        if isinstance(unit, dict) and unit.get("unit"):
+            records[str(unit["unit"])] = unit
+
+    for name in sorted(verified):
+        record = records.get(name)
+        if record is None:
+            continue       # the missing-record defect is already raised
+        if record.get("load_state") != "loaded":
+            defects.append(
+                f"{name}: listed in verified_units while its record shows "
+                f"load_state={record.get('load_state')!r} — the canonical "
+                f"certifier does not pass a unit the manager has not loaded, "
+                f"so this artifact's verdict is not supported by its own facts"
+            )
+        if record.get("need_daemon_reload") is not False:
+            defects.append(
+                f"{name}: listed in verified_units while its record shows "
+                f"need_daemon_reload={record.get('need_daemon_reload')!r} — a "
+                f"unit whose on-disk configuration is not what PID 1 loaded "
+                f"cannot have been certified, whatever the verdict field says"
+            )
+        if record.get("configuration_stable") is not True:
+            defects.append(
+                f"{name}: listed in verified_units while its record shows "
+                f"configuration_stable={record.get('configuration_stable')!r} "
+                f"— evidence whose configuration moved (or was never compared) "
+                f"during verification cannot support a PASS"
+            )
+        required_command = list(_validity.build_verifier_command(name))
+        if record.get("verifier_command") != required_command:
+            defects.append(
+                f"{name}: listed in verified_units while its record shows "
+                f"verifier_command={record.get('verifier_command')!r}, not the "
+                f"required {required_command!r} — a verdict from a different "
+                f"command is a verdict about something else"
+            )
+    return defects
+
+
 def certify_release_identity(surfaces: list[ExecutionSurface], *,
                              pointer_result: dict,
                              release_root: str = CURRENT_POINTER,
@@ -1152,6 +1228,7 @@ def certify_release_identity(surfaces: list[ExecutionSurface], *,
     # reporting convenience, never authority: if the recorded facts imply
     # FAILED, a claimed PASS is an internal inconsistency and is rejected.
     contract_defects = (validity_contract_defects(validity_result)
+                        + rederived_validity_defects(validity_result)
                         + scheduler_contract_defects(scheduler_result)
                         + rederived_scheduler_defects(
                             scheduler_result, release_root=release_root,

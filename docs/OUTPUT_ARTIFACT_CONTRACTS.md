@@ -164,6 +164,17 @@ Rules:
     stats each unit search directory and each unit's `<unit>.d` directory,
     recording a non-existent path as `absent` so a directory that appears and
     vanishes cannot read as unchanged either.
+- `SYSTEMD_UNIT_VALIDITY` is a reporting field, exactly as
+  `SCHEDULER_ALIGNMENT` is. The aggregate validates every verdict-bearing
+  recorded fact before trusting it: each unit in `verified_units` must have a
+  record stating `load_state=loaded`, `need_daemon_reload=false`,
+  `configuration_stable=true`, and the exact required `verifier_command` —
+  because the canonical certifier only reaches PASS when all of those hold.
+  Deliberately not a second run of the certifier: the artifact summarizes the
+  before/after provenance into `configuration_stable` rather than carrying
+  both endpoints, so re-invoking the certifier would mean synthesizing the
+  digests it compares — manufacturing the very evidence being checked. Absence
+  of a fact is a defect, not a pass.
 - An optional unit is tolerated only when the artifact's own
   `discovered_units` shows it **absent**. Optional licenses a missing unit,
   never an unverified installed one; an artifact that lists a unit as
@@ -218,8 +229,9 @@ Rules:
   the origins it demanded.
 - `surfaces` must record every directive in the canonical `EXEC_DIRECTIVES`
   contract, not just `ExecStart`: `ExecStartPre`, `ExecStartPost`,
-  `ExecReload`, `ExecStop` and `ExecStopPost` all execute code and are all
-  release identity. The shell collector reads that set from
+  `ExecReload`, `ExecStop`, `ExecStopPost` and `ExecCondition` all execute
+  code and are all release identity — a condition program in the legacy
+  checkout is legacy code deciding whether the release runs. The shell collector reads that set from
   `portfolio_automation/release/exec_directives.manifest`, which the scheduler
   module **generates**; a test asserts the file equals `EXEC_DIRECTIVES`
   exactly and is byte-identical to what the generator would write, so the two

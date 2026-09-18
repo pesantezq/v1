@@ -73,7 +73,18 @@ def with_records(artifact: dict) -> dict:
     if "units" in artifact:
         return artifact
     return {**artifact, "units": [
-        {"unit": u, "verifier_exit_status": 0, "verifier_result": "PASS"}
+        {
+            "unit": u,
+            # The full canonical record shape: every verdict-bearing fact the
+            # aggregate validates must be STATED, because absence of a denial
+            # is not evidence of success.
+            "load_state": "loaded",
+            "need_daemon_reload": False,
+            "configuration_stable": True,
+            "verifier_command": list(V.build_verifier_command(u)),
+            "verifier_exit_status": 0,
+            "verifier_result": "PASS",
+        }
         for u in (artifact.get("verified_units") or ())
     ]}
 
@@ -2395,9 +2406,20 @@ def test_a_record_that_does_not_state_success_cannot_certify(record):
 
 
 def test_a_record_that_states_success_still_certifies():
-    """The control."""
+    """The control: a record stating EVERY verdict-bearing fact certifies.
+
+    "States success" means the full canonical record -- loaded, current,
+    configuration-stable, verified with the exact required command -- because
+    each of those facts is one the canonical certifier requires for PASS.
+    """
     combined = _contract_aggregate(units=[
-        {"unit": "stockbot-daily.service", "verifier_exit_status": 0,
+        {"unit": "stockbot-daily.service",
+         "load_state": "loaded",
+         "need_daemon_reload": False,
+         "configuration_stable": True,
+         "verifier_command": list(V.build_verifier_command(
+             "stockbot-daily.service")),
+         "verifier_exit_status": 0,
          "verifier_result": "PASS"}])
     assert combined["production_release_identity"] == "PASS", combined["errors"]
 
@@ -2879,10 +2901,9 @@ def test_the_collector_reads_the_manifest_rather_than_restating_it():
             f"the manifest")
 
 
-@pytest.mark.parametrize("directive", [
-    "ExecStart", "ExecStartPre", "ExecStartPost",
-    "ExecReload", "ExecStop", "ExecStopPost",
-])
+@pytest.mark.parametrize("directive", __import__(
+    "portfolio_automation.release.scheduler", fromlist=["EXEC_DIRECTIVES"]
+).EXEC_DIRECTIVES)
 def test_a_legacy_path_in_any_executable_hook_is_unresolved(directive):
     """Every hook class systemd can execute is release identity."""
     from portfolio_automation.release import scheduler as S
@@ -2979,3 +3000,268 @@ def test_the_external_destination_is_bounded_to_outside_the_repository():
         encoding="utf-8")
     assert "must be outside the repository" in text
     assert "must be an absolute path" in text
+
+
+# ===========================================================================
+# M23E: the five evidence-trust closures
+# ===========================================================================
+
+# --- P1-A: ExecCondition is an executable surface ---------------------------
+
+def test_a_legacy_exec_condition_cannot_certify():
+    """systemd runs ExecCondition before the start hooks, so a condition
+    program in the legacy checkout is legacy code deciding whether the release
+    runs."""
+    from portfolio_automation.release import scheduler as S
+    assert "ExecCondition" in S.EXEC_DIRECTIVES
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n"
+        "ExecCondition=/opt/stockbot/legacy/scripts/cond.sh\n",
+        origin="systemd:stockbot-daily.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",))
+    assert result["status"] == "FAILED"
+
+
+def test_an_aligned_exec_condition_still_certifies():
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n"
+        "ExecCondition=/opt/stockbot/current/scripts/cond.sh\n",
+        origin="systemd:stockbot-daily.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",))
+    assert result["status"] == "OK", result["errors"]
+
+
+def test_exec_condition_reset_uses_the_existing_parser_semantics():
+    """No special-case logic: a blank assignment clears the list exactly as it
+    does for every other Exec* directive."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecCondition=/opt/stockbot/legacy/cond.sh\n"
+        "ExecCondition=\nExecCondition=/opt/stockbot/current/cond.sh\n"
+        "ExecStart=/opt/stockbot/current/run.sh\n",
+        origin="systemd:x.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))
+    assert result["status"] == "OK", result["errors"]
+
+
+# --- P1-B: every verdict-bearing validity fact is validated -----------------
+
+def _validity_record(**over):
+    base = {"unit": "stockbot-daily.service",
+            "load_state": "loaded",
+            "need_daemon_reload": False,
+            "configuration_stable": True,
+            "verifier_command": list(V.build_verifier_command(
+                "stockbot-daily.service")),
+            "verifier_exit_status": 0,
+            "verifier_result": "PASS"}
+    base.update(over)
+    return base
+
+
+@pytest.mark.parametrize("override, expected", [
+    ({"load_state": "not-found"}, "load_state"),
+    ({"load_state": None}, "load_state"),
+    ({"need_daemon_reload": True}, "need_daemon_reload"),
+    ({"need_daemon_reload": None}, "need_daemon_reload"),
+    ({"configuration_stable": False}, "configuration_stable"),
+    ({"configuration_stable": None}, "configuration_stable"),
+    ({"verifier_command": ["systemd-analyze", "verify",
+                           "stockbot-daily.service"]}, "verifier_command"),
+    ({"verifier_command": None}, "verifier_command"),
+])
+def test_a_validity_fact_contradicting_pass_cannot_certify(override, expected):
+    """SYSTEMD_UNIT_VALIDITY is a reporting field, exactly as
+    SCHEDULER_ALIGNMENT is. The canonical certifier only passes a unit that is
+    loaded, current, configuration-stable and verified with the exact required
+    command; an artifact whose records say otherwise while claiming PASS is
+    internally inconsistent."""
+    combined = _contract_aggregate(units=[_validity_record(**override)])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any(expected in d for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_a_fully_stated_validity_record_still_certifies():
+    combined = _contract_aggregate(units=[_validity_record()])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+
+
+# --- P1-C: every command in a list-valued Exec property ---------------------
+
+_CUR_REC = ("{ path=/opt/stockbot/current/scripts/pre.sh ; "
+            "argv[]=/opt/stockbot/current/scripts/pre.sh ; ignore_errors=no }")
+_LEG_REC = ("{ path=/opt/stockbot/legacy/scripts/pre.sh ; "
+            "argv[]=/opt/stockbot/legacy/scripts/pre.sh ; ignore_errors=no }")
+
+
+@pytest.mark.parametrize("value, legacy_present", [
+    (_CUR_REC + " " + _LEG_REC, True),          # aligned first, legacy second
+    (_LEG_REC + " " + _CUR_REC, True),          # legacy first
+    (_CUR_REC + " " + _LEG_REC + " " + _CUR_REC, True),   # legacy middle of 3
+    (_CUR_REC + " " + _CUR_REC, False),         # all aligned (control)
+])
+def test_every_command_in_an_exec_array_is_preserved(value, legacy_present):
+    """The D-Bus type behind Exec* is an ARRAY. Reading only the first record
+    reduces a list to its head, and ordering could then hide a legacy command
+    behind an aligned one."""
+    mod = _observation_module()
+    text = mod._unit_text(["ExecStartPre=" + value,
+                           "ExecStart=" + _CUR_REC.replace("pre.sh", "run.sh")])
+    assert text.count("ExecStartPre=") == value.count("argv[]")
+    assert ("legacy" in text) == legacy_present
+    # and through the canonical certifier: legacy anywhere fails
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(text, origin="systemd:x.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))
+    assert result["status"] == ("FAILED" if legacy_present else "OK"), \
+        result["errors"]
+
+
+def test_repeated_exec_property_lines_are_all_preserved():
+    """systemctl show also emits one property line per command (measured on
+    systemd 255); both shapes must survive reconstruction."""
+    mod = _observation_module()
+    text = mod._unit_text(["ExecStartPre=" + _CUR_REC,
+                           "ExecStartPre=" + _LEG_REC,
+                           "ExecStart=" + _CUR_REC.replace("pre.sh", "run.sh")])
+    assert text.count("ExecStartPre=") == 2
+    assert "legacy" in text
+
+
+def test_an_unparseable_exec_record_fails_closed():
+    """A record nobody can read resolves to nothing, so it cannot certify —
+    dropping it would make "could not read" look like "was not there"."""
+    mod = _observation_module()
+    commands = mod._exec_commands("{ garbage with no argv }")
+    assert commands, "the record was silently dropped"
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=" + commands[0] + "\n",
+        origin="systemd:x.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))
+    assert result["status"] == "FAILED"
+
+
+# --- P1-D: every gate-bearing occurrence inside the bracket -----------------
+
+def _move_section(stream, name, *, to_end=True):
+    lines = stream.splitlines(True)
+    grabbed, out, index = [], [], 0
+    while index < len(lines):
+        if lines[index].startswith("##" + name):
+            j = index + 1
+            while j < len(lines) and not lines[j].startswith("##"):
+                j += 1
+            grabbed = lines[index:j]
+            index = j
+            continue
+        out.append(lines[index])
+        index += 1
+    rebuilt = "".join(out)
+    block = "".join(grabbed)
+    if to_end:
+        return rebuilt.replace("##OBSERVATION_END", block + "##OBSERVATION_END", 1)
+    return rebuilt.replace("##HOST", block + "##HOST", 1)
+
+
+def _minimal_observation():
+    mod = _observation_module()
+    lines = []
+    for name, _ in mod.OBSERVATION_ORDER:
+        if name == "POINTER_PATH":
+            # the pointer facts travel together in a real capture
+            for extra in ("RELEASE_ROOT", "RELEASES_ROOT", "SCHEDULER_UNIT x",
+                          "POINTER_PATH", "POINTER_IS_SYMLINK",
+                          "POINTER_RESOLVED", "POINTER_SHA", "POINTER_DIRTY"):
+                lines.append(f"##{extra}\nvalue\n")
+            continue
+        lines.append(f"##{name}\nvalue\n")
+    return "".join(lines)
+
+
+def test_a_complete_observation_has_no_gate_bearing_defects():
+    mod = _observation_module()
+    assert mod.order_defects(_minimal_observation()) == []
+
+
+@pytest.mark.parametrize("section", [
+    "SCHEDULER_UNIT", "SCHEDULER_CRON", "POINTER_SHA", "POINTER_RESOLVED",
+    "RELEASE_ROOT", "EXEC_DIRECTIVES",
+])
+@pytest.mark.parametrize("to_end", [True, False])
+def test_gate_evidence_outside_the_bracket_is_rejected(section, to_end):
+    """An anchor pair brackets nothing for evidence that sits outside it, and
+    build() would consume the late copy — so every OCCURRENCE of every
+    gate-bearing section must lie inside [BEFORE, AFTER]."""
+    mod = _observation_module()
+    moved = _move_section(_minimal_observation(), section, to_end=to_end)
+    defects = mod.order_defects(moved)
+    assert any(section in d and "bracket" in d for d in defects) or \
+        any(section in d and "out of order" in d for d in defects), \
+        (section, to_end, defects)
+
+
+def test_the_gate_bearing_set_is_derived_not_handwritten():
+    """A new consumer section must automatically fall under the bracket."""
+    mod = _observation_module()
+    derived = mod.gate_bearing_sections()
+    consumed = set(mod.FLOW_SECTIONS) | {"SCHEDULER_UNIT"}
+    assert derived == consumed - mod.BOUNDARY_SECTIONS - {
+        "VALIDITY_BEGIN", "VALIDITY_END"}
+
+
+# --- P1-E: no ungoverned validity write --------------------------------------
+
+def test_the_validity_cli_has_no_raw_output_path():
+    text = (REPO / "scripts" / "certify_systemd_validity.py").read_text(
+        encoding="utf-8")
+    assert '"--out"' not in text
+    assert "--external-evidence-dir" in text
+    assert "must be outside the repository" in text
+    assert "must be an absolute path" in text
+
+
+def test_the_validity_cli_rejects_repository_destinations(tmp_path):
+    import subprocess, sys
+    capture = tmp_path / "capture.txt"
+    capture.write_text(CAPTURE, encoding="utf-8")
+    script = str(REPO / "scripts" / "certify_systemd_validity.py")
+
+    def run(*extra):
+        return subprocess.run(
+            [sys.executable, script, str(capture), *extra],
+            capture_output=True, text=True, cwd=str(REPO))
+
+    inside = REPO / "outputs" / "backtest"
+    result = run("--external-evidence-dir", str(inside))
+    assert result.returncode != 0
+    assert "outside the repository" in result.stderr
+
+    result = run("--external-evidence-dir", "outputs/backtest")
+    assert result.returncode != 0
+    assert "absolute path" in result.stderr
+
+    # a symlink pointing back into the repository cannot smuggle the write
+    link = tmp_path / "sneaky"
+    link.symlink_to(REPO)
+    result = run("--external-evidence-dir", str(link))
+    assert result.returncode != 0
+    assert "outside the repository" in result.stderr
+
+    # the control: a genuinely external directory works and the write lands
+    outside = tmp_path / "evidence"
+    outside.mkdir()
+    result = run("--external-evidence-dir", str(outside))
+    assert (outside / "systemd_unit_validity.json").exists()

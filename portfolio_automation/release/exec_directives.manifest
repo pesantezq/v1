@@ -16,3 +16,4 @@ ExecStartPost
 ExecReload
 ExecStop
 ExecStopPost
+ExecCondition

@@ -12,7 +12,7 @@ VPS, root, or systemd.
 Usage::
 
     ssh host 'bash -s' < scripts/collect_systemd_validity_evidence.sh \\
-        | python3 scripts/certify_systemd_validity.py --out evidence.json
+        | python3 scripts/certify_systemd_validity.py --namespace policy
 
 Exit status: 0 when SYSTEMD_UNIT_VALIDITY == PASS, 1 otherwise, so the gate can
 be wired into a runbook step without parsing its own output.
@@ -294,7 +294,15 @@ def _atomic_write(path: Path, text: str) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("evidence", nargs="?", help="collector output (default: stdin)")
-    ap.add_argument("--out", help="write the JSON artifact here")
+    # Two destinations, named separately -- the same rule the aggregate CLI
+    # follows, for the same reason: one generic path argument meaning both is
+    # how production-certification evidence becomes writable into a replay
+    # tree. There is deliberately no raw output path.
+    ap.add_argument("--external-evidence-dir",
+                    help="EXTERNAL evidence destination for Phase-E, outside "
+                         "the production checkout. Must be an absolute path "
+                         "that resolves outside the repository; the write is "
+                         "atomic. This is not a general output path.")
     ap.add_argument("--namespace", choices=sorted(APPROVED_NAMESPACES),
                     help="governed output namespace; when given, the artifact "
                          "is written through data_governance.safe_write_json "
@@ -330,8 +338,25 @@ def main() -> int:
         # validates the namespace and owns the write.
         from portfolio_automation.data_governance import safe_write_json
         safe_write_json(args.namespace, args.artifact_name, result)
-    if args.out:
-        _atomic_write(Path(args.out), payload + "\n")
+    if args.external_evidence_dir:
+        destination = Path(args.external_evidence_dir)
+        if not destination.is_absolute():
+            raise SystemExit("--external-evidence-dir must be an absolute path")
+        repo = Path(__file__).resolve().parent.parent
+        try:
+            # resolve() follows symlinks, so a link pointing back into the
+            # repository cannot smuggle the write inside it.
+            resolved = destination.resolve()
+        except OSError as exc:
+            raise SystemExit(f"--external-evidence-dir is unusable: {exc}")
+        if resolved == repo or repo in resolved.parents:
+            raise SystemExit(
+                f"--external-evidence-dir must be outside the repository "
+                f"({repo}); use --namespace for in-repository evidence")
+        if not resolved.is_dir():
+            raise SystemExit(
+                f"--external-evidence-dir does not exist: {resolved}")
+        _atomic_write(resolved / args.artifact_name, payload + "\n")
     print(payload)
     return 0 if result["SYSTEMD_UNIT_VALIDITY"] == V.PASS else 1
 

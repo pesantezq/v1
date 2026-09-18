@@ -64,6 +64,28 @@ OBSERVATION_ORDER = (
     ("OBSERVATION_END", True),
 )
 
+#: Sections that establish IDENTITY or the BRACKET rather than gate evidence.
+#: Everything else the consumer reads is gate-bearing by definition -- the set
+#: is DERIVED from what `parse_flow`/`build` actually consume (FLOW_SECTIONS
+#: plus the repeatable per-unit blocks), not hand-listed, so a new evidence
+#: section cannot be added to the consumer without automatically falling under
+#: the bracket requirement.
+BOUNDARY_SECTIONS = frozenset({
+    "HOST", "OBSERVATION_ID", "CHECKED_AT",
+    "CONFIGURATION_ANCHOR_BEFORE", "CONFIGURATION_ANCHOR_AFTER",
+    "OBSERVATION_END",
+})
+#: Repeatable evidence blocks the consumer reads that are not run-level
+#: scalars. SCHEDULER_UNIT appears once per unit by design.
+REPEATABLE_GATE_SECTIONS = ("SCHEDULER_UNIT",)
+
+
+def gate_bearing_sections() -> frozenset[str]:
+    """Every section whose content can contribute to a gate verdict."""
+    return (frozenset(FLOW_SECTIONS) | frozenset(REPEATABLE_GATE_SECTIONS)
+            ) - BOUNDARY_SECTIONS - {"VALIDITY_BEGIN", "VALIDITY_END"}
+
+
 #: Run-level sections of the OUTER flow. Each may appear exactly once, for the
 #: same reason the validity capture's own sections may: a stream carrying two
 #: runs cannot attribute its evidence to one, and `parse` keeps the last value
@@ -145,6 +167,34 @@ def order_defects(outer: str) -> list[str]:
             "observation stream continues after ##OBSERVATION_END — evidence "
             "recorded past the terminal marker was not part of the bracketed "
             "collection")
+
+    # Every OCCURRENCE of every gate-bearing section must lie inside the
+    # bracket. The pairwise check above orders the required singletons; it
+    # cannot see a repeatable block (a SCHEDULER_UNIT appears once per unit by
+    # design) or a duplicated scalar moved past an anchor, and `build()` would
+    # consume the late copy -- gate evidence the anchors never bracketed.
+    before_at = positions["CONFIGURATION_ANCHOR_BEFORE"]
+    after_at = positions["CONFIGURATION_ANCHOR_AFTER"]
+    gate_bearing = gate_bearing_sections()
+    inner_depth = 0
+    for index, name in enumerate(seen):
+        # the nested validity capture repeats section names legitimately; its
+        # own containment is enforced through the VALIDITY_BEGIN/END markers
+        if name == "VALIDITY_BEGIN":
+            inner_depth += 1
+            continue
+        if name == "VALIDITY_END":
+            inner_depth -= 1
+            continue
+        if inner_depth > 0 or name not in gate_bearing:
+            continue
+        if index < before_at or index > after_at:
+            side = ("before the opening anchor" if index < before_at
+                    else "after the closing anchor")
+            defects.append(
+                f"observation stream has gate evidence ##{name} {side} — "
+                f"evidence outside the configuration bracket was not proven "
+                f"quiet and cannot contribute to release identity")
     return defects
 
 
@@ -224,20 +274,41 @@ def parse_flow(outer: str) -> dict:
 #: command line the manager would execute, so that is what is recovered.
 _ARGV = re.compile(r"argv\[\]=(.*?)(?:\s;\s|\s*\}$)")
 _PATH_ONLY = re.compile(r"path=(\S+)")
+#: One ``{ ... }`` command record. The D-Bus type behind these properties is an
+#: ARRAY (``a(sasbttttuii)``), so one property line can legitimately carry
+#: several records, and ``systemctl show`` also emits repeated property lines
+#: -- both shapes were measured on systemd 255. Reading only the first record
+#: reduces a list to its head: an aligned first command followed by a legacy
+#: second one reconstructs as aligned-only, and the scheduler certifies a unit
+#: whose later commands it never saw.
+_EXEC_RECORD = re.compile(r"\{[^{}]*\}")
 #: EnvironmentFiles=/path (ignore_errors=no) -> EnvironmentFile=/path
 _ENVFILE = re.compile(r"^(\S+?)(?:\s*\(ignore_errors=\S+\))?$")
 
 
-def _exec_command(value: str) -> str:
-    """The command line `systemctl show` says this ExecStart would run."""
+def _exec_commands(value: str) -> list[str]:
+    """EVERY command line this Exec* property value carries, in order.
+
+    A record that cannot be parsed is returned VERBATIM rather than dropped:
+    its braces resolve to nothing under the scheduler's path semantics, so an
+    unreadable command fails the certification closed instead of silently
+    narrowing the evidence. Dropping it would make "could not read" look like
+    "was not there".
+    """
     value = value.strip()
     if not value.startswith("{"):
-        return value          # already unit-file syntax
-    argv = _ARGV.search(value)
-    if argv and argv.group(1).strip():
-        return argv.group(1).strip()
-    path = _PATH_ONLY.search(value)
-    return path.group(1) if path else ""
+        return [value] if value else []
+    commands: list[str] = []
+    for record in _EXEC_RECORD.findall(value):
+        argv = _ARGV.search(record)
+        if argv and argv.group(1).strip():
+            commands.append(argv.group(1).strip())
+            continue
+        path = _PATH_ONLY.search(record)
+        commands.append(path.group(1) if path else record)
+    # A structured value with no extractable record at all is malformed
+    # evidence; kept verbatim for the same fail-closed reason.
+    return commands or [value]
 
 
 def _unit_text(properties: list[str]) -> str:
@@ -255,8 +326,7 @@ def _unit_text(properties: list[str]) -> str:
         if not value:
             continue
         if key in EXEC_DIRECTIVES:
-            command = _exec_command(value)
-            if command:
+            for command in _exec_commands(value):
                 body.append(f"{key}={command}")
         elif key in ("WorkingDirectory", "RootDirectory"):
             body.append(f"{key}={value}")

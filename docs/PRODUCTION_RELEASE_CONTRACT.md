@@ -742,11 +742,25 @@ stat its own file there. When the witness cannot be observed the collector
 records that and certification **fails closed**, because content equality does
 not prove interval stability.
 
+**Exec properties are arrays.** The D-Bus type behind every `Exec*` property
+is an array (`a(sasbttttuii)`), and `systemctl show` emits both repeated
+property lines and multiple `{ ... }` records — measured on systemd 255.
+Reconstruction preserves **every** command in order; a record that cannot be
+parsed is kept verbatim, where it resolves to nothing and fails the
+certification closed, because dropping it would make "could not read" look
+like "was not there".
+
 **Ordering is evidence.** Section counts prove the pieces exist; only order
 proves the anchors bracketed anything. A stream with both anchors moved to the
 end contains exactly one of every required section while neither precedes a
 single gate — measured, and it certified. The observation is therefore parsed
 as an ordered sequence, and is never sorted into a valid shape after the fact.
+Beyond the required singleton order, **every occurrence of every gate-bearing
+section** — the scheduler unit blocks, cron, the pointer facts, the release
+and witness sections — must lie inside the `[ANCHOR_BEFORE, ANCHOR_AFTER]`
+bracket. The gate-bearing set is derived from what the consumer actually
+reads, not hand-listed, so a new evidence section cannot be added to the
+consumer without automatically falling under the bracket requirement.
 
 ### Where this evidence may be written
 
@@ -757,9 +771,12 @@ production bundle became writable into a replay tree.
 | destination | rule |
 |---|---|
 | `--namespace policy` | in-repository; the write is owned by `data_governance.safe_write_json` |
-| `--external-evidence-dir <abs>` | Phase-E evidence outside the production checkout; must be absolute, must resolve outside the repository, written atomically |
+| `--external-evidence-dir <abs>` | Phase-E evidence outside the production checkout; must be absolute, must **resolve** outside the repository (symlinks are followed, so a link back inside is rejected), written atomically |
 
-There is no raw output path. `outputs/backtest/`, `outputs/latest/`, sandbox
+Both release-evidence CLIs — the three-gate aggregate
+(`certify_release_observation.py`) and the standalone validity certifier
+(`certify_systemd_validity.py`) — follow this rule. There is no raw output
+path in either. `outputs/backtest/`, `outputs/latest/`, sandbox
 and historical trees are all rejected.
 
 ### The documented witness policy, including its false negatives
