@@ -362,7 +362,9 @@ def _unit_text(properties: list[str]) -> str:
 
 
 def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
-          expected_validity_units: tuple[str, ...]) -> dict:
+          expected_validity_units: tuple[str, ...],
+          release_root: str = "/opt/stockbot/current",
+          releases_root: str = "/opt/stockbot/releases") -> dict:
     outer, inner = split_validity(text)
     defects = flow_defects(outer)
     flow = parse_flow(outer)
@@ -449,7 +451,21 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     obs = ObservationContext(host=host, observation_id=observation_id)
     bracket = {"configuration_anchor_before": before,
                "configuration_anchor_after": after}
-    release_root = sc.get("RELEASE_ROOT", "/opt/stockbot/current")
+    # The acceptance boundary belongs to the CERTIFICATION REQUEST, exactly
+    # as approved_sha and expected_origins do. An untrusted capture that could
+    # choose the release root its own commands are certified against -- or
+    # widen the releases root the pointer is contained in -- would be setting
+    # its own bar; recorded values are cross-checked, never adopted.
+    for label, recorded, required in (
+            ("RELEASE_ROOT", sc.get("RELEASE_ROOT", ""), release_root),
+            ("RELEASES_ROOT", sc.get("RELEASES_ROOT", ""), releases_root),
+            ("POINTER_PATH", sc.get("POINTER_PATH", ""), release_root)):
+        if recorded != required:
+            defects.append(
+                f"observation records {label}={recorded!r} while this "
+                f"certification requires {required!r} — evidence that chooses "
+                f"its own acceptance boundary is not evidence about this "
+                f"release")
 
     # --- scheduler leg ----------------------------------------------------
     surfaces: list = []
@@ -483,6 +499,18 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                 f"always requests this scalar, and defaulting it would supply "
                 f"chroot semantics the evidence never recorded")
             continue
+        # A block whose own LoadState is not "loaded" describes a unit the
+        # manager was not running; converting it into execution surfaces while
+        # the nested validity leg claims the unit loaded would compose two
+        # manager observations that cannot both describe one stable run.
+        load_states = [line.split("=", 1)[1].strip() for line in props
+                       if line.startswith("LoadState=")]
+        if load_states != ["loaded"]:
+            defects.append(
+                f"##SCHEDULER_UNIT {unit}: the block records "
+                f"LoadState={load_states!r} — scheduler evidence about a unit "
+                f"the manager had not loaded cannot certify that unit")
+            continue
         if any(recorded != unit for recorded in recorded_ids):
             defects.append(
                 f"##SCHEDULER_UNIT {unit}: the block's own Id says "
@@ -514,8 +542,7 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     )
     pointer_result = {
         **P.certify_pointer(evidence, approved_sha=approved_sha,
-                            releases_root=sc.get("RELEASES_ROOT",
-                                                 "/opt/stockbot/releases"),
+                            releases_root=releases_root,
                             observation=obs),
         **bracket,
     }
@@ -523,7 +550,7 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     # --- validity leg -----------------------------------------------------
     parsed = CV.parse_evidence(inner)
     stream_defects = (CV.stream_defects(inner) + CV.run_level_defects(inner)
-                      + CV.per_unit_defects(inner))
+                      + CV.run_order_defects(inner) + CV.per_unit_defects(inner))
     if stream_defects:
         validity = V.certify_systemd_unit_validity(verifier_available=False,
                                                    **parsed)
@@ -582,6 +609,12 @@ def main() -> int:
                     help="comma-separated origins the scheduler gate demands")
     ap.add_argument("--expected-validity-units", default="",
                     help="comma-separated units the validity gate must cover")
+    ap.add_argument("--release-root", default="/opt/stockbot/current",
+                    help="the release root this certification is against; the "
+                         "captured value is cross-checked, never adopted")
+    ap.add_argument("--releases-root", default="/opt/stockbot/releases",
+                    help="the releases root the pointer must resolve inside; "
+                         "cross-checked the same way")
     # Two destinations, deliberately named separately. One generic path
     # argument meaning both is how a production-certification bundle ended up
     # writable into outputs/backtest/ -- a replay-only tree -- and how a raw
@@ -610,6 +643,8 @@ def main() -> int:
                                if o.strip()),
         expected_validity_units=tuple(
             u.strip() for u in args.expected_validity_units.split(",") if u.strip()),
+        release_root=args.release_root,
+        releases_root=args.releases_root,
     )
     payload = json.dumps(bundle, indent=2, sort_keys=True)
 

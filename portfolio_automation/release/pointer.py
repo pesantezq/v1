@@ -52,6 +52,14 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 def _under(path: str, root: str) -> bool:
     p = PurePosixPath(str(path))
     r = PurePosixPath(str(root).rstrip("/"))
+    # Same rule as the scheduler's containment predicate: PurePosixPath does
+    # not normalize dot segments, so releases/current/../../legacy reads as
+    # beneath the releases root lexically while naming a path outside it.
+    # Lexical ".." resolution is steerable through directory symlinks, so a
+    # path carrying dot segments is simply NOT under the root -- no legitimate
+    # resolved release path carries one.
+    if any(part in (".", "..") for part in p.parts):
+        return False
     return p == r or r in p.parents
 
 

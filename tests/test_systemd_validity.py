@@ -3388,10 +3388,15 @@ def _observation_with_unit_block(unit_lines):
             lines.append("##SCHEDULER_CRON\n")     # empty crontab is valid
             continue
         if name == "POINTER_PATH":
+            # boundary-clean baseline: the roots and pointer path carry the
+            # values the certification request expects, so a test that doctors
+            # ONE of them is load-bearing rather than riding a baseline defect
             lines.append("##RELEASE_ROOT\n/opt/stockbot/current\n")
+            lines.append("##RELEASES_ROOT\n/opt/stockbot/releases\n")
             lines.append("##SCHEDULER_UNIT stockbot-daily.service\n"
                          + "".join(l + "\n" for l in unit_lines))
-            for extra in ("POINTER_PATH", "POINTER_IS_SYMLINK",
+            lines.append("##POINTER_PATH\n/opt/stockbot/current\n")
+            for extra in ("POINTER_IS_SYMLINK",
                           "POINTER_RESOLVED", "POINTER_SHA", "POINTER_DIRTY"):
                 lines.append(f"##{extra}\nvalue\n")
             continue
@@ -3406,6 +3411,7 @@ def test_a_scheduler_block_with_a_foreign_id_cannot_certify():
     mod = _observation_module()
     stream = _observation_with_unit_block([
         "Id=some-other.service",
+        "LoadState=loaded",
         "RootDirectoryStartOnly=no",
         "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
         "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
@@ -3762,3 +3768,121 @@ def test_the_governed_write_is_anchored_to_the_repository(tmp_path):
     finally:
         if target.exists():
             target.unlink()
+
+
+# ---------------------------------------------------------------------------
+# The certification request owns the acceptance boundary
+# ---------------------------------------------------------------------------
+
+def test_the_aggregate_invokes_the_nested_run_order_validator():
+    """The standalone validity CLI orders its capture; the aggregate path must
+    apply the same validator to the nested capture or the repair is bypassable
+    through the flow it exists for."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service", "LoadState=loaded",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    # relocate the nested capture's closing pointer reading before its SHOWs
+    inner_moved = CAPTURE.splitlines(True)
+    grabbed, rebuilt, index = [], [], 0
+    while index < len(inner_moved):
+        if inner_moved[index].startswith("##RELEASE_POINTER_AFTER"):
+            grabbed = inner_moved[index:index + 2]
+            index += 2
+            continue
+        rebuilt.append(inner_moved[index])
+        index += 1
+    doctored_inner = "".join(rebuilt).replace("##SHOW",
+                                              "".join(grabbed) + "##SHOW", 1)
+    doctored = stream.replace("##VALIDITY_BEGIN\nvalue\n",
+                              "##VALIDITY_BEGIN\n" + doctored_inner, 1)
+    bundle = mod.build(doctored, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert bundle["systemd_unit_validity"]["SYSTEMD_UNIT_VALIDITY"] == \
+        V.NOT_CERTIFIABLE
+
+
+def test_a_relocated_optional_section_is_rejected():
+    """OPTIONAL is verdict-bearing inventory: moved after the closing pointer
+    reading, a late section would waive a required unit from outside the
+    bracket."""
+    mod = _cert_module()
+    doctored = CAPTURE.replace("##EXPECTED\n", "##EXPECTED\nghost.service\n", 1)
+    doctored = doctored.replace(
+        "##RELEASE_POINTER_AFTER",
+        "##OPTIONAL\nghost.service\n##RELEASE_POINTER_AFTER", 1)
+    defects = mod.run_order_defects(doctored)
+    assert any("OPTIONAL" in d for d in defects), defects
+
+
+@pytest.mark.parametrize("section, value", [
+    ("RELEASE_ROOT", "/opt/stockbot/legacy"),
+    ("RELEASES_ROOT", "/opt"),
+    ("POINTER_PATH", "/tmp/not-production"),
+])
+def test_evidence_cannot_choose_its_own_acceptance_boundary(section, value):
+    """The roots belong to the certification request, exactly as approved_sha
+    and expected_origins do; recorded values are cross-checked, never adopted."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service", "LoadState=loaded",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    doctored = []
+    replaced = False
+    lines = stream.splitlines(True)
+    for index, line in enumerate(lines):
+        doctored.append(line)
+        if line.strip() == "##" + section and not replaced:
+            replaced = True
+            # the next line is the section's value
+            lines[index + 1] = value + "\n"
+    bundle = mod.build("".join(lines), approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("chooses its own acceptance boundary" in d
+               for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
+
+
+def test_a_pointer_target_with_dot_segments_cannot_certify():
+    """The pointer containment predicate follows the same fail-closed rule as
+    the scheduler's: releases/current/../../legacy is not under the root."""
+    from portfolio_automation.release import pointer as PT
+    evidence = PT.PointerEvidence(
+        pointer_path="/opt/stockbot/current", exists=True, is_symlink=True,
+        resolved_path="/opt/stockbot/releases/current/../../legacy",
+        resolved_exists=True, target_sha="a" * 40, target_tracked_dirty=False)
+    result = PT.certify_pointer(evidence, approved_sha="a" * 40,
+                                releases_root="/opt/stockbot/releases")
+    assert result["status"] == "FAILED"
+    assert any("outside the releases root" in e for e in result["errors"])
+
+
+def test_a_scheduler_block_for_an_unloaded_unit_cannot_certify():
+    """Scheduler evidence about a unit the manager had not loaded cannot
+    certify that unit, however aligned its recorded command is."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service", "LoadState=not-found",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("LoadState" in d for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
