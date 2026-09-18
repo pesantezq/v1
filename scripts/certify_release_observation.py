@@ -317,6 +317,13 @@ def _exec_commands(value: str) -> list[str]:
     value = value.strip()
     if not value.startswith("{"):
         return [value] if value else []
+    # The brace records and the whitespace between them must consume the WHOLE
+    # value. findall() would silently discard residue -- an appended
+    # "TRAILING /path" after the records, or a damaged later record --
+    # making "could not read that part" look like "it was not there". Residue
+    # keeps the value verbatim, where it resolves to nothing and fails closed.
+    if _EXEC_RECORD.sub("", value).strip():
+        return [value]
     commands: list[str] = []
     for record in _EXEC_RECORD.findall(value):
         argv = _ARGV.search(record)

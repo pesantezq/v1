@@ -3886,3 +3886,61 @@ def test_a_scheduler_block_for_an_unloaded_unit_cannot_certify():
     assert agg["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("LoadState" in d for d in agg["observation_stream_defects"]), \
         agg["observation_stream_defects"]
+
+
+# ---------------------------------------------------------------------------
+# A systemd origin names one unit; residue is not silence
+# ---------------------------------------------------------------------------
+
+def test_a_shadow_unit_cannot_satisfy_a_systemd_origin():
+    """systemd unit names may themselves contain ":", so
+    systemd:daily.service:shadow is a DIFFERENT unit whose evidence must not
+    satisfy a demand for systemd:daily.service through the prefix rule."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(
+        "[Service]\nExecStart=/opt/stockbot/current/scripts/run.sh\n",
+        origin="systemd:stockbot-daily.service:shadow")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:stockbot-daily.service",))
+    assert result["status"] == "FAILED"
+    assert "systemd:stockbot-daily.service" in result["missing_expected"]
+
+
+def test_a_suffixed_cron_origin_still_satisfies_its_base():
+    """Prefix satisfaction remains for genuinely suffixed origins — cron
+    sub-entries are lines of one origin, not other units."""
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_crontab(
+        "0 9 * * * /opt/stockbot/current/scripts/run_daily_safe.sh\n",
+        origin="cron:host-a")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("cron",))
+    assert result["status"] == "OK", result["errors"]
+
+
+@pytest.mark.parametrize("value, expect_verbatim", [
+    (_CUR_REC + " TRAILING /opt/stockbot/legacy/evil.sh", True),
+    (_CUR_REC + " { broken", True),
+    ("garbage " + _CUR_REC, True),
+    (_CUR_REC + "  " + _CUR_REC, False),      # whitespace-only residue is fine
+])
+def test_residue_around_exec_records_fails_closed(value, expect_verbatim):
+    """findall() would silently discard anything outside the brace records —
+    appended or damaged later command evidence disappearing instead of failing
+    closed. Residue keeps the whole value verbatim, where it resolves to
+    nothing."""
+    mod = _observation_module()
+    commands = mod._exec_commands(value)
+    if expect_verbatim:
+        assert commands == [value]
+        from portfolio_automation.release import scheduler as S
+        surfaces = S.parse_systemd_unit(
+            "[Service]\nExecStart=" + commands[0] + "\n",
+            origin="systemd:x.service")
+        assert S.certify_scheduler_identity(
+            surfaces, release_root="/opt/stockbot/current",
+            expected_origins=("systemd:x.service",))["status"] == "FAILED"
+    else:
+        assert commands == ["/opt/stockbot/current/scripts/pre.sh"] * 2

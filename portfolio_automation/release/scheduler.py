@@ -598,9 +598,22 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
     missing_expected: list[str] = []
     if expected_origins:
         present = {s.origin for s in surfaces}
+        # A systemd origin names exactly ONE unit, and systemd unit names may
+        # themselves contain ":" -- so "systemd:daily.service:shadow" is a
+        # DIFFERENT unit whose evidence must not satisfy a demand for
+        # "systemd:daily.service" through the generic prefix rule. Prefix
+        # satisfaction remains for genuinely suffixed origins (cron lines),
+        # which are sub-entries of one origin rather than other units.
+        def _satisfies(origin: str, want: str) -> bool:
+            if origin == want:
+                return True
+            if want.startswith(f"{SYSTEMD_ORIGIN_PREFIX}:"):
+                return False
+            return origin.startswith(f"{want}:")
+
         missing_expected = [
             want for want in expected_origins
-            if not any(o == want or o.startswith(f"{want}:") for o in present)
+            if not any(_satisfies(o, want) for o in present)
         ]
     unresolved = unresolved_surfaces(surfaces, release_root=release_root)
     secrets: list[str] = []
