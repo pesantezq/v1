@@ -21,9 +21,21 @@ from portfolio_automation.vs002_evidence import snapshots as SN
 
 from tests.test_vs002_evidence import (  # the shared synthetic machinery
     BENCH, SESSIONS, SYMBOLS, SyntheticAdjustedProvider, _archive, _db,
-    _dates, _scan_dates)
+    _dates, _scan_dates, fixed_clock)
 
 RETRIEVED_AT = datetime(2026, 9, 18, 15, 0, tzinfo=timezone.utc)
+
+
+def _reseal(root, manifest):
+    """Rewrite a manifest AND its package_id so a tamper survives the package
+    identity + artifact-digest checks and must be caught by a deeper
+    invariant. Mirrors the builder: package_id hashes the core (everything
+    except generated_at and package_id)."""
+    core = {k: v for k, v in manifest.items()
+            if k not in ("generated_at", "package_id")}
+    manifest["package_id"] = C.package_id(core)
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2,
+                                                   sort_keys=True))
 
 
 def _package(tmp_path: Path, *, provider=None, scans=None) -> tuple[Path, dict]:
@@ -33,7 +45,8 @@ def _package(tmp_path: Path, *, provider=None, scans=None) -> tuple[Path, dict]:
         _archive(tmp_path, sym, 106 if sym == "NASA" else SESSIONS)
     manifest = B.build(tmp_path, code_sha="testsha",
                        generated_at="2026-09-06T00:00:00Z",
-                       bar_provider=provider or SyntheticAdjustedProvider())
+                       bar_provider=provider or SyntheticAdjustedProvider(),
+                       bar_clock=fixed_clock())
     return tmp_path / B.DEFAULT_OUT_REL, manifest
 
 
@@ -330,16 +343,195 @@ def test_same_frozen_bytes_rebuild_to_identical_identities(tmp_path: Path):
     assert a["bar_raw_response_digests"] == b["bar_raw_response_digests"]
 
 
-def test_snapshot_identities_are_deterministic(built_dir):
+def test_byte_identical_package_validates_to_identical_identities(tmp_path):
+    """The replay property, with NO externally supplied retrieval time: a
+    package copied byte-for-byte and validated twice yields identical snapshot
+    ids, payload hashes, EvidenceRefs and package identity."""
+    import shutil
+    root, manifest = _package(tmp_path / "src")
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy)
+    a = CON.validate(root)
+    b = CON.validate(copy)
+    assert a.manifest["package_id"] == b.manifest["package_id"]
+    assert [r["snapshot_id"] for r in a.bar_snapshots] == \
+        [r["snapshot_id"] for r in b.bar_snapshots]
+    assert [r["payload_hash"] for r in a.bar_snapshots] == \
+        [r["payload_hash"] for r in b.bar_snapshots]
+    refs_a = [(r.snapshot_id, r.payload_hash) for r in a.evidence_refs()]
+    refs_b = [(r.snapshot_id, r.payload_hash) for r in b.evidence_refs()]
+    assert refs_a == refs_b and refs_a
+
+
+# ===========================================================================
+# Finding A — the frozen provider input is preserved and re-verifiable
+# ===========================================================================
+
+def test_raw_provider_input_is_frozen_in_the_package(built_dir):
     root, manifest = built_dir
+    raw = json.loads((root / "bars_raw.json").read_text())
+    # exactly the kept symbols, benchmark included
+    assert set(raw) == set(manifest["bar_eligible_universe"]) | {BENCH}
+    # and each per-symbol raw digest recomputes from the persisted raw
+    for sym, digest in manifest["bar_raw_response_digests"].items():
+        assert C.artifact_digest(raw[sym]) == digest
+
+
+def test_raw_row_mutation_with_unchanged_digest_is_refused(built_dir):
+    """A mutated raw row whose recorded digest was left alone: the consumer
+    recomputes the digest from the frozen bytes and refuses."""
+    root, _ = built_dir
+    raw = json.loads((root / "bars_raw.json").read_text())
+    raw[BENCH][0]["adjClose"] = raw[BENCH][0]["adjClose"] * 1.5
+    (root / "bars_raw.json").write_text(json.dumps(raw, indent=2, sort_keys=True))
+    with pytest.raises(CON.SnapshotInvalid, match="raw-response digest mismatch"):
+        CON.validate(root)
+
+
+def test_raw_digest_mutation_is_refused(built_dir):
+    root, _ = built_dir
+    manifest = json.loads((root / "manifest.json").read_text())
+    sym = manifest["bar_eligible_universe"][0]
+    manifest["bar_raw_response_digests"][sym] = "deadbeef" * 8
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2,
+                                                   sort_keys=True))
+    with pytest.raises(CON.SnapshotInvalid):
+        CON.validate(root)
+
+
+def test_normalized_bars_must_reproduce_from_frozen_raw(tmp_path):
+    """valid raw + independently-VALID but UNRELATED normalized bars: the
+    raw->normalized reconstruction refuses the pairing even though the spliced
+    bars pass the semantics battery on their own.
+
+    The unrelated bars come from a sibling package whose provider scaled every
+    close AND adjClose by a common factor: scaling-invariant, so the
+    adjustment ratios (and thus the semantics battery and row counts) are
+    identical, while the price LEVELS differ. Only the binding back to THIS
+    package's frozen raw can tell them apart."""
+    def scale(sym, rows):
+        return [{**r, "close": r["close"] * 1.5, "adjClose": r["adjClose"] * 1.5}
+                for r in rows]
+    root, _ = _package(tmp_path / "a")
+    sib, _ = _package(tmp_path / "b",
+                      provider=SyntheticAdjustedProvider(mutate=scale))
+    foreign = json.loads((sib / "bars.json").read_text())
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["artifact_digests"]["bars.json"] = C.artifact_digest(foreign)
+    (root / "bars.json").write_text(json.dumps(foreign, indent=2, sort_keys=True))
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid,
+                       match="not reproducible from the frozen raw"):
+        CON.validate(root)
+
+
+# ===========================================================================
+# Finding B — retrieval time is immutable package state, never caller-chosen
+# ===========================================================================
+
+def test_retrieval_time_is_bound_to_the_package(built_dir):
+    root, manifest = built_dir
+    stamps = manifest["bar_retrieved_at"]
+    assert set(stamps) == set(manifest["bar_eligible_universe"]) | {BENCH}
+    # snapshot known_at == the package retrieval fact, for every symbol
     snap = CON.validate(root)
-    first = SN.panel_snapshots(snap.bars[:10], retrieved_at=RETRIEVED_AT,
-                               raw_digests=manifest["bar_raw_response_digests"])
-    second = SN.panel_snapshots(snap.bars[:10], retrieved_at=RETRIEVED_AT,
-                                raw_digests=manifest["bar_raw_response_digests"])
-    assert [s.snapshot_id for s in first] == [s.snapshot_id for s in second]
-    assert [r.payload_hash for r in SN.panel_refs(first)] == \
-        [r.payload_hash for r in SN.panel_refs(second)]
+    retrieved = SN.parse_retrieved_at(stamps)
+    snaps = SN.panel_snapshots_bound(
+        snap.bars[:5], retrieved_at=retrieved,
+        raw_digests=manifest["bar_raw_response_digests"])
+    for sn in snaps:
+        assert sn.pit.known_at == retrieved[sn.entity_id]
+        assert sn.pit.known_at_basis == "derived_conservative"
+
+
+def test_altered_retrieval_time_breaks_canonical_identity(built_dir):
+    """Retrieval/possession provenance is part of evidence identity: shifting
+    the recorded retrieval time makes the rebuilt snapshot ids disagree with
+    the frozen ones (and also moves package_id)."""
+    root, _ = built_dir
+    manifest = json.loads((root / "manifest.json").read_text())
+    sym = next(iter(manifest["bar_retrieved_at"]))
+    manifest["bar_retrieved_at"][sym] = "2020-01-01T00:00:00Z"
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2,
+                                                   sort_keys=True))
+    with pytest.raises(CON.SnapshotInvalid):
+        CON.validate(root)
+
+
+def test_the_lab_consumer_supplies_no_retrieval_time(built_dir):
+    """The refs an ExperimentSpec consumes come from the frozen package, with
+    no caller timestamp parameter anywhere in the path."""
+    import inspect
+    root, _ = built_dir
+    snap = CON.validate(root)
+    # evidence_refs takes only self — no retrieved_at to inject
+    assert list(inspect.signature(snap.evidence_refs).parameters) == []
+    assert snap.evidence_refs()
+
+
+# ===========================================================================
+# Finding C — canonical evidence identity is frozen and rederived
+# ===========================================================================
+
+def test_canonical_snapshots_are_package_bound(built_dir):
+    root, manifest = built_dir
+    snaps = json.loads((root / "bars_snapshots.json").read_text())
+    assert len(snaps) == manifest["bar_snapshot_count"] == manifest["bar_row_count"]
+    for rec in snaps[:3]:
+        assert rec["snapshot_id"].startswith("evs_")
+        assert rec["source_id"] == manifest["bar_source_id"]
+        assert rec["evidence_type"] == C.EVIDENCE_TYPE_BAR
+
+
+def test_snapshot_id_tamper_is_refused(built_dir):
+    root, _ = built_dir
+    snaps = json.loads((root / "bars_snapshots.json").read_text())
+    snaps[0]["snapshot_id"] = "evs_" + "0" * 32
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["artifact_digests"]["bars_snapshots.json"] = C.artifact_digest(snaps)
+    (root / "bars_snapshots.json").write_text(json.dumps(snaps, indent=2,
+                                                         sort_keys=True))
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid, match="snapshot_id mismatch"):
+        CON.validate(root)
+
+
+def test_payload_hash_tamper_is_refused(built_dir):
+    root, _ = built_dir
+    snaps = json.loads((root / "bars_snapshots.json").read_text())
+    snaps[0]["payload_hash"] = "0" * 64
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["artifact_digests"]["bars_snapshots.json"] = C.artifact_digest(snaps)
+    (root / "bars_snapshots.json").write_text(json.dumps(snaps, indent=2,
+                                                         sort_keys=True))
+    _reseal(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid, match="payload_hash mismatch"):
+        CON.validate(root)
+
+
+def test_experimentspec_refs_come_from_the_package(built_dir):
+    """The exposed EvidenceRefs match the frozen identities exactly and are
+    the ones an ExperimentSpec would embed."""
+    root, _ = built_dir
+    snap = CON.validate(root)
+    refs = snap.evidence_refs()
+    frozen = {r["snapshot_id"] for r in snap.bar_snapshots}
+    assert {r.snapshot_id for r in refs} == frozen
+    assert all(len(r.payload_hash) == 64 for r in refs)
+
+
+def test_a_missing_raw_artifact_is_refused(built_dir):
+    root, _ = built_dir
+    (root / "bars_raw.json").unlink()
+    with pytest.raises(CON.SnapshotInvalid, match="missing artifact"):
+        CON.validate(root)
+
+
+def test_a_missing_snapshots_artifact_is_refused(built_dir):
+    root, _ = built_dir
+    (root / "bars_snapshots.json").unlink()
+    with pytest.raises(CON.SnapshotInvalid, match="missing artifact"):
+        CON.validate(root)
 
 
 # ---------------------------------------------------------------------------

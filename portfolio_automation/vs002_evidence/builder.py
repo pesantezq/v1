@@ -29,10 +29,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from portfolio_automation.vs002_evidence import contracts as C
+from portfolio_automation.vs002_evidence import snapshots as SN
 
 SIGNALS_REL = "signals.json"
 RETURNS_REL = "returns.json"
 BARS_REL = "bars.json"
+BARS_RAW_REL = "bars_raw.json"            # frozen provider input, pre-normalization
+BARS_SNAPSHOTS_REL = "bars_snapshots.json"  # canonical evidence identities
 MANIFEST_REL = "manifest.json"
 
 DEFAULT_DB_REL = "data/portfolio.db"
@@ -293,9 +296,17 @@ def _session_gaps(symbol_dates: list[str], benchmark_dates: list[str]) -> int:
     return worst
 
 
+def _utc_now() -> datetime:
+    """The production acquisition clock. Never called in hermetic tests, which
+    inject a deterministic clock so retrieval time is reproducible."""
+    return datetime.now(timezone.utc)
+
+
 def build_adjusted_bars(provider: Any, symbols: list[str], *,
+                        clock: Any = _utc_now,
                         benchmark_first: bool = True) -> tuple[
-                            dict[str, list[C.BarRow]], dict[str, str]]:
+                            dict[str, list[C.BarRow]], dict[str, list],
+                            dict[str, str], dict[str, datetime]]:
     """Fetch + validate the panel through the provider boundary.
 
     Refuses, in order: a provider whose declared endpoint is not the authorized
@@ -303,8 +314,16 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
     benchmark; any per-symbol normalization or semantics failure; a gap wider
     than the frozen contract allows.
 
-    Returns ``(bars_by_symbol, raw_digests)`` where each raw digest binds the
-    normalized panel back to the provider bytes it came from.
+    ``clock`` is called ONCE per symbol, immediately after that symbol's
+    provider response returns, to record a truthful per-symbol retrieval time.
+    It is a build-side acquisition fact: the production binding reads the real
+    clock, tests inject a deterministic one, and the lab consumer never
+    supplies it.
+
+    Returns ``(panel, raw_responses, raw_digests, retrieved_at)``:
+    the normalized bars, the EXACT parsed provider rows (frozen, pre-
+    normalization), the per-symbol raw digest, and the per-symbol retrieval
+    timestamp.
     """
     declared = getattr(provider, "endpoint", None)
     if declared != C.AUTHORIZED_ENDPOINT:
@@ -317,10 +336,17 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
     if C.BENCHMARK not in ordered:
         raise BuildError("benchmark bars are mandatory")
     panel: dict[str, list[C.BarRow]] = {}
+    raw_responses: dict[str, list] = {}
     raw_digests: dict[str, str] = {}
+    retrieved_at: dict[str, datetime] = {}
     for sym in ([C.BENCHMARK] + [s for s in ordered if s != C.BENCHMARK]
                 if benchmark_first else ordered):
         raw = provider.fetch(sym)
+        stamp = clock()
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None:
+            raise BuildError(
+                f"{sym}: acquisition clock returned {stamp!r}, not a tz-aware "
+                f"datetime — retrieval time must be a real, tz-aware fact")
         try:
             raw_digests[sym] = C.artifact_digest(raw)
         except Exception as exc:
@@ -334,6 +360,11 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
         if findings:
             raise BuildError("; ".join(findings))
         panel[sym] = bars
+        # The raw rows are frozen EXACTLY as returned — provider order,
+        # unnormalized — so the consumer can recompute the digest and
+        # re-derive the normalized bars from the same bytes.
+        raw_responses[sym] = list(raw)
+        retrieved_at[sym] = stamp
 
     bench_dates = [b.session_date for b in panel[C.BENCHMARK]]
     for sym, bars in panel.items():
@@ -345,7 +376,34 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
                 f"{sym}: gap of {gap} benchmark sessions inside the series — "
                 f"the frozen contract allows at most {C.MAX_SESSION_GAP}, and "
                 f"forward-filling across it would invent sessions")
-    return panel, raw_digests
+    return panel, raw_responses, raw_digests, retrieved_at
+
+
+def window_bar_payload(panel: dict[str, list[C.BarRow]], kept: set[str],
+                       start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """The ONE deterministic normalized-bar projection, shared by the builder
+    and by the consumer's raw->normalized reconstruction so the two cannot
+    diverge. Every bar in the inclusive [start, end] window, sorted."""
+    out: list[dict[str, Any]] = []
+    for sym in sorted(kept):
+        for b in panel.get(sym, []):
+            if start_date <= b.session_date <= end_date:
+                out.append(b.to_dict())
+    out.sort(key=lambda r: (r["symbol"], r["session_date"]))
+    return out
+
+
+def reconstruct_bars_from_raw(raw_responses: dict[str, list], kept: set[str],
+                              start_date: str, end_date: str
+                              ) -> list[dict[str, Any]]:
+    """Re-derive the normalized bar payload from FROZEN raw provider input,
+    using the same normalization and windowing the builder used. The consumer
+    compares this against the persisted bars.json: equal means the normalized
+    artifact was genuinely derived from the frozen raw response, not paired
+    with it."""
+    panel = {sym: _normalize_bars(sym, raw_responses[sym])
+             for sym in kept if sym in raw_responses}
+    return window_bar_payload(panel, kept, start_date, end_date)
 
 
 def bar_eligibility(panel: dict[str, list[C.BarRow]],
@@ -378,7 +436,8 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
           out_rel: str = DEFAULT_OUT_REL,
           code_sha: str = "UNAVAILABLE",
           generated_at: Optional[str] = None,
-          bar_provider: Any = None) -> dict[str, Any]:
+          bar_provider: Any = None,
+          bar_clock: Any = None) -> dict[str, Any]:
     """Build the package. Returns the manifest.
 
     With ``bar_provider`` (the production path, via
@@ -430,6 +489,8 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
 
     # ---- the dividend-adjusted bar panel (bounded 0C prerequisite) --------
     bars_payload: list[dict[str, Any]] = []
+    bars_raw_payload: dict[str, list] = {}
+    bars_snapshots_payload: list[dict[str, Any]] = []
     bar_manifest: dict[str, Any] = {}
     if bar_provider is not None:
         earliest_by_symbol: dict[str, str] = {}
@@ -437,8 +498,9 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
             d = s_.signal_time[:10]
             if s_.ticker not in earliest_by_symbol or d < earliest_by_symbol[s_.ticker]:
                 earliest_by_symbol[s_.ticker] = d
-        panel, raw_digests = build_adjusted_bars(
-            bar_provider, sorted(set(C.FROZEN_UNIVERSE) | {C.BENCHMARK}))
+        panel, raw_responses, raw_digests, retrieved_at = build_adjusted_bars(
+            bar_provider, sorted(set(C.FROZEN_UNIVERSE) | {C.BENCHMARK}),
+            clock=bar_clock or _utc_now)
         bar_eligible, bar_excluded = bar_eligibility(panel, earliest_by_symbol)
         if not bar_eligible:
             raise BuildError(
@@ -453,10 +515,28 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
         bar_start_idx = max(0, bar_idx - C.MIN_PRIOR_SESSIONS
                             - LOOKBACK_BUFFER_SESSIONS)
         bar_start = bench_bar_dates[bar_start_idx]
-        for sym in sorted(kept_bars):
-            for b in panel[sym]:
-                if bar_start <= b.session_date <= cutoff_date:
-                    bars_payload.append(b.to_dict())
+        # ONE shared projection, reused by the consumer's raw->normalized check.
+        bars_payload = window_bar_payload(panel, kept_bars, bar_start, cutoff_date)
+        # Finding A: freeze the EXACT parsed provider rows, pre-normalization,
+        # for every kept symbol. Deterministic symbol order; row order exactly
+        # as the provider returned it.
+        bars_raw_payload = {sym: list(raw_responses[sym])
+                            for sym in sorted(kept_bars) if sym in raw_responses}
+        # Finding B: per-symbol retrieval time is an immutable package fact.
+        bar_retrieved_at = {
+            sym: retrieved_at[sym].astimezone(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            for sym in sorted(kept_bars) if sym in retrieved_at}
+        # Finding C: build the canonical snapshots HERE and freeze their
+        # identities, using the package-bound retrieval time (never a caller
+        # value). Snapshot identity is derived from the SAME second-precision
+        # timestamp that is persisted -- parsed back from the manifest strings
+        # -- so the build-side and lab-side identities are byte-identical
+        # rather than differing by a discarded sub-second component.
+        retrieved_bound = SN.parse_retrieved_at(bar_retrieved_at)
+        snaps = SN.panel_snapshots_bound(
+            bars_payload, retrieved_at=retrieved_bound, raw_digests=raw_digests)
+        bars_snapshots_payload = [SN.snapshot_identity(sn) for sn in snaps]
         descriptor = C.data_source_descriptor()
         per_symbol_bars: dict[str, int] = {}
         for b in bars_payload:
@@ -471,7 +551,9 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
             "bar_excluded_symbols": bar_excluded,
             "bar_raw_response_digests": {
                 k: raw_digests[k] for k in sorted(kept_bars)},
+            "bar_retrieved_at": bar_retrieved_at,
             "bar_row_count": len(bars_payload),
+            "bar_snapshot_count": len(bars_snapshots_payload),
             "per_symbol_bar_counts": per_symbol_bars,
             "bar_date_range": {"start": bar_start, "end": cutoff_date},
             "bar_max_session_gap": C.MAX_SESSION_GAP,
@@ -538,8 +620,10 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
         "artifact_digests": {
             SIGNALS_REL: C.artifact_digest(signals_payload),
             RETURNS_REL: C.artifact_digest(returns_payload),
-            **({BARS_REL: C.artifact_digest(bars_payload)} if bar_manifest
-               else {}),
+            **({BARS_REL: C.artifact_digest(bars_payload),
+                BARS_RAW_REL: C.artifact_digest(bars_raw_payload),
+                BARS_SNAPSHOTS_REL: C.artifact_digest(bars_snapshots_payload)}
+               if bar_manifest else {}),
         },
         **bar_manifest,
     }
@@ -554,6 +638,8 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
     _write(out_dir / RETURNS_REL, returns_payload)
     if bar_manifest:
         _write(out_dir / BARS_REL, bars_payload)
+        _write(out_dir / BARS_RAW_REL, bars_raw_payload)
+        _write(out_dir / BARS_SNAPSHOTS_REL, bars_snapshots_payload)
     _write(out_dir / MANIFEST_REL, manifest)
     return manifest
 

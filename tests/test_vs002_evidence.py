@@ -123,6 +123,22 @@ class SyntheticAdjustedProvider:
         return self._mutate(symbol, self._rows(symbol))
 
 
+# A deterministic acquisition clock. Hermetic tests never read the wall
+# clock; retrieval time must be reproducible so canonical identities are too.
+# Advances one second per call so distinct symbols get distinct-but-fixed
+# retrieval instants without any real timing.
+def fixed_clock(start_iso: str = "2026-09-18T15:00:00Z"):
+    import datetime as _dt
+    base = _dt.datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    state = {"n": 0}
+
+    def _clock():
+        stamp = base + _dt.timedelta(seconds=state["n"])
+        state["n"] += 1
+        return stamp
+    return _clock
+
+
 @pytest.fixture
 def built(tmp_path: Path) -> tuple[Path, dict]:
     scans = _scan_dates(12)
@@ -131,7 +147,8 @@ def built(tmp_path: Path) -> tuple[Path, dict]:
         _archive(tmp_path, sym, SHORT_SESSIONS if sym == "NASA" else SESSIONS)
     manifest = B.build(tmp_path, code_sha="testsha",
                        generated_at="2026-09-06T00:00:00Z",
-                       bar_provider=SyntheticAdjustedProvider())
+                       bar_provider=SyntheticAdjustedProvider(),
+                       bar_clock=fixed_clock())
     return tmp_path / B.DEFAULT_OUT_REL, manifest
 
 

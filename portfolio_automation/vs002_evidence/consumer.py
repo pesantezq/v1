@@ -24,8 +24,9 @@ from typing import Any, Optional
 
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence.builder import (
-    BARS_REL, MANIFEST_REL, RETURNS_REL, SIGNALS_REL,
-    verify_adjustment_semantics)
+    BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, MANIFEST_REL, RETURNS_REL,
+    SIGNALS_REL, reconstruct_bars_from_raw, verify_adjustment_semantics)
+from portfolio_automation.vs002_evidence import snapshots as SN
 
 EXPECTED_ARTIFACTS = frozenset({SIGNALS_REL, RETURNS_REL, MANIFEST_REL})
 
@@ -43,6 +44,8 @@ class ValidatedSnapshot:
     signals: list[dict[str, Any]]
     returns: list[dict[str, Any]]
     bars: list[dict[str, Any]] = field(default_factory=list)
+    bars_raw: dict[str, list] = field(default_factory=dict)
+    bar_snapshots: list[dict[str, Any]] = field(default_factory=list)
     _returns_index: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     # ---- deterministic access -------------------------------------------
@@ -85,6 +88,15 @@ class ValidatedSnapshot:
                 return b
         return None
 
+    def evidence_refs(self) -> list:
+        """The exact package-bound EvidenceRefs an ExperimentSpec embeds.
+
+        Reconstructed from the frozen canonical identities the build persisted
+        — not minted here, and not dependent on any caller timestamp. Holding
+        a ValidatedSnapshot means these already reconciled against a rebuild
+        from the frozen raw + retrieval facts (see :func:`validate`)."""
+        return [SN.ref_from_identity(rec) for rec in self.bar_snapshots]
+
     def bars_before(self, symbol: str, boundary_date: str) -> list[dict[str, Any]]:
         """Every bar session STRICTLY before the boundary — the structural
         anti-lookahead edge of the beta window, same strictness as
@@ -119,7 +131,8 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     # declare it must not smuggle it. The EXPECTED set is manifest-driven so
     # neither direction can pass silently.
     declares_bars = bool(manifest.get("bar_endpoint"))
-    expected = set(EXPECTED_ARTIFACTS) | ({BARS_REL} if declares_bars else set())
+    expected = set(EXPECTED_ARTIFACTS) | (
+        {BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL} if declares_bars else set())
     present = {p.name for p in root.iterdir() if p.is_file()}
     missing = sorted(expected - present)
     extra = sorted(present - expected)
@@ -135,13 +148,20 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     signals = json.loads((root / SIGNALS_REL).read_text(encoding="utf-8"))
     returns = json.loads((root / RETURNS_REL).read_text(encoding="utf-8"))
     bars: list[dict[str, Any]] = []
+    bars_raw: dict[str, list] = {}
+    bar_snapshots: list[dict[str, Any]] = []
     if declares_bars:
         bars = json.loads((root / BARS_REL).read_text(encoding="utf-8"))
+        bars_raw = json.loads((root / BARS_RAW_REL).read_text(encoding="utf-8"))
+        bar_snapshots = json.loads(
+            (root / BARS_SNAPSHOTS_REL).read_text(encoding="utf-8"))
 
     declared = manifest.get("artifact_digests") or {}
     artifact_pairs = [(SIGNALS_REL, signals), (RETURNS_REL, returns)]
     if declares_bars:
         artifact_pairs.append((BARS_REL, bars))
+        artifact_pairs.append((BARS_RAW_REL, bars_raw))
+        artifact_pairs.append((BARS_SNAPSHOTS_REL, bar_snapshots))
     for name, payload in artifact_pairs:
         actual = C.artifact_digest(payload)
         if declared.get(name) != actual:
@@ -227,8 +247,62 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
                 bar_rows, is_benchmark=sym == C.BENCHMARK)
             errors.extend(findings)
 
+        # Finding A: each per-symbol raw digest must be RECOMPUTABLE from the
+        # persisted raw artifact — proving the recorded digest describes the
+        # frozen provider input actually shipped, not some discarded original.
+        declared_raw = manifest.get("bar_raw_response_digests") or {}
+        for sym in sorted(declared_raw):
+            if sym not in bars_raw:
+                errors.append(f"raw response for {sym} absent from {BARS_RAW_REL}")
+                continue
+            recomputed = C.artifact_digest(bars_raw[sym])
+            if recomputed != declared_raw[sym]:
+                errors.append(
+                    f"{sym}: raw-response digest mismatch — manifest "
+                    f"{declared_raw[sym]} != recomputed {recomputed}")
+
+        # Raw -> normalized binding: re-derive the normalized panel from the
+        # FROZEN raw input, through the same normalization + windowing the
+        # builder used, and require it to equal bars.json. This refuses a
+        # package that pairs a valid raw response with independently-valid but
+        # unrelated normalized bars.
+        rng = manifest.get("bar_date_range") or {}
+        kept = set(manifest.get("bar_eligible_universe") or []) | {C.BENCHMARK}
+        if not errors:
+            try:
+                reconstructed = reconstruct_bars_from_raw(
+                    bars_raw, kept, str(rng.get("start")), str(rng.get("end")))
+            except Exception as exc:  # noqa: BLE001 — a raw that will not
+                reconstructed = None   # re-normalize is itself a failure
+                errors.append(
+                    f"frozen raw response does not re-normalize: "
+                    f"{type(exc).__name__}: {exc}")
+            if reconstructed is not None and reconstructed != bars:
+                errors.append(
+                    "normalized bars are not reproducible from the frozen raw "
+                    "response — bars.json was not derived from bars_raw.json")
+
+        # Finding C: rebuild the canonical snapshot identities from the frozen
+        # raw + package-bound retrieval time + normalized bars, and require
+        # them to match the frozen identities exactly. No caller timestamp
+        # participates; the retrieval fact is read from the package.
+        if not errors:
+            try:
+                retrieved = SN.parse_retrieved_at(
+                    manifest.get("bar_retrieved_at") or {})
+                mismatches = SN.rebuild_identity_mismatches(
+                    bars, retrieved_at=retrieved,
+                    raw_digests=declared_raw,
+                    frozen_identities=bar_snapshots)
+                errors.extend(mismatches)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    f"canonical evidence identity could not be rebuilt: "
+                    f"{type(exc).__name__}: {exc}")
+
     if errors:
         raise SnapshotInvalid("; ".join(errors))
 
     return ValidatedSnapshot(root=root, manifest=manifest,
-                             signals=signals, returns=returns, bars=bars)
+                             signals=signals, returns=returns, bars=bars,
+                             bars_raw=bars_raw, bar_snapshots=bar_snapshots)
