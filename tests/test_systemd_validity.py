@@ -61,6 +61,7 @@ VALIDITY_ENVELOPE = {
     # The top-level verdict-bearing facts every real artifact records; the
     # aggregate validates each against the canonical requirement, so a fixture
     # without them is not a realistic stand-in for a capture.
+    "checked_at": CHECKED_AT,
     "systemd_version": VERSION,
     "verifier_flag": V.REQUIRED_VERIFIER_FLAG,
     "search_path": SEARCH_PATH.split(),
@@ -1158,6 +1159,7 @@ def test_a_tolerated_optional_absence_still_binds():
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
+            "discovered_units": ["stockbot-daily.service"],
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
         }),
@@ -1281,6 +1283,7 @@ def test_a_genuinely_considered_optional_absence_is_still_tolerated():
             "SYSTEMD_UNIT_VALIDITY": "PASS",
             "expected_units": ["stockbot-daily.service",
                                "stockbot-sandbox-daily.timer"],
+            "discovered_units": ["stockbot-daily.service"],
             "verified_units": ["stockbot-daily.service"],
             "optional_units": ["stockbot-sandbox-daily.timer"],
         }),
@@ -3408,3 +3411,71 @@ def test_a_scheduler_block_without_an_id_cannot_certify():
     agg = bundle["production_release_identity"]
     assert agg["production_release_identity"] == "NOT_ESTABLISHED"
     assert any("records no Id" in d for d in agg["observation_stream_defects"])
+
+
+# ---------------------------------------------------------------------------
+# Absence from discovery, and time, are verdict-bearing too
+# ---------------------------------------------------------------------------
+
+def test_a_required_unit_absent_from_discovery_cannot_certify():
+    """The canonical certifier fails on a required unit missing from the host;
+    a successful per-unit record cannot compensate, because the canonical
+    logic fails the run on absence regardless of any record's success."""
+    combined = _contract_aggregate(discovered_units=[])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("absent from the artifact's own discovery" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_recorded_missing_units_cannot_ride_under_a_pass():
+    combined = _contract_aggregate(missing_units=["stockbot-daily.service"])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("missing_units" in d
+               for d in combined["validity_contract_defects"])
+
+
+@pytest.mark.parametrize("stamp", ["", "not-a-timestamp",
+                                   "2026-09-08 21:00:00", None])
+def test_an_unparseable_checked_at_cannot_certify(stamp):
+    """Collection time is required ISO-8601 UTC provenance — evidence that
+    cannot say when it was taken cannot be shown to belong to its bracket."""
+    combined = _contract_aggregate(checked_at=stamp)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("checked_at" in d for d in combined["validity_contract_defects"])
+
+
+# ---------------------------------------------------------------------------
+# A pre-planted symlink cannot redirect the external evidence write
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("script, artifact", [
+    ("certify_release_observation.py", "release_observation.json"),
+    ("certify_systemd_validity.py", "systemd_unit_validity.json"),
+])
+def test_a_preplanted_tmp_symlink_cannot_redirect_the_write(tmp_path, script,
+                                                            artifact):
+    """A predictable `<name>.tmp` path can be planted as a symlink before the
+    run; a non-exclusive open would follow it and write the bundle OUTSIDE the
+    directory that was just validated. mkstemp opens O_CREAT|O_EXCL, which
+    never follows a link, and its name is unpredictable besides."""
+    import subprocess, sys
+    capture = tmp_path / "capture.txt"
+    capture.write_text(CAPTURE, encoding="utf-8")
+    outside = tmp_path / "evidence"
+    outside.mkdir()
+    victim = tmp_path / "victim.json"
+    victim.write_text("precious\n", encoding="utf-8")
+    # the attack: every predictable tmp spelling points at the victim
+    for planted in {artifact + ".tmp",
+                    artifact.rsplit(".", 1)[0] + ".json.tmp"}:
+        (outside / planted).symlink_to(victim)
+    subprocess.run(
+        [sys.executable, str(REPO / "scripts" / script), str(capture),
+         "--external-evidence-dir", str(outside)],
+        capture_output=True, text=True, cwd=str(REPO))
+    assert victim.read_text(encoding="utf-8") == "precious\n", \
+        "the write followed a pre-planted symlink out of the directory"
+    # ...and the planted links were not installed as the artifact
+    if (outside / artifact).exists():
+        assert not (outside / artifact).is_symlink()

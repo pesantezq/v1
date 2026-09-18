@@ -1084,6 +1084,35 @@ def rederived_validity_defects(validity_result: dict | None) -> list[str]:
     # unit. Every requirement below is the validity module's own constant or
     # helper -- nothing is restated.
     if verdict == "PASS":
+        stamp = str(validity_result.get("checked_at") or "")
+        if not _validity._is_utc_timestamp(stamp):
+            defects.append(
+                f"validity artifact records checked_at={stamp!r} — the "
+                f"canonical certifier requires an ISO-8601 UTC collection "
+                f"time, because evidence that cannot say when it was taken "
+                f"cannot be shown to belong to the bracket it claims")
+
+        # Required = expected minus optional, exactly as the canonical
+        # certifier computes it. A required unit absent from the artifact's
+        # own discovery is an error there, so a PASS recorded alongside it --
+        # or alongside a non-empty missing_units list -- is the artifact
+        # contradicting itself about its own inventory. A per-unit verifier
+        # record cannot compensate: the canonical logic fails the run on
+        # absence regardless of any record's success.
+        expected = set(validity_result.get("expected_units") or ())
+        optional = set(validity_result.get("optional_units") or ())
+        discovered = set(validity_result.get("discovered_units") or ())
+        for unit in sorted((expected - optional) - discovered):
+            defects.append(
+                f"{unit}: required expected unit absent from the artifact's "
+                f"own discovery — the canonical certifier fails on a missing "
+                f"production unit, so this artifact's PASS is not supported "
+                f"by its own inventory")
+        for unit in sorted(set(validity_result.get("missing_units") or ())):
+            defects.append(
+                f"{unit}: recorded in missing_units while the artifact claims "
+                f"PASS — a verdict cannot outrank the absence it records")
+
         flag = validity_result.get("verifier_flag")
         if flag != _validity.REQUIRED_VERIFIER_FLAG:
             defects.append(

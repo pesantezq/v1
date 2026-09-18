@@ -17,6 +17,7 @@ import argparse
 import re
 import json
 import os
+import tempfile
 import sys
 from pathlib import Path
 
@@ -603,9 +604,24 @@ def main() -> int:
             raise SystemExit(
                 f"--external-evidence-dir does not exist: {resolved}")
         target = resolved / args.artifact_name
-        tmp = target.with_suffix(".json.tmp")
-        tmp.write_text(payload + "\n", encoding="utf-8")
-        os.replace(tmp, target)
+        # Exclusively-created, unpredictably-named temp file, exactly as the
+        # sibling validity CLI writes. A predictable `<name>.tmp` path can be
+        # pre-planted as a symlink, and write_text() would follow it -- the
+        # bundle landing OUTSIDE the directory that was just validated.
+        # mkstemp opens with O_CREAT|O_EXCL, which never follows a link.
+        fd, tmp = tempfile.mkstemp(dir=str(resolved),
+                                   prefix=f".{args.artifact_name}.",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload + "\n")
+            os.replace(tmp, target)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     print(payload)
     return (0 if bundle["production_release_identity"][
