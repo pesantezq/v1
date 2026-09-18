@@ -38,6 +38,8 @@ import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from .observation import ObservationContext
+
 POINTER_OK = "OK"
 POINTER_FAILED = "FAILED"
 
@@ -50,6 +52,14 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 def _under(path: str, root: str) -> bool:
     p = PurePosixPath(str(path))
     r = PurePosixPath(str(root).rstrip("/"))
+    # Same rule as the scheduler's containment predicate: PurePosixPath does
+    # not normalize dot segments, so releases/current/../../legacy reads as
+    # beneath the releases root lexically while naming a path outside it.
+    # Lexical ".." resolution is steerable through directory symlinks, so a
+    # path carrying dot segments is simply NOT under the root -- no legitimate
+    # resolved release path carries one.
+    if any(part in (".", "..") for part in p.parts):
+        return False
     return p == r or r in p.parents
 
 
@@ -84,7 +94,8 @@ class PointerEvidence:
 def certify_pointer(evidence: PointerEvidence, *, approved_sha: str,
                     releases_root: str = "/opt/stockbot/releases",
                     require_symlink: bool = True,
-                    require_clean: bool = True) -> dict:
+                    require_clean: bool = True,
+                    observation: ObservationContext | None = None) -> dict:
     """Certify pointer -> resolved release -> git SHA == approved SHA.
 
     Returns ``{"status": "OK"|"FAILED", "errors": [...], ...}``. Never raises
@@ -143,4 +154,8 @@ def certify_pointer(evidence: PointerEvidence, *, approved_sha: str,
         "resolved_path": evidence.resolved_path,
         "target_sha": evidence.target_sha,
         "approved_sha": approved_sha,
+        # Which observation this reading belongs to. A pointer read is a
+        # point-in-time fact about one host; without this it can be composed
+        # with unit evidence from a different host or a different run.
+        **(observation or ObservationContext("", "")).as_dict(),
     }
