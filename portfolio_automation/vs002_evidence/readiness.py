@@ -99,6 +99,64 @@ def evaluate(snap: ValidatedSnapshot) -> Readiness:
             f"{len(leaked)} signal(s) would admit a session at or after the "
             f"signal boundary into beta estimation, e.g. {leaked[:3]}")
 
+    # ---- the dividend-adjusted bar panel: the risk evidence itself --------
+    if not snap.has_bars:
+        reasons.append(
+            "no dividend-adjusted bar panel — the historical risk evidence "
+            "VS-002 is blocked on is absent from this package")
+    else:
+        bench_bar_dates = {b["session_date"] for b in snap.bars_for(C.BENCHMARK)}
+        if not bench_bar_dates:
+            reasons.append(f"benchmark {C.BENCHMARK} absent from the bar panel")
+        bar_eligible = set(m.get("bar_eligible_universe") or [])
+        if not bar_eligible:
+            reasons.append("no symbol is bar-eligible under the universal rule")
+        for sym, why in dict(m.get("bar_excluded_symbols") or {}).items():
+            if str(C.MIN_PRIOR_SESSIONS) not in why                     and "no matured signal" not in why:
+                reasons.append(
+                    f"{sym} bar-excluded for a reason outside the universal "
+                    f"rule: {why}")
+
+        bar_short: list[str] = []
+        bar_thin: list[str] = []
+        bar_leaked: list[str] = []
+        for sym in sorted(bar_eligible):
+            for sig in snap.signals_for(sym):
+                boundary = sig["signal_time"][:10]
+                prior = snap.bars_before(sym, boundary)
+                if len(prior) < C.MIN_PRIOR_SESSIONS:
+                    bar_short.append(f"{sym}@{boundary}:{len(prior)}")
+                    continue
+                window = [b["session_date"]
+                          for b in prior[-C.MIN_PRIOR_SESSIONS:]]
+                joint = len(set(window) & bench_bar_dates)
+                if joint < C.MIN_JOINT_OBSERVATIONS:
+                    bar_thin.append(f"{sym}@{boundary}:{joint}")
+                # Strict structural boundary — the signal-date bar itself is
+                # the leak the frozen design names.
+                if any(d >= boundary for d in window):
+                    bar_leaked.append(f"{sym}@{boundary}")
+        if bar_short:
+            reasons.append(
+                f"{len(bar_short)} signal(s) lack a {C.MIN_PRIOR_SESSIONS}-"
+                f"session adjusted-bar lookback, e.g. {bar_short[:3]}")
+        if bar_thin:
+            reasons.append(
+                f"{len(bar_thin)} signal(s) have < {C.MIN_JOINT_OBSERVATIONS} "
+                f"joint stock/benchmark bar sessions, e.g. {bar_thin[:3]}")
+        if bar_leaked:
+            reasons.append(
+                f"{len(bar_leaked)} signal(s) would admit a bar at or after "
+                f"the signal boundary into beta estimation, e.g. {bar_leaked[:3]}")
+
+        if m.get("adjusted_pit_certification") != C.ADJUSTED_PIT_CERTIFICATION:
+            reasons.append(
+                "manifest lacks the narrow adjusted-bar PIT certification")
+        if m.get("adjusted_beta_convention") != C.ADJUSTED_BETA_CONVENTION:
+            reasons.append(
+                "adjusted beta convention is not the declared dividend-"
+                "adjusted convention")
+
     # ---- ordering + convention ------------------------------------------
     for sym in sorted(eligible | {C.BENCHMARK}):
         dates = [r["session_date"] for r in snap.returns_for(sym)]
@@ -122,6 +180,9 @@ def evaluate(snap: ValidatedSnapshot) -> Readiness:
         "min_prior_sessions": C.MIN_PRIOR_SESSIONS,
         "min_joint_observations": C.MIN_JOINT_OBSERVATIONS,
         "min_cohorts": C.MIN_COHORTS,
+        "bar_rows": len(snap.bars),
+        "bar_eligible_symbols": sorted(m.get("bar_eligible_universe") or []),
+        "risk_free_rate_7d": snap.risk_free_rate_7d,
     }
     return Readiness(status=(READY if not reasons else NOT_READY),
                      reasons=tuple(reasons), detail=detail)

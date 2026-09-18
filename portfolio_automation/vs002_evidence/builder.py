@@ -32,6 +32,7 @@ from portfolio_automation.vs002_evidence import contracts as C
 
 SIGNALS_REL = "signals.json"
 RETURNS_REL = "returns.json"
+BARS_REL = "bars.json"
 MANIFEST_REL = "manifest.json"
 
 DEFAULT_DB_REL = "data/portfolio.db"
@@ -172,12 +173,220 @@ def _return_panel(archives: dict[str, list[dict]], symbols: list[str],
     return out
 
 
+class FMPDividendAdjustedProvider:
+    """The ONE production provider for the adjusted-bar panel.
+
+    Exists so the builder can demand an ENDPOINT IDENTITY rather than trust
+    whatever rows it is handed: the identity is compared against the authorized
+    endpoint before a single row is read. Tests inject synthetic providers with
+    the same two-attribute surface; this class is the production binding and is
+    NOT exercised offline (B3: no network, no credential, no fetch here).
+    """
+
+    endpoint = C.AUTHORIZED_ENDPOINT
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def fetch(self, symbol: str) -> list[dict]:
+        return self._client.get_historical_prices_dividend_adjusted(symbol)
+
+
+def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
+    """Provider rows -> chronological BarRows. Every refusal is a BuildError.
+
+    FAIL CLOSED, field by field: a row missing a required field, carrying a
+    non-finite or non-positive price, or duplicating a session date is
+    malformed evidence, and no version of it is admitted.
+    """
+    if not isinstance(raw_rows, list) or not raw_rows:
+        raise BuildError(f"{symbol}: provider returned no bar rows")
+    bars: list[C.BarRow] = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            raise BuildError(f"{symbol}: malformed provider row {type(row).__name__}")
+        missing = [f for f in C.REQUIRED_PROVIDER_FIELDS if row.get(f) is None]
+        if missing:
+            raise BuildError(
+                f"{symbol}: provider row missing required field(s) {missing} — "
+                f"the claimed semantics cannot be established from weaker data")
+        try:
+            close = float(row["close"])
+            adj_close = float(row["adjClose"])
+            volume = int(row["volume"])
+        except (TypeError, ValueError) as exc:
+            raise BuildError(f"{symbol}: malformed value in provider row: {exc}")
+        if not (close > 0 and adj_close > 0 and close == close
+                and adj_close == adj_close and close not in (float("inf"),)
+                and adj_close not in (float("inf"),)):
+            raise BuildError(
+                f"{symbol}: non-finite or non-positive price on "
+                f"{str(row['date'])[:10]}")
+        if volume < 0:
+            raise BuildError(f"{symbol}: negative volume on {str(row['date'])[:10]}")
+        bars.append(C.BarRow(symbol=symbol, session_date=str(row["date"])[:10],
+                             close=close, adj_close=adj_close, volume=volume))
+    bars.sort(key=lambda b: b.session_date)
+    dates = [b.session_date for b in bars]
+    if len(set(dates)) != len(dates):
+        dupes = sorted({d for d in dates if dates.count(d) > 1})
+        raise BuildError(f"{symbol}: duplicate session dates {dupes[:3]}")
+    return bars
+
+
+def verify_adjustment_semantics(bars: list[C.BarRow], *,
+                                is_benchmark: bool) -> list[str]:
+    """The DIJ-0011 battery, deterministic and re-runnable by any consumer.
+
+    What each check PROVES, stated exactly:
+
+    * ratio = adj_close/close is the cumulative adjustment factor for actions
+      AFTER that session. For a genuinely dividend/split-adjusted series it is
+      non-decreasing over time (every action shrinks earlier adjusted values
+      relative to close) and ~1.0 on the latest session. A violated monotone
+      is an artificial discontinuity; a final ratio away from 1 is a series
+      adjusted to some other vintage.
+    * splits and dividends both express as ratio steps, so the same two checks
+      cover both behaviours; the synthetic fixtures exercise each separately.
+    * the BENCHMARK must show at least one genuine adjustment over a long
+      span. SPY pays quarterly dividends; 200+ sessions of ratio == 1.0 is how
+      an unadjusted series masquerades as adjusted, and DIJ-0011 names exactly
+      this as the mutation that must fail. Single names may legitimately show
+      ratio == 1 (non-payers, no splits), so the witness is scoped to the
+      benchmark rather than generalized into a false positive.
+    """
+    findings: list[str] = []
+    if not bars:
+        return ["empty bar series"]
+    sym = bars[0].symbol
+    ratios = [b.adj_close / b.close for b in bars]
+    if abs(ratios[-1] - 1.0) > C.RATIO_FINAL_TOLERANCE:
+        findings.append(
+            f"{sym}: final adj_close/close ratio {ratios[-1]:.6f} is not ~1 — "
+            f"the series is adjusted to some other vintage")
+    for i in range(1, len(ratios)):
+        if ratios[i] < ratios[i - 1] * (1.0 - C.RATIO_MONOTONE_TOLERANCE):
+            findings.append(
+                f"{sym}: adjustment ratio decreases at {bars[i].session_date} "
+                f"({ratios[i - 1]:.6f} -> {ratios[i]:.6f}) — an artificial "
+                f"discontinuity no real corporate action produces")
+            break
+    if is_benchmark and len(bars) >= 200:
+        if all(abs(r - 1.0) <= C.RATIO_MONOTONE_TOLERANCE for r in ratios):
+            findings.append(
+                f"{sym}: benchmark shows NO adjustment over {len(bars)} "
+                f"sessions — indistinguishable from an unadjusted series, so "
+                f"the dividend-adjusted claim is not established")
+    return findings
+
+
+def _session_gaps(symbol_dates: list[str], benchmark_dates: list[str]) -> int:
+    """Largest number of BENCHMARK sessions skipped between two consecutive
+    symbol sessions. The benchmark is the session ruler: a symbol that misses
+    more than MAX_SESSION_GAP of them inside its own span has a hole no
+    'claimed continuous window' may paper over."""
+    index = {d: i for i, d in enumerate(benchmark_dates)}
+    positions = [index[d] for d in symbol_dates if d in index]
+    worst = 0
+    for a, b in zip(positions, positions[1:]):
+        worst = max(worst, b - a - 1)
+    return worst
+
+
+def build_adjusted_bars(provider: Any, symbols: list[str], *,
+                        benchmark_first: bool = True) -> tuple[
+                            dict[str, list[C.BarRow]], dict[str, str]]:
+    """Fetch + validate the panel through the provider boundary.
+
+    Refuses, in order: a provider whose declared endpoint is not the authorized
+    one (endpoint substitution is a refusal, never a fallback); an absent
+    benchmark; any per-symbol normalization or semantics failure; a gap wider
+    than the frozen contract allows.
+
+    Returns ``(bars_by_symbol, raw_digests)`` where each raw digest binds the
+    normalized panel back to the provider bytes it came from.
+    """
+    declared = getattr(provider, "endpoint", None)
+    if declared != C.AUTHORIZED_ENDPOINT:
+        raise BuildError(
+            f"provider declares endpoint {declared!r}, not the authorized "
+            f"{C.AUTHORIZED_ENDPOINT!r} — endpoint substitution is refused, "
+            f"never adopted")
+
+    ordered = sorted(set(symbols))
+    if C.BENCHMARK not in ordered:
+        raise BuildError("benchmark bars are mandatory")
+    panel: dict[str, list[C.BarRow]] = {}
+    raw_digests: dict[str, str] = {}
+    for sym in ([C.BENCHMARK] + [s for s in ordered if s != C.BENCHMARK]
+                if benchmark_first else ordered):
+        raw = provider.fetch(sym)
+        try:
+            raw_digests[sym] = C.artifact_digest(raw)
+        except Exception as exc:
+            raise BuildError(
+                f"{sym}: provider response is not canonicalizable "
+                f"({type(exc).__name__}: {exc}) — malformed evidence is "
+                f"refused, never coerced")
+        bars = _normalize_bars(sym, raw)
+        findings = verify_adjustment_semantics(bars,
+                                               is_benchmark=sym == C.BENCHMARK)
+        if findings:
+            raise BuildError("; ".join(findings))
+        panel[sym] = bars
+
+    bench_dates = [b.session_date for b in panel[C.BENCHMARK]]
+    for sym, bars in panel.items():
+        if sym == C.BENCHMARK:
+            continue
+        gap = _session_gaps([b.session_date for b in bars], bench_dates)
+        if gap > C.MAX_SESSION_GAP:
+            raise BuildError(
+                f"{sym}: gap of {gap} benchmark sessions inside the series — "
+                f"the frozen contract allows at most {C.MAX_SESSION_GAP}, and "
+                f"forward-filling across it would invent sessions")
+    return panel, raw_digests
+
+
+def bar_eligibility(panel: dict[str, list[C.BarRow]],
+                    earliest_signal: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+    """The universal >=252-prior-session rule, applied to the BAR panel.
+
+    Same rule, same wording, no ticker exceptions — a short-history symbol is
+    excluded by arithmetic, exactly as the returns-path eligibility does it.
+    """
+    eligible: list[str] = []
+    excluded: dict[str, str] = {}
+    for sym in sorted(k for k in panel if k != C.BENCHMARK):
+        first = earliest_signal.get(sym)
+        if first is None:
+            excluded[sym] = "no matured signal"
+            continue
+        dates = [b.session_date for b in panel[sym]]
+        prior = bisect_left(dates, first)
+        if prior < C.MIN_PRIOR_SESSIONS:
+            excluded[sym] = (
+                f"only {prior} prior sessions before first signal {first}; "
+                f"universal rule requires >= {C.MIN_PRIOR_SESSIONS}")
+            continue
+        eligible.append(sym)
+    return eligible, excluded
+
+
 def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
           archive_rel: str = DEFAULT_ARCHIVE_REL,
           out_rel: str = DEFAULT_OUT_REL,
           code_sha: str = "UNAVAILABLE",
-          generated_at: Optional[str] = None) -> dict[str, Any]:
-    """Build the package. Returns the manifest. Writes three files."""
+          generated_at: Optional[str] = None,
+          bar_provider: Any = None) -> dict[str, Any]:
+    """Build the package. Returns the manifest.
+
+    With ``bar_provider`` (the production path, via
+    :class:`FMPDividendAdjustedProvider`) the package also carries the
+    dividend-adjusted bar panel — the historical risk evidence VS-002 is
+    blocked on. Without it the legacy three-artifact package is produced and
+    readiness will truthfully report the risk evidence as missing.
+    """
     root = Path(repo_root)
     signals = _read_signals(root / db_rel)
 
@@ -218,6 +427,61 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
 
     signal_dates = sorted({s.signal_time[:10] for s in signals})
     cohorts = greedy_cohorts(signal_dates)
+
+    # ---- the dividend-adjusted bar panel (bounded 0C prerequisite) --------
+    bars_payload: list[dict[str, Any]] = []
+    bar_manifest: dict[str, Any] = {}
+    if bar_provider is not None:
+        earliest_by_symbol: dict[str, str] = {}
+        for s_ in signals:
+            d = s_.signal_time[:10]
+            if s_.ticker not in earliest_by_symbol or d < earliest_by_symbol[s_.ticker]:
+                earliest_by_symbol[s_.ticker] = d
+        panel, raw_digests = build_adjusted_bars(
+            bar_provider, sorted(set(C.FROZEN_UNIVERSE) | {C.BENCHMARK}))
+        bar_eligible, bar_excluded = bar_eligibility(panel, earliest_by_symbol)
+        if not bar_eligible:
+            raise BuildError(
+                "no symbol passes the universal history rule on the adjusted "
+                "bar panel")
+        kept_bars = set(bar_eligible) | {C.BENCHMARK}
+        # Bounded like the return panel: the experiment needs the pre-signal
+        # window plus the scored span, never the whole provider history.
+        bench_bar_dates = [b.session_date for b in panel[C.BENCHMARK]]
+        first_signal_date = min(earliest_by_symbol.values())
+        bar_idx = bisect_left(bench_bar_dates, first_signal_date)
+        bar_start_idx = max(0, bar_idx - C.MIN_PRIOR_SESSIONS
+                            - LOOKBACK_BUFFER_SESSIONS)
+        bar_start = bench_bar_dates[bar_start_idx]
+        for sym in sorted(kept_bars):
+            for b in panel[sym]:
+                if bar_start <= b.session_date <= cutoff_date:
+                    bars_payload.append(b.to_dict())
+        descriptor = C.data_source_descriptor()
+        per_symbol_bars: dict[str, int] = {}
+        for b in bars_payload:
+            per_symbol_bars[b["symbol"]] = per_symbol_bars.get(b["symbol"], 0) + 1
+        bar_manifest = {
+            "bar_endpoint": C.AUTHORIZED_ENDPOINT,
+            "bar_source_provider": C.SOURCE_PROVIDER,
+            "bar_source_dataset": C.SOURCE_DATASET,
+            "bar_source_id": descriptor.source_id,
+            "bar_evidence_type": C.EVIDENCE_TYPE_BAR,
+            "bar_eligible_universe": sorted(bar_eligible),
+            "bar_excluded_symbols": bar_excluded,
+            "bar_raw_response_digests": {
+                k: raw_digests[k] for k in sorted(kept_bars)},
+            "bar_row_count": len(bars_payload),
+            "per_symbol_bar_counts": per_symbol_bars,
+            "bar_date_range": {"start": bar_start, "end": cutoff_date},
+            "bar_max_session_gap": C.MAX_SESSION_GAP,
+            "adjusted_return_derivation": C.ADJUSTED_BETA_FORMULA,
+            "adjusted_beta_convention": C.ADJUSTED_BETA_CONVENTION,
+            "adjusted_pit_certification": C.ADJUSTED_PIT_CERTIFICATION,
+            "adjusted_pit_certification_scope":
+                C.ADJUSTED_PIT_CERTIFICATION_SCOPE,
+            "risk_free_rate_7d": dict(C.RISK_FREE_RATE_7D_ASSUMPTION),
+        }
 
     signals_payload = [s.to_dict() for s in
                        sorted(signals, key=lambda s: (s.ticker, s.signal_time))]
@@ -274,7 +538,10 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
         "artifact_digests": {
             SIGNALS_REL: C.artifact_digest(signals_payload),
             RETURNS_REL: C.artifact_digest(returns_payload),
+            **({BARS_REL: C.artifact_digest(bars_payload)} if bar_manifest
+               else {}),
         },
+        **bar_manifest,
     }
     manifest = dict(manifest_core)
     manifest["generated_at"] = generated_at or datetime.now(
@@ -285,6 +552,8 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
     out_dir.mkdir(parents=True, exist_ok=True)
     _write(out_dir / SIGNALS_REL, signals_payload)
     _write(out_dir / RETURNS_REL, returns_payload)
+    if bar_manifest:
+        _write(out_dir / BARS_REL, bars_payload)
     _write(out_dir / MANIFEST_REL, manifest)
     return manifest
 
