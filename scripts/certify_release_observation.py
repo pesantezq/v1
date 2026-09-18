@@ -216,6 +216,21 @@ def flow_defects(outer: str) -> list[str]:
     ]
     defects.extend(order_defects(outer))
 
+    # An unknown marker is malformed residue, not a section change: it flips
+    # `section` in parse_flow and silently discards every following property
+    # until the next recognised marker -- an aligned ExecStart followed by
+    # ##IGNORED and a legacy ExecStop lost the legacy command entirely.
+    known = frozenset(FLOW_SECTIONS) | {"SCHEDULER_UNIT"}
+    for line in outer.splitlines():
+        if line.startswith("##"):
+            name = line[2:].split(" ", 1)[0].strip()
+            if name not in known:
+                defects.append(
+                    f"observation contains unknown section marker "
+                    f"{line.strip()!r} — the collector never emits it, and "
+                    f"treating it as a section change would silently truncate "
+                    f"the evidence around it")
+
     # One scheduler block per unit. `parse_flow` appends, so two blocks for
     # one unit would MERGE -- an old aligned block compensating for a later
     # one that reports the unit failed or gone, with the contradiction
@@ -557,7 +572,8 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     # --- validity leg -----------------------------------------------------
     parsed = CV.parse_evidence(inner)
     stream_defects = (CV.stream_defects(inner) + CV.run_level_defects(inner)
-                      + CV.run_order_defects(inner) + CV.per_unit_defects(inner))
+                      + CV.run_order_defects(inner) + CV.per_unit_defects(inner)
+                      + CV.unknown_marker_defects(inner))
     if stream_defects:
         validity = V.certify_systemd_unit_validity(verifier_available=False,
                                                    **parsed)

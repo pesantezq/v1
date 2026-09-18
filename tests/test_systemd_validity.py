@@ -3944,3 +3944,43 @@ def test_residue_around_exec_records_fails_closed(value, expect_verbatim):
             expected_origins=("systemd:x.service",))["status"] == "FAILED"
     else:
         assert commands == ["/opt/stockbot/current/scripts/pre.sh"] * 2
+
+
+# ---------------------------------------------------------------------------
+# An unknown marker is malformed evidence, not a section change
+# ---------------------------------------------------------------------------
+
+def test_an_unknown_marker_cannot_truncate_scheduler_evidence():
+    """##IGNORED inside a scheduler block flipped the active section and every
+    following property vanished — an aligned ExecStart survived while the
+    legacy ExecStop after the marker disappeared, and the aggregate passed."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service", "LoadState=loaded",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+        "##IGNORED",
+        "ExecStop={ path=/opt/stockbot/legacy-stop ; "
+        "argv[]=/opt/stockbot/legacy-stop ; ignore_errors=no }",
+    ])
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("unknown section marker" in d
+               for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
+
+
+def test_an_unknown_marker_cannot_hide_a_contradictory_validity_fact():
+    """##IGNORED placed before a later NeedDaemonReload=yes made the fact
+    vanish and restored PASS."""
+    mod = _cert_module()
+    assert mod.unknown_marker_defects(CAPTURE) == []
+    doctored = CAPTURE.replace(
+        "NeedDaemonReload=no",
+        "##IGNORED\nNeedDaemonReload=yes", 1)
+    defects = mod.unknown_marker_defects(doctored)
+    assert any("##IGNORED" in d for d in defects), defects

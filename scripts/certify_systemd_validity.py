@@ -196,6 +196,28 @@ def run_order_defects(text: str) -> list[str]:
     return defects
 
 
+#: Every marker the collector emits. Anything else is malformed residue, and
+#: treating it as a section change silently discards every following line
+#: until the next recognised marker -- a ##IGNORED placed before a
+#: contradictory NeedDaemonReload=yes made the fact vanish and restored PASS.
+KNOWN_SECTIONS = (frozenset(RUN_LEVEL_SECTIONS)
+                  | frozenset(PER_UNIT_SECTIONS) | {"END"})
+
+
+def unknown_marker_defects(text: str) -> list[str]:
+    """Markers the collector never emits. Evidence that cannot be attributed
+    to a known section must fail closed, not silence what follows it."""
+    return [
+        f"evidence contains unknown section marker {line.strip()!r} — the "
+        f"collector never emits it, and treating it as a section change would "
+        f"silently discard every following record until the next recognised "
+        f"marker"
+        for line in (text or "").splitlines()
+        if line.startswith("##")
+        and line[2:].split(" ", 1)[0].strip() not in KNOWN_SECTIONS
+    ]
+
+
 def run_level_defects(text: str) -> list[str]:
     """Ways a stream is not one complete, ordered capture."""
     seen: dict[str, int] = {}
@@ -420,7 +442,8 @@ def main() -> int:
 
     parsed = parse_evidence(text)
     defects = (stream_defects(text) + run_level_defects(text)
-               + run_order_defects(text) + per_unit_defects(text))
+               + run_order_defects(text) + per_unit_defects(text)
+               + unknown_marker_defects(text))
     classified = tuple(u.strip() for u in args.classified.split(",") if u.strip())
 
     # A truncated, doubled or edited capture must not look like a clean host.
