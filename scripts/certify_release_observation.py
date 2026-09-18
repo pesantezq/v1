@@ -347,7 +347,12 @@ def _unit_text(properties: list[str]) -> str:
         if key in EXEC_DIRECTIVES:
             for command in _exec_commands(value):
                 body.append(f"{key}={command}")
-        elif key in ("WorkingDirectory", "RootDirectory"):
+        elif key in ("WorkingDirectory", "RootDirectory",
+                     "RootDirectoryStartOnly"):
+            # RootDirectoryStartOnly is code identity: under `yes` the chroot
+            # applies to ExecStart ONLY, so a non-start hook resolves on the
+            # HOST. Dropping it here made the parser default to false and
+            # treat a legacy ExecStop as safely chrooted under the release.
             body.append(f"{key}={value}")
         elif key == "EnvironmentFiles":
             match = _ENVFILE.match(value)

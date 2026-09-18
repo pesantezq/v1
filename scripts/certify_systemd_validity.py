@@ -94,7 +94,9 @@ RUN_LEVEL_SECTIONS = (
 #: carrying a failing ``##VERIFY`` followed by a passing one for the same unit
 #: silently resolves the contradiction by ordering. Evidence that says two
 #: different things about one unit is not evidence about that unit.
-PER_UNIT_SECTIONS = ("SHOW", "RECHECK", "VERIFYCMD", "VERIFY")
+#: In COLLECTION order -- the ordering check below zips adjacent pairs, so
+#: this tuple IS the required sequence, not just a membership set.
+PER_UNIT_SECTIONS = ("SHOW", "VERIFYCMD", "VERIFY", "RECHECK")
 
 
 def per_unit_defects(text: str) -> list[str]:
@@ -107,13 +109,40 @@ def per_unit_defects(text: str) -> list[str]:
         if len(parts) >= 2 and parts[0] in PER_UNIT_SECTIONS:
             key = (parts[0], parts[1])
             seen[key] = seen.get(key, 0) + 1
-    return [
+    defects = [
         f"evidence contains {count} ##{section} sections for {unit} — a "
         f"capture records each unit once, so a stream carrying several "
         f"contradicts itself about that unit and the contradiction would "
         f"otherwise be resolved by ordering alone"
         for (section, unit), count in sorted(seen.items()) if count > 1
     ]
+
+    # ...and in COLLECTION order. The RECHECK snapshot only proves the
+    # configuration held still if it was taken AFTER the verifier ran; a
+    # stream that moves it before ##VERIFY still has every section exactly
+    # once while its "post-verification" observation predates the
+    # verification. Order is evidence here exactly as it is for the outer
+    # flow's anchors.
+    positions: dict[tuple[str, str], int] = {}
+    for index, line in enumerate((text or "").splitlines()):
+        if not line.startswith("##"):
+            continue
+        parts = line[2:].split()
+        if len(parts) >= 2 and parts[0] in PER_UNIT_SECTIONS:
+            positions.setdefault((parts[1], parts[0]), index)
+    units = {unit for (unit, _section) in positions}
+    for unit in sorted(units):
+        ordered = [positions.get((unit, section))
+                   for section in PER_UNIT_SECTIONS]
+        present = [(section, at) for section, at
+                   in zip(PER_UNIT_SECTIONS, ordered) if at is not None]
+        for (earlier, at_a), (later, at_b) in zip(present, present[1:]):
+            if at_a > at_b:
+                defects.append(
+                    f"{unit}: ##{later} appears before ##{earlier} — the "
+                    f"sections are out of collection order, and a re-check "
+                    f"taken before verification brackets nothing")
+    return defects
 
 
 def run_level_defects(text: str) -> list[str]:

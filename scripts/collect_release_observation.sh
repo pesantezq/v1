@@ -273,8 +273,13 @@ for u in $UNITS; do
   echo "##SCHEDULER_UNIT $u"
   # Every executable directive, plus the directives that decide where that
   # code resolves from. Unquoted $EXEC_FLAGS on purpose: it is a flag list.
+  # RootDirectoryStartOnly decides WHICH commands the chroot applies to --
+  # under `yes`, only ExecStart resolves beneath RootDirectory and every other
+  # hook resolves on the HOST. Omitting it makes the parser default to false
+  # and treat a legacy ExecStop as chrooted under the release.
   systemctl show "$u" \
     -p Id $EXEC_FLAGS -p WorkingDirectory -p RootDirectory \
+    -p RootDirectoryStartOnly \
     -p EnvironmentFiles -p LoadState --no-pager 2>/dev/null
 done
 echo "##SCHEDULER_CRON"

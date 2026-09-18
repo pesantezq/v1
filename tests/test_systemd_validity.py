@@ -3576,3 +3576,79 @@ def test_duplicate_scheduler_blocks_for_one_unit_are_rejected():
         "LoadState=not-found\n##SCHEDULER_UNIT stockbot-daily.service\n", 1)
     defects = mod.flow_defects(mod.split_validity(duplicated)[0])
     assert any("2 ##SCHEDULER_UNIT blocks" in d for d in defects), defects
+
+
+# ---------------------------------------------------------------------------
+# RootDirectoryStartOnly travels with the scheduler evidence
+# ---------------------------------------------------------------------------
+
+def test_root_directory_start_only_is_preserved_in_reconstruction():
+    """Under RootDirectoryStartOnly=yes the chroot applies to ExecStart ONLY,
+    so a non-start hook resolves on the HOST. Dropping the property made the
+    parser default it to false and treat a legacy ExecStop as safely chrooted
+    beneath the release."""
+    mod = _observation_module()
+    text = mod._unit_text([
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+        "ExecStop={ path=/opt/stockbot/legacy-stop ; "
+        "argv[]=/opt/stockbot/legacy-stop ; ignore_errors=no }",
+        "RootDirectory=/opt/stockbot/current",
+        "RootDirectoryStartOnly=yes",
+    ])
+    assert "RootDirectoryStartOnly=yes" in text
+    from portfolio_automation.release import scheduler as S
+    surfaces = S.parse_systemd_unit(text, origin="systemd:x.service")
+    result = S.certify_scheduler_identity(
+        surfaces, release_root="/opt/stockbot/current",
+        expected_origins=("systemd:x.service",))
+    assert result["status"] == "FAILED", (
+        "the legacy host-path ExecStop must not be treated as chrooted")
+
+
+def test_the_observation_collector_requests_root_directory_start_only():
+    flow = (REPO / "scripts" / "collect_release_observation.sh").read_text(
+        encoding="utf-8")
+    assert "-p RootDirectoryStartOnly" in flow
+
+
+# ---------------------------------------------------------------------------
+# The per-unit validity sections must arrive in collection order
+# ---------------------------------------------------------------------------
+
+def test_per_unit_sections_are_in_collection_order():
+    """A RECHECK moved before VERIFY still has every section exactly once
+    while its "post-verification" observation predates the verification —
+    claiming configuration stability that brackets nothing."""
+    unit = "stockbot-daily.service"
+    lines = CAPTURE.splitlines(True)
+    blocks: dict[str, list[str]] = {}
+    current = None
+    rebuilt: list[str] = []
+    for line in lines:
+        if line.startswith("##"):
+            name = line[2:].split()[0]
+            if name in ("SHOW", "VERIFYCMD", "VERIFY", "RECHECK"):
+                current = name
+                blocks[current] = [line]
+                continue
+            current = None
+        if current:
+            blocks[current].append(line)
+        else:
+            rebuilt.append(line)
+    # reassemble with RECHECK before VERIFYCMD/VERIFY
+    reordered = "".join(rebuilt).replace(
+        "##RELEASE_POINTER_AFTER",
+        "".join(blocks["SHOW"]) + "".join(blocks["RECHECK"])
+        + "".join(blocks["VERIFYCMD"]) + "".join(blocks["VERIFY"])
+        + "##RELEASE_POINTER_AFTER", 1)
+    mod = _cert_module()
+    assert mod.per_unit_defects(CAPTURE) == []
+    defects = mod.per_unit_defects(reordered)
+    assert any("out of collection order" in d for d in defects), defects
+
+
+def test_the_canonical_capture_order_is_declared():
+    mod = _cert_module()
+    assert mod.PER_UNIT_SECTIONS == ("SHOW", "VERIFYCMD", "VERIFY", "RECHECK")
