@@ -579,6 +579,10 @@ def certify_scheduler_identity(surfaces: list[ExecutionSurface], *,
                 "unresolved": [], "system_transitional": [],
                 "secret_paths_outside_release": [],
                 "missing_expected": list(expected_origins or ()),
+                # Same shape as the certified path: the artifact builder reads
+                # every one of these keys, and an empty collection must fail
+                # closed as evidence, not crash the evidence pipeline.
+                "scope": "path_alignment_only",
                 **provenance}
 
     missing_expected: list[str] = []
@@ -1072,6 +1076,56 @@ def rederived_validity_defects(validity_result: dict | None) -> list[str]:
         return []          # absence is reported by validity_contract_defects
 
     defects: list[str] = []
+    verdict = validity_result.get("SYSTEMD_UNIT_VALIDITY")
+
+    # --- top-level facts. The canonical certifier blocks on each of these
+    # before it ever looks at a unit, so an artifact recording them while
+    # claiming PASS is contradicting itself at the top level, not just per
+    # unit. Every requirement below is the validity module's own constant or
+    # helper -- nothing is restated.
+    if verdict == "PASS":
+        flag = validity_result.get("verifier_flag")
+        if flag != _validity.REQUIRED_VERIFIER_FLAG:
+            defects.append(
+                f"validity artifact records verifier_flag={flag!r}, not the "
+                f"required {_validity.REQUIRED_VERIFIER_FLAG!r} — a verdict "
+                f"from a differently-flagged verifier is a verdict about "
+                f"something else")
+        major = _validity.systemd_major(
+            str(validity_result.get("systemd_version") or ""))
+        if major is None or major < _validity.MIN_MEASURED_SYSTEMD_MAJOR:
+            defects.append(
+                f"validity artifact records systemd_version="
+                f"{validity_result.get('systemd_version')!r} — the canonical "
+                f"certifier refuses versions below "
+                f"{_validity.MIN_MEASURED_SYSTEMD_MAJOR} (or unparseable ones) "
+                f"because the verifier exit status is unmeasured there")
+        anchored = set(validity_result.get("search_path") or ())
+        effective = set(validity_result.get("search_path_effective") or ())
+        if not anchored or not effective:
+            defects.append(
+                "validity artifact records no anchored or no effective unit "
+                "search path — an anchor set that cannot be shown complete "
+                "cannot support a PASS")
+        elif effective - anchored:
+            defects.append(
+                f"validity artifact's anchors covered a NARROWER set than the "
+                f"effective unit load path it recorded (missing: "
+                f"{', '.join(sorted(effective - anchored))}) — a transient "
+                f"drop-in under an unanchored directory would not have been "
+                f"seen, and the canonical certifier blocks on exactly this")
+        rogue = (set(validity_result.get("discovered_units") or ())
+                 - set(validity_result.get("expected_units") or ())
+                 - set(validity_result.get("optional_units") or ())
+                 - set(validity_result.get("classified_units") or ()))
+        recorded_rogue = set(validity_result.get("unexpected_units") or ())
+        for unit in sorted(rogue | recorded_rogue):
+            defects.append(
+                f"{unit}: discovered but neither expected, optional nor "
+                f"classified — the canonical certifier fails on an "
+                f"unrecognised scheduler surface, so this artifact's PASS is "
+                f"not supported by its own inventory")
+
     verified = set(validity_result.get("verified_units") or ())
     records: dict[str, dict] = {}
     for unit in validity_result.get("units") or ():

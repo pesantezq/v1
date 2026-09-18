@@ -430,6 +430,26 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     # --- scheduler leg ----------------------------------------------------
     surfaces: list = []
     for unit, props in sorted(flow["units"].items()):
+        # The block must be about the unit its marker names. `systemctl show`
+        # records the unit's own Id; a stored capture that places another
+        # service's (aligned) output under this marker would otherwise have
+        # that evidence certified under this unit's origin -- one unit's
+        # evidence certifying another.
+        recorded_ids = [line.split("=", 1)[1].strip()
+                        for line in props
+                        if line.startswith("Id=") and line.split("=", 1)[1].strip()]
+        if not recorded_ids:
+            defects.append(
+                f"##SCHEDULER_UNIT {unit}: the block records no Id — evidence "
+                f"that cannot say which unit it describes cannot be bound to "
+                f"one")
+            continue
+        if any(recorded != unit for recorded in recorded_ids):
+            defects.append(
+                f"##SCHEDULER_UNIT {unit}: the block's own Id says "
+                f"{recorded_ids!r} — evidence from one unit must not certify "
+                f"another, however aligned it is")
+            continue
         surfaces.extend(S.parse_systemd_unit(_unit_text(props),
                                              origin=f"systemd:{unit}"))
     if flow["cron"].strip():
@@ -495,6 +515,24 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
     }
 
 
+def _safe_artifact_name(name: str) -> str:
+    """A single plain filename, or nothing.
+
+    Joining a validated directory with an UNvalidated name undoes the
+    validation: ``--artifact-name ../escaped.json`` writes beside the
+    directory, and an absolute name replaces it entirely — measured. The name
+    is therefore confined to one path component before any join.
+    """
+    candidate = Path(name)
+    if (name in ("", ".", "..") or candidate.is_absolute()
+            or candidate.name != name):
+        raise SystemExit(
+            f"--artifact-name must be a plain filename, got {name!r} — the "
+            f"destination directory is validated, so the name must not be "
+            f"able to leave it")
+    return name
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("evidence", nargs="?",
@@ -520,6 +558,9 @@ def main() -> int:
                          "absolute path outside the repository; the write is "
                          "atomic. This is not a general output path.")
     args = ap.parse_args()
+    # Confined up front: a bad name must be rejected before any
+    # evidence is built, not discovered at write time.
+    args.artifact_name = _safe_artifact_name(args.artifact_name)
 
     text = (Path(args.evidence).read_text(encoding="utf-8")
             if args.evidence else sys.stdin.read())
@@ -561,7 +602,7 @@ def main() -> int:
         if not resolved.is_dir():
             raise SystemExit(
                 f"--external-evidence-dir does not exist: {resolved}")
-        target = resolved / "release_observation.json"
+        target = resolved / args.artifact_name
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(payload + "\n", encoding="utf-8")
         os.replace(tmp, target)

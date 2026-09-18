@@ -291,6 +291,24 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def _safe_artifact_name(name: str) -> str:
+    """A single plain filename, or nothing.
+
+    Joining a validated directory with an UNvalidated name undoes the
+    validation: ``--artifact-name ../escaped.json`` writes beside the
+    directory, and an absolute name replaces it entirely — measured. The name
+    is therefore confined to one path component before any join.
+    """
+    candidate = Path(name)
+    if (name in ("", ".", "..") or candidate.is_absolute()
+            or candidate.name != name):
+        raise SystemExit(
+            f"--artifact-name must be a plain filename, got {name!r} — the "
+            f"destination directory is validated, so the name must not be "
+            f"able to leave it")
+    return name
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("evidence", nargs="?", help="collector output (default: stdin)")
@@ -313,6 +331,9 @@ def main() -> int:
                     help="comma-separated relevant units an operator has "
                          "explicitly classified as not requiring validation")
     args = ap.parse_args()
+    # Confined up front: a bad name must be rejected before any
+    # evidence is built, not discovered at write time.
+    args.artifact_name = _safe_artifact_name(args.artifact_name)
 
     text = (Path(args.evidence).read_text(encoding="utf-8")
             if args.evidence else sys.stdin.read())

@@ -58,6 +58,13 @@ VALIDITY_ENVELOPE = {
     "schema": V.SCHEMA,
     "schema_version": V.SCHEMA_VERSION,
     "observe_only": True,
+    # The top-level verdict-bearing facts every real artifact records; the
+    # aggregate validates each against the canonical requirement, so a fixture
+    # without them is not a realistic stand-in for a capture.
+    "systemd_version": VERSION,
+    "verifier_flag": V.REQUIRED_VERIFIER_FLAG,
+    "search_path": SEARCH_PATH.split(),
+    "search_path_effective": SEARCH_PATH.split(),
     **BRACKET,
 }
 
@@ -3265,3 +3272,139 @@ def test_the_validity_cli_rejects_repository_destinations(tmp_path):
     outside.mkdir()
     result = run("--external-evidence-dir", str(outside))
     assert (outside / "systemd_unit_validity.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Top-level validity facts are verdict-bearing too
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("override, expected", [
+    ({"discovered_units": ["stockbot-daily.service", "rogue.service"]},
+     "rogue.service"),
+    ({"unexpected_units": ["rogue.service"]}, "rogue.service"),
+    ({"systemd_version": "systemd 1"}, "systemd_version"),
+    ({"systemd_version": ""}, "systemd_version"),
+    ({"verifier_flag": "--recursive-errors=yes"}, "verifier_flag"),
+    ({"verifier_flag": None}, "verifier_flag"),
+    ({"search_path": ["/etc/systemd/system"]}, "NARROWER"),
+    ({"search_path": []}, "search path"),
+    ({"search_path_effective": []}, "search path"),
+])
+def test_a_top_level_validity_fact_contradicting_pass_cannot_certify(
+        override, expected):
+    """The canonical certifier blocks on each of these before it ever looks at
+    a unit: an unrecognised scheduler surface, an unmeasured systemd version, a
+    differently-flagged verifier, and an anchor set narrower than the effective
+    load path. An artifact recording them while claiming PASS contradicts
+    itself at the top level."""
+    combined = _contract_aggregate(**override)
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any(expected in d for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_a_classified_rogue_unit_is_not_a_defect():
+    """The canonical waiver: a discovered unit an operator explicitly
+    classified is not unexpected, so the re-derivation must not re-flag it."""
+    combined = _contract_aggregate(
+        discovered_units=["stockbot-daily.service", "waived.service"],
+        classified_units=["waived.service"])
+    assert combined["production_release_identity"] == "PASS", combined["errors"]
+
+
+# ---------------------------------------------------------------------------
+# Artifact names are confined to their destination
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("script", ["certify_systemd_validity.py",
+                                    "certify_release_observation.py"])
+@pytest.mark.parametrize("name", ["../escaped.json", "/tmp/abs.json",
+                                  "a/b.json", "..", ""])
+def test_an_artifact_name_cannot_leave_its_destination(tmp_path, script, name):
+    """Joining a validated directory with an unvalidated name undoes the
+    validation — `--artifact-name ../x.json` writes beside the directory and an
+    absolute name replaces it entirely."""
+    import subprocess, sys
+    capture = tmp_path / "capture.txt"
+    capture.write_text(CAPTURE, encoding="utf-8")
+    outside = tmp_path / "evidence"
+    outside.mkdir()
+    result = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / script), str(capture),
+         "--external-evidence-dir", str(outside), "--artifact-name", name],
+        capture_output=True, text=True, cwd=str(REPO))
+    assert result.returncode != 0, (script, name, result.stderr[-200:])
+    assert "plain filename" in result.stderr, result.stderr[-200:]
+    assert not (tmp_path / "escaped.json").exists()
+
+
+def test_a_plain_artifact_name_still_lands_in_the_destination(tmp_path):
+    import subprocess, sys
+    capture = tmp_path / "capture.txt"
+    capture.write_text(CAPTURE, encoding="utf-8")
+    outside = tmp_path / "evidence"
+    outside.mkdir()
+    subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "certify_systemd_validity.py"),
+         str(capture), "--external-evidence-dir", str(outside),
+         "--artifact-name", "named.json"],
+        capture_output=True, text=True, cwd=str(REPO))
+    assert (outside / "named.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# A scheduler block is bound to the unit its marker names
+# ---------------------------------------------------------------------------
+
+def _observation_with_unit_block(unit_lines):
+    mod = _observation_module()
+    lines = []
+    for name, _ in mod.OBSERVATION_ORDER:
+        if name == "SCHEDULER_CRON":
+            lines.append("##SCHEDULER_CRON\n")     # empty crontab is valid
+            continue
+        if name == "POINTER_PATH":
+            lines.append("##RELEASE_ROOT\n/opt/stockbot/current\n")
+            lines.append("##SCHEDULER_UNIT stockbot-daily.service\n"
+                         + "".join(l + "\n" for l in unit_lines))
+            for extra in ("POINTER_PATH", "POINTER_IS_SYMLINK",
+                          "POINTER_RESOLVED", "POINTER_SHA", "POINTER_DIRTY"):
+                lines.append(f"##{extra}\nvalue\n")
+            continue
+        lines.append(f"##{name}\nvalue\n")
+    return "".join(lines)
+
+
+def test_a_scheduler_block_with_a_foreign_id_cannot_certify():
+    """Another service's (aligned) `systemctl show` output placed under this
+    unit's marker must not certify this unit — one unit's evidence must not
+    certify another."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=some-other.service",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("must not certify another" in d
+               for d in agg["observation_stream_defects"]), \
+        agg["observation_stream_defects"]
+
+
+def test_a_scheduler_block_without_an_id_cannot_certify():
+    """Evidence that cannot say which unit it describes cannot be bound to one."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    bundle = mod.build(stream, approved_sha="0" * 40,
+                       expected_origins=("systemd:stockbot-daily.service",),
+                       expected_validity_units=("stockbot-daily.service",))
+    agg = bundle["production_release_identity"]
+    assert agg["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("records no Id" in d for d in agg["observation_stream_defects"])
