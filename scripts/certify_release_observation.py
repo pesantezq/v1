@@ -215,6 +215,24 @@ def flow_defects(outer: str) -> list[str]:
         for name, count in sorted(seen.items()) if count > 1
     ]
     defects.extend(order_defects(outer))
+
+    # One scheduler block per unit. `parse_flow` appends, so two blocks for
+    # one unit would MERGE -- an old aligned block compensating for a later
+    # one that reports the unit failed or gone, with the contradiction
+    # resolved silently by concatenation. Same rule the validity capture's
+    # per-unit sections already follow.
+    scheduler_blocks: dict[str, int] = {}
+    for line in outer.splitlines():
+        if line.startswith("##SCHEDULER_UNIT "):
+            name = line[len("##SCHEDULER_UNIT "):].strip()
+            scheduler_blocks[name] = scheduler_blocks.get(name, 0) + 1
+    for name, count in sorted(scheduler_blocks.items()):
+        if count > 1:
+            defects.append(
+                f"observation stream contains {count} ##SCHEDULER_UNIT blocks "
+                f"for {name} — a capture records each unit once, and merging "
+                f"them would let earlier evidence compensate for a later "
+                f"contradictory manager query")
     for required in ("HOST", "OBSERVATION_ID",
                      "CONFIGURATION_ANCHOR_BEFORE", "CONFIGURATION_ANCHOR_AFTER",
                      "OBSERVATION_END"):

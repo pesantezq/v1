@@ -1143,17 +1143,56 @@ def rederived_validity_defects(validity_result: dict | None) -> list[str]:
                 f"{', '.join(sorted(effective - anchored))}) — a transient "
                 f"drop-in under an unanchored directory would not have been "
                 f"seen, and the canonical certifier blocks on exactly this")
-        rogue = (set(validity_result.get("discovered_units") or ())
-                 - set(validity_result.get("expected_units") or ())
-                 - set(validity_result.get("optional_units") or ())
+        # The canonical unexpected-unit calculation subtracts expected and
+        # explicitly classified units ONLY. Optionality permits the absence of
+        # an expected unit; it does not classify unrelated discovered ones, so
+        # subtracting optional_units here would let an artifact wave a rogue
+        # unit through by naming it optional.
+        rogue = (discovered - expected
                  - set(validity_result.get("classified_units") or ()))
         recorded_rogue = set(validity_result.get("unexpected_units") or ())
         for unit in sorted(rogue | recorded_rogue):
             defects.append(
-                f"{unit}: discovered but neither expected, optional nor "
-                f"classified — the canonical certifier fails on an "
-                f"unrecognised scheduler surface, so this artifact's PASS is "
-                f"not supported by its own inventory")
+                f"{unit}: discovered but neither expected nor classified — "
+                f"the canonical certifier fails on an unrecognised scheduler "
+                f"surface, so this artifact's PASS is not supported by its "
+                f"own inventory")
+
+        # The canonical verified inventory, recomputed whole: every required
+        # unit, plus every optional expected unit that is actually installed.
+        # The artifact's verified_units must EQUAL it -- a smaller claimed set
+        # would let an installed expected unit carry no provenance and no
+        # verifier result while the later per-unit checks examine only the
+        # units the artifact chose to name.
+        canonical_verified = ((expected - optional)
+                              | (expected & optional & discovered))
+        claimed = set(validity_result.get("verified_units") or ())
+        for unit in sorted(canonical_verified - claimed):
+            defects.append(
+                f"{unit}: expected (and installed where optional) but absent "
+                f"from verified_units — the canonical certifier verifies "
+                f"every unit it requires, so this artifact's PASS skips a "
+                f"unit nothing checked")
+        for unit in sorted(claimed - canonical_verified):
+            defects.append(
+                f"{unit}: listed in verified_units but not part of the "
+                f"canonical verified inventory for this artifact's own "
+                f"expected/optional/discovered sets — evidence about a unit "
+                f"the run did not require cannot be attributed to it")
+
+        # Zero verification establishes nothing. The canonical certifier
+        # blocks both an empty expected inventory and the drained case where
+        # every expected unit is optional and absent -- "nothing to check"
+        # must never read as "everything checks out".
+        if not expected:
+            defects.append(
+                "validity artifact claims PASS with no expected units — an "
+                "empty inventory cannot certify")
+        elif not claimed:
+            defects.append(
+                "validity artifact claims PASS while verifying no unit — "
+                "every expected unit is optional and absent, so this run "
+                "established nothing")
 
     verified = set(validity_result.get("verified_units") or ())
     records: dict[str, dict] = {}

@@ -737,8 +737,9 @@ def test_release_identity_requires_all_three_gates(verdict, expected):
         validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
             "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": verdict,
-            "verified_units": ["stockbot-daily.service"],
-        }),
+            "expected_units": ["stockbot-daily.service"],
+            "discovered_units": ["stockbot-daily.service"],
+            "verified_units": ["stockbot-daily.service"]}),
         scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == expected
@@ -969,9 +970,12 @@ def test_covered_units_do_establish_the_aggregate():
         validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
             "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
-            "verified_units": ["stockbot-daily.service",
+            "expected_units": ["stockbot-daily.service",
                                "stockbot-dashboard.service"],
-        }),
+            "discovered_units": ["stockbot-daily.service",
+                               "stockbot-dashboard.service"],
+            "verified_units": ["stockbot-daily.service",
+                               "stockbot-dashboard.service"]}),
         scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
@@ -1015,6 +1019,8 @@ def test_cron_origins_do_not_demand_a_systemd_unit():
         validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "expected_units": ["stockbot-daily.service"],
+                         "discovered_units": ["stockbot-daily.service"],
                          "verified_units": ["stockbot-daily.service"]}),
         scheduler_result=_flow_scheduler(cron=True),
     )
@@ -1130,9 +1136,12 @@ def test_a_verified_timer_satisfies_the_binding():
         validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
             "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
-            "verified_units": ["stockbot-daily.service",
+            "expected_units": ["stockbot-daily.service",
                                "stockbot-daily.timer"],
-        }),
+            "discovered_units": ["stockbot-daily.service",
+                               "stockbot-daily.timer"],
+            "verified_units": ["stockbot-daily.service",
+                               "stockbot-daily.timer"]}),
         scheduler_result=_flow_scheduler(),
     )
     assert combined["production_release_identity"] == "PASS"
@@ -1691,6 +1700,8 @@ def _aggregate(*, validity_obs=OBS, pointer_obs=OBS, aggregate_obs=OBS):
                          **VALIDITY_ENVELOPE,
                          "release_pointer": RELEASE,
                          "SYSTEMD_UNIT_VALIDITY": "PASS",
+                         "expected_units": [unit],
+                         "discovered_units": [unit],
                          "verified_units": [unit]}),
         scheduler_result=_flow_scheduler(aggregate_obs),
         observation=aggregate_obs,
@@ -2066,21 +2077,30 @@ def test_a_quiet_window_keeps_the_anchor_stable():
 # ---------------------------------------------------------------------------
 
 def _optional_aggregate(*, discovered, verified):
+    """The optional-unit waiver, exercised on the TIMER.
+
+    The service is always discovered and verified, because an all-optional-
+    absent run verifies nothing and the canonical certifier refuses it
+    outright -- the waiver is only ever exercisable alongside at least one
+    genuinely verified unit, so a fixture claiming otherwise could never have
+    been a real PASS artifact.
+    """
     from portfolio_automation.release import scheduler as S
+    timer = "stockbot-daily.timer"
     return S.certify_release_identity(
         _daily_surfaces(),
         observation=OBS,
         pointer_result=bound({"status": "OK", "errors": []}),
         release_root="/opt/stockbot/current",
         expected_origins=("systemd:stockbot-daily.service",),
-        expected_validity_units=("stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service", timer),
         validity_result=with_records({**OBS.as_dict(), **VALIDITY_ENVELOPE,
             "release_pointer": RELEASE,
             "SYSTEMD_UNIT_VALIDITY": "PASS",
-            "expected_units": ["stockbot-daily.service"],
-            "optional_units": ["stockbot-daily.service"],
-            "discovered_units": list(discovered),
-            "verified_units": list(verified),
+            "expected_units": ["stockbot-daily.service", timer],
+            "optional_units": [timer],
+            "discovered_units": ["stockbot-daily.service"] + list(discovered),
+            "verified_units": ["stockbot-daily.service"] + list(verified),
         }),
         scheduler_result=_flow_scheduler(),
     )
@@ -2097,9 +2117,9 @@ def test_optional_cannot_waive_a_unit_the_evidence_says_is_installed():
     checked.
     """
     combined = _optional_aggregate(
-        discovered=["stockbot-daily.service"], verified=[])
+        discovered=["stockbot-daily.timer"], verified=[])
     assert combined["production_release_identity"] == "NOT_ESTABLISHED"
-    assert "stockbot-daily.service" in combined["validity_installed_but_unverified"]
+    assert "stockbot-daily.timer" in combined["validity_installed_but_unverified"]
     assert any("cannot waive it" in e for e in combined["errors"]), \
         combined["errors"]
 
@@ -2113,8 +2133,8 @@ def test_optional_still_waives_a_unit_that_is_genuinely_absent():
 
 def test_an_installed_optional_unit_that_was_verified_still_certifies():
     combined = _optional_aggregate(
-        discovered=["stockbot-daily.service"],
-        verified=["stockbot-daily.service"])
+        discovered=["stockbot-daily.timer"],
+        verified=["stockbot-daily.timer"])
     assert combined["production_release_identity"] == "PASS", combined["errors"]
 
 
@@ -3479,3 +3499,80 @@ def test_a_preplanted_tmp_symlink_cannot_redirect_the_write(tmp_path, script,
     # ...and the planted links were not installed as the artifact
     if (outside / artifact).exists():
         assert not (outside / artifact).is_symlink()
+
+
+# ---------------------------------------------------------------------------
+# The canonical inventory invariants, mirrored whole
+# ---------------------------------------------------------------------------
+
+def test_an_installed_expected_unit_missing_from_verified_cannot_certify():
+    """A stored PASS naming extra.service as expected AND discovered while
+    omitting it from verified_units skips a unit nothing checked — the
+    canonical certifier verifies every unit it requires."""
+    combined = _contract_aggregate(
+        expected_units=["stockbot-daily.service", "extra.service"],
+        discovered_units=["stockbot-daily.service", "extra.service"])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("extra.service" in d and "verified_units" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_a_verified_unit_outside_the_canonical_inventory_cannot_certify():
+    """verified_units must EQUAL the canonical computation in both directions:
+    evidence about a unit the run did not require cannot be attributed to it."""
+    combined = _contract_aggregate(
+        verified_units=["stockbot-daily.service", "stray.service"])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("stray.service" in d and "canonical verified inventory" in d
+               for d in combined["validity_contract_defects"]),         combined["validity_contract_defects"]
+
+
+def test_a_zero_verification_artifact_cannot_certify():
+    """Every expected unit optional and absent verifies nothing; the canonical
+    certifier refuses the run outright — "nothing to check" must never read as
+    "everything checks out"."""
+    combined = _contract_aggregate(
+        expected_units=["stockbot-daily.timer"],
+        optional_units=["stockbot-daily.timer"],
+        discovered_units=[], verified_units=[], units=[])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("verifying no unit" in d or "no expected units" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_an_empty_expected_inventory_cannot_certify():
+    combined = _contract_aggregate(expected_units=[], discovered_units=[],
+                                   verified_units=[], units=[])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+
+
+def test_optional_status_cannot_classify_a_rogue_unit():
+    """Optionality permits the ABSENCE of an expected unit; it does not
+    classify unrelated discovered ones. An installed rogue named only in
+    optional_units must still be rogue."""
+    combined = _contract_aggregate(
+        optional_units=["rogue.service"],
+        discovered_units=["stockbot-daily.service", "rogue.service"])
+    assert combined["production_release_identity"] == "NOT_ESTABLISHED"
+    assert any("rogue.service" in d and "neither expected nor classified" in d
+               for d in combined["validity_contract_defects"]), \
+        combined["validity_contract_defects"]
+
+
+def test_duplicate_scheduler_blocks_for_one_unit_are_rejected():
+    """Two blocks for one unit MERGE in parse_flow, letting an old aligned
+    block compensate for a later contradictory manager query."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block([
+        "Id=stockbot-daily.service",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ])
+    duplicated = stream.replace(
+        "##SCHEDULER_UNIT stockbot-daily.service\n",
+        "##SCHEDULER_UNIT stockbot-daily.service\nId=stockbot-daily.service\n"
+        "LoadState=not-found\n##SCHEDULER_UNIT stockbot-daily.service\n", 1)
+    defects = mod.flow_defects(mod.split_validity(duplicated)[0])
+    assert any("2 ##SCHEDULER_UNIT blocks" in d for d in defects), defects
