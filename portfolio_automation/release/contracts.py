@@ -45,6 +45,14 @@ RELEASE_IMMUTABLE = "RELEASE_IMMUTABLE"
 #: never write it. Distinct from RUNTIME_GENERATED so the guard can forbid the
 #: latter under outputs/ without also forbidding legitimate frozen evidence.
 IMMUTABLE_EXPERIMENT_EVIDENCE = "IMMUTABLE_EXPERIMENT_EVIDENCE"
+#: A single untracked symlink the deployed release attaches to shared host
+#: state outside the release tree (``.venv -> /opt/stockbot/.venv``,
+#: ``.env -> /opt/stockbot/.env``). Intentional release topology -- neither
+#: release source nor ordinary generated output. Only the exact attachment
+#: paths qualify, and the release-observation gate additionally requires the
+#: entry to be UNTRACKED: a tracked/modified ``.env``/``.venv`` is drift, not
+#: an approved attachment.
+RUNTIME_ATTACHMENT = "RUNTIME_ATTACHMENT"
 UNCLASSIFIED = "UNCLASSIFIED"
 
 # Roots production writes into during ordinary operation. At the time of this
@@ -59,17 +67,38 @@ UNCLASSIFIED = "UNCLASSIFIED"
 # the tracked set under a runtime root is exactly the immutable evidence
 # allowlist. A blanket "nothing tracked under outputs/" would be wrong: it
 # would forbid legitimate frozen experiment evidence.
+# Expressed as path COMPONENTS. On the real host the deployed release attaches
+# each root as an untracked symlink to shared state (``data -> /opt/stockbot/
+# data`` and so on), so BOTH the bare root (the attachment symlink itself) and
+# everything beneath it are runtime-mutable. Matching is component-aware (see
+# ``_under_runtime_root``): "data" and "data/x" match, "database" does not.
 RUNTIME_ROOTS: tuple[str, ...] = (
-    "data/",
-    "outputs/",
-    "logs/",
+    "data",
+    "outputs",
+    "logs",
 )
 
 # Additional writable locations that are not under a runtime root.
 _RUNTIME_MUTABLE_EXTRA: tuple[str, ...] = (
-    ".pytest_cache/",
-    "__pycache__/",
+    ".pytest_cache",
+    "__pycache__",
 )
+
+# Release-ROOT runtime attachments: the exact symlink each deployed release
+# carries AND the canonical host target it must resolve to. Classifying the
+# pathname (RUNTIME_ATTACHMENT) only excuses it from *pathname* drift; the
+# release-observation certifier additionally proves, per this mapping, that the
+# entry is an untracked symlink pointing HERE and stable across the observation
+# bracket. A ``.venv -> /tmp/rogue`` link therefore fails certification even
+# though its porcelain status is the same ``?? .venv``.
+RUNTIME_ATTACHMENT_TARGETS: dict[str, str] = {
+    ".venv": "/opt/stockbot/.venv",
+    ".env": "/opt/stockbot/.env",
+}
+
+#: The attachment pathnames, derived from the target mapping so the two cannot
+#: drift apart.
+_RUNTIME_ATTACHMENTS: tuple[str, ...] = tuple(RUNTIME_ATTACHMENT_TARGETS)
 
 # Source of the approved release. Production reads these and must never write
 # them; a runtime write here is precisely the drift this contract forbids.
@@ -165,6 +194,15 @@ def _normalise(rel_path: str) -> str:
     return "/".join(p for p in parts if p not in (".",))
 
 
+def _under_runtime_root(norm: str, roots: tuple[str, ...]) -> bool:
+    """Component-aware membership: ``norm`` IS one of ``roots`` or lies beneath
+    it. A loose string prefix would classify ``database`` as ``data``."""
+    for root in roots:
+        if norm == root or norm.startswith(root + "/"):
+            return True
+    return False
+
+
 def classify_path(rel_path: str) -> str:
     """Classify a release-relative path.
 
@@ -175,9 +213,10 @@ def classify_path(rel_path: str) -> str:
     norm = _normalise(rel_path)
     if norm in IMMUTABLE_EVIDENCE_ARTIFACTS:
         return IMMUTABLE_EXPERIMENT_EVIDENCE
-    for prefix in RUNTIME_ROOTS + _RUNTIME_MUTABLE_EXTRA:
-        if norm.startswith(prefix):
-            return RUNTIME_MUTABLE
+    if norm in _RUNTIME_ATTACHMENTS:
+        return RUNTIME_ATTACHMENT
+    if _under_runtime_root(norm, RUNTIME_ROOTS + _RUNTIME_MUTABLE_EXTRA):
+        return RUNTIME_MUTABLE
     if norm in _RELEASE_IMMUTABLE_FILES:
         return RELEASE_IMMUTABLE
     for prefix in _RELEASE_IMMUTABLE_PREFIXES:
@@ -194,7 +233,7 @@ def is_runtime_mutable(rel_path: str) -> bool:
 def runtime_root_of(rel_path: str) -> str | None:
     """Return the runtime root containing ``rel_path``, or None."""
     norm = _normalise(rel_path)
-    for prefix in RUNTIME_ROOTS:
-        if norm.startswith(prefix):
-            return prefix
+    for root in RUNTIME_ROOTS:
+        if norm == root or norm.startswith(root + "/"):
+            return root
     return None

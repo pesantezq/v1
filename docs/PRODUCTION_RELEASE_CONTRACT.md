@@ -725,10 +725,58 @@ and cannot be put back.
 
 Which dirty paths matter is decided by the canonical release-immutability
 contract (`portfolio_automation.release.contracts.classify_path`), not
-restated here: production writes under the runtime roots (`data/`, `outputs/`,
-`logs/`) by design, so dirt there is expected operation, while a modified
-`RELEASE_IMMUTABLE` path is exactly the drift this gate exists to catch.
-Untracked files follow that same contract; this gate invents no new rule.
+restated here: production writes under the runtime roots (`data`, `outputs`,
+`logs`) by design, so dirt there is expected operation, while a modified
+`RELEASE_IMMUTABLE` path is exactly the drift this gate exists to catch. Runtime
+roots are matched by path **component** (the bare release-root symlink `data`
+*and* everything beneath it are runtime-mutable; `database` is not `data`), so a
+release that attaches its runtime roots as bare symlinks is not misread as
+drift. An **arbitrary** untracked path is still drift; VS-001's frozen evidence
+keeps its `IMMUTABLE_EXPERIMENT_EVIDENCE` precedence.
+
+#### Release-root runtime attachments (`.venv`, `.env`)
+
+A deployed release attaches a small, fixed set of untracked symlinks to shared
+host state that is intentionally **not** part of the release:
+
+| attachment | canonical target |
+|---|---|
+| `.venv` | `/opt/stockbot/.venv` |
+| `.env`  | `/opt/stockbot/.env` |
+
+These are their own class (`RUNTIME_ATTACHMENT`) so a secret/environment
+symlink is never mistaken for ordinary generated output. Classification alone
+excuses only the *pathname*; the certifier additionally **proves** each
+attachment rather than assuming it. To be excused from release dirt an
+attachment must, at both bracket endpoints:
+
+1. be reported **untracked** by git porcelain (`?? .venv`);
+2. exist;
+3. be a **symlink** (a regular file/dir in the slot is rejected);
+4. resolve to the **canonical target** above — a `.venv -> /tmp/rogue` link is
+   rejected even though its porcelain status is the same `?? .venv`;
+5. carry **stable link witnesses** across the whole observation — the
+   configuration anchor folds in each attachment's own inode/size/mtime/ctime
+   and raw/resolved target, so a swap (even A→B→A that restores the target
+   bytes) breaks `anchor_before == anchor_after`.
+
+A **tracked or modified** `.env`/`.venv` (porcelain status other than `??`) is
+drift, not an approved attachment. The certifier reads the attachment target
+pathname as evidence; it never reads `.env` **contents**.
+
+#### Timers carry execution *routing*, not an execution surface
+
+A `.timer` has no `[Service]` `Exec*` surface, so it is not required to record
+`RootDirectoryStartOnly` and it contributes no scheduler execution surface of
+its own (that requirement is unchanged for `.service` units). But a timer still
+**routes** execution: its effective `Triggers`/`Unit` names the service it
+starts, and a drop-in can repoint it. The certifier therefore records each
+timer's manager-derived effective target and requires that every triggered
+StockBot service (a) lies inside the declared certification inventory, (b) has
+its own scheduler evidence, and (c) is covered by systemd-unit validity — so a
+timer can never start an uninspected service. `Id` and `LoadState=loaded` are
+required for every scheduler unit; a non-service unit that nonetheless carries
+service execution/path evidence fails closed.
 
 **Cron's backing store, not just its rendered content.** `crontab -l` content
 is blind to A→B→A exactly as file content is everywhere else. The observation

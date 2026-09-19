@@ -60,6 +60,11 @@ stockbot-daily.timer}"
 # The effective unit load path, asked of systemd rather than assumed. See
 # collect_systemd_validity_evidence.sh for why a hardcoded subset is a false
 # PASS waiting to happen.
+# Release-root runtime attachment symlinks. Mirrors
+# portfolio_automation/release/contracts.RUNTIME_ATTACHMENT_TARGETS; the
+# certifier validates type/target against that contract and fails CLOSED if an
+# expected attachment's evidence is missing, so an omission here is fail-safe.
+RUNTIME_ATTACHMENTS="${STOCKBOT_RUNTIME_ATTACHMENTS:-.venv .env}"
 SEARCH_PATH="${STOCKBOT_UNIT_SEARCH_PATH:-}"
 if [ -z "$SEARCH_PATH" ]; then
   SEARCH_PATH=$(systemd-analyze unit-paths 2>/dev/null | tr '\n' ' ')
@@ -221,6 +226,21 @@ _configuration_anchor() {
 "
   out="$out release_max_ctime=$(_release_max_ctime "$resolved_release")
 "
+  # release-root runtime attachments: the symlink's OWN witnesses (not its
+  # target's) plus the raw and resolved target, so a swapped or repointed
+  # attachment cannot read as unchanged even if the target bytes are restored.
+  for _a in $RUNTIME_ATTACHMENTS; do
+    _ap="$resolved_release/$_a"
+    if [ -L "$_ap" ] || [ -e "$_ap" ]; then
+      out="$out$(stat -c '%n|%i|%s|%.9Y|%.9Z' "$_ap" 2>/dev/null)
+"
+      out="$out attach_${_a}=$(readlink "$_ap" 2>/dev/null)|$(readlink -f "$_ap" 2>/dev/null)
+"
+    else
+      out="$out$_ap|absent
+"
+    fi
+  done
   printf '%s' "$out" | sha256sum | awk '{print $1}'
 }
 
@@ -277,10 +297,35 @@ for u in $UNITS; do
   # under `yes`, only ExecStart resolves beneath RootDirectory and every other
   # hook resolves on the HOST. Omitting it makes the parser default to false
   # and treat a legacy ExecStop as chrooted under the release.
+  # Triggers/Unit expose a timer's EFFECTIVE routing target (drop-in-aware);
+  # harmless empty scalars for a .service. The certifier uses them only for
+  # non-service units, to prove a timer starts a service inside the inventory.
   systemctl show "$u" \
     -p Id $EXEC_FLAGS -p WorkingDirectory -p RootDirectory \
     -p RootDirectoryStartOnly \
+    -p Triggers -p Unit \
     -p EnvironmentFiles -p LoadState --no-pager 2>/dev/null
+done
+
+# Release-root runtime attachment evidence: link TYPE and TARGET, so the
+# certifier can prove .venv/.env are symlinks resolving to their canonical host
+# targets rather than merely present. Stays inside the configuration bracket.
+_att_release=$(readlink -f "$RELEASE_POINTER" 2>/dev/null)
+for _a in $RUNTIME_ATTACHMENTS; do
+  _ap="$_att_release/$_a"
+  echo "##RUNTIME_ATTACHMENT $_a"
+  if [ -L "$_ap" ]; then
+    echo "exists=yes"
+    echo "is_symlink=yes"
+    echo "raw_target=$(readlink "$_ap" 2>/dev/null)"
+    echo "resolved_target=$(readlink -f "$_ap" 2>/dev/null)"
+  elif [ -e "$_ap" ]; then
+    echo "exists=yes"
+    echo "is_symlink=no"
+  else
+    echo "exists=no"
+    echo "is_symlink=no"
+  fi
 done
 echo "##SCHEDULER_CRON"
 crontab -l 2>/dev/null
