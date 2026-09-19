@@ -84,14 +84,21 @@ _RUNTIME_MUTABLE_EXTRA: tuple[str, ...] = (
     "__pycache__",
 )
 
-# Release-ROOT runtime attachments: exact single paths the deployed release
-# symlinks to shared, non-release host state. Classified distinctly so a
-# secret/environment attachment is never mistaken for ordinary generated
-# output. Only these EXACT paths qualify.
-_RUNTIME_ATTACHMENTS: tuple[str, ...] = (
-    ".venv",
-    ".env",
-)
+# Release-ROOT runtime attachments: the exact symlink each deployed release
+# carries AND the canonical host target it must resolve to. Classifying the
+# pathname (RUNTIME_ATTACHMENT) only excuses it from *pathname* drift; the
+# release-observation certifier additionally proves, per this mapping, that the
+# entry is an untracked symlink pointing HERE and stable across the observation
+# bracket. A ``.venv -> /tmp/rogue`` link therefore fails certification even
+# though its porcelain status is the same ``?? .venv``.
+RUNTIME_ATTACHMENT_TARGETS: dict[str, str] = {
+    ".venv": "/opt/stockbot/.venv",
+    ".env": "/opt/stockbot/.env",
+}
+
+#: The attachment pathnames, derived from the target mapping so the two cannot
+#: drift apart.
+_RUNTIME_ATTACHMENTS: tuple[str, ...] = tuple(RUNTIME_ATTACHMENT_TARGETS)
 
 # Source of the approved release. Production reads these and must never write
 # them; a runtime write here is precisely the drift this contract forbids.

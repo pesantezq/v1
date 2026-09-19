@@ -3248,7 +3248,7 @@ def test_the_gate_bearing_set_is_derived_not_handwritten():
     """A new consumer section must automatically fall under the bracket."""
     mod = _observation_module()
     derived = mod.gate_bearing_sections()
-    consumed = set(mod.FLOW_SECTIONS) | {"SCHEDULER_UNIT"}
+    consumed = set(mod.FLOW_SECTIONS) | set(mod.REPEATABLE_GATE_SECTIONS)
     assert derived == consumed - mod.BOUNDARY_SECTIONS - {
         "VALIDITY_BEGIN", "VALIDITY_END"}
 
@@ -4093,7 +4093,7 @@ def _valid_service_lines():
     ]
 
 
-def _build_stream(*, dirty=(), timer_lines=None, service_lines=None):
+def _build_stream(*, dirty=(), timer_lines=None, service_lines=None, attachments=None):
     """A build()-consumable stream at the production SHAPE: a valid service
     scheduler block, optional extra ##SCHEDULER_UNIT timer block, and real
     `git status --porcelain` dirty entries injected at BOTH endpoints."""
@@ -4107,6 +4107,12 @@ def _build_stream(*, dirty=(), timer_lines=None, service_lines=None):
         block = ("##SCHEDULER_UNIT stockbot-daily.timer\n"
                  + "".join(l + "\n" for l in timer_lines))
         stream = stream.replace("##POINTER_PATH", block + "##POINTER_PATH", 1)
+    if attachments is not None:
+        blocks = ""
+        for name, fields in attachments:
+            blocks += ("##RUNTIME_ATTACHMENT " + name + "\n"
+                       + "".join(f"{k}={v}\n" for k, v in fields.items()))
+        stream = stream.replace("##POINTER_PATH", blocks + "##POINTER_PATH", 1)
     return mod, stream
 
 
@@ -4165,10 +4171,27 @@ def test_fa_a_tracked_runtime_attachment_is_not_excused():
 
 # --- Finding B ------------------------------------------------------------
 
-def _timer(*, unit_id="stockbot-daily.timer", loaded=True, extra=()):
+def _timer(*, unit_id="stockbot-daily.timer", loaded=True,
+           triggers="stockbot-daily.service", extra=()):
     lines = [f"Id={unit_id}", f"LoadState={'loaded' if loaded else 'not-found'}"]
+    if triggers is not None:
+        lines.append(f"Triggers={triggers}")
     lines.extend(extra)
     return lines
+
+
+def _attachment_defects(defects):
+    return [d for d in defects if d.startswith("runtime attachment")]
+
+
+_GOOD_ATTACHMENTS = [
+    (".venv", {"exists": "yes", "is_symlink": "yes",
+               "raw_target": "/opt/stockbot/.venv",
+               "resolved_target": "/opt/stockbot/.venv"}),
+    (".env", {"exists": "yes", "is_symlink": "yes",
+              "raw_target": "/opt/stockbot/.env",
+              "resolved_target": "/opt/stockbot/.env"}),
+]
 
 
 def test_fb_a_timer_without_the_service_scalar_is_accepted_by_the_scheduler_leg():
@@ -4216,3 +4239,121 @@ def test_fb_a_service_still_requires_the_chroot_scope_scalar():
         "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }"])
     defects = _unit_defects(_stream_defects(mod, stream), "stockbot-daily.service")
     assert any("RootDirectoryStartOnly" in d for d in defects), defects
+
+
+# ===========================================================================
+# PR #46 authority-closure: attachment target proof + timer routing proof
+# ===========================================================================
+
+# --- P1-A: attachment TARGET / TYPE proof ---------------------------------
+
+def test_p1a_correct_attachments_do_not_block():
+    """Untracked `.venv`/`.env` that are symlinks resolving to the canonical
+    host targets, with stable witnesses, are excused from release dirt and
+    raise no attachment defect."""
+    mod, stream = _build_stream(dirty=["?? .venv", "?? .env"],
+                                attachments=_GOOD_ATTACHMENTS)
+    defects = _stream_defects(mod, stream)
+    assert _attachment_defects(defects) == [], _attachment_defects(defects)
+    assert _dirty_defects(defects) == []
+
+
+@pytest.mark.parametrize("name,bad_target", [
+    (".venv", "/tmp/rogue"), (".env", "/tmp/rogue.env")])
+def test_p1a_wrong_attachment_target_is_rejected(name, bad_target):
+    atts = [(n, dict(f)) for n, f in _GOOD_ATTACHMENTS]
+    for n, f in atts:
+        if n == name:
+            f["raw_target"] = bad_target
+            f["resolved_target"] = bad_target
+    mod, stream = _build_stream(dirty=["?? .venv", "?? .env"], attachments=atts)
+    defects = _attachment_defects(_stream_defects(mod, stream))
+    assert any(name in d and "canonical" in d for d in defects), defects
+
+
+def test_p1a_non_symlink_attachment_is_rejected():
+    atts = [(n, dict(f)) for n, f in _GOOD_ATTACHMENTS]
+    atts[0][1]["is_symlink"] = "no"     # .venv is a regular file/dir
+    mod, stream = _build_stream(dirty=["?? .venv", "?? .env"], attachments=atts)
+    defects = _attachment_defects(_stream_defects(mod, stream))
+    assert any(".venv" in d and "is_symlink" in d for d in defects), defects
+
+
+def test_p1a_missing_attachment_is_rejected():
+    """An attachment the topology requires but the observation never captured
+    cannot be excused."""
+    mod, stream = _build_stream(dirty=["?? .env"],
+                                attachments=[a for a in _GOOD_ATTACHMENTS
+                                             if a[0] == ".env"])
+    defects = _attachment_defects(_stream_defects(mod, stream))
+    assert any(".venv" in d and "no attachment evidence" in d for d in defects), defects
+
+
+def test_p1a_absent_attachment_object_is_rejected():
+    atts = [(n, dict(f)) for n, f in _GOOD_ATTACHMENTS]
+    atts[1][1]["exists"] = "no"         # .env slot empty on the host
+    mod, stream = _build_stream(attachments=atts)
+    defects = _attachment_defects(_stream_defects(mod, stream))
+    assert any(".env" in d and "exists" in d for d in defects), defects
+
+
+def test_p1a_tracked_attachment_still_blocks_as_drift():
+    """Even with correct attachment target evidence, a TRACKED/modified .env
+    (status != '??') is still release drift, not an approved attachment."""
+    mod, stream = _build_stream(dirty=["M  .env"], attachments=_GOOD_ATTACHMENTS)
+    assert any(".env" in d for d in _dirty_defects(_stream_defects(mod, stream)))
+
+
+# --- P1-B: timer ROUTING proof --------------------------------------------
+
+def test_p1b_timer_to_expected_service_does_not_block():
+    mod, stream = _build_stream(timer_lines=_timer(),
+                                attachments=_GOOD_ATTACHMENTS)
+    defects = _unit_defects(
+        _stream_defects(mod, stream, extra_validity=("stockbot-daily.timer",)),
+        "stockbot-daily.timer")
+    assert defects == [], defects
+
+
+def test_p1b_timer_to_legacy_service_is_rejected():
+    mod, stream = _build_stream(timer_lines=_timer(triggers="legacy-runner.service"))
+    defects = _unit_defects(
+        _stream_defects(mod, stream, extra_validity=("stockbot-daily.timer",)),
+        "stockbot-daily.timer")
+    assert any("legacy-runner.service" in d and "inventory" in d
+               for d in defects), defects
+
+
+def test_p1b_timer_target_absent_from_scheduler_is_rejected():
+    """The triggered service is declared but has no scheduler block in this
+    observation, so its execution surfaces were never aligned."""
+    mod, stream = _build_stream(
+        timer_lines=_timer(triggers="stockbot-helper.service"))
+    defects = _unit_defects(
+        _stream_defects(mod, stream,
+                        extra_validity=("stockbot-daily.timer",
+                                        "stockbot-helper.service")),
+        "stockbot-daily.timer")
+    assert any("stockbot-helper.service" in d and "no scheduler evidence" in d
+               for d in defects), defects
+
+
+def test_p1b_timer_with_no_effective_target_is_rejected():
+    mod, stream = _build_stream(timer_lines=_timer(triggers=None))
+    defects = _unit_defects(
+        _stream_defects(mod, stream, extra_validity=("stockbot-daily.timer",)),
+        "stockbot-daily.timer")
+    assert any("no effective trigger target" in d for d in defects), defects
+
+
+def test_p1b_timer_target_uses_manager_triggers_over_unit_directive():
+    """Triggers (manager-derived, drop-in-aware) wins over the Unit directive:
+    a template that reads Unit=stockbot-daily.service but whose EFFECTIVE
+    Triggers points at a legacy service is rejected."""
+    mod, stream = _build_stream(timer_lines=_timer(
+        triggers=None, extra=["Unit=stockbot-daily.service",
+                              "Triggers=legacy-runner.service"]))
+    defects = _unit_defects(
+        _stream_defects(mod, stream, extra_validity=("stockbot-daily.timer",)),
+        "stockbot-daily.timer")
+    assert any("legacy-runner.service" in d for d in defects), defects

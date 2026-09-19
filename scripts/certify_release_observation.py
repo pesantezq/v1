@@ -78,7 +78,7 @@ BOUNDARY_SECTIONS = frozenset({
 })
 #: Repeatable evidence blocks the consumer reads that are not run-level
 #: scalars. SCHEDULER_UNIT appears once per unit by design.
-REPEATABLE_GATE_SECTIONS = ("SCHEDULER_UNIT",)
+REPEATABLE_GATE_SECTIONS = ("SCHEDULER_UNIT", "RUNTIME_ATTACHMENT")
 
 
 def gate_bearing_sections() -> frozenset[str]:
@@ -220,7 +220,7 @@ def flow_defects(outer: str) -> list[str]:
     # `section` in parse_flow and silently discards every following property
     # until the next recognised marker -- an aligned ExecStart followed by
     # ##IGNORED and a legacy ExecStop lost the legacy command entirely.
-    known = frozenset(FLOW_SECTIONS) | {"SCHEDULER_UNIT"}
+    known = frozenset(FLOW_SECTIONS) | {"SCHEDULER_UNIT", "RUNTIME_ATTACHMENT"}
     for line in outer.splitlines():
         if line.startswith("##"):
             tokens = line[2:].split()
@@ -235,7 +235,7 @@ def flow_defects(outer: str) -> list[str]:
             # a known name with the wrong SHAPE is equally malformed: a bare
             # ##SCHEDULER_UNIT sets the unit to empty and every following
             # property is silently discarded
-            expected_arity = 2 if name == "SCHEDULER_UNIT" else 1
+            expected_arity = 2 if name in ("SCHEDULER_UNIT", "RUNTIME_ATTACHMENT") else 1
             if len(tokens) != expected_arity:
                 defects.append(
                     f"observation contains malformed section marker "
@@ -260,6 +260,18 @@ def flow_defects(outer: str) -> list[str]:
                 f"for {name} — a capture records each unit once, and merging "
                 f"them would let earlier evidence compensate for a later "
                 f"contradictory manager query")
+    attachment_blocks: dict[str, int] = {}
+    for line in outer.splitlines():
+        if line.startswith("##RUNTIME_ATTACHMENT "):
+            nm = line[len("##RUNTIME_ATTACHMENT "):].strip()
+            attachment_blocks[nm] = attachment_blocks.get(nm, 0) + 1
+    for name, count in sorted(attachment_blocks.items()):
+        if count > 1:
+            defects.append(
+                f"observation stream contains {count} ##RUNTIME_ATTACHMENT "
+                f"blocks for {name} — a capture records each attachment once, "
+                f"and merging them would let one link witness compensate for a "
+                f"contradictory reading of the same attachment")
     for required in ("HOST", "OBSERVATION_ID",
                      "CONFIGURATION_ANCHOR_BEFORE", "CONFIGURATION_ANCHOR_AFTER",
                      "OBSERVATION_END"):
@@ -276,6 +288,7 @@ def parse_flow(outer: str) -> dict:
     """Read the outer stream's scalar sections and per-unit scheduler blocks."""
     scalars: dict[str, str] = {}
     units: dict[str, list[str]] = {}
+    attachments: dict[str, list[str]] = {}
     cron: list[str] = []
     release_dirty: dict[str, list[str]] = {"BEFORE": [], "AFTER": []}
     section = unit = ""
@@ -286,9 +299,13 @@ def parse_flow(outer: str) -> dict:
             unit = parts[1].strip() if len(parts) > 1 else ""
             if section == "SCHEDULER_UNIT" and unit:
                 units.setdefault(unit, [])
+            if section == "RUNTIME_ATTACHMENT" and unit:
+                attachments.setdefault(unit, [])
             continue
         if section == "SCHEDULER_UNIT" and unit:
             units[unit].append(raw)
+        elif section == "RUNTIME_ATTACHMENT" and unit:
+            attachments[unit].append(raw)
         elif section == "SCHEDULER_CRON":
             cron.append(raw)
         elif section in ("RELEASE_DIRTY_BEFORE", "RELEASE_DIRTY_AFTER"):
@@ -304,8 +321,8 @@ def parse_flow(outer: str) -> dict:
                     release_dirty[section.rsplit("_", 1)[1]].append(raw)
         elif section in FLOW_SECTIONS and raw.strip():
             scalars.setdefault(section, raw.strip())
-    return {"scalars": scalars, "units": units, "cron": "\n".join(cron),
-            "release_dirty": release_dirty}
+    return {"scalars": scalars, "units": units, "attachments": attachments,
+            "cron": "\n".join(cron), "release_dirty": release_dirty}
 
 
 #: `systemctl show` reports ExecStart in a STRUCTURED form, not unit-file
@@ -395,6 +412,22 @@ def _unit_text(properties: list[str]) -> str:
     return "[Service]\n" + "\n".join(body) + "\n"
 
 
+def _timer_targets(props: list[str]) -> list[str]:
+    """The effective service(s) a timer routes execution to. Prefer the
+    manager-derived ``Triggers`` (which reflects drop-in overrides), falling
+    back to the ``Unit`` directive. Only .service targets are returned; a timer
+    that triggers timers.target and the like carries no application routing."""
+    triggers: list[str] = []
+    unit_directive: list[str] = []
+    for line in props:
+        if line.startswith("Triggers="):
+            triggers = line.split("=", 1)[1].split()
+        elif line.startswith("Unit="):
+            unit_directive = line.split("=", 1)[1].split()
+    effective = triggers or unit_directive
+    return [t for t in effective if t.endswith(".service")]
+
+
 def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
           expected_validity_units: tuple[str, ...],
           release_root: str = "/opt/stockbot/current",
@@ -468,6 +501,44 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                     f"{endpoint.lower()} endpoint ({status.strip()} {part}) — "
                     f"HEAD naming the approved commit does not make the "
                     f"worktree the committed release")
+
+    # --- runtime attachment leg (P1-A) ------------------------------------
+    # A release-root runtime attachment (.venv/.env) is excused from release
+    # dirt only when PROVEN to be an untracked symlink resolving to its
+    # canonical host target. Cross-bracket stability is enforced by the
+    # configuration anchor (which folds in each attachment's link witness);
+    # type and target are proven here from the dedicated evidence blocks.
+    attachments = flow.get("attachments", {})
+    for aname, target in sorted(C.RUNTIME_ATTACHMENT_TARGETS.items()):
+        block = attachments.get(aname)
+        if not block:
+            defects.append(
+                f"runtime attachment {aname}: no attachment evidence in the "
+                f"observation — its link type and target were never proven, so "
+                f"the untracked-path exception cannot be applied")
+            continue
+        fields: dict[str, str] = {}
+        for line in block:
+            k, _, v = line.partition("=")
+            fields.setdefault(k.strip(), v.strip())
+        if fields.get("exists") != "yes":
+            defects.append(
+                f"runtime attachment {aname}: recorded exists="
+                f"{fields.get('exists')!r} — an attachment the topology "
+                f"requires is absent")
+            continue
+        if fields.get("is_symlink") != "yes":
+            defects.append(
+                f"runtime attachment {aname}: recorded is_symlink="
+                f"{fields.get('is_symlink')!r} — a regular file or directory in "
+                f"an attachment slot is not the approved topology")
+            continue
+        resolved = fields.get("resolved_target") or fields.get("raw_target") or ""
+        if resolved != target:
+            defects.append(
+                f"runtime attachment {aname}: resolves to {resolved!r}, not the "
+                f"canonical {target!r} — a link pointing outside the approved "
+                f"target runs production from an uncertified environment")
 
     # The non-restorable half. A tracked file modified and restored to its
     # committed content reads clean in porcelain at BOTH ends -- measured --
@@ -589,6 +660,29 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                     f"to silently discard executable data on a unit that should "
                     f"have none")
                 continue
+            # P1-B: a timer has no [Service] Exec surface but it DOES route
+            # execution. Prove its effective target resolves into the certified
+            # inventory, so a drop-in cannot silently repoint it at an
+            # uninspected service.
+            targets = _timer_targets(props)
+            if not targets:
+                defects.append(
+                    f"##SCHEDULER_UNIT {unit}: records no effective trigger "
+                    f"target (Triggers=/Unit=) — a scheduler unit that routes "
+                    f"execution must name the service it starts, or its target "
+                    f"is unverifiable")
+                continue
+            for tgt in targets:
+                if tgt not in expected_validity_units:
+                    defects.append(
+                        f"##SCHEDULER_UNIT {unit}: triggers {tgt}, which is "
+                        f"outside the declared certification inventory — a timer "
+                        f"must not start a service no gate inspects")
+                elif tgt not in flow["units"]:
+                    defects.append(
+                        f"##SCHEDULER_UNIT {unit}: triggers {tgt}, but that "
+                        f"service has no scheduler evidence in this observation "
+                        f"— its execution surfaces were never aligned")
     if flow["cron"].strip():
         surfaces.extend(S.parse_crontab(flow["cron"], origin="cron"))
     scheduler_artifact = S.scheduler_alignment_artifact(
