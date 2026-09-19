@@ -37,6 +37,16 @@ FMP_ENDPOINTS = {
         "usage": "SMA, returns, volume averages",
     },
 
+    "historical_prices_dividend_adjusted": {
+        "endpoint": "/stable/historical-price-eod/dividend-adjusted",
+        "method": "GET",
+        "params": ["symbol", "from"],
+        "per_symbol": True,
+        "starter_safe": "unverified",
+        "priority": "P2",
+        "usage": "VS-002 historical risk evidence ONLY (bounded Northstar 0C). Adjustment semantics carried by the endpoint identity. Entitlement/response shape UNVERIFIED — one bounded metered verification is deferred to the production evidence-build mission. Fail closed; never fall back to /full, the mutable archive, or another vendor.",
+    },
+
     "stock_news": {
         "endpoint": "/stable/news/stock",
         "method": "GET",

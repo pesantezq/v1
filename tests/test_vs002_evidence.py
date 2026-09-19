@@ -73,8 +73,89 @@ def _scan_dates(n: int, step: int = 8) -> list[str]:
     return [all_days[start + i * step] for i in range(n)]
 
 
+class SyntheticAdjustedProvider:
+    """Deterministic dividend-adjusted provider rows. SYNTHETIC and says so.
+
+    Models the semantics the authorized endpoint CLAIMS: ``close`` is the
+    unadjusted official close (a 10:1 split shows a raw discontinuity; a
+    dividend does not), ``adjClose`` is the smooth split+dividend adjusted
+    series with a final adjustment factor of exactly 1. The benchmark carries
+    a dividend event so the masquerade witness has something genuine to see.
+    """
+
+    endpoint = C.AUTHORIZED_ENDPOINT
+
+    def __init__(self, symbols=SYMBOLS + (BENCH,), *,
+                 mutate=None) -> None:
+        self._symbols = tuple(symbols)
+        self._mutate = mutate or (lambda sym, rows: rows)
+
+    def _rows(self, symbol: str) -> list[dict]:
+        n = SHORT_SESSIONS if symbol == "NASA" else SESSIONS
+        days = _dates(SESSIONS)[-n:]
+        # a smooth adjusted path; per-symbol offset keeps series distinct
+        base = 100.0 + (hash(symbol) % 7)
+        adj = [base + i * 0.5 for i in range(n)]
+        # one dividend on the benchmark 300 sessions in: every EARLIER
+        # adjusted close is scaled down by the factor, later ones untouched
+        div_factor = 0.99 if symbol == BENCH and n > 320 else None
+        div_at = 300
+        # one 10:1 split on AAPL 250 sessions in: the RAW close drops 10x at
+        # the split while the adjusted series stays smooth
+        split_at = 250 if symbol == "AAPL" and n > 320 else None
+        rows = []
+        for i, day in enumerate(days):
+            adj_close = adj[i]
+            if div_factor is not None and i < div_at:
+                adj_close *= div_factor
+            close = adj[i]
+            if split_at is not None and i < split_at:
+                close = adj[i] * 10.0
+            if div_factor is not None and i >= div_at:
+                pass  # post-dividend: close == adjusted path
+            elif div_factor is not None:
+                close = adj[i]  # raw close does NOT drop on a dividend
+            rows.append({"date": day, "close": round(close, 6),
+                         "adjClose": round(adj_close, 6), "volume": 1000 + i})
+        return list(reversed(rows))     # provider convention: newest-first
+
+    def fetch(self, symbol: str) -> list[dict]:
+        return self._mutate(symbol, self._rows(symbol))
+
+
+# A deterministic acquisition clock. Hermetic tests never read the wall
+# clock; retrieval time must be reproducible so canonical identities are too.
+# Advances one second per call so distinct symbols get distinct-but-fixed
+# retrieval instants without any real timing.
+def fixed_clock(start_iso: str = "2026-09-18T15:00:00Z"):
+    import datetime as _dt
+    base = _dt.datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    state = {"n": 0}
+
+    def _clock():
+        stamp = base + _dt.timedelta(seconds=state["n"])
+        state["n"] += 1
+        return stamp
+    return _clock
+
+
 @pytest.fixture
 def built(tmp_path: Path) -> tuple[Path, dict]:
+    scans = _scan_dates(12)
+    _db(tmp_path, scans=scans)
+    for sym in SYMBOLS + (BENCH,):
+        _archive(tmp_path, sym, SHORT_SESSIONS if sym == "NASA" else SESSIONS)
+    manifest = B.build(tmp_path, code_sha="testsha",
+                       generated_at="2026-09-06T00:00:00Z",
+                       bar_provider=SyntheticAdjustedProvider(),
+                       bar_clock=fixed_clock())
+    return tmp_path / B.DEFAULT_OUT_REL, manifest
+
+
+@pytest.fixture
+def built_legacy(tmp_path: Path) -> tuple[Path, dict]:
+    """The pre-bar package shape: valid, digest-bound — and missing the risk
+    evidence, which readiness must say out loud."""
     scans = _scan_dates(12)
     _db(tmp_path, scans=scans)
     for sym in SYMBOLS + (BENCH,):
@@ -300,6 +381,15 @@ def test_consumer_pre_signal_boundary_is_strict(built):
 
 
 # ── readiness ─────────────────────────────────────────────────────────────
+
+
+def test_a_legacy_package_without_bars_is_not_ready(built_legacy):
+    """A package without the adjusted-bar panel is missing exactly the risk
+    evidence VS-002 is blocked on, and readiness says so."""
+    snap = CON.validate(built_legacy[0])
+    r = R.evaluate(snap)
+    assert r.status == R.NOT_READY
+    assert any("no dividend-adjusted bar panel" in x for x in r.reasons)
 
 
 def test_valid_fixture_is_ready(built):

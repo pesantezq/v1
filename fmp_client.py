@@ -43,6 +43,15 @@ _EP_QUOTE = "quote"
 _EP_PROFILE = "profile"
 _EP_RATIOS = "ratios"
 _EP_HISTORICAL = "historical-price-eod/full"
+# VS-002 historical risk evidence ONLY (bounded Northstar 0C mission
+# northstar_0c_historical_price_evidence_for_vs002). Chosen because adjustment
+# semantics must be explicit in the ENDPOINT IDENTITY rather than inferred from
+# a field named adjClose. Entitlement/response shape on the current plan is
+# UNVERIFIED (deferred B3): the production evidence-build mission performs one
+# bounded metered verification. If unavailable or incompatible the consumer
+# FAILS CLOSED — never falls back to /full, the mutable archive, or another
+# vendor.
+_EP_HISTORICAL_DIVADJ = "historical-price-eod/dividend-adjusted"
 _EP_NEWS_STOCK = "news/stock"
 _EP_INCOME_STMT = "income-statement"
 _EP_KEY_METRICS = "key-metrics"
@@ -1155,3 +1164,70 @@ class FMPClient:
             sym, len(rows), from_date,
         )
         return rows
+
+    def get_historical_prices_dividend_adjusted(
+        self,
+        symbol: str,
+        years: int = 5,
+        ttl_days: int = 1,
+    ) -> List[Dict]:
+        """Fetch DIVIDEND-ADJUSTED daily bars for a single symbol.
+
+        Uses stable/historical-price-eod/dividend-adjusted?symbol=X&from=D.
+        Registered for the bounded VS-002 historical-evidence mission ONLY.
+
+        STRICTER than :meth:`get_historical_prices`, deliberately:
+
+        * a dict response is NOT unwrapped. The ``{"historical": [...]}``
+          envelope is the legacy /full shape, and silently accepting it here
+          would be exactly the endpoint substitution this path must refuse.
+          Anything that is not a plain list is treated as failure.
+        * there is no fallback to any other endpoint or provider. An
+          unavailable or incompatible endpoint returns ``[]`` and the evidence
+          builder fails closed on it.
+
+        Returns the provider rows verbatim (newest-first per FMP convention);
+        normalization and semantic verification belong to the evidence
+        builder, which also digests the raw response.
+        """
+        if not symbol:
+            return []
+        sym = symbol.upper()
+        from_date = (date.today() - timedelta(days=years * 365)).isoformat()
+        cache_key = f"hist_divadj_{sym}_{years}y"
+        ttl_seconds = ttl_days * 86400
+
+        cached = self._cache.get(cache_key, ttl_seconds)
+        if cached is not None:
+            return cached if isinstance(cached, list) else []
+
+        if self._counter.would_exceed(self._budget):
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
+
+        try:
+            raw = self._raw_get(
+                _EP_HISTORICAL_DIVADJ,
+                {"symbol": sym, "from": from_date},
+                base_url=FMP_STABLE_BASE_URL,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"FMP get_historical_prices_dividend_adjusted({symbol!r}) "
+                f"failed: {exc}")
+            stale = self._cache.get_stale(cache_key)
+            return stale if isinstance(stale, list) else []
+
+        if not isinstance(raw, list):
+            logger.warning(
+                "FMP dividend-adjusted endpoint for %s returned %s, not a "
+                "list — refusing (no legacy unwrapping on this path)",
+                sym, type(raw).__name__)
+            return []
+
+        self._cache.set(cache_key, raw)
+        logger.debug(
+            "FMP stable/historical-price-eod/dividend-adjusted %s: %d rows "
+            "(from %s)", sym, len(raw), from_date,
+        )
+        return raw

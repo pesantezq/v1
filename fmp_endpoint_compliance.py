@@ -26,6 +26,9 @@ STABLE_METHOD_MAP: dict[str, tuple[str, str]] = {
     "get_batch_quotes":       ("quote",                       "quote"),
     "get_batch_profiles":     ("profile",                     "profile"),
     "get_historical_prices":  ("historical-price-eod/full",   "historical_prices"),
+    "get_historical_prices_dividend_adjusted":
+        ("historical-price-eod/dividend-adjusted",
+         "historical_prices_dividend_adjusted"),
     "get_ratios":             ("ratios",                       "ratios"),
     "get_stock_news":         ("news/stock",                   "stock_news"),
     "get_income_statement":   ("income-statement",             "income_statement"),

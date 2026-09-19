@@ -46,6 +46,23 @@ REGISTRY: dict[str, dict] = {
         "classification": "core_stable_ok",
         "usage": "SMA20, 5d change, volume avg",
     },
+    # Registered 2026-09-18 for the bounded Northstar 0C mission
+    # northstar_0c_historical_price_evidence_for_vs002. Adjustment semantics
+    # are carried by the ENDPOINT IDENTITY, never inferred from a field named
+    # adjClose. starter_safe is "unverified" ON PURPOSE: no entitlement probe
+    # has run (deferred to the production evidence-build mission, which gets
+    # ONE bounded metered verification). If the endpoint is unavailable or
+    # incompatible the evidence path FAILS CLOSED — no fallback to /full, the
+    # mutable archive, Yahoo, yfinance, or any other vendor.
+    "historical_prices_dividend_adjusted": {
+        "endpoint":      "/stable/historical-price-eod/dividend-adjusted",
+        "per_symbol":    True,
+        "starter_safe":  "unverified",
+        "priority":      "P2",
+        "required_daily": False,
+        "classification": "core_stable_ok",
+        "usage": "VS-002 historical risk evidence ONLY (bounded 0C); entitlement UNVERIFIED, fail closed, never fall back",
+    },
     # Intraday research bars for the Governed Intraday Strategy Lab.
     # Registered 2026-08-08 after a read-only entitlement probe: 5min returns
     # full regular sessions back to at least 2017; 1min returns HTTP 402

@@ -24,7 +24,10 @@ from typing import Any, Optional
 
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence.builder import (
-    MANIFEST_REL, RETURNS_REL, SIGNALS_REL)
+    BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, MANIFEST_REL, RETURNS_REL,
+    SIGNALS_REL, reconstruct_bars_from_raw, verify_adjustment_semantics,
+    full_panel_from_raw, bar_eligibility)
+from portfolio_automation.vs002_evidence import snapshots as SN
 
 EXPECTED_ARTIFACTS = frozenset({SIGNALS_REL, RETURNS_REL, MANIFEST_REL})
 
@@ -41,6 +44,9 @@ class ValidatedSnapshot:
     manifest: dict[str, Any]
     signals: list[dict[str, Any]]
     returns: list[dict[str, Any]]
+    bars: list[dict[str, Any]] = field(default_factory=list)
+    bars_raw: dict[str, list] = field(default_factory=dict)
+    bar_snapshots: list[dict[str, Any]] = field(default_factory=list)
     _returns_index: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     # ---- deterministic access -------------------------------------------
@@ -58,6 +64,46 @@ class ValidatedSnapshot:
     def returns_for(self, symbol: str) -> list[dict[str, Any]]:
         """Chronological. Ordering is part of the contract, not incidental."""
         return [r for r in self.returns if r["symbol"] == symbol]
+
+    # ---- the dividend-adjusted bar panel ----------------------------------
+    @property
+    def has_bars(self) -> bool:
+        return bool(self.manifest.get("bar_endpoint"))
+
+    @property
+    def risk_free_rate_7d(self) -> dict[str, Any]:
+        """The preregistered rf assumption. Read from the manifest so the
+        result can never be described as having used an observed rate."""
+        return dict(self.manifest.get("risk_free_rate_7d") or {})
+
+    def bars_for(self, symbol: str) -> list[dict[str, Any]]:
+        """Chronological, exactly as stored. Ordering is contract."""
+        return [b for b in self.bars if b["symbol"] == symbol]
+
+    def bar(self, symbol: str, session_date: str) -> Optional[dict[str, Any]]:
+        """Exact (symbol, session_date) lookup. No forward fill, no nearest
+        neighbour, no implicit calendar: an absent session is None, and
+        whatever asked for it decides what absence means — never this reader."""
+        for b in self.bars_for(symbol):
+            if b["session_date"] == session_date:
+                return b
+        return None
+
+    def evidence_refs(self) -> list:
+        """The exact package-bound EvidenceRefs an ExperimentSpec embeds.
+
+        Reconstructed from the frozen canonical identities the build persisted
+        — not minted here, and not dependent on any caller timestamp. Holding
+        a ValidatedSnapshot means these already reconciled against a rebuild
+        from the frozen raw + retrieval facts (see :func:`validate`)."""
+        return [SN.ref_from_identity(rec) for rec in self.bar_snapshots]
+
+    def bars_before(self, symbol: str, boundary_date: str) -> list[dict[str, Any]]:
+        """Every bar session STRICTLY before the boundary — the structural
+        anti-lookahead edge of the beta window, same strictness as
+        :meth:`returns_before`."""
+        return [b for b in self.bars_for(symbol)
+                if b["session_date"] < boundary_date]
 
     def returns_before(self, symbol: str, boundary_date: str) -> list[dict[str, Any]]:
         """Every session STRICTLY before the boundary.
@@ -82,9 +128,15 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
         raise SnapshotInvalid(f"manifest absent: {root / MANIFEST_REL}")
     manifest = json.loads((root / MANIFEST_REL).read_text(encoding="utf-8"))
 
+    # A package that declares the bar panel must carry it; one that does not
+    # declare it must not smuggle it. The EXPECTED set is manifest-driven so
+    # neither direction can pass silently.
+    declares_bars = bool(manifest.get("bar_endpoint"))
+    expected = set(EXPECTED_ARTIFACTS) | (
+        {BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL} if declares_bars else set())
     present = {p.name for p in root.iterdir() if p.is_file()}
-    missing = sorted(EXPECTED_ARTIFACTS - present)
-    extra = sorted(present - EXPECTED_ARTIFACTS)
+    missing = sorted(expected - present)
+    extra = sorted(present - expected)
     if missing:
         errors.append(f"missing artifact(s): {missing}")
     if extra:
@@ -96,9 +148,22 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
 
     signals = json.loads((root / SIGNALS_REL).read_text(encoding="utf-8"))
     returns = json.loads((root / RETURNS_REL).read_text(encoding="utf-8"))
+    bars: list[dict[str, Any]] = []
+    bars_raw: dict[str, list] = {}
+    bar_snapshots: list[dict[str, Any]] = []
+    if declares_bars:
+        bars = json.loads((root / BARS_REL).read_text(encoding="utf-8"))
+        bars_raw = json.loads((root / BARS_RAW_REL).read_text(encoding="utf-8"))
+        bar_snapshots = json.loads(
+            (root / BARS_SNAPSHOTS_REL).read_text(encoding="utf-8"))
 
     declared = manifest.get("artifact_digests") or {}
-    for name, payload in ((SIGNALS_REL, signals), (RETURNS_REL, returns)):
+    artifact_pairs = [(SIGNALS_REL, signals), (RETURNS_REL, returns)]
+    if declares_bars:
+        artifact_pairs.append((BARS_REL, bars))
+        artifact_pairs.append((BARS_RAW_REL, bars_raw))
+        artifact_pairs.append((BARS_SNAPSHOTS_REL, bar_snapshots))
+    for name, payload in artifact_pairs:
         actual = C.artifact_digest(payload)
         if declared.get(name) != actual:
             errors.append(_digest_mismatch(name, declared.get(name), actual))
@@ -142,8 +207,141 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     if unmatured:
         errors.append(f"{len(unmatured)} unmatured signal(s) present")
 
+    if declares_bars:
+        # The bar panel's own contract, revalidated INDEPENDENTLY: endpoint
+        # identity, counts, chronology, duplicates, and the same adjustment-
+        # semantics battery the builder ran — recomputed here because the
+        # transport is exactly where substitution would occur.
+        if manifest.get("bar_endpoint") != C.AUTHORIZED_ENDPOINT:
+            errors.append(
+                f"bar panel declares endpoint {manifest.get('bar_endpoint')!r}, "
+                f"not the authorized {C.AUTHORIZED_ENDPOINT!r}")
+        if manifest.get("bar_source_id") != C.data_source_descriptor().source_id:
+            errors.append("bar_source_id does not match the authorized "
+                          "dividend-adjusted source descriptor")
+        if len(bars) != manifest.get("bar_row_count"):
+            errors.append(
+                f"bar row count {len(bars)} != manifest "
+                f"{manifest.get('bar_row_count')}")
+        rf = manifest.get("risk_free_rate_7d") or {}
+        if (rf.get("value") != C.RISK_FREE_RATE_7D_ASSUMPTION["value"]
+                or rf.get("basis") != C.RISK_FREE_RATE_7D_ASSUMPTION["basis"]
+                or rf.get("observed_evidence") is not False):
+            errors.append(
+                "risk_free_rate_7d is missing or is not the preregistered "
+                "operator assumption — the result must never claim an "
+                "observed risk-free rate")
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for b in bars:
+            by_symbol.setdefault(str(b.get("symbol")), []).append(b)
+        for sym, rows in sorted(by_symbol.items()):
+            dates = [r["session_date"] for r in rows]
+            if dates != sorted(dates):
+                errors.append(f"{sym}: bar series is not chronologically ordered")
+            if len(set(dates)) != len(dates):
+                errors.append(f"{sym}: duplicate bar session dates")
+            bar_rows = [C.BarRow(symbol=sym, session_date=r["session_date"],
+                                 close=float(r["close"]),
+                                 adj_close=float(r["adj_close"]),
+                                 volume=int(r["volume"])) for r in rows]
+            findings = verify_adjustment_semantics(
+                bar_rows, is_benchmark=sym == C.BENCHMARK)
+            errors.extend(findings)
+
+        # Finding A: each per-symbol raw digest must be RECOMPUTABLE from the
+        # persisted raw artifact — proving the recorded digest describes the
+        # frozen provider input actually shipped, not some discarded original.
+        declared_raw = manifest.get("bar_raw_response_digests") or {}
+        for sym in sorted(declared_raw):
+            if sym not in bars_raw:
+                errors.append(f"raw response for {sym} absent from {BARS_RAW_REL}")
+                continue
+            recomputed = C.artifact_digest(bars_raw[sym])
+            if recomputed != declared_raw[sym]:
+                errors.append(
+                    f"{sym}: raw-response digest mismatch — manifest "
+                    f"{declared_raw[sym]} != recomputed {recomputed}")
+
+        # Finding 2: independently REPLAY the excluded-symbol decision. Rebuild
+        # the full normalized candidate panel from the frozen full-universe raw
+        # and recompute the universal >=252-prior-session rule from the frozen
+        # earliest-signal facts. The recomputed eligible/excluded sets must
+        # equal the manifest's — otherwise the raw does not actually justify
+        # the recorded exclusions, and the decision is not reproducible.
+        if not errors:
+            fetched = set(manifest.get("bar_fetched_universe") or [])
+            earliest = {k: str(v) for k, v in
+                        (manifest.get("bar_earliest_signal") or {}).items()}
+            missing_raw = sorted(fetched - set(bars_raw))
+            if missing_raw:
+                errors.append(
+                    f"fetched symbols absent from frozen raw, cannot replay "
+                    f"exclusions: {missing_raw}")
+            else:
+                try:
+                    full = full_panel_from_raw(bars_raw, fetched)
+                    re_elig, re_excl = bar_eligibility(full, earliest)
+                except Exception as exc:  # noqa: BLE001
+                    re_elig, re_excl = None, None
+                    errors.append(
+                        f"bar eligibility could not be replayed from frozen "
+                        f"raw: {type(exc).__name__}: {exc}")
+                if re_elig is not None:
+                    m_elig = sorted(manifest.get("bar_eligible_universe") or [])
+                    m_excl = dict(manifest.get("bar_excluded_symbols") or {})
+                    if sorted(re_elig) != m_elig:
+                        errors.append(
+                            f"bar_eligible_universe not reproducible from frozen "
+                            f"raw: recomputed {sorted(re_elig)} != manifest "
+                            f"{m_elig}")
+                    if re_excl != m_excl:
+                        errors.append(
+                            "bar_excluded_symbols not reproducible from frozen "
+                            "raw: the recorded exclusion arithmetic does not "
+                            "match the frozen provider input")
+
+        # Raw -> normalized binding: re-derive the normalized panel from the
+        # FROZEN raw input, through the same normalization + windowing the
+        # builder used, and require it to equal bars.json. This refuses a
+        # package that pairs a valid raw response with independently-valid but
+        # unrelated normalized bars.
+        rng = manifest.get("bar_date_range") or {}
+        kept = set(manifest.get("bar_eligible_universe") or []) | {C.BENCHMARK}
+        if not errors:
+            try:
+                reconstructed = reconstruct_bars_from_raw(
+                    bars_raw, kept, str(rng.get("start")), str(rng.get("end")))
+            except Exception as exc:  # noqa: BLE001 — a raw that will not
+                reconstructed = None   # re-normalize is itself a failure
+                errors.append(
+                    f"frozen raw response does not re-normalize: "
+                    f"{type(exc).__name__}: {exc}")
+            if reconstructed is not None and reconstructed != bars:
+                errors.append(
+                    "normalized bars are not reproducible from the frozen raw "
+                    "response — bars.json was not derived from bars_raw.json")
+
+        # Finding C: rebuild the canonical snapshot identities from the frozen
+        # raw + package-bound retrieval time + normalized bars, and require
+        # them to match the frozen identities exactly. No caller timestamp
+        # participates; the retrieval fact is read from the package.
+        if not errors:
+            try:
+                retrieved = SN.parse_retrieved_at(
+                    manifest.get("bar_retrieved_at") or {})
+                mismatches = SN.rebuild_identity_mismatches(
+                    bars, retrieved_at=retrieved,
+                    raw_digests=declared_raw,
+                    frozen_identities=bar_snapshots)
+                errors.extend(mismatches)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(
+                    f"canonical evidence identity could not be rebuilt: "
+                    f"{type(exc).__name__}: {exc}")
+
     if errors:
         raise SnapshotInvalid("; ".join(errors))
 
     return ValidatedSnapshot(root=root, manifest=manifest,
-                             signals=signals, returns=returns)
+                             signals=signals, returns=returns, bars=bars,
+                             bars_raw=bars_raw, bar_snapshots=bar_snapshots)
