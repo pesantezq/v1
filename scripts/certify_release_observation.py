@@ -454,8 +454,15 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
             for part in [p.strip() for p in path.split("->")]:
                 if not part:
                     continue
-                if C.classify_path(part) == C.RUNTIME_MUTABLE:
+                cls = C.classify_path(part)
+                if cls == C.RUNTIME_MUTABLE:
                     continue        # production writes here by design
+                # A release-root runtime ATTACHMENT (.venv/.env at its exact
+                # path) is intentional topology, not drift -- but only while
+                # UNTRACKED. A tracked/modified attachment falls through to a
+                # defect below, so a drifting secret/env file is never excused.
+                if cls == C.RUNTIME_ATTACHMENT and status.strip() == "??":
+                    continue
                 defects.append(
                     f"the resolved release has a modified tracked file at the "
                     f"{endpoint.lower()} endpoint ({status.strip()} {part}) — "
@@ -518,25 +525,10 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                 f"that cannot say which unit it describes cannot be bound to "
                 f"one")
             continue
-        # The chroot-scope property must be RECORDED. The collector always
-        # requests it, so a block without exactly one usable value did not
-        # come from the collector -- and reconstructing without it would
-        # supply systemd semantics (StartOnly=false) that the evidence never
-        # recorded, treating a legacy host-path hook as chrooted beneath the
-        # release.
-        start_only = [line.split("=", 1)[1].strip() for line in props
-                      if line.startswith("RootDirectoryStartOnly=")]
-        if len(start_only) != 1 or start_only[0] not in ("yes", "no"):
-            defects.append(
-                f"##SCHEDULER_UNIT {unit}: the block records "
-                f"{start_only!r} for RootDirectoryStartOnly — the collector "
-                f"always requests this scalar, and defaulting it would supply "
-                f"chroot semantics the evidence never recorded")
-            continue
-        # A block whose own LoadState is not "loaded" describes a unit the
-        # manager was not running; converting it into execution surfaces while
-        # the nested validity leg claims the unit loaded would compose two
-        # manager observations that cannot both describe one stable run.
+        # LoadState applies to EVERY scheduler unit, service or timer: a
+        # block whose own LoadState is not "loaded" describes a unit the
+        # manager was not running, and cannot certify that unit while the
+        # nested validity leg claims it loaded.
         load_states = [line.split("=", 1)[1].strip() for line in props
                        if line.startswith("LoadState=")]
         if load_states != ["loaded"]:
@@ -545,14 +537,58 @@ def build(text: str, *, approved_sha: str, expected_origins: tuple[str, ...],
                 f"LoadState={load_states!r} — scheduler evidence about a unit "
                 f"the manager had not loaded cannot certify that unit")
             continue
+        # The block's own Id must match its marker, for every unit type.
         if any(recorded != unit for recorded in recorded_ids):
             defects.append(
                 f"##SCHEDULER_UNIT {unit}: the block's own Id says "
                 f"{recorded_ids!r} — evidence from one unit must not certify "
                 f"another, however aligned it is")
             continue
-        surfaces.extend(S.parse_systemd_unit(_unit_text(props),
-                                             origin=f"systemd:{unit}"))
+        # Execution-surface identity is a SERVICE concern. A .service unit
+        # carries Exec*/chroot semantics, so its RootDirectoryStartOnly scalar
+        # must be recorded and its surfaces reconstructed. A .timer (or any
+        # other non-service unit) has no [Service] execution surface and the
+        # manager does not provide the service-only scalar; it stays mandatory
+        # through the nested SYSTEMD_UNIT_VALIDITY leg (expected_validity_units)
+        # and contributes no scheduler surface here.
+        if unit.endswith(".service"):
+            # The chroot-scope property must be RECORDED. The collector always
+            # requests it, so a block without exactly one usable value did not
+            # come from the collector -- and reconstructing without it would
+            # supply systemd semantics (StartOnly=false) that the evidence
+            # never recorded, treating a legacy host-path hook as chrooted
+            # beneath the release.
+            start_only = [line.split("=", 1)[1].strip() for line in props
+                          if line.startswith("RootDirectoryStartOnly=")]
+            if len(start_only) != 1 or start_only[0] not in ("yes", "no"):
+                defects.append(
+                    f"##SCHEDULER_UNIT {unit}: the block records "
+                    f"{start_only!r} for RootDirectoryStartOnly — the collector "
+                    f"always requests this scalar, and defaulting it would "
+                    f"supply chroot semantics the evidence never recorded")
+                continue
+            surfaces.extend(S.parse_systemd_unit(_unit_text(props),
+                                                 origin=f"systemd:{unit}"))
+        else:
+            # A non-service unit must not smuggle in executable data. Fail
+            # closed rather than silently discard any real execution/path
+            # surface the certifier cannot scope for a non-service unit.
+            try:
+                stray = S.parse_systemd_unit(_unit_text(props),
+                                             origin=f"systemd:{unit}")
+            except Exception as exc:  # noqa: BLE001
+                defects.append(
+                    f"##SCHEDULER_UNIT {unit}: a non-service unit records "
+                    f"unparseable service execution evidence ({exc}) — refusing "
+                    f"to discard executable data the certifier cannot scope")
+                continue
+            if stray:
+                defects.append(
+                    f"##SCHEDULER_UNIT {unit}: a non-service unit records "
+                    f"{len(stray)} service execution/path surface(s) — refusing "
+                    f"to silently discard executable data on a unit that should "
+                    f"have none")
+                continue
     if flow["cron"].strip():
         surfaces.extend(S.parse_crontab(flow["cron"], origin="cron"))
     scheduler_artifact = S.scheduler_alignment_artifact(

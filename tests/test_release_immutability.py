@@ -1417,3 +1417,40 @@ def test_transitional_allowlist_still_applies_without_a_root_directory():
     )[0]
     assert plain.is_system_transitional
     assert plain.resolves_to_release(release_root=REL)
+
+
+# ===========================================================================
+# Finding A: release-root runtime bindings are topology, not drift
+# ===========================================================================
+
+@pytest.mark.parametrize("rel", [
+    "data", "data/x.db", "logs", "logs/x.log", "outputs", "outputs/foo/x",
+])
+def test_fa_runtime_roots_and_descendants_are_runtime_mutable(rel):
+    """A release-root runtime symlink (bare ``data``/``logs``/``outputs``) and
+    everything beneath it are runtime-mutable. The bare root regressed to
+    UNCLASSIFIED before this fix and was reported as release drift."""
+    assert C.classify_path(rel) == C.RUNTIME_MUTABLE
+
+
+@pytest.mark.parametrize("rel", [".venv", ".env"])
+def test_fa_release_root_attachments_are_a_distinct_class(rel):
+    """``.venv``/``.env`` are untracked symlinks the deployed release attaches
+    to shared host state. They get their own class -- not RUNTIME_MUTABLE, so a
+    secret/environment attachment is never mistaken for generated output -- and
+    are not, on their own, runtime-writable output."""
+    assert C.classify_path(rel) == C.RUNTIME_ATTACHMENT
+    assert not C.is_runtime_mutable(rel)
+
+
+@pytest.mark.parametrize("rel", ["database", "outputsx", "logschema.sql"])
+def test_fa_matching_is_component_aware_not_loose_prefix(rel):
+    """``database`` must not be classified as the ``data`` runtime root."""
+    assert C.classify_path(rel) != C.RUNTIME_MUTABLE
+
+
+def test_fa_immutable_experiment_evidence_precedence_is_preserved():
+    """The frozen VS-001 evidence sits under ``outputs/`` but must keep its
+    IMMUTABLE_EXPERIMENT_EVIDENCE class, not fall to RUNTIME_MUTABLE."""
+    for rel in C.IMMUTABLE_EVIDENCE_ARTIFACTS:
+        assert C.classify_path(rel) == C.IMMUTABLE_EXPERIMENT_EVIDENCE

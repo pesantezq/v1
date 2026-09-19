@@ -3704,8 +3704,11 @@ def test_a_scheduler_block_without_the_chroot_scope_cannot_certify():
     exactly one usable value did not come from it, and defaulting would supply
     chroot semantics the evidence never recorded."""
     mod = _observation_module()
+    # LoadState=loaded so the ONLY remaining defect is the missing chroot-scope
+    # scalar (LoadState and Id-match are now checked for every unit type first).
     stream = _observation_with_unit_block([
         "Id=stockbot-daily.service",
+        "LoadState=loaded",
         "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
         "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
     ])
@@ -4073,3 +4076,143 @@ def test_a_validity_only_optional_absence_is_still_tolerated():
     """The control: the waiver survives for units the scheduler never claims."""
     combined = _optional_aggregate(discovered=[], verified=[])
     assert combined["production_release_identity"] == "PASS", combined["errors"]
+
+
+# ===========================================================================
+# Finding A + B: runtime bindings and timers do not create false release drift
+# (driven through build() at the real production report SHAPE)
+# ===========================================================================
+
+def _valid_service_lines():
+    return [
+        "Id=stockbot-daily.service",
+        "LoadState=loaded",
+        "RootDirectoryStartOnly=no",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }",
+    ]
+
+
+def _build_stream(*, dirty=(), timer_lines=None, service_lines=None):
+    """A build()-consumable stream at the production SHAPE: a valid service
+    scheduler block, optional extra ##SCHEDULER_UNIT timer block, and real
+    `git status --porcelain` dirty entries injected at BOTH endpoints."""
+    mod = _observation_module()
+    stream = _observation_with_unit_block(service_lines or _valid_service_lines())
+    porcelain = "".join(e + "\n" for e in dirty)
+    for label in ("BEFORE", "AFTER"):
+        stream = stream.replace(f"##RELEASE_DIRTY_{label}\nvalue\n",
+                                f"##RELEASE_DIRTY_{label}\n" + porcelain, 1)
+    if timer_lines is not None:
+        block = ("##SCHEDULER_UNIT stockbot-daily.timer\n"
+                 + "".join(l + "\n" for l in timer_lines))
+        stream = stream.replace("##POINTER_PATH", block + "##POINTER_PATH", 1)
+    return mod, stream
+
+
+def _stream_defects(mod, stream, *, extra_validity=()):
+    bundle = mod.build(
+        stream, approved_sha="0" * 40,
+        expected_origins=("systemd:stockbot-daily.service",),
+        expected_validity_units=("stockbot-daily.service",) + tuple(extra_validity))
+    return bundle["production_release_identity"]["observation_stream_defects"]
+
+
+def _dirty_defects(defects):
+    return [d for d in defects if "modified tracked file at the" in d]
+
+
+def _unit_defects(defects, unit):
+    return [d for d in defects if d.startswith(f"##SCHEDULER_UNIT {unit}")]
+
+
+# --- Finding A ------------------------------------------------------------
+
+def test_fa_untracked_runtime_bindings_are_not_release_drift():
+    """The exact false blocker: the release-root runtime attachment/symlinks
+    the deployed release carries (`?? .venv`, `?? data`, `?? logs`) must not,
+    by themselves, be reported as modified tracked release files."""
+    mod, stream = _build_stream(dirty=["?? .venv", "?? data", "?? logs"])
+    assert _dirty_defects(_stream_defects(mod, stream)) == []
+
+
+@pytest.mark.parametrize("path", ["rogue.py", "portfolio_automation/rogue.py"])
+def test_fa_untracked_source_still_blocks(path):
+    """An arbitrary untracked path is NOT excused — only the exact runtime
+    bindings are."""
+    mod, stream = _build_stream(dirty=[f"?? {path}"])
+    dd = _dirty_defects(_stream_defects(mod, stream))
+    assert any(path in d for d in dd), dd
+
+
+def test_fa_modified_release_source_still_blocks():
+    """A tracked modification to release source is exactly the drift the gate
+    exists to catch (`M  <path>` = staged-modified porcelain)."""
+    mod, stream = _build_stream(
+        dirty=["M  portfolio_automation/release/scheduler.py"])
+    dd = _dirty_defects(_stream_defects(mod, stream))
+    assert any("scheduler.py" in d for d in dd), dd
+
+
+def test_fa_a_tracked_runtime_attachment_is_not_excused():
+    """The security property: the tolerance is for an UNTRACKED attachment at
+    the exact path. A TRACKED/modified `.env` (`M  .env`, status != '??') is
+    drift, not an approved attachment."""
+    mod, stream = _build_stream(dirty=["M  .env"])
+    dd = _dirty_defects(_stream_defects(mod, stream))
+    assert any(".env" in d for d in dd), dd
+
+
+# --- Finding B ------------------------------------------------------------
+
+def _timer(*, unit_id="stockbot-daily.timer", loaded=True, extra=()):
+    lines = [f"Id={unit_id}", f"LoadState={'loaded' if loaded else 'not-found'}"]
+    lines.extend(extra)
+    return lines
+
+
+def test_fb_a_timer_without_the_service_scalar_is_accepted_by_the_scheduler_leg():
+    """The exact false blocker: a `.timer` has no [Service] execution surface
+    and the manager does not provide RootDirectoryStartOnly for it, so the
+    scheduler leg must not reject the timer block for lacking that scalar. The
+    timer stays mandatory through the (separate, unchanged) validity leg."""
+    mod, stream = _build_stream(timer_lines=_timer(),
+                                dirty=["?? .venv", "?? data", "?? logs"])
+    defects = _stream_defects(mod, stream, extra_validity=("stockbot-daily.timer",))
+    assert _unit_defects(defects, "stockbot-daily.timer") == []
+    # and Finding A on the same real-shape stream: no false runtime-binding drift
+    assert _dirty_defects(defects) == []
+
+
+def test_fb_a_timer_with_a_mismatched_id_is_rejected():
+    mod, stream = _build_stream(timer_lines=_timer(unit_id="other.timer"))
+    defects = _unit_defects(_stream_defects(mod, stream), "stockbot-daily.timer")
+    assert any("must not certify another" in d for d in defects), defects
+
+
+def test_fb_a_timer_not_loaded_is_rejected():
+    mod, stream = _build_stream(timer_lines=_timer(loaded=False))
+    defects = _unit_defects(_stream_defects(mod, stream), "stockbot-daily.timer")
+    assert any("LoadState" in d for d in defects), defects
+
+
+def test_fb_a_timer_carrying_service_execution_evidence_fails_closed():
+    """A non-service unit that nonetheless records a real execution surface is
+    evidence the certifier cannot scope — fail closed, do not silently discard
+    it."""
+    mod, stream = _build_stream(timer_lines=_timer(extra=[
+        "ExecStart={ path=/opt/stockbot/legacy/run.sh ; "
+        "argv[]=/opt/stockbot/legacy/run.sh ; ignore_errors=no }"]))
+    defects = _unit_defects(_stream_defects(mod, stream), "stockbot-daily.timer")
+    assert any("execution/path surface" in d for d in defects), defects
+
+
+def test_fb_a_service_still_requires_the_chroot_scope_scalar():
+    """The guard that must NOT weaken: a `.service` block missing
+    RootDirectoryStartOnly is still rejected (a timer must not relax this)."""
+    mod, stream = _build_stream(service_lines=[
+        "Id=stockbot-daily.service", "LoadState=loaded",
+        "ExecStart={ path=/opt/stockbot/current/scripts/run.sh ; "
+        "argv[]=/opt/stockbot/current/scripts/run.sh ; ignore_errors=no }"])
+    defects = _unit_defects(_stream_defects(mod, stream), "stockbot-daily.service")
+    assert any("RootDirectoryStartOnly" in d for d in defects), defects
