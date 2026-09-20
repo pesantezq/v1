@@ -350,6 +350,17 @@ REGISTRY: tuple[EnvVar, ...] = (
         group=GROUP_BROKER,
     ),
     EnvVar(
+        name="SCHWAB_TOKEN_PATH",
+        required=False,
+        default=None,
+        secret=False,
+        description=("Path of the Schwab OAuth token file (single-writer store; 0600, atomic). "
+                     "Default: <checkout>/data/schwab_token.json (legacy). Recommended in production: "
+                     "/var/lib/stockbot/broker/schwab/token.json — outside any release checkout. "
+                     "Changing it never moves a token; migration is an explicit operator step."),
+        group=GROUP_BROKER,
+    ),
+    EnvVar(
         name="SCHWAB_READ_ONLY_MODE",
         required=False,
         default="true",
