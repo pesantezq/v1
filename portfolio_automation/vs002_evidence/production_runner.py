@@ -204,9 +204,9 @@ def _default_credential_present() -> bool:
 
 
 def _default_client_factory() -> Any:
-    # retry_max=1 defensively; the strict-live method makes one attempt anyway.
-    from fmp_client import FMPClient
-    return FMPClient(retry_max=1)
+    # Construction lives in the sanctioned data_budget factory, not here.
+    from portfolio_automation.data_budget.factory import vs002_strict_evidence_client
+    return vs002_strict_evidence_client()
 
 
 def _git_sha(root: Path) -> str:
@@ -317,9 +317,23 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
         res.exact_blockers = blockers
         return res
 
-    # ---- acquisition + build (adjusted-bar mode) ------------------------
+    # ---- construct the client + last capacity preflight (still no network)
     if client is None:
-        client = (client_factory or _default_client_factory)()
+        try:
+            client = (client_factory or _default_client_factory)()
+        except Exception as exc:  # noqa: BLE001 — credential/config unavailable
+            res.result = BLOCKED_PREFLIGHT
+            res.exact_blockers = [
+                f"FMP client could not be constructed: {type(exc).__name__}: {exc}"]
+            return res
+    if hasattr(client, "can_admit") and not client.can_admit(len(plan)):
+        res.result = BLOCKED_PREFLIGHT
+        res.exact_blockers = [
+            f"daily FMP budget cannot admit the {len(plan)}-request mission "
+            f"before request #1 — refusing a partial panel"]
+        return res
+
+    # ---- acquisition + build (adjusted-bar mode) ------------------------
     acquirer = StrictLiveAcquirer(client, plan)
     provider = B.FMPDividendAdjustedProvider(acquirer)
     res.code_sha = code_sha or _git_sha(root)

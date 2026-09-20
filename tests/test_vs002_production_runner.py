@@ -377,6 +377,23 @@ def test_preflight_blocks_missing_signal_db(tmp_path):
     assert any("signal database" in b for b in res.exact_blockers)
 
 
+class _BudgetRefusingClient:
+    def can_admit(self, n):
+        return False
+    def get_dividend_adjusted_bars_strict_live(self, *a, **k):
+        raise AssertionError("must not acquire when the budget preflight refuses")
+
+
+def test_preflight_blocks_when_budget_cannot_admit_mission(tmp_path):
+    _seed(tmp_path)
+    client = _BudgetRefusingClient()
+    res = PR.run(tmp_path, client=client, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="budget")
+    assert res.result == PR.BLOCKED_PREFLIGHT
+    assert any("budget" in b for b in res.exact_blockers)
+    assert res.attempted_http_requests == 0
+
+
 def test_exit_codes_are_deterministic():
     assert PR.EXIT_CODES[PR.PASS] == 0
     assert PR.EXIT_CODES[PR.NOT_READY] == 10

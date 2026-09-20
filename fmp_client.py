@@ -426,6 +426,14 @@ class FMPClient:
         """Number of API calls made so far today."""
         return self._counter.today_count
 
+    def can_admit(self, n: int = 1) -> bool:
+        """True if the daily budget can still admit ``n`` more calls today.
+
+        A read-only capacity check for a bounded mission (e.g. VS-002) that must
+        refuse BEFORE request #1 rather than acquire a partial panel that was
+        predictably impossible to complete."""
+        return not self._counter.would_exceed(self._budget, additional=n)
+
     @property
     def last_response_bytes(self) -> int:
         """Bytes of the most recent HTTP response body. 0 until the first live
