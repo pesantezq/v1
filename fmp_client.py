@@ -332,6 +332,53 @@ class FMPClient:
             f"for {base_url}/{endpoint}: {last_err}"
         )
 
+    def _raw_get_once(
+        self,
+        endpoint: str,
+        params: Dict[str, str],
+        *,
+        base_url: str = FMP_BASE_URL,
+    ) -> Any:
+        """A SINGLE HTTP GET: no retry, no cache, no stale fallback.
+
+        The VS-002 strict-live evidence path ONLY. Increments the daily call
+        counter on a successful call and fails closed (raises ``FMPError``) on
+        any HTTP, transport, or parse error -- a transient 429/5xx/timeout is a
+        failure here, never a retried-and-recovered call, because the evidence
+        must be the one live response obtained in this bounded acquisition.
+        """
+        params = {**params, 'apikey': self._api_key}
+        url = f"{base_url}/{endpoint}?{urllib.parse.urlencode(params)}"
+        self._rate_limit()
+        try:
+            req = urllib.request.Request(
+                url, headers={'User-Agent': 'PortfolioBot/1.0'}
+            )
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                raw = resp.read()
+                self._last_response_bytes = len(raw)
+                data = json.loads(raw.decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise FMPError(
+                    f"FMP authentication failed (HTTP {exc.code}) for "
+                    f"{base_url}/{endpoint}. Verify FMP_API_KEY."
+                ) from exc
+            raise FMPError(
+                f"FMP strict-live request failed (HTTP {exc.code}) for "
+                f"{base_url}/{endpoint} — no retry on the VS-002 evidence path"
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise FMPError(
+                f"FMP strict-live request failed (transport) for "
+                f"{base_url}/{endpoint}: {exc} — no retry on the VS-002 "
+                f"evidence path"
+            ) from exc
+        if isinstance(data, dict) and 'Error Message' in data:
+            raise FMPError(f"FMP API error: {data['Error Message']}")
+        self._counter.increment()
+        return data
+
     def _get_cached(
         self,
         cache_key: str,
@@ -1230,4 +1277,58 @@ class FMPClient:
             "FMP stable/historical-price-eod/dividend-adjusted %s: %d rows "
             "(from %s)", sym, len(raw), from_date,
         )
+        return raw
+
+    def get_dividend_adjusted_bars_strict_live(
+        self,
+        symbol: str,
+        *,
+        years: int = 5,
+        on_attempt: Optional[Any] = None,
+    ) -> List[Dict]:
+        """STRICT-LIVE dividend-adjusted acquisition for the bounded VS-002
+        evidence build. Deliberately different from
+        :meth:`get_historical_prices_dividend_adjusted`:
+
+        * exactly ONE HTTP attempt (no retry on 429/5xx/timeout/transport);
+        * NO cache is read (fresh or stale) and NO stale fallback is served —
+          the package must represent the live response obtained now;
+        * the daily budget is still honoured, and a budget that cannot admit
+          another call fails closed (``CallBudgetExceeded``) rather than being
+          rescued from stale cache;
+        * only the authorized ``/stable/historical-price-eod/dividend-adjusted``
+          endpoint; a non-list response is refused (no legacy unwrap, no
+          fallback).
+
+        ``on_attempt(symbol)`` — if given — is called immediately BEFORE the
+        outbound request so the caller can count actual HTTP attempts, including
+        one that then fails. It is not called when the budget refuses the call,
+        because no request goes out in that case.
+
+        Not for general callers; scanner/news/profile/history keep the cached,
+        retrying, fallback-tolerant path unchanged.
+        """
+        if not symbol:
+            raise FMPError("strict-live acquisition requires a symbol")
+        sym = symbol.upper()
+        if self._counter.would_exceed(self._budget):
+            raise CallBudgetExceeded(
+                f"Daily FMP budget ({self._budget} calls) would be exceeded; "
+                f"the VS-002 strict-live path refuses a stale-cache rescue for "
+                f"{sym!r} and fails closed"
+            )
+        from_date = (date.today() - timedelta(days=years * 365)).isoformat()
+        if on_attempt is not None:
+            on_attempt(sym)
+        raw = self._raw_get_once(
+            _EP_HISTORICAL_DIVADJ,
+            {"symbol": sym, "from": from_date},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        if not isinstance(raw, list):
+            raise FMPError(
+                f"dividend-adjusted endpoint for {sym} returned "
+                f"{type(raw).__name__}, not a list — refused on the strict-live "
+                f"path (no legacy {{'historical': [...]}} unwrap, no fallback)"
+            )
         return raw
