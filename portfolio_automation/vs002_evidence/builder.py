@@ -53,6 +53,17 @@ class BuildError(RuntimeError):
     """The build fails closed rather than emitting a partial package."""
 
 
+
+class ProviderEvidenceError(BuildError):
+    """A failure of the live provider RESPONSE itself — wrong endpoint identity,
+    an absent benchmark response, missing required fields, a non-finite or
+    non-positive price, duplicate session dates, an un-canonicalizable payload,
+    an adjustment-semantics failure, or a session gap wider than the frozen
+    contract. A BuildError subclass so existing handling is unchanged; the
+    production runner distinguishes it as FAIL_PROVIDER, reserving FAIL_BUILD for
+    genuine non-provider package-construction failures."""
+
+
 def _read_signals(db_path: Path) -> list[C.SignalRow]:
     """Matured signals only. An unmatured outcome is excluded, never imputed."""
     if not db_path.is_file():
@@ -203,14 +214,14 @@ def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
     malformed evidence, and no version of it is admitted.
     """
     if not isinstance(raw_rows, list) or not raw_rows:
-        raise BuildError(f"{symbol}: provider returned no bar rows")
+        raise ProviderEvidenceError(f"{symbol}: provider returned no bar rows")
     bars: list[C.BarRow] = []
     for row in raw_rows:
         if not isinstance(row, dict):
-            raise BuildError(f"{symbol}: malformed provider row {type(row).__name__}")
+            raise ProviderEvidenceError(f"{symbol}: malformed provider row {type(row).__name__}")
         missing = [f for f in C.REQUIRED_PROVIDER_FIELDS if row.get(f) is None]
         if missing:
-            raise BuildError(
+            raise ProviderEvidenceError(
                 f"{symbol}: provider row missing required field(s) {missing} — "
                 f"the claimed semantics cannot be established from weaker data")
         try:
@@ -218,22 +229,22 @@ def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
             adj_close = float(row["adjClose"])
             volume = int(row["volume"])
         except (TypeError, ValueError) as exc:
-            raise BuildError(f"{symbol}: malformed value in provider row: {exc}")
+            raise ProviderEvidenceError(f"{symbol}: malformed value in provider row: {exc}")
         if not (close > 0 and adj_close > 0 and close == close
                 and adj_close == adj_close and close not in (float("inf"),)
                 and adj_close not in (float("inf"),)):
-            raise BuildError(
+            raise ProviderEvidenceError(
                 f"{symbol}: non-finite or non-positive price on "
                 f"{str(row['date'])[:10]}")
         if volume < 0:
-            raise BuildError(f"{symbol}: negative volume on {str(row['date'])[:10]}")
+            raise ProviderEvidenceError(f"{symbol}: negative volume on {str(row['date'])[:10]}")
         bars.append(C.BarRow(symbol=symbol, session_date=str(row["date"])[:10],
                              close=close, adj_close=adj_close, volume=volume))
     bars.sort(key=lambda b: b.session_date)
     dates = [b.session_date for b in bars]
     if len(set(dates)) != len(dates):
         dupes = sorted({d for d in dates if dates.count(d) > 1})
-        raise BuildError(f"{symbol}: duplicate session dates {dupes[:3]}")
+        raise ProviderEvidenceError(f"{symbol}: duplicate session dates {dupes[:3]}")
     return bars
 
 
@@ -328,14 +339,14 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
     """
     declared = getattr(provider, "endpoint", None)
     if declared != C.AUTHORIZED_ENDPOINT:
-        raise BuildError(
+        raise ProviderEvidenceError(
             f"provider declares endpoint {declared!r}, not the authorized "
             f"{C.AUTHORIZED_ENDPOINT!r} — endpoint substitution is refused, "
             f"never adopted")
 
     ordered = sorted(set(symbols))
     if C.BENCHMARK not in ordered:
-        raise BuildError("benchmark bars are mandatory")
+        raise ProviderEvidenceError("benchmark bars are mandatory")
     panel: dict[str, list[C.BarRow]] = {}
     raw_responses: dict[str, list] = {}
     raw_digests: dict[str, str] = {}
@@ -351,7 +362,7 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
         try:
             raw_digests[sym] = C.artifact_digest(raw)
         except Exception as exc:
-            raise BuildError(
+            raise ProviderEvidenceError(
                 f"{sym}: provider response is not canonicalizable "
                 f"({type(exc).__name__}: {exc}) — malformed evidence is "
                 f"refused, never coerced")
@@ -359,7 +370,7 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
         findings = verify_adjustment_semantics(bars,
                                                is_benchmark=sym == C.BENCHMARK)
         if findings:
-            raise BuildError("; ".join(findings))
+            raise ProviderEvidenceError("; ".join(findings))
         panel[sym] = bars
         # The raw rows are frozen EXACTLY as returned — provider order,
         # unnormalized — so the consumer can recompute the digest and
@@ -389,7 +400,7 @@ def gap_check_kept(panel: dict[str, list[C.BarRow]], kept: set[str]) -> None:
             continue
         gap = _session_gaps([b.session_date for b in panel[sym]], bench_dates)
         if gap > C.MAX_SESSION_GAP:
-            raise BuildError(
+            raise ProviderEvidenceError(
                 f"{sym}: gap of {gap} benchmark sessions inside the series — "
                 f"the frozen contract allows at most {C.MAX_SESSION_GAP}, and "
                 f"forward-filling across it would invent sessions")

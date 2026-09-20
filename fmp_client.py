@@ -350,6 +350,12 @@ class FMPClient:
         params = {**params, 'apikey': self._api_key}
         url = f"{base_url}/{endpoint}?{urllib.parse.urlencode(params)}"
         self._rate_limit()
+        # One outbound attempt == one persisted budget count, recorded BEFORE
+        # the request so a 429 / 5xx / auth / transport / timeout / malformed-
+        # JSON / API-error-payload failure still consumes budget — a failed
+        # attempt used real provider capacity. A budget REFUSAL happens in the
+        # caller before this method, so it never reaches here and never counts.
+        self._counter.increment()
         try:
             req = urllib.request.Request(
                 url, headers={'User-Agent': 'PortfolioBot/1.0'}
@@ -357,7 +363,7 @@ class FMPClient:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 raw = resp.read()
                 self._last_response_bytes = len(raw)
-                data = json.loads(raw.decode('utf-8'))
+            data = json.loads(raw.decode('utf-8'))
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise FMPError(
@@ -374,9 +380,13 @@ class FMPClient:
                 f"{base_url}/{endpoint}: {exc} — no retry on the VS-002 "
                 f"evidence path"
             ) from exc
+        except ValueError as exc:
+            raise FMPError(
+                f"FMP strict-live response was not valid JSON for "
+                f"{base_url}/{endpoint}: {exc}"
+            ) from exc
         if isinstance(data, dict) and 'Error Message' in data:
             raise FMPError(f"FMP API error: {data['Error Message']}")
-        self._counter.increment()
         return data
 
     def _get_cached(

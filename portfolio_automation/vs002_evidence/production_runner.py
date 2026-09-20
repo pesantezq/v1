@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -74,6 +75,21 @@ _REQUIRED_SIGNAL_COLUMNS = (
 class StrictLiveAcquisitionError(RuntimeError):
     """A violation of the runner's acquisition contract (plan membership,
     SPY-first, no duplicate, hard 22-request cap)."""
+
+
+# A run id is a SINGLE safe path component. It must never carry a separator or
+# traversal that could escape the governed staging namespace. The internally
+# generated id (``<utc>-<hex8>``) matches; "..", "x/..", "/tmp/x", "x\\..\\y"
+# and empty do not.
+_SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+
+def _validate_run_id(run_id: str) -> Optional[str]:
+    if not run_id or not _SAFE_RUN_ID.fullmatch(run_id):
+        return (f"run id {run_id!r} is not a single safe path component "
+                f"([A-Za-z0-9][A-Za-z0-9_-]{{0,63}}) — path separators and "
+                f"traversal are refused")
+    return None
 
 
 def acquisition_plan() -> list[str]:
@@ -220,13 +236,20 @@ def _git_sha(root: Path) -> str:
         return "UNAVAILABLE"
 
 
-def _safe_rmtree(path: Path) -> None:
-    """Remove ONLY a fresh per-run staging directory we created."""
-    if path.name.startswith(".staging-") and path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
+def _safe_rmtree(root: Path, staging_rel: str, out_root_rel: str) -> None:
+    """Remove ONLY a fresh ``.staging-*`` directory that resolves INSIDE the
+    governed VS-002 output root. Symlink-aware: it compares REAL paths, so it
+    can never remove anything whose real location is outside that root."""
+    staging = root / staging_rel
+    if not staging.is_dir() or not staging.name.startswith(".staging-"):
+        return
+    governed = Path(os.path.realpath(root / out_root_rel))
+    if Path(os.path.realpath(staging)).parent == governed:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
-def _publish(root: Path, staging_rel: str, final_rel: str) -> tuple[bool, bool]:
+def _publish(root: Path, staging_rel: str, final_rel: str,
+             out_root_rel: str) -> tuple[bool, bool]:
     """Atomically publish the validated staging package to its content-addressed
     destination. NEVER overwrites an existing package: an identical package_id
     means byte-identical evidence already exists."""
@@ -234,7 +257,7 @@ def _publish(root: Path, staging_rel: str, final_rel: str) -> tuple[bool, bool]:
     final = root / final_rel
     final.parent.mkdir(parents=True, exist_ok=True)
     if final.exists():
-        _safe_rmtree(staging)            # our own fresh dir; the existing one is untouched
+        _safe_rmtree(root, staging_rel, out_root_rel)  # our own fresh dir; existing untouched
         return False, False
     os.replace(staging, final)           # atomic rename on one filesystem
     return True, False
@@ -263,13 +286,19 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
     root = Path(repo_root)
     plan = acquisition_plan()
     now = datetime.now(timezone.utc)
-    run_id = run_id or (now.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8])
+    if run_id is None:
+        run_id = now.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     generated_at = generated_at or now.strftime("%Y-%m-%dT%H:%M:%SZ")
     staging_rel = f"{out_root_rel}/.staging-{run_id}"
     res = RunnerResult(run_id=run_id, frozen_universe=list(plan),
                        package_staging_rel=staging_rel)
 
     # ---- G10 preflight: every failable check before attempt #1 ----------
+    run_id_err = _validate_run_id(run_id)
+    if run_id_err:
+        res.result = BLOCKED_PREFLIGHT
+        res.exact_blockers = [run_id_err]
+        return res
     blockers: list[str] = []
     if len(C.FROZEN_UNIVERSE) != 21:
         blockers.append(
@@ -312,6 +341,10 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
         blockers.append("FMP credential is not present in the environment")
     if (root / staging_rel).exists():
         blockers.append(f"fresh staging path already exists: {staging_rel}")
+    governed_root = Path(os.path.realpath(root / out_root_rel))
+    if Path(os.path.realpath(root / staging_rel)).parent != governed_root:
+        blockers.append(
+            "resolved staging path escapes the governed VS-002 output root")
     if blockers:
         res.result = BLOCKED_PREFLIGHT
         res.exact_blockers = blockers
@@ -341,19 +374,29 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
         B.build(root, out_rel=staging_rel, code_sha=res.code_sha,
                 generated_at=generated_at, bar_provider=provider,
                 bar_clock=clock)
+    except B.ProviderEvidenceError as exc:
+        # live provider RESPONSE shape / semantics failure
+        res.attempts = acquirer.attempts
+        res.acquisition_order = [a["symbol"] for a in acquirer.attempts]
+        res.result = FAIL_PROVIDER
+        res.exact_blockers = [f"{type(exc).__name__}: {exc}"]
+        _safe_rmtree(root, staging_rel, out_root_rel)
+        return res
     except B.BuildError as exc:
+        # a genuine non-provider package-construction failure, unless the
+        # provider fetch itself already failed at the transport layer
         res.attempts = acquirer.attempts
         res.acquisition_order = [a["symbol"] for a in acquirer.attempts]
         res.result = FAIL_PROVIDER if acquirer.had_failure else FAIL_BUILD
         res.exact_blockers = [f"{type(exc).__name__}: {exc}"]
-        _safe_rmtree(root / staging_rel)
+        _safe_rmtree(root, staging_rel, out_root_rel)
         return res
     except Exception as exc:  # noqa: BLE001 — StrictLiveAcquisitionError,
         res.attempts = acquirer.attempts   # CallBudgetExceeded, FMPError, ...
         res.acquisition_order = [a["symbol"] for a in acquirer.attempts]
         res.result = FAIL_PROVIDER
         res.exact_blockers = [f"{type(exc).__name__}: {exc}"]
-        _safe_rmtree(root / staging_rel)
+        _safe_rmtree(root, staging_rel, out_root_rel)
         return res
     res.attempts = acquirer.attempts
     res.acquisition_order = [a["symbol"] for a in acquirer.attempts]
@@ -365,7 +408,7 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
         res.consumer_validation = "FAIL"
         res.result = FAIL_PACKAGE_VALIDATION
         res.exact_blockers = [f"SnapshotInvalid: {exc}"]
-        _safe_rmtree(root / staging_rel)
+        _safe_rmtree(root, staging_rel, out_root_rel)
         return res
     res.consumer_validation = "PASS"
     res.package_id = validated.manifest.get("package_id")
@@ -380,7 +423,7 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
 
     # ---- publish the validated package (immutable, non-overwriting) -----
     final_rel = f"{out_root_rel}/packages/{res.package_id}"
-    published, overwrote = _publish(root, staging_rel, final_rel)
+    published, overwrote = _publish(root, staging_rel, final_rel, out_root_rel)
     res.package_path = final_rel
     res.package_published = published
     res.package_overwrote_existing = overwrote
@@ -409,8 +452,6 @@ def _build_parser() -> argparse.ArgumentParser:
                     "It does NOT execute VS-002.")
     p.add_argument("--repo-root", required=True,
                    help="deployed release root, e.g. /opt/stockbot/current")
-    p.add_argument("--run-id", default=None,
-                   help="optional explicit run id for the staging directory")
     p.add_argument("--json", action="store_true",
                    help="print the machine-readable result to stdout")
     # Deliberately NO flags for symbols, benchmark, endpoint, MIN_COHORTS,
@@ -421,7 +462,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
-    res = run(args.repo_root, run_id=args.run_id)
+    res = run(args.repo_root)
     payload = res.to_dict()
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

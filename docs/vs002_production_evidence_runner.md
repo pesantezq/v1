@@ -58,7 +58,30 @@ inherited from the general FMP client.
 
 A failed or partial acquisition is never reported as `NOT_READY`.
 
+## Agent Export boundary
+
+The generic Agent Export allowlist no longer carries VS-002 evidence. The old
+flat `vs002_evidence/{signals,returns,manifest}.json` entries are removed, so a
+stale flat file can never be exported as though it were this runner's package.
+The runner's package (six artifacts under `packages/<package_id>/`) is **not**
+exported by the generic path; it is carried only by the separate, explicitly
+authorized transport mission, which selects **one** `package_id` (never
+`latest`, never a wildcard).
+
 ## Operator sequencing
+
+The strict sequence, each step separately authorized:
+
+1. **production runner PASS** (this component) — builds, validates, and assesses
+   readiness on the VPS; publishes the immutable package. Does not transport.
+2. **explicit package transport is STILL A SEPARATE MISSION** — carries one
+   named `package_id` from production to the lab.
+3. **the lab independently validates** the exact `package_id`, artifact digests,
+   and EvidenceRefs (`consumer.validate` on the lab side).
+4. **only then may the VS-002 experiment be authorized** — a third, distinct
+   mission.
+
+
 
 This runner produces and assesses a production evidence package. It does not
 transport it and does not run the experiment. After a `PASS`, the package is

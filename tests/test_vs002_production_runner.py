@@ -399,3 +399,171 @@ def test_exit_codes_are_deterministic():
     assert PR.EXIT_CODES[PR.NOT_READY] == 10
     assert PR.EXIT_CODES[PR.BLOCKED_PREFLIGHT] == 20
     assert len(set(PR.EXIT_CODES.values())) == len(PR.EXIT_CODES)
+
+
+# ===========================================================================
+# PR #47 review closure: budget accounting, run-id containment, classification
+# ===========================================================================
+
+class _RawResp:
+    def __init__(self, raw):
+        self._b = raw
+    def read(self):
+        return self._b
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+# --- Finding 2: failed strict-live attempts count against the daily budget --
+
+@pytest.mark.parametrize("scenario",
+                         ["success", "http429", "http500", "urlerror",
+                          "malformed", "api_error"])
+def test_f2_every_outbound_attempt_counts_once(tmp_path, monkeypatch, scenario):
+    cl = _client(tmp_path, budget=230)
+    start = cl.calls_today
+    def fake(req, timeout=None):
+        if scenario == "success":
+            return _Resp(_GOOD)
+        if scenario == "http429":
+            raise urllib.error.HTTPError(req.full_url, 429, "rate", {}, None)
+        if scenario == "http500":
+            raise urllib.error.HTTPError(req.full_url, 500, "err", {}, None)
+        if scenario == "urlerror":
+            raise urllib.error.URLError("down")
+        if scenario == "malformed":
+            return _RawResp(b"not json {{{")
+        return _Resp({"Error Message": "bad symbol"})     # api_error
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    from fmp_client import FMPError
+    if scenario == "success":
+        cl.get_dividend_adjusted_bars_strict_live("SPY")
+    else:
+        with pytest.raises(FMPError):
+            cl.get_dividend_adjusted_bars_strict_live("SPY")
+    assert cl.calls_today == start + 1
+
+
+def test_f2_budget_refusal_does_not_count(tmp_path, monkeypatch):
+    cl = _client(tmp_path, budget=3)
+    cl._counter.increment(3)
+    start = cl.calls_today
+    called = []
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None: called.append(1) or _Resp(_GOOD))
+    from fmp_client import CallBudgetExceeded
+    with pytest.raises(CallBudgetExceeded):
+        cl.get_dividend_adjusted_bars_strict_live("SPY")
+    assert cl.calls_today == start          # +0
+    assert called == []                     # no outbound request
+
+
+def test_f2_failed_attempts_consume_capacity(tmp_path, monkeypatch):
+    cl = _client(tmp_path, budget=5)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: (_ for _ in ()).throw(urllib.error.URLError("x")))
+    from fmp_client import FMPError
+    assert cl.can_admit(5) is True
+    for _ in range(5):
+        with pytest.raises(FMPError):
+            cl.get_dividend_adjusted_bars_strict_live("SPY")
+    assert cl.calls_today == 5
+    assert cl.can_admit(1) is False         # capacity consumed by FAILED attempts
+
+
+# --- Finding 3: run-id path containment ------------------------------------
+
+@pytest.mark.parametrize("bad", ["../x", "x/../../tmp/x", "/tmp/x",
+                                 "x\\..\\y", ".", "..", "", "a/b"])
+def test_f3_malicious_run_id_blocks_before_any_write(tmp_path, bad):
+    _seed(tmp_path)
+    client = FakeStrictClient()
+    res = PR.run(tmp_path, client=client, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id=bad)
+    assert res.result == PR.BLOCKED_PREFLIGHT
+    assert any("run id" in b or "safe path component" in b
+               for b in res.exact_blockers), res.exact_blockers
+    assert client.calls == []               # no acquisition
+    out = tmp_path / PR.B.DEFAULT_OUT_REL
+    assert not (out.exists() and list(out.glob(".staging-*")))
+
+
+def test_f3_safe_rmtree_refuses_outside_governed_root(tmp_path):
+    outside = tmp_path / "outside" / ".staging-evil"
+    outside.mkdir(parents=True)
+    PR._safe_rmtree(tmp_path, "../outside/.staging-evil", PR.B.DEFAULT_OUT_REL)
+    assert outside.exists()                 # untouched — real path is outside
+
+
+# --- Finding 4: invalid live payload -> FAIL_PROVIDER ----------------------
+
+class _BadSpyClient:
+    def __init__(self, kind):
+        self.kind = kind
+        self._rows = SyntheticAdjustedProvider()._rows
+        self.calls = []
+
+    def get_dividend_adjusted_bars_strict_live(self, symbol, *, years=5,
+                                               on_attempt=None):
+        sym = symbol.upper()
+        if on_attempt is not None:
+            on_attempt(sym)
+        self.calls.append(sym)
+        rows = [dict(r) for r in self._rows(sym)]
+        if sym == "SPY":
+            if self.kind == "empty":
+                return []
+            if self.kind == "missing_field":
+                return [{k: v for k, v in r.items() if k != "adjClose"}
+                        for r in rows]
+            if self.kind == "bad_price":
+                rows[0]["close"] = -1.0
+                return rows
+            if self.kind == "dup_date":
+                rows[1]["date"] = rows[0]["date"]
+                return rows
+            if self.kind == "semantics":
+                return [{**r, "adjClose": r["close"]} for r in rows]  # no witness
+        return rows
+
+
+@pytest.mark.parametrize("kind", ["empty", "missing_field", "bad_price",
+                                  "dup_date", "semantics"])
+def test_f4_invalid_live_payload_is_fail_provider(tmp_path, kind):
+    _seed(tmp_path)
+    res = PR.run(tmp_path, client=_BadSpyClient(kind), credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="prov" + kind[:4])
+    assert res.result == PR.FAIL_PROVIDER, (kind, res.exact_blockers)
+    assert res.exit_code == 30
+    assert res.acquisition_order == ["SPY"]         # stops at the first bad response
+    assert res.package_published is False
+    assert not (tmp_path / PR.B.DEFAULT_OUT_REL / "packages").exists()
+
+
+def test_f4_genuine_build_defect_is_fail_build(tmp_path):
+    """A non-provider construction failure (no matured signals) is FAIL_BUILD /
+    exit 31, distinguishable from provider-evidence failures — and no fetch
+    happens because signals are read first."""
+    import sqlite3
+    d = tmp_path / "data"
+    d.mkdir(parents=True)
+    con = sqlite3.connect(d / "portfolio.db")
+    con.execute("""CREATE TABLE watchlist_signal_feedback (
+        ticker TEXT, signal_time TEXT, signal_score REAL, price_at_signal REAL,
+        outcome_return_7d REAL, outcome_price_7d REAL, evaluated_at_7d TEXT,
+        prediction_intent TEXT, data_mode TEXT)""")
+    con.execute("INSERT INTO watchlist_signal_feedback VALUES (?,?,?,?,?,?,?,?,?)",
+                ("AAPL", "2025-03-01T09:00:00", 0.5, 100.0, None, None, None,
+                 "up", "live"))       # unmatured -> no matured signals
+    con.commit()
+    con.close()
+    client = FakeStrictClient()
+    res = PR.run(tmp_path, client=client, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="buildfail")
+    assert res.result == PR.FAIL_BUILD
+    assert res.exit_code == 31
+    assert client.calls == []                        # signals read before any fetch
+    assert res.package_published is False
