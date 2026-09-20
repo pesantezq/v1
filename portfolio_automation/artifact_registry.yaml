@@ -729,6 +729,45 @@ artifacts:
     consumer_status: consumed
     notes: "Schwab read-only broker sync health. Always-producible; status=unconfigured until SCHWAB_* env + OAuth token set. Refreshed daily by run_daily_safe.sh (non-blocking) + re-triggerable on-demand (CLI/GUI)."
 
+  schwab_token_lifecycle.json:
+    path: outputs/latest/schwab_token_lifecycle.json
+    label: schwab token lifecycle telemetry
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: "NON-SECRET Schwab auth lifecycle telemetry (auth_state, refresh attempted/succeeded, refresh_token rotated, one-way fingerprint, authorization_expiry_basis). Written by every configured sync attempt via SchwabAuthManager. Never contains token bytes. Studies whether refresh-token rotation renews the ~7-day interactive window; the code assumes it does NOT."
+
+  broker_evidence_latest_attempt.json:
+    path: outputs/latest/broker_evidence_latest_attempt.json
+    label: broker evidence latest attempt
+    lens: developer
+    role: telemetry
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: "What the most recent Schwab sync attempt did (ADMITTED / REAUTH_REQUIRED / AUTH_UNAVAILABLE / ACQUISITION_FAILED / SCHEMA_DRIFT / NORMALIZATION_FAILED / EVIDENCE_REFUSED / UNCONFIGURED). implies_empty_portfolio is always false: a failed attempt means UNKNOWN truth, never zero holdings."
+
+  broker_evidence_latest_admitted.json:
+    path: outputs/latest/broker_evidence_latest_admitted.json
+    label: broker evidence latest admitted
+    lens: risk_action
+    role: advisor
+    required: false
+    cadence: on_demand
+    producer: schwab_sync
+    consumers: []
+    severity_if_missing: info
+    consumer_status: diagnostic_only
+    notes: "Last-known-good canonical EvidenceSnapshot of the Schwab portfolio, written ONLY when the EvidenceGateway ADMITTED it. Re-verified (hash + id) on every read. schwab_portfolio_snapshot.json / schwab_positions.json are projections derived from this record. Archived write-once under outputs/archive/broker_evidence/<day>/."
+
   schwab_portfolio_snapshot.json:
     path: outputs/latest/schwab_portfolio_snapshot.json
     label: schwab portfolio snapshot
