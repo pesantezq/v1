@@ -48,7 +48,9 @@ def test_sync_error_path_redacts_secret_in_status(tmp_path, monkeypatch):
     monkeypatch.setenv("SCHWAB_CLIENT_ID", "cid")
     monkeypatch.setenv("SCHWAB_CLIENT_SECRET", "csec")
     monkeypatch.setenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1/cb")
-    monkeypatch.setattr(sync.oauth, "valid_access_token", lambda: "TOK")
+    # the sync asks the single auth authority (not the legacy facade) for a token
+    from portfolio_automation.brokers.schwab_auth_manager import AuthResult, AuthState
+    monkeypatch.setattr(sync, "_acquire_auth", lambda: AuthResult(state=AuthState.OK, access_token="TOK"))
 
     def boom():
         raise RuntimeError("network fail access_token=LEAKED_TOKEN_XYZ client_secret=SHH")
@@ -75,7 +77,9 @@ def test_all_artifacts_carry_observe_only(tmp_path, monkeypatch):
     monkeypatch.setenv("SCHWAB_CLIENT_ID", "cid")
     monkeypatch.setenv("SCHWAB_CLIENT_SECRET", "csec")
     monkeypatch.setenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1/cb")
-    monkeypatch.setattr(sync.oauth, "valid_access_token", lambda: "TOK")
+    # the sync asks the single auth authority (not the legacy facade) for a token
+    from portfolio_automation.brokers.schwab_auth_manager import AuthResult, AuthState
+    monkeypatch.setattr(sync, "_acquire_auth", lambda: AuthResult(state=AuthState.OK, access_token="TOK"))
 
     import portfolio_automation.brokers.broker_models as bm_mod
     from portfolio_automation.brokers.broker_models import BrokerSnapshot, BrokerAccount
