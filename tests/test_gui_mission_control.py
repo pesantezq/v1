@@ -534,3 +534,130 @@ def test_no_forbidden_action_labels_rendered(client, tmp_path):
     src = _TEMPLATE.read_text(encoding="utf-8").lower()
     for label in _FORBIDDEN_RENDERED + ("restart", "retry", "elevate"):
         assert label not in src, label
+
+
+# ---------------------------------------------------------------------------
+# Freshness through the REAL HTTP route (PR #48 review repair)
+#
+# The escaped defect: the route called the adapter without a reference instant,
+# and control_center_truth.classify() deliberately answers UNKNOWN when `now`
+# is absent, so a real page load could never distinguish a fresh verdict from a
+# stale one although adapter tests that pass a fixed _NOW could. The route now
+# supplies an aware UTC instant; the read model still does ALL classification.
+# ---------------------------------------------------------------------------
+
+import re as _re
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+
+def _records_root(tmp_path: Path, recorded_at: str) -> Path:
+    """A repo root whose controller-records ledger holds one PASS verdict."""
+    row = dict(_GOOD_RECORD, recorded_at=recorded_at)
+    return _root(tmp_path, records=json.dumps(row) + "\n")
+
+
+def _capability_state(html: str, capability: str) -> str:
+    """The badge label in the readiness table row for `capability`."""
+    m = _re.search(
+        rf'<td[^>]*>{capability}</td>\s*<td[^>]*>.*?>([A-Z_]+)</span>', html, _re.S)
+    assert m, f"capability row {capability!r} not rendered"
+    return m.group(1)
+
+
+def test_reference_now_is_an_aware_utc_iso_instant():
+    raw = app_module._mission_control_reference_now()
+    parsed = _dt.fromisoformat(raw)
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == _td(0)
+    assert abs((_dt.now(_tz.utc) - parsed).total_seconds()) < 5
+
+
+def test_http_fresh_verification_is_live(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: _NOW)
+    fresh = (_dt.fromisoformat(_NOW) - _td(hours=1)).isoformat()
+    html = client(_records_root(tmp_path, fresh)).get(_ROUTE).text
+    assert _capability_state(html, "supervisor_state") == "LIVE"
+    assert _NOW in html  # the reference instant is shown to the operator
+
+
+def test_http_stale_verification_is_stale(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: _NOW)
+    stale = (_dt.fromisoformat(_NOW) - _td(days=3)).isoformat()
+    html = client(_records_root(tmp_path, stale)).get(_ROUTE).text
+    assert _capability_state(html, "supervisor_state") == "STALE"
+    # a STALE required capability is organised into Failures & blockers
+    assert _re.search(r'aria-label="Failures and blockers".*?supervisor_state', html, _re.S)
+
+
+def test_http_real_clock_path_classifies_fresh_evidence_live(client, tmp_path):
+    """No monkeypatch: the shipped helper, the shipped route, the shipped read model."""
+    recent = (_dt.now(_tz.utc) - _td(minutes=5)).isoformat()
+    html = client(_records_root(tmp_path, recent)).get(_ROUTE).text
+    assert _capability_state(html, "supervisor_state") == "LIVE"
+
+
+def test_http_naive_or_invalid_timestamp_stays_unknown(client, tmp_path, monkeypatch):
+    """A reference instant does not let the read model invent an age it cannot
+    measure: a naive or unparseable timestamp is still UNKNOWN, not STALE."""
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: _NOW)
+    for label, ts in (("naive", "2026-09-20T08:30:00"), ("garbage", "not-a-time")):
+        html = client(_records_root(tmp_path / label, ts)).get(_ROUTE).text
+        assert _capability_state(html, "supervisor_state") == "UNKNOWN", label
+
+
+def test_http_without_reference_instant_is_unknown_which_is_the_escaped_defect(
+        client, tmp_path, monkeypatch):
+    """Documents the read model's rule the route must satisfy: no `now`, no
+    freshness verdict. This is what every real request used to do."""
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: None)
+    fresh = (_dt.fromisoformat(_NOW) - _td(hours=1)).isoformat()
+    html = client(_records_root(tmp_path, fresh)).get(_ROUTE).text
+    assert _capability_state(html, "supervisor_state") == "UNKNOWN"
+
+
+def test_http_pending_and_unavailable_are_untouched_by_the_reference_instant(
+        client, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: _NOW)
+    fresh = (_dt.fromisoformat(_NOW) - _td(hours=1)).isoformat()
+    html = client(_records_root(tmp_path, fresh)).get(_ROUTE).text
+    for cap in ("worker_activity", "queue_state", "component_health",
+                "controller_since", "attention_derivation", "controller_identity"):
+        assert _capability_state(html, cap) == "PENDING_BACKEND", cap
+    assert _capability_state(html, "learning") == "UNAVAILABLE"
+    assert _capability_state(html, "run_history") == "UNAVAILABLE"  # no outcome ledger here
+
+
+def test_gui_holds_no_freshness_rule_of_its_own():
+    """The GUI passes an instant and renders a verdict. It never computes an age,
+    never holds a threshold and never classifies."""
+    import inspect
+    import textwrap
+
+    def calls(src: str) -> set[str]:
+        out: set[str] = set()
+        for node in ast.walk(ast.parse(textwrap.dedent(src))):
+            if isinstance(node, ast.Call):
+                f = node.func
+                out.add(f.id if isinstance(f, ast.Name) else getattr(f, "attr", ""))
+        return out
+
+    def names(src: str) -> set[str]:
+        return {n.id for n in ast.walk(ast.parse(textwrap.dedent(src)))
+                if isinstance(n, ast.Name)}
+
+    adapter_src = _ADAPTER.read_text(encoding="utf-8")
+    template_src = _TEMPLATE.read_text(encoding="utf-8")
+    route_src = inspect.getsource(app_module.page_dash_mission_control)
+    helper_src = inspect.getsource(app_module._mission_control_reference_now)
+    freshness_machinery = {"timedelta", "total_seconds", "classify", "FRESHNESS_SECONDS",
+                           "fromisoformat", "_parse"}
+    for src, name in ((adapter_src, "adapter"), (route_src, "route"), (helper_src, "helper")):
+        assert not (calls(src) & freshness_machinery), (name, calls(src) & freshness_machinery)
+        assert not (names(src) & freshness_machinery), (name, names(src) & freshness_machinery)
+    for token in ("total_seconds", "timedelta", "now -", "- now"):
+        assert token not in template_src, token
+    # the route hands the instant over; the helper only reads the clock
+    assert "_mission_control_reference_now" in calls(route_src)
+    assert calls(helper_src) <= {"now", "isoformat"}, calls(helper_src)
+    # the adapter still consumes build_dashboard and nothing else (see the AST test)
+    assert "build_dashboard(repo_root, now)" in adapter_src

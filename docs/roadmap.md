@@ -87,6 +87,32 @@ journal and remains accurate history — it is deliberately not rewritten.
 
 ---
 
+## GUI-1 / Mission Control — built, review candidate (2026-09-20)
+
+- **Status:** built / review candidate — PR #48 (`feature/gui1-read-only-mission-control`,
+  off main `c7798cf`). Not merged at the time of this entry.
+- **Route:** `GET /dashboard/mission-control` in the gui_v2 dashboard ("More" menu).
+  Module `gui_v2/data/dash_mission_control.py`, template
+  `gui_v2/templates/dashboard/mission_control.html`, tests
+  `tests/test_gui_mission_control.py`; consumer note in
+  `docs/WORKER_CONTROL_CENTER_INTERFACE.md`.
+- **Read-only.** GET only; no form, button or mutating route (405 on POST/PUT/DELETE/PATCH).
+  Rendering changes no byte of the repository.
+- **Controller/read-model-backed.** Sole data source is
+  `ew0a_readmodels.build_dashboard(repo_root, now)`; the adapter imports nothing else and
+  binds no file/path/json/process facility. The request supplies an aware UTC reference
+  instant; the read model's own `classify()` decides LIVE / STALE / UNKNOWN.
+- **No authority mutation.** Authority is presentation only; a non-canonical record
+  renders the read model's `UNAVAILABLE` refusal, never grants.
+- **No backend producers.** Worker heartbeat/activity, queue state, supervisor
+  availability/latency, component health, `controller_since`, controller identity and
+  attention derivation remain **`PENDING_BACKEND` and are rendered as such** — never as
+  healthy/online/idle/ready, never green. Learning stays
+  `UNAVAILABLE_PENDING_CERTIFICATION`. The accepted debt that `backend_truth` reads
+  hardened reader output directly is unchanged.
+- **Roadmap status.** Journal entry only: Northstar phase ordering, `next_official_step`,
+  0C / VS-002 priority and future-phase statuses are unchanged. GUI-2 not authorized.
+
 ## Crowd Radar multi-source (no-extra-cost) — built (2026-06-14)
 
 - Dev-doc-audited, entitlement-probed multi-source connector lane under

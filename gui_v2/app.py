@@ -529,6 +529,24 @@ def page_dash_system(
     return _render(request, "dashboard/system.html", **ctx)
 
 
+def _mission_control_reference_now() -> str:
+    """The request's evaluation instant: an aware UTC ISO-8601 timestamp.
+
+    Supplied to ``build_dashboard(..., now)`` so the read model's OWN
+    freshness rules (``control_center_truth.classify``) can decide LIVE /
+    STALE / UNKNOWN for timestamped evidence. Without a reference instant the
+    classifier deliberately answers UNKNOWN, which made every real page load
+    unable to distinguish a fresh verdict from a stale one (PR #48 review).
+
+    This is the only clock read on the Mission Control path. The GUI never
+    computes an age, never holds a freshness limit and never classifies: it hands
+    the instant over and renders what the read model returns. Kept as a
+    named function so tests can pin it.
+    """
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 @app.get("/dashboard/mission-control", response_class=HTMLResponse)
 def page_dash_mission_control(
     request: Request, _a: str | None = Depends(_require_auth)
@@ -537,11 +555,13 @@ def page_dash_mission_control(
 
     GET only. The view is projected from the certified controller read model
     (``ew0a_readmodels.build_dashboard``) by ``dash_mission_control``; this
-    route adds nothing, derives nothing and offers no control. ``now`` is
-    deliberately left to the read model's own no-fabricated-time discipline.
+    route adds nothing, derives nothing and offers no control. The one input
+    it contributes is the request's reference instant (see
+    ``_mission_control_reference_now``), which the read model -- not the
+    GUI -- uses to classify freshness.
     """
     return _render(request, "dashboard/mission_control.html",
-                   **_dash_mission_control(REPO_ROOT))
+                   **_dash_mission_control(REPO_ROOT, _mission_control_reference_now()))
 
 
 @app.get("/dashboard/strategy-lab", response_class=HTMLResponse)
