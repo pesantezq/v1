@@ -264,9 +264,23 @@ def test_g6_readmodel_session_surface_is_read_only():
                 assert writer not in dumped
 
 
-def test_g6_absent_ledger_is_pending_backend_not_a_fabrication(tmp_path):
+def test_g6_absent_ledger_is_answered_by_this_producer_not_fabricated(tmp_path):
+    """Was: an absent ledger must project PENDING_BACKEND.
+
+    That encoded a defect. PENDING_BACKEND means the interface expects a
+    capability and NOBODY BUILT THE PRODUCER -- but this module IS the
+    active-session producer, so answering "no session" as PENDING_BACKEND told
+    an operator to go build a backend already in the tree. The read model now
+    asks this producer and classifies its answer; the property that actually
+    mattered is unchanged and still asserted here: nothing is fabricated."""
     from portfolio_automation.engineer_worker.ew0a_readmodels import _build_active_session
-    assert _build_active_session(tmp_path) == "PENDING_BACKEND"
+    payload, status, detail = _build_active_session(tmp_path)
+    assert status == "OK" and detail == ""
+    assert payload["session_state"] == ns.NO_SESSION
+    assert payload["session_id"] is None
+    # no invented session identity, objective, mission or progress
+    assert payload["mission_id"] == ns.NO_SESSION
+    assert payload["tasks_verified"] == 0
 
 
 # ── the real repository ────────────────────────────────────────────────────
