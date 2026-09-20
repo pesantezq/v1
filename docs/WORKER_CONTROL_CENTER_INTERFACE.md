@@ -1105,6 +1105,38 @@ access credentials · execute shell through GUI input. Projections are structura
 separate from any controller mutation path; there is **no** action endpoint here.
 
 ## Handoff
+
+### GUI-1 consumer: Mission Control (`/dashboard/mission-control`)
+
+The first shipped consumer of this contract is the read-only Mission Control page
+in the gui_v2 dashboard: route `GET /dashboard/mission-control` in `gui_v2/app.py`,
+presentation adapter `gui_v2/data/dash_mission_control.py`, template
+`gui_v2/templates/dashboard/mission_control.html`, tests
+`tests/test_gui_mission_control.py`. It supersedes the standalone
+`feature/worker-control-center-gui` console named below, whose adapters parsed the
+authoritative files directly.
+
+What it does and does not do, each asserted by a test:
+
+- Its only data source is `build_dashboard()`. The adapter imports nothing but this
+  module and binds no file/path/json/process facility; the page renders against a
+  non-existent repo root once `build_dashboard` is stubbed.
+- It never writes: rendering leaves every byte of the repository unchanged.
+- It shows the read model's own states (`LIVE / STALE / PENDING_BACKEND /
+  UNAVAILABLE / UNKNOWN`) verbatim, plus `DERIVED` for the `can_*` booleans (which
+  the contract itself labels derived) and `CONTRACT_CONSTANT` for fixed identities.
+  `PENDING_BACKEND`, `UNAVAILABLE`, `UNKNOWN` and `STALE` are never rendered green.
+- Authority is presentation only: no form, button or non-GET route exists; a
+  non-canonical record renders the read model's `UNAVAILABLE` refusal, not grants.
+- The learning projection is shown as `UNAVAILABLE` with the quarantine detail and
+  is not reconstructed.
+- "Failures & blockers" and "Unavailable / pending" are organisation of status fields
+  already returned (mechanically walked); while `attention.derivation_state` is
+  `PENDING_BACKEND` the page says an empty list is not evidence that nothing needs
+  the operator.
+- If `build_dashboard` raises despite its totality contract, the page fails closed to
+  an `UNAVAILABLE` banner naming only the exception type.
+
 - Controller branch/SHA: `feature/ew-0a-safe-operations` (see the accompanying
   GUI-handoff report for the exact SHA).
 - Interface doc: this file. Projection module: `ew0a_readmodels.py` (protected).
