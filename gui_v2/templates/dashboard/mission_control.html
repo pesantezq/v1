@@ -1,0 +1,326 @@
+{% extends "base.html" %}
+{% import "components/_ui.html" as ui %}
+{% block title %}Mission Control &mdash; StockBot{% endblock %}
+
+{# ===================================================================
+   Mission Control (GUI-1) — READ-ONLY human oversight surface.
+
+   Everything on this page is a value the certified controller read model
+   published (gui_v2/data/dash_mission_control.py -> build_dashboard).
+   No form, no POST, no control of any kind lives here: there is nothing
+   to click that changes Northstar. State labels are the read model's own
+   (LIVE / STALE / PENDING_BACKEND / UNAVAILABLE / UNKNOWN) plus DERIVED and
+   CONTRACT_CONSTANT for values the contract labels as non-evidence.
+   =================================================================== #}
+
+{% macro state(f) -%}{{ ui.badge(f.severity, f.state) }}{%- endmacro %}
+
+{% macro field_row(f) -%}
+<div class="flex items-start justify-between gap-3 py-1.5 border-b border-zinc-800/60 last:border-0">
+  <div class="min-w-0">
+    <div class="text-xs text-zinc-500">{{ f.label }}</div>
+    <div class="text-sm text-zinc-200 font-mono break-words">{{ f.value }}</div>
+    {% if f.note %}<div class="text-[11px] text-zinc-500 mt-0.5">{{ f.note }}</div>{% endif %}
+  </div>
+  <div class="flex-shrink-0">{{ state(f) }}</div>
+</div>
+{%- endmacro %}
+
+{% macro field_list(fields) -%}
+<div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2">
+  {% for f in fields %}{{ field_row(f) }}{% endfor %}
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div id="dashboard-mission-control-content"
+     hx-get="/dashboard/mission-control"
+     hx-trigger="every 120s"
+     hx-target="#dashboard-mission-control-content"
+     hx-select="#dashboard-mission-control-content"
+     hx-swap="outerHTML"
+     class="space-y-7">
+
+  {{ ui.page_header("Mission Control",
+                    "Read-only Northstar oversight — what is running, under what authority, with what evidence",
+                    "/dashboard/mission-control", "dashboard-mission-control-content") }}
+
+  <p class="text-xs text-zinc-500">
+    Observe-only. Every value is projected by the controller read model
+    (<span class="font-mono">{{ read_model_schema.schema_version or "schema unavailable" }}</span>
+    {% if read_model_schema.schema_kind %}· <span class="font-mono">{{ read_model_schema.schema_kind }}</span>{% endif %}).
+    This page cannot change authority, missions, tasks, or production.
+    {% if now %}Reference time <span class="font-mono">{{ now }}</span>.{% endif %}
+  </p>
+
+  {% if read_model_status != "LIVE" %}
+  <section aria-label="Read model unavailable"
+           class="bg-rose-500/10 border border-rose-500/30 rounded-xl px-4 py-3">
+    <div class="flex items-center gap-2">
+      {{ ui.badge("red", read_model_status) }}
+      <span class="text-sm text-rose-200 font-medium">Read model unavailable</span>
+    </div>
+    <p class="text-xs text-rose-300/80 mt-1">{{ read_model_detail }}</p>
+  </section>
+  {% endif %}
+
+  {# ---------------- Hero strip ---------------- #}
+  <section aria-label="Mission status strip" class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {% for h in hero %}
+    {{ ui.hero_stat(h.label, h.value, h.severity, h.state ~ (" · " ~ h.note if h.note else "")) }}
+    {% endfor %}
+  </section>
+
+  {# ---------------- Mission ---------------- #}
+  <section aria-label="Mission">
+    {{ ui.section_header("Mission", "Runtime mission and deliverable progress", "controller · mission") }}
+    {{ field_list(mission.fields) }}
+  </section>
+
+  {# ---------------- Session ---------------- #}
+  <section aria-label="Session">
+    {% set s = mission.session %}
+    {{ ui.section_header("Recorded session", "The session producer's projection, under its own truth flags", "active_session") }}
+    {% if not s.present %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3 flex items-center gap-3">
+        {{ ui.badge(s.severity, s.state) }}
+        <span class="text-sm text-zinc-300">{{ s.detail }}</span>
+        {% if s.session_state %}<span class="text-xs text-zinc-500 font-mono">{{ s.session_state }}</span>{% endif %}
+      </div>
+    {% else %}
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        {{ ui.badge(s.session_state_severity, "session " ~ s.session_state) }}
+        {{ ui.badge(s.consistency_severity, "mission " ~ s.mission_consistency) }}
+        {{ ui.badge(s.severity, "freshness " ~ s.state) }}
+        {% if not s.safe_to_present_as_current_work %}
+        {{ ui.badge("red", "NOT current work") }}
+        {% endif %}
+      </div>
+      {% if not s.safe_to_present_as_current_work %}
+      <p class="text-xs text-rose-300/80 mb-2">{{ s.consistency_detail }}</p>
+      {% endif %}
+      {{ field_list(s.fields) }}
+      {% if s.blockers %}
+      <ul class="mt-2 space-y-1">
+        {% for b in s.blockers %}<li class="text-sm text-rose-200">{{ ui.badge("red", "BLOCKER") }} {{ b }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  {# ---------------- Authority ---------------- #}
+  <section aria-label="Authority">
+    {{ ui.section_header("Authority", "Presentation only. Nothing on this page can change it.", "worker_authority") }}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div class="space-y-3">
+        {{ field_list(authority.fields) }}
+        {% if authority.capabilities %}
+        <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2">
+          <div class="text-xs text-zinc-500 py-1">Derived capabilities</div>
+          {% for f in authority.capabilities %}{{ field_row(f) }}{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="space-y-3">
+        <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3">
+          <div class="flex items-center justify-between">
+            <div class="text-xs text-zinc-500">Effective grants</div>
+            {{ ui.badge(authority.severity, authority.state) }}
+          </div>
+          {% if authority.grants %}
+          <ul class="mt-1 space-y-0.5">{% for g in authority.grants %}<li class="text-sm text-zinc-200">{{ g }}</li>{% endfor %}</ul>
+          {% else %}
+          <div class="text-sm text-zinc-400 mt-1">(no grants projected)</div>
+          {% endif %}
+          {% if authority.detail %}<p class="text-[11px] text-amber-300/80 mt-2">{{ authority.detail }}</p>{% endif %}
+        </div>
+        <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-3">
+          <div class="text-xs text-zinc-500">Forbidden operations (permanent boundary)</div>
+          <div class="mt-1 flex flex-wrap gap-1">
+            {% for op in authority.forbidden_ops %}<span class="font-mono text-[11px] text-zinc-300 bg-zinc-800/70 rounded px-1.5 py-0.5">{{ op }}</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ---------------- Workers / components ---------------- #}
+  <section aria-label="Workers and components">
+    {{ ui.section_header("Workers and components", "Each value carries its own evidence state. A missing heartbeat is PENDING_BACKEND, not health.", "worker · supervisor · controller") }}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      {% for w in workers %}
+      <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2">
+        <div class="py-1.5">
+          <div class="text-xs uppercase tracking-wide text-zinc-400 font-medium">{{ w.title }}</div>
+          {% if w.identity %}<div class="text-sm text-zinc-200 font-mono">{{ w.identity }}</div>{% endif %}
+          {% if w.identity_basis %}<div class="text-[11px] text-zinc-500">identity basis: {{ w.identity_basis }}</div>{% endif %}
+        </div>
+        {% for f in w.fields %}{{ field_row(f) }}{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div>
+        <div class="text-xs text-zinc-500 mb-1">Component health</div>
+        {{ field_list(system_health.fields) }}
+        {% if system_health.note %}<p class="text-[11px] text-zinc-500 mt-1">{{ system_health.note }}</p>{% endif %}
+      </div>
+      <div>
+        <div class="text-xs text-zinc-500 mb-1">Protected config readability (not liveness)</div>
+        {{ field_list(system_health.readability) }}
+      </div>
+    </div>
+  </section>
+
+  {# ---------------- Readiness / evidence ---------------- #}
+  <section aria-label="Readiness and evidence">
+    {{ ui.section_header("Readiness and evidence", "Capability-based readiness from backend_truth", readiness.schema_version or "backend_truth") }}
+    <div class="flex flex-wrap items-center gap-2 mb-2">
+      {{ ui.badge(readiness.readiness_severity, "readiness " ~ readiness.readiness) }}
+      {% for sc in readiness.state_counts %}{{ ui.badge(sc.severity, sc.state ~ " " ~ sc.count) }}{% endfor %}
+    </div>
+    {{ field_list(readiness.fields) }}
+    <div class="mt-3 overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="bg-zinc-900 text-zinc-400 text-xs uppercase tracking-wide text-left">
+            <th class="py-2 px-3">Capability</th><th class="py-2 px-3">State</th><th class="py-2 px-3">Required</th><th class="py-2 px-3">Detail</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for c in readiness.capabilities %}
+          <tr>
+            <td class="py-2 px-3 font-mono text-zinc-200">{{ c.capability }}</td>
+            <td class="py-2 px-3">{{ ui.badge(c.severity, c.state) }}</td>
+            <td class="py-2 px-3 text-zinc-400">{{ "yes" if c.required else "no" }}</td>
+            <td class="py-2 px-3 text-zinc-400 text-xs">{{ c.detail }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ---------------- Run history ---------------- #}
+  <section aria-label="Run history">
+    {{ ui.section_header("Run history", "Engineering outcome ledger, newest first (ledger index shown)", run_session.source or "run_history") }}
+    {{ field_list(run_session.fields) }}
+    {% if run_session.runs %}
+    <div class="mt-3 overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="bg-zinc-900 text-zinc-400 text-xs uppercase tracking-wide text-left">
+            <th class="py-2 px-3">#</th><th class="py-2 px-3">Task</th><th class="py-2 px-3">Status</th><th class="py-2 px-3">Risk</th><th class="py-2 px-3">Executor</th><th class="py-2 px-3">Verdict</th><th class="py-2 px-3">Failures</th><th class="py-2 px-3">Recorded</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for r in run_session.runs %}
+          <tr>
+            <td class="py-2 px-3 font-mono text-zinc-500">{{ r.ledger_index }}</td>
+            <td class="py-2 px-3"><span class="font-mono text-zinc-200">{{ r.task_id }}</span><div class="text-xs text-zinc-500">{{ r.title }}</div></td>
+            <td class="py-2 px-3">{{ ui.badge(r.severity, r.final_status) }}</td>
+            <td class="py-2 px-3 text-zinc-400 text-xs">{{ r.risk_class }}</td>
+            <td class="py-2 px-3 text-zinc-400 text-xs">{{ r.executor }}</td>
+            <td class="py-2 px-3 text-zinc-400 text-xs">{{ r.supervisor_verdict if r.supervisor_verdict is not none else "—" }}</td>
+            <td class="py-2 px-3 text-zinc-400 text-xs">{{ r.failure_classes | join(", ") or "—" }}</td>
+            <td class="py-2 px-3 text-zinc-500 text-xs font-mono">{{ r.recorded_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if run_session.provenance_note %}<p class="text-[11px] text-zinc-500 mt-1">{{ run_session.provenance_note }}</p>{% endif %}
+    {% endif %}
+  </section>
+
+  {# ---------------- Attention ---------------- #}
+  <section aria-label="Attention required">
+    {{ ui.section_header("Attention required", "Only an authoritative derivation may say nothing needs you", "attention") }}
+    {{ field_list(attention.fields) }}
+    {% if attention.entries %}
+    <ul class="mt-2 space-y-1">
+      {% for i in attention.entries %}<li class="text-sm text-zinc-200">{{ ui.badge("yellow", i.get("severity", "ATTENTION")) }} {{ i.get("title") or i.get("detail") or i }}</li>{% endfor %}
+    </ul>
+    {% elif not attention.zero_items_is_authoritative %}
+    <div class="mt-2 bg-zinc-900 rounded-xl border border-dashed border-zinc-700 px-4 py-3 text-sm text-zinc-400">
+      {{ ui.badge(attention.severity, attention.state) }}
+      <span class="ml-2">No attention items are projected, and the read model states this is <strong>not</strong> evidence that nothing requires you.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Failures / blockers ---------------- #}
+  <section aria-label="Failures and blockers">
+    {{ ui.section_header("Failures and blockers", "Organised from status fields the read model already returned — not an attention engine", "run_history · active_session · backend_truth · worker_authority") }}
+    {% if failures %}
+    <ul class="space-y-1.5">
+      {% for f in failures %}
+      <li class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2 flex items-start gap-3">
+        {{ ui.badge(f.severity, f.state) }}
+        <div class="min-w-0">
+          <div class="text-sm text-zinc-200"><span class="text-zinc-500 text-xs uppercase mr-1">{{ f.kind }}</span><span class="font-mono">{{ f.ref }}</span></div>
+          {% if f.detail %}<div class="text-xs text-zinc-400 break-words">{{ f.detail }}</div>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="bg-zinc-900 rounded-xl border border-dashed border-zinc-700 px-4 py-3 text-sm text-zinc-400">
+      No failed runs, session blockers, readiness reasons or unusable evidence are projected.
+      This is not a health claim: see Attention and Unavailable / pending.
+    </div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Unavailable / pending ---------------- #}
+  <section aria-label="Unavailable or pending information">
+    {{ ui.section_header("Unavailable / pending information", "What the system genuinely does not know yet, found mechanically in the read model", "PENDING_BACKEND · UNAVAILABLE · UNKNOWN") }}
+    <div class="bg-zinc-900 rounded-xl border border-zinc-800 px-4 py-2 mb-3 flex items-start gap-3">
+      {{ ui.badge(learning.severity, "learning " ~ learning.state) }}
+      <div class="text-xs text-zinc-400">{{ learning.detail }}</div>
+    </div>
+    {% if unavailable %}
+    <div class="overflow-x-auto rounded-xl border border-zinc-800">
+      <table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-zinc-900 text-zinc-400 text-xs uppercase tracking-wide text-left"><th class="py-2 px-3">Section</th><th class="py-2 px-3">Field</th><th class="py-2 px-3">State</th></tr></thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% for u in unavailable %}
+          <tr><td class="py-1.5 px-3 font-mono text-zinc-300 text-xs">{{ u.section }}</td><td class="py-1.5 px-3 font-mono text-zinc-400 text-xs">{{ u.field }}</td><td class="py-1.5 px-3">{{ ui.badge(u.severity, u.state) }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-sm text-zinc-400">No PENDING_BACKEND, UNAVAILABLE or UNKNOWN fields were found in the read model.</div>
+    {% endif %}
+  </section>
+
+  {# ---------------- Provenance ---------------- #}
+  <section aria-label="Provenance">
+    <details class="group">
+      <summary class="cursor-pointer select-none text-sm font-semibold uppercase tracking-wide text-zinc-300 list-none flex items-center gap-1">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        Provenance · {{ provenance | length }} sections
+      </summary>
+      <div class="mt-2 overflow-x-auto rounded-xl border border-zinc-800">
+        <table class="w-full text-sm border-collapse">
+          <thead><tr class="bg-zinc-900 text-zinc-400 text-xs uppercase tracking-wide text-left"><th class="py-2 px-3">Section</th><th class="py-2 px-3">Read model</th><th class="py-2 px-3">Schema</th><th class="py-2 px-3">Source</th><th class="py-2 px-3">Evidence</th><th class="py-2 px-3">Note</th></tr></thead>
+          <tbody class="divide-y divide-zinc-800">
+            {% for p in provenance %}
+            <tr>
+              <td class="py-1.5 px-3 font-mono text-zinc-300 text-xs">{{ p.section }}</td>
+              <td class="py-1.5 px-3 text-zinc-400 text-xs">{{ p.read_model or "—" }}</td>
+              <td class="py-1.5 px-3 font-mono text-zinc-500 text-xs">{{ p.schema_version or "—" }}</td>
+              <td class="py-1.5 px-3 font-mono text-zinc-500 text-xs">{{ p.source or "—" }}</td>
+              <td class="py-1.5 px-3 font-mono text-zinc-400 text-xs">{{ p.evidence or "—" }}</td>
+              <td class="py-1.5 px-3 text-zinc-500 text-xs">{{ p.note or "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+</div>
+{% endblock %}

@@ -325,6 +325,7 @@ from gui_v2.data.dash_today import collect_today_view as _dash_today
 from gui_v2.data.dash_portfolio import collect_portfolio_view as _dash_portfolio
 from gui_v2.data.dash_quant import collect_quant_view as _dash_quant
 from gui_v2.data.dash_system import collect_system_view as _dash_system
+from gui_v2.data.dash_mission_control import collect_mission_control_view as _dash_mission_control
 from gui_v2.data.dash_memo import collect_memo_view as _dash_memo
 from gui_v2.data.dash_memo_datasets import collect_memo_datasets_view
 from gui_v2.data.dash_portfolio_sync import collect_portfolio_sync_view as _dash_portfolio_sync
@@ -526,6 +527,21 @@ def page_dash_system(
     except Exception:
         pass
     return _render(request, "dashboard/system.html", **ctx)
+
+
+@app.get("/dashboard/mission-control", response_class=HTMLResponse)
+def page_dash_mission_control(
+    request: Request, _a: str | None = Depends(_require_auth)
+) -> HTMLResponse:
+    """Mission Control (GUI-1): read-only Northstar oversight.
+
+    GET only. The view is projected from the certified controller read model
+    (``ew0a_readmodels.build_dashboard``) by ``dash_mission_control``; this
+    route adds nothing, derives nothing and offers no control. ``now`` is
+    deliberately left to the read model's own no-fabricated-time discipline.
+    """
+    return _render(request, "dashboard/mission_control.html",
+                   **_dash_mission_control(REPO_ROOT))
 
 
 @app.get("/dashboard/strategy-lab", response_class=HTMLResponse)
