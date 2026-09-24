@@ -100,6 +100,9 @@ _READINESS_SEVERITY: dict[str, str] = {
     "UNAVAILABLE": "red",
 }
 _CONSISTENCY_SEVERITY: dict[str, str] = {"AGREES": "green", "MISMATCH": "red"}
+#: control_center_truth.Readiness values. A separate taxonomy from TruthState:
+#: PARTIAL is a readiness, not a freshness, and is never a TruthState.
+READINESS_STATES: tuple[str, ...] = ("READY", "MOSTLY_LIVE", "PARTIAL", "UNAVAILABLE")
 
 #: Keys whose string value is itself a published evidence/truth state.
 _EVIDENCE_KEYS = frozenset({
@@ -143,6 +146,17 @@ def _field(label: str, value: Any, state: str, note: str = "",
         display = str(value)
     return {"key": key or label, "label": label, "value": display, "raw": value,
             "state": state, "severity": state_severity(state), "note": note}
+
+
+def _readiness_field(label: str, readiness: Any, note: str = "", key: str = "") -> dict[str, Any]:
+    """A field whose state IS the published readiness value, mapped through
+    _READINESS_SEVERITY -- never coerced into a TruthState. An unrecognised or
+    missing readiness fails closed to UNAVAILABLE (red), never to a positive
+    state (PR #48 review: PARTIAL was being relabelled LIVE)."""
+    state = readiness if isinstance(readiness, str) and readiness in READINESS_STATES else UNAVAILABLE
+    f = _field(label, state, state, note, key=key)
+    f["severity"] = _READINESS_SEVERITY.get(state, "gray")
+    return f
 
 
 def _section_evidence(section: dict[str, Any], *keys: str, default: str) -> str:
@@ -245,13 +259,14 @@ def project_mission_control(dashboard: dict[str, Any],
             "schema_kind": dashboard.get("schema_kind"),
             "read_model": dashboard.get("read_model")},
     }
-    view["mission"] = _mission_section(controller, mission, session_raw)
+    view["mission"] = _mission_section(controller, mission, session_raw, truth)
     view["authority"] = _authority_section(authority, worker, apprenticeship)
     view["run_session"] = _run_section(
         run_history, supervisor,
         supervisor_state=_published_capability_state(truth, "supervisor_state"))
-    view["workers"] = _worker_cards(worker, supervisor, controller)
-    view["system_health"] = _health_section(health)
+    view["workers"] = _worker_cards(worker, supervisor, controller, truth,
+                                    authority_evidence=view["authority"]["state"])
+    view["system_health"] = _health_section(health, truth)
     view["readiness"] = _readiness_section(truth, records)
     view["attention"] = _attention_section(attention, dashboard.get("attention_items"))
     view["learning"] = {
@@ -272,16 +287,19 @@ def project_mission_control(dashboard: dict[str, Any],
 # ---------------------------------------------------------------------------
 
 def _mission_section(controller: dict[str, Any], mission: dict[str, Any],
-                     session_raw: Any) -> dict[str, Any]:
+                     session_raw: Any, truth: dict[str, Any]) -> dict[str, Any]:
+    """Mission rows carry the backend_truth states published for them
+    (mission_state, controller_state); nothing here is assumed LIVE."""
     fields = []
+    mission_state = _published_capability_state(truth, "mission_state")
+    controller_state = _published_capability_state(truth, "controller_state")
     runtime_mission = controller.get("current_mission")
     fields.append(_field("Runtime mission", runtime_mission,
-                         _state_of(runtime_mission, "LIVE" if runtime_mission else UNAVAILABLE),
+                         _state_of(runtime_mission, mission_state),
                          "from the runtime policy via the controller summary",
                          key="runtime_mission"))
     note = str(mission.get("completion_note") or "")
-    progress_state = PENDING_BACKEND if note.startswith(PENDING_BACKEND) else (
-        "LIVE" if mission else UNAVAILABLE)
+    progress_state = PENDING_BACKEND if note.startswith(PENDING_BACKEND) else mission_state
     fields.append(_field("Deliverables verified",
                          f"{mission.get('verified_count', '—')} / {mission.get('total_required', '—')}",
                          progress_state, note, key="deliverables"))
@@ -289,7 +307,7 @@ def _mission_section(controller: dict[str, Any], mission: dict[str, Any],
                          progress_state, "", key="is_complete"))
     fields.append(_field("Controller operational state",
                          controller.get("operational_state"),
-                         _state_of(controller.get("operational_state"), "LIVE"),
+                         _state_of(controller.get("operational_state"), controller_state),
                          key="operational_state"))
     return {"fields": fields, "session": _session_block(session_raw)}
 
@@ -448,17 +466,30 @@ def _run_section(run_history: dict[str, Any], supervisor: dict[str, Any],
 
 
 def _worker_cards(worker: dict[str, Any], supervisor: dict[str, Any],
-                  controller: dict[str, Any]) -> list[dict[str, Any]]:
-    """One card per represented component. Every value keeps its own state."""
+                  controller: dict[str, Any], truth: dict[str, Any],
+                  authority_evidence: str = UNAVAILABLE) -> list[dict[str, Any]]:
+    """One card per represented component. Every value keeps its own state.
+
+    ``authority_evidence`` is worker_authority.record_evidence as published:
+    the worker's level is the EFFECTIVE, fail-closed value the authority
+    reader returned, which is not evidence that the record is usable. A valid
+    A1 beside refused grants must render UNAVAILABLE, not LIVE (PR #48 review).
+    Controller rows carry the controller_state / controller_since /
+    controller_identity capabilities the read model published."""
     w_ev = _section_evidence(worker, "records_evidence", default=UNAVAILABLE)
     s_ev = _section_evidence(supervisor, "records_evidence", default=UNAVAILABLE)
+    controller_state = _published_capability_state(truth, "controller_state")
+    controller_since = _published_capability_state(truth, "controller_since")
+    controller_identity = _published_capability_state(truth, "controller_identity")
     cards = []
     cards.append({
         "title": "Engineer worker", "identity": worker.get("worker_identity"),
         "identity_basis": worker.get("identity_basis"),
         "fields": [
             _field("Role", worker.get("role"), CONTRACT_CONSTANT, key="role"),
-            _field("Authority", worker.get("ew_authority"), "LIVE", key="ew_authority"),
+            _field("Authority", worker.get("ew_authority"), authority_evidence,
+                   f"effective (fail-closed) level from the authority reader; "
+                   f"record evidence {authority_evidence}", key="ew_authority"),
             _field("Operational state", worker.get("operational_state"),
                    _state_of(worker.get("operational_state"), w_ev), key="operational_state"),
             _field("Current task", worker.get("current_task"),
@@ -502,16 +533,15 @@ def _worker_cards(worker: dict[str, Any], supervisor: dict[str, Any],
             _field("Role", controller.get("controller_role"), CONTRACT_CONSTANT, key="role"),
             _field("Level", controller.get("controller_level"), CONTRACT_CONSTANT, key="level"),
             _field("Identity basis", controller.get("identity_basis"),
-                   PENDING_BACKEND if controller.get("identity_basis") == "ASSUMED_NOT_OBSERVED"
-                   else "LIVE",
+                   _state_of(controller.get("identity_basis"), controller_identity),
                    "identity is assumed by contract until a controller identity producer exists"
                    if controller.get("identity_basis") == "ASSUMED_NOT_OBSERVED" else "",
                    key="identity_basis"),
             _field("Operational state", controller.get("operational_state"),
-                   _state_of(controller.get("operational_state"), "LIVE"),
+                   _state_of(controller.get("operational_state"), controller_state),
                    key="operational_state"),
             _field("Controller since", controller.get("controller_since"),
-                   _state_of(controller.get("controller_since"), "LIVE"),
+                   _state_of(controller.get("controller_since"), controller_since),
                    key="controller_since"),
             _field("Escalation role", controller.get("escalation_role"),
                    CONTRACT_CONSTANT, key="escalation_role"),
@@ -519,28 +549,34 @@ def _worker_cards(worker: dict[str, Any], supervisor: dict[str, Any],
     return cards
 
 
-def _health_section(health: dict[str, Any]) -> dict[str, Any]:
+def _health_section(health: dict[str, Any], truth: dict[str, Any]) -> dict[str, Any]:
+    """Component rows carry the published component_health capability (no
+    producer exists, so PENDING_BACKEND); readability rows show the probe's
+    own published state verbatim, and only READABLE is green."""
     components = ("controller", "gpt_supervisor", "engineer_runtime", "sandbox",
                   "evidence_bridge", "control_loop")
+    component_health = _published_capability_state(truth, "component_health")
     fields = [_field(name.replace("_", " "), health.get(name),
-                     _state_of(health.get(name), "LIVE" if name in health else UNAVAILABLE),
+                     _state_of(health.get(name), component_health if name in health else UNAVAILABLE),
                      key=name)
               for name in components]
     readability_raw = health.get("config_readability")
     readability = []
     if isinstance(readability_raw, dict):
         for name, value in readability_raw.items():
-            readability.append(_field(str(name), value,
-                                      "LIVE" if value == "READABLE" else UNAVAILABLE,
-                                      "file readability only — never liveness",
-                                      key=str(name)))
+            probe = value if isinstance(value, str) and value else UNAVAILABLE
+            f = _field(str(name), probe, probe,
+                       "file readability only — never liveness", key=str(name))
+            f["severity"] = "green" if probe == "READABLE" else "yellow"
+            readability.append(f)
     return {"fields": fields, "readability": readability,
             "note": str(health.get("health_note") or ""),
             "authority": health.get("authority")}
 
 
 def _readiness_section(truth: dict[str, Any], records: dict[str, Any]) -> dict[str, Any]:
-    readiness = str(truth.get("readiness") or UNAVAILABLE)
+    readiness_raw = truth.get("readiness")
+    readiness = readiness_raw if isinstance(readiness_raw, str) and readiness_raw in READINESS_STATES else UNAVAILABLE
     caps_raw = truth.get("capabilities") if isinstance(truth.get("capabilities"), list) else []
     capabilities = []
     for c in caps_raw:
@@ -554,8 +590,7 @@ def _readiness_section(truth: dict[str, Any], records: dict[str, Any]) -> dict[s
     rec_av = _section_evidence(records, "availability", default=UNAVAILABLE)
     counts = truth.get("state_counts") if isinstance(truth.get("state_counts"), dict) else {}
     fields = [
-        _field("Readiness", readiness, readiness if readiness in READ_MODEL_STATES else "LIVE",
-               "capability-based, not a percentage", key="readiness"),
+        _readiness_field("Readiness", readiness, "capability-based, not a percentage", key="readiness"),
         _field("Controller records ledger", rec_av, rec_av,
                str(records.get("detail") or ""), key="controller_records"),
     ]
@@ -693,13 +728,12 @@ def _hero(view: dict[str, Any], controller: dict[str, Any], authority: dict[str,
     readiness = view["readiness"]["readiness"]
     att_state = view["attention"]["state"]
     return [
-        _field("Mission", mission, _state_of(mission, "LIVE" if mission else UNAVAILABLE),
+        _field("Mission", mission,
+               _state_of(mission, _published_capability_state(truth, "mission_state")),
                key="mission"),
         _field("Authority", authority.get("level"), auth_state,
                f"record evidence {auth_state}", key="authority"),
-        {**_field("Readiness", readiness, readiness if readiness in READ_MODEL_STATES else "LIVE",
-                  key="readiness"),
-         "severity": view["readiness"]["readiness_severity"]},
+        _readiness_field("Readiness", readiness, key="readiness"),
         _field("Attention",
                f"{view['attention']['fields'][1]['value']} item(s)"
                if view["attention"]["zero_items_is_authoritative"] else att_state,

@@ -785,3 +785,184 @@ def test_http_page_shows_one_freshness_answer_for_the_supervisor_evidence(
 def _capability_state_in(dashboard, capability):
     return next(c["state"] for c in dashboard["backend_truth"]["capabilities"]
                 if c["capability"] == capability)
+
+
+# ---------------------------------------------------------------------------
+# Truth preservation: readiness and authority evidence (PR #48 review, round 4)
+#
+# Codex A: backend_truth.readiness == PARTIAL was relabelled LIVE (readiness
+#          row and hero) because PARTIAL is not a TruthState and the fallback
+#          was a positive literal.
+# Codex B: the worker card's "Authority" row hard-coded LIVE, so a valid A1
+#          level with refused (non-canonical) grants rendered a green LIVE
+#          badge beside record_evidence=UNAVAILABLE on the same page.
+# Sweep:   every other literal-LIVE fallback in the adapter is replaced by the
+#          published backend_truth capability state; a missing or unrecognised
+#          state fails closed to UNAVAILABLE.
+# ---------------------------------------------------------------------------
+
+READINESS_VALUES = ("READY", "MOSTLY_LIVE", "PARTIAL", "UNAVAILABLE")
+
+
+def _with_readiness(dashboard, value):
+    d = copy.deepcopy(dashboard)
+    d["backend_truth"]["readiness"] = value
+    return d
+
+
+def _with_capability(dashboard, capability, state):
+    d = copy.deepcopy(dashboard)
+    for c in d["backend_truth"]["capabilities"]:
+        if c["capability"] == capability:
+            c["state"] = state
+    return d
+
+
+def _hero_by_key(view):
+    return {h["key"]: h for h in view["hero"]}
+
+
+def _readiness_row(view):
+    return {f["key"]: f for f in view["readiness"]["fields"]}["readiness"]
+
+
+def _worker_field(view, card_title, key):
+    card = next(c for c in view["workers"] if c["title"] == card_title)
+    return {f["key"]: f for f in card["fields"]}[key]
+
+
+def test_partial_readiness_is_never_relabelled_live(client, tmp_path):
+    """Codex A. The populated fixture is genuinely PARTIAL (worker_activity has
+    no producer). PARTIAL must stay PARTIAL in the row, the hero and the HTML."""
+    d = rm.build_dashboard(_populated(tmp_path), _NOW)
+    assert d["backend_truth"]["readiness"] == "PARTIAL"
+    view = mc.project_mission_control(d, _NOW)
+    row = _readiness_row(view)
+    assert row["state"] == "PARTIAL" and row["severity"] != "green"
+    hero = _hero_by_key(view)["readiness"]
+    assert hero["state"] == "PARTIAL" and hero["severity"] != "green"
+    assert view["readiness"]["readiness_severity"] == mc._READINESS_SEVERITY["PARTIAL"]
+    html = client(_populated(tmp_path / "http")).get(_ROUTE).text
+    hero_html = _re.search(r'<span[^>]*>Readiness</span>.*?</div>', html, _re.S).group(0)
+    assert "PARTIAL" in hero_html and "LIVE" not in hero_html
+    row_html = _re.search(r'Readiness</div>.*?</span>', html, _re.S).group(0)
+    assert ">PARTIAL</span>" in row_html and "LIVE" not in row_html
+    assert "border-emerald-500/30" not in row_html
+
+
+def test_every_readiness_value_maps_through_the_readiness_taxonomy(tmp_path):
+    base = rm.build_dashboard(_populated(tmp_path), _NOW)
+    for value in READINESS_VALUES:
+        view = mc.project_mission_control(_with_readiness(base, value), _NOW)
+        row, hero = _readiness_row(view), _hero_by_key(view)["readiness"]
+        assert row["state"] == value and hero["state"] == value, value
+        assert row["severity"] == hero["severity"] == mc._READINESS_SEVERITY[value], value
+        assert row["state"] not in mc.READ_MODEL_STATES or value == "UNAVAILABLE"
+    # unrecognised or missing readiness fails closed, never positive
+    for bogus in ("BOGUS", "", None):
+        view = mc.project_mission_control(_with_readiness(base, bogus), _NOW)
+        assert _readiness_row(view)["state"] == "UNAVAILABLE"
+        assert _hero_by_key(view)["readiness"]["severity"] != "green"
+
+
+def test_authority_row_carries_unavailable_evidence_beside_a_valid_level(client, tmp_path):
+    """Codex B. Valid A1 level, non-canonical grants -> the read model reads the
+    effective level A1 but refuses the record (record_evidence UNAVAILABLE)."""
+    root = _root(tmp_path)
+    p = root / au.DEFAULT_STATE_REL
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    assert rec["level"] == "A1_ASSISTED_ENGINEERING"
+    rec["grants"] = rec["grants"][:-1]                     # subset: non-canonical
+    p.write_text(json.dumps(rec), encoding="utf-8")
+    d = rm.build_dashboard(root, _NOW)
+    assert d["worker"]["ew_authority"] == "A1_ASSISTED_ENGINEERING"
+    assert d["worker_authority"]["record_evidence"] == "UNAVAILABLE"
+    view = mc.project_mission_control(d, _NOW)
+    f = _worker_field(view, "Engineer worker", "ew_authority")
+    assert f["state"] == "UNAVAILABLE" and f["severity"] != "green"
+    assert "fail-closed" in f["note"]
+    assert view["authority"]["state"] == "UNAVAILABLE"
+    assert _hero_by_key(view)["authority"]["state"] == "UNAVAILABLE"
+    html = client(root).get(_ROUTE).text
+    card = _re.search(r'Engineer worker</div>.*?GPT supervisor', html, _re.S).group(0)
+    auth_row = _re.search(r'>Authority</div>.*?</span>', card, _re.S).group(0)
+    assert ">UNAVAILABLE</span>" in auth_row and "border-emerald-500/30" not in auth_row
+    assert "A1_ASSISTED_ENGINEERING" in auth_row          # effective level still shown
+
+
+def test_authority_row_is_live_only_when_the_record_evidence_is_live(tmp_path):
+    d = rm.build_dashboard(_populated(tmp_path), _NOW)
+    assert d["worker_authority"]["record_evidence"] == "LIVE"
+    view = mc.project_mission_control(d, _NOW)
+    assert _worker_field(view, "Engineer worker", "ew_authority")["state"] == "LIVE"
+    for state in ("STALE", "UNKNOWN", "UNAVAILABLE", "PENDING_BACKEND"):
+        d2 = copy.deepcopy(d)
+        d2["worker_authority"]["record_evidence"] = state
+        f = _worker_field(mc.project_mission_control(d2, _NOW), "Engineer worker", "ew_authority")
+        assert f["state"] == state and f["severity"] != "green", state
+
+
+def test_mission_and_controller_rows_carry_published_capability_states(tmp_path):
+    """Sweep: no row invents LIVE; each takes the backend_truth capability the
+    read model published for it, and a missing capability is UNAVAILABLE."""
+    base = rm.build_dashboard(_populated(tmp_path), _NOW)
+    view = mc.project_mission_control(base, _NOW)
+    mission_fields = {f["key"]: f for f in view["mission"]["fields"]}
+    assert mission_fields["runtime_mission"]["state"] == "LIVE"          # published mission_state
+    assert _hero_by_key(view)["mission"]["state"] == "LIVE"
+    ctl = lambda v, k: _worker_field(v, "Controller", k)
+    assert ctl(view, "identity_basis")["state"] == "PENDING_BACKEND"     # controller_identity
+    assert ctl(view, "controller_since")["state"] == "PENDING_BACKEND"
+    for cap, check in (("mission_state", lambda v: (mission_fields_of(v)["runtime_mission"]["state"],
+                                                     _hero_by_key(v)["mission"]["state"])),
+                       ("controller_state", lambda v: (ctl(v, "operational_state")["state"],)),
+                       ("controller_identity", lambda v: (ctl(v, "identity_basis")["state"],))):
+        for state in ("UNAVAILABLE", "STALE", "UNKNOWN"):
+            v = mc.project_mission_control(_with_capability(base, cap, state), _NOW)
+            got = check(v)
+            # the PENDING_BACKEND sentinel value always wins over section evidence
+            assert all(g in (state, "PENDING_BACKEND") for g in got), (cap, state, got)
+            assert any(g == state for g in got) or cap == "controller_state", (cap, state, got)
+    # a capability the read model did not publish at all -> UNAVAILABLE, not LIVE
+    d = copy.deepcopy(base)
+    d["backend_truth"]["capabilities"] = [c for c in d["backend_truth"]["capabilities"]
+                                          if c["capability"] != "mission_state"]
+    v = mc.project_mission_control(d, _NOW)
+    assert mission_fields_of(v)["runtime_mission"]["state"] == "UNAVAILABLE"
+    assert _hero_by_key(v)["mission"]["state"] == "UNAVAILABLE"
+
+
+def mission_fields_of(view):
+    return {f["key"]: f for f in view["mission"]["fields"]}
+
+
+def test_component_health_and_readability_do_not_invent_live(tmp_path):
+    base = rm.build_dashboard(_populated(tmp_path), _NOW)
+    view = mc.project_mission_control(base, _NOW)
+    for f in view["system_health"]["fields"]:
+        assert f["state"] == "PENDING_BACKEND", f["key"]
+    # readability rows carry the probe's own published state verbatim
+    for f in view["system_health"]["readability"]:
+        assert f["state"] == f["raw"] == "READABLE"
+        assert "never liveness" in f["note"]
+    d = copy.deepcopy(base)
+    d["system_health"]["config_readability"]["authority_record"] = "MALFORMED"
+    d["system_health"]["controller"] = "GREEN"          # a value without a producer
+    v = mc.project_mission_control(d, _NOW)
+    rd = {f["key"]: f for f in v["system_health"]["readability"]}["authority_record"]
+    assert rd["state"] == "MALFORMED" and rd["severity"] != "green"
+    ctl = {f["key"]: f for f in v["system_health"]["fields"]}["controller"]
+    assert ctl["state"] == "PENDING_BACKEND" and ctl["severity"] != "green"   # component_health capability
+
+
+def test_adapter_has_no_literal_live_fallback_inside_any_projection():
+    """The only place the adapter may spell LIVE as a value is the module-level
+    taxonomy tables and the page-level read_model_status; no projection
+    function may fall back to a positive truth state."""
+    tree = ast.parse(_ADAPTER.read_text(encoding="utf-8"))
+    offenders = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Constant) and node.value == "LIVE":
+                offenders.append(fn.name)
+    assert set(offenders) <= {"project_mission_control"}, sorted(set(offenders))
