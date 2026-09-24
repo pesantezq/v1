@@ -306,9 +306,18 @@ def test_default_time_behaviour_is_preserved(tmp_path, configured, monkeypatch):
     after = datetime.now(timezone.utc)
     attempt = _attempt(tmp_path)
     admitted = _latest(tmp_path, ES.LATEST_ADMITTED_FILE)
-    assert before <= datetime.fromisoformat(attempt["generated_at"]) <= after
-    assert before <= datetime.fromisoformat(admitted["admitted_at"]) <= after
-    assert (tmp_path / "outputs/archive/broker_evidence" / before.date().isoformat()).is_dir()
+    stamped_attempt = datetime.fromisoformat(attempt["generated_at"])
+    stamped_admitted = datetime.fromisoformat(admitted["admitted_at"])
+    assert before <= stamped_attempt <= after
+    assert before <= stamped_admitted <= after
+    assert stamped_attempt == stamped_admitted, "one sync, one clock, in default mode too"
+    # Derive the expected partition from the RECORDED instant, not from `before`:
+    # a run starting just before UTC midnight and reading its clock just after it
+    # would correctly archive under the next date, and pinning `before.date()`
+    # would make this assertion flake at exactly one boundary per day -- the same
+    # date-dependence this whole change exists to remove.
+    assert (tmp_path / "outputs/archive/broker_evidence"
+            / stamped_admitted.date().isoformat()).is_dir()
 
 
 def test_clock_propagation_does_not_change_evidence_semantics(tmp_path, configured, monkeypatch):
