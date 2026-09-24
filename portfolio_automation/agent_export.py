@@ -123,14 +123,16 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("daily_memo_md",            "latest/daily_memo.md",                 False, "daily_memo",        "memo"),
     AllowlistEntry("daily_memo_txt",           "latest/daily_memo.txt",                False, "daily_memo",        "memo"),
     AllowlistEntry("memo_datasets",            "latest/memo_datasets.json",            False, "memo_datasets",     "memo"),
-    # -- VS-002 frozen research evidence ----------------------------------
-    # Three exact paths, not a directory. outputs/backtest/historical/** is
-    # deliberately NOT allowlisted: the research plane receives DERIVED daily
-    # returns, whose ratios survive a later whole-series adjustment, rather than
-    # price levels, whose vintage this archive cannot certify.
-    AllowlistEntry("vs002_signals",            "vs002_evidence/signals.json",          False, "vs002_evidence",    "research_evidence"),
-    AllowlistEntry("vs002_returns",            "vs002_evidence/returns.json",          False, "vs002_evidence",    "research_evidence"),
-    AllowlistEntry("vs002_manifest",           "vs002_evidence/manifest.json",         False, "vs002_evidence",    "research_evidence"),
+    # -- VS-002 research evidence: NOT carried by the generic Agent Export --
+    # The VS-002 evidence build now publishes an immutable, content-addressed
+    # package at outputs/vs002_evidence/packages/<package_id>/ with SIX
+    # artifacts (signals, returns, bars, bars_raw, bars_snapshots, manifest).
+    # The old flat vs002_evidence/{signals,returns,manifest}.json entries are
+    # REMOVED so the generic export can never pick up stale flat files and pass
+    # them off as that package. Package transport is a SEPARATE authorized
+    # mission that selects ONE explicit package_id — never "latest", never a
+    # wildcard such as outputs/vs002_evidence/packages/**, and never the
+    # outputs/backtest/historical/** price archive.
 )
 
 

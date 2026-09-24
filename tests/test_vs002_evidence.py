@@ -452,14 +452,33 @@ def test_exported_artifacts_contain_no_secret_shapes(built):
         assert not pat.search((root / name).read_text(encoding="utf-8")), name
 
 
-def test_allowlist_exposes_exact_paths_not_the_archive_tree():
+def test_allowlist_no_longer_carries_flat_vs002_evidence():
+    """The runner publishes an immutable, content-addressed package; the old
+    flat vs002_evidence/{signals,returns,manifest}.json entries are removed so
+    the generic Agent Export can never carry stale flat evidence. Transport is
+    a separate mission that selects ONE explicit package_id."""
     from portfolio_automation.agent_export import ALLOWLIST
-    entries = {e.logical_name: e.source_relpath for e in ALLOWLIST
-               if e.logical_name.startswith("vs002_")}
-    assert entries == {
-        "vs002_signals": "vs002_evidence/signals.json",
-        "vs002_returns": "vs002_evidence/returns.json",
-        "vs002_manifest": "vs002_evidence/manifest.json"}
-    # The raw price archive must never be generically allowlisted.
+    assert not any(e.logical_name.startswith("vs002_") for e in ALLOWLIST)
+    assert not any("vs002_evidence" in e.source_relpath for e in ALLOWLIST)
+    # The raw price archive and wildcards must never be generically allowlisted.
     assert not any("backtest" in e.source_relpath for e in ALLOWLIST)
     assert not any(e.source_relpath.endswith("**") for e in ALLOWLIST)
+
+
+def test_stale_flat_vs002_artifact_cannot_enter_agent_export(tmp_path):
+    """A stale legacy flat VS-002 artifact on disk must not be exportable as
+    though it were the runner's package (Finding 1 regression)."""
+    from portfolio_automation import agent_export as AX
+    art = tmp_path / "vs002_evidence"
+    art.mkdir(parents=True)
+    (art / "signals.json").write_text('[{"stale": true}]', encoding="utf-8")
+    (art / "returns.json").write_text("[]", encoding="utf-8")
+    (art / "manifest.json").write_text('{"stale": true}', encoding="utf-8")
+    # non-required subset so absent latest/* artifacts are gaps, not errors;
+    # the point is that NO allowlist entry selects the stale flat vs002 files.
+    allowlist = tuple(e for e in AX.ALLOWLIST if not e.required)
+    plan = AX.build_snapshot(
+        production_git_sha="deadbeef", production_run_id="r",
+        run_started_at=None, run_completed_at=None,
+        artifacts_root=tmp_path, allowlist=allowlist, dry_run=True)
+    assert not any(str(n).startswith("vs002") for n in plan["would_include"])
