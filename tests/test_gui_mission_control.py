@@ -661,3 +661,127 @@ def test_gui_holds_no_freshness_rule_of_its_own():
     assert calls(helper_src) <= {"now", "isoformat"}, calls(helper_src)
     # the adapter still consumes build_dashboard and nothing else (see the AST test)
     assert "build_dashboard(repo_root, now)" in adapter_src
+
+
+# ---------------------------------------------------------------------------
+# Supervisor verification freshness vs ledger usability (PR #48 review, P2)
+#
+# Two different questions about the same supervisor evidence:
+#   supervisor.records_evidence     -> was the controller-records LEDGER usable?
+#   backend_truth.supervisor_state  -> is the latest verification FRESH?
+# A readable ledger holding an old PASS is LIVE on the first axis and STALE on
+# the second. The "Last successful verification" row must carry the second,
+# published by the read model; the verdict COUNTS stay on the first.
+# ---------------------------------------------------------------------------
+
+def _run_fields(view):
+    return {f["key"]: f for f in view["run_session"]["fields"]}
+
+
+def _with_supervisor_state(dashboard, state):
+    d = copy.deepcopy(dashboard)
+    for c in d["backend_truth"]["capabilities"]:
+        if c["capability"] == "supervisor_state":
+            c["state"] = state
+    return d
+
+
+def _stale_ledger_dashboard(tmp_path):
+    """A REAL read-model dashboard: readable ledger, PASS verdict 3 days old."""
+    stale = (_dt.fromisoformat(_NOW) - _td(days=3)).isoformat()
+    return rm.build_dashboard(_records_root(tmp_path, stale), _NOW)
+
+
+def test_last_verification_row_uses_published_supervisor_state_not_ledger_usability(tmp_path):
+    """Case A: records_evidence=LIVE, supervisor_state=STALE -> row STALE, not green;
+    verdict counts stay on ledger usability (LIVE)."""
+    d = _stale_ledger_dashboard(tmp_path)
+    assert d["supervisor"]["records_evidence"] == "LIVE"          # ledger usable
+    assert _capability_state_in(d, "supervisor_state") == "STALE"  # verification old
+    view = mc.project_mission_control(d, _NOW)
+    row = _run_fields(view)["last_successful_verification"]
+    assert row["state"] == "STALE"
+    assert row["severity"] != "green"
+    assert "backend_truth.supervisor_state" in row["note"]
+    counts = _run_fields(view)["supervisor_recent"]
+    assert counts["state"] == "LIVE"                               # different question
+
+
+def test_fresh_verification_with_live_ledger_is_live(tmp_path):
+    """Case B."""
+    fresh = (_dt.fromisoformat(_NOW) - _td(hours=1)).isoformat()
+    d = rm.build_dashboard(_records_root(tmp_path, fresh), _NOW)
+    assert _capability_state_in(d, "supervisor_state") == "LIVE"
+    view = mc.project_mission_control(d, _NOW)
+    assert _run_fields(view)["last_successful_verification"]["state"] == "LIVE"
+    assert _run_fields(view)["supervisor_recent"]["state"] == "LIVE"
+
+
+def test_unknown_verification_freshness_is_shown_as_unknown(tmp_path):
+    """Case C: the read model says UNKNOWN (no instant, or an unmeasurable
+    timestamp); the GUI shows UNKNOWN and infers nothing else."""
+    fresh = (_dt.fromisoformat(_NOW) - _td(hours=1)).isoformat()
+    d = rm.build_dashboard(_records_root(tmp_path, fresh), None)   # no reference instant
+    assert d["supervisor"]["records_evidence"] == "LIVE"
+    assert _capability_state_in(d, "supervisor_state") == "UNKNOWN"
+    view = mc.project_mission_control(d, None)
+    row = _run_fields(view)["last_successful_verification"]
+    assert row["state"] == "UNKNOWN" and row["severity"] != "green"
+
+
+def test_gui_carries_every_published_supervisor_state_verbatim(tmp_path):
+    """The row is a copy of the published state for every value the read model
+    can publish -- including ones the fixture cannot naturally produce."""
+    base = _stale_ledger_dashboard(tmp_path)
+    for state in mc.READ_MODEL_STATES:
+        view = mc.project_mission_control(_with_supervisor_state(base, state), _NOW)
+        row = _run_fields(view)["last_successful_verification"]
+        assert row["state"] == state, state
+        assert row["severity"] == mc.state_severity(state)
+        if state != "LIVE":
+            assert row["severity"] != "green", state
+
+
+def test_unpublished_or_unrecognised_supervisor_state_is_unavailable_not_live(tmp_path):
+    """Case D: absence of the published capability is not health."""
+    base = _stale_ledger_dashboard(tmp_path)
+    no_cap = copy.deepcopy(base)
+    no_cap["backend_truth"]["capabilities"] = [
+        c for c in no_cap["backend_truth"]["capabilities"] if c["capability"] != "supervisor_state"]
+    for d in (no_cap, _with_supervisor_state(base, "HEALTHY"), {**base, "backend_truth": "x"}):
+        row = _run_fields(mc.project_mission_control(d, _NOW))["last_successful_verification"]
+        assert row["state"] == "UNAVAILABLE"
+        assert row["severity"] != "green"
+
+
+def test_unusable_ledger_keeps_both_dimensions_unavailable(tmp_path):
+    """Case D: a corrupt ledger -> records_evidence UNAVAILABLE, no verification
+    value -> supervisor_state UNAVAILABLE; neither becomes LIVE or PENDING."""
+    d = rm.build_dashboard(_root(tmp_path, records="[1,2]\n"), _NOW)
+    assert d["supervisor"]["records_evidence"] == "UNAVAILABLE"
+    assert _capability_state_in(d, "supervisor_state") == "UNAVAILABLE"
+    fields = _run_fields(mc.project_mission_control(d, _NOW))
+    assert fields["last_successful_verification"]["state"] == "UNAVAILABLE"
+    assert fields["supervisor_recent"]["state"] == "UNAVAILABLE"
+
+
+def test_http_page_shows_one_freshness_answer_for_the_supervisor_evidence(
+        client, tmp_path, monkeypatch):
+    """Case E: the rendered page's readiness table and its 'Last successful
+    verification' row agree (both STALE), and the row is not a green badge."""
+    monkeypatch.setattr(app_module, "_mission_control_reference_now", lambda: _NOW)
+    stale = (_dt.fromisoformat(_NOW) - _td(days=3)).isoformat()
+    html = client(_records_root(tmp_path, stale)).get(_ROUTE).text
+    assert _capability_state(html, "supervisor_state") == "STALE"
+    row = _re.search(
+        r'Last successful verification</div>.*?</div>\s*<div class="flex-shrink-0">.*?>([A-Z_]+)</span>',
+        html, _re.S)
+    assert row, "row not rendered"
+    assert row.group(1) == "STALE"
+    row_html = _re.search(r'Last successful verification</div>.*?</span>', html, _re.S).group(0)
+    assert "border-emerald-500/30" not in row_html
+
+
+def _capability_state_in(dashboard, capability):
+    return next(c["state"] for c in dashboard["backend_truth"]["capabilities"]
+                if c["capability"] == capability)

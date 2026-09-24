@@ -159,6 +159,20 @@ def _get(dashboard: dict[str, Any], key: str) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
+def _published_capability_state(truth: dict[str, Any], capability: str) -> str:
+    """The truth state ``backend_truth`` published for one capability.
+
+    Read verbatim; never computed here. A capability the read model did not
+    publish is UNAVAILABLE to this page -- not LIVE, and not re-derived from
+    whatever timestamp happens to sit nearby."""
+    caps = truth.get("capabilities") if isinstance(truth.get("capabilities"), list) else []
+    for c in caps:
+        if isinstance(c, dict) and c.get("capability") == capability:
+            state = c.get("state")
+            return state if isinstance(state, str) and state in READ_MODEL_STATES else UNAVAILABLE
+    return UNAVAILABLE
+
+
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
@@ -233,7 +247,9 @@ def project_mission_control(dashboard: dict[str, Any],
     }
     view["mission"] = _mission_section(controller, mission, session_raw)
     view["authority"] = _authority_section(authority, worker, apprenticeship)
-    view["run_session"] = _run_section(run_history, supervisor)
+    view["run_session"] = _run_section(
+        run_history, supervisor,
+        supervisor_state=_published_capability_state(truth, "supervisor_state"))
     view["workers"] = _worker_cards(worker, supervisor, controller)
     view["system_health"] = _health_section(health)
     view["readiness"] = _readiness_section(truth, records)
@@ -368,7 +384,20 @@ def _authority_section(authority: dict[str, Any], worker: dict[str, Any],
     }
 
 
-def _run_section(run_history: dict[str, Any], supervisor: dict[str, Any]) -> dict[str, Any]:
+def _run_section(run_history: dict[str, Any], supervisor: dict[str, Any],
+                 supervisor_state: str = UNAVAILABLE) -> dict[str, Any]:
+    """Two supervisor evidence dimensions, kept apart on purpose:
+
+    * ``supervisor.records_evidence`` -- was the controller-records LEDGER
+      readable/usable? It governs the verdict COUNTS, which are conditional on
+      the ledger and say nothing about age.
+    * ``backend_truth.supervisor_state`` -- is the latest verification FRESH?
+      Classified by the read model (``classify`` on the verification
+      timestamp against the request instant). It governs the 'Last successful
+      verification' row. A readable ledger holding an old PASS is LIVE on the
+      first axis and STALE on the second; showing the ledger answer on the
+      timestamp row contradicted the readiness table (PR #48 review).
+    """
     availability = _section_evidence(run_history, "availability", default=UNAVAILABLE)
     runs_raw = run_history.get("runs") if isinstance(run_history.get("runs"), list) else []
     runs = []
@@ -407,7 +436,9 @@ def _run_section(run_history: dict[str, Any], supervisor: dict[str, Any]) -> dic
                sup_evidence, "conditional on the controller-records ledger",
                key="supervisor_recent"),
         _field("Last successful verification",
-               supervisor.get("last_successful_verification"), sup_evidence,
+               supervisor.get("last_successful_verification"), supervisor_state,
+               f"freshness classified by the read model (backend_truth.supervisor_state); "
+               f"records ledger {sup_evidence}",
                key="last_successful_verification"),
     ]
     return {"state": availability, "severity": state_severity(availability),
