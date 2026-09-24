@@ -177,3 +177,31 @@ def test_cli_status_prints_auth_and_evidence_fields(tmp_path, monkeypatch, capsy
     assert sync.main(["--status"]) == 0
     out = capsys.readouterr().out
     assert "READ-ONLY MODE ACTIVE" in out and "auth_state=" in out and "evidence=" in out
+
+
+def test_archive_day_uses_injected_time_not_wall_clock(tmp_path, configured, monkeypatch):
+    """Regression: the write-once broker-evidence archive day (and admitted_at /
+    generated_at) must come from the injected sync/evidence instant, NOT the
+    wall clock at persist time. Proven by pinning the wall clock to a far date
+    and requiring the archive to still land under the injected 2026-09-20."""
+    import datetime as _dt
+    _auth(monkeypatch)
+    _fake_client(monkeypatch)
+    real = _dt.datetime
+
+    class _FarClock(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real(2030, 1, 2, 3, 4, 5, tzinfo=tz or _dt.timezone.utc)
+
+    monkeypatch.setattr(ES, "datetime", _FarClock)
+    st = sync.run_sync(root=tmp_path, now=TS)
+    assert st["overall_status"] == "ok"
+    admitted = _latest(tmp_path, ES.LATEST_ADMITTED_FILE)
+    day = TS[:10]                                   # 2026-09-20, the injected day
+    archived = (tmp_path / "outputs/archive/broker_evidence" / day
+                / f"{admitted['snapshot_id']}.json")
+    assert archived.exists(), "archive must use the injected time, not wall clock"
+    assert not (tmp_path / "outputs/archive/broker_evidence" / "2030-01-02").exists()
+    assert admitted["admitted_at"].startswith("2026-09-20")
+    assert admitted["generated_at"].startswith("2026-09-20")
