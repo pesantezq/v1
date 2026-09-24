@@ -185,7 +185,12 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
                           last_error=f"EVIDENCE_REFUSED: {decision.reason.value}")
 
     try:
-        ES.record_admitted(root, snapshot=evidence, decision=decision, sync_id=sync_id)
+        # Persist under the SAME deterministic instant the evidence snapshot
+        # already carries (its possession PIT), so the write-once archive day,
+        # admitted_at and generated_at agree with the sync/evidence time rather
+        # than the wall clock at persist time.
+        ES.record_admitted(root, snapshot=evidence, decision=decision,
+                           sync_id=sync_id, now=evidence.pit.retrieved_at)
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.ADMITTED,
                           auth_state=auth.state.value, admission=decision,
                           snapshot_id=evidence.snapshot_id)
