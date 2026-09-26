@@ -219,10 +219,12 @@ def _default_credential_present() -> bool:
     return bool(get_secret("FMP_API_KEY"))
 
 
-def _default_client_factory() -> Any:
-    # Construction lives in the sanctioned data_budget factory, not here.
+def _default_client_factory(root: Path) -> Any:
+    # Construction lives in the sanctioned data_budget factory, not here. The
+    # local FMP daily-budget policy is inherited from <root>/config.json
+    # (api_limits.fmp_daily_calls_budget); 0 there means no local daily cap.
     from portfolio_automation.data_budget.factory import vs002_strict_evidence_client
-    return vs002_strict_evidence_client()
+    return vs002_strict_evidence_client(config_path=root / "config.json")
 
 
 def _git_sha(root: Path) -> str:
@@ -353,7 +355,7 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
     # ---- construct the client + last capacity preflight (still no network)
     if client is None:
         try:
-            client = (client_factory or _default_client_factory)()
+            client = client_factory() if client_factory is not None else _default_client_factory(root)
         except Exception as exc:  # noqa: BLE001 — credential/config unavailable
             res.result = BLOCKED_PREFLIGHT
             res.exact_blockers = [
