@@ -159,15 +159,18 @@ def test_tailwind_is_self_hosted_not_cdn():
 
 
 def test_static_assets_have_cache_buster():
-    """CSS/JS links carry a ?v=<mtime> cache-buster so a rebuilt asset is fetched
-    without a hard refresh (2026-07-07)."""
+    """CSS/JS links carry a ?v=<token> cache-buster so a rebuilt asset is fetched
+    without a hard refresh (2026-07-07). The token is derived from the asset
+    mtime and is letters-only since the account-masking flake repair (see
+    tests/test_gui_static_version.py); this test guards its PRESENCE, not its
+    alphabet."""
     import re
     from fastapi.testclient import TestClient
     from gui_v2.app import app
 
     html = TestClient(app).get("/dashboard/today").text
-    assert re.search(r"/static/app\.css\?v=[0-9a-f]+", html), "app.css missing ?v= cache-buster"
-    assert re.search(r"/static/htmx\.min\.js\?v=[0-9a-f]+", html), "htmx missing ?v= cache-buster"
+    assert re.search(r"/static/app\.css\?v=[A-Za-z0-9]+", html), "app.css missing ?v= cache-buster"
+    assert re.search(r"/static/htmx\.min\.js\?v=[A-Za-z0-9]+", html), "htmx missing ?v= cache-buster"
 
 
 def test_pr4_all_dashboard_tables_have_overflow_guard():
