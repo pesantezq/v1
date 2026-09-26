@@ -224,7 +224,13 @@ def _default_client_factory(root: Path) -> Any:
     # local FMP daily-budget policy is inherited from <root>/config.json
     # (api_limits.fmp_daily_calls_budget); 0 there means no local daily cap.
     from portfolio_automation.data_budget.factory import vs002_strict_evidence_client
-    return vs002_strict_evidence_client(config_path=root / "config.json")
+    # Anchor BOTH the config and the shared FMP call counter to the deployment
+    # root, so can_admit() consults <root>/data/fmp_cache/call_counter.json (the
+    # counter the rest of the app increments) rather than one under the process
+    # working directory.
+    return vs002_strict_evidence_client(
+        config_path=root / "config.json",
+        cache_dir=root / "data" / "fmp_cache")
 
 
 def _git_sha(root: Path) -> str:

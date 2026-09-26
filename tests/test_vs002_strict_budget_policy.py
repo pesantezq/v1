@@ -76,7 +76,7 @@ def test_case_d_missing_key_falls_back_230(tmp_path):
 
 
 # CASE E — malformed value must NOT become uncapped (falls back to 230)
-@pytest.mark.parametrize("bad", [None, "x", {"a": 1}, [1, 2], True, False, 1.5])
+@pytest.mark.parametrize("bad", [None, "x", {"a": 1}, [1, 2], True, False, 1.5, -1, -5])
 def test_case_e_malformed_is_not_uncapped(tmp_path, bad):
     cl = _client(tmp_path, config_path=_cfg(tmp_path, bad))
     assert cl._budget == 230                         # capped, never silently 0
@@ -107,6 +107,19 @@ def test_case_g_mission_bound_independent_of_zero_budget(tmp_path):
     acq2 = PR.StrictLiveAcquirer(FakeStrictClient(), plan)
     with pytest.raises(PR.StrictLiveAcquisitionError):
         acq2.get_historical_prices_dividend_adjusted("AAPL")      # SPY must be first
+
+
+def test_default_factory_anchors_counter_to_repo_root(tmp_path):
+    """The runner's default factory must anchor the shared FMP call counter to
+    the deployment root (<root>/data/fmp_cache), not the process working dir, so
+    can_admit consults the counter the rest of the app increments."""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"api_limits": {"fmp_daily_calls_budget": 500}}),
+        encoding="utf-8")
+    cl = PR._default_client_factory(tmp_path)
+    assert str(cl._counter._path).startswith(
+        str(tmp_path / "data" / "fmp_cache"))
+    assert cl._budget == 500      # and inherited the config budget
 
 
 # The production config's actual policy is 0 (uncapped local) — guard against a

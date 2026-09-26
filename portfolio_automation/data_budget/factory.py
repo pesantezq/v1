@@ -64,7 +64,11 @@ def _load_fmp_daily_budget(config_path: Any = "config.json", *,
         return default
     raw = limits["fmp_daily_calls_budget"]
     # bool is a subclass of int; a True/False here is a config mistake, not a cap.
-    if isinstance(raw, bool) or not isinstance(raw, int):
+    # bool is a subclass of int; a True/False here is a config mistake, not a
+    # cap. A negative value would make FMPClient.would_exceed treat it as <= 0
+    # (uncapped), contradicting "only explicit 0 is uncapped" — so it, too, is
+    # rejected to the safe positive fallback rather than silently uncapping.
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
         return default
     return raw
 
