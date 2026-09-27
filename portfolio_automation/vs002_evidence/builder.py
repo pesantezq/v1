@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from decimal import Decimal, InvalidOperation
 from bisect import bisect_left
 from datetime import datetime, timezone
 from pathlib import Path
@@ -278,64 +279,184 @@ def _companion_close_by_date(full_rows: Any) -> tuple[dict[str, float], list[str
     return out, []
 
 
-def verify_dividend_adjustment_witness(adjusted_benchmark: list[C.BarRow],
-                                       companion_full_rows: Any) -> list[str]:
-    """DIJ-0011 anti-masquerade witness, on the ONE series that can carry it.
+def series_decimal_places(values: Any) -> Optional[int]:
+    """The SERIES-WIDE maximum number of decimal places across ``values``,
+    derived from each value's shortest round-tripping decimal representation
+    (``Decimal(str(x))``) — the same canonical form the frozen JSON evidence
+    round-trips to on both the live-build and offline-replay sides. JSON drops
+    lexical trailing zeros (405.70 -> 405.7), so precision is taken SERIES-WIDE,
+    never per row. Returns ``None`` (fail closed) if any value is non-finite or
+    cannot be represented as a finite decimal, or if there are no values."""
+    places = 0
+    saw = False
+    for v in values:
+        saw = True
+        try:
+            d = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return None
+        exp = d.as_tuple().exponent
+        if not isinstance(exp, int):      # 'n' / 'N' / 'F' => nan / inf
+            return None
+        places = max(places, max(0, -exp))
+    return places if saw else None
 
-    The authorized dividend-adjusted endpoint emits no raw close, so the per-bar
-    adjustment factor is established against the COMPANION /full close of the
-    BENCHMARK only::
 
-        factor(t) = adj_close_dividend_adjusted(t) / close_full(t)
+def factor_interval(adj_close: Decimal, close: Decimal,
+                    q_adj: Decimal, q_close: Decimal) -> dict[str, Decimal]:
+    """The dividend-adjustment factor and its round-to-nearest uncertainty
+    interval for ONE session, in exact Decimal arithmetic.
 
-    FMP's /full close is split-adjusted and adjClose is split+dividend adjusted,
-    so this factor isolates the DIVIDEND adjustment (splits cancel). It proves,
-    exactly:
+    Round-to-nearest is an explicit, conservative modelling ASSUMPTION (NOT a
+    provider guarantee): a serialized value ``x`` at quantum ``q`` is taken to
+    represent a true value in ``[x - q/2, x + q/2]``. For positive prices the
+    factor is bounded by ``low = adj_low/close_high`` and
+    ``high = adj_high/close_low``."""
+    adj_low = adj_close - q_adj / 2
+    adj_high = adj_close + q_adj / 2
+    close_low = close - q_close / 2
+    close_high = close + q_close / 2
+    return {
+        "point": adj_close / close,
+        "low": adj_low / close_high,
+        "high": adj_high / close_low,
+        "adj_low": adj_low, "adj_high": adj_high,
+        "close_low": close_low, "close_high": close_high,
+    }
 
-    * final factor ~1: the adjusted series is adjusted to the retrieval vintage;
-    * factor non-decreasing over time: no artificial reversal a real corporate
-      action cannot produce;
-    * at least one nontrivial adjustment over a long span: SPY pays quarterly
-      dividends, so a flat factor == 1 is an unadjusted series masquerading as
-      adjusted — the exact mutation DIJ-0011 names.
 
-    Single names may legitimately show no adjustment, so the witness is scoped to
-    the benchmark; the dataset identity is the same authorized endpoint for every
-    symbol, so one benchmark witness establishes the endpoint's semantics.
-    """
+def is_material_reversal(prev_interval: dict, curr_interval: dict) -> bool:
+    """A dividend-adjustment factor reversal is MATERIAL (a genuine defect) only
+    when the current session's factor interval lies strictly below the previous
+    session's — i.e. ``curr.high < prev.low``. A boundary touch
+    (``curr.high == prev.low``) is not proven decreasing and is NOT material, so
+    the comparison is strict less-than."""
+    return curr_interval["high"] < prev_interval["low"]
+
+
+def _analyze_dividend_adjustment_witness(
+        adjusted_benchmark: list[C.BarRow], companion_full_rows: Any
+        ) -> tuple[list[str], dict[str, Any]]:
+    """Shared witness core used by BOTH the live builder and the credential-free
+    consumer replay, so ONE deterministic rule governs establishment and
+    revalidation. Returns ``(findings, detail)``; empty findings == pass.
+
+    The per-step monotonicity test is PRECISION-AWARE: each series' quantum is
+    inferred from its own observed decimal resolution, and a backwards move is a
+    defect ONLY when the measured precision cannot explain it — i.e. only when
+    ``current.factor_high < previous.factor_low``. A boundary touch
+    (``current.factor_high == previous.factor_low``) is not proven decreasing and
+    passes. The final-factor (~1) and at-least-one-real-adjustment requirements
+    remain; the latter now requires at least one session whose factor interval
+    EXCLUDES 1.0."""
+    detail: dict[str, Any] = {}
     if not adjusted_benchmark:
-        return ["witness: empty adjusted benchmark series"]
+        return ["witness: empty adjusted benchmark series"], detail
     sym = adjusted_benchmark[0].symbol
     close_by_date, problems = _companion_close_by_date(companion_full_rows)
     if problems:
-        return [f"{sym} witness: {p}" for p in problems]
+        return [f"{sym} witness: {p}" for p in problems], detail
     joined = [(b.session_date, b.adj_close, close_by_date[b.session_date])
               for b in adjusted_benchmark if b.session_date in close_by_date]
     if len(joined) < C.WITNESS_MIN_OVERLAP_SESSIONS:
-        return [f"{sym} witness: only {len(joined)} overlapping benchmark "
-                f"sessions between the adjusted and companion /full series; "
-                f">= {C.WITNESS_MIN_OVERLAP_SESSIONS} required to witness a "
-                f"dividend adjustment"]
+        return ([f"{sym} witness: only {len(joined)} overlapping benchmark "
+                 f"sessions between the adjusted and companion /full series; "
+                 f">= {C.WITNESS_MIN_OVERLAP_SESSIONS} required to witness a "
+                 f"dividend adjustment"], detail)
     joined.sort(key=lambda t: t[0])
-    factors = [adj / close for (_d, adj, close) in joined]
+
+    # Series-wide observed precision, derived from the frozen evidence itself.
+    p_adj = series_decimal_places(adj for _d, adj, _c in joined)
+    p_close = series_decimal_places(close for _d, _a, close in joined)
+    if p_adj is None or p_close is None:
+        return ([f"{sym} witness: observed decimal precision could not be "
+                 f"deterministically derived from the frozen evidence"], detail)
+    q_adj = Decimal(1).scaleb(-p_adj)
+    q_close = Decimal(1).scaleb(-p_close)
+    if q_adj <= 0 or q_close <= 0:
+        return [f"{sym} witness: inferred quantum is non-positive"], detail
+    detail.update({"symbol": sym, "overlap_sessions": len(joined),
+                   "adjusted_precision": p_adj, "companion_precision": p_close,
+                   "q_adj": str(q_adj), "q_close": str(q_close)})
+
+    sessions: list[dict[str, Any]] = []
+    for d, adj_f, close_f in joined:
+        iv = factor_interval(Decimal(str(adj_f)), Decimal(str(close_f)),
+                             q_adj, q_close)
+        if iv["close_low"] <= 0 or iv["adj_low"] <= 0:
+            return ([f"{sym} witness: uncertainty interval crosses zero at {d} "
+                     f"— the factor cannot be bounded"], detail)
+        sessions.append({"date": d, **iv})
+
     findings: list[str] = []
-    if abs(factors[-1] - 1.0) > C.RATIO_FINAL_TOLERANCE:
+    final_point = float(sessions[-1]["point"])
+    if abs(final_point - 1.0) > C.RATIO_FINAL_TOLERANCE:
         findings.append(
-            f"{sym}: final dividend-adjustment factor {factors[-1]:.6f} is not "
+            f"{sym}: final dividend-adjustment factor {final_point:.6f} is not "
             f"~1 — the adjusted series is adjusted to some other vintage")
-    for i in range(1, len(factors)):
-        if factors[i] < factors[i - 1] * (1.0 - C.RATIO_MONOTONE_TOLERANCE):
+
+    # Monotone-interval FEASIBILITY, not just an adjacent-pair check: a
+    # non-decreasing true factor becomes infeasible once an interval's high
+    # falls below the RUNNING MAXIMUM of all prior interval lows. Comparing only
+    # to the immediately preceding interval would miss a gradual decline whose
+    # adjacent pairs each overlap but whose cumulative drop far exceeds the
+    # measured precision (Codex P1).
+    first_violation = None
+    running_max_low = sessions[0]["low"]
+    for i in range(1, len(sessions)):
+        if is_material_reversal({"low": running_max_low}, sessions[i]):
+            first_violation = {
+                "date": sessions[i]["date"],
+                "running_max_prior_low": str(running_max_low),
+                "curr_high": str(sessions[i]["high"])}
             findings.append(
-                f"{sym}: dividend-adjustment factor decreases at {joined[i][0]} "
-                f"({factors[i - 1]:.6f} -> {factors[i]:.6f}) — an artificial "
-                f"discontinuity no real corporate action produces")
+                f"{sym}: dividend-adjustment factor materially decreases at "
+                f"{sessions[i]['date']} — current interval high "
+                f"{float(sessions[i]['high']):.9f} < the running maximum of all "
+                f"prior interval lows {float(running_max_low):.9f}; a cumulative "
+                f"reversal the observed precision (q_adj={q_adj}, q_close="
+                f"{q_close}) cannot explain")
             break
-    if all(abs(f - 1.0) <= C.RATIO_MONOTONE_TOLERANCE for f in factors):
+        if sessions[i]["low"] > running_max_low:
+            running_max_low = sessions[i]["low"]
+    detail["first_violation"] = first_violation
+
+    if all(s["low"] <= 1 <= s["high"] for s in sessions):
         findings.append(
-            f"{sym}: benchmark shows NO dividend adjustment over {len(factors)} "
-            f"sessions vs the companion /full series — indistinguishable from an "
+            f"{sym}: benchmark shows NO dividend adjustment distinguishable from "
+            f"the companion /full series over {len(sessions)} sessions (every "
+            f"factor interval contains 1.0) — indistinguishable from an "
             f"unadjusted series, so the dividend-adjusted claim is not established")
-    return findings
+    detail["passed"] = not findings
+    return findings, detail
+
+
+def verify_dividend_adjustment_witness(adjusted_benchmark: list[C.BarRow],
+                                       companion_full_rows: Any) -> list[str]:
+    """DIJ-0011 anti-masquerade witness (benchmark only): the authorized
+    dividend-adjusted endpoint emits no raw close, so the adjustment factor
+    ``factor(t) = adjClose_divadj(t) / close_full(t)`` is established against the
+    companion /full close. FMP's /full close is split-adjusted and adjClose is
+    split+dividend adjusted, so the factor isolates the DIVIDEND adjustment.
+
+    Delegates to :func:`_analyze_dividend_adjustment_witness`, which applies a
+    PRECISION-AWARE interval monotonicity test (see there). Empty list == pass.
+    """
+    return _analyze_dividend_adjustment_witness(
+        adjusted_benchmark, companion_full_rows)[0]
+
+
+def dividend_adjustment_witness_report(adjusted_benchmark: list[C.BarRow],
+                                       companion_full_rows: Any) -> dict[str, Any]:
+    """Structured witness diagnostics — inferred adjusted/companion precision,
+    the two quanta, overlap, first material monotonicity violation (if any), and
+    the findings/pass verdict — for tests and offline diagnostics. Deliberately
+    narrow to the dividend-adjustment witness."""
+    findings, detail = _analyze_dividend_adjustment_witness(
+        adjusted_benchmark, companion_full_rows)
+    detail["findings"] = findings
+    detail["passed"] = not findings
+    return detail
 
 
 def _session_gaps(symbol_dates: list[str], benchmark_dates: list[str]) -> int:
