@@ -84,6 +84,7 @@ class SyntheticAdjustedProvider:
     """
 
     endpoint = C.AUTHORIZED_ENDPOINT
+    companion_endpoint = C.COMPANION_ENDPOINT
 
     def __init__(self, symbols=SYMBOLS + (BENCH,), *,
                  mutate=None) -> None:
@@ -120,6 +121,13 @@ class SyntheticAdjustedProvider:
         return list(reversed(rows))     # provider convention: newest-first
 
     def fetch(self, symbol: str) -> list[dict]:
+        return self._mutate(symbol, self._rows(symbol))
+
+    def fetch_companion(self, symbol: str) -> list[dict]:
+        # The /full companion carries the split-adjusted ``close``; the same
+        # synthetic rows already model it (raw close does not drop on a
+        # dividend). Mutations apply here too so a scaling mutation stays
+        # witness-consistent across the adjusted and companion series.
         return self._mutate(symbol, self._rows(symbol))
 
 

@@ -21,7 +21,7 @@ from tests.test_vs002_evidence import (
     _db, _scan_dates, fixed_clock, SyntheticAdjustedProvider)
 
 _ARTIFACTS = {"signals.json", "returns.json", "bars.json", "bars_raw.json",
-              "bars_snapshots.json", "manifest.json"}
+              "bars_witness_raw.json", "bars_snapshots.json", "manifest.json"}
 
 
 class FakeStrictClient:
@@ -45,6 +45,16 @@ class FakeStrictClient:
             raise FMPError(f"synthetic transport failure for {sym}")
         if sym in self._empty:
             return []
+        return self._rows(sym)
+
+    def get_full_bars_strict_live(self, symbol, *, years=5, on_attempt=None):
+        sym = symbol.upper()
+        if on_attempt is not None:
+            on_attempt(sym)
+        self.calls.append(sym)
+        if sym in self._fail:
+            from fmp_client import FMPError
+            raise FMPError(f"synthetic companion failure for {sym}")
         return self._rows(sym)
 
 
@@ -78,11 +88,19 @@ def test_2_spy_is_request_one(tmp_path):
     assert res.attempts[0]["symbol"] == "SPY"
 
 
-def test_3_complete_mission_is_exactly_22_requests(tmp_path):
+def test_3_complete_mission_is_exactly_23_requests(tmp_path):
+    """22 dividend-adjusted acquisitions + 1 SPY /full companion witness. The
+    benchmark appears twice (adjusted + companion), so 23 requests span 22
+    unique symbols."""
     res = _run(tmp_path)
-    assert res.attempted_http_requests == 22
-    assert len(res.acquisition_order) == 22
+    assert res.attempted_http_requests == 23
+    assert len(res.acquisition_order) == 23
     assert len(set(res.acquisition_order)) == 22
+    # exactly one companion attempt, and it is the benchmark
+    companion = [a for a in res.attempts
+                 if a.get("endpoint_class") == "companion_full"]
+    assert len(companion) == 1 and companion[0]["symbol"] == "SPY"
+    assert res.acquisition_order[:2] == ["SPY", "SPY"]  # adjusted then companion
 
 
 def test_4_no_23rd_request_is_possible():
@@ -520,7 +538,7 @@ class _BadSpyClient:
                 return [{k: v for k, v in r.items() if k != "adjClose"}
                         for r in rows]
             if self.kind == "bad_price":
-                rows[0]["close"] = -1.0
+                rows[0]["adjClose"] = -1.0
                 return rows
             if self.kind == "dup_date":
                 rows[1]["date"] = rows[0]["date"]
@@ -528,6 +546,13 @@ class _BadSpyClient:
             if self.kind == "semantics":
                 return [{**r, "adjClose": r["close"]} for r in rows]  # no witness
         return rows
+
+    def get_full_bars_strict_live(self, symbol, *, years=5, on_attempt=None):
+        sym = symbol.upper()
+        if on_attempt is not None:
+            on_attempt(sym)
+        self.calls.append(sym)
+        return [dict(r) for r in self._rows(sym)]
 
 
 @pytest.mark.parametrize("kind", ["empty", "missing_field", "bad_price",
@@ -538,7 +563,12 @@ def test_f4_invalid_live_payload_is_fail_provider(tmp_path, kind):
                  clock=fixed_clock(), code_sha="x", run_id="prov" + kind[:4])
     assert res.result == PR.FAIL_PROVIDER, (kind, res.exact_blockers)
     assert res.exit_code == 30
-    assert res.acquisition_order == ["SPY"]         # stops at the first bad response
+    if kind == "semantics":
+        # SPY adjusted + SPY /full companion, then the benchmark witness fails
+        assert res.acquisition_order == ["SPY", "SPY"]
+    else:
+        # normalization/shape failure on the first adjusted response, pre-companion
+        assert res.acquisition_order == ["SPY"]
     assert res.package_published is False
     assert not (tmp_path / PR.B.DEFAULT_OUT_REL / "packages").exists()
 

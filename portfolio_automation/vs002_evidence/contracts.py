@@ -35,7 +35,14 @@ from portfolio_automation.northstar.canonical import (
     canonical_dumps, content_hash, deterministic_id)
 from portfolio_automation.northstar.sources import DataSourceDescriptor
 
-SCHEMA_VERSION = "engineering.vs002_evidence.v0"
+# v1: the dividend-adjusted bar contract carries no raw ``close`` (the authorized
+# endpoint does not emit one) and the package gains the companion witness
+# artifact ``bars_witness_raw.json`` plus its manifest provenance. The version
+# bump makes the contract change EXPLICIT: a consumer rejects a mismatched
+# version outright instead of silently reporting a prior package as "missing"
+# the new artifact. No v0 dividend-adjusted package was ever published (B3
+# failed closed before publication), so no migration path is owed.
+SCHEMA_VERSION = "engineering.vs002_evidence.v1"
 SCHEMA_KIND = "experimental_noncanonical"
 
 #: The frozen VS-002 universe, derived from the durable VS-001 artifacts.
@@ -173,11 +180,37 @@ SOURCE_PROVIDER = "fmp"
 SOURCE_DATASET = "historical_price_eod_dividend_adjusted"
 EVIDENCE_TYPE_BAR = "market.price_daily_dividend_adjusted"
 
-#: Fields every provider row MUST carry for the semantics this contract claims.
-#: The real endpoint's shape is UNVERIFIED (deferred B3); if it cannot supply
-#: these fields the production build FAILS CLOSED rather than establishing the
-#: claim from weaker data.
-REQUIRED_PROVIDER_FIELDS = ("date", "close", "adjClose", "volume")
+#: The COMPANION endpoint used ONLY to witness the dividend-adjustment semantics
+#: of the benchmark. It never participates in eligibility, returns, beta, cohort
+#: selection, signal inclusion or scoring — it establishes, independently, that
+#: the authorized dividend-adjusted series is genuinely adjusted. FMP's ``/full``
+#: ``close`` is split-adjusted; the dividend-adjusted ``adjClose`` is split AND
+#: dividend adjusted, so ``adjClose/close`` isolates the DIVIDEND adjustment
+#: (splits cancel). The witness therefore claims dividend adjustment, not both.
+COMPANION_ENDPOINT = "/stable/historical-price-eod/full"
+COMPANION_WITNESS_SYMBOL = BENCHMARK
+COMPANION_SOURCE_DATASET = "historical_price_eod_full"
+
+#: The witness needs a real overlap between the two benchmark series to make a
+#: claim at all. Mirrors the long-span requirement the old benchmark battery
+#: used (SPY pays quarterly dividends; a short overlap cannot witness one).
+WITNESS_MIN_OVERLAP_SESSIONS = 200
+
+#: Fields every dividend-adjusted provider row MUST carry for the semantics this
+#: contract claims. B3 established that the authorized dividend-adjusted endpoint
+#: returns ``adjOpen/adjHigh/adjLow/adjClose/volume`` and NO raw ``close`` — so
+#: requiring ``close`` here was impossible-by-construction and made the build
+#: fail closed on a schema mismatch, not on weak data. The load-bearing consumed
+#: field is ``adjClose`` (the beta's only input); ``date`` and ``volume`` are the
+#: minimal remaining structure. ``adjOpen/adjHigh/adjLow`` are retained verbatim
+#: in ``bars_raw`` but are not load-bearing for the beta claim, so they are not
+#: required. Raw ``close`` is NEVER fabricated or aliased from ``adjClose``; the
+#: benchmark adjustment semantics are witnessed independently via COMPANION_ENDPOINT.
+REQUIRED_PROVIDER_FIELDS = ("date", "adjClose", "volume")
+
+#: Fields the COMPANION ``/full`` benchmark row MUST carry. Only ``close`` (split-
+#: adjusted) is consumed by the witness; ``date`` joins it to the adjusted series.
+COMPANION_REQUIRED_FIELDS = ("date", "close")
 
 #: A symbol series may not skip more than this many BENCHMARK sessions between
 #: two consecutive bars. From the frozen minimum-evidence contract: "no gap
@@ -265,24 +298,26 @@ def data_source_descriptor() -> DataSourceDescriptor:
 
 @dataclass(frozen=True)
 class BarRow:
-    """One dividend-adjusted daily bar, exactly as the contract requires.
+    """One dividend-adjusted daily bar, exactly as the authorized endpoint emits.
 
-    ``close`` is the unadjusted official close (retained so the adjustment is
-    auditable); ``adj_close`` is the split-AND-dividend adjusted close the
-    beta consumes; ``volume`` exists for liquidity sanity only.
+    ``adj_close`` is the split-AND-dividend adjusted close the beta consumes and
+    the ONLY price the return series is derived from; ``volume`` exists for
+    liquidity sanity only. There is deliberately NO raw ``close``: the authorized
+    dividend-adjusted endpoint does not emit one, and fabricating or aliasing it
+    from ``adj_close`` would invent evidence. The dividend-adjustment semantics
+    are witnessed separately, on the benchmark only, against the companion
+    ``/full`` series (see :func:`verify_dividend_adjustment_witness`).
     """
 
     symbol: str
     session_date: str
-    close: float
     adj_close: float
     volume: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol, "session_date": self.session_date,
-            "close": self.close, "adj_close": self.adj_close,
-            "volume": self.volume,
+            "adj_close": self.adj_close, "volume": self.volume,
         }
 
 

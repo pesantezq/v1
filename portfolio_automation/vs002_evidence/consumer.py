@@ -24,9 +24,9 @@ from typing import Any, Optional
 
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence.builder import (
-    BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, MANIFEST_REL, RETURNS_REL,
-    SIGNALS_REL, reconstruct_bars_from_raw, verify_adjustment_semantics,
-    full_panel_from_raw, bar_eligibility)
+    BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, BARS_WITNESS_RAW_REL,
+    MANIFEST_REL, RETURNS_REL, SIGNALS_REL, reconstruct_bars_from_raw,
+    verify_dividend_adjustment_witness, full_panel_from_raw, bar_eligibility)
 from portfolio_automation.vs002_evidence import snapshots as SN
 
 EXPECTED_ARTIFACTS = frozenset({SIGNALS_REL, RETURNS_REL, MANIFEST_REL})
@@ -46,6 +46,7 @@ class ValidatedSnapshot:
     returns: list[dict[str, Any]]
     bars: list[dict[str, Any]] = field(default_factory=list)
     bars_raw: dict[str, list] = field(default_factory=dict)
+    bars_witness_raw: list = field(default_factory=list)
     bar_snapshots: list[dict[str, Any]] = field(default_factory=list)
     _returns_index: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
@@ -133,7 +134,8 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     # neither direction can pass silently.
     declares_bars = bool(manifest.get("bar_endpoint"))
     expected = set(EXPECTED_ARTIFACTS) | (
-        {BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL} if declares_bars else set())
+        {BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, BARS_WITNESS_RAW_REL}
+        if declares_bars else set())
     present = {p.name for p in root.iterdir() if p.is_file()}
     missing = sorted(expected - present)
     extra = sorted(present - expected)
@@ -150,10 +152,13 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     returns = json.loads((root / RETURNS_REL).read_text(encoding="utf-8"))
     bars: list[dict[str, Any]] = []
     bars_raw: dict[str, list] = {}
+    bars_witness_raw: list = []
     bar_snapshots: list[dict[str, Any]] = []
     if declares_bars:
         bars = json.loads((root / BARS_REL).read_text(encoding="utf-8"))
         bars_raw = json.loads((root / BARS_RAW_REL).read_text(encoding="utf-8"))
+        bars_witness_raw = json.loads(
+            (root / BARS_WITNESS_RAW_REL).read_text(encoding="utf-8"))
         bar_snapshots = json.loads(
             (root / BARS_SNAPSHOTS_REL).read_text(encoding="utf-8"))
 
@@ -162,6 +167,7 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     if declares_bars:
         artifact_pairs.append((BARS_REL, bars))
         artifact_pairs.append((BARS_RAW_REL, bars_raw))
+        artifact_pairs.append((BARS_WITNESS_RAW_REL, bars_witness_raw))
         artifact_pairs.append((BARS_SNAPSHOTS_REL, bar_snapshots))
     for name, payload in artifact_pairs:
         actual = C.artifact_digest(payload)
@@ -240,13 +246,59 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
                 errors.append(f"{sym}: bar series is not chronologically ordered")
             if len(set(dates)) != len(dates):
                 errors.append(f"{sym}: duplicate bar session dates")
-            bar_rows = [C.BarRow(symbol=sym, session_date=r["session_date"],
-                                 close=float(r["close"]),
-                                 adj_close=float(r["adj_close"]),
-                                 volume=int(r["volume"])) for r in rows]
-            findings = verify_adjustment_semantics(
-                bar_rows, is_benchmark=sym == C.BENCHMARK)
-            errors.extend(findings)
+
+        # The dividend-adjustment witness, REPLAYED from frozen bytes with NO
+        # credential: the benchmark's full adjusted series (re-normalized from
+        # bars_raw) against the frozen companion /full response. The companion
+        # digest must also recompute to exactly what the manifest recorded, and
+        # the companion endpoint identity must be the authorized one.
+        if manifest.get("companion_endpoint") != C.COMPANION_ENDPOINT:
+            errors.append(
+                f"companion endpoint {manifest.get('companion_endpoint')!r} is "
+                f"not the authorized {C.COMPANION_ENDPOINT!r}")
+        # The witness artifact is an explicit observe_only ENVELOPE. Require the
+        # marker to be exactly True, extract the provider rows WITHOUT mutation,
+        # and keep two integrity scopes distinct: the manifest companion_raw_digest
+        # is recomputed over the exact rows (never the envelope metadata), while
+        # the whole-envelope artifact digest was checked above via artifact_pairs.
+        witness_rows = None
+        if not isinstance(bars_witness_raw, dict):
+            errors.append(
+                "witness artifact is not an observe_only envelope object")
+        elif bars_witness_raw.get("observe_only") is not True:
+            errors.append(
+                "witness artifact observe_only is missing or not exactly true")
+        elif not isinstance(bars_witness_raw.get("rows"), list):
+            errors.append("witness artifact envelope has no rows list")
+        else:
+            witness_rows = bars_witness_raw["rows"]
+        if witness_rows is not None:
+            declared_companion_digest = manifest.get("companion_raw_digest")
+            recomputed_companion_digest = C.artifact_digest(witness_rows)
+            if declared_companion_digest != recomputed_companion_digest:
+                errors.append(
+                    f"companion /full raw digest mismatch: manifest "
+                    f"{declared_companion_digest} != recomputed "
+                    f"{recomputed_companion_digest} (the digest is over the exact "
+                    f"provider rows, not the envelope)")
+            if C.BENCHMARK not in bars_raw:
+                errors.append(
+                    f"benchmark {C.BENCHMARK} absent from frozen raw; cannot "
+                    f"replay the dividend-adjustment witness")
+            else:
+                try:
+                    bench_panel = full_panel_from_raw(bars_raw, {C.BENCHMARK})
+                    witness_findings = verify_dividend_adjustment_witness(
+                        bench_panel.get(C.BENCHMARK, []), witness_rows)
+                except Exception as exc:  # noqa: BLE001
+                    witness_findings = [
+                        f"dividend-adjustment witness could not be replayed from "
+                        f"frozen raw: {type(exc).__name__}: {exc}"]
+                errors.extend(witness_findings)
+        if manifest.get("witness_result") != "PASS":
+            errors.append(
+                "manifest witness_result is not PASS — the dividend-adjustment "
+                "witness is not established")
 
         # Finding A: each per-symbol raw digest must be RECOMPUTABLE from the
         # persisted raw artifact — proving the recorded digest describes the
@@ -344,4 +396,5 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
 
     return ValidatedSnapshot(root=root, manifest=manifest,
                              signals=signals, returns=returns, bars=bars,
-                             bars_raw=bars_raw, bar_snapshots=bar_snapshots)
+                             bars_raw=bars_raw, bars_witness_raw=bars_witness_raw,
+                             bar_snapshots=bar_snapshots)

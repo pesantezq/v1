@@ -1350,3 +1350,53 @@ class FMPClient:
                 f"path (no legacy {{'historical': [...]}} unwrap, no fallback)"
             )
         return raw
+
+    def get_full_bars_strict_live(
+        self,
+        symbol: str,
+        *,
+        years: int = 5,
+        on_attempt: Optional[Any] = None,
+    ) -> List[Dict]:
+        """STRICT-LIVE ``/full`` acquisition, used ONLY as the dividend-adjustment
+        semantic WITNESS for the benchmark in the bounded VS-002 evidence build.
+
+        Identical discipline to :meth:`get_dividend_adjusted_bars_strict_live`:
+
+        * exactly ONE HTTP attempt (no retry on 429/5xx/timeout/transport);
+        * NO cache read (fresh or stale) and NO stale fallback — the witness
+          must represent the live response obtained now;
+        * the same daily budget/counter is honoured and increments at the
+          outbound boundary; a budget that cannot admit another call fails
+          closed (``CallBudgetExceeded``) rather than being rescued from cache;
+        * only the authorized ``/stable/historical-price-eod/full`` endpoint; a
+          non-list response is refused (no legacy unwrap, no fallback).
+
+        The witness needs the ``close`` field (split-adjusted) that the
+        dividend-adjusted endpoint does not emit; it is NEVER used for returns,
+        eligibility, cohorts or beta.
+        """
+        if not symbol:
+            raise FMPError("strict-live companion acquisition requires a symbol")
+        sym = symbol.upper()
+        if self._counter.would_exceed(self._budget):
+            raise CallBudgetExceeded(
+                f"Daily FMP budget ({self._budget} calls) would be exceeded; "
+                f"the VS-002 strict-live companion path refuses a stale-cache "
+                f"rescue for {sym!r} and fails closed"
+            )
+        from_date = (date.today() - timedelta(days=years * 365)).isoformat()
+        if on_attempt is not None:
+            on_attempt(sym)
+        raw = self._raw_get_once(
+            _EP_HISTORICAL,
+            {"symbol": sym, "from": from_date},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        if not isinstance(raw, list):
+            raise FMPError(
+                f"/full endpoint for {sym} returned {type(raw).__name__}, not a "
+                f"list — refused on the strict-live companion path (no legacy "
+                f"{{'historical': [...]}} unwrap, no fallback)"
+            )
+        return raw

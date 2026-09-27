@@ -77,7 +77,6 @@ def bar_snapshot(bar: Mapping[str, Any], *, retrieved_at: datetime,
         payload={
             "symbol": str(bar["symbol"]).upper(),
             "session_date": str(bar["session_date"]),
-            "close": float(bar["close"]),
             "adj_close": float(bar["adj_close"]),
             "volume": int(bar["volume"]),
         },

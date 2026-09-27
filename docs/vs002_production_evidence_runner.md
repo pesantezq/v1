@@ -19,14 +19,26 @@ inherited from the general FMP client.
   production VPS through the existing secret mechanism only. The research /
   QPC engineering environment never receives it, and the runner never prints
   `FMP_API_KEY` or a credential-bearing URL.
-- **Fixed endpoint.** Only `/stable/historical-price-eod/dividend-adjusted`.
-  There is no CLI flag for the endpoint, symbols, benchmark, `MIN_COHORTS`,
-  retries, cache, provider, or a synthetic mode — the frozen contract is the
-  only configuration. A test-only injection seam exists internally.
-- **22 actual HTTP attempts maximum.** SPY first, then each frozen
-  non-benchmark symbol exactly once. The SPY response is simultaneously the
-  live entitlement check, the response-shape check, the semantic check, and
-  that symbol's evidence — there is no sacrificial probe.
+- **Fixed endpoints.** The authoritative risk-return source is only
+  `/stable/historical-price-eod/dividend-adjusted`; the benchmark
+  dividend-adjustment witness additionally reads
+  `/stable/historical-price-eod/full` for SPY only. There is no CLI flag for
+  the endpoints, symbols, benchmark, `MIN_COHORTS`, retries, cache, provider, or
+  a synthetic mode — the frozen contract is the only configuration. A test-only
+  injection seam exists internally.
+- **23 actual HTTP attempts maximum, across two authorized endpoint classes.**
+  22 dividend-adjusted acquisitions (SPY first, then each frozen non-benchmark
+  symbol exactly once) plus exactly ONE benchmark `/stable/historical-price-eod/full`
+  companion witness. Order: SPY dividend-adjusted → SPY `/full` companion →
+  verify the dividend-adjustment witness → the remaining 21 dividend-adjusted
+  symbols, so a semantic mismatch costs at most two calls. Both endpoint classes
+  consume ONE shared mission budget/counter; there is no 24th request. The
+  companion `/full` response is **advisory-only**: it witnesses the benchmark's
+  dividend adjustment (`adjClose_divadj / close_full`, which isolates the
+  dividend component since FMP's `/full` close is split-adjusted) and NEVER
+  participates in eligibility, returns, beta, cohorts, signal inclusion or
+  scoring. Like every artifact in this `experimental_noncanonical` package it
+  grants no authority (see the manifest `authority_statement`).
 - **No retry.** Exactly one outbound request per symbol; a 429/5xx/timeout/
   transport error fails the symbol (and the build), it is never retried.
 - **No cache, no stale fallback.** The strict-live path reads neither fresh
@@ -63,7 +75,9 @@ A failed or partial acquisition is never reported as `NOT_READY`.
 The generic Agent Export allowlist no longer carries VS-002 evidence. The old
 flat `vs002_evidence/{signals,returns,manifest}.json` entries are removed, so a
 stale flat file can never be exported as though it were this runner's package.
-The runner's package (six artifacts under `packages/<package_id>/`) is **not**
+The runner's package (seven artifacts under `packages/<package_id>/` —
+`signals.json`, `returns.json`, `bars.json`, `bars_raw.json`,
+`bars_witness_raw.json`, `bars_snapshots.json`, `manifest.json`) is **not**
 exported by the generic path; it is carried only by the separate, explicitly
 authorized transport mission, which selects **one** `package_id` (never
 `latest`, never a wildcard).
