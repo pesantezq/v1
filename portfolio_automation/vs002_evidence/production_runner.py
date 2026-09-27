@@ -353,6 +353,20 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
     res = RunnerResult(run_id=run_id, frozen_universe=list(plan),
                        package_staging_rel=staging_rel)
 
+    # ---- fail closed on a non-canonical VS-002 output root --------------
+    # The governed VS002_EVIDENCE writer only permits writes beneath the
+    # canonical namespace root (outputs/vs002_evidence). A non-default
+    # out_root_rel would otherwise pass preflight, consume live provider calls,
+    # and then fail on the FIRST artifact write. Refuse it here — before client
+    # construction, can_admit(), StrictLiveAcquirer, any FMP request, and any
+    # staging-directory mutation.
+    if out_root_rel != B.DEFAULT_OUT_REL:
+        res.result = BLOCKED_PREFLIGHT
+        res.exact_blockers = [
+            f"non-canonical VS-002 output root {out_root_rel!r} is refused; "
+            f"expected {B.DEFAULT_OUT_REL!r}"]
+        return res
+
     # ---- G10 preflight: every failable check before attempt #1 ----------
     run_id_err = _validate_run_id(run_id)
     if run_id_err:
