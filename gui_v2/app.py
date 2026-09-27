@@ -30,25 +30,43 @@ if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+#: Sixteen letters: one per hex nibble. Encoding the digest with letters only
+#: means the token can never contain a digit, so no digit-run detector
+#: (account-number masking uses ``(?<!\d)\d{8,}(?!\d)``) can ever match it.
+_STATIC_TOKEN_ALPHABET = "abcdefghijklmnop"
+
+
+def _static_token_for_mtime(mtime: int) -> str:
+    """Deterministic, letters-only, URL-safe cache-busting token for an mtime.
+
+    Why letters only: the previous token was ``md5(mtime)[:8]`` in hex with an
+    ``"a"`` appended when all eight characters were digits. About 2.3% of mtimes
+    hash to an all-digit prefix, and the appended letter does not help: the
+    masking regex only needs a NON-digit on either side of the run, so
+    ``65512658a`` still contains the eight-digit run ``65512658`` and rendered
+    as two false "account numbers" in CI (both static links share one checkout
+    mtime). Mapping each hex nibble to a letter removes the whole class of
+    failure structurally rather than by probability.
+    """
+    import hashlib
+    digest = hashlib.md5(str(int(mtime)).encode()).hexdigest()[:8]
+    return "".join(_STATIC_TOKEN_ALPHABET[int(c, 16)] for c in digest)
+
+
 def _static_version(filename: str) -> str:
-    """Cache-busting token for a /static asset — a short hash of the file mtime.
+    """Cache-busting token for a /static asset — derived from the file mtime.
 
     Appended as ``?v=<token>`` so a rebuilt stylesheet/script is fetched by the
     browser without a hard refresh. Changes exactly when the file changes; falls
-    back to "0" when the asset is missing (never raises during render).
-
-    A hex hash (not the raw epoch) is used deliberately: it guarantees the token
-    is never a bare 8+ digit run, so it can't trip content-safety scans that flag
-    long digit sequences (e.g. account-number masking).
+    back to "0" when the asset is missing (never raises during render). The
+    token is letters only (see ``_static_token_for_mtime``), so it can never be
+    mistaken for an account number by the GUI's digit-run masking checks.
     """
-    import hashlib
     try:
         mtime = int((STATIC_DIR / filename).stat().st_mtime)
     except OSError:
         return "0"
-    token = hashlib.md5(str(mtime).encode()).hexdigest()[:8]
-    # Guarantee at least one letter so the token can never be 8 consecutive digits.
-    return token if any(c.isalpha() for c in token) else token + "a"
+    return _static_token_for_mtime(mtime)
 
 
 templates.env.globals["static_v"] = _static_version
