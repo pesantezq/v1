@@ -133,9 +133,16 @@ def run_status(*, root: Path = Path("."), now: str | None = None,
 def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
     root = Path(root)
     ts = now or _now()
+    # One sync, one logical instant. PR #50 put the ADMITTED record and its
+    # write-once archive day on this clock; the attempt record is the other half
+    # of the same observation and must not be stamped from the wall clock, or a
+    # replayed or backdated sync emits two disagreeing dates for one run.
+    # `_parse_ts` is total -- it falls back to now() on an unparseable value --
+    # so hoisting it here introduces no new failure path.
+    ts_dt = _parse_ts(ts)
     if not (oauth.is_configured() and _enabled()):
         ES.record_attempt(root, sync_id=_sync_id(ts), outcome=ES.SyncOutcome.UNCONFIGURED,
-                          auth_state="UNCONFIGURED")
+                          auth_state="UNCONFIGURED", now=ts_dt)
         return run_status(root=root, now=ts, auth_state="UNCONFIGURED")  # fail-closed: unconfigured/disabled
     sync_id = _sync_id(ts)
     auth = _acquire_auth()
@@ -143,7 +150,7 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
     if not auth.ok:
         outcome = ES.SyncOutcome.REAUTH_REQUIRED if auth.reauth_required else ES.SyncOutcome.AUTH_UNAVAILABLE
         ES.record_attempt(root, sync_id=sync_id, outcome=outcome, auth_state=auth.state.value,
-                          error=auth.detail)
+                          error=auth.detail, now=ts_dt)
         hint = "run the interactive re-auth" if auth.reauth_required else "transient; will retry next run"
         return run_status(root=root, now=ts, auth_state=auth.state.value,
                           last_error=f"{auth.state.value}: {bm.redact(auth.detail)} ({hint})")
@@ -154,14 +161,15 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
         raw = client.get_accounts(positions=True)
     except Exception as exc:
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.ACQUISITION_FAILED,
-                          auth_state=auth.state.value, error=str(exc))
+                          auth_state=auth.state.value, error=str(exc), now=ts_dt)
         return run_status(root=root, now=ts, auth_state=auth.state.value,
                           last_error=f"ACQUISITION_FAILED: {bm.redact(str(exc))}")
     # A malformed or empty response is NOT an empty portfolio.
     if not isinstance(raw, list) or not isinstance(nums, list):
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.SCHEMA_DRIFT,
                           auth_state=auth.state.value,
-                          error=f"unexpected response types: accounts={type(raw).__name__} numbers={type(nums).__name__}")
+                          error=f"unexpected response types: accounts={type(raw).__name__} numbers={type(nums).__name__}",
+                          now=ts_dt)
         return run_status(root=root, now=ts, auth_state=auth.state.value,
                           last_error="SCHEMA_DRIFT: accounts response is not a list")
     try:
@@ -173,14 +181,15 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
         evidence = AD.to_evidence_snapshot(bps)
     except Exception as exc:
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.NORMALIZATION_FAILED,
-                          auth_state=auth.state.value, error=str(exc))
+                          auth_state=auth.state.value, error=str(exc), now=ts_dt)
         return run_status(root=root, now=ts, auth_state=auth.state.value,
                           last_error=f"NORMALIZATION_FAILED: {bm.redact(str(exc))}")
 
     decision = AD.admit_broker_snapshot(evidence, as_of=evidence.pit.retrieved_at)
     if not decision.admitted:
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.EVIDENCE_REFUSED,
-                          auth_state=auth.state.value, admission=decision, error=decision.detail)
+                          auth_state=auth.state.value, admission=decision, error=decision.detail,
+                          now=ts_dt)
         return run_status(root=root, now=ts, auth_state=auth.state.value,
                           last_error=f"EVIDENCE_REFUSED: {decision.reason.value}")
 
@@ -193,7 +202,7 @@ def run_sync(*, root: Path = Path("."), now: str | None = None) -> dict:
                            sync_id=sync_id, now=evidence.pit.retrieved_at)
         ES.record_attempt(root, sync_id=sync_id, outcome=ES.SyncOutcome.ADMITTED,
                           auth_state=auth.state.value, admission=decision,
-                          snapshot_id=evidence.snapshot_id)
+                          snapshot_id=evidence.snapshot_id, now=ts_dt)
         sd = AD.project_snapshot_dict(evidence, decision)
         pr = AD.project_positions_dict(evidence, decision)
         _write(root, "schwab_portfolio_snapshot.json", sd)
