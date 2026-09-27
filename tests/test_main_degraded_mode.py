@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from main import run_portfolio_update
 from utils import load_config
+import pytest
 
 
 class _FakeStore:
@@ -63,6 +64,10 @@ class _EmptyFallbackWatchlist:
         return None
 
 
+# serial: runs the real pipeline against the checkout's cwd paths and writes
+# data/fmp_budget.db, data/finance_history.json and outputs/latest/* (attributed
+# 2026-09-27); other tests share those files, so this cannot run in an xdist worker.
+@pytest.mark.serial
 class TestMainDegradedMode(unittest.TestCase):
     def _seed_prices(self, holdings, _market_client):
         for holding in holdings:

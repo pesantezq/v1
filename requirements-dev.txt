@@ -1,0 +1,11 @@
+# Test-only dependencies. NOT a runtime surface: requirements.txt remains the
+# single authoritative dependency source for the application and the VPS
+# (see .github/workflows/northstar-ci.yml). Install alongside it for testing:
+#
+#     python -m pip install -r requirements.txt -r requirements-dev.txt
+#
+# pytest-xdist accelerates the development loop and the CI certification
+# shards by running parallel-safe tests across worker processes; it is
+# inert unless `-n` is passed, so plain `python -m pytest` behaves as before.
+pytest>=9,<10
+pytest-xdist>=3.6,<4

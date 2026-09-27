@@ -16,6 +16,7 @@ from watchlist_scanner.performance_feedback import (
     run_signal_feedback_cycle,
 )
 from watchlist_scanner.state import WatchlistStateStore
+import pytest
 
 
 class TestWatchlistSignalFeedback(unittest.TestCase):
@@ -70,6 +71,9 @@ class TestWatchlistSignalFeedback(unittest.TestCase):
             },
         )
 
+    # serial: _load_fmp_budget() writes the checkout's data/fmp_budget.db, which the
+    # main-pipeline tests also write (attributed 2026-09-27).
+    @pytest.mark.serial
     def test_outcome_tracking_and_report_writes_work(self):
         self._seed_daily_cache(
             "AMD",

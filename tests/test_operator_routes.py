@@ -6,6 +6,7 @@ from pathlib import Path
 import gui_v2.app as appmod
 from fastapi.testclient import TestClient
 from gui_v2.app import app
+import pytest
 
 client = TestClient(app)
 
@@ -35,6 +36,9 @@ def _seed(root, wid, status):
         f.write(json.dumps(rec) + "\n")
 
 
+# serial: these three append to the checkout's outputs/operator_control/audit_log.jsonl
+# (no REPO_ROOT monkeypatch), so they must not interleave across xdist workers.
+@pytest.mark.serial
 def test_cancel_blocked_without_edit_flag(monkeypatch):
     monkeypatch.setattr(appmod, "_operator_edit_enabled", lambda: False)
     r = client.post(
@@ -48,6 +52,7 @@ def test_cancel_blocked_without_edit_flag(monkeypatch):
         assert "level=error" in r.headers["location"]
 
 
+@pytest.mark.serial
 def test_cancel_rejects_cross_origin(monkeypatch):
     monkeypatch.setattr(appmod, "_operator_edit_enabled", lambda: True)
     r = client.post(
@@ -61,6 +66,7 @@ def test_cancel_rejects_cross_origin(monkeypatch):
         assert "level=error" in r.headers["location"]
 
 
+@pytest.mark.serial
 def test_cancel_requires_reason(monkeypatch):
     monkeypatch.setattr(appmod, "_operator_edit_enabled", lambda: True)
     r = client.post(
