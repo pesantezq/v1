@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from main import run_portfolio_update
 from utils import load_config
+import pytest
 
 
 class _FakeStore:
@@ -52,6 +53,10 @@ class _FakeDrawdownTracker:
         return "Drawdown: 0.0% from 12m-high | 0.0% from ATH $7,258 | Regime: normal"
 
 
+# serial: runs the real pipeline against the checkout's cwd paths and writes
+# data/fmp_budget.db, data/finance_history.json and outputs/latest/* (attributed
+# 2026-09-27); other tests share those files, so this cannot run in an xdist worker.
+@pytest.mark.serial
 class TestMainFmpCircuitBreaker(unittest.TestCase):
     def test_circuit_breaker_falls_back_without_crashing(self):
         config = load_config("config.json")

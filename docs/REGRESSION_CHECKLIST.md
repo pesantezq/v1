@@ -10,6 +10,46 @@ Use this before merging any change that touches scoring, ranking, allocation, st
 - no FMP endpoint changes may bypass `fmp_endpoint_registry.py`
 - production daily automation should use `bash scripts/run_daily_safe.sh`, not a direct `python main.py` cron entry
 
+## 0b. Test Acceleration — Development Loop vs Final Gate (2026-09-27)
+
+The official full-suite command is unchanged and remains the certification
+universe:
+
+- `python -m pytest -q --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py`
+
+Test-only tooling lives in `requirements-dev.txt` (`pytest`, `pytest-xdist`);
+install it alongside `requirements.txt` for development and CI. It is never a
+runtime dependency and is inert unless `-n` is passed.
+
+**Development loop** (selective, fast):
+
+- focused: `python -m pytest -q tests/<relevant_test>.py`
+- affected domain: `python -m pytest -q -n 8 $(python scripts/ci_test_shards.py files <shard>)`
+- whole suite locally: `python -m pytest -q -n 8 --ignore=tests/test_gui_api_health.py --ignore=tests/test_gui_insight_cards.py`
+  (measured on the QPC, 8 CPUs: ~37 s wall vs ~338 s serial; 8 workers was the
+  knee — 10 and 12 were slower)
+- `-x` is fine here.
+
+**Final exact-head certification** (complete, never inferred):
+
+- the complete required universe, no `-x`, no `--lf`/`--ff`, no `.pytest_cache`
+  reuse, no testmon, no verdict carried over from an earlier SHA;
+- CI runs it as six domain shards (`governance`, `evidence_data`,
+  `broker_portfolio`, `strategy_research`, `gui_readmodels`, `core`) with 4
+  xdist workers each, plus a serial phase for tests marked `serial`
+  (`pytest.ini`; nine tests that write shared checkout files, each justified
+  at its marker);
+- `python scripts/ci_test_shards.py verify` proves by exact node ID that the
+  union of the shards equals the official collection, with no duplicates; the
+  CI governance job runs it on every push and `tests/test_ci_test_shards.py`
+  pins the static contract (every test file in exactly one shard, `core` is
+  the catch-all, workflow matrix == shard names, deselect list shared);
+- the ten CI-deselected node IDs (live-artifact / production-host tests) are
+  declared once in `scripts/ci_test_shards.py` and still run in the VPS-side
+  full suite.
+
+Only dependencies are cached in CI (`pip`); correctness is never cached.
+
 ## 1. Compile And Import Checks
 
 - Run `python -m compileall .`

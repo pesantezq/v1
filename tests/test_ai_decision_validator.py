@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pytest
+
 from portfolio_automation.ai_decision_validator import (
     STATUS_ALIGNED,
     STATUS_CAUTION,
@@ -485,6 +487,9 @@ class TestLLMFallback(unittest.TestCase):
         self.assertEqual(1, result["total_validated"])
         self.assertFalse(result["ai_used"])
 
+    # serial: appends to the checkout's outputs/policy/ai_usage_events.jsonl, which other
+    # tests read (attributed 2026-09-27).
+    @pytest.mark.serial
     def test_llm_enhance_fallback_on_exception(self):
         from portfolio_automation.ai_decision_validator import _try_llm_enhance
 

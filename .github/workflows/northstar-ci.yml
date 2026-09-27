@@ -49,14 +49,19 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
-        # requirements.txt is the repository's single authoritative dependency
-        # source; pytest is a test-only addition (deliberately not a runtime
-        # requirement). No uv/poetry — plain pip per repo convention.
+        # requirements.txt is the repository's single authoritative RUNTIME
+        # dependency source; requirements-dev.txt holds test-only tools
+        # (pytest, pytest-xdist) and is never installed on the VPS. No
+        # uv/poetry — plain pip per repo convention. The pip cache above is a
+        # DEPENDENCY cache only: no test verdict is ever cached.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Compile
         run: |
@@ -82,10 +87,26 @@ jobs:
       - name: Validate operator-control boundary
         run: python -m pytest -q tests/test_operator_control.py
 
+      - name: Verify certification sharding (collection equivalence)
+        # Proves, by exact node ID, that the union of the shards below is the
+        # official full-suite universe (scripts/ci_test_shards.py): nothing
+        # dropped, nothing duplicated. Drift fails here, visibly.
+        run: |
+          python -m pytest -q tests/test_ci_test_shards.py
+          python scripts/ci_test_shards.py verify
+
   tests:
-    name: Hermetic regression tests
+    name: Hermetic regression tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Logical domain shards, by test ownership (scripts/ci_test_shards.py).
+        # Every file the official full-suite command collects belongs to exactly
+        # one shard, `core` is the catch-all, and the governance job proves the
+        # union equals the official collection by exact node ID.
+        shard: [governance, evidence_data, broker_portfolio, strategy_research, gui_readmodels, core]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,11 +116,14 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Configure git identity for test fixtures
         # tests/test_worker_workspace.py exercises clone/worktree isolation by
@@ -110,46 +134,73 @@ jobs:
           git config --global user.email "ci@northstar.invalid"
           git config --global user.name "northstar-ci"
 
-      - name: Run hermetic regression suite
-        # The repository's declared full-suite command
-        # (.agent/project_state.yaml:required_test_policy.full_suite_command)
-        # with its two pre-existing declared exclusions, plus 5 deselected
-        # test IDs that VALIDATE LIVE PRODUCTION RUNTIME STATE and therefore
-        # cannot run hermetically (classified 2026-08-09 by running the full
-        # 10,252-test suite in a bare worktree — 10,246 passed; each of the 5
-        # was then proven to pass against the live VPS corpus, i.e. they are
-        # live-artifact-dependent, not regressions; they remain VPS-side
-        # validation):
-        #   - test_artifact_registry: validates the live outputs/ corpus
-        #     (14 required runtime artifacts absent in a fresh checkout)
-        #   - test_gui_dashboard_memo/quant (3): render routes against live
-        #     outputs/latest daily-memo + quant artifacts
-        #   - test_strategy_projection_anchor: reads the live sandbox
-        #     active-strategy selection
-        # Plus 5 deselected test IDs with PRODUCTION-HOST assumptions,
-        # exposed by remote run 31336323571 (they pass on the VPS; hermetic
-        # rewrites are a documented follow-up, and they keep running in the
-        # VPS-side full suite):
-        #   - test_broker_overlay (4): call load_config with the hardcoded
-        #     absolute path /opt/stockbot/config.json
-        #   - test_operator_worker_runner::test_safe_repair_uses_accept_edits_
-        #     and_strips_api_key: requires a `claude` binary on PATH
-        #     (_run_direct_claude returns early without one, so the test's
-        #     subprocess monkeypatch is never reached)
-        # tests/conftest.py guards the protected scoring registry during the
-        # run. Any OTHER failure here is a real regression — do not mask it
-        # with skips or `|| true`.
+      - name: Run shard (parallel phase)
+        # The certification universe is the repository's declared full-suite
+        # command (.agent/project_state.yaml:required_test_policy.full_suite_command)
+        # with its two declared --ignore exclusions, plus 10 deselected node IDs
+        # that VALIDATE LIVE PRODUCTION RUNTIME STATE or production-host
+        # assumptions and therefore cannot run hermetically (classified
+        # 2026-08-09; each passes against the live VPS corpus and stays in the
+        # VPS-side full suite): test_artifact_registry (live outputs/ corpus),
+        # test_gui_dashboard_memo/quant (3, live daily-memo + quant artifacts),
+        # test_strategy_projection_anchor (live sandbox strategy),
+        # test_broker_overlay (4, hardcoded /opt/stockbot/config.json),
+        # test_operator_worker_runner::test_safe_repair_... (needs a `claude`
+        # binary). Both lists live ONCE in scripts/ci_test_shards.py
+        # (`pytest-args`) so local and CI runs cannot disagree.
+        #
+        # pytest-xdist runs this shard's files across 4 workers (ubuntu-latest
+        # has 4 vCPUs; the QPC benchmark chose 8 for 8 CPUs). Tests marked
+        # `serial` (pytest.ini) are excluded here and run in the serial job.
+        # -p no:cacheprovider: no .pytest_cache, no --lf/--ff, no inference from
+        # any earlier SHA -- this is the exact-head gate. tests/conftest.py
+        # guards the protected scoring registry in every worker. Any failure
+        # here is a real regression -- do not mask it with skips or `|| true`.
         run: |
-          python -m pytest -q \
-            --ignore=tests/test_gui_api_health.py \
-            --ignore=tests/test_gui_insight_cards.py \
-            --deselect "tests/test_artifact_registry.py::test_sqg_registration_keeps_registry_green_and_debt_free" \
-            --deselect "tests/test_gui_dashboard_memo.py::test_memo_route_all_six_section_headings_present" \
-            --deselect "tests/test_gui_dashboard_memo.py::test_memo_route_has_stacked_sections" \
-            --deselect "tests/test_gui_dashboard_quant.py::test_quant_route_mobile_card_stack_present" \
-            --deselect "tests/test_strategy_projection_anchor.py::test_projection_sets_anchor_strategy_id_when_selected" \
-            --deselect "tests/test_broker_overlay.py::test_apply_overlay_to_config_object" \
-            --deselect "tests/test_broker_overlay.py::test_apply_overlay_writes_source_artifact" \
-            --deselect "tests/test_broker_overlay.py::test_apply_overlay_config_fallback_returns_unchanged" \
-            --deselect "tests/test_broker_overlay.py::test_apply_overlay_records_config_source_on_fallback" \
-            --deselect "tests/test_operator_worker_runner.py::test_safe_repair_uses_accept_edits_and_strips_api_key"
+          FILES=$(python scripts/ci_test_shards.py files "${{ matrix.shard }}")
+          python -m pytest -q -p no:cacheprovider -n 4 --dist=load -m "not serial" \
+            $(python scripts/ci_test_shards.py pytest-args) $FILES
+
+  tests-serial:
+    name: Hermetic regression tests (serial phase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Configure git identity for test fixtures
+        run: |
+          git config --global user.email "ci@northstar.invalid"
+          git config --global user.name "northstar-ci"
+
+      - name: Run serial-marked tests in one process
+        # Tests that validate process- or repository-wide state carry the
+        # `serial` marker and run here, alone, without xdist: nine tests in six
+        # files that write shared checkout files (data/fmp_budget.db,
+        # outputs/latest/*, outputs/operator_control/audit_log.jsonl, ...),
+        # attributed per node on 2026-09-27 and justified at each marker. They
+        # are part of the exact-head gate, never dropped.
+        run: |
+          N=$(python scripts/ci_test_shards.py serial-count)
+          echo "serial tests collected: $N"
+          if [ "$N" = "0" ]; then
+            echo "no serial-marked tests; nothing to run"
+          else
+            python -m pytest -q -p no:cacheprovider -m serial \
+              $(python scripts/ci_test_shards.py pytest-args) tests
+          fi
