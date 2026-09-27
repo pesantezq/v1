@@ -2320,3 +2320,60 @@ Produced by `portfolio_automation/weekly_etf_bundles/run.py`
 - `email_receipt.json` — send/dry-run/duplicate-suppressed receipt (content hash).
 - Also: `outputs/simulation/weekly_etf_bundle_engine_overlay.json` (sim-only bounded
   overlay A/B) and `outputs/policy/weekly_etf_email_log.jsonl` (email dedup log).
+
+
+---
+
+## VS-002 frozen evidence package (`engineering.vs002_evidence.v1`)
+
+`experimental_noncanonical` / **evidence-only**. Produced on the production host
+by the governed runner (`portfolio_automation.vs002_evidence.production_runner`)
+and published immutably, content-addressed, at
+`outputs/vs002_evidence/packages/<package_id>/`. It grants **no** trade, capital
+or strategy authority (manifest `authority_statement`), and the runner never
+executes VS-002. `schema_version = engineering.vs002_evidence.v1`.
+
+**v1 change vs v0:** the authorized dividend-adjusted endpoint emits no raw
+`close`, so the bar contract carries `adj_close` only, and the package gains the
+`bars_witness_raw.json` companion witness artifact plus its manifest provenance.
+A consumer rejects a mismatched `schema_version` outright.
+
+### Exactly seven artifacts (bar mode)
+
+| artifact | role |
+|---|---|
+| `signals.json` | recorded, matured watchlist signals (never reconstructed) |
+| `returns.json` | derived daily returns — the consumer contract; `r(t)=adj_close(t)/adj_close(t-1)-1` |
+| `bars.json` | normalized dividend-adjusted bars (`symbol, session_date, adj_close, volume`) — **no raw close** |
+| `bars_raw.json` | EXACT parsed provider response per fetched symbol (frozen, pre-normalization), enabling raw→normalized replay |
+| `bars_witness_raw.json` | observe_only ENVELOPE `{"observe_only": true, "rows": [EXACT /full rows]}` — the companion semantic witness |
+| `bars_snapshots.json` | canonical EvidenceSnapshot identities for the kept bars |
+| `manifest.json` | digests, package identity, provenance, PIT/beta conventions, witness provenance |
+
+### Authoritative return source
+Only `/stable/historical-price-eod/dividend-adjusted`; the consumed field is
+`adjClose`. Eligibility, cohorts and beta derive from the adjusted bars alone.
+
+### Companion dividend-adjustment witness
+- endpoint `/stable/historical-price-eod/full`, symbol **SPY** only;
+- `factor = adjClose_dividend_adjusted / close_full` — witnesses the **dividend**
+  adjustment (FMP `/full` close is split-adjusted, so splits cancel);
+- **semantic evidence only**: it never participates in eligibility, returns,
+  beta, cohort selection, signal inclusion or scoring;
+- persisted as an `observe_only: true` envelope so the advisory status is
+  explicit on the artifact itself; the exact provider rows under `rows` are
+  never mutated or coerced.
+
+### Two integrity scopes (kept distinct)
+- `manifest.companion_raw_digest` = digest of the **exact provider rows**
+  (`bars_witness_raw.json → rows`);
+- `manifest.artifact_digests["bars_witness_raw.json"]` = digest of the **whole
+  persisted envelope**.
+
+### Consumer replay requirement
+`consumer.validate` runs credential-free on the lab side and, for the witness,
+requires `observe_only` to be exactly `true`, extracts `rows` without mutation,
+recomputes the raw-response digest from `rows`, and independently replays the
+SPY dividend-adjustment witness from the frozen bytes. Any missing/false/
+malformed `observe_only`, any tamper of the rows or the envelope, or a schema
+version mismatch is refused (`SnapshotInvalid`).

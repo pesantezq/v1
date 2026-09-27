@@ -673,7 +673,14 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
         raw_responses = _acq["raw_responses"]
         raw_digests = _acq["raw_digests"]
         retrieved_at = _acq["retrieved_at"]
-        bars_witness_raw_payload = list(_acq["companion_raw"])
+        # observe_only ENVELOPE (AGENTS.md: every new artifact payload carries
+        # observe_only: true). The EXACT provider rows are preserved verbatim
+        # under "rows" — never coerced or reordered. Two distinct integrity
+        # scopes result: manifest companion_raw_digest is the digest of the
+        # exact rows; artifact_digests[bars_witness_raw.json] is the digest of
+        # the whole persisted envelope. The envelope grants no authority.
+        bars_witness_raw_payload = {"observe_only": True,
+                                    "rows": list(_acq["companion_raw"])}
         companion_retrieved_at = _acq["companion_retrieved_at"].astimezone(
             timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         companion_digest = _acq["companion_digest"]

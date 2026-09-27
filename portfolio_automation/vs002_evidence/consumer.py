@@ -256,27 +256,45 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
             errors.append(
                 f"companion endpoint {manifest.get('companion_endpoint')!r} is "
                 f"not the authorized {C.COMPANION_ENDPOINT!r}")
-        declared_companion_digest = manifest.get("companion_raw_digest")
-        recomputed_companion_digest = C.artifact_digest(bars_witness_raw)
-        if declared_companion_digest != recomputed_companion_digest:
+        # The witness artifact is an explicit observe_only ENVELOPE. Require the
+        # marker to be exactly True, extract the provider rows WITHOUT mutation,
+        # and keep two integrity scopes distinct: the manifest companion_raw_digest
+        # is recomputed over the exact rows (never the envelope metadata), while
+        # the whole-envelope artifact digest was checked above via artifact_pairs.
+        witness_rows = None
+        if not isinstance(bars_witness_raw, dict):
             errors.append(
-                f"companion /full raw digest mismatch: manifest "
-                f"{declared_companion_digest} != recomputed "
-                f"{recomputed_companion_digest}")
-        if C.BENCHMARK not in bars_raw:
+                "witness artifact is not an observe_only envelope object")
+        elif bars_witness_raw.get("observe_only") is not True:
             errors.append(
-                f"benchmark {C.BENCHMARK} absent from frozen raw; cannot replay "
-                f"the dividend-adjustment witness")
+                "witness artifact observe_only is missing or not exactly true")
+        elif not isinstance(bars_witness_raw.get("rows"), list):
+            errors.append("witness artifact envelope has no rows list")
         else:
-            try:
-                bench_panel = full_panel_from_raw(bars_raw, {C.BENCHMARK})
-                witness_findings = verify_dividend_adjustment_witness(
-                    bench_panel.get(C.BENCHMARK, []), bars_witness_raw)
-            except Exception as exc:  # noqa: BLE001
-                witness_findings = [
-                    f"dividend-adjustment witness could not be replayed from "
-                    f"frozen raw: {type(exc).__name__}: {exc}"]
-            errors.extend(witness_findings)
+            witness_rows = bars_witness_raw["rows"]
+        if witness_rows is not None:
+            declared_companion_digest = manifest.get("companion_raw_digest")
+            recomputed_companion_digest = C.artifact_digest(witness_rows)
+            if declared_companion_digest != recomputed_companion_digest:
+                errors.append(
+                    f"companion /full raw digest mismatch: manifest "
+                    f"{declared_companion_digest} != recomputed "
+                    f"{recomputed_companion_digest} (the digest is over the exact "
+                    f"provider rows, not the envelope)")
+            if C.BENCHMARK not in bars_raw:
+                errors.append(
+                    f"benchmark {C.BENCHMARK} absent from frozen raw; cannot "
+                    f"replay the dividend-adjustment witness")
+            else:
+                try:
+                    bench_panel = full_panel_from_raw(bars_raw, {C.BENCHMARK})
+                    witness_findings = verify_dividend_adjustment_witness(
+                        bench_panel.get(C.BENCHMARK, []), witness_rows)
+                except Exception as exc:  # noqa: BLE001
+                    witness_findings = [
+                        f"dividend-adjustment witness could not be replayed from "
+                        f"frozen raw: {type(exc).__name__}: {exc}"]
+                errors.extend(witness_findings)
         if manifest.get("witness_result") != "PASS":
             errors.append(
                 "manifest witness_result is not PASS — the dividend-adjustment "

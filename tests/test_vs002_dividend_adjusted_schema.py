@@ -116,7 +116,8 @@ def test_4_companion_witness_consumes_full_close(tmp_path):
     assert m["witness_result"] == "PASS"
     assert m["witness_overlap"]["sessions"] >= C.WITNESS_MIN_OVERLAP_SESSIONS
     wit = json.loads((root / "bars_witness_raw.json").read_text())
-    assert wit and all("close" in r for r in wit)
+    assert wit["observe_only"] is True
+    assert wit["rows"] and all("close" in r for r in wit["rows"])
 
 
 def test_4b_companion_without_close_fails_the_witness(tmp_path):
@@ -197,7 +198,7 @@ def test_10_consumer_replays_witness_from_frozen_bytes(tmp_path):
 def test_11_witness_evidence_tamper_is_refused(tmp_path):
     root, _ = _pkg(tmp_path)
     wit = json.loads((root / "bars_witness_raw.json").read_text())
-    wit[0]["close"] = wit[0]["close"] * 1.5
+    wit["rows"][0]["close"] = wit["rows"][0]["close"] * 1.5
     (root / "bars_witness_raw.json").write_text(
         json.dumps(wit, indent=2, sort_keys=True))
     with pytest.raises(CON.SnapshotInvalid):
@@ -211,7 +212,7 @@ def test_11b_resealed_witness_tamper_still_breaks_the_replay(tmp_path):
     root, _ = _pkg(tmp_path)
     manifest = json.loads((root / "manifest.json").read_text())
     wit = json.loads((root / "bars_witness_raw.json").read_text())
-    for r in wit:
+    for r in wit["rows"]:
         r["close"] = r["close"] * 1.5      # shifts the factor away from ~1
     (root / "bars_witness_raw.json").write_text(
         json.dumps(wit, indent=2, sort_keys=True))
@@ -347,5 +348,103 @@ def test_consumer_refuses_a_swapped_companion_endpoint(tmp_path):
     manifest["companion_endpoint"] = C.AUTHORIZED_ENDPOINT
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2,
                                                    sort_keys=True))
+    with pytest.raises(CON.SnapshotInvalid):
+        CON.validate(root)
+
+
+# ===========================================================================
+# observe_only ENVELOPE governance (PR #54 closeout)
+# ===========================================================================
+
+def _reseal_pkg(root, manifest):
+    core = {k: v for k, v in manifest.items()
+            if k not in ("generated_at", "package_id")}
+    manifest["package_id"] = C.package_id(core)
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def test_witness_artifact_carries_observe_only_true(tmp_path):
+    root, _ = _pkg(tmp_path)
+    wit = json.loads((root / "bars_witness_raw.json").read_text())
+    assert isinstance(wit, dict) and wit["observe_only"] is True
+    assert isinstance(wit["rows"], list) and wit["rows"]
+
+
+def test_witness_rows_are_the_exact_provider_rows(tmp_path):
+    prov = SyntheticAdjustedProvider()
+    root, m = _pkg(tmp_path, provider=prov)
+    wit = json.loads((root / "bars_witness_raw.json").read_text())
+    # rows are the exact companion /full provider response, unmutated
+    assert wit["rows"] == prov.fetch_companion(BENCH)
+    # the raw-response digest is over the ROWS, never the envelope metadata
+    assert m["companion_raw_digest"] == C.artifact_digest(wit["rows"])
+    assert m["companion_raw_digest"] != C.artifact_digest(wit)
+    # the whole-envelope artifact digest is a distinct scope
+    assert m["artifact_digests"]["bars_witness_raw.json"] == C.artifact_digest(wit)
+
+
+@pytest.mark.parametrize("bad", [False, "true", 1, None, "__DELETE__"])
+def test_false_missing_or_nonbool_observe_only_is_refused(tmp_path, bad):
+    root, _ = _pkg(tmp_path)
+    manifest = json.loads((root / "manifest.json").read_text())
+    wit = json.loads((root / "bars_witness_raw.json").read_text())
+    if bad == "__DELETE__":
+        wit.pop("observe_only")
+    else:
+        wit["observe_only"] = bad
+    (root / "bars_witness_raw.json").write_text(
+        json.dumps(wit, indent=2, sort_keys=True))
+    # reseal the whole-envelope artifact digest + package id so the tamper must
+    # be caught by the EXPLICIT observe_only check, not merely the digest check
+    manifest["artifact_digests"]["bars_witness_raw.json"] = C.artifact_digest(wit)
+    _reseal_pkg(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid):
+        CON.validate(root)
+
+
+def test_flipping_observe_only_cannot_alter_returns(tmp_path):
+    root, _ = _pkg(tmp_path)
+    good_returns = (root / "returns.json").read_bytes()
+    manifest = json.loads((root / "manifest.json").read_text())
+    wit = json.loads((root / "bars_witness_raw.json").read_text())
+    wit["observe_only"] = False
+    (root / "bars_witness_raw.json").write_text(
+        json.dumps(wit, indent=2, sort_keys=True))
+    manifest["artifact_digests"]["bars_witness_raw.json"] = C.artifact_digest(wit)
+    _reseal_pkg(root, manifest)
+    with pytest.raises(CON.SnapshotInvalid):   # observe_only must be true
+        CON.validate(root)
+    # returns.json is byte-identical: observe_only lives only in the witness
+    # envelope and never feeds the calculated return series
+    assert (root / "returns.json").read_bytes() == good_returns
+
+
+def test_witness_cannot_affect_eligibility_or_cohorts_via_envelope(tmp_path):
+    """The envelope wrapper (and its metadata) is not consulted for the
+    consumed surface: eligibility and cohorts come only from the adjusted
+    panel."""
+    root, m = _pkg(tmp_path)
+    # nothing in the eligibility/cohort manifest surface references the witness
+    for key in ("bar_eligible_universe", "bar_excluded_symbols",
+                "non_overlapping_cohort_dates"):
+        blob = json.dumps(m[key])
+        assert "observe_only" not in blob and "companion" not in blob
+
+
+def test_v1_schema_and_exact_seven_artifacts(tmp_path):
+    root, m = _pkg(tmp_path)
+    assert m["schema_version"] == "engineering.vs002_evidence.v1"
+    names = {p.name for p in root.iterdir() if p.is_file()}
+    assert names == {"signals.json", "returns.json", "bars.json", "bars_raw.json",
+                     "bars_witness_raw.json", "bars_snapshots.json",
+                     "manifest.json"}
+
+
+def test_v0_labeled_manifest_is_refused(tmp_path):
+    root, _ = _pkg(tmp_path)
+    manifest = json.loads((root / "manifest.json").read_text())
+    manifest["schema_version"] = "engineering.vs002_evidence.v0"
+    _reseal_pkg(root, manifest)
     with pytest.raises(CON.SnapshotInvalid):
         CON.validate(root)
