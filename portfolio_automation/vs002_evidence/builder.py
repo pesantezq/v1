@@ -395,20 +395,30 @@ def _analyze_dividend_adjustment_witness(
             f"{sym}: final dividend-adjustment factor {final_point:.6f} is not "
             f"~1 — the adjusted series is adjusted to some other vintage")
 
+    # Monotone-interval FEASIBILITY, not just an adjacent-pair check: a
+    # non-decreasing true factor becomes infeasible once an interval's high
+    # falls below the RUNNING MAXIMUM of all prior interval lows. Comparing only
+    # to the immediately preceding interval would miss a gradual decline whose
+    # adjacent pairs each overlap but whose cumulative drop far exceeds the
+    # measured precision (Codex P1).
     first_violation = None
+    running_max_low = sessions[0]["low"]
     for i in range(1, len(sessions)):
-        if is_material_reversal(sessions[i - 1], sessions[i]):
+        if is_material_reversal({"low": running_max_low}, sessions[i]):
             first_violation = {
                 "date": sessions[i]["date"],
-                "prev_low": str(sessions[i - 1]["low"]),
+                "running_max_prior_low": str(running_max_low),
                 "curr_high": str(sessions[i]["high"])}
             findings.append(
                 f"{sym}: dividend-adjustment factor materially decreases at "
                 f"{sessions[i]['date']} — current interval high "
-                f"{float(sessions[i]['high']):.9f} < previous interval low "
-                f"{float(sessions[i - 1]['low']):.9f}; a reversal the observed "
-                f"precision (q_adj={q_adj}, q_close={q_close}) cannot explain")
+                f"{float(sessions[i]['high']):.9f} < the running maximum of all "
+                f"prior interval lows {float(running_max_low):.9f}; a cumulative "
+                f"reversal the observed precision (q_adj={q_adj}, q_close="
+                f"{q_close}) cannot explain")
             break
+        if sessions[i]["low"] > running_max_low:
+            running_max_low = sessions[i]["low"]
     detail["first_violation"] = first_violation
 
     if all(s["low"] <= 1 <= s["high"] for s in sessions):

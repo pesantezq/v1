@@ -214,3 +214,35 @@ def test_schema_and_witness_envelope_unchanged(tmp_path):
 def test_ratio_monotone_tolerance_is_removed():
     assert not hasattr(C, "RATIO_MONOTONE_TOLERANCE")
     assert C.RATIO_FINAL_TOLERANCE == 1e-4
+
+
+# ── Codex P1: cumulative gradual decline (adjacent overlaps, total exceeds q) ─
+
+def test_cumulative_gradual_decline_is_caught():
+    """A gradual decline whose ADJACENT interval pairs each still overlap but
+    whose CUMULATIVE drop far exceeds the uncertainty envelope must FAIL, via
+    monotone-interval feasibility (running max of all prior lows). No adjacent
+    pair alone is a material reversal, so an adjacent-only check would wrongly
+    PASS this corrupt series."""
+    n = 260
+    close_fn = lambda i: 400.00
+    lo_adj = round(400.00 - 0.01 * 130, 2)          # 398.70 after 130 cents
+    def adj_fn(i):
+        if i <= 130:
+            return round(400.00 - 0.01 * i, 2)      # 400.00 -> 398.70
+        frac = (i - 130) / (n - 1 - 130)
+        return round(lo_adj + (400.00 - lo_adj) * frac, 2)   # ramp back to 400
+    bars, comp = _bars_and_companion(n, adj_fn, close_fn)
+
+    rep = B.dividend_adjustment_witness_report(bars, comp)
+    assert not rep["passed"], "cumulative decline must be flagged"
+    assert rep["first_violation"] is not None
+
+    # ...yet NO adjacent pair on its own is a material reversal (the exact gap
+    # the running-max feasibility test closes).
+    q_adj = Decimal(1).scaleb(-B.series_decimal_places([b.adj_close for b in bars]))
+    q_close = Decimal(1).scaleb(-B.series_decimal_places([c["close"] for c in comp]))
+    ivs = [B.factor_interval(Decimal(str(b.adj_close)), Decimal(str(c["close"])),
+                             q_adj, q_close) for b, c in zip(bars, comp)]
+    assert not any(B.is_material_reversal(ivs[i - 1], ivs[i])
+                   for i in range(1, len(ivs)))
