@@ -202,5 +202,5 @@ jobs:
             echo "no serial-marked tests; nothing to run"
           else
             python -m pytest -q -p no:cacheprovider -m serial \
-              $(python scripts/ci_test_shards.py pytest-args) tests
+              $(python scripts/ci_test_shards.py pytest-args)
           fi

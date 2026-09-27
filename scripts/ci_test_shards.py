@@ -11,8 +11,12 @@ WHY THIS EXISTS
     duplicating, or re-ordering any required test.
 
 THE CONTRACT (enforced by `verify` and by tests/test_ci_test_shards.py)
-    * every test FILE the official command collects belongs to EXACTLY ONE
-      shard (rules are ordered; the last shard is the catch-all, so a new test
+    * the universe is what the OFFICIAL COMMAND collects: pytest discovery from
+      the repository root with NO path operand (so root-level test_*.py and
+      tools/*_test.py are in scope, not only tests/). It is derived by asking
+      pytest (`--collect-only`), never by re-implementing discovery rules;
+    * every test FILE in that universe belongs to EXACTLY ONE shard (rules are
+      ordered; the last shard is the catch-all, so a new or out-of-tree test
       file can never be silently dropped -- it lands in `core`);
     * the UNION of the shards' collected node IDs == the official command's
       collected node IDs, exactly, and shards are pairwise disjoint;
@@ -32,6 +36,7 @@ USAGE
 """
 from __future__ import annotations
 
+import functools
 import os
 import subprocess
 import sys
@@ -109,15 +114,66 @@ SHARD_RULES: tuple[tuple[str, object], ...] = (
 SHARD_NAMES: tuple[str, ...] = tuple(name for name, _ in SHARD_RULES)
 
 
+# --- pytest plugin hook -------------------------------------------------------
+# When this file is loaded by pytest as a plugin (only the subprocess below does
+# that: `-p ci_test_shards` with scripts/ on PYTHONPATH), it records the path of
+# every Module collector pytest opens, i.e. every file the run IMPORTS -- which
+# includes modules that define no tests (test_demo.py, tools/*_test.py). Those
+# never appear in `--collect-only -q` output, but an import error in them fails
+# the official command, so the shard universe must include them.
+MODULE_LOG_ENV = "CI_TEST_SHARDS_MODULE_LOG"
+
+
+def pytest_collectstart(collector):  # pragma: no cover - exercised via subprocess
+    log = os.environ.get(MODULE_LOG_ENV)
+    if log and collector.__class__.__name__ == "Module":
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(str(collector.path) + "\n")
+
+
+@functools.lru_cache(maxsize=None)
+def official_collection() -> frozenset[str]:
+    """Node IDs the official command collects: repository-root discovery, no
+    path operand, official ignores and CI deselects applied. Asked of pytest
+    itself so this can never drift from what the official command runs."""
+    return frozenset(_collect([]))
+
+
+@functools.lru_cache(maxsize=None)
+def official_modules() -> frozenset[str]:
+    """Every module file the official command IMPORTS during collection
+    (repository-root discovery, no path operand), including files that define
+    no tests. Recorded by this file's own pytest_collectstart hook."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tmp:
+        log = tmp.name
+    env = dict(os.environ, **{MODULE_LOG_ENV: log,
+                              "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO / "scripts"),
+                                                                           os.environ.get("PYTHONPATH", "")]))})
+    cmd = [sys.executable, "-m", "pytest", "-q", "--collect-only", "-p", "no:cacheprovider",
+           "-p", "ci_test_shards", *official_official_pytest_args()]
+    res = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, env=env)
+    if res.returncode not in (0, 5):
+        sys.stderr.write(res.stdout[-4000:] + res.stderr[-2000:])
+        raise SystemExit(f"module enumeration failed: rc={res.returncode}")
+    mods = set()
+    for ln in Path(log).read_text(encoding="utf-8").splitlines():
+        p = Path(ln.strip())
+        if p.is_file():
+            mods.add(p.resolve().relative_to(REPO).as_posix())
+    os.unlink(log)
+    return frozenset(mods)
+
+
 def official_test_files() -> list[str]:
-    """Every test file the official command would consider (minus its ignores)."""
-    out = []
-    for p in sorted(TESTS.rglob("test_*.py")):
-        rel = p.relative_to(REPO).as_posix()
-        if rel in OFFICIAL_IGNORES or "__pycache__" in rel:
-            continue
-        out.append(rel)
-    return out
+    """The shard universe: every module the official command imports, plus (as a
+    cross-check) every file that owns a collected node."""
+    from_nodes = {node.split("::", 1)[0] for node in official_collection()}
+    mods = set(official_modules())
+    missing = from_nodes - mods
+    if missing:
+        raise SystemExit(f"node files not seen by the module hook: {sorted(missing)[:5]}")
+    return sorted(mods)
 
 
 def shard_of(rel: str) -> str:
@@ -134,7 +190,7 @@ def shard_files() -> dict[str, list[str]]:
     return out
 
 
-def pytest_args() -> list[str]:
+def official_official_pytest_args() -> list[str]:
     args = [f"--ignore={x}" for x in OFFICIAL_IGNORES]
     for node in CI_DESELECT:
         args += ["--deselect", node]
@@ -142,9 +198,11 @@ def pytest_args() -> list[str]:
 
 
 def _collect(paths: list[str], extra: list[str] | None = None) -> set[str]:
-    """Node IDs pytest collects for `paths` (official ignores/deselects applied)."""
+    """Node IDs pytest collects for `paths` (official ignores/deselects applied).
+    An empty `paths` means repository-root discovery, exactly like the official
+    command."""
     cmd = [sys.executable, "-m", "pytest", "-q", "--collect-only", "-p", "no:cacheprovider",
-           *pytest_args(), *(extra or []), *paths]
+           *official_official_pytest_args(), *(extra or []), *paths]
     res = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     if res.returncode not in (0, 5):
         sys.stderr.write(res.stdout[-4000:] + res.stderr[-2000:])
@@ -156,11 +214,11 @@ def verify() -> int:
     """Collection equivalence, exactly as CI executes it:
 
         UNION over shards of collect(shard files, -m "not serial")
-        UNION            collect(tests,       -m "serial")
-        ==               collect(tests)   (the official command + CI deselects)
+        UNION            collect(<repo root>, -m "serial")
+        ==               collect(<repo root>)   (the official command + CI deselects)
 
     with every phase pairwise disjoint (no node runs twice)."""
-    official = _collect(["tests"])
+    official = set(official_collection())
     union: set[str] = set()
     counts: dict[str, int] = {}
     ok = True
@@ -172,7 +230,7 @@ def verify() -> int:
             ok = False
             print(f"DUPLICATE across shards ({name}): {sorted(dup)[:5]} ...")
         union |= ids
-    serial = _collect(["tests"], ["-m", "serial"])
+    serial = _collect([], ["-m", "serial"])
     dup = union & serial
     if dup:
         ok = False
@@ -189,6 +247,14 @@ def verify() -> int:
             print(f"{label}: {len(s)}")
             for n in sorted(s)[:20]:
                 print("   ", n)
+    mods = official_modules()
+    sharded = {f for files in shard_files().values() for f in files}
+    unsharded = set(mods) - sharded
+    if unsharded:
+        ok = False
+        print(f"IMPORTED MODULES NOT IN ANY SHARD: {sorted(unsharded)}")
+    print(f"OFFICIAL_IMPORTED_MODULE_COUNT={len(mods)}  (outside tests/: "
+          f"{sorted(m for m in mods if not m.startswith('tests/'))})")
     print(f"OFFICIAL_COLLECTION_NODE_COUNT={len(official)}")
     print(f"ACCELERATED_COLLECTION_NODE_COUNT={len(union)}")
     for name in SHARD_NAMES:
@@ -198,7 +264,7 @@ def verify() -> int:
 
 
 def serial_count() -> int:
-    ids = _collect(["tests"], ["-m", "serial"])
+    ids = _collect([], ["-m", "serial"])
     print(len(ids))
     return 0
 
@@ -222,7 +288,7 @@ def main(argv: list[str]) -> int:
         print("\n".join(shard_files()[rest[0]]))
         return 0
     if cmd == "pytest-args":
-        print(" ".join(pytest_args()))
+        print(" ".join(official_official_pytest_args()))
         return 0
     if cmd == "verify":
         return verify()

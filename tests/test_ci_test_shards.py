@@ -18,11 +18,20 @@ WORKFLOW = REPO / ".github" / "workflows" / "northstar-ci.yml"
 PYTEST_INI = REPO / "pytest.ini"
 
 
+_MODULE = None
+
+
 def _load():
-    spec = importlib.util.spec_from_file_location("ci_test_shards", REPO / "scripts" / "ci_test_shards.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Load the helper once per test session: its universe functions run pytest
+    collection subprocesses (cached inside the module), so sharing one module
+    object keeps this file fast."""
+    global _MODULE
+    if _MODULE is None:
+        spec = importlib.util.spec_from_file_location("ci_test_shards", REPO / "scripts" / "ci_test_shards.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _MODULE = mod
+    return _MODULE
 
 
 def test_every_official_test_file_belongs_to_exactly_one_shard():
@@ -44,7 +53,20 @@ def test_catch_all_shard_prevents_silent_drops(tmp_path, monkeypatch):
     m = _load()
     assert m.shard_of("tests/test_zzz_totally_new_subsystem.py") == "core"
     assert m.shard_of("tests/some_new_dir/test_thing.py") == "core"
+    assert m.shard_of("test_demo.py") == "core"            # repository root
+    assert m.shard_of("tools/smoke_test.py") == "core"     # out of tree
     assert m.SHARD_NAMES[-1] == "core"
+
+
+def test_universe_is_repository_root_discovery_not_only_tests_dir():
+    """The official command has no path operand, so pytest discovers from the
+    repository root; files outside tests/ must be in the universe (Codex P1)."""
+    m = _load()
+    files = m.official_test_files()
+    outside = [f for f in files if not f.startswith("tests/")]
+    assert outside, "expected root-level / tools test files in the universe"
+    for f in outside:
+        assert m.shard_of(f) == "core", f
 
 
 def test_official_ignores_are_not_sharded_and_deselects_point_at_real_files():

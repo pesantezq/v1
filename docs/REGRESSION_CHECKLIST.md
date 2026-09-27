@@ -40,7 +40,9 @@ runtime dependency and is inert unless `-n` is passed.
   (`pytest.ini`; nine tests that write shared checkout files, each justified
   at its marker);
 - `python scripts/ci_test_shards.py verify` proves by exact node ID that the
-  union of the shards equals the official collection, with no duplicates; the
+  union of the shards equals the official collection -- pytest's repository-root
+  discovery with no path operand, so root-level and `tools/` test files count --
+  with no duplicates; the
   CI governance job runs it on every push and `tests/test_ci_test_shards.py`
   pins the static contract (every test file in exactly one shard, `core` is
   the catch-all, workflow matrix == shard names, deselect list shared);
