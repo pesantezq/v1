@@ -60,6 +60,13 @@ class OutputNamespace(str, Enum):
     # outcomes, scorecard/calibration, and health for the curated ETF baskets.
     # Never feeds decision_plan.json or the production decision engine.
     WEEKLY_ETF_BUNDLES  = "weekly_etf_bundles"
+    # ── VS-002 frozen evidence package (added 2026-09-27) ──────────────────
+    # Immutable, content-addressed dividend-adjusted price-evidence packages for
+    # the bounded VS-002 mission, published under outputs/vs002_evidence/. This
+    # namespace governs per-FILE artifact writes; the runner keeps its stronger
+    # package-DIRECTORY atomic publication (staging -> validate -> os.replace ->
+    # immutable packages/<id>/) layered on top.
+    VS002_EVIDENCE      = "vs002_evidence"
 
 
 class DataGovernanceError(Exception):
@@ -93,6 +100,7 @@ _NAMESPACE_SUBDIR: dict[OutputNamespace, str] = {
     OutputNamespace.PROMOTION_REVIEW:    "promotion_review",
     OutputNamespace.PROMOTION_APPROVALS: "promotion_approvals",
     OutputNamespace.WEEKLY_ETF_BUNDLES:  "weekly_etf_bundles",
+    OutputNamespace.VS002_EVIDENCE:      "vs002_evidence",
 }
 
 # Namespaces that include user_id as a path segment
@@ -289,6 +297,49 @@ def safe_write_json(
     )
 
 
+def safe_write_namespace_path(
+    namespace: OutputNamespace,
+    target_path: Path | str,
+    content: str,
+    user_id: str = "owner",
+    base_dir: Path | str = "outputs",
+    encoding: str = "utf-8",
+) -> Path:
+    """Atomically write *content* to *target_path*, requiring it to resolve
+    strictly beneath *namespace*'s root under *base_dir*.
+
+    Unlike :func:`safe_write_text` (which takes a namespace-RELATIVE filename and
+    constructs the path), this accepts a caller-constructed path — for writers
+    that already compute nested destinations, e.g. the VS-002 evidence builder
+    writing into a per-run ``.staging-<run-id>/`` directory — and enforces the
+    same containment guarantee via :func:`validate_output_path`, which resolves
+    ``..`` and symlinks before comparison so traversal and symlink escapes fail
+    closed (:exc:`DataGovernanceError`).
+
+    The write is atomic: a temp file in the SAME destination directory, then
+    :func:`os.replace`, and the temp is cleaned up on any failure. This per-file
+    atomicity is ADDITIVE — it never replaces a higher-level package-directory
+    validation/publication transaction the caller performs on top.
+    """
+    resolved = validate_output_path(
+        namespace, target_path, user_id=user_id, base_dir=base_dir)
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(resolved.parent), prefix=f".{resolved.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(content)
+        os.replace(tmp_name, resolved)
+    except BaseException:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return resolved
+
+
 def namespace_for_existing_path(path: Path | str) -> OutputNamespace | None:
     """
     Detect which namespace *path* belongs to by inspecting its components.
@@ -385,5 +436,13 @@ def get_policies(base_dir: Path | str = "outputs") -> dict[OutputNamespace, Outp
             description="Standalone observe-only weekly ETF bundle watchlist: "
                         "analysis, frozen predictions, matured outcomes, scorecard, "
                         "calibration, and health — never feeds the decision engine",
+        ),
+        OutputNamespace.VS002_EVIDENCE: OutputPathPolicy(
+            namespace=OutputNamespace.VS002_EVIDENCE,
+            root=base / "vs002_evidence",
+            description="Immutable, content-addressed VS-002 dividend-adjusted "
+                        "price-evidence packages (experimental_noncanonical). "
+                        "Per-file artifact writes are governed; the runner's "
+                        "package-directory atomic publication stays on top.",
         ),
     }
