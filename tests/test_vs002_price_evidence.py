@@ -93,7 +93,7 @@ def test_unadjusted_benchmark_masquerade_fails_split_dividend_battery(tmp_path: 
         if sym != BENCH:
             return rows
         return [{**r, "adjClose": r["close"]} for r in rows]
-    with pytest.raises(B.BuildError, match="NO adjustment"):
+    with pytest.raises(B.BuildError, match="NO dividend adjustment"):
         _package(tmp_path,
                  provider=SyntheticAdjustedProvider(mutate=strip_adjustment))
 
@@ -102,12 +102,12 @@ def test_split_semantics_mutation_fails(tmp_path: Path):
     """An 'adjusted' series that jumps WITH the split (ratio step down in
     time) is an artificial discontinuity no real corporate action produces."""
     def break_split(sym, rows):
-        if sym != "AAPL":
+        if sym != BENCH:
             return rows
         rows = [dict(r) for r in rows]
-        # one mid-series bar whose adjusted close dips and recovers: the
-        # adjustment ratio decreases going forward in time, which no genuine
-        # split or dividend adjustment can produce
+        # one mid-series benchmark bar whose adjusted close dips: the
+        # dividend-adjustment factor (adjClose_divadj / close_full) decreases
+        # going forward in time, which no genuine corporate action can produce
         rows[len(rows) // 2]["adjClose"] *= 0.5
         return rows
     with pytest.raises(B.BuildError, match="artificial discontinuity|not ~1"):
@@ -166,15 +166,15 @@ def test_duplicate_session_is_refused(tmp_path: Path):
 def test_251_prior_sessions_do_not_satisfy_the_252_gate():
     dates = _dates(SESSIONS)
     panel = {
-        BENCH: [C.BarRow(BENCH, d, 1.0, 1.0, 1) for d in dates],
-        "AAPL": [C.BarRow("AAPL", d, 1.0, 1.0, 1) for d in dates[-252:]],
+        BENCH: [C.BarRow(BENCH, d, 1.0, 1) for d in dates],
+        "AAPL": [C.BarRow("AAPL", d, 1.0, 1) for d in dates[-252:]],
     }
     earliest = {"AAPL": dates[-1]}     # 251 strictly-prior sessions exist
     eligible, excluded = B.bar_eligibility(panel, earliest)
     assert eligible == []
     assert "251 prior sessions" in excluded["AAPL"]
     # ...and 252 does satisfy it: same rule, one more session.
-    panel["AAPL"] = [C.BarRow("AAPL", d, 1.0, 1.0, 1) for d in dates[-253:]]
+    panel["AAPL"] = [C.BarRow("AAPL", d, 1.0, 1) for d in dates[-253:]]
     eligible, _ = B.bar_eligibility(panel, earliest)
     assert eligible == ["AAPL"]
 
@@ -208,7 +208,7 @@ def test_missing_benchmark_bars_refuse_the_build(tmp_path: Path):
 
 
 @pytest.mark.parametrize("field, bad", [
-    ("close", -1.0), ("close", 0.0), ("adjClose", float("nan")),
+    ("adjClose", -1.0), ("adjClose", 0.0), ("adjClose", float("nan")),
     ("adjClose", None), ("volume", None),
 ])
 def test_malformed_values_are_refused(tmp_path: Path, field, bad):

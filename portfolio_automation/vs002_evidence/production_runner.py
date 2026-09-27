@@ -121,11 +121,22 @@ class StrictLiveAcquirer:
         self._plan = list(plan)
         self._planset = set(self._plan)
         self._done: list[str] = []
+        self._companion_done = False
+        # Both authorized endpoint classes consume ONE mission budget: the 22
+        # dividend-adjusted acquisitions plus exactly ONE benchmark /full
+        # companion witness == a hard cap of 23 outbound requests, no 24th.
+        self._max_total = len(self._plan) + 1
         self.attempts: list[dict[str, Any]] = []
 
-    def _record_attempt(self, symbol: str) -> None:
+    def _record_attempt(self, symbol: str, endpoint_class: str) -> None:
         self.attempts.append(
-            {"n": len(self.attempts) + 1, "symbol": symbol, "success": None})
+            {"n": len(self.attempts) + 1, "symbol": symbol,
+             "endpoint_class": endpoint_class, "success": None})
+
+    def _mark_last(self, sym: str, ok: bool) -> None:
+        if (self.attempts and self.attempts[-1]["symbol"] == sym
+                and self.attempts[-1]["success"] is None):
+            self.attempts[-1]["success"] = ok
 
     def get_historical_prices_dividend_adjusted(self, symbol: str) -> list[dict]:
         sym = str(symbol).upper()
@@ -141,20 +152,55 @@ class StrictLiveAcquirer:
                 f"benchmark {self._plan[0]} must be acquired first; got {sym}")
         if len(self._done) >= len(self._plan):
             raise StrictLiveAcquisitionError(
-                f"acquisition cap ({len(self._plan)}) reached; a further "
-                f"request is refused — no 23rd acquisition is possible")
+                f"dividend-adjusted acquisition cap ({len(self._plan)}) reached; "
+                f"a further request is refused — no 23rd adjusted acquisition")
+        if len(self.attempts) >= self._max_total:
+            raise StrictLiveAcquisitionError(
+                f"total outbound cap ({self._max_total}) reached — no 24th "
+                f"request of any kind is possible")
         self._done.append(sym)
         try:
             rows = self._client.get_dividend_adjusted_bars_strict_live(
-                sym, on_attempt=self._record_attempt)
+                sym, on_attempt=lambda s: self._record_attempt(
+                    s, "dividend_adjusted"))
         except Exception:
-            if (self.attempts and self.attempts[-1]["symbol"] == sym
-                    and self.attempts[-1]["success"] is None):
-                self.attempts[-1]["success"] = False
+            self._mark_last(sym, False)
             raise
-        if (self.attempts and self.attempts[-1]["symbol"] == sym
-                and self.attempts[-1]["success"] is None):
-            self.attempts[-1]["success"] = True
+        self._mark_last(sym, True)
+        return rows
+
+    def get_historical_prices(self, symbol: str) -> list[dict]:
+        """The COMPANION /full acquisition, benchmark-only, exactly once, AFTER
+        the benchmark dividend-adjusted acquisition and BEFORE any remaining
+        adjusted acquisition — so a witness mismatch costs at most two calls."""
+        sym = str(symbol).upper()
+        if sym != C.BENCHMARK:
+            raise StrictLiveAcquisitionError(
+                f"the /full companion witness is benchmark-only; {sym} is refused")
+        if self._companion_done:
+            raise StrictLiveAcquisitionError(
+                "the /full companion witness would be acquired more than once")
+        if not self._done or self._done[0] != self._plan[0]:
+            raise StrictLiveAcquisitionError(
+                f"benchmark {self._plan[0]} dividend-adjusted must be acquired "
+                f"before the /full companion witness")
+        if len(self._done) != 1:
+            raise StrictLiveAcquisitionError(
+                "the /full companion witness must precede the remaining "
+                "dividend-adjusted acquisitions")
+        if len(self.attempts) >= self._max_total:
+            raise StrictLiveAcquisitionError(
+                f"total outbound cap ({self._max_total}) reached — no 24th "
+                f"request of any kind is possible")
+        self._companion_done = True
+        try:
+            rows = self._client.get_full_bars_strict_live(
+                sym, on_attempt=lambda s: self._record_attempt(
+                    s, "companion_full"))
+        except Exception:
+            self._mark_last(sym, False)
+            raise
+        self._mark_last(sym, True)
         return rows
 
     @property
@@ -175,7 +221,7 @@ class RunnerResult:
     frozen_universe: list[str] = field(default_factory=list)
     acquisition_order: list[str] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
-    max_http_attempts: int = 22
+    max_http_attempts: int = 23
     package_staging_rel: Optional[str] = None
     package_path: Optional[str] = None
     package_id: Optional[str] = None
@@ -367,11 +413,12 @@ def run(repo_root: Any, *, code_sha: Optional[str] = None,
             res.exact_blockers = [
                 f"FMP client could not be constructed: {type(exc).__name__}: {exc}"]
             return res
-    if hasattr(client, "can_admit") and not client.can_admit(len(plan)):
+    if hasattr(client, "can_admit") and not client.can_admit(len(plan) + 1):
         res.result = BLOCKED_PREFLIGHT
         res.exact_blockers = [
-            f"daily FMP budget cannot admit the {len(plan)}-request mission "
-            f"before request #1 — refusing a partial panel"]
+            f"daily FMP budget cannot admit the {len(plan) + 1}-request mission "
+            f"(22 dividend-adjusted + 1 /full companion witness) before "
+            f"request #1 — refusing a partial panel"]
         return res
 
     # ---- acquisition + build (adjusted-bar mode) ------------------------

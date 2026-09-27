@@ -161,6 +161,10 @@ def evaluate(snap: ValidatedSnapshot) -> Readiness:
             reasons.append(
                 "adjusted beta convention is not the declared dividend-"
                 "adjusted convention")
+        if m.get("witness_result") != "PASS":
+            reasons.append(
+                "the dividend-adjustment witness did not pass — the adjusted "
+                "series' dividend-adjustment semantics are not established")
 
     # ---- ordering + convention ------------------------------------------
     for sym in sorted(eligible | {C.BENCHMARK}):

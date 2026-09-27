@@ -36,6 +36,7 @@ RETURNS_REL = "returns.json"
 BARS_REL = "bars.json"
 BARS_RAW_REL = "bars_raw.json"            # frozen provider input, pre-normalization
 BARS_SNAPSHOTS_REL = "bars_snapshots.json"  # canonical evidence identities
+BARS_WITNESS_RAW_REL = "bars_witness_raw.json"  # frozen companion /full benchmark witness
 MANIFEST_REL = "manifest.json"
 
 DEFAULT_DB_REL = "data/portfolio.db"
@@ -198,12 +199,19 @@ class FMPDividendAdjustedProvider:
     """
 
     endpoint = C.AUTHORIZED_ENDPOINT
+    companion_endpoint = C.COMPANION_ENDPOINT
 
     def __init__(self, client: Any) -> None:
         self._client = client
 
     def fetch(self, symbol: str) -> list[dict]:
         return self._client.get_historical_prices_dividend_adjusted(symbol)
+
+    def fetch_companion(self, symbol: str) -> list[dict]:
+        """The COMPANION /full acquisition, used ONLY to witness benchmark
+        dividend-adjustment semantics. Same strict-live client boundary as
+        :meth:`fetch`; it never feeds returns, eligibility, cohorts or beta."""
+        return self._client.get_historical_prices(symbol)
 
 
 def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
@@ -225,21 +233,19 @@ def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
                 f"{symbol}: provider row missing required field(s) {missing} — "
                 f"the claimed semantics cannot be established from weaker data")
         try:
-            close = float(row["close"])
             adj_close = float(row["adjClose"])
             volume = int(row["volume"])
         except (TypeError, ValueError) as exc:
             raise ProviderEvidenceError(f"{symbol}: malformed value in provider row: {exc}")
-        if not (close > 0 and adj_close > 0 and close == close
-                and adj_close == adj_close and close not in (float("inf"),)
+        if not (adj_close > 0 and adj_close == adj_close
                 and adj_close not in (float("inf"),)):
             raise ProviderEvidenceError(
-                f"{symbol}: non-finite or non-positive price on "
+                f"{symbol}: non-finite or non-positive adjusted price on "
                 f"{str(row['date'])[:10]}")
         if volume < 0:
             raise ProviderEvidenceError(f"{symbol}: negative volume on {str(row['date'])[:10]}")
         bars.append(C.BarRow(symbol=symbol, session_date=str(row["date"])[:10],
-                             close=close, adj_close=adj_close, volume=volume))
+                             adj_close=adj_close, volume=volume))
     bars.sort(key=lambda b: b.session_date)
     dates = [b.session_date for b in bars]
     if len(set(dates)) != len(dates):
@@ -248,49 +254,86 @@ def _normalize_bars(symbol: str, raw_rows: list[dict]) -> list[C.BarRow]:
     return bars
 
 
-def verify_adjustment_semantics(bars: list[C.BarRow], *,
-                                is_benchmark: bool) -> list[str]:
-    """The DIJ-0011 battery, deterministic and re-runnable by any consumer.
+def _companion_close_by_date(full_rows: Any) -> tuple[dict[str, float], list[str]]:
+    """Parse companion /full benchmark rows into {session_date: close}. Fails
+    closed on any missing/malformed close, mirroring :func:`_normalize_bars`."""
+    if not isinstance(full_rows, list) or not full_rows:
+        return {}, ["companion /full benchmark series is empty"]
+    out: dict[str, float] = {}
+    for row in full_rows:
+        if not isinstance(row, dict):
+            return {}, [f"companion /full row is malformed {type(row).__name__}"]
+        missing = [f for f in C.COMPANION_REQUIRED_FIELDS if row.get(f) is None]
+        if missing:
+            return {}, [f"companion /full row missing required field(s) {missing}"]
+        try:
+            close = float(row["close"])
+        except (TypeError, ValueError) as exc:
+            return {}, [f"companion /full row has a non-numeric close: {exc}"]
+        if not (close > 0 and close == close and close not in (float("inf"),)):
+            return {}, [f"companion /full non-finite/non-positive close on "
+                        f"{str(row['date'])[:10]}"]
+        out[str(row["date"])[:10]] = close
+    return out, []
 
-    What each check PROVES, stated exactly:
 
-    * ratio = adj_close/close is the cumulative adjustment factor for actions
-      AFTER that session. For a genuinely dividend/split-adjusted series it is
-      non-decreasing over time (every action shrinks earlier adjusted values
-      relative to close) and ~1.0 on the latest session. A violated monotone
-      is an artificial discontinuity; a final ratio away from 1 is a series
-      adjusted to some other vintage.
-    * splits and dividends both express as ratio steps, so the same two checks
-      cover both behaviours; the synthetic fixtures exercise each separately.
-    * the BENCHMARK must show at least one genuine adjustment over a long
-      span. SPY pays quarterly dividends; 200+ sessions of ratio == 1.0 is how
-      an unadjusted series masquerades as adjusted, and DIJ-0011 names exactly
-      this as the mutation that must fail. Single names may legitimately show
-      ratio == 1 (non-payers, no splits), so the witness is scoped to the
-      benchmark rather than generalized into a false positive.
+def verify_dividend_adjustment_witness(adjusted_benchmark: list[C.BarRow],
+                                       companion_full_rows: Any) -> list[str]:
+    """DIJ-0011 anti-masquerade witness, on the ONE series that can carry it.
+
+    The authorized dividend-adjusted endpoint emits no raw close, so the per-bar
+    adjustment factor is established against the COMPANION /full close of the
+    BENCHMARK only::
+
+        factor(t) = adj_close_dividend_adjusted(t) / close_full(t)
+
+    FMP's /full close is split-adjusted and adjClose is split+dividend adjusted,
+    so this factor isolates the DIVIDEND adjustment (splits cancel). It proves,
+    exactly:
+
+    * final factor ~1: the adjusted series is adjusted to the retrieval vintage;
+    * factor non-decreasing over time: no artificial reversal a real corporate
+      action cannot produce;
+    * at least one nontrivial adjustment over a long span: SPY pays quarterly
+      dividends, so a flat factor == 1 is an unadjusted series masquerading as
+      adjusted — the exact mutation DIJ-0011 names.
+
+    Single names may legitimately show no adjustment, so the witness is scoped to
+    the benchmark; the dataset identity is the same authorized endpoint for every
+    symbol, so one benchmark witness establishes the endpoint's semantics.
     """
+    if not adjusted_benchmark:
+        return ["witness: empty adjusted benchmark series"]
+    sym = adjusted_benchmark[0].symbol
+    close_by_date, problems = _companion_close_by_date(companion_full_rows)
+    if problems:
+        return [f"{sym} witness: {p}" for p in problems]
+    joined = [(b.session_date, b.adj_close, close_by_date[b.session_date])
+              for b in adjusted_benchmark if b.session_date in close_by_date]
+    if len(joined) < C.WITNESS_MIN_OVERLAP_SESSIONS:
+        return [f"{sym} witness: only {len(joined)} overlapping benchmark "
+                f"sessions between the adjusted and companion /full series; "
+                f">= {C.WITNESS_MIN_OVERLAP_SESSIONS} required to witness a "
+                f"dividend adjustment"]
+    joined.sort(key=lambda t: t[0])
+    factors = [adj / close for (_d, adj, close) in joined]
     findings: list[str] = []
-    if not bars:
-        return ["empty bar series"]
-    sym = bars[0].symbol
-    ratios = [b.adj_close / b.close for b in bars]
-    if abs(ratios[-1] - 1.0) > C.RATIO_FINAL_TOLERANCE:
+    if abs(factors[-1] - 1.0) > C.RATIO_FINAL_TOLERANCE:
         findings.append(
-            f"{sym}: final adj_close/close ratio {ratios[-1]:.6f} is not ~1 — "
-            f"the series is adjusted to some other vintage")
-    for i in range(1, len(ratios)):
-        if ratios[i] < ratios[i - 1] * (1.0 - C.RATIO_MONOTONE_TOLERANCE):
+            f"{sym}: final dividend-adjustment factor {factors[-1]:.6f} is not "
+            f"~1 — the adjusted series is adjusted to some other vintage")
+    for i in range(1, len(factors)):
+        if factors[i] < factors[i - 1] * (1.0 - C.RATIO_MONOTONE_TOLERANCE):
             findings.append(
-                f"{sym}: adjustment ratio decreases at {bars[i].session_date} "
-                f"({ratios[i - 1]:.6f} -> {ratios[i]:.6f}) — an artificial "
+                f"{sym}: dividend-adjustment factor decreases at {joined[i][0]} "
+                f"({factors[i - 1]:.6f} -> {factors[i]:.6f}) — an artificial "
                 f"discontinuity no real corporate action produces")
             break
-    if is_benchmark and len(bars) >= 200:
-        if all(abs(r - 1.0) <= C.RATIO_MONOTONE_TOLERANCE for r in ratios):
-            findings.append(
-                f"{sym}: benchmark shows NO adjustment over {len(bars)} "
-                f"sessions — indistinguishable from an unadjusted series, so "
-                f"the dividend-adjusted claim is not established")
+    if all(abs(f - 1.0) <= C.RATIO_MONOTONE_TOLERANCE for f in factors):
+        findings.append(
+            f"{sym}: benchmark shows NO dividend adjustment over {len(factors)} "
+            f"sessions vs the companion /full series — indistinguishable from an "
+            f"unadjusted series, so the dividend-adjusted claim is not established")
     return findings
 
 
@@ -316,9 +359,7 @@ def _utc_now() -> datetime:
 def build_adjusted_bars(provider: Any, symbols: list[str], *,
                         clock: Any = _utc_now,
                         apply_gap_check: bool = True,
-                        benchmark_first: bool = True) -> tuple[
-                            dict[str, list[C.BarRow]], dict[str, list],
-                            dict[str, str], dict[str, datetime]]:
+                        benchmark_first: bool = True) -> dict[str, Any]:
     """Fetch + validate the panel through the provider boundary.
 
     Refuses, in order: a provider whose declared endpoint is not the authorized
@@ -343,6 +384,12 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
             f"provider declares endpoint {declared!r}, not the authorized "
             f"{C.AUTHORIZED_ENDPOINT!r} — endpoint substitution is refused, "
             f"never adopted")
+    companion_declared = getattr(provider, "companion_endpoint", None)
+    if companion_declared != C.COMPANION_ENDPOINT:
+        raise ProviderEvidenceError(
+            f"provider declares companion endpoint {companion_declared!r}, not "
+            f"the authorized {C.COMPANION_ENDPOINT!r} — companion substitution "
+            f"is refused, never adopted")
 
     ordered = sorted(set(symbols))
     if C.BENCHMARK not in ordered:
@@ -351,8 +398,8 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
     raw_responses: dict[str, list] = {}
     raw_digests: dict[str, str] = {}
     retrieved_at: dict[str, datetime] = {}
-    for sym in ([C.BENCHMARK] + [s for s in ordered if s != C.BENCHMARK]
-                if benchmark_first else ordered):
+
+    def _acquire(sym: str) -> list[C.BarRow]:
         raw = provider.fetch(sym)
         stamp = clock()
         if not isinstance(stamp, datetime) or stamp.tzinfo is None:
@@ -367,16 +414,39 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
                 f"({type(exc).__name__}: {exc}) — malformed evidence is "
                 f"refused, never coerced")
         bars = _normalize_bars(sym, raw)
-        findings = verify_adjustment_semantics(bars,
-                                               is_benchmark=sym == C.BENCHMARK)
-        if findings:
-            raise ProviderEvidenceError("; ".join(findings))
         panel[sym] = bars
         # The raw rows are frozen EXACTLY as returned — provider order,
         # unnormalized — so the consumer can recompute the digest and
         # re-derive the normalized bars from the same bytes.
         raw_responses[sym] = list(raw)
         retrieved_at[sym] = stamp
+        return bars
+
+    # 1. Benchmark dividend-adjusted FIRST (SPY == attempt #1).
+    benchmark_bars = _acquire(C.BENCHMARK)
+
+    # 2. Benchmark companion /full SECOND (attempt #2), then witness BEFORE any
+    #    further adjusted call, so a semantic mismatch costs at most TWO calls.
+    companion_raw = provider.fetch_companion(C.BENCHMARK)
+    companion_stamp = clock()
+    if not isinstance(companion_stamp, datetime) or companion_stamp.tzinfo is None:
+        raise BuildError(
+            f"{C.BENCHMARK} companion: acquisition clock returned "
+            f"{companion_stamp!r}, not a tz-aware datetime")
+    try:
+        companion_digest = C.artifact_digest(companion_raw)
+    except Exception as exc:
+        raise ProviderEvidenceError(
+            f"{C.BENCHMARK} companion: /full response is not canonicalizable "
+            f"({type(exc).__name__}: {exc}) — malformed evidence is refused")
+    witness_findings = verify_dividend_adjustment_witness(
+        benchmark_bars, companion_raw)
+    if witness_findings:
+        raise ProviderEvidenceError("; ".join(witness_findings))
+
+    # 3. Remaining adjusted symbols (attempts #3..), only after the witness.
+    for sym in [s for s in ordered if s != C.BENCHMARK]:
+        _acquire(sym)
 
     # The gap check is a property of the CONSUMED series. When the caller
     # decides eligibility separately (adjusted-bar mode fetches the whole
@@ -385,7 +455,30 @@ def build_adjusted_bars(provider: Any, symbols: list[str], *,
     # validation is deferred to gap_check_kept() over the kept set.
     if apply_gap_check:
         gap_check_kept(panel, {s for s in panel if s != C.BENCHMARK})
-    return panel, raw_responses, raw_digests, retrieved_at
+
+    close_by_date, _wp = _companion_close_by_date(companion_raw)
+    overlap = sorted(b.session_date for b in benchmark_bars
+                     if b.session_date in close_by_date)
+    witness = {
+        "companion_provider": C.SOURCE_PROVIDER,
+        "companion_endpoint": C.COMPANION_ENDPOINT,
+        "companion_dataset": C.COMPANION_SOURCE_DATASET,
+        "companion_symbol": C.COMPANION_WITNESS_SYMBOL,
+        "overlap_start": overlap[0] if overlap else None,
+        "overlap_end": overlap[-1] if overlap else None,
+        "overlap_sessions": len(overlap),
+        "result": "PASS",
+    }
+    return {
+        "panel": panel,
+        "raw_responses": raw_responses,
+        "raw_digests": raw_digests,
+        "retrieved_at": retrieved_at,
+        "companion_raw": list(companion_raw),
+        "companion_retrieved_at": companion_stamp,
+        "companion_digest": companion_digest,
+        "witness": witness,
+    }
 
 
 def gap_check_kept(panel: dict[str, list[C.BarRow]], kept: set[str]) -> None:
@@ -522,6 +615,7 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
     # behavior is preserved unchanged.
     bars_payload: list[dict[str, Any]] = []
     bars_raw_payload: dict[str, list] = {}
+    bars_witness_raw_payload: list = []
     bars_snapshots_payload: list[dict[str, Any]] = []
     bar_manifest: dict[str, Any] = {}
     stored_at: dict[str, str] = {}
@@ -572,9 +666,18 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
             if s_.ticker not in earliest_all or d < earliest_all[s_.ticker]:
                 earliest_all[s_.ticker] = d
 
-        panel, raw_responses, raw_digests, retrieved_at = build_adjusted_bars(
+        _acq = build_adjusted_bars(
             bar_provider, sorted(set(C.FROZEN_UNIVERSE) | {C.BENCHMARK}),
             clock=bar_clock or _utc_now, apply_gap_check=False)
+        panel = _acq["panel"]
+        raw_responses = _acq["raw_responses"]
+        raw_digests = _acq["raw_digests"]
+        retrieved_at = _acq["retrieved_at"]
+        bars_witness_raw_payload = list(_acq["companion_raw"])
+        companion_retrieved_at = _acq["companion_retrieved_at"].astimezone(
+            timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        companion_digest = _acq["companion_digest"]
+        witness_meta = _acq["witness"]
         bar_eligible, bar_excluded = bar_eligibility(panel, earliest_all)
         if not bar_eligible:
             raise BuildError(
@@ -659,6 +762,21 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
             "adjusted_pit_certification_scope":
                 C.ADJUSTED_PIT_CERTIFICATION_SCOPE,
             "risk_free_rate_7d": dict(C.RISK_FREE_RATE_7D_ASSUMPTION),
+            # Companion dividend-adjustment witness (benchmark only). It NEVER
+            # participates in eligibility, returns, cohorts or beta; it proves
+            # the authorized adjusted series is genuinely dividend-adjusted.
+            "companion_provider": witness_meta["companion_provider"],
+            "companion_endpoint": witness_meta["companion_endpoint"],
+            "companion_dataset": witness_meta["companion_dataset"],
+            "companion_symbol": witness_meta["companion_symbol"],
+            "companion_retrieved_at": companion_retrieved_at,
+            "companion_raw_digest": companion_digest,
+            "witness_overlap": {
+                "start": witness_meta["overlap_start"],
+                "end": witness_meta["overlap_end"],
+                "sessions": witness_meta["overlap_sessions"],
+            },
+            "witness_result": witness_meta["result"],
         }
 
     signals_payload = [s.to_dict() for s in
@@ -719,7 +837,8 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
             RETURNS_REL: C.artifact_digest(returns_payload),
             **({BARS_REL: C.artifact_digest(bars_payload),
                 BARS_RAW_REL: C.artifact_digest(bars_raw_payload),
-                BARS_SNAPSHOTS_REL: C.artifact_digest(bars_snapshots_payload)}
+                BARS_SNAPSHOTS_REL: C.artifact_digest(bars_snapshots_payload),
+                BARS_WITNESS_RAW_REL: C.artifact_digest(bars_witness_raw_payload)}
                if bar_manifest else {}),
         },
         **bar_manifest,
@@ -736,6 +855,7 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
     if bar_manifest:
         _write(out_dir / BARS_REL, bars_payload)
         _write(out_dir / BARS_RAW_REL, bars_raw_payload)
+        _write(out_dir / BARS_WITNESS_RAW_REL, bars_witness_raw_payload)
         _write(out_dir / BARS_SNAPSHOTS_REL, bars_snapshots_payload)
     _write(out_dir / MANIFEST_REL, manifest)
     return manifest
