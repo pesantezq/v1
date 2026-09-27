@@ -74,7 +74,8 @@ _REQUIRED_SIGNAL_COLUMNS = (
 
 class StrictLiveAcquisitionError(RuntimeError):
     """A violation of the runner's acquisition contract (plan membership,
-    SPY-first, no duplicate, hard 22-request cap)."""
+    SPY-first, no duplicate, companion ordering, hard 23-request cap:
+    22 dividend-adjusted + 1 benchmark /full companion)."""
 
 
 # A run id is a SINGLE safe path component. It must never carry a separator or
@@ -101,15 +102,20 @@ def acquisition_plan() -> list[str]:
 class StrictLiveAcquirer:
     """The client the runner hands to ``FMPDividendAdjustedProvider``.
 
-    It exposes the one method the provider calls,
-    ``get_historical_prices_dividend_adjusted``, but routes it through the
-    strict-live FMP path and OWNS the acquisition invariants regardless of how
-    the builder drives the fetch loop:
+    It exposes the two methods the provider calls —
+    ``get_historical_prices_dividend_adjusted`` (the 22 authoritative
+    acquisitions) and ``get_historical_prices`` (the single benchmark ``/full``
+    companion witness) — routing both through the strict-live FMP path and
+    OWNING the acquisition invariants regardless of how the builder drives the
+    fetch loop:
 
-    * every symbol must be in the frozen plan;
+    * every dividend-adjusted symbol must be in the frozen plan;
     * the benchmark (SPY) must be acquired first;
     * no symbol is acquired twice;
-    * the number of outbound requests can never exceed the plan size (22).
+    * the companion witness is benchmark-only, at most once, after the SPY
+      dividend-adjusted acquisition and before the remaining ones;
+    * the two endpoint classes share ONE budget and the total outbound requests
+      can never exceed the plan size + 1 (23).
 
     ``attempts`` records the actual outbound HTTP requests (an attempt is logged
     immediately before the request goes out, so a request that then fails still
@@ -501,10 +507,11 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m portfolio_automation.vs002_evidence.production_runner",
         description="Governed production runner for the bounded VS-002 "
                     "historical-price evidence build. Acquires the frozen "
-                    "22-symbol dividend-adjusted panel strict-live (one HTTP "
-                    "attempt per symbol, no cache, no fallback), builds a fresh "
-                    "immutable package, validates it, and assesses readiness. "
-                    "It does NOT execute VS-002.")
+                    "22-symbol dividend-adjusted panel plus one SPY /full "
+                    "dividend-adjustment witness (23 strict-live HTTP attempts "
+                    "max, one per request, no cache, no retry, no fallback), "
+                    "builds a fresh immutable package, validates it, and "
+                    "assesses readiness. It does NOT execute VS-002.")
     p.add_argument("--repo-root", required=True,
                    help="deployed release root, e.g. /opt/stockbot/current")
     p.add_argument("--json", action="store_true",

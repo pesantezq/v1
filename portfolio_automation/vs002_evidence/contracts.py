@@ -35,7 +35,14 @@ from portfolio_automation.northstar.canonical import (
     canonical_dumps, content_hash, deterministic_id)
 from portfolio_automation.northstar.sources import DataSourceDescriptor
 
-SCHEMA_VERSION = "engineering.vs002_evidence.v0"
+# v1: the dividend-adjusted bar contract carries no raw ``close`` (the authorized
+# endpoint does not emit one) and the package gains the companion witness
+# artifact ``bars_witness_raw.json`` plus its manifest provenance. The version
+# bump makes the contract change EXPLICIT: a consumer rejects a mismatched
+# version outright instead of silently reporting a prior package as "missing"
+# the new artifact. No v0 dividend-adjusted package was ever published (B3
+# failed closed before publication), so no migration path is owed.
+SCHEMA_VERSION = "engineering.vs002_evidence.v1"
 SCHEMA_KIND = "experimental_noncanonical"
 
 #: The frozen VS-002 universe, derived from the durable VS-001 artifacts.
