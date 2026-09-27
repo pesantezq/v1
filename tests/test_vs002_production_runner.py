@@ -597,3 +597,54 @@ def test_f4_genuine_build_defect_is_fail_build(tmp_path):
     assert res.exit_code == 31
     assert client.calls == []                        # signals read before any fetch
     assert res.package_published is False
+
+
+# ===========================================================================
+# PR #55 P2: fail closed on a non-canonical VS-002 output root (the governed
+# VS002_EVIDENCE writer only permits writes beneath outputs/vs002_evidence).
+# ===========================================================================
+
+def test_canonical_out_root_still_passes(tmp_path):
+    res = _run(tmp_path, run_id="canon", out_root_rel=PR.B.DEFAULT_OUT_REL)
+    assert res.result == PR.PASS, res.exact_blockers
+    assert res.attempted_http_requests == 23     # 22 adjusted + 1 companion
+
+
+def test_non_canonical_out_root_blocks_before_acquisition(tmp_path):
+    _seed(tmp_path)
+    client = FakeStrictClient()
+    res = PR.run(tmp_path, client=client, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="ncanon",
+                 out_root_rel="outputs/other")
+    assert res.result == PR.BLOCKED_PREFLIGHT
+    assert any("non-canonical" in b and "vs002_evidence" in b
+               for b in res.exact_blockers), res.exact_blockers
+    # nothing acquired, nothing written
+    assert res.attempted_http_requests == 0
+    assert client.calls == []
+    assert not (tmp_path / "outputs" / "other").exists()
+    assert not (tmp_path / "outputs" / "vs002_evidence" / "packages").exists()
+    assert not list((tmp_path / "outputs").glob("**/.staging-*"))
+
+
+@pytest.mark.parametrize("bad_root", [
+    "outputs/other", "outputs", "../escape", "/tmp/abs_root",
+    "outputs/vs002_evidence/sub", "outputs/vs002_evidence/.staging-x"])
+def test_custom_roots_refused_before_any_fmp(tmp_path, bad_root):
+    _seed(tmp_path)
+    client = FakeStrictClient()
+    res = PR.run(tmp_path, client=client, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="c", out_root_rel=bad_root)
+    assert res.result == PR.BLOCKED_PREFLIGHT
+    assert res.attempted_http_requests == 0
+    assert client.calls == []                    # provider method never called
+
+
+def test_non_canonical_root_refused_even_without_injected_client(tmp_path):
+    """The refusal precedes client construction: no client/credential needed."""
+    _seed(tmp_path)
+    res = PR.run(tmp_path, credential_present=lambda: True,
+                 clock=fixed_clock(), code_sha="x", run_id="pre",
+                 out_root_rel="outputs/other")
+    assert res.result == PR.BLOCKED_PREFLIGHT
+    assert res.attempted_http_requests == 0

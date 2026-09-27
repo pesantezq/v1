@@ -2377,3 +2377,16 @@ recomputes the raw-response digest from `rows`, and independently replays the
 SPY dividend-adjustment witness from the frozen bytes. Any missing/false/
 malformed `observe_only`, any tamper of the rows or the envelope, or a schema
 version mismatch is refused (`SnapshotInvalid`).
+
+### Write governance
+Every artifact is written through `data_governance.safe_write_namespace_path`
+under the dedicated `VS002_EVIDENCE` output namespace
+(`outputs/vs002_evidence/`). Writes fail closed (`DataGovernanceError`) on any
+path that resolves outside that root (`..` traversal, absolute external path,
+symlink escape), and each file is written atomically (a temp file in the same
+directory, then `os.replace`). This per-file governance is ADDITIVE: the runner
+still builds into a per-run `.staging-<run-id>/`, validates the complete package,
+and only then atomically publishes the whole directory to the immutable,
+content-addressed `packages/<package_id>/`. Serialization is byte-for-byte
+unchanged (`indent=2`, sorted keys, trailing newline), so artifact digests and
+`package_id` are identical to the pre-governance writer.

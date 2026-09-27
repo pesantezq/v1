@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from portfolio_automation import data_governance as _dg
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence import snapshots as SN
 
@@ -857,17 +858,25 @@ def build(repo_root: Path, *, db_rel: str = DEFAULT_DB_REL,
 
     out_dir = root / out_rel
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write(out_dir / SIGNALS_REL, signals_payload)
-    _write(out_dir / RETURNS_REL, returns_payload)
+    _write(root, out_dir / SIGNALS_REL, signals_payload)
+    _write(root, out_dir / RETURNS_REL, returns_payload)
     if bar_manifest:
-        _write(out_dir / BARS_REL, bars_payload)
-        _write(out_dir / BARS_RAW_REL, bars_raw_payload)
-        _write(out_dir / BARS_WITNESS_RAW_REL, bars_witness_raw_payload)
-        _write(out_dir / BARS_SNAPSHOTS_REL, bars_snapshots_payload)
-    _write(out_dir / MANIFEST_REL, manifest)
+        _write(root, out_dir / BARS_REL, bars_payload)
+        _write(root, out_dir / BARS_RAW_REL, bars_raw_payload)
+        _write(root, out_dir / BARS_WITNESS_RAW_REL, bars_witness_raw_payload)
+        _write(root, out_dir / BARS_SNAPSHOTS_REL, bars_snapshots_payload)
+    _write(root, out_dir / MANIFEST_REL, manifest)
     return manifest
 
 
-def _write(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8")
+def _write(root: Path, path: Path, payload: Any) -> None:
+    """Governed, path-contained, atomic per-file write of ONE VS-002 evidence
+    artifact beneath the VS002_EVIDENCE namespace root
+    (``<root>/outputs/vs002_evidence``). Serialization is preserved byte-for-byte
+    (indent=2, sort_keys, trailing newline) so artifact digests and package_id
+    are unchanged — only the WRITE MECHANISM is governed. The runner's
+    package-directory atomic publication is layered on top of this."""
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _dg.safe_write_namespace_path(
+        _dg.OutputNamespace.VS002_EVIDENCE, path, content,
+        base_dir=Path(root) / "outputs")
