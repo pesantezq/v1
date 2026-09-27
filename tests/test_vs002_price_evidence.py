@@ -110,7 +110,7 @@ def test_split_semantics_mutation_fails(tmp_path: Path):
         # going forward in time, which no genuine corporate action can produce
         rows[len(rows) // 2]["adjClose"] *= 0.5
         return rows
-    with pytest.raises(B.BuildError, match="artificial discontinuity|not ~1"):
+    with pytest.raises(B.BuildError, match="materially decreases|artificial discontinuity|not ~1"):
         _package(tmp_path, provider=SyntheticAdjustedProvider(mutate=break_split))
 
 

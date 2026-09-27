@@ -2358,6 +2358,18 @@ Only `/stable/historical-price-eod/dividend-adjusted`; the consumed field is
 - endpoint `/stable/historical-price-eod/full`, symbol **SPY** only;
 - `factor = adjClose_dividend_adjusted / close_full` — witnesses the **dividend**
   adjustment (FMP `/full` close is split-adjusted, so splits cancel);
+- the witness requires: final factor ~1; at least one session whose factor
+  interval EXCLUDES 1.0 (a real historical adjustment); and **precision-aware
+  monotonicity**. Factor uncertainty intervals are derived from the frozen
+  evidence's own **series-wide** observed decimal precision — not per-row, since
+  JSON parsing drops lexical trailing zeros (`405.70`→`405.7`) — under a
+  **round-to-nearest** modelling assumption (`x` at quantum `q` denotes a true
+  value in `[x - q/2, x + q/2]`). This is an explicit conservative assumption,
+  **not** a provider-documented rounding guarantee. A backwards move is a defect
+  only when it exceeds that envelope, i.e. `current_factor_upper <
+  previous_factor_lower`; a boundary touch is not proven decreasing and passes.
+  There is no fixed monotonicity tolerance (the former `1e-6` operated below the
+  ~cent serialization resolution of the inputs and was removed);
 - **semantic evidence only**: it never participates in eligibility, returns,
   beta, cohort selection, signal inclusion or scoring;
 - persisted as an `observe_only: true` envelope so the advisory status is

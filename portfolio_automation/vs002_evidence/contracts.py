@@ -218,10 +218,14 @@ COMPANION_REQUIRED_FIELDS = ("date", "close")
 #: bound taken from the experiment's own contract, not invented continuity.
 MAX_SESSION_GAP = 5
 
-#: Tolerances for the adjustment-semantics battery. Relative, small, and only
-#: as forgiving as provider rounding requires.
+#: Tolerance for the FINAL adjustment-factor check only (the adjusted series
+#: must be adjusted to ~the retrieval vintage). The per-step MONOTONICITY check
+#: is deliberately NOT a fixed scalar: it is a precision-aware interval test
+#: derived from the frozen evidence's own observed decimal resolution (see
+#: ``builder._analyze_dividend_adjustment_witness``). A fixed 1e-6 monotone
+#: tolerance was empirically shown to operate below the ~cent serialization
+#: resolution of the inputs, so it was removed.
 RATIO_FINAL_TOLERANCE = 1e-4
-RATIO_MONOTONE_TOLERANCE = 1e-6
 
 #: The PIT claim for the bar panel, stated as narrowly as the returns claim.
 #: Two DIFFERENT truths, deliberately not conflated (operator ruling B1):
