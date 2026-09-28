@@ -104,6 +104,7 @@
       "interval": "same two-sided 95% Student-t CI",
       "net_no_action_return_pct": "outcome_return_7d_pct - 0.10 - rf_7d  (= outcome_return_7d_pct - 0.10 since rf_7d=0)"
     },
+    "observe_only": true,
     "population_binding": {
       "base_population": "evaluated non-SPY signal rows with an EXACT matured SPY timestamp match; used by H1 and NO_ACTION so both gates operate on the same forward-outcome population",
       "below_min_cohorts": "if exclusions reduce independent cohort count below 10 => EVIDENCE_INCONCLUSIVE",
@@ -124,8 +125,8 @@
       "chosen_method": "historical beta-adjusted excess return",
       "estimation_window_sessions": 252,
       "minimum_joint_observations": 60,
-      "pit_boundary": "only bars with known_at <= signal_time may enter the window; contemporaneous and forward bars structurally excluded via the EvidenceGateway",
-      "window_boundary": "ends STRICTLY before signal_time"
+      "pit_boundary": "TWO PIT truths per the package ADJUSTED_PIT_CERTIFICATION: (a) POSSESSION PIT \u2014 bar snapshots carry known_at=retrieved_at and are refused by the EvidenceGateway for any as_of before retrieval; (b) STRUCTURAL WINDOW SAFETY \u2014 the beta window admits ONLY sessions whose session_date is STRICTLY before the signal date. Beta estimation uses the STRUCTURAL session_date cutoff, NOT a known_at <= signal_time rule: the v1 package deliberately records known_at=retrieved_at (after the historical signal timestamps), so a known_at cutoff would exclude every historical bar and make beta uncomputable. No contemporaneous or forward session enters the window; no historical known_at is fabricated.",
+      "window_boundary": "the 252 trading sessions whose SESSION_DATE is STRICTLY before the signal's session date (structural window safety); this is the package's frozen ADJUSTED_PIT rule, not a known_at cutoff"
     },
     "row_arithmetic": {
       "expected_market_return_7d_pct": "rf_7d + beta_i,T * (recorded_SPY_outcome_7d_pct - rf_7d)",
@@ -149,9 +150,10 @@
   },
   "experiment_id": "VS-002",
   "freeze_digest_basis": "content_hash(canonical_dumps(binding_core)); the preregistration identity changes iff ANY binding scientific rule changes",
-  "generated_at": "2026-09-28T11:27:22Z",
-  "preregistration_freeze_digest": "958dcd4b401b3719cd46499a3b2102981b409990c2c132e317c9d1d9efcc1fb5",
-  "preregistration_id": "vs002prereg_90ea158d1c7b10214d0d8539393ec440",
+  "generated_at": "2026-09-28T11:41:41Z",
+  "observe_only": true,
+  "preregistration_freeze_digest": "b7da049bfb58c789b31adc3ee6c9eb5044b270a5a73bc7746c5edd048e48ad54",
+  "preregistration_id": "vs002prereg_2b3dcf7dba0b29304a5543f2d25efb4c",
   "schema_kind": "experimental_noncanonical",
   "schema_version": "engineering.vertical_slice.preregistration.v1",
   "status": "PREREGISTERED_NOT_EXECUTED",

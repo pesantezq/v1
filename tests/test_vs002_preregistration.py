@@ -130,7 +130,17 @@ def test_beta_window_min_obs(core):
     ra = core["risk_adjustment"]
     assert ra["estimation_window_sessions"] == 252
     assert ra["minimum_joint_observations"] == 60
-    assert "STRICTLY before signal_time" in ra["window_boundary"]
+    # structural session_date cutoff, NOT a known_at cutoff: the package records
+    # known_at=retrieved_at (post-signal), which a known_at rule would exclude
+    assert "SESSION_DATE is STRICTLY before" in ra["window_boundary"]
+    assert "structural window safety" in ra["window_boundary"].lower()
+    assert "STRUCTURAL session_date cutoff, NOT a" in ra["pit_boundary"]
+    assert "known_at=retrieved_at" in ra["pit_boundary"]
+
+
+def test_observe_only_marker_frozen(art, core):
+    assert art["observe_only"] is True
+    assert core["observe_only"] is True   # part of the frozen identity
 
 
 # ── cohort rule + >=10 ────────────────────────────────────────────────────
