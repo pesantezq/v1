@@ -799,3 +799,26 @@ def test_p1_all_beta_computable_matches_prior_semantics():
     assert res.population.base_population_rows == 36
     assert res.h1.cohort_count == res.no_action.cohort_count == 12   # no divergence when all computable
     assert res.criterion_outcome is CriterionOutcome.MET
+
+
+def test_beta_window_is_anchored_to_benchmark_not_stock_trailing_bars():
+    # Codex P1 (line 310): a SPARSE stock must NOT stretch the estimate past the 252
+    # BENCHMARK sessions. The stock omits the in-window range [base-252..base-201]
+    # and instead holds OLD bars [base-300..base-253] that lie OUTSIDE the 252-
+    # benchmark window; those must be excluded from beta.
+    binding = RR.verify_preregistration(PREREG)
+    base = 400000
+    boundary = _d(base)
+    spy_ords = list(range(base - 300, base))                      # 300 benchmark sessions
+    stock_ords = list(range(base - 300, base - 252)) + list(range(base - 200, base))
+    spy = _bars("SPY", _spy_adj_series([_d(o) for o in spy_ords]))
+    stock = _bars("AAA", _spy_adj_series([_d(o) for o in stock_ords]))
+    beta, n = RR.compute_beta(stock, spy, boundary_date=boundary,
+                              window_sessions=binding.beta_window_sessions,
+                              minimum_joint_observations=binding.minimum_joint_observations)
+    # only in-window recent pairs [base-200..base-1] count: 200 bars -> 199 pairs;
+    # the 48 OLD out-of-window stock bars are excluded (a stock-trailing-252 window
+    # would have wrongly admitted them).
+    assert n == 199
+    assert math.isfinite(beta)
+

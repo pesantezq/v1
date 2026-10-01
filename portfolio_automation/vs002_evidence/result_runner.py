@@ -303,17 +303,25 @@ def compute_beta(stock_bars: Sequence[Mapping[str, Any]],
     ``ReturnRow``. A session the stock is missing but SPY has (gaps up to
     ``MAX_SESSION_GAP`` are permitted) yields a mismatched pair that is EXCLUDED,
     never compressed into a benchmark daily return: no forward-fill, no
-    interpolation, no invented session. The window is the stock's trailing
-    ``window_sessions`` sessions before the signal date (matching the readiness
-    gate); the minimum is counted in MATCHED pair observations."""
-    sw = [b for b in stock_bars if str(b["session_date"]) < boundary_date]
-    sw = sw[-window_sessions:]
+    interpolation, no invented session.
+
+    The estimation window is the frozen ``window_boundary``: the ``window_sessions``
+    (252) MARKET trading sessions strictly before the signal date, anchored to the
+    BENCHMARK (SPY) sessions, NOT the stock's own bars. A stock that omits permitted
+    benchmark sessions must NOT stretch the estimate back past those 252 market
+    sessions, so only stock bars falling ON a benchmark-window session enter; the
+    minimum is counted in MATCHED pair observations."""
     bw = [b for b in spy_bars if str(b["session_date"]) < boundary_date]
-    if len(sw) < 2 or len(bw) < 2:
+    bw = bw[-window_sessions:]                       # the 252 benchmark market sessions
+    if len(bw) < 2:
         raise BetaUncomputable("beta_window_lt_2_bars")
-    stock_r = _consecutive_returns(sw)
+    window_dates = {str(b["session_date"]) for b in bw}
+    sw = [b for b in stock_bars if str(b["session_date"]) in window_dates]
+    if len(sw) < 2:
+        raise BetaUncomputable("beta_window_lt_2_bars")
+    stock_r = _consecutive_returns(sw)              # consecutive IN-WINDOW stock pairs
     spy_r = _consecutive_returns(bw)
-    pairs = sorted(set(stock_r) & set(spy_r))   # EXACT (prev, cur) identity only
+    pairs = sorted(set(stock_r) & set(spy_r))   # EXACT (prev, cur) within the 252-benchmark window
     if len(pairs) < minimum_joint_observations:
         raise BetaUncomputable("insufficient_joint_observations")
     ri = [stock_r[p] for p in pairs]
