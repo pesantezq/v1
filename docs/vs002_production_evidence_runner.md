@@ -101,8 +101,18 @@ The strict sequence, each step separately authorized. Status as of 2026-10-01:
    `b7da049b…`), merged via PR #58 @ `556e554a`. Grants no execution authority.
 5. **deterministic VS-002 result-runner IMPLEMENTATION** — build and certify the
    runner against the frozen preregistration + frozen package identity using
-   synthetic/mutation evidence. **NEXT bounded engineering mission**
-   (`northstar_vs002_result_runner`). Does NOT execute the real experiment.
+   synthetic/mutation evidence. This is the `northstar_vs002_result_runner`
+   mission. **Status (2026-10-01): IMPLEMENTED AS A CANDIDATE** on branch
+   `research/vs002-result-runner` — `portfolio_automation/vs002_evidence/`
+   `result_runner.py` + `result_contract.py`, certified with synthetic and
+   mutation fixtures only (`tests/test_vs002_result_runner*.py`). The runner
+   recomputes the preregistration freeze digest, binds the frozen package
+   identity as metadata, and computes H1/H2/NO_ACTION under the frozen rules.
+   The real frozen evidence package was **NOT opened, enumerated, validated, or
+   evaluated**, and NO real VS-002 result was computed. Candidate completion on
+   the branch is NOT durability: it is durable only after independent review and
+   merge to `main`, and it grants NO real-experiment-execution authority. Does
+   NOT execute the real experiment.
 6. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
    mission. NOT authorized.
 
