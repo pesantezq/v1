@@ -92,6 +92,85 @@ def test_phase_status_parses_to_mapping(phase):
     assert isinstance(phase, dict) and phase
 
 
+# ── Status vocabulary is self-declared and fail-closed ────────────────
+# phase_status.yaml declares its own phase-status vocabulary in the header
+# comment ("# Statuses: a | b | c | ..."). Codex P2 flagged that `preregistered`
+# was used as a phase status while that declaration omitted it. These guards pin
+# the declaration as authoritative: every PHASE status actually used must be a
+# declared term, and the check is proven to reject an undeclared value.
+#
+# Scope note: only PHASE-level statuses are governed by this vocabulary (the
+# program's own status and each entry under `phases`). Milestones, gates,
+# authorizations and attempted-designs carry their OWN state words
+# (e.g. SATISFIED, certification_candidate, COMPLETE,
+# NOT_EXECUTED_INSUFFICIENT_EVIDENCE) and are deliberately out of scope here.
+
+#: Phase statuses that MUST appear in the declared vocabulary for this change.
+REQUIRED_DECLARED_STATUSES = {"preregistered", "active", "complete", "not_started"}
+
+
+def _declared_status_vocabulary(text: str) -> set:
+    """Parse the '# Statuses: a | b | ...' declaration from the raw YAML text.
+
+    Reads the header line and any immediately following comment lines that
+    continue the pipe-delimited list (a comment line without a '|' ends it, so
+    the human-readable definition lines that follow are not mistaken for terms).
+    """
+    lines = text.splitlines()
+    starts = [i for i, l in enumerate(lines)
+              if l.lstrip("# ").startswith("Statuses:")]
+    assert starts, "no '# Statuses:' vocabulary declaration found in phase_status.yaml"
+    i = starts[0]
+    buf = lines[i].split("Statuses:", 1)[1]
+    j = i + 1
+    while j < len(lines) and lines[j].lstrip().startswith("#") and "|" in lines[j]:
+        buf += " " + lines[j].lstrip("# ").strip()
+        j += 1
+    terms = {t.strip() for t in buf.split("|")}
+    return {t for t in terms if t and all(c.isalpha() or c == "_" for c in t)}
+
+
+def _phase_statuses(program: dict) -> set:
+    """Every PHASE-level status actually used by the current program."""
+    used = set()
+    top = program.get("status")
+    if isinstance(top, str):
+        used.add(top)
+    for entry in (program.get("phases") or {}).values():
+        if isinstance(entry, dict) and isinstance(entry.get("status"), str):
+            used.add(entry["status"])
+    return used
+
+
+def test_status_vocabulary_declares_preregistered_and_core_terms():
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    missing = REQUIRED_DECLARED_STATUSES - declared
+    assert not missing, f"status vocabulary is missing declared terms: {sorted(missing)}"
+
+
+def test_every_phase_status_used_is_within_the_declared_vocabulary(phase):
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    used = _phase_statuses(phase["stockbot_northstar_redesign"])
+    assert used, "expected at least one phase status to be in use"
+    undeclared = used - declared
+    assert not undeclared, (
+        "phase statuses used but not declared in the vocabulary: "
+        f"{sorted(undeclared)} (declared: {sorted(declared)})"
+    )
+
+
+def test_status_vocabulary_check_is_fail_closed_against_unknown_values(phase):
+    """The guard above must REJECT drift, not merely pass today.
+
+    Injecting a status outside the declaration must be detected as undeclared;
+    if it were silently accepted, the vocabulary check would be worthless."""
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    bogus = "totally_unknown_status"
+    assert bogus not in declared
+    used_with_bogus = _phase_statuses(phase["stockbot_northstar_redesign"]) | {bogus}
+    assert used_with_bogus - declared == {bogus}
+
+
 # ── Program / phase / step ─────────────────────────────────────────────────
 
 
