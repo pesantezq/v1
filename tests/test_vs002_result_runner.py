@@ -695,3 +695,107 @@ def test_observations_embed_in_canonical_experiment_result_authority_screen():
         return ks
     res = _run(build_snapshot(_uniform_cohorts(10), betas={"AAA": 1.0}))
     assert not (_keys(res.to_observations()) & set(_AUTHORITY_KEYS))
+
+
+# ── P1: beta failure != base-population failure (frozen population_binding) ──
+# NO_ACTION does not use beta and shares the base population with H1, so a
+# beta-uncomputable row must REMAIN in the base population and NO_ACTION, and be
+# excluded only from the beta-dependent risk-adjusted statistics (H1/H2).
+
+def _short_bars(symbol, boundary_ord, n=30):
+    """A short consecutive adj-close series (all sessions strictly before the
+    boundary) that yields < MIN_JOINT_OBSERVATIONS exact pairs → beta uncomputable."""
+    ords = list(range(boundary_ord - (n + 10), boundary_ord - 10))
+    return _bars(symbol, _spy_adj_series([_d(o) for o in ords]))
+
+
+def test_p1_beta_failure_row_stays_in_base_and_no_action_only():
+    base = 739000
+    snap = build_snapshot([CohortSpec(base, 1.0, [RowSpec("BAD", 0.5, 3.5)])],
+                          betas={"BAD": 1.0}, extra_bars={"BAD": _short_bars("BAD", base)})
+    rows, excl, ev = RR._prepare_rows(snap, RR.verify_preregistration(PREREG))
+    assert len(rows) == 1                                   # retained in base population
+    r = rows[0]
+    assert r.net_risk_adjusted_excess_pct is None           # no H1 risk-adjusted value
+    assert r.net_no_action_return_pct == pytest.approx(3.5 - 0.1, abs=1e-9)  # NO_ACTION, no beta
+    assert excl["beta_insufficient_joint_observations"] == 1
+
+
+def test_p1_no_action_retains_beta_failed_rows():
+    base = 739000
+    cohorts = [CohortSpec(base + i * 8, 1.0,
+                          [RowSpec("AAA", 0.5, 0.3, time="10:00:00"),   # na = 0.2 (beta ok)
+                           RowSpec("BAD", 0.5, 5.1, time="11:00:00")])  # na = 5.0 (beta fails)
+               for i in range(10)]
+    snap = build_snapshot(cohorts, betas={"AAA": 1.0, "BAD": 1.0},
+                          extra_bars={"BAD": _short_bars("BAD", base)})
+    res = _run(snap)
+    # each cohort NO_ACTION mean = avg(0.2, 5.0) = 2.6 (BOTH rows); dropping BAD → 0.2
+    assert res.no_action.cohort_count == 10
+    assert res.no_action.mean_net_no_action_return == pytest.approx(2.6, abs=1e-6)
+    assert res.population.base_population_rows == 20        # beta-failed BAD rows retained
+    assert res.population.exclusion_counts.get("beta_insufficient_joint_observations", 0) == 10
+
+
+def test_p1_cohort_selection_uses_base_population_dates_not_beta_subset():
+    base = 739000
+    cohorts = [CohortSpec(base, 1.0, [RowSpec("AAA", 0.5, 3.5)]),
+               CohortSpec(base + 8, 1.0, [RowSpec("AAA", 0.5, 3.5)]),
+               CohortSpec(base + 16, 1.0, [RowSpec("BAD", 0.5, 3.5)])]  # beta-only cohort date
+    snap = build_snapshot(cohorts, betas={"AAA": 1.0, "BAD": 1.0},
+                          extra_bars={"BAD": _short_bars("BAD", base)})
+    res = _run(snap)
+    assert _d(base + 16) in res.population.selected_cohort_dates   # chosen from base dates
+    assert len(res.population.selected_cohort_dates) == 3
+
+
+def test_p1_h1_valid_cohort_count_excludes_beta_only_cohorts():
+    base = 739000
+    cohorts = [CohortSpec(base + i * 8, 1.0, [RowSpec("AAA", 0.5, 3.5)]) for i in range(10)]
+    cohorts.append(CohortSpec(base + 80, 1.0, [RowSpec("BAD", 0.5, 3.5)]))  # beta-only cohort
+    snap = build_snapshot(cohorts, betas={"AAA": 1.0, "BAD": 1.0},
+                          extra_bars={"BAD": _short_bars("BAD", base)})
+    res = _run(snap)
+    assert res.no_action.cohort_count == 11     # NO_ACTION keeps the beta-only cohort
+    assert res.h1.cohort_count == 10            # H1 has no risk-adjusted mean for that date
+
+
+def test_p1_mixed_cohort_no_action_uses_both_h1_uses_beta_only():
+    base = 739000
+    rows_mixed = [RowSpec("AAA", 0.5, 3.5, time="10:00:00"),   # beta ok → net_excess 2.4 ; na 3.4
+                  RowSpec("BAD", 0.5, 9.1, time="11:00:00")]   # beta fail → na 9.0 ; no risk-adj
+    snap = build_snapshot([CohortSpec(base, 1.0, rows_mixed)],
+                          betas={"AAA": 1.0, "BAD": 1.0},
+                          extra_bars={"BAD": _short_bars("BAD", base)})
+    binding = RR.verify_preregistration(PREREG)
+    rows, excl, ev = RR._prepare_rows(snap, binding)
+    by = RR._group_by_date(rows)
+    na_vals = sorted(round(r.net_no_action_return_pct, 4) for r in by[_d(base)])
+    h1_vals = [r.net_risk_adjusted_excess_pct for r in by[_d(base)]
+               if r.net_risk_adjusted_excess_pct is not None]
+    assert na_vals == [3.4, 9.0]                                  # NO_ACTION uses BOTH base rows
+    assert h1_vals == [pytest.approx(2.4, abs=1e-9)]             # H1 uses only the beta-computable row
+
+
+def test_p1_scored_beta_uncomputable_row_is_not_an_h2_pair():
+    base = 739000
+    rows = [RowSpec("AAA", 0.2, 3.3, time="10:00:00"),
+            RowSpec("AAA", 0.5, 3.5, time="11:00:00"),
+            RowSpec("BAD", 0.8, 3.7, time="12:00:00")]   # scored but beta fails → not an H2 pair
+    snap = build_snapshot([CohortSpec(base, 1.0, rows)],
+                          betas={"AAA": 1.0, "BAD": 1.0},
+                          extra_bars={"BAD": _short_bars("BAD", base)})
+    binding = RR.verify_preregistration(PREREG)
+    prows, excl, ev = RR._prepare_rows(snap, binding)
+    by = RR._group_by_date(prows)
+    valid_pairs = [(r.signal_score, r.net_risk_adjusted_excess_pct) for r in by[_d(base)]
+                   if r.signal_score is not None and r.net_risk_adjusted_excess_pct is not None]
+    assert len(valid_pairs) == 2                       # the beta-failed scored row is not a pair
+    assert RR._h2([_d(base)], by, binding.minimum_cohorts).valid_cohort_ic_count == 0
+
+
+def test_p1_all_beta_computable_matches_prior_semantics():
+    res = _run(build_snapshot(_uniform_cohorts(12, jitter=0.01), betas={"AAA": 1.0}))
+    assert res.population.base_population_rows == 36
+    assert res.h1.cohort_count == res.no_action.cohort_count == 12   # no divergence when all computable
+    assert res.criterion_outcome is CriterionOutcome.MET

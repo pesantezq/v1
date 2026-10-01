@@ -301,3 +301,21 @@ def test_importing_runner_does_no_module_level_io():
                     name = (f.attr if isinstance(f, ast.Attribute)
                             else f.id if isinstance(f, ast.Name) else "")
                     assert name not in io_names, f"{mod} does IO at module scope: {name}"
+
+
+def test_m21_beta_failure_does_not_empty_base_population_or_no_action(monkeypatch):
+    # P1 mutation guard: if beta failure `continue`d (removing the row entirely),
+    # the base population and NO_ACTION would be emptied. Force EVERY beta to fail
+    # and prove the base population + NO_ACTION are still fully populated and only
+    # the beta-dependent H1/H2 go INCONCLUSIVE. Restoring `except BetaUncomputable:
+    # continue` makes this test fail.
+    def _always_fail(*a, **k):
+        raise RR.BetaUncomputable("insufficient_joint_observations")
+    monkeypatch.setattr(RR, "compute_beta", _always_fail, raising=True)
+    res = _run(build_snapshot(_uniform_cohorts(12, jitter=0.01), betas={"AAA": 1.0}))
+    assert res.population.base_population_rows == 36          # every base row retained
+    assert res.population.exclusion_counts.get("beta_insufficient_joint_observations", 0) == 36
+    assert res.no_action.cohort_count == 12                  # NO_ACTION keeps all cohorts
+    assert res.no_action.status is not NoActionStatus.INCONCLUSIVE
+    assert res.h1.status is H1Status.INCONCLUSIVE            # no risk-adjusted rows → H1 inconclusive
+    assert res.h2.status is H2Status.INCONCLUSIVE

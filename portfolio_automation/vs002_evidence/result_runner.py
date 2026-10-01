@@ -335,8 +335,8 @@ def compute_beta(stock_bars: Sequence[Mapping[str, Any]],
 class _Row:
     cohort_date: str
     ticker: str
-    net_risk_adjusted_excess_pct: float
-    net_no_action_return_pct: float
+    net_risk_adjusted_excess_pct: Optional[float]  # None when beta is uncomputable
+    net_no_action_return_pct: float                # NEVER None (does not use beta)
     signal_score: Optional[float]
 
 
@@ -389,19 +389,25 @@ def _prepare_rows(snap: ValidatedSnapshot, binding: PreregBinding
             continue
         spy_ret = spy_out[signal_time]
         boundary = str(signal_time)[:10]
+        # NO_ACTION is a cash/rf return over the identical interval and does NOT
+        # use beta (frozen no_action.definition); it is valid for every base row.
+        net_no_action = stock_out - rf - friction
         try:
             beta, _n = compute_beta(
                 snap.bars_for(ticker), spy_bars, boundary_date=boundary,
                 window_sessions=binding.beta_window_sessions,
                 minimum_joint_observations=binding.minimum_joint_observations)
         except BetaUncomputable as e:
+            # Beta failure removes this row ONLY from the beta-dependent
+            # risk-adjusted statistics (H1/H2). The row REMAINS in the base
+            # population and in NO_ACTION: the frozen population_binding has H1
+            # and NO_ACTION operate on the SAME exact-matured-SPY-match population.
             excl[f"beta_{e.reason}"] += 1
-            continue
-
-        expected_market = rf + beta * (spy_ret - rf)
-        gross = stock_out - expected_market
-        net_excess = gross - friction
-        net_no_action = stock_out - rf - friction
+            net_excess = None
+        else:
+            expected_market = rf + beta * (spy_ret - rf)
+            gross = stock_out - expected_market
+            net_excess = gross - friction
 
         score = s.get("signal_score")
         if score is not None:
@@ -425,8 +431,12 @@ def _group_by_date(rows: Sequence[_Row]) -> dict[str, list[_Row]]:
 
 def _h1(selected: Sequence[str], by_date: Mapping[str, list[_Row]],
         min_cohorts: int) -> H1Result:
-    cohort_means = [_mean([r.net_risk_adjusted_excess_pct for r in by_date[d]])
-                    for d in selected]
+    cohort_means = []
+    for d in selected:
+        vals = [r.net_risk_adjusted_excess_pct for r in by_date[d]
+                if r.net_risk_adjusted_excess_pct is not None]
+        if vals:  # a cohort with no valid risk-adjusted row yields no H1 mean
+            cohort_means.append(_mean(vals))
     n = len(cohort_means)
     if n < min_cohorts:
         return H1Result(H1Status.INCONCLUSIVE, n, None, None)
@@ -455,7 +465,9 @@ def _h2(selected: Sequence[str], by_date: Mapping[str, list[_Row]],
     cohort_ics: list[float] = []
     for d in selected:
         pairs = [(r.signal_score, r.net_risk_adjusted_excess_pct)
-                 for r in by_date[d] if r.signal_score is not None]
+                 for r in by_date[d]
+                 if r.signal_score is not None
+                 and r.net_risk_adjusted_excess_pct is not None]
         if len(pairs) < 3:
             continue
         scores = [p[0] for p in pairs]
