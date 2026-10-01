@@ -438,6 +438,28 @@ def test_beta_252_session_cap_respected():
     assert n == 251   # 252 windowed bars → 251 consecutive returns
 
 
+def test_beta_aligns_stock_and_spy_on_identical_session_pairs_under_gaps():
+    # The package permits a kept symbol to miss up to MAX_SESSION_GAP sessions.
+    # When the stock is missing a middle session SPY has, returns must be derived
+    # over COMMON consecutive pairs — never a multi-session stock return paired
+    # against a single-session benchmark return (Codex PR #60 P1).
+    base = 100100
+    spy = [{"symbol": "SPY", "session_date": _d(base + i), "adj_close": 100.0 + i,
+            "volume": 1} for i in range(7)]            # d0..d6
+    stock_ords = [base + x for x in (0, 1, 2, 4, 5, 6)]  # missing d3 (base+3)
+    stock = [{"symbol": "AAA", "session_date": _d(o), "adj_close": 50.0 + (o - base),
+              "volume": 1} for o in stock_ords]
+    ri, rs, common = RR._aligned_adjusted_returns(stock, spy)
+    # common dates exclude the missing session; the gap is spanned by BOTH legs
+    assert common == [_d(base + x) for x in (0, 1, 2, 4, 5, 6)]
+    # the gap pair is (d2 -> d4) for BOTH series, not stock(d2->d4) vs spy(d3->d4)
+    gap_idx = common.index(_d(base + 4)) - 1
+    assert ri[gap_idx] == pytest.approx((50.0 + 4) / (50.0 + 2) - 1, abs=1e-12)  # 54/52-1
+    assert rs[gap_idx] == pytest.approx((100.0 + 4) / (100.0 + 2) - 1, abs=1e-12)  # 104/102-1
+    # every paired observation spans the identical interval for both legs
+    assert len(ri) == len(rs) == len(common) - 1
+
+
 # ───────────────────────────────── cohorts ──────────────────────────────────
 def test_greedy_cohorts_seven_day_boundary_and_six_day_rejection():
     # dates: 0, +6, +13 → greedy picks 0 and +13 (skips +6, only 6 days)
