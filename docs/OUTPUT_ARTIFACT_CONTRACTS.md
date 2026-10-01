@@ -2366,8 +2366,11 @@ Only `/stable/historical-price-eod/dividend-adjusted`; the consumed field is
   **round-to-nearest** modelling assumption (`x` at quantum `q` denotes a true
   value in `[x - q/2, x + q/2]`). This is an explicit conservative assumption,
   **not** a provider-documented rounding guarantee. A backwards move is a defect
-  only when it exceeds that envelope, i.e. `current_factor_upper <
-  previous_factor_lower`; a boundary touch is not proven decreasing and passes.
+  only when it exceeds that envelope, i.e. when the current session's
+  `factor_high` is below the **running maximum of all prior interval lows**
+  (monotone-interval feasibility — not merely the immediately previous
+  interval's low); a boundary touch (`current factor_high == running max of
+  prior lows`) is not proven decreasing and passes.
   There is no fixed monotonicity tolerance (the former `1e-6` operated below the
   ~cent serialization resolution of the inputs and was removed);
 - **semantic evidence only**: it never participates in eligibility, returns,
