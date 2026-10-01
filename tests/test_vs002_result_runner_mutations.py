@@ -214,8 +214,8 @@ def test_m17_h1_interval_uses_tabulated_t_not_normal_196():
     from tests.test_vs002_result_runner import _const_cohorts
     res = _run(build_snapshot(_const_cohorts(10, 2.0, spread=0.1), betas={"AAA": 1.0}))
     iv = res.h1.interval
-    assert iv.n == 10 and iv.t_critical == 2.262   # t(9), not 1.96
-    assert iv.ci_low == pytest.approx(iv.mean - 2.262 * iv.se, abs=1e-12)
+    assert iv.n == 10 and iv.t_critical == RC.student_t_critical(9)   # tabulated t(9), not 1.96
+    assert iv.ci_low == pytest.approx(iv.mean - RC.student_t_critical(9) * iv.se, abs=1e-12)
     assert iv.t_critical != pytest.approx(1.96, abs=1e-3)
 
 

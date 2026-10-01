@@ -16,6 +16,7 @@ artifact, never a claim made by this synthetic-certification mission.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Optional, Tuple
@@ -56,39 +57,131 @@ class NoActionStatus(str, Enum):
     INCONCLUSIVE = "NO_ACTION_INCONCLUSIVE"
 
 
-# ── Frozen tabulated two-sided 95% Student-t critical values t(0.975, df) ────
-# Deterministic table (NO scipy/statsmodels, NO normal approximation). The
-# VS-002 package legally produces at most ~a few dozen independent cohorts, so
-# df never exceeds this table in a real run; any df outside it FAILS CLOSED.
-STUDENT_T_0975: dict[int, float] = {
-    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
-    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
-    11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
-    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
-    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
-    26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
-    31: 2.040, 32: 2.037, 33: 2.035, 34: 2.032, 35: 2.030,
-    36: 2.028, 37: 2.026, 38: 2.024, 39: 2.023, 40: 2.021,
-}
-STUDENT_T_MAX_DF = max(STUDENT_T_0975)
+# ── Deterministic tabulated two-sided 95% Student-t critical values t(0.975, df) ─
+# The frozen interval rule mandates deterministic TABULATED Student-t 0.975
+# critical values with NO scipy/statsmodels and NO normal-1.96 approximation.
+#
+# The VS-002 independent-cohort count has NO authoritative finite maximum in
+# source: cohorts are greedy non-overlapping 7-day groups over the signal-
+# evidence window, and that window's length is not frozen by the preregistration
+# or the evidence contracts. This mission may not inspect the real package to
+# bound it. So instead of assuming a small df (the earlier "a few dozen cohorts"
+# claim was never established from source), the table is GENERATED over a
+# generous, explicit, REPRODUCIBLE domain by the pure-python quantile method
+# below, and the runner FAILS CLOSED above that domain rather than approximating.
+# STUDENT_T_MAX_DF is table coverage, NOT a claimed scientific maximum, and no
+# real-package contents informed its value.
+
+STUDENT_T_MAX_DF = 1000  # covers df up to 1000, i.e. >= 1001 independent
+#                          non-overlapping 7-day cohorts (~19 years of them) —
+#                          far beyond any realistic VS-002 signal window.
+
+
+def _regularized_incomplete_beta(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta I_x(a, b), Numerical-Recipes ``betai`` via the
+    Lentz continued fraction. Pure-python, deterministic, no dependency."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    ln_beta = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+    front = math.exp(ln_beta + a * math.log(x) + b * math.log(1.0 - x))
+
+    def _betacf(a: float, b: float, x: float) -> float:
+        tiny = 1e-300
+        qab = a + b
+        qap = a + 1.0
+        qam = a - 1.0
+        c = 1.0
+        d = 1.0 - qab * x / qap
+        if abs(d) < tiny:
+            d = tiny
+        d = 1.0 / d
+        h = d
+        for m in range(1, 300):
+            m2 = 2 * m
+            aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+            d = 1.0 + aa * d
+            if abs(d) < tiny:
+                d = tiny
+            c = 1.0 + aa / c
+            if abs(c) < tiny:
+                c = tiny
+            d = 1.0 / d
+            h *= d * c
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+            d = 1.0 + aa * d
+            if abs(d) < tiny:
+                d = tiny
+            c = 1.0 + aa / c
+            if abs(c) < tiny:
+                c = tiny
+            d = 1.0 / d
+            delta = d * c
+            h *= delta
+            if abs(delta - 1.0) < 1e-15:
+                break
+        return h
+
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1.0 - x) / b
+
+
+def _student_t_0975_quantile(df: int) -> float:
+    """Upper 0.975 critical value of Student's t with ``df`` degrees of freedom.
+
+    Uses the upper-tail identity P(T > t) = 0.5 * I_{df/(df+t^2)}(df/2, 1/2):
+    solves I_x(df/2, 1/2) = 0.05 for x by bisection, then t = sqrt(df*(1-x)/x).
+    Deterministic; no scipy/statsmodels."""
+    a = df / 2.0
+    b = 0.5
+    lo, hi = 1e-300, 1.0 - 1e-16
+    for _ in range(300):
+        mid = 0.5 * (lo + hi)
+        if _regularized_incomplete_beta(a, b, mid) > 0.05:
+            hi = mid
+        else:
+            lo = mid
+    x = 0.5 * (lo + hi)
+    return math.sqrt(df * (1.0 - x) / x)
+
+
+@lru_cache(maxsize=None)
+def _tabulated_t_0975(df: int) -> float:
+    """One deterministic tabulated t(0.975, df) value, stored to 6 decimals and
+    MEMOIZED — the cache is the table. Computed by the reproducible method above
+    (never scipy/statsmodels, never a normal approximation). Only the handful of
+    df actually used by a run are ever materialized, so import stays instant,
+    while the value for any df is fixed, reviewable, and reproducible."""
+    return round(_student_t_0975_quantile(df), 6)
 
 
 class StudentTTableError(ValueError):
-    """Raised when a required df is outside the frozen tabulated range.
+    """Raised when a required df is outside the tabulated domain.
 
     Fail-closed: the runner never substitutes a normal approximation or an
-    invented/interpolated critical value."""
+    invented/interpolated critical value; extending the domain is a reviewable
+    ruling, not a silent fallback."""
 
 
 def student_t_critical(df: int) -> float:
-    """t(0.975, df) from the frozen table, or fail closed."""
+    """t(0.975, df) from the deterministic tabulated domain, or fail closed."""
     if not isinstance(df, int) or df < 1:
         raise StudentTTableError(f"degrees of freedom must be a positive int, got {df!r}")
-    if df not in STUDENT_T_0975:
+    if df > STUDENT_T_MAX_DF:
         raise StudentTTableError(
-            f"df={df} is outside the tabulated Student-t range [1, {STUDENT_T_MAX_DF}]; "
-            "no normal approximation or interpolation is permitted")
-    return STUDENT_T_0975[df]
+            f"df={df} is outside the tabulated Student-t domain [1, {STUDENT_T_MAX_DF}]; "
+            "no normal approximation or interpolation is permitted — extending the domain "
+            "requires an explicit operator/scientific ruling")
+    return _tabulated_t_0975(df)
+
+
+def student_t_table() -> dict[int, float]:
+    """Materialize the full tabulated domain [1, STUDENT_T_MAX_DF] as a plain
+    dict. A reviewable static representation of the table; used by the
+    reproducibility test, never at import time."""
+    return {df: _tabulated_t_0975(df) for df in range(1, STUDENT_T_MAX_DF + 1)}
 
 
 def _finite(x: float, name: str) -> float:

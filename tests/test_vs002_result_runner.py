@@ -438,26 +438,73 @@ def test_beta_252_session_cap_respected():
     assert n == 251   # 252 windowed bars → 251 consecutive returns
 
 
-def test_beta_aligns_stock_and_spy_on_identical_session_pairs_under_gaps():
-    # The package permits a kept symbol to miss up to MAX_SESSION_GAP sessions.
-    # When the stock is missing a middle session SPY has, returns must be derived
-    # over COMMON consecutive pairs — never a multi-session stock return paired
-    # against a single-session benchmark return (Codex PR #60 P1).
+def test_beta_pairs_only_on_identical_prev_cur_session_pairs():
+    # REPAIR A case 1: when both series share a consecutive session grid, every
+    # native (prev, cur) pair matches and is included.
     base = 100100
-    spy = [{"symbol": "SPY", "session_date": _d(base + i), "adj_close": 100.0 + i,
-            "volume": 1} for i in range(7)]            # d0..d6
-    stock_ords = [base + x for x in (0, 1, 2, 4, 5, 6)]  # missing d3 (base+3)
-    stock = [{"symbol": "AAA", "session_date": _d(o), "adj_close": 50.0 + (o - base),
-              "volume": 1} for o in stock_ords]
-    ri, rs, common = RR._aligned_adjusted_returns(stock, spy)
-    # common dates exclude the missing session; the gap is spanned by BOTH legs
-    assert common == [_d(base + x) for x in (0, 1, 2, 4, 5, 6)]
-    # the gap pair is (d2 -> d4) for BOTH series, not stock(d2->d4) vs spy(d3->d4)
-    gap_idx = common.index(_d(base + 4)) - 1
-    assert ri[gap_idx] == pytest.approx((50.0 + 4) / (50.0 + 2) - 1, abs=1e-12)  # 54/52-1
-    assert rs[gap_idx] == pytest.approx((100.0 + 4) / (100.0 + 2) - 1, abs=1e-12)  # 104/102-1
-    # every paired observation spans the identical interval for both legs
-    assert len(ri) == len(rs) == len(common) - 1
+    ords = list(range(base, base + 6))
+    spy = _bars("SPY", {_d(o): 100.0 + i for i, o in enumerate(ords)})
+    stock = _bars("AAA", {_d(o): 50.0 + i for i, o in enumerate(ords)})
+    matched = set(RR._consecutive_returns(stock)) & set(RR._consecutive_returns(spy))
+    assert matched == {(_d(ords[i]), _d(ords[i + 1])) for i in range(len(ords) - 1)}
+
+
+def test_beta_excludes_pair_when_stock_misses_an_intermediate_benchmark_session():
+    # REPAIR A case 2: stock missing d3 → its native return is (d2 -> d4); SPY has
+    # (d2 -> d3) and (d3 -> d4). The mismatched (d2 -> d4) pair must be EXCLUDED,
+    # never compressed into a benchmark daily return.
+    base = 200000
+    spy_ords = list(range(base, base + 6))                 # d0..d5
+    stock_ords = [base, base + 1, base + 2, base + 4, base + 5]  # missing d3
+    spy = _bars("SPY", {_d(o): 100.0 + i for i, o in enumerate(spy_ords)})
+    stock = _bars("AAA", {_d(o): 50.0 + (o - base) for o in stock_ords})
+    sr = RR._consecutive_returns(stock)
+    br = RR._consecutive_returns(spy)
+    gap = (_d(base + 2), _d(base + 4))
+    assert gap in sr                                   # stock's native multi-session pair
+    assert gap not in br                               # SPY never has it
+    assert (_d(base + 2), _d(base + 3)) in br and (_d(base + 3), _d(base + 4)) in br
+    assert gap not in (set(sr) & set(br))              # EXCLUDED
+    assert (set(sr) & set(br)) == {(_d(base), _d(base + 1)),
+                                   (_d(base + 1), _d(base + 2)),
+                                   (_d(base + 4), _d(base + 5))}
+
+
+def test_beta_excludes_pair_when_benchmark_misses_an_intermediate_stock_session():
+    # REPAIR A case 3: symmetric — SPY missing d3; stock has (d2->d3),(d3->d4),
+    # SPY has (d2->d4). None of the three pair.
+    base = 210000
+    stock_ords = list(range(base, base + 6))
+    spy_ords = [base, base + 1, base + 2, base + 4, base + 5]  # SPY missing d3
+    stock = _bars("AAA", {_d(o): 50.0 + (o - base) for o in stock_ords})
+    spy = _bars("SPY", {_d(o): 100.0 + (o - base) for o in spy_ords})
+    sr = RR._consecutive_returns(stock)
+    br = RR._consecutive_returns(spy)
+    assert (_d(base + 2), _d(base + 4)) in br           # SPY's native multi-session pair
+    assert (_d(base + 2), _d(base + 3)) in sr and (_d(base + 3), _d(base + 4)) in sr
+    matched = set(sr) & set(br)
+    assert (_d(base + 2), _d(base + 4)) not in matched
+    assert (_d(base + 2), _d(base + 3)) not in matched
+    assert (_d(base + 3), _d(base + 4)) not in matched
+    assert matched == {(_d(base), _d(base + 1)), (_d(base + 1), _d(base + 2)),
+                       (_d(base + 4), _d(base + 5))}
+
+
+def test_beta_computable_when_enough_exact_pairs_survive_a_gap():
+    # REPAIR A case 4: a single intra-window gap drops exactly one pair; the rest
+    # (>=60) still pair exactly, so beta is computable over matched pairs only.
+    binding = RR.verify_preregistration(PREREG)
+    base = 300000
+    boundary = _d(base + 200)
+    spy_ords = list(range(base, base + 64))              # 64 sessions, 63 SPY pairs
+    stock_ords = [o for o in spy_ords if o != base + 30]  # one intra-window gap
+    spy = _bars("SPY", _spy_adj_series([_d(o) for o in spy_ords]))
+    stock = _bars("AAA", _spy_adj_series([_d(o) for o in stock_ords]))
+    beta, n = RR.compute_beta(stock, spy, boundary_date=boundary,
+                              window_sessions=binding.beta_window_sessions,
+                              minimum_joint_observations=binding.minimum_joint_observations)
+    assert n == 61   # 62 stock pairs minus the single gap pair SPY lacks
+    assert math.isfinite(beta)
 
 
 # ───────────────────────────────── cohorts ──────────────────────────────────
@@ -494,10 +541,21 @@ def test_cohorts_equal_weighted_despite_unequal_row_counts():
 
 
 # ─────────────────────────── Student-t table rules ──────────────────────────
-def test_student_t_table_exact_values():
-    assert RC.student_t_critical(9) == 2.262
-    assert RC.student_t_critical(19) == 2.093
-    assert RC.student_t_critical(29) == 2.045
+def test_student_t_table_reproduces_published_values():
+    # The deterministic generator reproduces the standard two-sided 95% (0.975)
+    # critical values across the domain, including well beyond "a few dozen" df.
+    anchors = {1: 12.706, 2: 4.303, 5: 2.571, 9: 2.262, 10: 2.228, 19: 2.093,
+               29: 2.045, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980,
+               200: 1.972, 500: 1.965, 1000: 1.962}
+    for df, v in anchors.items():
+        assert RC.student_t_critical(df) == pytest.approx(v, abs=6e-4)
+    # monotonic decreasing + deterministic (memoised) over a sample of the domain
+    sample = list(range(1, 41)) + [50, 100, 200, 500, 1000]
+    vals = [RC.student_t_critical(d) for d in sample]
+    assert all(vals[i] > vals[i + 1] for i in range(len(vals) - 1))
+    assert RC.student_t_critical(9) == RC.student_t_critical(9)
+    # the underlying quantile method itself reproduces an anchor (provenance)
+    assert round(RC._student_t_0975_quantile(9), 3) == 2.262
 
 
 def test_student_t_hand_computed_interval():
@@ -505,17 +563,21 @@ def test_student_t_hand_computed_interval():
     iv = RR.student_t_interval(values, minimum_n=10)
     assert iv.mean == pytest.approx(2.0, abs=1e-12)
     assert iv.se == pytest.approx(math.sqrt((10 / 9)) / math.sqrt(10), abs=1e-12)
-    assert iv.t_critical == 2.262
-    assert iv.ci_low == pytest.approx(2.0 - 2.262 * iv.se, abs=1e-12)
+    assert iv.t_critical == RC.student_t_critical(9)   # tabulated t(9)
+    assert iv.ci_low == pytest.approx(2.0 - RC.student_t_critical(9) * iv.se, abs=1e-12)
 
 
 def test_student_t_below_minimum_returns_none():
     assert RR.student_t_interval([1.0] * 9, minimum_n=10) is None
 
 
-def test_student_t_df_outside_table_fails_closed():
+def test_student_t_df_outside_tabulated_domain_fails_closed():
+    # df within the generous domain is valid (no artificial 40-cohort ceiling);
+    # beyond STUDENT_T_MAX_DF it FAILS CLOSED rather than approximating.
+    assert RC.student_t_critical(41) > 0            # was previously rejected; now valid
+    assert RC.student_t_critical(RC.STUDENT_T_MAX_DF) > 0
     with pytest.raises(RC.StudentTTableError):
-        RC.student_t_critical(41)   # 42 cohorts → df 41, outside table
+        RC.student_t_critical(RC.STUDENT_T_MAX_DF + 1)
     with pytest.raises(RC.StudentTTableError):
         RC.student_t_critical(0)
 

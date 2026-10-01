@@ -270,59 +270,64 @@ def spearman_rho(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
 
 
 # ────────────────────────────── beta estimation ─────────────────────────────
-def _aligned_adjusted_returns(stock_window_bars: Sequence[Mapping[str, Any]],
-                              spy_before_bars: Sequence[Mapping[str, Any]]
-                              ) -> tuple[list[float], list[float], list[str]]:
-    """Dividend-adjusted returns for the stock and SPY over IDENTICAL consecutive
-    session pairs.
+def _consecutive_returns(bars: Sequence[Mapping[str, Any]]
+                         ) -> dict[tuple[str, str], float]:
+    """A series' native dividend-adjusted DAILY returns, keyed by the EXACT
+    ``(prev_session_date, session_date)`` pair.
 
-    The two series are aligned on their COMMON session dates FIRST, then each
-    paired return spans the same ``[prev_common, common]`` interval for both
-    series. A session missing from one series (the package permits gaps up to
-    ``MAX_SESSION_GAP``) therefore can never pair a multi-session stock return
-    against a single-session benchmark return — the two legs of every pair span
-    exactly the same dates, or the observation does not exist."""
-    stock_px = {str(b["session_date"]): b["adj_close"] for b in stock_window_bars}
-    spy_px = {str(b["session_date"]): b["adj_close"] for b in spy_before_bars}
-    common = sorted(set(stock_px) & set(spy_px))
-    ri: list[float] = []
-    rs: list[float] = []
-    for k in range(1, len(common)):
-        dp, d = common[k - 1], common[k]
-        ri.append(C.derive_adjusted_return(stock_px[d], stock_px[dp]))
-        rs.append(C.derive_adjusted_return(spy_px[d], spy_px[dp]))
-    return ri, rs, common
+    This is identical to the evidence builder's ``adjusted_return_panel`` /
+    ``ReturnRow`` derivation: ``r = adj_close(cur)/adj_close(prev) - 1`` over
+    CONSECUTIVE bars within THIS series. A session the series is missing simply
+    makes its next return span the gap natively (``prev`` is the previous bar the
+    series actually has), and that return carries its own exact pair identity. A
+    return is never re-derived over another series' session grid."""
+    out: dict[tuple[str, str], float] = {}
+    for i in range(1, len(bars)):
+        prev_d = str(bars[i - 1]["session_date"])
+        cur_d = str(bars[i]["session_date"])
+        out[(prev_d, cur_d)] = C.derive_adjusted_return(
+            bars[i]["adj_close"], bars[i - 1]["adj_close"])
+    return out
 
 
 def compute_beta(stock_bars: Sequence[Mapping[str, Any]],
                  spy_bars: Sequence[Mapping[str, Any]],
                  *, boundary_date: str, window_sessions: int,
                  minimum_joint_observations: int) -> tuple[float, int]:
-    """beta_i = Cov(r_i, r_SPY) / Var(r_SPY) over dividend-adjusted daily returns
-    on sessions STRICTLY before the signal date (structural window), aligned on
-    identical consecutive session pairs (see :func:`_aligned_adjusted_returns`).
+    """beta_i = Cov(r_i, r_SPY) / Var(r_SPY) over dividend-adjusted DAILY returns
+    on sessions STRICTLY before the signal date (structural window).
 
-    The window is the stock's trailing ``window_sessions`` sessions before the
-    signal date (matching the readiness gate); SPY supplies prices on the common
-    dates only. The minimum is counted in PAIRED return observations."""
+    A stock return and a benchmark return form ONE joint observation only when
+    they span the IDENTICAL ``(prev_session_date, session_date)`` pair — the
+    frozen daily-return identity the evidence builder records on every
+    ``ReturnRow``. A session the stock is missing but SPY has (gaps up to
+    ``MAX_SESSION_GAP`` are permitted) yields a mismatched pair that is EXCLUDED,
+    never compressed into a benchmark daily return: no forward-fill, no
+    interpolation, no invented session. The window is the stock's trailing
+    ``window_sessions`` sessions before the signal date (matching the readiness
+    gate); the minimum is counted in MATCHED pair observations."""
     sw = [b for b in stock_bars if str(b["session_date"]) < boundary_date]
     sw = sw[-window_sessions:]
     bw = [b for b in spy_bars if str(b["session_date"]) < boundary_date]
     if len(sw) < 2 or len(bw) < 2:
         raise BetaUncomputable("beta_window_lt_2_bars")
-    ri, rs, _common = _aligned_adjusted_returns(sw, bw)
-    if len(ri) < minimum_joint_observations:
+    stock_r = _consecutive_returns(sw)
+    spy_r = _consecutive_returns(bw)
+    pairs = sorted(set(stock_r) & set(spy_r))   # EXACT (prev, cur) identity only
+    if len(pairs) < minimum_joint_observations:
         raise BetaUncomputable("insufficient_joint_observations")
+    ri = [stock_r[p] for p in pairs]
+    rs = [spy_r[p] for p in pairs]
     ms = _mean(rs)
     mi = _mean(ri)
     var = sum((x - ms) ** 2 for x in rs)
     if var <= 0:
         raise BetaUncomputable("zero_benchmark_variance")
-    cov = sum((ri[k] - mi) * (rs[k] - ms) for k in range(len(ri)))
+    cov = sum((ri[k] - mi) * (rs[k] - ms) for k in range(len(pairs)))
     beta = cov / var
     if not math.isfinite(beta):
         raise BetaUncomputable("non_finite_beta")
-    return beta, len(ri)
+    return beta, len(pairs)
 
 
 # ─────────────────────────────── row preparation ────────────────────────────
