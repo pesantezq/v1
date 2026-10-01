@@ -84,21 +84,29 @@ authorized transport mission, which selects **one** `package_id` (never
 
 ## Operator sequencing
 
-The strict sequence, each step separately authorized:
+The strict sequence, each step separately authorized. Status as of 2026-10-01:
 
-1. **production runner PASS** (this component) — builds, validates, and assesses
-   readiness on the VPS; publishes the immutable package. Does not transport.
-2. **explicit package transport is STILL A SEPARATE MISSION** — carries one
-   named `package_id` from production to the lab.
+1. **production runner PASS** (this component) — builds, validates, assesses
+   readiness on the VPS; publishes the immutable package. **DONE** — frozen
+   package `vs002evd_77469725f5592e6df33742b68a31ae1e` on production SHA `7f2d410`.
+2. **explicit package transport** — one named `package_id` from production to the
+   lab. **DONE** — byte-exact (transport digest `4e1f5a6f…`).
 3. **the lab independently validates** the exact `package_id`, artifact digests,
-   and EvidenceRefs (`consumer.validate` on the lab side).
-4. **only then may the VS-002 experiment be authorized** — a third, distinct
-   mission.
+   EvidenceRefs, witness and readiness (`consumer.validate` on the lab side).
+   **DONE** — `VS002_LAB_REVALIDATED=YES` (2026-09-28); witness PASS, readiness
+   `VS002_READY`.
+4. **final result-blind preregistration frozen** — the six operator rulings and
+   the exact statistical contract. **DONE** — `evals/vertical_slice/VS-002_preregistration.json`
+   (schema `engineering.vertical_slice.preregistration.v1`, freeze digest
+   `b7da049b…`), merged via PR #58 @ `556e554a`. Grants no execution authority.
+5. **deterministic VS-002 result-runner IMPLEMENTATION** — build and certify the
+   runner against the frozen preregistration + frozen package identity using
+   synthetic/mutation evidence. **NEXT bounded engineering mission**
+   (`northstar_vs002_result_runner`). Does NOT execute the real experiment.
+6. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
+   mission. NOT authorized.
 
-
-
-This runner produces and assesses a production evidence package. It does not
-transport it and does not run the experiment. After a `PASS`, the package is
-transferred to the lab and independently revalidated as a **separate**
-mission, and only then may the frozen VS-002 experiment be authorized — three
-distinct, separately authorized steps.
+The authoritative frozen experiment contract is the preregistration JSON in step
+4; this document summarizes the sequencing only and does not restate those rules.
+This runner produces and assesses a production evidence package; it does not
+transport it and does not run the experiment.

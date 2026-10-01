@@ -11,8 +11,13 @@
 # ---------------------------------------------------------------------------
 # STOCKBOT_NORTHSTAR_REDESIGN (current program, opened 2026-08-09)
 # Charter: docs/NORTHSTAR_REDESIGN.md. Authority: config/agent_policy.yaml.
-# Statuses: complete | active | ready | blocked | waiting_for_evidence |
-#           deferred | not_started | superseded
+# Statuses: complete | active | ready | blocked | preregistered |
+#           waiting_for_evidence | deferred | not_started | superseded
+#   preregistered (added 2026-10-01) — a design is frozen/committed and durable
+#     but NOT executed; e.g. the Vertical Slice after the VS-002 preregistration
+#     merged (PR #58): no result runner is built and no experiment has run.
+#     tests/test_northstar_authority.py asserts every phase status used here is
+#     within this declared vocabulary, fail-closed against unknown values.
 # NO future phase below is implemented. Phase 0A is NOT complete while its
 # CI milestone is outstanding.
 # ---------------------------------------------------------------------------
@@ -49,8 +54,15 @@ stockbot_northstar_redesign:
                                              # durable; the supervisor is NOT approved by it.
       evidence: docs/G1_SUPERVISOR_MEASUREMENT.md, evals/g1/formal/
   engineer_runtime_state:
-    mission_id: northstar_0c_historical_price_evidence_for_vs002
-                          # 2026-09-05 — repointed by explicit operator authorization.
+    mission_id: northstar_vs002_result_runner
+                          # 2026-10-01 — repointed: the historical-price-evidence prerequisite is COMPLETE
+                          # (frozen VS-002 evidence package durable + lab-revalidated; final
+                          # result-blind preregistration MERGED via PR #58 @ 556e554a). The next
+                          # dispatchable BOUNDED mission is the deterministic VS-002 result-runner
+                          # IMPLEMENTATION (synthetic/mutation-tested); it does NOT execute the
+                          # real experiment, which is a SEPARATE later separately-authorized
+                          # mission. Setting it grants NO execution/production/capital/C1 authority.
+                          # Prior 2026-09-05 — repointed by explicit operator authorization.
                           # VS-002 proved it cannot execute without historical daily price
                           # evidence, so Phase 0C resumes for THAT PREREQUISITE ONLY.
                           #
@@ -71,12 +83,20 @@ stockbot_northstar_redesign:
                           # requires changing this field deliberately rather than drifting
                           # into it. Setting it grants NO new authority — only which
                           # mission's tasks may be dispatched.
-    last_authorized_mission: northstar_vertical_slice_and_preregistration
-                          # NOT complete: the Vertical Slice is `blocked` pending the bounded
-                          # 0C prerequisite below. VS-001 executed and is durable; VS-002 was
-                          # designed and deliberately NOT executed. Before it: northstar_0c_pit_evidence_gateway_research_store
-                          # (0C, still not complete), and before that
+    last_authorized_mission: northstar_0c_historical_price_evidence_for_vs002
+                          # 2026-10-01 — the mission authorized immediately before the current
+                          # result-runner. It is COMPLETE and durable (governed VS-002 evidence
+                          # acquisition; frozen package lab-revalidated; final result-blind
+                          # preregistration merged PR #58 @ 556e554a). Before it the Vertical
+                          # Slice (northstar_vertical_slice_and_preregistration), now
+                          # `preregistered` — VS-001 executed and is durable; VS-002 is
+                          # preregistered and deliberately NOT executed (no result runner built,
+                          # no experiment run). Before that northstar_0c_pit_evidence_gateway_research_store
+                          # (0C lifetime identity, still not complete), and before that
                           # northstar_0b_decision_outcome_passport_contracts (complete + durable).
+                          # Prior wording (2026-09-05): "the Vertical Slice is `blocked` pending
+                          # the bounded 0C prerequisite" — superseded now that the prerequisite
+                          # is complete and the preregistration is durable.
     prior_state: IDLE     # mission_id was "" between 0B closure and this authorization;
                           # the idle semantics remain pinned by
                           # tests/test_ew0a_loop.py::test_idle_runtime_refuses_every_task
@@ -224,27 +244,35 @@ stockbot_northstar_redesign:
         Local Models / Trusted Tools). Prime is superseded as orchestrator.
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
-      status: active   # 2026-09-05 — RESUMED, bounded. Authorized for the historical price evidence prerequisite ONLY (see bounded_authorization); every other remaining_work item below stays UNAUTHORIZED and undispatchable. Prior note: 2026-09-04 — was `active` (authorized 2026-08-15). NOT complete, NOT superseded, NOT deferred, and NOT abandoned: every durable milestone below stands and every remaining_work item is preserved verbatim. The protected queue now places the Vertical Slice before the remainder of 0C, and the slice is what will establish which evidence capabilities the rest of 0C actually requires. `waiting_for_evidence` is the existing status vocabulary term for exactly that; no new status was invented. See authorization below for the original operator decision.
-      step: northstar_0c_historical_price_evidence_for_vs002   # the currently dispatchable BOUNDED mission; see step semantics above
+      status: active   # 2026-10-01 — Phase 0C REMAINS ACTIVE, still bounded. The bounded historical-price-evidence prerequisite is now COMPLETE/durable (see historical_price_evidence_prerequisite milestone), and the CURRENT dispatchable bounded mission is northstar_vs002_result_runner (result-runner IMPLEMENTATION only; it does NOT execute the real experiment, which is a separate later separately-authorized mission). Every OTHER remaining_work item below stays UNAUTHORIZED and undispatchable; the 0C exit gate is UNSATISFIED and no Research Store exists. NOT complete, NOT superseded, NOT deferred, NOT abandoned: every durable milestone below stands and every remaining_work item is preserved verbatim. Prior note (2026-09-05): RESUMED, bounded — authorized for the historical price evidence prerequisite ONLY; the protected queue placed the Vertical Slice before the remainder of 0C to establish which evidence capabilities the rest of 0C requires, and `waiting_for_evidence` was cited as the existing vocabulary term with no new status invented at that time. Prior: 2026-09-04 — was `active` (authorized 2026-08-15). See authorization below for the original operator decision.
+      step: northstar_vs002_result_runner   # 2026-10-01: the currently dispatchable BOUNDED mission (historical-price-evidence prerequisite COMPLETE; see historical_price_evidence_prerequisite milestone). Result-runner IMPLEMENTATION only; real execution is a separate gated mission. See step semantics above
       original_step: northstar_0c_pit_evidence_gateway_research_store   # the phase's lifetime mission identity, preserved as history and NOT currently dispatchable
       bounded_authorization:
         authorized_by: operator
-        authorized_at: 2026-09-05
-        authorized_mission: northstar_0c_historical_price_evidence_for_vs002
-        prerequisite_for: VS-002 (evals/vertical_slice/VS-002_blocked.json)
-        data_source: >-
-          Existing Financial Modeling Prep integration only. Preferred endpoint
-          /stable/historical-price-eod/dividend-adjusted, because adjustment semantics must be
-          explicit rather than inferred from a field named adjClose. No paid or new provider,
-          no Yahoo/yfinance fallback.
+        authorized_at: 2026-10-01
+        authorized_mission: northstar_vs002_result_runner
+        prerequisite_for: VS-002 (evals/vertical_slice/VS-002_preregistration.json)
         scope: >-
-          PIT-safe historical daily price evidence for the 22 VS-002 symbols plus SPY, with
-          durable storage and as_of query, sufficient to estimate beta over a 252-session
-          lookback and to evaluate a 7-day forward outcome. Explicitly does NOT authorize the
-          remaining 0C work items, 0D, intraday data, options, fundamentals, news, engines,
-          capital authority or C1.
-        not_yet_executed: true   # this authorization makes the mission dispatchable; no adapter
-                                 # exists, no data has been fetched, and fmp_client.py is untouched
+          Implement and certify the DETERMINISTIC VS-002 result runner against the durable
+          frozen preregistration (freeze b7da049b…) and the exact frozen evidence-package
+          identity (vs002evd_77469725…), using synthetic/mutation evidence FIRST and WITHOUT
+          executing the real experiment. RESULT_RUNNER_IMPLEMENTATION and REAL_EXPERIMENT_EXECUTION
+          are distinct missions. Explicitly does NOT authorize the real VS-002 execution, the
+          remaining 0C work items, the 0C Research Store, 0D or later, intraday data, options,
+          fundamentals, news, engines, capital authority, production deployment, broker access,
+          or C1.
+        not_yet_executed: true   # the runner is not built, no result exists, and no experiment has run
+        prior_bounded_authorization:   # history — the just-COMPLETED bounded prerequisite
+          authorized_by: operator
+          authorized_at: 2026-09-05
+          authorized_mission: northstar_0c_historical_price_evidence_for_vs002
+          status: COMPLETE   # see milestones.historical_price_evidence_prerequisite
+          data_source: >-
+            Existing Financial Modeling Prep integration only; /stable/historical-price-eod/dividend-adjusted.
+          note: >-
+            PIT-safe historical daily price evidence for the 22 VS-002 symbols plus SPY. Satisfied;
+            the frozen evidence package is durable and lab-revalidated, and the final result-blind
+            preregistration is merged (PR #58).
       depends_on: northstar_phase_0b   # complete; gate NORTHSTAR_0B_CONTRACTS_READY @ main 678c73e
       implementation_started: true     # 2026-08-16 — flipped by the FIRST durable 0C implementation, exactly as the activation record said it would be. See evidence_gateway_foundation below. `active` still records that the phase is in progress, NOT that it is complete: the 0C exit gate is unsatisfied and the Research Store does not exist.
       milestones:
@@ -268,6 +296,27 @@ stockbot_northstar_redesign:
             a fresh REPAIR on an under-evidenced packet, and an under-scoped criterion
             recorded as a scope gap. Final senior merge review PASS_ON_MERITS. See
             docs/NORTHSTAR_0C_SESSION_ns0c-evgw-foundation-001.jsonl.
+        historical_price_evidence_prerequisite:
+          status: complete   # 2026-10-01 — the bounded Phase 0C prerequisite for VS-002 is SATISFIED and durable. Completing it does NOT complete Phase 0C: the exit gate below is still UNSATISFIED and no Research Store exists.
+          durable: true
+          merged_main_sha: 556e554a997d79a6632e7fb62fc2bddaeec1e35e   # PR #58 (final preregistration) — the merge that made this prerequisite durable
+          post_merge_main_ci_result: SUCCESS   # post-merge main push CI run 36892671799 — all shards green
+          governed_acquisition: "PRs #44/#47/#52/#54/#55/#57 merged: offline dividend-adjusted bar path, governed 23-call strict-live production evidence runner, namespace-safe atomic package writes, precision-aware dividend-adjustment witness"
+          frozen_evidence_package:
+            package_id: vs002evd_77469725f5592e6df33742b68a31ae1e
+            source_production_sha: 7f2d4103326587ebce3c2a1898f200ac3e11d641
+            transport_digest: 4e1f5a6f432e6b1df7d062ab878922afa1439834f151c0bbfa214c289c216136
+            lab_revalidated: true   # VS002_LAB_REVALIDATED=YES 2026-09-28; witness PASS, readiness VS002_READY (20 eligible, 19 cohorts); evidence held OUTSIDE the repo (~/stockbot-lab/evidence/vs002/), never committed
+          final_preregistration:
+            path: evals/vertical_slice/VS-002_preregistration.json
+            schema_version: engineering.vertical_slice.preregistration.v1
+            preregistration_id: vs002prereg_2b3dcf7dba0b29304a5543f2d25efb4c
+            freeze_digest: b7da049bfb58c789b31adc3ee6c9eb5044b270a5a73bc7746c5edd048e48ad54
+            result_blind: true
+            vs002_executed: false
+            merged_pr: 58
+            merged_main_sha: 556e554a997d79a6632e7fb62fc2bddaeec1e35e
+            grants_authority: false   # confers no execution/production/capital/C1 authority
       remaining_work:   # the 0C exit gate is NOT satisfied by the foundation
         - revision/supersession safety (a later revision must not leak backward into a historical as-of read)
         - "research-store foundation - persistence and query"
@@ -275,6 +324,17 @@ stockbot_northstar_redesign:
         - lookahead audit over store reads
         - replay/reproducibility as required by the contracts
       next_bounded_candidate: revision/supersession safety   # CANDIDATE ONLY — not implemented and NOT independently authorized; starting it requires its own authorization
+      open_pr_disposition:   # 2026-10-01 — recorded so a future session does NOT treat months-old candidates as merge-ready current work
+        PR_24: >-
+          OPEN, heavily diverged 'Northstar 0C: Research Store Foundation (candidate, senior
+          review required, DO NOT MERGE)'. Useful prior implementation/review evidence; NOT a
+          durable Research Store on current main. The future 0C Research Store mission must
+          re-evaluate / reuse / reimplement its valid work against current main rather than
+          blindly merge this months-old candidate. Not merged/closed/rebased by this mission.
+        PR_10: >-
+          OPEN, heavily diverged old draft 'feat(intraday-lab): Session 3.1D hypothesis
+          preregistration'. Historical research branch; NOT current merge-ready work. Not
+          merged/closed/rebased by this mission.
       unresolved_semantics:
         effective_period_vs_as_of: >-
           UNRESOLVED / NOT DECIDED. No rule such as effective_period_end <= as_of exists.
@@ -313,10 +373,15 @@ stockbot_northstar_redesign:
         evidence only; learning informs routing and never grants authority.
     northstar_vertical_slice_and_preregistration:
       name: "Vertical Slice & Preregistration"
-      status: blocked   # 2026-09-05 — BLOCKED, not complete and not abandoned. VS-002 measured that it cannot execute credibly without historical daily price/risk evidence: 2 non-overlapping 7-day cohorts against a required 10, and 10-13 usable joint return observations against this repository's own gates of 15 and 30. The slice resumes at VS-002 once the bounded Phase 0C prerequisite below is satisfied. VS-001 remains durable and VS-002's blocked result remains durable; neither is retracted by this transition.
-      blocked_on: northstar_0c_historical_price_evidence_for_vs002
-      blocked_reason: >-
-        VS-002 requires historical price/risk evidence supplied by bounded Phase 0C work.
+      status: preregistered   # 2026-10-01 — the bounded Phase 0C historical-price-evidence prerequisite is SATISFIED and the final result-blind VS-002 preregistration is DURABLE (PR #58 @ 556e554a, freeze b7da049b…); the slice is no longer blocked on evidence. VS-002 is PREREGISTERED and NOT executed (no result runner built, no experiment run); VS-001 remains durable. Prior 2026-09-05 — BLOCKED, not complete and not abandoned. VS-002 measured that it cannot execute credibly without historical daily price/risk evidence: 2 non-overlapping 7-day cohorts against a required 10, and 10-13 usable joint return observations against this repository's own gates of 15 and 30. The slice resumes at VS-002 once the bounded Phase 0C prerequisite below is satisfied. VS-001 remains durable and VS-002's blocked result remains durable; neither is retracted by this transition.
+      prerequisite_satisfied: northstar_0c_historical_price_evidence_for_vs002   # 2026-10-01 — satisfied (was blocked_on)
+      prerequisite_note: >-
+        2026-10-01: the bounded Phase 0C prerequisite (governed historical daily price/risk
+        evidence) is SATISFIED; the frozen VS-002 evidence package is durable and
+        lab-revalidated and the final result-blind preregistration is merged (PR #58 @
+        556e554a, freeze b7da049b…). The slice now awaits the deterministic VS-002
+        result-runner IMPLEMENTATION, and then a SEPARATE authorization for one frozen
+        VS-002 execution. VS-002 has NOT executed.
       step: northstar_vertical_slice_and_preregistration
       depends_on: g1_supervisor_measurement   # durable_measurements above; satisfied 2026-09-04 @ main 9d9db1f
       executed: false   # The PHASE is not complete. VS-001 DID execute and is durable
@@ -327,7 +392,7 @@ stockbot_northstar_redesign:
                         # unblocks.
       experiments:
         VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
-        VS-002: not_executed_blocked  # evals/vertical_slice/VS-002_blocked.json
+        VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; no result runner yet.
       objective: >-
         Build and run the smallest credible end-to-end Northstar investing research
         slice that exercises the real architecture and produces operating evidence.

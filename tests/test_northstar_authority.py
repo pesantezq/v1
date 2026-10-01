@@ -23,14 +23,17 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-09-05: Phase 0C resumed under a
-#: BOUNDED step after VS-002 proved it cannot execute without historical price
-#: evidence. Three identifiers stay live and must be kept apart:
-#:   AUTHORIZED_MISSION - the one bounded mission that may be dispatched today
-#:   BROAD_0C_MISSION   - 0C's lifetime identity, preserved as history and NOT
-#:                        dispatchable, so the rest of 0C cannot resume by momentum
-#:   VS_MISSION         - the Vertical Slice, now `blocked` awaiting the prerequisite
-AUTHORIZED_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
+#: The mission the roadmap authorizes NOW. 2026-10-01: the historical-price-
+#: evidence prerequisite is COMPLETE (frozen VS-002 evidence package durable and
+#: lab-revalidated; final result-blind preregistration merged via PR #58), so the
+#: dispatchable bounded step is repointed to the VS-002 result-runner
+#: IMPLEMENTATION. Identifiers kept apart:
+#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today
+#:   HISTORICAL_EVIDENCE_MISSION - the just-completed prerequisite (now prior_primary)
+#:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
+#:   VS_MISSION                  - the Vertical Slice, now `preregistered` (VS-002 not executed)
+AUTHORIZED_MISSION = "northstar_vs002_result_runner"
+HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
 VS_MISSION = "northstar_vertical_slice_and_preregistration"
 
@@ -89,6 +92,85 @@ def test_phase_status_parses_to_mapping(phase):
     assert isinstance(phase, dict) and phase
 
 
+# ── Status vocabulary is self-declared and fail-closed ────────────────
+# phase_status.yaml declares its own phase-status vocabulary in the header
+# comment ("# Statuses: a | b | c | ..."). Codex P2 flagged that `preregistered`
+# was used as a phase status while that declaration omitted it. These guards pin
+# the declaration as authoritative: every PHASE status actually used must be a
+# declared term, and the check is proven to reject an undeclared value.
+#
+# Scope note: only PHASE-level statuses are governed by this vocabulary (the
+# program's own status and each entry under `phases`). Milestones, gates,
+# authorizations and attempted-designs carry their OWN state words
+# (e.g. SATISFIED, certification_candidate, COMPLETE,
+# NOT_EXECUTED_INSUFFICIENT_EVIDENCE) and are deliberately out of scope here.
+
+#: Phase statuses that MUST appear in the declared vocabulary for this change.
+REQUIRED_DECLARED_STATUSES = {"preregistered", "active", "complete", "not_started"}
+
+
+def _declared_status_vocabulary(text: str) -> set:
+    """Parse the '# Statuses: a | b | ...' declaration from the raw YAML text.
+
+    Reads the header line and any immediately following comment lines that
+    continue the pipe-delimited list (a comment line without a '|' ends it, so
+    the human-readable definition lines that follow are not mistaken for terms).
+    """
+    lines = text.splitlines()
+    starts = [i for i, l in enumerate(lines)
+              if l.lstrip("# ").startswith("Statuses:")]
+    assert starts, "no '# Statuses:' vocabulary declaration found in phase_status.yaml"
+    i = starts[0]
+    buf = lines[i].split("Statuses:", 1)[1]
+    j = i + 1
+    while j < len(lines) and lines[j].lstrip().startswith("#") and "|" in lines[j]:
+        buf += " " + lines[j].lstrip("# ").strip()
+        j += 1
+    terms = {t.strip() for t in buf.split("|")}
+    return {t for t in terms if t and all(c.isalpha() or c == "_" for c in t)}
+
+
+def _phase_statuses(program: dict) -> set:
+    """Every PHASE-level status actually used by the current program."""
+    used = set()
+    top = program.get("status")
+    if isinstance(top, str):
+        used.add(top)
+    for entry in (program.get("phases") or {}).values():
+        if isinstance(entry, dict) and isinstance(entry.get("status"), str):
+            used.add(entry["status"])
+    return used
+
+
+def test_status_vocabulary_declares_preregistered_and_core_terms():
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    missing = REQUIRED_DECLARED_STATUSES - declared
+    assert not missing, f"status vocabulary is missing declared terms: {sorted(missing)}"
+
+
+def test_every_phase_status_used_is_within_the_declared_vocabulary(phase):
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    used = _phase_statuses(phase["stockbot_northstar_redesign"])
+    assert used, "expected at least one phase status to be in use"
+    undeclared = used - declared
+    assert not undeclared, (
+        "phase statuses used but not declared in the vocabulary: "
+        f"{sorted(undeclared)} (declared: {sorted(declared)})"
+    )
+
+
+def test_status_vocabulary_check_is_fail_closed_against_unknown_values(phase):
+    """The guard above must REJECT drift, not merely pass today.
+
+    Injecting a status outside the declaration must be detected as undeclared;
+    if it were silently accepted, the vocabulary check would be worthless."""
+    declared = _declared_status_vocabulary(PHASE_FILE.read_text(encoding="utf-8"))
+    bogus = "totally_unknown_status"
+    assert bogus not in declared
+    used_with_bogus = _phase_statuses(phase["stockbot_northstar_redesign"]) | {bogus}
+    assert used_with_bogus - declared == {bogus}
+
+
 # ── Program / phase / step ─────────────────────────────────────────────────
 
 
@@ -104,14 +186,16 @@ def test_current_phase_and_step(state):
     assert state["current_step"] == AUTHORIZED_MISSION
     assert state["current_step"] != BROAD_0C_MISSION
     assert state["current_step"] != VS_MISSION
+    # the prerequisite it replaced has moved to prior_primary, not current
+    assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the Vertical Slice really was the
-    # prior primary, and it is blocked rather than finished.
-    assert nos["prior_primary"] == VS_MISSION
+    # History is carried forward, not erased: the just-completed historical-price
+    # evidence prerequisite is now the prior primary.
+    assert nos["prior_primary"] == HISTORICAL_EVIDENCE_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -183,23 +267,44 @@ def test_g1_is_recorded_as_a_durable_measurement_and_not_as_a_gate(phase):
 # ── the Vertical Slice is the one current mission ─────────────────────────
 
 
-def test_vertical_slice_is_blocked_and_neither_complete_nor_erased(phase):
-    """Blocked is a waiting state, not a verdict on the slice.
+def test_vertical_slice_is_preregistered_not_executed_and_not_erased(phase):
+    """The slice is unblocked and its VS-002 design is frozen, but NOT executed.
 
-    VS-001 really executed and is durable; VS-002 really was designed and
-    deliberately not executed. A transition that made either look like it never
-    happened would be the defect here."""
+    The historical-price-evidence prerequisite is satisfied and the final
+    result-blind preregistration is durable, so the slice is no longer `blocked`.
+    VS-001 really executed and is durable; VS-002 is preregistered and
+    deliberately not executed (no result runner built, no experiment run). A
+    transition that made either look like it never happened — or that implied
+    VS-002 has run — would be the defect here."""
     vs = phase["stockbot_northstar_redesign"]["phases"][VS_MISSION]
-    assert vs["status"] == "blocked"
-    assert vs["status"] not in ("complete", "superseded", "deferred", "active")
-    assert vs["blocked_on"] == AUTHORIZED_MISSION
-    assert "historical price" in vs["blocked_reason"]
-    # The phase is not finished, and both experiments remain on the record.
+    assert vs["status"] == "preregistered"
+    assert vs["status"] not in ("complete", "superseded", "deferred", "active", "blocked")
+    # the prerequisite it was blocked on is now satisfied, not pending
+    assert vs["prerequisite_satisfied"] == HISTORICAL_EVIDENCE_MISSION
+    assert "preregistration" in vs["prerequisite_note"].lower()
+    # the phase is not finished, and both experiments remain on the record.
     assert vs["executed"] is False
     assert vs["experiments"]["VS-001"] == "executed_durable"
-    assert vs["experiments"]["VS-002"] == "not_executed_blocked"
-    # The original slice authorization survives as history.
+    assert vs["experiments"]["VS-002"] == "preregistered_not_executed"
+    # the original slice authorization survives as history.
     assert vs["authorization"]["authorized_mission"] == VS_MISSION
+
+
+def test_historical_price_evidence_prerequisite_is_durable_but_not_execution(phase):
+    """The completed prerequisite is recorded with its frozen identities and
+    grants nothing; completing it does not complete Phase 0C."""
+    pc = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    m = pc["milestones"]["historical_price_evidence_prerequisite"]
+    assert m["status"] == "complete" and m["durable"] is True
+    pre = m["final_preregistration"]
+    assert pre["freeze_digest"] == "b7da049bfb58c789b31adc3ee6c9eb5044b270a5a73bc7746c5edd048e48ad54"
+    assert pre["preregistration_id"] == "vs002prereg_2b3dcf7dba0b29304a5543f2d25efb4c"
+    assert pre["vs002_executed"] is False
+    assert pre["grants_authority"] is False
+    assert m["frozen_evidence_package"]["package_id"] == "vs002evd_77469725f5592e6df33742b68a31ae1e"
+    # Phase 0C remains active with its exit gate unsatisfied.
+    assert pc["status"] == "active"
+    assert pc["exit_gate"] == "lookahead-audited PIT reads over the research store"
 
 
 def test_vertical_slice_history_artifacts_still_exist():
@@ -297,7 +402,7 @@ def test_no_future_phase_marked_complete_in_project_state(state):
     assert phases["northstar_phase_0a"]["status"] == "complete"
     assert phases["northstar_phase_0b"]["status"] == "complete"
     assert phases["northstar_phase_0c"]["status"] == "active"
-    assert phases[VS_MISSION]["status"] == "blocked"
+    assert phases[VS_MISSION]["status"] == "preregistered"
 
 
 def test_phase_0a_complete_with_gate_and_both_milestones(phase):
