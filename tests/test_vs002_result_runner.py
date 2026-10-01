@@ -27,6 +27,20 @@ from portfolio_automation.vs002_evidence.result_contract import (
 
 REPO = Path(__file__).resolve().parent.parent
 PREREG = RR.load_preregistration(REPO)
+
+import importlib.util as _ilu
+
+
+def _load_student_t_generator():
+    """Load the deterministic generator SCRIPT (provenance/verification tool).
+
+    It lives under scripts/ and is deliberately NOT imported by the runtime
+    result_contract/result_runner modules."""
+    path = REPO / "scripts" / "generate_vs002_student_t_table.py"
+    spec = _ilu.spec_from_file_location("vs002_student_t_generator", path)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 GEN_AT = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 # Frozen identity strings (metadata only — never used for discovery/IO).
@@ -541,21 +555,64 @@ def test_cohorts_equal_weighted_despite_unequal_row_counts():
 
 
 # ─────────────────────────── Student-t table rules ──────────────────────────
-def test_student_t_table_reproduces_published_values():
-    # The deterministic generator reproduces the standard two-sided 95% (0.975)
-    # critical values across the domain, including well beyond "a few dozen" df.
-    anchors = {1: 12.706, 2: 4.303, 5: 2.571, 9: 2.262, 10: 2.228, 19: 2.093,
-               29: 2.045, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980,
-               200: 1.972, 500: 1.965, 1000: 1.962}
-    for df, v in anchors.items():
+#: Independent published two-sided 95% (0.975) Student-t critical values — NOT
+#: produced by the repo's own generator, so they cross-check the static table.
+PUBLISHED_T_0975 = {1: 12.706, 2: 4.303, 5: 2.571, 9: 2.262, 10: 2.228, 19: 2.093,
+                    29: 2.045, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980,
+                    200: 1.972, 500: 1.965, 1000: 1.962}
+
+
+def test_student_t_static_table_matches_independent_published_anchors():
+    for df, v in PUBLISHED_T_0975.items():
         assert RC.student_t_critical(df) == pytest.approx(v, abs=6e-4)
-    # monotonic decreasing + deterministic (memoised) over a sample of the domain
-    sample = list(range(1, 41)) + [50, 100, 200, 500, 1000]
-    vals = [RC.student_t_critical(d) for d in sample]
-    assert all(vals[i] > vals[i + 1] for i in range(len(vals) - 1))
-    assert RC.student_t_critical(9) == RC.student_t_critical(9)
-    # the underlying quantile method itself reproduces an anchor (provenance)
-    assert round(RC._student_t_0975_quantile(9), 3) == 2.262
+
+
+def test_student_t_static_table_is_complete_immutable_and_monotonic():
+    tbl = RC.STUDENT_T_0975
+    assert isinstance(tbl, tuple)              # immutable static representation
+    assert len(tbl) == 1001 and tbl[0] is None  # df indexes directly; df starts at 1
+    vals = tbl[1:]
+    assert len(vals) == 1000                   # no gaps: df 1..1000
+    assert RC.STUDENT_T_MAX_DF == 1000
+    assert all(isinstance(v, float) and math.isfinite(v) and v > 0 for v in vals)
+    assert all(vals[i] > vals[i + 1] for i in range(len(vals) - 1))  # strictly decreasing
+    # runtime lookup returns exactly the committed entry, for every df sampled
+    for df in (1, 9, 10, 40, 251, 999, 1000):
+        assert RC.student_t_critical(df) == tbl[df]
+
+
+def test_student_t_runtime_is_pure_lookup_independent_of_the_generator(monkeypatch):
+    # The runtime module must not contain or call the generator.
+    for name in ("_student_t_0975_quantile", "_regularized_incomplete_beta",
+                 "_tabulated_t_0975", "student_t_table"):
+        assert not hasattr(RC, name), f"runtime must not expose {name}"
+    # Even if the generator script is broken/raises, runtime lookup still works,
+    # proving student_t_critical does not call it.
+    gen = _load_student_t_generator()
+    monkeypatch.setattr(gen, "student_t_0975_quantile",
+                        lambda df: (_ for _ in ()).throw(AssertionError("runtime must not generate")),
+                        raising=True)
+    assert RC.student_t_critical(9) == RC.STUDENT_T_0975[9]
+
+
+def test_student_t_static_table_regenerates_from_committed_generator():
+    # Provenance: the pure-python generator reproduces every committed value
+    # exactly (both are round(quantile, 8)), across the whole domain.
+    gen = _load_student_t_generator()
+    assert gen.CERTIFIED_MAX_DF == RC.STUDENT_T_MAX_DF
+    for df in range(1, RC.STUDENT_T_MAX_DF + 1):
+        assert gen.generate_value(df) == RC.STUDENT_T_0975[df]
+    # deterministic across repeated calls
+    assert gen.generate_value(37) == gen.generate_value(37)
+
+
+def test_student_t_df_above_certified_table_is_an_engineering_blocker():
+    # A df beyond the certified static table must FAIL CLOSED (StudentTTableError)
+    # — an engineering/certification blocker — never a silently computed interval
+    # and never an EVIDENCE_INCONCLUSIVE classification.
+    values = [float(i) for i in range(RC.STUDENT_T_MAX_DF + 2)]  # n-1 = 1001 > MAX
+    with pytest.raises(RC.StudentTTableError):
+        RR.student_t_interval(values, minimum_n=10)
 
 
 def test_student_t_hand_computed_interval():
