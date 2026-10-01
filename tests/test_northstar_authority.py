@@ -23,14 +23,17 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-09-05: Phase 0C resumed under a
-#: BOUNDED step after VS-002 proved it cannot execute without historical price
-#: evidence. Three identifiers stay live and must be kept apart:
-#:   AUTHORIZED_MISSION - the one bounded mission that may be dispatched today
-#:   BROAD_0C_MISSION   - 0C's lifetime identity, preserved as history and NOT
-#:                        dispatchable, so the rest of 0C cannot resume by momentum
-#:   VS_MISSION         - the Vertical Slice, now `blocked` awaiting the prerequisite
-AUTHORIZED_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
+#: The mission the roadmap authorizes NOW. 2026-10-01: the historical-price-
+#: evidence prerequisite is COMPLETE (frozen VS-002 evidence package durable and
+#: lab-revalidated; final result-blind preregistration merged via PR #58), so the
+#: dispatchable bounded step is repointed to the VS-002 result-runner
+#: IMPLEMENTATION. Identifiers kept apart:
+#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today
+#:   HISTORICAL_EVIDENCE_MISSION - the just-completed prerequisite (now prior_primary)
+#:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
+#:   VS_MISSION                  - the Vertical Slice, now `preregistered` (VS-002 not executed)
+AUTHORIZED_MISSION = "northstar_vs002_result_runner"
+HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
 VS_MISSION = "northstar_vertical_slice_and_preregistration"
 
@@ -104,14 +107,16 @@ def test_current_phase_and_step(state):
     assert state["current_step"] == AUTHORIZED_MISSION
     assert state["current_step"] != BROAD_0C_MISSION
     assert state["current_step"] != VS_MISSION
+    # the prerequisite it replaced has moved to prior_primary, not current
+    assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the Vertical Slice really was the
-    # prior primary, and it is blocked rather than finished.
-    assert nos["prior_primary"] == VS_MISSION
+    # History is carried forward, not erased: the just-completed historical-price
+    # evidence prerequisite is now the prior primary.
+    assert nos["prior_primary"] == HISTORICAL_EVIDENCE_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -183,23 +188,44 @@ def test_g1_is_recorded_as_a_durable_measurement_and_not_as_a_gate(phase):
 # ── the Vertical Slice is the one current mission ─────────────────────────
 
 
-def test_vertical_slice_is_blocked_and_neither_complete_nor_erased(phase):
-    """Blocked is a waiting state, not a verdict on the slice.
+def test_vertical_slice_is_preregistered_not_executed_and_not_erased(phase):
+    """The slice is unblocked and its VS-002 design is frozen, but NOT executed.
 
-    VS-001 really executed and is durable; VS-002 really was designed and
-    deliberately not executed. A transition that made either look like it never
-    happened would be the defect here."""
+    The historical-price-evidence prerequisite is satisfied and the final
+    result-blind preregistration is durable, so the slice is no longer `blocked`.
+    VS-001 really executed and is durable; VS-002 is preregistered and
+    deliberately not executed (no result runner built, no experiment run). A
+    transition that made either look like it never happened — or that implied
+    VS-002 has run — would be the defect here."""
     vs = phase["stockbot_northstar_redesign"]["phases"][VS_MISSION]
-    assert vs["status"] == "blocked"
-    assert vs["status"] not in ("complete", "superseded", "deferred", "active")
-    assert vs["blocked_on"] == AUTHORIZED_MISSION
-    assert "historical price" in vs["blocked_reason"]
-    # The phase is not finished, and both experiments remain on the record.
+    assert vs["status"] == "preregistered"
+    assert vs["status"] not in ("complete", "superseded", "deferred", "active", "blocked")
+    # the prerequisite it was blocked on is now satisfied, not pending
+    assert vs["prerequisite_satisfied"] == HISTORICAL_EVIDENCE_MISSION
+    assert "preregistration" in vs["prerequisite_note"].lower()
+    # the phase is not finished, and both experiments remain on the record.
     assert vs["executed"] is False
     assert vs["experiments"]["VS-001"] == "executed_durable"
-    assert vs["experiments"]["VS-002"] == "not_executed_blocked"
-    # The original slice authorization survives as history.
+    assert vs["experiments"]["VS-002"] == "preregistered_not_executed"
+    # the original slice authorization survives as history.
     assert vs["authorization"]["authorized_mission"] == VS_MISSION
+
+
+def test_historical_price_evidence_prerequisite_is_durable_but_not_execution(phase):
+    """The completed prerequisite is recorded with its frozen identities and
+    grants nothing; completing it does not complete Phase 0C."""
+    pc = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    m = pc["milestones"]["historical_price_evidence_prerequisite"]
+    assert m["status"] == "complete" and m["durable"] is True
+    pre = m["final_preregistration"]
+    assert pre["freeze_digest"] == "b7da049bfb58c789b31adc3ee6c9eb5044b270a5a73bc7746c5edd048e48ad54"
+    assert pre["preregistration_id"] == "vs002prereg_2b3dcf7dba0b29304a5543f2d25efb4c"
+    assert pre["vs002_executed"] is False
+    assert pre["grants_authority"] is False
+    assert m["frozen_evidence_package"]["package_id"] == "vs002evd_77469725f5592e6df33742b68a31ae1e"
+    # Phase 0C remains active with its exit gate unsatisfied.
+    assert pc["status"] == "active"
+    assert pc["exit_gate"] == "lookahead-audited PIT reads over the research store"
 
 
 def test_vertical_slice_history_artifacts_still_exist():
@@ -297,7 +323,7 @@ def test_no_future_phase_marked_complete_in_project_state(state):
     assert phases["northstar_phase_0a"]["status"] == "complete"
     assert phases["northstar_phase_0b"]["status"] == "complete"
     assert phases["northstar_phase_0c"]["status"] == "active"
-    assert phases[VS_MISSION]["status"] == "blocked"
+    assert phases[VS_MISSION]["status"] == "preregistered"
 
 
 def test_phase_0a_complete_with_gate_and_both_milestones(phase):

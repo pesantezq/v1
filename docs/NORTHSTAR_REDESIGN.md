@@ -57,7 +57,7 @@ Strategic Goal   the North Star statement above
 Status vocabulary (extends the repo's existing lowercase enum — `complete`,
 `active`, `deferred`, `superseded` — do not invent competing vocabularies):
 
-`complete` · `active` · `ready` · `blocked` · `waiting_for_evidence` ·
+`complete` · `active` · `ready` · `blocked` · `preregistered` · `waiting_for_evidence` ·
 `deferred` · `not_started` · `superseded`
 
 ## 3. Phases
@@ -74,7 +74,7 @@ Research Store exists. No phase below 0C is implemented or started.**
 |---|---|---|---|---|---|---|
 | 0A | Architecture, Authority & CI Foundation | **complete** (gate `NORTHSTAR_GOVERNANCE_FOUNDATION_READY`, 2026-08-09) | Make the North Star authoritative; one coherent authority model; CI that proves invariants on every change | topology stabilization (done 2026-08-09) | every later phase | ACHIEVED: authority reconciled (`1794a164`, 3 hardening passes) AND CI green remotely (run `31338193791`) |
 | 0B | Canonical Evidence, Prediction & Worker Contracts | **complete** | Define the canonical PredictionRecord / evidence / AI-worker contracts (schemas, not runtimes) — incl. **replaceable data-source extensibility**: external sources (FMP, SEC, FINRA, float/short interest, institutional/insider/congress, analyst revisions, crowd/attention, sentiment, news, options, transcripts, macro, future commercial data) are Evidence Plane inputs with source/dataset/record identity, provenance, PIT timestamps, snapshot/hash, schema/version, rights metadata — never vendor schemas embedded in the engines or workers | 0A | 0C, 0D, worker admission later | contracts reviewed + versioned + test-covered |
-| 0C | Point-in-Time EvidenceGateway & Research Store | **active** (implementation in progress; EvidenceGateway foundation durable @ `33de038`, PR #20, main CI #44 — exit gate NOT satisfied, Research Store not built) | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
+| 0C | Point-in-Time EvidenceGateway & Research Store | **active** (implementation in progress; EvidenceGateway foundation durable @ `33de038`, PR #20, main CI #44 — exit gate NOT satisfied, Research Store not built; the bounded VS-002 historical-price-evidence prerequisite is COMPLETE — frozen evidence package durable + lab-revalidated and the final result-blind VS-002 preregistration merged (PR #58 @ `556e554a`); next bounded step = VS-002 result-runner implementation) | PIT, identity-bound, provenance-aware evidence access (generalizing Intraday Lab's preregistration/identity-era patterns) | 0B | all certification and engines | lookahead-audited PIT reads over the research store |
 | 0D | Certification, Champion/Challenger & Incremental-Value Foundation | not_started | The mechanism that decides whether anything (predictor, allocator, exit method, AI worker, strategy) demonstrates incremental value | 0B, 0C | Phases 1–8 admission | reproducible certification verdicts with controlled attribution |
 
 ### Core intelligence
