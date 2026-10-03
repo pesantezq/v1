@@ -23,16 +23,19 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-10-01: the historical-price-
-#: evidence prerequisite is COMPLETE (frozen VS-002 evidence package durable and
-#: lab-revalidated; final result-blind preregistration merged via PR #58), so the
-#: dispatchable bounded step is repointed to the VS-002 result-runner
-#: IMPLEMENTATION. Identifiers kept apart:
+#: The mission the roadmap authorizes NOW. 2026-10-02: the deterministic VS-002
+#: result runner is COMPLETE and durable (PR #60 merged @ main eaee0584), so
+#: the dispatchable bounded step is repointed to the VS-002 transport-digest
+#: CONTRACT foundation (committed vs002.transport_digest.v1 algorithm, proven on
+#: synthetic packages only; no real-package access, no execution). Identifiers
+#: kept apart:
 #:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today
-#:   HISTORICAL_EVIDENCE_MISSION - the just-completed prerequisite (now prior_primary)
+#:   RESULT_RUNNER_MISSION       - the just-completed result-runner mission (now prior_primary)
+#:   HISTORICAL_EVIDENCE_MISSION - the completed prerequisite before it (history)
 #:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
 #:   VS_MISSION                  - the Vertical Slice, now `preregistered` (VS-002 not executed)
-AUTHORIZED_MISSION = "northstar_vs002_result_runner"
+AUTHORIZED_MISSION = "northstar_vs002_transport_digest_contract_foundation"
+RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
 VS_MISSION = "northstar_vertical_slice_and_preregistration"
@@ -186,16 +189,20 @@ def test_current_phase_and_step(state):
     assert state["current_step"] == AUTHORIZED_MISSION
     assert state["current_step"] != BROAD_0C_MISSION
     assert state["current_step"] != VS_MISSION
-    # the prerequisite it replaced has moved to prior_primary, not current
+    # the completed missions it replaced are history, not current
+    assert state["current_step"] != RESULT_RUNNER_MISSION
     assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the just-completed historical-price
-    # evidence prerequisite is now the prior primary.
-    assert nos["prior_primary"] == HISTORICAL_EVIDENCE_MISSION
+    # History is carried forward, not erased: the just-completed result-runner
+    # mission is now the prior primary, and the prerequisite before it is still
+    # named in its note.
+    assert nos["prior_primary"] == RESULT_RUNNER_MISSION
+    assert RESULT_RUNNER_MISSION in state["completed_steps"]
+    assert HISTORICAL_EVIDENCE_MISSION in state["completed_steps"]
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -368,8 +375,10 @@ def test_only_the_bounded_0c_mission_is_dispatchable():
 
     assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
 
-    for refused in (BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
-                    "northstar_0d_certification", "", None):
+    for refused in (BROAD_0C_MISSION, VS_MISSION, RESULT_RUNNER_MISSION,
+                    HISTORICAL_EVIDENCE_MISSION,
+                    "northstar_vs002_transport_binding_recertification",
+                    "northstar_phase_0d", "northstar_0d_certification", "", None):
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
 
@@ -387,6 +396,37 @@ def test_the_rest_of_0c_remains_unauthorized_by_the_bounded_step(phase):
     # Every remaining_work item is still listed and still unauthorized.
     assert len(p0c["remaining_work"]) == 5
     assert all(item not in auth["authorized_mission"] for item in p0c["remaining_work"])
+    # The transport-digest contract mission names what it must never touch.
+    lowered = scope.lower()
+    for excluded in ("real frozen package", "execution", "preregistration",
+                     "recertification", "0d", "c1"):
+        assert excluded in lowered, f"scope must exclude {excluded}"
+    # The history chain is nested, not erased.
+    prior = auth["prior_bounded_authorization"]
+    assert prior["authorized_mission"] == RESULT_RUNNER_MISSION
+    assert prior["status"] == "COMPLETE"
+    assert prior["prior_bounded_authorization"]["authorized_mission"] == HISTORICAL_EVIDENCE_MISSION
+
+
+def test_result_runner_milestone_is_durable_but_executes_nothing(phase):
+    """PR #60 made the runner durable. Durability of the runner is not execution
+    of the experiment, and it is not a recomputable transport identity."""
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    m = p0c["milestones"]["vs002_result_runner"]
+    assert m["status"] == "complete" and m["durable"] is True
+    assert m["merged_main_sha"] == "eaee0584b64346e558080ef7067abe7718ef2320"
+    assert m["pull_request"] == 60
+    assert m["post_merge_main_ci_result"] == "SUCCESS"
+    assert m["vs002_executed"] is False
+    assert m["real_package_opened"] is False
+    assert m["grants_authority"] is False
+    gap = m["transport_integrity_gap"]
+    assert "LEGACY_TRANSPORT_DIGEST_ALGORITHM_UNRECOVERABLE" in gap
+    assert AUTHORIZED_MISSION in gap
+    # The historical transport digest is preserved verbatim where it was recorded.
+    h = p0c["milestones"]["historical_price_evidence_prerequisite"]
+    assert h["frozen_evidence_package"]["transport_digest"] == \
+        "4e1f5a6f432e6b1df7d062ab878922afa1439834f151c0bbfa214c289c216136"
 
 
 # ── Req 9: future phases not falsely complete ──────────────────────────────
