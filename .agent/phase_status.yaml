@@ -420,17 +420,19 @@ stockbot_northstar_redesign:
         2026-10-01: the bounded Phase 0C prerequisite (governed historical daily price/risk
         evidence) is SATISFIED; the frozen VS-002 evidence package is durable and
         lab-revalidated and the final result-blind preregistration is merged (PR #58 @
-        556e554a, freeze b7da049b…). The slice now awaits the deterministic VS-002
-        result-runner IMPLEMENTATION, and then a SEPARATE authorization for one frozen
-        VS-002 execution. VS-002 has NOT executed.
+        556e554a, freeze b7da049b…). 2026-10-02: the deterministic VS-002 result runner
+        is now COMPLETE and durable on main (PR #60 @ eaee0584); the slice now awaits the thin
+        VS-002 execution-adapter foundation (the current authorized bounded step), and then a
+        SEPARATE authorization for one frozen VS-002 execution. VS-002 has NOT executed.
       step: northstar_vertical_slice_and_preregistration
       depends_on: g1_supervisor_measurement   # durable_measurements above; satisfied 2026-09-04 @ main 9d9db1f
       executed: false   # The PHASE is not complete. VS-001 DID execute and is durable
                         # (freeze vsfreeze_f1c6ad41, verdict SUPPORTED, IC -0.059, economic
                         # skill NOT established). VS-002 was designed and deliberately NOT
                         # executed. The slice concludes only when a credible risk-adjusted
-                        # experiment has run, which is what the bounded 0C prerequisite
-                        # unblocks.
+                        # experiment has run; the result runner (built + durable on main, PR #60)
+                        # and the execution-adapter foundation are the remaining bounded steps
+                        # before a separately-authorized frozen VS-002 execution.
       experiments:
         VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
         VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; the result runner is built and durable on main (PR #60), but the experiment has not been run.
