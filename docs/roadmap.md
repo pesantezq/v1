@@ -41,11 +41,14 @@ Current position (2026-08-15):
     loosened and no verdict was rerolled.
 - **Engineer runtime:** `mission_id` =
   `northstar_vs002_execution_adapter_foundation` — the current bounded dispatch
-  mission (2026-10-02). It was repointed as bounded missions completed: the broad
-  `northstar_0c_pit_evidence_gateway_research_store` (0C lifetime identity,
-  preserved as history) → the historical-price-evidence prerequisite (COMPLETE,
-  PR #58) → the deterministic VS-002 result runner (COMPLETE and durable on main,
-  PR #60 @ `eaee0584`) → the thin VS-002 execution-adapter foundation (current).
+  mission (2026-10-02). It was repointed through a sequence of bounded dispatch
+  missions. The broad `northstar_0c_pit_evidence_gateway_research_store` is the 0C
+  lifetime identity; it became `waiting_for_evidence` while still INCOMPLETE (NOT
+  completed) and is preserved as history. The bounded dispatch then ran:
+  `northstar_vertical_slice_and_preregistration` → the historical-price-evidence
+  prerequisite (COMPLETE, PR #58) → the deterministic VS-002 result runner
+  (COMPLETE and durable on main, PR #60 @ `eaee0584`) → the thin VS-002
+  execution-adapter foundation (current).
   This value is the bounded mission boundary: tasks from other phases are still
   refused. Setting it grants no new authority. Authority remains
   `A1_ASSISTED_ENGINEERING`; controller level `C0.5_SHADOW`.
