@@ -15,7 +15,8 @@
 #           waiting_for_evidence | deferred | not_started | superseded
 #   preregistered (added 2026-10-01) — a design is frozen/committed and durable
 #     but NOT executed; e.g. the Vertical Slice after the VS-002 preregistration
-#     merged (PR #58): no result runner is built and no experiment has run.
+#     merged (PR #58). As of 2026-10-02 the deterministic result runner IS built and durable
+#     on main (PR #60), but VS-002 itself has not been executed (no experiment has run).
 #     tests/test_northstar_authority.py asserts every phase status used here is
 #     within this declared vocabulary, fail-closed against unknown values.
 # NO future phase below is implemented. Phase 0A is NOT complete while its
@@ -98,8 +99,8 @@ stockbot_northstar_redesign:
                           # preregistration merged PR #58 @ 556e554a). Before it the Vertical
                           # Slice (northstar_vertical_slice_and_preregistration), now
                           # `preregistered` — VS-001 executed and is durable; VS-002 is
-                          # preregistered and deliberately NOT executed (no result runner built,
-                          # no experiment run). Before that northstar_0c_pit_evidence_gateway_research_store
+                          # preregistered and deliberately NOT executed: the result runner is now built
+                          # and durable on main (PR #60), but the real experiment has not been run. Before that northstar_0c_pit_evidence_gateway_research_store
                           # (0C lifetime identity, still not complete), and before that
                           # northstar_0b_decision_outcome_passport_contracts (complete + durable).
                           # Prior wording (2026-09-05): "the Vertical Slice is `blocked` pending
@@ -413,7 +414,7 @@ stockbot_northstar_redesign:
         evidence only; learning informs routing and never grants authority.
     northstar_vertical_slice_and_preregistration:
       name: "Vertical Slice & Preregistration"
-      status: preregistered   # 2026-10-01 — the bounded Phase 0C historical-price-evidence prerequisite is SATISFIED and the final result-blind VS-002 preregistration is DURABLE (PR #58 @ 556e554a, freeze b7da049b…); the slice is no longer blocked on evidence. VS-002 is PREREGISTERED and NOT executed (no result runner built, no experiment run); VS-001 remains durable. Prior 2026-09-05 — BLOCKED, not complete and not abandoned. VS-002 measured that it cannot execute credibly without historical daily price/risk evidence: 2 non-overlapping 7-day cohorts against a required 10, and 10-13 usable joint return observations against this repository's own gates of 15 and 30. The slice resumes at VS-002 once the bounded Phase 0C prerequisite below is satisfied. VS-001 remains durable and VS-002's blocked result remains durable; neither is retracted by this transition.
+      status: preregistered   # 2026-10-01 — the bounded Phase 0C historical-price-evidence prerequisite is SATISFIED and the final result-blind VS-002 preregistration is DURABLE (PR #58 @ 556e554a, freeze b7da049b…); the slice is no longer blocked on evidence. VS-002 is PREREGISTERED and NOT executed: the deterministic result runner is now built and durable on main (PR #60 @ eaee0584), but VS-002 itself has not been executed (no experiment run); VS-001 remains durable. Prior 2026-09-05 — BLOCKED, not complete and not abandoned. VS-002 measured that it cannot execute credibly without historical daily price/risk evidence: 2 non-overlapping 7-day cohorts against a required 10, and 10-13 usable joint return observations against this repository's own gates of 15 and 30. The slice resumes at VS-002 once the bounded Phase 0C prerequisite below is satisfied. VS-001 remains durable and VS-002's blocked result remains durable; neither is retracted by this transition.
       prerequisite_satisfied: northstar_0c_historical_price_evidence_for_vs002   # 2026-10-01 — satisfied (was blocked_on)
       prerequisite_note: >-
         2026-10-01: the bounded Phase 0C prerequisite (governed historical daily price/risk
@@ -432,7 +433,7 @@ stockbot_northstar_redesign:
                         # unblocks.
       experiments:
         VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
-        VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; no result runner yet.
+        VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; the result runner is built and durable on main (PR #60), but the experiment has not been run.
       objective: >-
         Build and run the smallest credible end-to-end Northstar investing research
         slice that exercises the real architecture and produces operating evidence.
