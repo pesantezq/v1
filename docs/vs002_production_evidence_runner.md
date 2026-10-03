@@ -101,20 +101,26 @@ The strict sequence, each step separately authorized. Status as of 2026-10-01:
    `b7da049b…`), merged via PR #58 @ `556e554a`. Grants no execution authority.
 5. **deterministic VS-002 result-runner IMPLEMENTATION** — build and certify the
    runner against the frozen preregistration + frozen package identity using
-   synthetic/mutation evidence. This is the `northstar_vs002_result_runner`
-   mission. **Status (2026-10-01): IMPLEMENTED AS A CANDIDATE** on branch
-   `research/vs002-result-runner` — `portfolio_automation/vs002_evidence/`
-   `result_runner.py` + `result_contract.py`, certified with synthetic and
-   mutation fixtures only (`tests/test_vs002_result_runner*.py`). The runner
-   recomputes the preregistration freeze digest, binds the frozen package
-   identity as metadata, and computes H1/H2/NO_ACTION under the frozen rules.
-   The real frozen evidence package was **NOT opened, enumerated, validated, or
-   evaluated**, and NO real VS-002 result was computed. Candidate completion on
-   the branch is NOT durability: it is durable only after independent review and
-   merge to `main`, and it grants NO real-experiment-execution authority. Does
-   NOT execute the real experiment.
-6. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
-   mission. NOT authorized.
+   synthetic/mutation evidence. This was the `northstar_vs002_result_runner`
+   mission. **DONE — COMPLETE and durable on `main`** via PR #60 (merge
+   `eaee0584`, post-merge CI green; certified head `c9a088e`):
+   `portfolio_automation/vs002_evidence/result_runner.py` + `result_contract.py`,
+   certified with synthetic and mutation fixtures only
+   (`tests/test_vs002_result_runner*.py`). The real frozen evidence package was
+   **NOT opened, enumerated, validated, or evaluated**, and NO real VS-002 result
+   was computed. Being durable on `main` grants NO real-experiment-execution authority.
+6. **thin VS-002 execution-adapter foundation** — wire the trusted path
+   (explicit package path -> `consumer.validate` -> `ValidatedSnapshot` ->
+   `verify_evidence_binding` -> `result_runner.run` -> canonical `ExperimentResult`
+   -> governed immutable result artifact) with package-integrity wiring, SYNTHETIC
+   fixtures only. This is the `northstar_vs002_execution_adapter_foundation`
+   mission — the **NEXT authorized bounded step**. Execution-time package
+   integrity = recomputable artifact digests + deterministic `package_id`
+   (`consumer.validate`) PLUS `manifest code_sha == frozen source_production_sha`;
+   the frozen `package_transport_digest` is a **HISTORICAL ATTESTATION ONLY** and is
+   not recomputed. Does NOT open the real package and does NOT execute the experiment.
+7. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
+   mission (`northstar_vs002_frozen_execution`). NOT authorized.
 
 The authoritative frozen experiment contract is the preregistration JSON in step
 4; this document summarizes the sequencing only and does not restate those rules.
