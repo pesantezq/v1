@@ -23,16 +23,17 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-10-01: the historical-price-
-#: evidence prerequisite is COMPLETE (frozen VS-002 evidence package durable and
-#: lab-revalidated; final result-blind preregistration merged via PR #58), so the
-#: dispatchable bounded step is repointed to the VS-002 result-runner
-#: IMPLEMENTATION. Identifiers kept apart:
-#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today
-#:   HISTORICAL_EVIDENCE_MISSION - the just-completed prerequisite (now prior_primary)
+#: The mission the roadmap authorizes NOW. 2026-10-02: the deterministic VS-002
+#: result runner is COMPLETE and durable on main (PR #60 merged @ eaee0584, post-
+#: merge CI green), so the dispatchable bounded step is repointed to the THIN
+#: VS-002 execution-adapter foundation. Identifiers kept apart:
+#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today (the execution adapter)
+#:   RESULT_RUNNER_MISSION       - the just-completed result runner (now prior_primary)
+#:   HISTORICAL_EVIDENCE_MISSION - the earlier completed prerequisite (before the result runner)
 #:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
-#:   VS_MISSION                  - the Vertical Slice, now `preregistered` (VS-002 not executed)
-AUTHORIZED_MISSION = "northstar_vs002_result_runner"
+#:   VS_MISSION                  - the Vertical Slice, `preregistered` (VS-002 not executed)
+AUTHORIZED_MISSION = "northstar_vs002_execution_adapter_foundation"
+RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
 VS_MISSION = "northstar_vertical_slice_and_preregistration"
@@ -188,14 +189,15 @@ def test_current_phase_and_step(state):
     assert state["current_step"] != VS_MISSION
     # the prerequisite it replaced has moved to prior_primary, not current
     assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
+    assert state["current_step"] != RESULT_RUNNER_MISSION  # just-completed; now prior_primary
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the just-completed historical-price
-    # evidence prerequisite is now the prior primary.
-    assert nos["prior_primary"] == HISTORICAL_EVIDENCE_MISSION
+    # History is carried forward, not erased: the just-completed result runner is
+    # now the prior primary (the historical-price evidence prerequisite preceded it).
+    assert nos["prior_primary"] == RESULT_RUNNER_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
