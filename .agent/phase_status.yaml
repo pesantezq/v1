@@ -430,9 +430,9 @@ stockbot_northstar_redesign:
                         # (freeze vsfreeze_f1c6ad41, verdict SUPPORTED, IC -0.059, economic
                         # skill NOT established). VS-002 was designed and deliberately NOT
                         # executed. The slice concludes only when a credible risk-adjusted
-                        # experiment has run; the result runner (built + durable on main, PR #60)
-                        # and the execution-adapter foundation are the remaining bounded steps
-                        # before a separately-authorized frozen VS-002 execution.
+                        # experiment has run. The result runner is COMPLETE and durable on main
+                        # (PR #60); the ONE remaining bounded step is the execution-adapter
+                        # foundation, before a separately-authorized frozen VS-002 execution.
       experiments:
         VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
         VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; the result runner is built and durable on main (PR #60), but the experiment has not been run.
