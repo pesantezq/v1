@@ -275,7 +275,7 @@ def test_vertical_slice_is_preregistered_not_executed_and_not_erased(phase):
     The historical-price-evidence prerequisite is satisfied and the final
     result-blind preregistration is durable, so the slice is no longer `blocked`.
     VS-001 really executed and is durable; VS-002 is preregistered and
-    deliberately not executed (no result runner built, no experiment run). A
+    deliberately not executed — the result runner is built and durable on main (PR #60), but the experiment has not been run. A
     transition that made either look like it never happened — or that implied
     VS-002 has run — would be the defect here."""
     vs = phase["stockbot_northstar_redesign"]["phases"][VS_MISSION]

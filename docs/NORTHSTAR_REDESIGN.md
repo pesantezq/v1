@@ -7,7 +7,7 @@ remote CI GREEN run `31338193791` @ `3fa43377`). **Phase 0B: COMPLETE**
 (2026-08-15; gate `NORTHSTAR_0B_CONTRACTS_READY` @ main `678c73e`, northstar-ci
 run #31 SUCCESS; exit gate `contracts reviewed + versioned + test-covered`
 satisfied, with 0B.1/0B.2/0B.3 each independently certified PASS).
-**Phase 0C: ACTIVE** (step `northstar_0c_pit_evidence_gateway_research_store`),
+**Phase 0C: ACTIVE** (current bounded step `northstar_vs002_execution_adapter_foundation`; the broad `northstar_0c_pit_evidence_gateway_research_store` is the phase's lifetime identity, preserved as history; the VS-002 result runner is COMPLETE and durable on main, PR #60 @ `eaee0584`),
 authorized 2026-08-15. Implementation has BEGUN
 (`implementation_started: true`): the EvidenceGateway foundation is durable at
 main `33de038` (PR #20, `northstar-ci` run #44 SUCCESS). Phase 0C is NOT
