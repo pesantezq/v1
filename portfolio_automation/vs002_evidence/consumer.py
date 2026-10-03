@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from portfolio_automation.vs002_evidence import contracts as C
 from portfolio_automation.vs002_evidence.builder import (
@@ -30,6 +30,20 @@ from portfolio_automation.vs002_evidence.builder import (
 from portfolio_automation.vs002_evidence import snapshots as SN
 
 EXPECTED_ARTIFACTS = frozenset({SIGNALS_REL, RETURNS_REL, MANIFEST_REL})
+#: The artifacts a package carries ONLY when its manifest declares the bar panel.
+BAR_ARTIFACTS = frozenset({BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, BARS_WITNESS_RAW_REL})
+
+
+def expected_artifacts(manifest: Mapping[str, Any]) -> frozenset[str]:
+    """The EXACT artifact set a package with this manifest must contain.
+
+    Manifest-driven in both directions: a package that declares the bar panel
+    must carry every bar artifact, and one that does not declare it must not
+    smuggle any in. This is the single definition shared by :func:`validate`
+    and by the transport digest (``transport_digest.py``), so the two cannot
+    drift apart into different ideas of what "the package" is."""
+    declares_bars = bool(manifest.get("bar_endpoint"))
+    return frozenset(EXPECTED_ARTIFACTS | (BAR_ARTIFACTS if declares_bars else frozenset()))
 
 
 class SnapshotInvalid(ValueError):
@@ -133,9 +147,7 @@ def validate(snapshot_dir: Path) -> ValidatedSnapshot:
     # declare it must not smuggle it. The EXPECTED set is manifest-driven so
     # neither direction can pass silently.
     declares_bars = bool(manifest.get("bar_endpoint"))
-    expected = set(EXPECTED_ARTIFACTS) | (
-        {BARS_REL, BARS_RAW_REL, BARS_SNAPSHOTS_REL, BARS_WITNESS_RAW_REL}
-        if declares_bars else set())
+    expected = set(expected_artifacts(manifest))
     present = {p.name for p in root.iterdir() if p.is_file()}
     missing = sorted(expected - present)
     extra = sorted(present - expected)

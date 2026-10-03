@@ -2385,6 +2385,53 @@ Only `/stable/historical-price-eod/dividend-adjusted`; the consumed field is
 - `manifest.artifact_digests["bars_witness_raw.json"]` = digest of the **whole
   persisted envelope**.
 
+### Transport digest (`vs002.transport_digest.v1`)
+A **third** integrity scope, kept distinct from the two above: the deterministic
+identity of the **transported bytes** of a package directory, computed by
+`portfolio_automation/vs002_evidence/transport_digest.py`. It does not redefine
+`package_id` or any artifact-level canonical digest, and it never parses-then-
+reserializes an artifact for hashing. Byte-exact definition, so another
+implementation can reproduce it without reading the Python source:
+
+```
+digest = SHA-256(
+    PREFIX
+    || for each artifact, in ascending order of its normalized path:
+           u32be(len(path_utf8)) || path_utf8 || u64be(len(file_bytes)) || file_bytes
+)
+PREFIX     = b"vs002.transport_digest.v1\x00"   (ASCII algorithm id + one NUL)
+path_utf8  = normalized relative POSIX path (NFC, "/" only, no "."/".." segments,
+             not absolute), UTF-8 encoded
+ordering   = ascending Unicode code point of the normalized path
+             (== ascending byte order of path_utf8)
+u32be/u64be= unsigned big-endian 32-/64-bit lengths
+file_bytes = the artifact's raw bytes exactly as stored (streamed)
+```
+
+- **Covered set**: exactly `consumer.expected_artifacts(manifest)` — `manifest.json`
+  plus the artifacts the manifest declares (the bar-panel artifacts iff
+  `bar_endpoint` is set). The manifest is parsed once, only to decide that set;
+  its bytes are hashed raw like every other artifact.
+- **Fail closed** (`TransportDigestError`): missing expected artifact; unexpected
+  file; any symlink, directory or special entry; a path that does not normalize
+  or collides with another after normalization; a file whose size changes while
+  it is read.
+- **Never enters the hash**: mtimes, permissions, ownership, directory listing
+  order, archive/tar/zip implementation, host operating system.
+- **Verification** (`verify_transport_digest(root, sha256, algorithm=...)`)
+  accepts only `algorithm == "vs002.transport_digest.v1"`.
+- **Legacy value.** The historical `package_transport_digest`
+  `4e1f5a6f432e6b1df7d062ab878922afa1439834f151c0bbfa214c289c216136` recorded for
+  `vs002evd_77469725…` in `evals/vertical_slice/VS-002_preregistration.json` and
+  `.agent/phase_status.yaml` is **preserved verbatim as a recorded fact**. The
+  procedure that produced it was never committed and is classified
+  `LEGACY_TRANSPORT_DIGEST_ALGORITHM_UNRECOVERABLE`: `vs002.transport_digest.v1` is
+  **not** claimed to reproduce it, and `verify_transport_digest` refuses that
+  label as a verification target. Establishing a new canonical transport
+  identity for the real package is the separately authorized
+  `northstar_vs002_transport_binding_recertification`; nothing in
+  `transport_digest.py` opens that package.
+
 ### Consumer replay requirement
 `consumer.validate` runs credential-free on the lab side and, for the witness,
 requires `observe_only` to be exactly `true`, extracts `rows` without mutation,

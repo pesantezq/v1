@@ -14,7 +14,7 @@
   "gpt_supervisor_required": true,
   "max_concurrent_tasks": 1,
   "max_tasks_without_checkpoint": 10,
-  "mission_id": "northstar_vs002_result_runner",
+  "mission_id": "northstar_vs002_transport_digest_contract_foundation",
   "schema_kind": "experimental_noncanonical",
   "schema_version": "engineering.runtime_policy.v0"
 }

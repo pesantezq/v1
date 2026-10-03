@@ -84,13 +84,21 @@ authorized transport mission, which selects **one** `package_id` (never
 
 ## Operator sequencing
 
-The strict sequence, each step separately authorized. Status as of 2026-10-01:
+The strict sequence, each step separately authorized. Status as of 2026-10-02:
 
 1. **production runner PASS** (this component) — builds, validates, assesses
    readiness on the VPS; publishes the immutable package. **DONE** — frozen
    package `vs002evd_77469725f5592e6df33742b68a31ae1e` on production SHA `7f2d410`.
 2. **explicit package transport** — one named `package_id` from production to the
-   lab. **DONE** — byte-exact (transport digest `4e1f5a6f…`).
+   lab. **DONE** — byte-exact (transport digest `4e1f5a6f…`). That value is a
+   **historical recorded fact**: the procedure that produced it was never
+   committed to the repository and is classified
+   `LEGACY_TRANSPORT_DIGEST_ALGORITHM_UNRECOVERABLE`, so it cannot be recomputed
+   and is not a verification target. The committed, deterministic replacement
+   algorithm is `vs002.transport_digest.v1`
+   (`portfolio_automation/vs002_evidence/transport_digest.py`, documented in
+   `docs/OUTPUT_ARTIFACT_CONTRACTS.md`); it is NOT claimed to reproduce
+   `4e1f5a6f…`. Re-binding the real package under it is step 5b below.
 3. **the lab independently validates** the exact `package_id`, artifact digests,
    EvidenceRefs, witness and readiness (`consumer.validate` on the lab side).
    **DONE** — `VS002_LAB_REVALIDATED=YES` (2026-09-28); witness PASS, readiness
@@ -102,17 +110,25 @@ The strict sequence, each step separately authorized. Status as of 2026-10-01:
 5. **deterministic VS-002 result-runner IMPLEMENTATION** — build and certify the
    runner against the frozen preregistration + frozen package identity using
    synthetic/mutation evidence. This is the `northstar_vs002_result_runner`
-   mission. **Status (2026-10-01): IMPLEMENTED AS A CANDIDATE** on branch
-   `research/vs002-result-runner` — `portfolio_automation/vs002_evidence/`
-   `result_runner.py` + `result_contract.py`, certified with synthetic and
-   mutation fixtures only (`tests/test_vs002_result_runner*.py`). The runner
-   recomputes the preregistration freeze digest, binds the frozen package
-   identity as metadata, and computes H1/H2/NO_ACTION under the frozen rules.
-   The real frozen evidence package was **NOT opened, enumerated, validated, or
-   evaluated**, and NO real VS-002 result was computed. Candidate completion on
-   the branch is NOT durability: it is durable only after independent review and
-   merge to `main`, and it grants NO real-experiment-execution authority. Does
-   NOT execute the real experiment.
+   mission. **DONE (2026-10-02): DURABLE** — PR #60 merged @ main `eaee0584`,
+   post-merge CI green. `portfolio_automation/vs002_evidence/result_runner.py` +
+   `result_contract.py`, certified with synthetic and mutation fixtures only
+   (`tests/test_vs002_result_runner*.py`). The runner recomputes the
+   preregistration freeze digest, binds the frozen package identity as metadata,
+   and computes H1/H2/NO_ACTION under the frozen rules. The real frozen evidence
+   package was **NOT opened, enumerated, validated, or evaluated**, and NO real
+   VS-002 result was computed. Durability grants NO real-experiment-execution
+   authority.
+5a. **transport-digest contract foundation** — the committed
+   `vs002.transport_digest.v1` algorithm proven on synthetic packages only
+   (`transport_digest.py`, `tests/test_vs002_transport_digest.py`). This is the
+   `northstar_vs002_transport_digest_contract_foundation` mission (current). It does
+   NOT open the real package, execute VS-002, or change the preregistration or
+   its historical `package_transport_digest`.
+5b. **transport-binding recertification** — apply the committed helper to the
+   real frozen INPUT package, result-blind, to establish a new canonical transport
+   identity and a properly versioned preregistration/binding revision. This is
+   `northstar_vs002_transport_binding_recertification`. **NOT authorized.**
 6. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
    mission. NOT authorized.
 
