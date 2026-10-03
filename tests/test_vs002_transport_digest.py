@@ -373,9 +373,15 @@ def test_legacy_digest_is_preserved_verbatim_and_is_not_a_verification_target(tm
     assert TD.LEGACY_TRANSPORT_DIGEST_ALGORITHM == "LEGACY_TRANSPORT_DIGEST_ALGORITHM_UNRECOVERABLE"
     assert TD.LEGACY_TRANSPORT_DIGEST_ALGORITHM != TD.TRANSPORT_DIGEST_ALGORITHM
     root = _write_package(tmp_path / "p", FLAT_ARTIFACTS)
-    with pytest.raises(TD.TransportDigestError, match="UNRECOVERABLE"):
+    # The refusal must come from the DEDICATED legacy branch (it explains WHY the
+    # value is not recomputable), not merely from the generic unknown-algorithm
+    # path -- otherwise the explanation could silently disappear.
+    with pytest.raises(TD.TransportDigestError,
+                       match="unrecoverable, uncommitted procedure") as exc:
         TD.verify_transport_digest(root, TD.LEGACY_TRANSPORT_DIGEST,
                                    algorithm=TD.LEGACY_TRANSPORT_DIGEST_ALGORITHM)
+    assert "historical recorded value" in str(exc.value)
+    assert "unsupported transport digest algorithm" not in str(exc.value)
 
 
 def test_no_claim_that_v1_reproduces_the_legacy_value(tmp_path: Path):
