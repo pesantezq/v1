@@ -143,7 +143,10 @@ cat .agent/phase_status.yaml            # per-step roadmap status
 - Implement only the step explicitly requested by the user.
 - Do not recommend Discovery Engine as the next step if a named roadmap step (e.g., Confidence Calibration, GUI panels) is still pending.
 - The authoritative next step is `next_official_step` in `.agent/project_state.yaml`.
+- `.agent/mission_registry.yaml` defines the protected orchestration policy for that mission: executor, auto-dispatch eligibility, and whether the next transition is preauthorized or human-required.
 - If you are unsure whether a step is in scope, ask before implementing.
+- After pushing a candidate, do not sit in a Claude session polling CI or waiting to merge. The trusted GitHub controller owns exact-head CI/Codex gating, SHA-guarded merge, post-merge certification, and any separately preauthorized transition.
+- Claude never merges, never advances protected state, and never treats a `human_required` edge as authorized.
 
 ## Observe-Only Default
 
