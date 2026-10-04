@@ -190,7 +190,9 @@ jobs:
           anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
           anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
-          github_token: ${{ github.token }}
+          # A PR opened with the default GITHUB_TOKEN does not trigger downstream CI;
+          # use the dedicated triggering credential when configured (falls back in shadow).
+          github_token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
           prompt: |
             Read the protected mission brief at the repository path
             "${{ steps.verify.outputs.prompt_source }}" (authoritative, from source

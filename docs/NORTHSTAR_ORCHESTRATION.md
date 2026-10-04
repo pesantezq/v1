@@ -220,8 +220,13 @@ controller behavior:
    source/app where supported), require PRs (no direct push), force-push protection.
 3. Configure Anthropic WIF repository variables: `ANTHROPIC_FEDERATION_RULE_ID`,
    `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID`.
-4. Configure an E4 protected GitHub Environment with required reviewers.
-5. Open a governed activation PR flipping `.agent/mission_registry.yaml`
+4. Configure a `NORTHSTAR_BOT_TOKEN` secret (a GitHub App installation token or a
+   fine-scoped PAT) used by the governance-PR and Claude-dispatch effect jobs — a PR
+   created with the default `GITHUB_TOKEN` does not trigger downstream CI, which would
+   stall the handoff. (In shadow, no PR is created, so the fallback to `github.token`
+   is inert.)
+5. Configure an E4 protected GitHub Environment with required reviewers.
+6. Open a governed activation PR flipping `.agent/mission_registry.yaml`
    `controller.mode` `shadow → enabled`; certify + manually merge it.
 
 Once `enabled` is durable, the already-implemented effectors run with no further

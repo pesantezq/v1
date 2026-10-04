@@ -111,7 +111,10 @@ def material_unresolved_from_threads(threads: list[dict], bot_login: str) -> lis
                 continue
             sev = _severity_from_body(cm.get("body") or "")
             if sev in MATERIAL_SEVERITIES:
-                out.append({"severity": sev, "commit_id": cm.get("commit_id"), "resolved": False})
+                # include author: evaluate_codex_binding filters inline_comments by
+                # author==bot, so a missing author would silently drop the finding.
+                out.append({"author": bot_login, "severity": sev,
+                            "commit_id": cm.get("commit_id"), "resolved": False})
                 break
     return out
 

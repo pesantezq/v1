@@ -347,6 +347,20 @@ def test_material_unresolved_from_threads_reads_real_resolution():
     # unresolved material from ANY head blocks: P1 at head, P2 at old head, and P0 (most severe)
     assert len(out) == 3
     assert {o["severity"] for o in out} == {"P0", "P1", "P2"}
+    # each assembled record carries author==bot so evaluate_codex_binding's author
+    # filter does not silently drop it
+    assert all(o["author"] == BOT for o in out)
+
+
+def test_assembled_material_findings_block_the_gate_end_to_end():
+    # an assembled material record (from the assembler) must actually block the gate
+    i = valid_inputs()
+    head = i["pr"]["head_sha"]
+    threads = [{"isResolved": False, "comments": [{"author": BOT, "body": "![P1 Badge] x", "commit_id": head}]}]
+    i["codex"]["inline_comments"] = asm.material_unresolved_from_threads(threads, BOT)
+    res = gate.evaluate_merge_gate(i)
+    assert res["decision"] == "FAIL"
+    assert "codex_clean_at_head" in set(res["blocking_reasons"])
 
 
 def test_reconcile_authority_requires_all_sources_to_agree():

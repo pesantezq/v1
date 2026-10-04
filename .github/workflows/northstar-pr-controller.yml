@@ -35,11 +35,6 @@ on:
     types: [resolved, unresolved]
   issue_comment:
     types: [created]
-  # Re-evaluate when northstar-ci FINISHES, so a PR whose Codex review arrived before
-  # CI completed is not left with a stale failing required check.
-  workflow_run:
-    workflows: ["northstar-ci"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -63,17 +58,15 @@ jobs:
       github.event_name == 'pull_request_review' ||
       github.event_name == 'pull_request_review_comment' ||
       github.event_name == 'pull_request_review_thread' ||
-      github.event_name == 'workflow_run' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
-      WF_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
       decision: ${{ steps.gate.outputs.decision }}
@@ -117,15 +110,25 @@ jobs:
           if [ "$MODE" != "shadow" ] && [ "$MODE" != "enabled" ]; then
             echo "::error::unknown controller mode '$MODE' — fail closed."; exit 1
           fi
-          # Resolve the PR number (direct for PR/comment events; via head branch for workflow_run).
           PR="${PR_NUMBER:-}"
-          if [ -z "$PR" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ -n "${WF_HEAD_BRANCH:-}" ]; then
-            PR=$(gh pr list -R "${GITHUB_REPOSITORY}" --head "${WF_HEAD_BRANCH}" --state open --json number -q '.[0].number // empty')
-          fi
           if [ -z "$PR" ]; then
             echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=NO_PR" >> "$GITHUB_OUTPUT"; exit 0
           fi
           PR_NUMBER="$PR"
+          # Wait for northstar-ci on THIS PR head to finish, so the gate evaluates the
+          # FINAL CI result and its check attaches to the PR head. (A workflow_run-based
+          # re-trigger would attach its check to main, not the PR head — GitHub event
+          # contract — so we poll here instead. Codex re-evaluation is handled by the
+          # pull_request_review / _comment / _thread triggers.)
+          HEADSHA=$(gh pr view "$PR" -R "${GITHUB_REPOSITORY}" --json headRefOid -q .headRefOid)
+          DEADLINE=$(( $(date +%s) + 900 ))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            ST=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEADSHA}&per_page=50" \
+                  -q 'first([.workflow_runs[] | select(.name=="northstar-ci")][].status) // ""' 2>/dev/null || echo "")
+            [ "$ST" = "completed" ] && break
+            [ -z "$ST" ] && break   # no run yet; evaluate now, a later PR event re-runs
+            sleep 20
+          done
           if ! python "$ASM" --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --mode "$MODE" --out /tmp/gate_inputs.json; then
             echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=ASSEMBLY_FAILED" >> "$GITHUB_OUTPUT"
             # FAIL CLOSED in enabled mode: a transient API/assembler failure must NOT

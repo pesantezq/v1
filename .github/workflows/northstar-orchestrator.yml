@@ -118,7 +118,11 @@ jobs:
       contents: write           # push a governance BRANCH (never main)
       pull-requests: write      # open ONE governance PR
     env:
-      GH_TOKEN: ${{ github.token }}
+      # A PR created with the default GITHUB_TOKEN does NOT trigger downstream
+      # workflow runs (GitHub recursion guard), which would stall the handoff. Use a
+      # dedicated triggering credential (GitHub App installation token / fine-scoped
+      # PAT) when configured; falls back to github.token in shadow, where no PR is made.
+      GH_TOKEN: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
       CERTIFIED_SHA: ${{ needs.post-merge-certify.outputs.certified_sha }}
     steps:
       - name: Checkout TRUSTED controller code from main
@@ -126,6 +130,7 @@ jobs:
         with:
           ref: main
           persist-credentials: true
+          token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
           fetch-depth: 0
 
       - name: Set up Python 3.12

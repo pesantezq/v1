@@ -198,9 +198,22 @@ def test_registry_controller_mode_is_shadow():
 def test_pr_controller_has_terminal_state_retriggers():
     on = _load(PR_CONTROLLER)
     on = on.get(True, on.get("on"))
+    # Codex terminal-state re-evaluation (review / comment / thread resolution).
     for ev in ("pull_request_review", "pull_request_review_comment",
-               "pull_request_review_thread", "workflow_run"):
+               "pull_request_review_thread"):
         assert ev in on, f"missing re-trigger {ev}"
+    # CI-completion is handled by in-job polling (a workflow_run check would attach to
+    # main, not the PR head), so the gate waits for northstar-ci on the PR head.
+    t = _text(PR_CONTROLLER)
+    assert "Wait for northstar-ci" in t and "DEADLINE" in t
+    assert "workflow_run" not in (on if isinstance(on, dict) else {})
+
+
+def test_generated_prs_use_triggering_credential():
+    # governance-PR and Claude-dispatch effect jobs must use a triggering credential
+    # (not the default GITHUB_TOKEN, which does not trigger downstream CI).
+    assert "secrets.NORTHSTAR_BOT_TOKEN" in _text(ORCHESTRATOR)
+    assert "secrets.NORTHSTAR_BOT_TOKEN" in _text(CLAUDE)
 
 
 def test_pr_controller_fails_closed_on_assembly_failure_in_enabled():
