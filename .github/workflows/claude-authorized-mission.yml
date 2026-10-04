@@ -1,0 +1,126 @@
+# Northstar authorized-mission Claude dispatch.
+#
+# BOOTSTRAP MODE: SHADOW. Builds the dispatch packet for the AUTHORIZED,
+# auto-dispatchable Claude mission (read from base-main protected state) and emits
+# DISPATCH/WOULD_DISPATCH/STOP. In shadow it dispatches NOTHING.
+#
+# SECURITY:
+#   * Authority + prompt come ONLY from protected source control; a caller-supplied
+#     mission id or prompt can never override protected state or widen authority
+#     (enforced by scripts/northstar_mission_packet.py).
+#   * Least-privilege token. Claude never receives PR approval or merge authority;
+#     at activation it gets at most pull-requests:write to OPEN a PR.
+#   * Prefer OIDC/WIF over a long-lived Anthropic API secret: at activation add
+#     `permissions: id-token: write` and exchange the OIDC token for short-lived
+#     credentials rather than storing a persistent secret. E4 / real-evidence /
+#     production dispatch is never reachable here (registry marks them
+#     human_required / auto_dispatch:false) and would additionally sit behind a
+#     GitHub Environment with required reviewers.
+#   * Third-party actions pinned to immutable commit SHAs; trusted main code only.
+name: claude-authorized-mission
+
+on:
+  workflow_dispatch:
+    inputs:
+      requested_mission:
+        description: "Optional mission id — IGNORED unless it equals the protected authorized mission."
+        required: false
+        type: string
+  workflow_run:
+    workflows: ["northstar-orchestrator"]
+    types: [completed]
+
+permissions:
+  contents: read            # shadow: read-only. Activation adds pull-requests:write (open PR only) and id-token:write (OIDC).
+
+concurrency:
+  group: claude-authorized-mission
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch authorized Claude mission (shadow)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REQUESTED_MISSION: ${{ github.event.inputs.requested_mission }}
+    steps:
+      - name: Checkout TRUSTED controller code from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install -r requirements.txt
+
+      - name: Build dispatch packet (shadow)
+        shell: bash
+        run: |
+          set -uo pipefail
+          PK=scripts/northstar_mission_packet.py
+          REG=.agent/mission_registry.yaml
+          if [ ! -f "$PK" ] || [ ! -f "$REG" ]; then
+            echo "::notice::dispatch tooling not durable on main yet — shadow no-op."
+            exit 0
+          fi
+          CUR=$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)
+          python - "$REG" "$CUR" "${REQUESTED_MISSION:-}" > /tmp/packet_inputs.json <<'PY'
+          import json, sys, pathlib
+          reg_path, sha, requested = sys.argv[1], sys.argv[2], (sys.argv[3] or None)
+          repo_root = pathlib.Path(".").resolve()
+          try:
+              import yaml
+              reg = yaml.safe_load(pathlib.Path(reg_path).read_text(encoding="utf-8"))
+              mode = (reg.get("controller") or {}).get("mode", "shadow")
+          except Exception:
+              reg, mode = {"missions": {}}, "shadow"
+          try:
+              from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
+              auth = RoadmapAuthorization.read(repo_root)
+              mission = auth.authorized_mission_id if auth.authoritative else None
+          except Exception:
+              mission = None
+          # prompt ONLY from the protected prompt_source
+          prompt_text = None
+          entry = (reg.get("missions") or {}).get(mission or "", {})
+          src = entry.get("prompt_source")
+          if src:
+              p = pathlib.Path(src)
+              if p.is_file():
+                  prompt_text = p.read_text(encoding="utf-8")
+          print(json.dumps({
+              "mode": mode,
+              "authoritative_mission": mission,
+              "requested_mission": requested,
+              "registry": reg,
+              "certified_main_sha": sha,
+              "protected_main_sha": sha,
+              "prompt_text": prompt_text,
+          }))
+          PY
+          echo "----- dispatch decision -----"
+          python "$PK" build --inputs /tmp/packet_inputs.json | tee /tmp/packet_out.json
+          {
+            echo "### Claude authorized-mission dispatch (shadow)"
+            echo ''
+            echo '```json'
+            cat /tmp/packet_out.json
+            echo '```'
+            echo ''
+            echo '_Shadow mode: packet emitted for inspection; nothing dispatched._'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      # --- Activation (enabled mode) would add, AFTER the packet decision is DISPATCH: ---
+      #   - uses: anthropics/claude-code-action@<immutable-sha>
+      #     with: { prompt_file: <packet prompt written to disk>, ... }
+      #   using OIDC-exchanged short-lived credentials (no long-lived secret),
+      #   pull-requests:write to OPEN a PR only (never approve/merge).

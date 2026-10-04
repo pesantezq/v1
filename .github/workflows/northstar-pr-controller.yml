@@ -1,0 +1,102 @@
+# Northstar PR controller — evaluates the NORTHSTAR_MERGE_GATE on a PR.
+#
+# BOOTSTRAP MODE: SHADOW. This workflow COMPUTES and EMITS the gate decision; it
+# performs NO merge and mutates nothing. The job name "Northstar merge gate" is
+# the check an operator will mark REQUIRED at activation. Until the controller is
+# durable on `main` and the registry controller.mode is flipped to `enabled`, the
+# job always succeeds (shadow is non-blocking).
+#
+# SECURITY: runs on `pull_request` (NOT pull_request_target) with a read-only
+# token, so untrusted candidate code can never gain write/merge power here. The
+# gate LOGIC is run from TRUSTED base `main` (a separate checkout), never from the
+# PR head — a candidate cannot rig its own gate. Third-party actions are pinned to
+# immutable commit SHAs.
+name: northstar-pr-controller
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  issue_comment:
+    types: [created]          # allows re-evaluation after `@codex review` / fixes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: northstar-pr-controller-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  northstar-merge-gate:
+    name: Northstar merge gate
+    # Only run on PR events (skip unrelated issue comments).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+    steps:
+      - name: Checkout TRUSTED controller code from base main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Evaluate NORTHSTAR_MERGE_GATE (shadow, non-blocking)
+        shell: bash
+        run: |
+          set -uo pipefail
+          GATE=scripts/northstar_pr_gate.py
+          if [ ! -f "$GATE" ]; then
+            echo "::notice::Controller not yet durable on main ($GATE absent) — shadow bootstrap no-op."
+            exit 0
+          fi
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::notice::No PR number in context — nothing to evaluate."
+            exit 0
+          fi
+          REG=.agent/mission_registry.yaml
+          MODE=$(python - "$REG" <<'PY'
+          import sys, pathlib
+          try:
+              import yaml
+              reg = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+              print((reg.get("controller") or {}).get("mode", "shadow"))
+          except Exception:
+              print("shadow")
+          PY
+          )
+          echo "controller mode: $MODE"
+          # Gather PR + CI + Codex metadata via the read-only gh API, then let the
+          # TRUSTED gate (from main) decide. Assembly is best-effort glue; the gate
+          # it feeds is the unit-tested deterministic core.
+          python scripts/northstar_assemble_gate_inputs.py \
+            --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --mode "$MODE" \
+            --out /tmp/gate_inputs.json || {
+              echo "::notice::input assembly unavailable — shadow no-op."; exit 0; }
+          echo "----- NORTHSTAR_MERGE_GATE audit -----"
+          if [ "$MODE" = "enabled" ]; then
+            python "$GATE" evaluate --inputs /tmp/gate_inputs.json --require-pass | tee /tmp/gate_out.json
+          else
+            python "$GATE" evaluate --inputs /tmp/gate_inputs.json | tee /tmp/gate_out.json
+            # shadow never blocks
+          fi
+          {
+            echo "### Northstar merge gate (${MODE})"
+            echo ''
+            echo '```json'
+            cat /tmp/gate_out.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true

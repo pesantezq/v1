@@ -1,0 +1,124 @@
+# ============================================================================
+# Northstar Mission Registry — machine-readable continuous-orchestration contract
+# ============================================================================
+# Added 2026-10-04 by northstar_continuous_mission_orchestration_foundation.
+#
+# This registry is a DECLARATIVE ROUTING CONTRACT, not an authority source.
+#
+# AUTHORITY PRECEDENCE (fail closed):
+#   The AUTHORITATIVE statement of which mission is dispatchable, and of every
+#   bounded authorization (including the paused VS-002 adapter's exact scope),
+#   lives ONLY in protected state on base `main`:
+#     .agent/project_state.yaml  (current_step, next_official_step.primary)
+#     .agent/phase_status.yaml   (active_phase.step, engineer_runtime_state.mission_id,
+#                                 bounded_authorization.*, paused_bounded_authorization)
+#     config/ew0a_runtime.json   (mission_id)
+#     config/agent_policy.yaml   (role/environment/domain authority)
+#   This registry may NARROW but can NEVER widen, grant, or redefine authority.
+#   A mission entry here confers nothing that protected state does not already
+#   authorize. The controllers re-derive every decision from protected base-main
+#   state at evaluation time and treat a registry/state disagreement as FAIL.
+#
+#   In particular, this registry deliberately does NOT copy the paused VS-002
+#   adapter authorization scope. On resume, the transition engine restores the
+#   EXACT `phase_status.yaml:...paused_bounded_authorization` object byte/struct
+#   -equivalently — it is never reconstructed, paraphrased, or widened here.
+#
+#   A candidate branch editing this file cannot thereby gain authority: the gate
+#   rejects any PR whose protected-state authority differs from base main, and
+#   dispatch/transition read authority from base-main protected state, not from a
+#   PR's copy of this registry.
+
+schema_version: northstar.mission_registry.v1
+
+# Controller rollout mode. This foundation ships in SHADOW and may never switch
+# itself to `enabled` (bootstrap rule). Activation is an operator/GPT action on
+# durable main after post-merge certification. Workflows fail closed to shadow
+# if this value is missing/unknown.
+controller:
+  mode: shadow            # shadow | enabled
+  level: C0.5_SHADOW      # aligns with the existing controller-level vocabulary (roadmap)
+  enabled_by: null        # operator/GPT sets this at activation; null in shadow
+  enabled_at: null
+
+# Risk classes that may ever be dispatched automatically. E4 (and anything
+# touching real evidence / production / broker / capital / C1 / Phase 0D) is
+# permanently human_required and can never auto-dispatch.
+auto_dispatch_allowed_risk_classes: [E1, E2, E3]
+human_required_risk_classes: [E4]
+
+missions:
+
+  northstar_continuous_mission_orchestration_foundation:
+    executor: claude
+    risk_class: E3
+    prompt_source: .agent/missions/northstar_continuous_mission_orchestration_foundation.md
+    auto_dispatch: false            # this bootstrap mission is operator-dispatched; never self-dispatches
+    completion_gate: durable_on_main_with_post_merge_ci_success
+    allowed_authority:
+      - repo_native_orchestration_implementation
+      - shadow_mode_decision_emission
+    forbidden_authority:
+      - mission_self_authorization
+      - self_merge
+      - real_vs002_package_access
+      - vs002_execution
+      - production_deployment
+      - broker_access
+      - capital_or_trading_action
+      - c1_activation
+      - phase_0d_advance
+      - roadmap_guard_weakening
+    transition_policy: preauthorized_auto   # resuming the already-authorized adapter is a pre-authorized edge
+    on_success:
+      next_mission: northstar_vs002_execution_adapter_foundation
+      restore_paused_authorization: true    # restore the EXACT phase_status paused_bounded_authorization object
+      restore_source: .agent/phase_status.yaml#stockbot_northstar_redesign.phases.northstar_phase_0c.bounded_authorization.paused_bounded_authorization
+    human_boundary_required: false
+
+  northstar_vs002_execution_adapter_foundation:
+    executor: claude
+    risk_class: E3
+    prompt_source: .agent/missions/northstar_vs002_execution_adapter_foundation.md
+    auto_dispatch: true             # already operator-authorized (currently PAUSED); eligible once resumed + certified main
+    completion_gate: durable_on_main_with_post_merge_ci_success
+    allowed_authority:
+      - thin_execution_adapter_implementation_synthetic_only
+      - governed_result_artifact_write
+    forbidden_authority:
+      - real_vs002_package_access
+      - vs002_frozen_execution
+      - vs002_metric_computation
+      - phase_0c_completion
+      - research_store_construction
+      - phase_0d_advance
+      - c1_activation
+      - production_deployment
+      - broker_access
+      - capital_or_trading_action
+      - mission_self_authorization
+    transition_policy: human_required       # its successor is E4 frozen execution — a human wall
+    on_success:
+      next_mission: northstar_vs002_frozen_execution
+      restore_paused_authorization: false
+    # Entering the adapter needs NO human boundary (operator already authorized it;
+    # it is merely PAUSED). The human wall is on its OUTBOUND transition to E4
+    # frozen execution, enforced by transition_policy: human_required above.
+    human_boundary_required: false
+
+  northstar_vs002_frozen_execution:
+    executor: claude
+    risk_class: E4
+    prompt_source: null             # no protected prompt exists; this mission is UNAUTHORIZED
+    auto_dispatch: false
+    completion_gate: unauthorized
+    allowed_authority: []
+    forbidden_authority:
+      - real_vs002_package_access
+      - vs002_execution
+      - everything_until_separately_authorized
+    transition_policy: human_required       # E4: automation must STOP; operator authorization required
+    on_success:
+      next_mission: null
+      restore_paused_authorization: false
+    human_boundary_required: true
