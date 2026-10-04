@@ -40,18 +40,27 @@ Current position (2026-08-15):
     credential protection**, then ONE fresh review. The detector was never
     loosened and no verdict was rerolled.
 - **Engineer runtime:** `mission_id` =
-  `northstar_0c_pit_evidence_gateway_research_store` — set from IDLE on
-  2026-08-15 by the operator's explicit 0C authorization. This value is the
-  bounded mission boundary: tasks from other phases are still refused. Setting
-  it grants no new authority. Authority remains `A1_ASSISTED_ENGINEERING`;
-  controller level `C0.5_SHADOW`.
+  `northstar_vs002_execution_adapter_foundation` — the current bounded dispatch
+  mission (2026-10-02). It was repointed through a sequence of bounded dispatch
+  missions. The broad `northstar_0c_pit_evidence_gateway_research_store` is the 0C
+  lifetime identity; it became `waiting_for_evidence` while still INCOMPLETE (NOT
+  completed) and is preserved as history. The bounded dispatch then ran:
+  `northstar_vertical_slice_and_preregistration` → the historical-price-evidence
+  prerequisite (COMPLETE, PR #58) → the deterministic VS-002 result runner
+  (COMPLETE and durable on main, PR #60 @ `eaee0584`) → the thin VS-002
+  execution-adapter foundation (current).
+  This value is the bounded mission boundary: tasks from other phases are still
+  refused. Setting it grants no new authority. Authority remains
+  `A1_ASSISTED_ENGINEERING`; controller level `C0.5_SHADOW`.
 - **Parallel (non-Northstar) workstream:** the Engineer Learning Kernel is
   `certification_candidate` — engineering-organization infrastructure, **not** a
   canonical Northstar contract. It is `NON_BLOCKING_FOR_NORTHSTAR_0B`. C1 is
   **DISABLED**; no capability has reached `READY_FOR_CERTIFICATION`.
 - **Phase 0C** (Point-in-Time EvidenceGateway & Research Store) — **ACTIVE**,
   the current authorized phase. Authorized 2026-08-15 by explicit operator
-  decision; step `northstar_0c_pit_evidence_gateway_research_store`.
+  decision; current bounded step `northstar_vs002_execution_adapter_foundation`
+  (the broad `northstar_0c_pit_evidence_gateway_research_store` remains the
+  phase's lifetime identity, preserved as history and not currently dispatchable).
   - **Implementation has begun** (`implementation_started: true`). The
     **EvidenceGateway foundation is durable** at main `33de038` (PR #20,
     `northstar-ci` run **#44 SUCCESS**, session `ns0c-evgw-foundation-001`):
@@ -60,10 +69,16 @@ Current position (2026-08-15):
     observability through the controller-owned read model, and a fail-closed
     certification evidence gate.
   - **Phase 0C is NOT complete.** The exit gate is unsatisfied and **no Research
-    Store exists**. Remaining: revision/supersession safety, research-store
-    persistence and query, historical as-of reads, lookahead audit over store
-    reads, and replay/reproducibility.
-  - Next bounded **candidate** (not authorized): revision/supersession safety.
+    Store exists**. The bounded VS-002 line is well advanced: the historical-price-
+    evidence prerequisite is COMPLETE (PR #58), the deterministic result runner is
+    COMPLETE and durable on main (PR #60 @ `eaee0584`), and the current authorized
+    bounded step is the VS-002 execution-adapter foundation. Remaining 0C work
+    (still unauthorized): revision/supersession safety, research-store persistence
+    and query, historical as-of reads, lookahead audit over store reads, and
+    replay/reproducibility.
+  - Current authorized bounded step: `northstar_vs002_execution_adapter_foundation`.
+    Frozen VS-002 execution remains a SEPARATE, unauthorized mission. Next 0C
+    **candidate** (not authorized): revision/supersession safety.
   - `effective_period_end` vs `as_of` remains **UNRESOLVED** — the canonical
     contract establishes no such rule, and it must not be inferred merely
     because the field exists.
