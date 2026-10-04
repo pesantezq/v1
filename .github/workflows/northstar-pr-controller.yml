@@ -17,8 +17,19 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
+  # Re-evaluate when Codex acts: a review (COMMENTED/clean) or an inline finding
+  # both emit these events, so the required check updates after Codex responds
+  # instead of stalling on the pre-review run.
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request_review_comment:
+    types: [created, edited]
   issue_comment:
-    types: [created]          # allows re-evaluation after `@codex review` / fixes
+    types: [created]          # `@codex review` / fixes also re-trigger
+  # NOTE: the clean-terminal `+1` reaction emits no workflow event. In practice
+  # Codex posts a COMMENTED review at each head (covered by pull_request_review);
+  # a pure reaction-only-with-no-review terminal is re-evaluated by an operator
+  # `workflow_dispatch` or the next review event.
   workflow_dispatch:
 
 permissions:
@@ -36,6 +47,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request_review' ||
+      github.event_name == 'pull_request_review_comment' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -171,6 +171,28 @@ enforce manually today.
 - Prefer OIDC/WIF over a long-lived API secret for Claude dispatch.
 - Fail closed on API/query ambiguity.
 
+## Input-assembly hardening (fail-closed on partial data)
+
+`scripts/northstar_assemble_gate_inputs.py` feeds the gate and is hardened so a
+security decision is never made on partial or tautological data:
+- the candidate's claimed mission is derived INDEPENDENTLY from the PR (a
+  `MISSION = <id>` contract line or a `mission:<id>` label), never copied from
+  protected state, so `protected_mission_authorizes_pr` is a real comparison;
+- all policy-relevant API queries are fully PAGINATED (a finding or protected-path
+  edit on a later page cannot be missed);
+- review-thread resolution is read from the GraphQL `reviewThreads.isResolved`
+  (fixing a finding and resolving the thread actually clears the gate);
+- `now_main_sha` is a FRESH remote read distinct from the checked-out
+  `protected.main_sha`, so `main_not_advanced` can genuinely fail;
+- the protected-path allowlist applies ONLY to files the PR ADDs; MODIFYING the
+  registry/scripts/workflows later is a protected-path violation.
+
+The PR controller re-evaluates on `pull_request_review` /
+`pull_request_review_comment` (so the required check updates after Codex responds,
+not only before). The Claude dispatch workflow verifies a REAL successful
+`northstar-ci` push run for the current main SHA before dispatching, so a manual
+`workflow_dispatch` cannot manufacture certification for an uncertified SHA.
+
 ## Required repository configuration for activation
 
 *(see final report; not mutated by this PR)* enabling GitHub auto-merge; a

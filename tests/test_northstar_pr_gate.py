@@ -23,6 +23,7 @@ def _load(name: str):
 
 
 gate = _load("northstar_pr_gate")
+asm = _load("northstar_assemble_gate_inputs")
 
 BOT = "chatgpt-codex-connector[bot]"
 HEAD = "h" * 40
@@ -259,3 +260,51 @@ def test_assess_candidate_protected_path_violation_vs_allowlist():
     out = gate.assess_candidate(base, head, allowlisted_new_paths=[".agent/mission_registry.yaml"])
     assert ".agent/project_state.yaml" in out["protected_path_violations"]
     assert ".agent/mission_registry.yaml" not in out["protected_path_violations"]
+
+
+# --------------- assembler pure helpers (Codex-hardening fixes) -------------- #
+def test_candidate_mission_from_label():
+    assert asm.candidate_mission_from_pr("body", ["mission:northstar_x"]) == "northstar_x"
+    assert asm.candidate_mission_from_pr("body", ["mission/northstar_z"]) == "northstar_z"
+
+
+def test_candidate_mission_from_body_line():
+    assert asm.candidate_mission_from_pr("intro\nMISSION = northstar_y\ntail", []) == "northstar_y"
+
+
+def test_candidate_mission_none_when_undeclared():
+    # a PR that declares no mission cannot be tautologically authorized
+    assert asm.candidate_mission_from_pr("no declaration here", []) is None
+    assert asm.candidate_mission_from_pr(None, None) is None
+
+
+def test_undeclared_candidate_mission_fails_gate():
+    # when the assembler yields None (PR declares no mission), the gate must block
+    res = _ev(lambda i: i["candidate"].update(authorized_mission=None))
+    assert res["decision"] == "FAIL"
+    assert "protected_mission_authorizes_pr" in _blocking(res)
+
+
+def test_added_only_allowlist_permits_added_but_flags_modified():
+    isp = lambda p: p.startswith((".agent/", "config/agent_policy"))
+    changed = [{"path": ".agent/mission_registry.yaml", "status": "modified"},
+               {"path": "scripts/northstar_pr_gate.py", "status": "added"},
+               {"path": "config/agent_policy.yaml", "status": "modified"}]
+    allow = {".agent/mission_registry.yaml", "scripts/northstar_pr_gate.py"}
+    out = asm.added_only_protected_violations(changed, allow, isp)
+    assert ".agent/mission_registry.yaml" in out   # MODIFYING an allowlisted file still violates
+    assert "scripts/northstar_pr_gate.py" not in out  # scripts/ not protected by isp here
+    assert "config/agent_policy.yaml" in out
+
+
+def test_material_unresolved_from_threads_reads_real_resolution():
+    head = "h" * 40
+    threads = [
+        {"isResolved": False, "comments": [{"author": BOT, "body": "![P1 Badge] x", "commit_id": head}]},
+        {"isResolved": True, "comments": [{"author": BOT, "body": "![P1 Badge] y", "commit_id": head}]},   # resolved -> excluded
+        {"isResolved": False, "comments": [{"author": BOT, "body": "nit, non-material", "commit_id": head}]},
+        {"isResolved": False, "comments": [{"author": BOT, "body": "![P2 Badge] z", "commit_id": "o" * 40}]},  # wrong head
+        {"isResolved": False, "comments": [{"author": "someone", "body": "![P1 Badge]", "commit_id": head}]},  # not the bot
+    ]
+    out = asm.material_unresolved_from_threads(threads, head, BOT)
+    assert len(out) == 1 and out[0]["severity"] == "P1"
