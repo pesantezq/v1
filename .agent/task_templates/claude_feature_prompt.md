@@ -10,6 +10,29 @@ Attach `.agent/project_state.yaml` content as additional context.
 Read `.agent/project_state.yaml` before starting.
 Confirm `{{STEP_NAME}}` is in `next_official_step`. If it is not, stop and ask.
 
+## Continuous Mission Orchestration — always applies
+
+Read `.agent/mission_registry.yaml` before implementation.
+
+- The requested mission must equal the protected current mission across project_state, phase_status, and config/ew0a_runtime.json.
+- Do not wait or poll for GitHub CI/Codex after pushing a candidate.
+- Do not merge your own PR.
+- Do not advance protected state or authorize the next mission.
+- The trusted GitHub controller owns exact-head CI, exact-head Codex review, SHA-guarded merge, post-merge main certification, and any separately preauthorized transition.
+- Automatic transitions are allowed only when the registry says `preauthorized_auto`.
+- A `human_required` transition is a hard stop. This always includes E4/real-evidence/production/capital/C1 boundaries unless separately authorized.
+- Ordinary missions must not modify the controller workflows/scripts or mission registry.
+- If running under the GitHub Claude handoff workflow, push the implementation branch and return the final report; the controller opens/certifies the PR.
+- If running interactively and opening the PR yourself, include this body marker:
+
+```
+<!-- northstar-orchestration
+kind: implementation
+mission_id: {{STEP_NAME}}
+starting_main_sha: <exact starting main SHA>
+-->
+```
+
 ---
 
 ## Goal
