@@ -54,9 +54,24 @@ Claude PR → northstar-ci (exact head) ─┐
 | `scripts/northstar_pr_gate.py` | `NORTHSTAR_MERGE_GATE` — the single deterministic pre-merge gate. Pure `evaluate_merge_gate(inputs)`. |
 | `scripts/northstar_transition.py` | Deterministic transition proposer. Pure `propose_transition(inputs)`. Emits an allowlisted governance-PR proposal or STOP. |
 | `scripts/northstar_mission_packet.py` | Deterministic Claude dispatch packet builder. Pure `build_mission_packet(inputs)`. |
-| `.github/workflows/northstar-pr-controller.yml` | Runs the merge gate on PR events; emits the `Northstar merge gate` result. |
-| `.github/workflows/northstar-orchestrator.yml` | Post-merge: triggers on `northstar-ci` success on `main` (push), certifies exact SHA, runs the transition proposer. |
-| `.github/workflows/claude-authorized-mission.yml` | Future Claude dispatch, gated; shadow by default. |
+| `scripts/northstar_materialize_transition.py` | Deterministic transition MATERIALIZER. Surgically applies a trusted proposal to the allowlisted protected fields (comment-preserving), restoring the paused authorization EXACTLY; fail-closed; no main push. |
+| `.github/workflows/northstar-pr-controller.yml` | Read-only `Northstar merge gate` job **+ a separate `auto-merge-effect` write job** (native GitHub auto-merge), unreachable in shadow. |
+| `.github/workflows/northstar-orchestrator.yml` | Read-only post-merge certify/propose job **+ a separate `governance-pr-effect` write job** that materializes the transition and opens ONE governance PR, unreachable in shadow. |
+| `.github/workflows/claude-authorized-mission.yml` | Read-only `build-packet` job **+ a separate `claude-dispatch` write job** that invokes the pinned `anthropics/claude-code-action` via Anthropic WIF, unreachable in shadow. |
+| `.github/scripts/northstar_build_{transition,packet}_inputs.sh` | Trusted-main IO glue that assembles controller inputs for the effect/decision jobs. |
+
+### Decision → effect (privilege separation)
+Every decision is computed by a **read-only** job (least-privilege token, trusted
+main code) that emits `mode`/`decision`/`sha` outputs. A **separate write effect
+job** — with only the minimal permissions it needs — runs ONLY when those trusted
+outputs prove `mode == enabled` and the exact decision, and re-validates state
+immediately before acting. The write jobs are **unreachable while mode is shadow**:
+
+| Decision job (read-only) | Effect job (write, enabled-only) | Bounded effect |
+|---|---|---|
+| `northstar-merge-gate` (PASS) | `auto-merge-effect` (`pull-requests:write`) | enable GitHub-native auto-merge (ruleset stays authoritative) |
+| `post-merge-certify` (PROPOSE) | `governance-pr-effect` (`contents:write`,`pull-requests:write`) | materialize + push governance branch + open ONE PR (never main) |
+| `build-packet` (DISPATCH) | `claude-dispatch` (`contents:write`,`pull-requests:write`,`id-token:write`) | invoke pinned Claude action via WIF, tool-constrained, open PR only |
 
 ## Authority precedence (fail closed)
 
@@ -193,8 +208,23 @@ not only before). The Claude dispatch workflow verifies a REAL successful
 `northstar-ci` push run for the current main SHA before dispatching, so a manual
 `workflow_dispatch` cannot manufacture certification for an uncertified SHA.
 
-## Required repository configuration for activation
+## Activation contract (configuration-only — no further code PR)
 
-*(see final report; not mutated by this PR)* enabling GitHub auto-merge; a
-main-branch ruleset; the required `Northstar merge gate` check; PR-only path;
-force-push protection; expected source/app for the required check.
+Both the deterministic decision layer AND the gated effect layer ship in this PR.
+After it is durable on `main` and post-merge-certified, activation is
+**repository-administration / configuration work only** — it adds no missing
+controller behavior:
+
+1. Enable GitHub auto-merge (`allow_auto_merge=true`).
+2. Add a `main` ruleset: require the `Northstar merge gate` check (pin its
+   source/app where supported), require PRs (no direct push), force-push protection.
+3. Configure Anthropic WIF repository variables: `ANTHROPIC_FEDERATION_RULE_ID`,
+   `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID`.
+4. Configure an E4 protected GitHub Environment with required reviewers.
+5. Open a governed activation PR flipping `.agent/mission_registry.yaml`
+   `controller.mode` `shadow → enabled`; certify + manually merge it.
+
+Once `enabled` is durable, the already-implemented effectors run with no further
+development PR: the merge gate enables native auto-merge on PASS, the orchestrator
+materializes the transition and opens the governance PR on PROPOSE, and the
+dispatcher invokes Claude on DISPATCH.

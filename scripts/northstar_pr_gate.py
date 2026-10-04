@@ -184,10 +184,29 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Candidate authority assessment (used by the CLI/workflow; unit-tested).      #
 # --------------------------------------------------------------------------- #
+# The controller's OWN files. Modifying these (vs a bootstrap add) must be a
+# protected-path violation so a candidate branch cannot rewrite its own gate /
+# effect workflows / registry and thereby grant itself write or merge authority.
+CONTROLLER_PROTECTED_PREFIXES = (
+    ".github/workflows/northstar-pr-controller.yml",
+    ".github/workflows/northstar-orchestrator.yml",
+    ".github/workflows/claude-authorized-mission.yml",
+    "scripts/northstar_pr_gate.py",
+    "scripts/northstar_transition.py",
+    "scripts/northstar_mission_packet.py",
+    "scripts/northstar_assemble_gate_inputs.py",
+    "scripts/northstar_materialize_transition.py",
+    ".agent/mission_registry.yaml",
+    ".agent/missions/",
+)
+
+
 def _is_protected(path: str) -> bool:
-    """Mirror the engineer-worker protected-path policy; fall back to a minimal
-    pattern set if the module is unavailable (keeps the gate importable in any
-    checkout)."""
+    """Mirror the engineer-worker protected-path policy, PLUS the controller's own
+    files (self-protection). Falls back to a minimal pattern set if the policy
+    module is unavailable (keeps the gate importable in any checkout)."""
+    if any(path.startswith(p) for p in CONTROLLER_PROTECTED_PREFIXES):
+        return True
     try:
         from portfolio_automation.engineer_worker.policy import is_protected
         return bool(is_protected(path))
@@ -195,7 +214,7 @@ def _is_protected(path: str) -> bool:
         fallback = (".agent/", "config/agent_policy.yaml", "config/ew0a_runtime",
                     "decision_engine.py", "portfolio_automation/scoring",
                     "portfolio_automation/broker", "systemd/", ".git/", ".env",
-                    "credentials", "secrets")
+                    "credentials", "secrets", ".github/workflows/northstar-")
         return any(tok in path for tok in fallback)
 
 

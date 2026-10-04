@@ -191,11 +191,19 @@ def _authoritative_mission() -> str | None:
 
 
 def _is_protected(path: str) -> bool:
+    # Controller self-protection first (modifying the controller's own files is a
+    # violation unless it is the bootstrap ADD, handled by the added-only allowlist).
     try:
-        from portfolio_automation.engineer_worker.policy import is_protected
-        return bool(is_protected(path))
+        from portfolio_automation.engineer_worker.policy import is_protected as _pol
     except Exception:
-        return path.startswith((".agent/", "config/agent_policy", "config/ew0a_runtime"))
+        _pol = None
+    controller = (".github/workflows/northstar-", "scripts/northstar_",
+                  ".agent/mission_registry.yaml", ".agent/missions/")
+    if any(path.startswith(p) for p in controller):
+        return True
+    if _pol is not None:
+        return bool(_pol(path))
+    return path.startswith((".agent/", "config/agent_policy", "config/ew0a_runtime"))
 
 
 def _git(*args: str) -> str:

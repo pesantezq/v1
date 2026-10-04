@@ -226,10 +226,18 @@ def _bh():
 
 def test_assess_candidate_clean():
     base, head = _bh()
-    head["changed_paths"] = ["scripts/northstar_pr_gate.py", "docs/NORTHSTAR_ORCHESTRATION.md"]
+    # ordinary, non-protected changes
+    head["changed_paths"] = ["portfolio_automation/some_feature.py", "docs/NORTHSTAR_ORCHESTRATION.md"]
     out = gate.assess_candidate(base, head)
     assert out == {"authority_mutated": False, "forbidden_authority_introduced": [],
                    "protected_path_violations": []}
+
+
+def test_assess_candidate_flags_controller_self_modification():
+    base, head = _bh()
+    head["changed_paths"] = ["scripts/northstar_pr_gate.py"]   # modifying the controller itself
+    out = gate.assess_candidate(base, head)
+    assert "scripts/northstar_pr_gate.py" in out["protected_path_violations"]
 
 
 def test_assess_candidate_detects_authority_mutation():
@@ -295,6 +303,34 @@ def test_added_only_allowlist_permits_added_but_flags_modified():
     assert ".agent/mission_registry.yaml" in out   # MODIFYING an allowlisted file still violates
     assert "scripts/northstar_pr_gate.py" not in out  # scripts/ not protected by isp here
     assert "config/agent_policy.yaml" in out
+
+
+def test_controller_self_protection_blocks_modifying_its_own_workflow():
+    # a candidate that MODIFIES the controller's own workflow/script/registry must
+    # be a protected-path violation (cannot self-grant write authority)
+    isp = asm._is_protected
+    changed = [{"path": ".github/workflows/northstar-pr-controller.yml", "status": "modified"},
+               {"path": "scripts/northstar_pr_gate.py", "status": "modified"},
+               {"path": ".agent/mission_registry.yaml", "status": "modified"}]
+    allow = asm.ALLOWLISTED_ADDED_PATHS
+    out = asm.added_only_protected_violations(changed, allow, isp)
+    assert ".github/workflows/northstar-pr-controller.yml" in out
+    assert "scripts/northstar_pr_gate.py" in out
+    assert ".agent/mission_registry.yaml" in out
+
+
+def test_controller_self_protection_permits_bootstrap_add():
+    isp = asm._is_protected
+    changed = [{"path": ".github/workflows/northstar-pr-controller.yml", "status": "added"},
+               {"path": "scripts/northstar_pr_gate.py", "status": "added"}]
+    out = asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, isp)
+    assert out == []   # the bootstrap PR that ADDs the controller is allowed
+
+
+def test_gate_is_protected_flags_controller_and_workflows():
+    assert gate._is_protected(".github/workflows/northstar-orchestrator.yml")
+    assert gate._is_protected("scripts/northstar_materialize_transition.py")
+    assert gate._is_protected(".agent/missions/x.md")
 
 
 def test_material_unresolved_from_threads_reads_real_resolution():

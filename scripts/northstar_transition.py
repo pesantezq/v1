@@ -120,6 +120,9 @@ def propose_transition(inputs: dict[str, Any]) -> dict[str, Any]:
     proposal = {
         "proposal_type": "governance_transition_pr",
         "delivery": "ordinary CI/review/human-merge governance; NOT a direct main push",
+        "completed_mission": completed,
+        "next_mission": nxt,
+        "certified_main_sha": certified_sha,
         "allowlisted_field_edits": {
             ".agent/project_state.yaml#current_step": nxt,
             ".agent/project_state.yaml#next_official_step.primary": nxt,
