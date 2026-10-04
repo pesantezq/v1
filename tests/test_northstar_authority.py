@@ -186,7 +186,8 @@ def test_current_phase_and_step(state):
     assert state["current_step"] != VS_MISSION
     # the prerequisite it replaced has moved to prior_primary, not current
     assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
-    assert state["current_step"] != RESULT_RUNNER_MISSION  # just-completed; now prior_primary
+    assert state["current_step"] != RESULT_RUNNER_MISSION
+    assert state["current_step"] != ADAPTER_MISSION  # explicitly paused while orchestration is current
 
 
 def test_next_official_step_is_the_authorized_mission(state):
@@ -197,6 +198,7 @@ def test_next_official_step_is_the_authorized_mission(state):
     # merge/CI/handoff waits. It is therefore the immediately prior primary and
     # must remain resumable, not be misclassified as complete.
     assert nos["prior_primary"] == ADAPTER_MISSION
+    assert nos["secondary"] == []  # paused work must not be advertised as dispatchable
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -369,7 +371,7 @@ def test_only_the_bounded_0c_mission_is_dispatchable():
 
     assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
 
-    for refused in (BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
+    for refused in (ADAPTER_MISSION, BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
                     "northstar_0d_certification", "", None):
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
@@ -541,6 +543,31 @@ def test_phase_0c_authorization_is_preserved_as_history(phase):
     auth = p0c["authorization"]
     assert auth["authorized_by"] == "operator"
     assert auth["authorized_mission"] == AUTHORIZED_0C_MISSION
+
+
+
+def test_paused_adapter_authorization_is_preserved_exactly(phase):
+    """The orchestration insertion may pause the adapter but may not erase or widen
+    the operator-approved adapter scope that must be restored after orchestration."""
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    paused = p0c["bounded_authorization"]["paused_bounded_authorization"]
+    assert paused["authorized_by"] == "operator"
+    assert paused["authorized_mission"] == ADAPTER_MISSION
+    assert paused["status"] == "PAUSED_NOT_EXECUTED"
+    assert paused["not_yet_executed"] is True
+    scope = paused["scope"]
+    for required in (
+        "EXPLICIT caller-supplied package path",
+        "SYNTHETIC fixtures ONLY",
+        "HISTORICAL ATTESTATION ONLY",
+        "does NOT authorize northstar_vs002_frozen_execution",
+        "real-package access",
+        "VS-002 metric computation",
+        "C1",
+        "trading/capital authority",
+    ):
+        assert required in scope
+    assert ADAPTER_MISSION in p0c["bounded_authorization"]["resume_after_completion"]
 
 
 def test_phase_0c_depends_on_a_completed_0b(phase):
