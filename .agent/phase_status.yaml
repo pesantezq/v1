@@ -90,11 +90,14 @@ stockbot_northstar_redesign:
                           # into it. Setting it grants NO new authority — only which
                           # mission's tasks may be dispatched.
     last_authorized_mission: northstar_vs002_execution_adapter_foundation
-                          # 2026-10-02 — the mission authorized immediately before the current execution-adapter
-                          # foundation; COMPLETE and durable on main (PR #60 @ eaee0584b643, post-merge CI green).
-                          # Prior: 2026-10-01 — northstar_0c_historical_price_evidence_for_vs002, the mission
-                          # authorized immediately before the
-                          # result-runner. It is COMPLETE and durable (governed VS-002 evidence
+                          # 2026-10-04 — the mission authorized immediately before the current
+                          # orchestration foundation. The execution adapter is PAUSED before
+                          # implementation, not complete/cancelled, and resumes after this
+                          # orchestration foundation is durable. Before the adapter, the
+                          # northstar_vs002_result_runner mission completed durably on main
+                          # via PR #60 @ eaee0584b643 with green post-merge CI. Before the
+                          # result runner: northstar_0c_historical_price_evidence_for_vs002,
+                          # COMPLETE and durable (governed VS-002 evidence
                           # acquisition; frozen package lab-revalidated; final result-blind
                           # preregistration merged PR #58 @ 556e554a). Before it the Vertical
                           # Slice (northstar_vertical_slice_and_preregistration), now
