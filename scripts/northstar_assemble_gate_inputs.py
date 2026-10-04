@@ -277,11 +277,13 @@ def _transition_exact_match(repo: str, pr_number: int, head_sha: str) -> bool:
         rels = {k.split("#", 1)[0] for k in proposal["allowlisted_field_edits"]}
         rels.add(".agent/phase_status.yaml")
         base_files = {rel: (REPO_ROOT / rel).read_text(encoding="utf-8") for rel in rels}
-        expected = mat.materialize_edits(base_files, proposal)["files"]
-        # PR's changed file set must be a SUBSET of the transition's files
-        changed = [f.get("filename") for f in _gh_paginated(f"repos/{repo}/pulls/{pr_number}/files")]
-        allowed = set(expected.keys())
-        if not changed or any(p not in allowed for p in changed):
+        result = mat.materialize_edits(base_files, proposal)
+        expected = result["files"]
+        expected_changed = set(result["changed"])      # the files the transition MUST change
+        # the PR's changed set must EQUAL the materializer's changed set — no missing
+        # updates (which would leave contradictory authority) and no extra files.
+        changed = {f.get("filename") for f in _gh_paginated(f"repos/{repo}/pulls/{pr_number}/files")}
+        if not expected_changed or changed != expected_changed:
             return False
         # each changed file at head must byte-equal the expected materialization
         for rel in changed:
@@ -300,8 +302,8 @@ def _is_protected(path: str) -> bool:
         from portfolio_automation.engineer_worker.policy import is_protected as _pol
     except Exception:
         _pol = None
-    controller = (".github/workflows/northstar-", ".github/scripts/northstar_",
-                  "scripts/northstar_", ".agent/mission_registry.yaml", ".agent/missions/")
+    controller = (".github/", "scripts/northstar_",
+                  ".agent/mission_registry.yaml", ".agent/missions/")
     if any(path.startswith(p) for p in controller):
         return True
     if _pol is not None:

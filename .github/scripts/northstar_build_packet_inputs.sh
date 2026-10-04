@@ -15,10 +15,13 @@ try:
     mode = (reg.get("controller") or {}).get("mode", "shadow")
 except Exception:
     reg, mode = {"missions": {}}, "shadow"
+# Authority must be RECONCILED across every protected source (project_state,
+# phase_status, ew0a_runtime) AND match roadmap_guard, else fail closed.
 try:
-    from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
-    auth = RoadmapAuthorization.read(root)
-    mission = auth.authorized_mission_id if auth.authoritative else None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("asm", "scripts/northstar_assemble_gate_inputs.py")
+    asm = importlib.util.module_from_spec(spec); spec.loader.exec_module(asm)
+    mission = asm._reconciled_authoritative()
 except Exception:
     mission = None
 prompt_text = None

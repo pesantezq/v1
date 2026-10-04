@@ -150,13 +150,14 @@ jobs:
           [ "$CUR" = "$CERTIFIED_SHA" ] || { echo "::error::main advanced ($CUR != $CERTIFIED_SHA) — STOP"; exit 1; }
           # Re-derive authoritative mission + registry constraints from trusted main; must still match.
           python - "$MISSION" > /tmp/verify.txt <<'PY'
-          import sys, pathlib
+          import sys, pathlib, importlib.util
           mission=sys.argv[1]
           import yaml
           reg=yaml.safe_load(pathlib.Path(".agent/mission_registry.yaml").read_text(encoding="utf-8"))
-          from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
-          auth=RoadmapAuthorization.read(pathlib.Path(".").resolve())
-          m=auth.authorized_mission_id if auth.authoritative else None
+          # Reconciled authority across ALL protected sources (must match roadmap_guard).
+          spec=importlib.util.spec_from_file_location("asm","scripts/northstar_assemble_gate_inputs.py")
+          asm=importlib.util.module_from_spec(spec); spec.loader.exec_module(asm)
+          m=asm._reconciled_authoritative()
           e=(reg.get("missions") or {}).get(mission or "", {})
           allowed=set(reg.get("auto_dispatch_allowed_risk_classes") or [])
           src=e.get("prompt_source") or ""

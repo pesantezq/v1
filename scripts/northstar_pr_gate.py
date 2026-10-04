@@ -208,8 +208,7 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
 # protected-path violation so a candidate branch cannot rewrite its own gate /
 # effect workflows / registry and thereby grant itself write or merge authority.
 CONTROLLER_PROTECTED_PREFIXES = (
-    ".github/workflows/northstar-",
-    ".github/scripts/northstar_",
+    ".github/",                     # ALL workflows/actions/scripts are security-critical
     "scripts/northstar_",
     ".agent/mission_registry.yaml",
     ".agent/missions/",
