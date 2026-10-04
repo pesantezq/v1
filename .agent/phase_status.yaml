@@ -292,10 +292,10 @@ stockbot_northstar_redesign:
             artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
             recomputable artifact digests + deterministic package_id (consumer.validate) plus
             ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
-            package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed.
-            This paused authorization does NOT authorize northstar_vs002_frozen_execution,
-            real-package access, VS-002 metric computation, Phase 0C completion, the 0C Research Store,
-            Phase 0D or later, C1, production deployment, broker access, or trading/capital authority.
+            package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
+            does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
+            computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
+            deployment, broker access, or trading/capital authority.
           resume_condition: >-
             Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
             durable on main, and post-merge main CI is green; resumption must restore this exact
