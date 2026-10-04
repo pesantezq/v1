@@ -143,11 +143,56 @@ def _parse_edit_key(key: str) -> tuple[str, str]:
     return relpath, locator
 
 
+_BA_PATH = "stockbot_northstar_redesign.phases.northstar_phase_0c.bounded_authorization"
+
+
 def _paused_object(phase_text: str) -> Any:
     import yaml
     doc = yaml.safe_load(phase_text)
     return (doc["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
             ["bounded_authorization"]["paused_bounded_authorization"])
+
+
+def _active_bounded_auth(phase_text: str) -> dict:
+    import yaml
+    doc = yaml.safe_load(phase_text)
+    return (doc["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+            ["bounded_authorization"])
+
+
+def _block_span_by_path(lines: list[str], dotted: str) -> tuple[int, int, int]:
+    start, end, parent = 0, len(lines), -1
+    hidx = bend = hind = 0
+    for seg in dotted.split("."):
+        hidx, bend, hind = _child_span(lines, start, end, parent, seg)
+        start, end, parent = hidx + 1, bend, hind
+    return hidx, bend, hind
+
+
+def _dedent_line(line: str, n: int) -> str:
+    i = 0
+    while i < n and i < len(line) and line[i] == " ":
+        i += 1
+    return line[i:]
+
+
+def promote_paused_to_active(phase_text: str) -> str:
+    """Make the ACTIVE bounded_authorization BECOME the preserved paused object
+    (verbatim, by moving its exact text up one indent level), preserving any
+    prior_bounded_authorization sibling. Surgical; no reconstruction."""
+    lines = phase_text.splitlines(keepends=True)
+    ba_h, ba_end, ba_ind = _block_span_by_path(lines, _BA_PATH)
+    pb_h, pb_end, pb_ind = _child_span(lines, ba_h + 1, ba_end, ba_ind, "paused_bounded_authorization")
+    dedent = pb_ind - ba_ind   # move paused children up to the active-children level
+    paused_children = [(_dedent_line(l, dedent) if l.strip() else l) for l in lines[pb_h + 1:pb_end]]
+    try:
+        pr_h, pr_end, _pr_ind = _child_span(lines, ba_h + 1, ba_end, ba_ind, "prior_bounded_authorization")
+        prior_block = lines[pr_h:pr_end]
+    except MaterializeError:
+        prior_block = []
+    new_children = paused_children + prior_block
+    out = lines[:ba_h + 1] + new_children + lines[ba_end:]
+    return "".join(out)
 
 
 def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> dict[str, Any]:
@@ -163,12 +208,18 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
     # 1) EXACT paused-authorization preservation check (before any edit)
     restore = proposal.get("restore_bounded_authorization")
     phase_rel = ".agent/phase_status.yaml"
+    already_promoted = False
     if restore is not None:
         if phase_rel not in out:
             raise MaterializeError("phase_status.yaml text not provided for restore")
-        before = _paused_object(out[phase_rel])
-        if before != restore:
-            raise MaterializeError("preserved paused_bounded_authorization != proposal object")
+        active = _active_bounded_auth(out[phase_rel])
+        active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
+        if "paused_bounded_authorization" not in active and active_core == restore:
+            already_promoted = True   # idempotent re-apply: the active object already IS it
+        else:
+            before = _paused_object(out[phase_rel])  # must exist pre-promotion
+            if before != restore:
+                raise MaterializeError("preserved paused_bounded_authorization != proposal object")
 
     # 2) surgical scalar edits (idempotent)
     for key, new_value in edits.items():
@@ -185,20 +236,20 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
             if relpath not in changed:
                 changed.append(relpath)
 
-    # 3) restore: repoint the ACTIVE bounded_authorization.authorized_mission to the
-    #    restored mission (the preserved block itself stays verbatim as the exact,
-    #    authoritative scope — never reconstructed).
-    if restore is not None:
-        target_mission = restore.get("authorized_mission")
-        ba_path = ("stockbot_northstar_redesign.phases.northstar_phase_0c."
-                   "bounded_authorization.authorized_mission")
-        new_text = set_scalar(out[phase_rel], ba_path, str(target_mission))
+    # 3) restore: PROMOTE the preserved paused object to BE the active bounded
+    #    authorization (verbatim text moved up one level), so the active object's
+    #    mission, scope, authorizer and markers are the adapter's — not just the
+    #    mission id. The exact preserved object is the source; nothing is reconstructed.
+    if restore is not None and not already_promoted:
+        new_text = promote_paused_to_active(out[phase_rel])
         if new_text != out[phase_rel]:
             out[phase_rel] = new_text
             if phase_rel not in changed:
                 changed.append(phase_rel)
 
-    # 4) POST-EDIT verification: intended values present AND preserved block intact
+    # 4) POST-EDIT verification: intended values present AND the active bounded
+    #    authorization now equals the restored paused object (minus any preserved
+    #    prior_bounded_authorization history), with the paused nesting consumed.
     import yaml
     for key, new_value in edits.items():
         relpath, locator = _parse_edit_key(key)
@@ -208,9 +259,12 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
         if str(got) != str(new_value):
             raise MaterializeError(f"post-edit mismatch for {key}: {got!r} != {new_value!r}")
     if restore is not None:
-        after = _paused_object(out[phase_rel])
-        if after != restore:
-            raise MaterializeError("preserved paused block changed during materialization")
+        active = _active_bounded_auth(out[phase_rel])
+        active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
+        if active_core != restore:
+            raise MaterializeError("active bounded_authorization != restored paused object")
+        if "paused_bounded_authorization" in active:
+            raise MaterializeError("paused_bounded_authorization was not consumed by promotion")
 
     return {"files": out, "changed": changed, "verified": True}
 

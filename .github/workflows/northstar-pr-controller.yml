@@ -125,7 +125,9 @@ jobs:
             ST=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEADSHA}&per_page=50" \
                   -q 'first([.workflow_runs[] | select(.name=="northstar-ci")][].status) // ""' 2>/dev/null || echo "")
             [ "$ST" = "completed" ] && break
-            [ -z "$ST" ] && break   # no run yet; evaluate now, a later PR event re-runs
+            # Keep waiting even if the run has not APPEARED yet: the controller and
+            # northstar-ci start on the same event, so the API can briefly return no
+            # matching run. Only stop on completion or the deadline.
             sleep 20
           done
           if ! python "$ASM" --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --mode "$MODE" --out /tmp/gate_inputs.json; then

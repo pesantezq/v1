@@ -313,7 +313,7 @@ def _is_protected(path: str) -> bool:
     # allocation/broker surfaces a mission PR must never silently alter.
     base = path.rsplit("/", 1)[-1]
     if base in ("recommendations.py", "recommendation_engine.py", "allocation_engine.py",
-                "decision_engine.py", "scoring.py"):
+                "decision_engine.py", "scoring.py", "config.json"):
         return True
     if _pol is not None:
         return bool(_pol(path))

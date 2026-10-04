@@ -331,16 +331,20 @@ def test_materialize_changes_only_allowlisted_fields():
 
 def test_materialize_restores_paused_authorization_exactly():
     out = mat.materialize_edits(_files(), _proposal())
-    assert mat._paused_object(out["files"][".agent/phase_status.yaml"]) == PAUSED_FIXTURE
+    active = mat._active_bounded_auth(out["files"][".agent/phase_status.yaml"])
+    core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
+    assert core == PAUSED_FIXTURE               # the ACTIVE object IS the paused object
+    assert "paused_bounded_authorization" not in active   # consumed by promotion
 
 
-def test_materialize_preserves_comments_and_scope():
+def test_materialize_preserves_comments_on_edited_scalar_lines():
     out = mat.materialize_edits(_files(), _proposal())
     ph_text = out["files"][".agent/phase_status.yaml"]
-    assert "# dispatch pointer" in ph_text          # inline comment preserved
-    assert "do not reconstruct me" in ph_text       # active scope text untouched
+    assert "# dispatch pointer" in ph_text          # inline comment on an edited scalar preserved
     ps_text = out["files"][".agent/project_state.yaml"]
     assert "# authorized 2026-10-04" in ps_text
+    # the OLD orchestration scope is correctly REPLACED by the promoted adapter object
+    assert "do not reconstruct me" not in ph_text
 
 
 def test_materialize_refuses_mismatched_paused_object():
@@ -364,12 +368,13 @@ def test_materialize_is_idempotent():
     assert out2["changed"] == []
 
 
-def test_materialize_does_not_touch_prior_or_paused_authorized_mission():
+def test_materialize_promotes_paused_and_preserves_prior_history():
     import yaml
     out = mat.materialize_edits(_files(), _proposal())
     ph = yaml.safe_load(out["files"][".agent/phase_status.yaml"])
     ba = ph["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]["bounded_authorization"]
-    assert ba["paused_bounded_authorization"]["authorized_mission"] == ADAPTER  # unchanged (already adapter)
+    assert ba["authorized_mission"] == ADAPTER          # active object promoted to the adapter
+    assert "paused_bounded_authorization" not in ba      # consumed
     assert ba["prior_bounded_authorization"]["authorized_mission"] == "northstar_vs002_result_runner"
 
 

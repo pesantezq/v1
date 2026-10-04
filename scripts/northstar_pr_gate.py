@@ -223,7 +223,7 @@ def _is_protected(path: str) -> bool:
         return True
     if path.rsplit("/", 1)[-1] in ("recommendations.py", "recommendation_engine.py",
                                     "allocation_engine.py", "decision_engine.py",
-                                    "scoring.py"):
+                                    "scoring.py", "config.json"):
         return True
     try:
         from portfolio_automation.engineer_worker.policy import is_protected
