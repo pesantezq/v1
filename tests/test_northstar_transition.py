@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -240,6 +243,88 @@ def test_real_mission_registry_parses_and_is_shadow():
     assert m[FROZEN]["risk_class"] == "E4"
     assert m[FROZEN]["auto_dispatch"] is False
     assert "E4" not in reg["auto_dispatch_allowed_risk_classes"]
+
+
+def test_transition_input_builder_serializes_yaml_dates_as_iso8601(tmp_path):
+    # Regression for the first real post-merge orchestrator run: PyYAML loads
+    # unquoted authorized_at scalars as datetime.date, which must be normalized
+    # deterministically before the transition input document is JSON encoded.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'MISSION = "
+        + ORCH
+        + "'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env["GITHUB_REPOSITORY"] = "pesantezq/v1"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / ".github" / "scripts" / "northstar_build_transition_inputs.sh"),
+            MAIN,
+            "success",
+            "push",
+            "main",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(proc.stdout)
+    paused = payload["paused_authorization"]
+    assert paused["authorized_mission"] == ADAPTER
+    assert paused["authorized_at"] == "2026-10-02"
+    assert isinstance(paused["authorized_at"], str)
+
+
+def test_real_json_normalized_paused_authorization_materializes_exactly():
+    # The proposal crosses JSON (date -> ISO string), while the source YAML is
+    # reparsed by the materializer (ISO-looking scalar -> datetime.date). Those
+    # representations must compare canonically without changing the preserved
+    # authorization text or weakening the exact-object check.
+    yaml = _yaml()
+    phase_text = PHASE_FILE.read_text(encoding="utf-8")
+    phase = yaml.safe_load(phase_text)
+    paused_yaml = (
+        phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+        ["bounded_authorization"]["paused_bounded_authorization"]
+    )
+
+    def iso_default(value):
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        raise TypeError(f"unsupported test transport type: {type(value).__name__}")
+
+    paused_transport = json.loads(json.dumps(paused_yaml, default=iso_default))
+    assert paused_transport["authorized_at"] == "2026-10-02"
+
+    proposal = _proposal()
+    proposal["restore_bounded_authorization"] = paused_transport
+    files = {
+        ".agent/project_state.yaml": (
+            REPO_ROOT / ".agent" / "project_state.yaml"
+        ).read_text(encoding="utf-8"),
+        ".agent/phase_status.yaml": phase_text,
+        "config/ew0a_runtime.json": (
+            REPO_ROOT / "config" / "ew0a_runtime.json"
+        ).read_text(encoding="utf-8"),
+    }
+
+    out = mat.materialize_edits(files, proposal)
+    active = mat._active_bounded_auth(out["files"][".agent/phase_status.yaml"])
+    active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
+    assert mat._canonical_transport(active_core) == paused_transport
+    assert "paused_bounded_authorization" not in active
+    assert "authorized_at: 2026-10-02" in out["files"][".agent/phase_status.yaml"]
 
 
 # ------------------------- transition MATERIALIZER -------------------------- #

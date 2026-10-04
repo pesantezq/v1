@@ -28,6 +28,7 @@ goes through ordinary CI/review/human-merge governance.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import re
 import subprocess
@@ -146,6 +147,27 @@ def _parse_edit_key(key: str) -> tuple[str, str]:
 _BA_PATH = "stockbot_northstar_redesign.phases.northstar_phase_0c.bounded_authorization"
 
 
+def _canonical_transport(value: Any) -> Any:
+    """Normalize YAML-native values to the deterministic JSON transport domain.
+
+    PyYAML materializes unquoted dates/timestamps as date/datetime objects while
+    transition proposals cross a JSON boundary and therefore carry ISO-8601
+    strings. Compare those representations canonically without reconstructing or
+    mutating the preserved YAML text. Unknown types fail closed.
+    """
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _canonical_transport(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_canonical_transport(v) for v in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise MaterializeError(
+        f"unsupported value type in transition transport: {value.__class__.__name__}"
+    )
+
+
 def _paused_object(phase_text: str) -> Any:
     import yaml
     doc = yaml.safe_load(phase_text)
@@ -207,6 +229,7 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
 
     # 1) EXACT paused-authorization preservation check (before any edit)
     restore = proposal.get("restore_bounded_authorization")
+    restore_transport = _canonical_transport(restore) if restore is not None else None
     phase_rel = ".agent/phase_status.yaml"
     already_promoted = False
     if restore is not None:
@@ -214,11 +237,12 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
             raise MaterializeError("phase_status.yaml text not provided for restore")
         active = _active_bounded_auth(out[phase_rel])
         active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
-        if "paused_bounded_authorization" not in active and active_core == restore:
+        if ("paused_bounded_authorization" not in active
+                and _canonical_transport(active_core) == restore_transport):
             already_promoted = True   # idempotent re-apply: the active object already IS it
         else:
             before = _paused_object(out[phase_rel])  # must exist pre-promotion
-            if before != restore:
+            if _canonical_transport(before) != restore_transport:
                 raise MaterializeError("preserved paused_bounded_authorization != proposal object")
 
     # 2) surgical scalar edits (idempotent)
@@ -261,7 +285,7 @@ def materialize_edits(files_text: dict[str, str], proposal: dict[str, Any]) -> d
     if restore is not None:
         active = _active_bounded_auth(out[phase_rel])
         active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
-        if active_core != restore:
+        if _canonical_transport(active_core) != restore_transport:
             raise MaterializeError("active bounded_authorization != restored paused object")
         if "paused_bounded_authorization" in active:
             raise MaterializeError("paused_bounded_authorization was not consumed by promotion")
