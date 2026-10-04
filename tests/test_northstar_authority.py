@@ -29,6 +29,7 @@ AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
 #: continuation waits without weakening roadmap_guard or protected authority.
 #: The adapter is paused and resumes after the orchestration foundation is durable.
 AUTHORIZED_MISSION = "northstar_continuous_mission_orchestration_foundation"
+ADAPTER_MISSION = "northstar_vs002_execution_adapter_foundation"
 RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
@@ -191,9 +192,11 @@ def test_current_phase_and_step(state):
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the just-completed result runner is
-    # now the prior primary (the historical-price evidence prerequisite preceded it).
-    assert nos["prior_primary"] == RESULT_RUNNER_MISSION
+    # The execution adapter was already operator-authorized but is temporarily
+    # paused so this cross-cutting orchestration foundation can remove manual
+    # merge/CI/handoff waits. It is therefore the immediately prior primary and
+    # must remain resumable, not be misclassified as complete.
+    assert nos["prior_primary"] == ADAPTER_MISSION
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
