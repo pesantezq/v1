@@ -1,0 +1,144 @@
+name: claude-authorized-mission
+
+on:
+  repository_dispatch:
+    types: [northstar-claude-dispatch]
+
+# Claude can implement and push a branch, but cannot merge or mutate authority.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: claude-authorized-mission
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - name: Checkout durable main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate protected dispatch payload
+        id: guard
+        env:
+          MISSION_ID: ${{ github.event.client_payload.mission_id }}
+          STARTING_MAIN_SHA: ${{ github.event.client_payload.starting_main_sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import yaml
+
+          mission = os.environ["MISSION_ID"]
+          expected_main = os.environ["STARTING_MAIN_SHA"]
+          actual_main = os.popen("git rev-parse HEAD").read().strip()
+          if actual_main != expected_main:
+              raise SystemExit(f"main drift: expected {expected_main}, got {actual_main}")
+
+          project = yaml.safe_load(Path(".agent/project_state.yaml").read_text())
+          phase = yaml.safe_load(Path(".agent/phase_status.yaml").read_text())
+          runtime = json.loads(Path("config/ew0a_runtime.json").read_text())
+          registry = yaml.safe_load(Path(".agent/mission_registry.yaml").read_text())
+
+          phase_name = project["current_phase"]
+          ns = phase["stockbot_northstar_redesign"]
+          mirrors = [
+              project["current_step"],
+              project["next_official_step"]["primary"],
+              ns["engineer_runtime_state"]["mission_id"],
+              ns["phases"][phase_name]["step"],
+              runtime["mission_id"],
+          ]
+          if any(value != mission for value in mirrors):
+              raise SystemExit(f"mission is not protected-current: {mirrors}")
+
+          entry = registry["missions"].get(mission)
+          if not entry or entry.get("executor") != "claude" or entry.get("auto_dispatch") is not True:
+              raise SystemExit("mission is not registered for automatic Claude dispatch")
+
+          prompt_path = entry["prompt_path"]
+          if not Path(prompt_path).is_file():
+              raise SystemExit(f"missing protected mission prompt: {prompt_path}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"prompt_path={prompt_path}\n")
+          PY
+
+      - name: Select Claude authentication
+        id: auth
+        run: |
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "mode=api_key" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Configure one repository secret: CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY"
+            exit 1
+          fi
+
+      - name: Run Claude with OAuth
+        id: claude_oauth
+        if: steps.auth.outputs.mode == 'oauth'
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          base_branch: main
+          branch_prefix: claude/northstar-
+          additional_permissions: actions: read
+          prompt: |
+            Read ${{ steps.guard.outputs.prompt_path }} from this trusted main checkout and execute that mission exactly.
+            Re-read .agent/project_state.yaml, .agent/phase_status.yaml, .agent/mission_registry.yaml, and config/ew0a_runtime.json before changing anything.
+            Do not merge. Do not mutate protected state. Do not wait or poll for CI/Codex after pushing.
+            The trusted Northstar controller will open/certify/merge the PR and perform any separately authorized transition.
+          claude_args: |
+            --max-turns 120
+
+      - name: Run Claude with API key
+        id: claude_api
+        if: steps.auth.outputs.mode == 'api_key'
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          base_branch: main
+          branch_prefix: claude/northstar-
+          additional_permissions: actions: read
+          prompt: |
+            Read ${{ steps.guard.outputs.prompt_path }} from this trusted main checkout and execute that mission exactly.
+            Re-read .agent/project_state.yaml, .agent/phase_status.yaml, .agent/mission_registry.yaml, and config/ew0a_runtime.json before changing anything.
+            Do not merge. Do not mutate protected state. Do not wait or poll for CI/Codex after pushing.
+            The trusted Northstar controller will open/certify/merge the PR and perform any separately authorized transition.
+          claude_args: |
+            --max-turns 120
+
+      - name: Open governed implementation PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MISSION_ID: ${{ github.event.client_payload.mission_id }}
+          STARTING_MAIN_SHA: ${{ github.event.client_payload.starting_main_sha }}
+          OAUTH_BRANCH: ${{ steps.claude_oauth.outputs.branch_name }}
+          API_BRANCH: ${{ steps.claude_api.outputs.branch_name }}
+        run: |
+          BRANCH="${OAUTH_BRANCH:-$API_BRANCH}"
+          if [ -z "$BRANCH" ]; then
+            echo "::error::Claude did not return a branch_name"
+            exit 1
+          fi
+          python scripts/northstar_orchestrator.py open-claude-pr             --branch "$BRANCH"             --mission "$MISSION_ID"             --starting-main-sha "$STARTING_MAIN_SHA"
