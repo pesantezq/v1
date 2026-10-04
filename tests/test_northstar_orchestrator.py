@@ -137,11 +137,17 @@ def test_registry_marks_e4_frozen_execution_human_required():
 
 
 def test_controller_paths_are_protected_for_ordinary_missions():
+    from portfolio_automation.engineer_worker.policy import is_protected
+
     registry = orch.load_registry()
     assert orch.path_is_controller_protected(
         ".github/workflows/northstar-orchestrator.yml",
         registry,
     )
+    assert is_protected(".github/workflows/northstar-orchestrator.yml")
+    assert is_protected(".github/workflows/claude-authorized-mission.yml")
+    assert is_protected("scripts/northstar_orchestrator.py")
+    assert is_protected("scripts/northstar_transition.py")
     assert orch.path_is_controller_protected(
         ".agent/missions/northstar_vs002_execution_adapter_foundation.md",
         registry,
