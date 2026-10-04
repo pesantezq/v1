@@ -286,6 +286,47 @@ def test_transition_input_builder_serializes_yaml_dates_as_iso8601(tmp_path):
     assert isinstance(paused["authorized_at"], str)
 
 
+def test_real_json_normalized_paused_authorization_materializes_exactly():
+    # The proposal crosses JSON (date -> ISO string), while the source YAML is
+    # reparsed by the materializer (ISO-looking scalar -> datetime.date). Those
+    # representations must compare canonically without changing the preserved
+    # authorization text or weakening the exact-object check.
+    yaml = _yaml()
+    phase_text = PHASE_FILE.read_text(encoding="utf-8")
+    phase = yaml.safe_load(phase_text)
+    paused_yaml = (
+        phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+        ["bounded_authorization"]["paused_bounded_authorization"]
+    )
+
+    def iso_default(value):
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        raise TypeError(f"unsupported test transport type: {type(value).__name__}")
+
+    paused_transport = json.loads(json.dumps(paused_yaml, default=iso_default))
+    assert paused_transport["authorized_at"] == "2026-10-02"
+
+    proposal = _proposal()
+    proposal["restore_bounded_authorization"] = paused_transport
+    files = {
+        ".agent/project_state.yaml": (
+            REPO_ROOT / ".agent" / "project_state.yaml"
+        ).read_text(encoding="utf-8"),
+        ".agent/phase_status.yaml": phase_text,
+        "config/ew0a_runtime.json": (
+            REPO_ROOT / "config" / "ew0a_runtime.json"
+        ).read_text(encoding="utf-8"),
+    }
+
+    out = mat.materialize_edits(files, proposal)
+    active = mat._active_bounded_auth(out["files"][".agent/phase_status.yaml"])
+    active_core = {k: v for k, v in active.items() if k != "prior_bounded_authorization"}
+    assert mat._canonical_transport(active_core) == paused_transport
+    assert "paused_bounded_authorization" not in active
+    assert "authorized_at: 2026-10-02" in out["files"][".agent/phase_status.yaml"]
+
+
 # ------------------------- transition MATERIALIZER -------------------------- #
 import textwrap  # noqa: E402
 
