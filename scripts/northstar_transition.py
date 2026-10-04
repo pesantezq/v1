@@ -120,16 +120,27 @@ def _restore_paused_adapter(
         rf"\1 {from_mission}",
         flags=re.M,
     )
-    phase_text = _replace_one(
-        phase_text,
+    phase_start = phase_text.index("    northstar_phase_0c:\n")
+    phase_end = phase_text.find("\n    northstar_vertical_slice_and_preregistration:", phase_start)
+    if phase_end < 0:
+        phase_end = len(phase_text)
+    phase_0c = phase_text[phase_start:phase_end]
+    phase_0c = _replace_one(
+        phase_0c,
         r"^(\s{6}step:)\s*\S+.*$",
         rf"\1 {to_mission}   # automatically restored from the exact paused operator authorization after orchestration became durable",
         flags=re.M,
     )
+    phase_text = phase_text[:phase_start] + phase_0c + phase_text[phase_end:]
 
     if "\n        continuous_mission_orchestration_foundation:\n" not in phase_text:
-        phase_text = _replace_one(
-            phase_text,
+        phase_start = phase_text.index("    northstar_phase_0c:\n")
+        phase_end = phase_text.find("\n    northstar_vertical_slice_and_preregistration:", phase_start)
+        if phase_end < 0:
+            phase_end = len(phase_text)
+        phase_0c = phase_text[phase_start:phase_end]
+        phase_0c = _replace_one(
+            phase_0c,
             r"^(\s{8}historical_price_evidence_prerequisite:)",
             "        continuous_mission_orchestration_foundation:\n"
             "          status: complete\n"
@@ -141,6 +152,7 @@ def _restore_paused_adapter(
             r"\1",
             flags=re.M,
         )
+        phase_text = phase_text[:phase_start] + phase_0c + phase_text[phase_end:]
 
     _write(phase_path, phase_text)
 
