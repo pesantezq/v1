@@ -1,0 +1,179 @@
+# Northstar post-merge orchestrator — certification + transition materialization.
+#
+# BOOTSTRAP MODE: SHADOW. The read-only certify/propose job computes the transition
+# decision; the write effect job (materialize + open ONE governance PR) is
+# UNREACHABLE while mode==shadow.
+#
+# PRIVILEGE SEPARATION:
+#   job `post-merge-certify`  — READ-ONLY (contents:read). Certifies the exact
+#       post-merge main SHA and runs the deterministic proposer; emits outputs.
+#   job `governance-pr-effect` — WRITE (contents:write + pull-requests:write) ONLY.
+#       Runs only when mode==enabled AND decision==PROPOSE. Re-derives the proposal
+#       from certified main, surgically materializes ONLY the allowlisted fields
+#       (restoring the paused VS-002 authorization EXACTLY), pushes a deterministic
+#       governance branch, and opens ONE governance PR against main. It NEVER pushes
+#       main and is idempotent on the (completed_mission, certified_sha) identity.
+#
+# SECURITY: a `workflow_run` workflow always runs the DEFAULT-branch (trusted main)
+# copy of this file — never a PR's copy. Trusted main code only; no untrusted
+# artifact execution. Third-party actions pinned to immutable SHAs.
+name: northstar-orchestrator
+
+on:
+  workflow_run:
+    workflows: ["northstar-ci"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: northstar-orchestrator-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  post-merge-certify:
+    name: Post-merge certification + transition proposal
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WF_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      WF_EVENT: ${{ github.event.workflow_run.event }}
+      WF_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      WF_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+    outputs:
+      mode: ${{ steps.propose.outputs.mode }}
+      decision: ${{ steps.propose.outputs.decision }}
+      certified_sha: ${{ steps.propose.outputs.certified_sha }}
+    steps:
+      - name: Checkout TRUSTED controller code from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install -r requirements.txt
+
+      - name: Certify exact SHA + propose transition
+        id: propose
+        shell: bash
+        run: |
+          set -uo pipefail
+          TRANS=scripts/northstar_transition.py
+          REG=.agent/mission_registry.yaml
+          CUR=$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${WF_HEAD_SHA}" != "$CUR" ]; then
+            echo "::warning::main advanced since this run (${WF_HEAD_SHA} != $CUR) — not certifying."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=STALE" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ ! -f "$TRANS" ] || [ ! -f "$REG" ]; then
+            echo "::notice::transition tooling not durable on main yet — shadow no-op."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=NO_OP" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Require REAL post-merge CI: a successful northstar-ci PUSH run at exactly
+          # CUR. This closes the workflow_dispatch bypass — a manual run cannot certify
+          # a SHA that never passed post-merge CI.
+          RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=main&event=push&status=success&per_page=50" \
+                 -q ".workflow_runs[] | select(.name==\"northstar-ci\" and .head_sha==\"$CUR\") | .id" 2>/dev/null | head -1)
+          if [ -z "${RUN:-}" ]; then
+            echo "::notice::main $CUR has no successful northstar-ci push run — not certified."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=UNCERTIFIED" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          bash .github/scripts/northstar_build_transition_inputs.sh "$CUR" "${WF_CONCLUSION:-success}" "${WF_EVENT:-push}" "${WF_BRANCH:-main}" > /tmp/trans_inputs.json
+          python "$TRANS" evaluate --inputs /tmp/trans_inputs.json | tee /tmp/trans_out.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open("/tmp/trans_out.json"))
+          print("decision="+str(d.get("decision"))); print("mode="+str(d.get("mode")))
+          PY
+          echo "certified_sha=$CUR" >> "$GITHUB_OUTPUT"
+          { echo "### Post-merge certification + transition ($(python -c "import json;print(json.load(open('/tmp/trans_out.json'))['mode'])"))"; echo; echo '```json'; cat /tmp/trans_out.json; echo '```'; echo; echo '_Shadow: no PR, no mutation._'; } >> "$GITHUB_STEP_SUMMARY" || true
+
+  governance-pr-effect:
+    name: Materialize transition + open governance PR (effect)
+    needs: post-merge-certify
+    # UNREACHABLE in shadow: requires enabled + a deterministic PROPOSE.
+    if: >-
+      needs.post-merge-certify.outputs.mode == 'enabled' &&
+      needs.post-merge-certify.outputs.decision == 'PROPOSE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write           # push a governance BRANCH (never main)
+      pull-requests: write      # open ONE governance PR
+    env:
+      # A PR created with the default GITHUB_TOKEN does NOT trigger downstream
+      # workflow runs (GitHub recursion guard), which would stall the handoff. Use a
+      # dedicated triggering credential (GitHub App installation token / fine-scoped
+      # PAT) when configured; falls back to github.token in shadow, where no PR is made.
+      GH_TOKEN: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
+      CERTIFIED_SHA: ${{ needs.post-merge-certify.outputs.certified_sha }}
+    steps:
+      - name: Checkout TRUSTED controller code from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: true
+          token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install -r requirements.txt
+
+      - name: Materialize transition + open governance PR (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUR=$(git rev-parse origin/main)
+          if [ "$CUR" != "$CERTIFIED_SHA" ]; then
+            echo "::error::main advanced ($CUR != $CERTIFIED_SHA) — STOP (no materialization)."; exit 1
+          fi
+          # Re-derive the proposal deterministically from certified main.
+          bash .github/scripts/northstar_build_transition_inputs.sh "$CUR" success push main > /tmp/trans_inputs.json
+          python scripts/northstar_transition.py evaluate --inputs /tmp/trans_inputs.json > /tmp/trans_out.json
+          python -c "import json,sys; d=json.load(open('/tmp/trans_out.json')); sys.exit(0 if d.get('decision')=='PROPOSE' else 3)" \
+            || { echo '::error::decision no longer PROPOSE — STOP'; exit 1; }
+          python -c "import json; d=json.load(open('/tmp/trans_out.json')); open('/tmp/proposal.json','w').write(json.dumps(d['proposal']))"
+          BRANCH=$(python -c "import json;from pathlib import Path;import importlib.util; \
+            spec=importlib.util.spec_from_file_location('m','scripts/northstar_materialize_transition.py'); \
+            m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); \
+            p=json.load(open('/tmp/proposal.json')); print(m.branch_name(p['completed_mission'], p['certified_main_sha']))")
+          echo "governance branch: $BRANCH"
+          # Idempotency: if the governance PR already exists for this dedup identity, stop.
+          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --json number -q 'length')
+          if [ "${EXIST:-0}" != "0" ]; then
+            echo "governance PR for $BRANCH already exists — idempotent no-op."; exit 0
+          fi
+          git config user.name "northstar-orchestrator"
+          git config user.email "orchestrator@northstar.invalid"
+          git checkout -b "$BRANCH"
+          python scripts/northstar_materialize_transition.py apply \
+            --proposal /tmp/proposal.json --certified-sha "$CERTIFIED_SHA" --repo-root .
+          git add -A
+          git commit -m "chore(northstar): materialize preauthorized transition $(python -c "import json;print(json.load(open('/tmp/proposal.json'))['completed_mission'])") -> $(python -c "import json;print(json.load(open('/tmp/proposal.json'))['next_mission'])")"
+          git push origin "$BRANCH"
+          gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "chore(northstar): governed mission transition (deterministic, allowlisted)" \
+            --body "Deterministic transition proposal materialized by the orchestrator from certified main \`${CERTIFIED_SHA}\`. Edits ONLY the allowlisted dispatch fields and restores the paused VS-002 adapter authorization EXACTLY. Goes through ordinary CI/review/human-merge; NOT a direct main push."
+          echo "opened governance PR from $BRANCH"

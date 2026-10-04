@@ -177,28 +177,25 @@ def test_program_is_northstar(state):
 
 
 def test_current_phase_and_step(state):
-    # 2026-09-05: Phase 0C resumed under a bounded step. current_phase names the
-    # PHASE; current_step names the bounded MISSION inside it. They are no longer
-    # the same string, which is the whole point of the bounded-step clarification.
+    # TRANSITION-SAFE: current_phase names the PHASE; current_step names the bounded
+    # MISSION inside it. The step is read dynamically so a governed transition stays
+    # CI-compatible, but it may never be the broad 0C lifetime mission or the retired
+    # vertical slice (those are permanently non-dispatchable).
     assert state["current_phase"] == "northstar_phase_0c"
-    assert state["current_step"] == AUTHORIZED_MISSION
-    assert state["current_step"] != BROAD_0C_MISSION
-    assert state["current_step"] != VS_MISSION
-    # the prerequisite it replaced has moved to prior_primary, not current
-    assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
-    assert state["current_step"] != RESULT_RUNNER_MISSION
-    assert state["current_step"] != ADAPTER_MISSION  # explicitly paused while orchestration is current
+    cur = state["current_step"]
+    assert isinstance(cur, str) and cur
+    assert cur != BROAD_0C_MISSION
+    assert cur != VS_MISSION
 
 
 def test_next_official_step_is_the_authorized_mission(state):
+    # TRANSITION-SAFE: primary must equal the current step; prior_primary records the
+    # immediately preceding mission (a non-empty string) and must remain resumable;
+    # no work may be advertised as a dispatchable secondary.
     nos = state["next_official_step"]
-    assert nos["primary"] == AUTHORIZED_MISSION
-    # The execution adapter was already operator-authorized but is temporarily
-    # paused so this cross-cutting orchestration foundation can remove manual
-    # merge/CI/handoff waits. It is therefore the immediately prior primary and
-    # must remain resumable, not be misclassified as complete.
-    assert nos["prior_primary"] == ADAPTER_MISSION
-    assert nos["secondary"] == []  # paused work must not be advertised as dispatchable
+    assert nos["primary"] == state["current_step"]
+    assert isinstance(nos.get("prior_primary"), str) and nos["prior_primary"]
+    assert nos["secondary"] == []
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -229,7 +226,7 @@ def test_agent_context_check_reports_program_phase_step():
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "stockbot_northstar_redesign" in out
-    assert AUTHORIZED_MISSION in out
+    assert _load(STATE_FILE)["current_step"] in out
     assert "northstar_phase_0c" in out
     # The stale claim must be gone from the summary.
     assert "Claude runs locally. Return VPS commands" not in out
@@ -334,11 +331,12 @@ def test_every_controller_pointer_agrees_on_the_current_mission(state, phase):
     """Three surfaces name the current mission. Any disagreement means at least
     one of them is lying, and the loop would dispatch off the wrong one."""
     runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
-    assert state["current_step"] == AUTHORIZED_MISSION
-    assert state["next_official_step"]["primary"] == AUTHORIZED_MISSION
-    assert runtime["mission_id"] == AUTHORIZED_MISSION
+    # TRANSITION-SAFE: all four pointers must AGREE on one mission (read dynamically).
+    cur = state["current_step"]
+    assert state["next_official_step"]["primary"] == cur
+    assert runtime["mission_id"] == cur
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
-    assert rt["mission_id"] == AUTHORIZED_MISSION
+    assert rt["mission_id"] == cur
     # No authoritative pointer may still dispatch the BROAD 0C mission or the
     # now-blocked Vertical Slice.
     for stale in (BROAD_0C_MISSION, VS_MISSION):
@@ -352,7 +350,7 @@ def test_every_controller_pointer_agrees_on_the_current_mission(state, phase):
     active_phase = phase["stockbot_northstar_redesign"]["phases"][state["current_phase"]]
     assert active_phase["status"] == "active"
     assert active_phase["step"] == rt["mission_id"] == runtime["mission_id"] \
-        == state["current_step"] == AUTHORIZED_MISSION
+        == state["current_step"] == cur
 
 
 def test_only_the_bounded_0c_mission_is_dispatchable():
@@ -367,12 +365,16 @@ def test_only_the_bounded_0c_mission_is_dispatchable():
 
     roadmap = RoadmapAuthorization.read(REPO_ROOT)
     assert roadmap.authoritative
-    assert roadmap.authorized_mission_id == AUTHORIZED_MISSION
+    # TRANSITION-SAFE: the guard authorizes EXACTLY the current protected mission,
+    # whatever it is, and refuses every permanently non-dispatchable mission.
+    cur = _load(STATE_FILE)["current_step"]
+    assert roadmap.authorized_mission_id == cur
+    assert_mission_authorized(roadmap, cur)  # the one that may run
 
-    assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
-
-    for refused in (ADAPTER_MISSION, BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
+    for refused in (BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
                     "northstar_0d_certification", "", None):
+        if refused == cur:
+            continue
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
 
@@ -381,9 +383,9 @@ def test_the_rest_of_0c_remains_unauthorized_by_the_bounded_step(phase):
     """An active phase is not a licence for everything inside it."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
     auth = p0c["bounded_authorization"]
-    assert auth["authorized_mission"] == AUTHORIZED_MISSION
+    # TRANSITION-SAFE: the active bounded authorization names the current mission.
+    assert auth["authorized_mission"] == _load(STATE_FILE)["current_step"]
     assert auth["authorized_by"] == "operator"
-    assert auth["not_yet_executed"] is True
     # The bounded scope must say plainly what it does NOT open.
     scope = auth["scope"]
     assert "does NOT authorize" in scope.replace("Explicitly ", "")

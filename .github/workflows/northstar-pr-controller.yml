@@ -1,0 +1,190 @@
+# Northstar PR controller — NORTHSTAR_MERGE_GATE + native auto-merge effector.
+#
+# BOOTSTRAP MODE: SHADOW. The read-only gate job computes the decision; the write
+# effect job (native GitHub auto-merge) is UNREACHABLE while mode==shadow. The job
+# name "Northstar merge gate" is the check an operator marks REQUIRED at activation.
+#
+# PRIVILEGE SEPARATION:
+#   job `northstar-merge-gate`  — READ-ONLY (contents:read, pull-requests:read).
+#       Runs TRUSTED controller code checked out from base `main`; emits outputs.
+#   job `auto-merge-effect`     — WRITE (pull-requests:write) ONLY. Runs only when
+#       the trusted gate outputs prove mode==enabled AND decision==PASS, then
+#       re-validates head/base/open/main and ENABLES GitHub-native auto-merge
+#       (the merge itself waits on the repository ruleset's required checks — the
+#       ruleset stays authoritative). It never force-merges and is idempotent.
+#
+# SECURITY: `pull_request` (not pull_request_target); a candidate that MODIFIES the
+# controller's own workflow/script/registry is a protected-path violation and fails
+# the gate (see northstar_assemble_gate_inputs/_is_protected), so a candidate branch
+# cannot self-grant write authority. #66 cannot self-merge: repo auto-merge is off
+# and no controller exists on base main until #66 is manually merged. Third-party
+# actions pinned to immutable SHAs.
+name: northstar-pr-controller
+
+on:
+  # The gate is FULLY DETERMINISTIC and depends on NO Codex/AI review, so the only
+  # triggers needed are PR-state events plus a manual recovery dispatch. The job polls
+  # exact-head northstar-ci to its terminal result itself.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to (re)evaluate (manual recovery)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: northstar-pr-controller-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  northstar-merge-gate:
+    name: Northstar merge gate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+    outputs:
+      mode: ${{ steps.gate.outputs.mode }}
+      decision: ${{ steps.gate.outputs.decision }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+      protected_main_sha: ${{ steps.gate.outputs.protected_main_sha }}
+      pr_number: ${{ steps.gate.outputs.pr_number }}
+    steps:
+      - name: Checkout TRUSTED controller code from base main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML (reliable — mode read must not silently fall back to shadow)
+        if: hashFiles('requirements.txt') != ''
+        run: python -m pip install -r requirements.txt
+
+      - name: Evaluate NORTHSTAR_MERGE_GATE
+        id: gate
+        shell: bash
+        run: |
+          set -uo pipefail
+          GATE=scripts/northstar_pr_gate.py
+          ASM=scripts/northstar_assemble_gate_inputs.py
+          if [ ! -f "$GATE" ] || [ ! -f "$ASM" ]; then
+            echo "::notice::Controller not yet durable on main — shadow bootstrap no-op."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=NO_OP" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Read the controller mode; FAIL CLOSED if it cannot be read (never silently
+          # downgrade to a non-blocking shadow pass).
+          if ! MODE=$(python -c "import yaml,pathlib;print((yaml.safe_load(pathlib.Path('.agent/mission_registry.yaml').read_text()).get('controller') or {}).get('mode',''))"); then
+            echo "::error::cannot read controller mode — fail closed."; exit 1
+          fi
+          if [ "$MODE" != "shadow" ] && [ "$MODE" != "enabled" ]; then
+            echo "::error::unknown controller mode '$MODE' — fail closed."; exit 1
+          fi
+          PR="${PR_NUMBER:-}"
+          if [ -z "$PR" ]; then
+            echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=NO_PR" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          PR_NUMBER="$PR"
+          # Wait for northstar-ci on THIS PR head to finish, so the gate evaluates the
+          # FINAL CI result and its check attaches to the PR head. The gate is fully
+          # deterministic and needs no AI-review re-trigger; the deadline below yields a
+          # deterministic FAIL in enabled mode (via --require-pass) if CI never completes.
+          HEADSHA=$(gh pr view "$PR" -R "${GITHUB_REPOSITORY}" --json headRefOid -q .headRefOid)
+          DEADLINE=$(( $(date +%s) + 900 ))
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            ST=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${HEADSHA}&per_page=50" \
+                  -q 'first([.workflow_runs[] | select(.name=="northstar-ci")][].status) // ""' 2>/dev/null || echo "")
+            [ "$ST" = "completed" ] && break
+            # Keep waiting even if the run has not APPEARED yet: the controller and
+            # northstar-ci start on the same event, so the API can briefly return no
+            # matching run. Only stop on completion or the deadline.
+            sleep 20
+          done
+          if ! python "$ASM" --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --mode "$MODE" --out /tmp/gate_inputs.json; then
+            echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=ASSEMBLY_FAILED" >> "$GITHUB_OUTPUT"
+            # FAIL CLOSED in enabled mode: a transient API/assembler failure must NOT
+            # leave the required check green without evaluating the PR.
+            if [ "$MODE" = "enabled" ]; then
+              echo "::error::gate input assembly failed in enabled mode — fail closed."; exit 1
+            fi
+            echo "::notice::input assembly unavailable — shadow no-op."; exit 0
+          fi
+          python "$GATE" evaluate --inputs /tmp/gate_inputs.json | tee /tmp/gate_out.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open("/tmp/gate_out.json")); i=json.load(open("/tmp/gate_inputs.json"))
+          print("decision="+str(d.get("decision")))
+          print("mode="+str(d.get("mode")))
+          print("head_sha="+str((i.get("pr") or {}).get("head_sha") or ""))
+          print("protected_main_sha="+str((i.get("protected") or {}).get("main_sha") or ""))
+          PY
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          { echo "### Northstar merge gate ($MODE)"; echo; echo '```json'; cat /tmp/gate_out.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
+          # In ENABLED mode this job IS the required check: fail on a non-PASS so the
+          # ruleset blocks merge. In SHADOW it never blocks.
+          DEC=$(python -c "import json;print(json.load(open('/tmp/gate_out.json'))['decision'])")
+          if [ "$MODE" = "enabled" ] && [ "$DEC" != "PASS" ]; then
+            echo "::error::merge gate FAIL in enabled mode"; exit 1
+          fi
+          exit 0
+
+  auto-merge-effect:
+    name: Enable native auto-merge (effect)
+    needs: northstar-merge-gate
+    # UNREACHABLE in shadow: requires the trusted gate to prove enabled + PASS.
+    if: >-
+      needs.northstar-merge-gate.outputs.mode == 'enabled' &&
+      needs.northstar-merge-gate.outputs.decision == 'PASS' &&
+      needs.northstar-merge-gate.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write      # the ONLY write authority, scoped to this effect job
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.northstar-merge-gate.outputs.pr_number }}
+      WANT_HEAD: ${{ needs.northstar-merge-gate.outputs.head_sha }}
+      WANT_MAIN: ${{ needs.northstar-merge-gate.outputs.protected_main_sha }}
+    steps:
+      - name: Re-validate state, then enable native auto-merge (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Re-validate immediately before acting (head/base/open unchanged; main not advanced).
+          read -r STATE BASE HEAD AUTO < <(gh pr view "$PR" -R "$GITHUB_REPOSITORY" \
+            --json state,baseRefName,headRefOid,autoMergeRequest \
+            -q '[.state, .baseRefName, .headRefOid, (if .autoMergeRequest then "enabled" else "none" end)] | @tsv')
+          CUR_MAIN=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" -q .sha)
+          echo "state=$STATE base=$BASE head=$HEAD want_head=$WANT_HEAD cur_main=$CUR_MAIN want_main=$WANT_MAIN auto=$AUTO"
+          if [ "$STATE" != "OPEN" ] || [ "$BASE" != "main" ] \
+             || [ "$HEAD" != "$WANT_HEAD" ] || [ "$CUR_MAIN" != "$WANT_MAIN" ]; then
+            echo "::error::state changed since gate decision — refusing to enable auto-merge (fail closed)."; exit 1
+          fi
+          if [ "$AUTO" = "enabled" ]; then
+            echo "auto-merge already enabled — idempotent no-op."; exit 0
+          fi
+          # Enable GitHub-NATIVE auto-merge. The actual merge still waits on the
+          # repository ruleset's required checks; this does not force a merge and
+          # grants Claude no merge authority.
+          gh pr merge "$PR" -R "$GITHUB_REPOSITORY" --auto --squash
+          echo "native auto-merge requested for PR #$PR"

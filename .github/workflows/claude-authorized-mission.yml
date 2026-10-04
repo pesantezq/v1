@@ -1,0 +1,242 @@
+# Northstar authorized-mission Claude dispatch — gated effector.
+#
+# BOOTSTRAP MODE: SHADOW. The read-only packet job computes the dispatch decision;
+# the write effect job (real anthropics/claude-code-action invocation) is
+# UNREACHABLE while mode==shadow.
+#
+# PRIVILEGE SEPARATION:
+#   job `build-packet`     — READ-ONLY (contents:read). Verifies REAL post-merge CI
+#       certification of current main, builds the dispatch packet from protected
+#       state, emits outputs. (A manual dispatch cannot manufacture certification.)
+#   job `claude-dispatch`  — WRITE (contents:write to implement on a branch,
+#       pull-requests:write to OPEN a PR, id-token:write for WIF). Runs only when
+#       mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
+#       before invoking Claude, uses the PROTECTED prompt_source, pins the action to
+#       an immutable SHA, authenticates via Anthropic Workload Identity Federation
+#       (no long-lived secret), constrains Claude's tools so it cannot merge/approve
+#       /modify rules, and is idempotent on the mission@sha identity.
+#
+# Claude never receives merge/approve authority. Third-party actions SHA-pinned.
+name: claude-authorized-mission
+
+on:
+  workflow_dispatch:
+    inputs:
+      requested_mission:
+        description: "Optional — IGNORED unless it equals the protected authorized mission."
+        required: false
+        type: string
+  workflow_run:
+    workflows: ["northstar-orchestrator"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-authorized-mission
+  cancel-in-progress: false
+
+jobs:
+  build-packet:
+    name: Build dispatch packet
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REQUESTED_MISSION: ${{ github.event.inputs.requested_mission }}
+    outputs:
+      mode: ${{ steps.packet.outputs.mode }}
+      decision: ${{ steps.packet.outputs.decision }}
+      mission: ${{ steps.packet.outputs.mission }}
+      certified_sha: ${{ steps.packet.outputs.certified_sha }}
+    steps:
+      - name: Checkout TRUSTED controller code from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install -r requirements.txt
+
+      - name: Verify REAL post-merge certification + build packet
+        id: packet
+        shell: bash
+        run: |
+          set -uo pipefail
+          PK=scripts/northstar_mission_packet.py
+          REG=.agent/mission_registry.yaml
+          if [ ! -f "$PK" ] || [ ! -f "$REG" ]; then
+            echo "::notice::dispatch tooling not durable on main yet — shadow no-op."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=NO_OP" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          CUR=$(git rev-parse origin/main)
+          RUN=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=main&event=push&status=success&per_page=50" \
+                 -q ".workflow_runs[] | select(.name==\"northstar-ci\" and .head_sha==\"$CUR\") | .id" 2>/dev/null | head -1)
+          if [ -z "${RUN:-}" ]; then
+            echo "::notice::current main $CUR is not post-merge-certified by northstar-ci — no dispatch."
+            echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=UNCERTIFIED" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          bash .github/scripts/northstar_build_packet_inputs.sh "$CUR" "${REQUESTED_MISSION:-}" > /tmp/packet_inputs.json
+          python "$PK" build --inputs /tmp/packet_inputs.json | tee /tmp/packet_out.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d=json.load(open("/tmp/packet_out.json"))
+          print("decision="+str(d.get("decision"))); print("mode="+str(d.get("mode")))
+          print("mission="+str((d.get("packet") or {}).get("mission_id") or ""))
+          PY
+          echo "certified_sha=$CUR" >> "$GITHUB_OUTPUT"
+          { echo "### Claude dispatch packet ($(python -c "import json;print(json.load(open('/tmp/packet_out.json'))['mode'])"))"; echo; echo '```json'; cat /tmp/packet_out.json; echo '```'; echo; echo '_Shadow: nothing dispatched._'; } >> "$GITHUB_STEP_SUMMARY" || true
+
+  claude-dispatch:
+    name: Dispatch Claude mission (effect)
+    needs: build-packet
+    # UNREACHABLE in shadow: requires enabled + a DISPATCH decision.
+    if: >-
+      needs.build-packet.outputs.mode == 'enabled' &&
+      needs.build-packet.outputs.decision == 'DISPATCH' &&
+      needs.build-packet.outputs.mission != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write           # implement on a branch (never main)
+      pull-requests: write      # OPEN a PR (never approve/merge)
+      id-token: write           # Anthropic Workload Identity Federation (no long-lived secret)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MISSION: ${{ needs.build-packet.outputs.mission }}
+      CERTIFIED_SHA: ${{ needs.build-packet.outputs.certified_sha }}
+      NORTHSTAR_BOT_LOGIN: ${{ vars.NORTHSTAR_BOT_LOGIN }}
+      WIF_RULE: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+      WIF_ORG: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+      WIF_SA: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout TRUSTED controller code from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: main
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        run: python -m pip install -r requirements.txt
+
+      - name: Re-verify authorization + WIF, resolve protected prompt
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fail closed if Anthropic WIF identifiers are absent (no long-lived secret fallback).
+          if [ -z "${WIF_RULE:-}" ] || [ -z "${WIF_ORG:-}" ] || [ -z "${WIF_SA:-}" ]; then
+            echo "::error::Anthropic WIF configuration absent (ANTHROPIC_FEDERATION_RULE_ID/ORGANIZATION_ID/SERVICE_ACCOUNT_ID) — fail closed."; exit 1
+          fi
+          CUR=$(git rev-parse origin/main)
+          [ "$CUR" = "$CERTIFIED_SHA" ] || { echo "::error::main advanced ($CUR != $CERTIFIED_SHA) — STOP"; exit 1; }
+          # Re-derive authoritative mission + registry constraints from trusted main; must still match.
+          python - "$MISSION" > /tmp/verify.txt <<'PY'
+          import sys, pathlib, importlib.util
+          mission=sys.argv[1]
+          import yaml
+          reg=yaml.safe_load(pathlib.Path(".agent/mission_registry.yaml").read_text(encoding="utf-8"))
+          # Reconciled authority across ALL protected sources (must match roadmap_guard).
+          spec=importlib.util.spec_from_file_location("asm","scripts/northstar_assemble_gate_inputs.py")
+          asm=importlib.util.module_from_spec(spec); spec.loader.exec_module(asm)
+          m=asm._reconciled_authoritative()
+          e=(reg.get("missions") or {}).get(mission or "", {})
+          allowed=set(reg.get("auto_dispatch_allowed_risk_classes") or [])
+          src=e.get("prompt_source") or ""
+          ok=(m==mission and e.get("executor")=="claude" and e.get("auto_dispatch") is True
+              and e.get("risk_class") in allowed and e.get("human_boundary_required") is not True
+              and bool(src) and pathlib.Path(src).is_file())
+          print("OK" if ok else "NO")
+          print(src)
+          PY
+          OK=$(sed -n 1p /tmp/verify.txt); SRC=$(sed -n 2p /tmp/verify.txt)
+          [ "$OK" = "OK" ] || { echo "::error::authorization re-check failed — STOP"; exit 1; }
+          echo "prompt_source=$SRC" >> "$GITHUB_OUTPUT"
+          # MISSION-LEVEL dedup (NOT per-SHA): once an implementation PR for this
+          # mission exists (any state), never dispatch it again — a later main commit
+          # with a new SHA must not re-launch the same mission.
+          DEDUP="auto-dispatch:${MISSION}"
+          echo "dedup=$DEDUP" >> "$GITHUB_OUTPUT"
+          # Authenticate the dedup: only count PRs authored by the TRUSTED dispatch
+          # bot (vars.NORTHSTAR_BOT_LOGIN), so an external/spoofed PR whose title
+          # contains the dedup token cannot permanently suppress legitimate dispatch.
+          AUTHOR_FILTER=""
+          [ -n "${NORTHSTAR_BOT_LOGIN:-}" ] && AUTHOR_FILTER="--author ${NORTHSTAR_BOT_LOGIN}"
+          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all $AUTHOR_FILTER --search "$DEDUP in:title" --json number -q 'length')
+          if [ "${EXIST:-0}" != "0" ]; then
+            echo "::notice::an implementation PR for $MISSION already exists — idempotent no-op."
+            echo "already=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "already=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Snapshot remote branches before dispatch
+        if: steps.verify.outputs.already == 'no'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_before.txt
+
+      - name: Invoke Claude (WIF, tool-constrained, open PR only — never merge/approve)
+        if: steps.verify.outputs.already == 'no'
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea  # v1
+        with:
+          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          # A PR opened with the default GITHUB_TOKEN does not trigger downstream CI;
+          # use the dedicated triggering credential when configured (falls back in shadow).
+          github_token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
+          prompt: |
+            Read the protected mission brief at the repository path
+            "${{ steps.verify.outputs.prompt_source }}" (authoritative, from source
+            control) and implement ONLY that mission on a NEW branch, opening ONE pull
+            request whose title contains the token "${{ steps.verify.outputs.dedup }}".
+            You must NOT merge or approve any PR, must NOT modify repository rulesets,
+            environments, or workflows under .github/, and must NOT change protected
+            dispatch state (.agent/, config/). Follow the mission's own hard boundaries.
+          # Constrain tools: file edits + safe git only. No gh/merge/approve/admin tools.
+          claude_args: >-
+            --allowedTools "Read" "Edit" "Write" "Grep" "Glob" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git checkout:*)" "Bash(git push:*)"
+
+      - name: Open the implementation PR explicitly (the action only prepares a branch)
+        if: steps.verify.outputs.already == 'no'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_after.txt
+          NEW=$(comm -13 /tmp/branches_before.txt /tmp/branches_after.txt | head -1)
+          if [ -z "$NEW" ]; then
+            echo "::notice::no new branch was pushed by the dispatch — nothing to open."
+            exit 0
+          fi
+          # Idempotent: only open if the trusted dispatch PR for this mission does not exist.
+          AUTHOR_FILTER=""
+          [ -n "${NORTHSTAR_BOT_LOGIN:-}" ] && AUTHOR_FILTER="--author ${NORTHSTAR_BOT_LOGIN}"
+          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all $AUTHOR_FILTER --search "auto-dispatch:${MISSION} in:title" --json number -q 'length')
+          if [ "${EXIST:-0}" != "0" ]; then
+            echo "dispatch PR already exists — no-op."; exit 0
+          fi
+          gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$NEW" \
+            --title "auto-dispatch:${MISSION} — implementation" \
+            --body "Automated implementation of the protected mission \`${MISSION}\` dispatched by the Northstar controller at certified main \`${CERTIFIED_SHA}\`. Opened for review; the controller never merges or approves."
+          echo "opened implementation PR from $NEW"
