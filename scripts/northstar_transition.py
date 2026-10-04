@@ -127,7 +127,7 @@ def _restore_paused_adapter(
         flags=re.M,
     )
 
-    if "continuous_mission_orchestration_foundation:" not in phase_text:
+    if "\n        continuous_mission_orchestration_foundation:\n" not in phase_text:
         phase_text = _replace_one(
             phase_text,
             r"^(\s{8}historical_price_evidence_prerequisite:)",
