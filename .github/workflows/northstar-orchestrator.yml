@@ -1,0 +1,49 @@
+name: northstar-orchestrator
+
+on:
+  workflow_run:
+    workflows: ["northstar-ci"]
+    types: [completed]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+
+# This is the trusted controller. It always checks out main, never PR-head code.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: northstar-orchestrator
+  cancel-in-progress: false
+
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted controller from main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install controller dependency
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Evaluate event against protected Northstar state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/northstar_orchestrator.py event --event-path "$GITHUB_EVENT_PATH"
