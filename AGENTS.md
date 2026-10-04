@@ -145,6 +145,16 @@ If Claude suggests a next step not in `next_official_step` in `project_state.yam
 
 ---
 
+
+## Continuous Mission Orchestration
+
+- `.agent/mission_registry.yaml` is protected control-plane input, not an implementation suggestion surface.
+- Exact-head CI + Codex evidence, merge, post-merge main certification, and preauthorized continuation are owned by the trusted GitHub controller.
+- Review findings must be bound to `original_commit_id`; GitHub may carry old inline comments forward and mutate their displayed `commit_id`.
+- A `human_required` transition must stop. Agents may explain the boundary but may not cross it.
+- Ordinary feature/documentation PRs must not modify the orchestration workflows, controller scripts, or mission registry.
+
+---
 ## Dependency Changes
 
 If a new package is added:
