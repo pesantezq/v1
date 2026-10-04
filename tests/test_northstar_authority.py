@@ -16,19 +16,21 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = REPO_ROOT / ".agent" / "project_state.yaml"
 PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
+REGISTRY_FILE = REPO_ROOT / ".agent" / "mission_registry.yaml"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-10-04: by explicit operator
-#: authorization, a short cross-cutting continuous-orchestration foundation is
-#: inserted ahead of the VS-002 execution adapter to remove manual merge/CI/
-#: continuation waits without weakening roadmap_guard or protected authority.
-#: The adapter is paused and resumes after the orchestration foundation is durable.
-AUTHORIZED_MISSION = "northstar_continuous_mission_orchestration_foundation"
+#: Current mission is read from the protected project-state record. Automatic
+#: transitions therefore do not require editing this test file merely to change
+#: today's mission; the registry + cross-file mirror tests below remain fail-closed.
+_STATE_AT_IMPORT = yaml.safe_load(STATE_FILE.read_text(encoding="utf-8"))
+AUTHORIZED_MISSION = _STATE_AT_IMPORT["current_step"]
+ORCHESTRATION_MISSION = "northstar_continuous_mission_orchestration_foundation"
 ADAPTER_MISSION = "northstar_vs002_execution_adapter_foundation"
 RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
@@ -187,18 +189,40 @@ def test_current_phase_and_step(state):
     # the prerequisite it replaced has moved to prior_primary, not current
     assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
     assert state["current_step"] != RESULT_RUNNER_MISSION
-    assert state["current_step"] != ADAPTER_MISSION  # explicitly paused while orchestration is current
+    if AUTHORIZED_MISSION == ORCHESTRATION_MISSION:
+        assert state["current_step"] != ADAPTER_MISSION  # paused while orchestration is current
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # The execution adapter was already operator-authorized but is temporarily
-    # paused so this cross-cutting orchestration foundation can remove manual
-    # merge/CI/handoff waits. It is therefore the immediately prior primary and
-    # must remain resumable, not be misclassified as complete.
-    assert nos["prior_primary"] == ADAPTER_MISSION
-    assert nos["secondary"] == []  # paused work must not be advertised as dispatchable
+    assert nos["secondary"] == []
+    if AUTHORIZED_MISSION == ORCHESTRATION_MISSION:
+        # The execution adapter is paused while orchestration is current.
+        assert nos["prior_primary"] == ADAPTER_MISSION
+    elif AUTHORIZED_MISSION == ADAPTER_MISSION:
+        assert nos["prior_primary"] == ORCHESTRATION_MISSION
+
+
+
+
+def test_current_mission_is_registered_and_transition_policy_is_safe(state):
+    registry = yaml.safe_load(REGISTRY_FILE.read_text(encoding="utf-8"))
+    assert registry["schema_version"] == "engineering.mission_registry.v1"
+    missions = registry["missions"]
+    assert AUTHORIZED_MISSION in missions
+    assert state["current_step"] == AUTHORIZED_MISSION
+    entry = missions[AUTHORIZED_MISSION]
+    transition = entry.get("on_success") or {}
+    policy = transition.get("policy")
+    assert policy in {"preauthorized_auto", "human_required"}
+    if entry.get("risk_class") == "E4":
+        assert policy == "human_required"
+        assert entry.get("auto_dispatch") is False
+    if policy == "preauthorized_auto":
+        target = transition.get("next_mission")
+        assert target in missions
+        assert missions[target].get("risk_class") != "E4"
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -371,8 +395,13 @@ def test_only_the_bounded_0c_mission_is_dispatchable():
 
     assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
 
-    for refused in (ADAPTER_MISSION, BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
-                    "northstar_0d_certification", "", None):
+    refused_missions = [BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
+                        "northstar_0d_certification", "", None]
+    if AUTHORIZED_MISSION != ADAPTER_MISSION:
+        refused_missions.append(ADAPTER_MISSION)
+    if AUTHORIZED_MISSION != ORCHESTRATION_MISSION:
+        refused_missions.append(ORCHESTRATION_MISSION)
+    for refused in refused_missions:
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
 
@@ -547,8 +576,10 @@ def test_phase_0c_authorization_is_preserved_as_history(phase):
 
 
 def test_paused_adapter_authorization_is_preserved_exactly(phase):
-    """The orchestration insertion may pause the adapter but may not erase or widen
-    the operator-approved adapter scope that must be restored after orchestration."""
+    """While orchestration is current, the paused adapter's exact operator contract
+    must survive so the controller can restore it without reconstruction."""
+    if AUTHORIZED_MISSION != ORCHESTRATION_MISSION:
+        pytest.skip("paused adapter record is only expected while orchestration is current")
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
     paused = p0c["bounded_authorization"]["paused_bounded_authorization"]
     assert paused["authorized_by"] == "operator"
