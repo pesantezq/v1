@@ -195,19 +195,26 @@ def test_registry_controller_mode_is_shadow():
 
 
 # ------------------- round-2 hardening (re-triggers / fail-closed) ----------- #
-def test_pr_controller_has_terminal_state_retriggers():
+def test_pr_controller_triggers_are_deterministic_only():
     on = _load(PR_CONTROLLER)
     on = on.get(True, on.get("on"))
-    # Codex terminal-state re-evaluation (review / review comment).
-    for ev in ("pull_request_review", "pull_request_review_comment"):
-        assert ev in on, f"missing re-trigger {ev}"
-    # pull_request_review_thread is NOT a supported Actions trigger — must be absent.
-    assert "pull_request_review_thread" not in on
-    # CI-completion is handled by in-job polling (a workflow_run check would attach to
-    # main, not the PR head), so the gate waits for northstar-ci on the PR head.
+    # ONLY PR-state events + manual recovery; NO Codex/AI-review-driven triggers.
+    assert "pull_request" in on
+    assert "workflow_dispatch" in on
+    for codex_trigger in ("pull_request_review", "pull_request_review_comment",
+                          "pull_request_review_thread", "issue_comment", "workflow_run"):
+        assert codex_trigger not in on, f"{codex_trigger} must not be a trigger"
+    # CI-completion is handled by in-job polling to the terminal result on the PR head.
     t = _text(PR_CONTROLLER)
     assert "Wait for northstar-ci" in t and "DEADLINE" in t
-    assert "workflow_run" not in (on if isinstance(on, dict) else {})
+
+
+def test_no_workflow_mentions_codex_as_a_gate():
+    # Codex is advisory-only; no workflow may request/poll/require it for merge.
+    for p in ALL:
+        t = _text(p)
+        assert "@codex" not in t
+        assert "chatgpt-codex-connector" not in t
 
 
 def test_generated_prs_use_triggering_credential():

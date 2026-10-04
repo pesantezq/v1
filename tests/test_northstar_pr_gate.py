@@ -1,9 +1,9 @@
-"""Tests for the NORTHSTAR_MERGE_GATE (scripts/northstar_pr_gate.py).
+"""Tests for the NORTHSTAR deterministic assurance gate (scripts/northstar_pr_gate.py).
 
-Fixture-based, hermetic, deterministic. Covers the full gate matrix: exact-head
-CI binding, exact-head Codex binding (review commit_id + clean +1 reaction +
-P1/P2 thread state), authority/forbidden/protected-path policy, and main-advance
-invalidation. Routed to the `governance` shard via the `test_northstar` prefix.
+Fixture-based, hermetic, deterministic. The gate's PASS/FAIL is established WITHOUT any
+AI review (Codex) or human input: exact-head CI, base-main authority, a DEFAULT-DENY
+change envelope, forbidden-authority checks, control-plane conformance, and remote-main
+freshness. Routed to the `governance` shard via the `test_northstar` prefix.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ def _load(name: str):
 gate = _load("northstar_pr_gate")
 asm = _load("northstar_assemble_gate_inputs")
 
-BOT = "chatgpt-codex-connector[bot]"
 HEAD = "h" * 40
 OLD = "o" * 40
 MAIN = "m" * 40
@@ -39,19 +38,20 @@ def valid_inputs() -> dict:
                "head_sha": HEAD, "mergeable": True},
         "ci": {"workflow_name": "northstar-ci", "head_sha": HEAD,
                "status": "completed", "conclusion": "success"},
-        "codex": {
-            "bot_login": BOT,
-            "reviews": [{"author": BOT, "state": "COMMENTED", "commit_id": HEAD,
-                         "submitted_at": "2026-10-04T10:00:00Z"}],
-            "inline_comments": [],
-            "clean_reaction": {"content": "+1", "actor": BOT,
-                               "created_at": "2026-10-04T11:00:00Z"},
-            "exact_head_review_request": {"sha": HEAD, "requested_at": "2026-10-04T09:00:00Z"},
-        },
         "protected": {"current_mission": MISSION, "main_sha": MAIN},
-        "candidate": {"authorized_mission": MISSION, "authority_mutated": False,
-                      "forbidden_authority_introduced": [], "protected_path_violations": []},
+        "candidate": {
+            "authorized_mission": MISSION,
+            "change_class": "normal",
+            "change_envelope_violations": [],
+            "control_plane_authorized": False,
+            "conformance_violations": [],
+            "is_deterministic_transition": False,
+            "transition_exact_match": False,
+            "forbidden_authority_introduced": [],
+            "missing_required_test_groups": [],
+        },
         "now_main_sha": MAIN,
+        "advisory_codex": None,
     }
 
 
@@ -62,7 +62,7 @@ def _ev(mut=None):
     return gate.evaluate_merge_gate(i)
 
 
-def _blocking(res):
+def _blk(res):
     return set(res["blocking_reasons"])
 
 
@@ -71,348 +71,213 @@ def test_all_gates_pass():
     res = _ev()
     assert res["decision"] == "PASS", res["blocking_reasons"]
     assert res["merge_ready"] is True
-    assert res["gate"] == "NORTHSTAR_MERGE_GATE"
+    assert res["gate"] == "NORTHSTAR_DETERMINISTIC_ASSURANCE_GATE"
 
 
-def test_shadow_mode_never_merges_even_on_pass():
+def test_shadow_never_merges_even_on_pass():
+    assert _ev()["would_merge"] is False
+
+
+def test_enabled_would_merge_on_pass():
+    assert _ev(lambda i: i.update(mode="enabled"))["would_merge"] is True
+
+
+# ----------------------- Codex independence (core) -------------------------- #
+def test_passes_with_no_codex_data_at_all():
+    # valid_inputs contains NO Codex field whatsoever
     res = _ev()
     assert res["decision"] == "PASS"
-    assert res["would_merge"] is False  # shadow
+    assert res["codex_role"] == "advisory_only"
 
 
-def test_enabled_mode_would_merge_on_pass():
-    res = _ev(lambda i: i.update(mode="enabled"))
-    assert res["decision"] == "PASS"
-    assert res["would_merge"] is True
+def test_advisory_codex_findings_do_not_affect_decision():
+    def mut(i):
+        i["advisory_codex"] = {"unresolved_p1": 5, "note": "codex thinks this is bad"}
+    res = _ev(mut)
+    assert res["decision"] == "PASS"           # advisory telemetry never blocks
+    assert res["advisory_codex"]["unresolved_p1"] == 5
+
+
+def test_no_codex_check_name_in_gate():
+    names = {ck["name"] for ck in _ev()["checks"]}
+    assert not any("codex" in n.lower() for n in names)
 
 
 # ------------------------------ CI binding ---------------------------------- #
 def test_stale_ci_head_rejected():
-    res = _ev(lambda i: i["ci"].update(head_sha=OLD))
-    assert res["decision"] == "FAIL"
-    assert "ci_bound_to_head" in _blocking(res)
+    assert "ci_bound_to_head" in _blk(_ev(lambda i: i["ci"].update(head_sha=OLD)))
 
 
 def test_ci_not_success_blocks():
-    res = _ev(lambda i: i["ci"].update(conclusion="failure"))
-    assert "ci_success" in _blocking(res)
+    assert "ci_success" in _blk(_ev(lambda i: i["ci"].update(conclusion="failure")))
 
 
 def test_ci_not_northstar_blocks():
-    res = _ev(lambda i: i["ci"].update(workflow_name="other-ci"))
-    assert "ci_is_northstar_ci" in _blocking(res)
+    assert "ci_is_northstar_ci" in _blk(_ev(lambda i: i["ci"].update(workflow_name="x")))
 
 
-# ---------------------------- Codex binding --------------------------------- #
-def test_stale_codex_review_only_rejected():
-    def mut(i):
-        i["codex"]["reviews"] = [{"author": BOT, "state": "COMMENTED", "commit_id": OLD,
-                                  "submitted_at": "2026-10-03T10:00:00Z"}]
-        i["codex"]["exact_head_review_request"] = None  # no fresh exact-head anchor
-    res = _ev(mut)
-    assert res["decision"] == "FAIL"
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_old_reaction_after_head_change_rejected():
-    # +1 predates the exact-head request/review anchor -> stale
-    res = _ev(lambda i: i["codex"]["clean_reaction"].update(created_at="2026-10-04T08:00:00Z"))
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_exact_head_clean_reaction_accepted_without_review():
-    # scenario B: no review object at all, just an exact-head request + later +1
-    def mut(i):
-        i["codex"]["reviews"] = []
-        i["codex"]["exact_head_review_request"] = {"sha": HEAD, "requested_at": "2026-10-04T09:00:00Z"}
-        i["codex"]["clean_reaction"] = {"content": "+1", "actor": BOT, "created_at": "2026-10-04T09:30:00Z"}
-    res = _ev(mut)
-    assert res["decision"] == "PASS", res["blocking_reasons"]
-
-
-def test_clean_reaction_with_wrong_request_sha_rejected():
-    def mut(i):
-        i["codex"]["reviews"] = []
-        i["codex"]["exact_head_review_request"] = {"sha": OLD, "requested_at": "2026-10-04T09:00:00Z"}
-    res = _ev(mut)
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_no_reaction_means_not_clean_silence():
-    res = _ev(lambda i: i["codex"].update(clean_reaction=None))
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_unresolved_p1_blocks():
-    def mut(i):
-        i["codex"]["inline_comments"] = [{"author": BOT, "severity": "P1", "commit_id": HEAD,
-                                          "resolved": False, "created_at": "2026-10-04T10:30:00Z"}]
-    res = _ev(mut)
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_unresolved_p2_blocks():
-    def mut(i):
-        i["codex"]["inline_comments"] = [{"author": BOT, "severity": "P2", "commit_id": HEAD,
-                                          "resolved": False, "created_at": "2026-10-04T10:30:00Z"}]
-    res = _ev(mut)
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-def test_resolved_old_thread_does_not_block():
-    def mut(i):
-        i["codex"]["inline_comments"] = [{"author": BOT, "severity": "P1", "commit_id": OLD,
-                                          "resolved": True, "created_at": "2026-10-03T10:30:00Z"}]
-    res = _ev(mut)
-    assert res["decision"] == "PASS", res["blocking_reasons"]
-
-
-def test_newer_finding_after_reaction_blocks():
-    def mut(i):
-        i["codex"]["inline_comments"] = [{"author": BOT, "severity": "P1", "commit_id": HEAD,
-                                          "resolved": False, "created_at": "2026-10-04T12:00:00Z"}]
-    res = _ev(mut)
-    assert "codex_clean_at_head" in _blocking(res)
-
-
-# ------------------------------ PR state ------------------------------------ #
-def test_draft_pr_blocks():
-    assert "pr_not_draft" in _blocking(_ev(lambda i: i["pr"].update(is_draft=True)))
+# ------------------------------- PR state ----------------------------------- #
+def test_draft_blocks():
+    assert "pr_not_draft" in _blk(_ev(lambda i: i["pr"].update(is_draft=True)))
 
 
 def test_non_main_base_blocks():
-    assert "base_is_main" in _blocking(_ev(lambda i: i["pr"].update(base_ref="develop")))
+    assert "base_is_main" in _blk(_ev(lambda i: i["pr"].update(base_ref="dev")))
 
 
-def test_non_mergeable_pr_blocks():
-    assert "pr_mergeable" in _blocking(_ev(lambda i: i["pr"].update(mergeable=False)))
+def test_non_mergeable_blocks():
+    assert "pr_mergeable" in _blk(_ev(lambda i: i["pr"].update(mergeable=False)))
 
 
-def test_closed_pr_blocks():
-    assert "pr_open" in _blocking(_ev(lambda i: i["pr"].update(state="CLOSED")))
+def test_closed_blocks():
+    assert "pr_open" in _blk(_ev(lambda i: i["pr"].update(state="CLOSED")))
 
 
-# --------------------------- authority / policy ----------------------------- #
-def test_protected_mission_mismatch_blocks():
-    res = _ev(lambda i: i["candidate"].update(authorized_mission="northstar_vs002_frozen_execution"))
-    assert "protected_mission_authorizes_pr" in _blocking(res)
+def test_mission_mismatch_blocks():
+    assert "protected_mission_authorizes_pr" in _blk(
+        _ev(lambda i: i["candidate"].update(authorized_mission="northstar_other")))
 
 
-def test_unauthorized_protected_state_modification_blocks():
-    assert "no_authority_mutation" in _blocking(_ev(lambda i: i["candidate"].update(authority_mutated=True)))
-
-
-def test_forbidden_authority_widening_blocks():
-    res = _ev(lambda i: i["candidate"].update(forbidden_authority_introduced=["auto_merge"]))
-    assert "no_forbidden_authority_introduced" in _blocking(res)
-
-
-def test_protected_path_violation_blocks():
-    res = _ev(lambda i: i["candidate"].update(protected_path_violations=["config/agent_policy.yaml"]))
-    assert "protected_path_policy_ok" in _blocking(res)
-
-
-def test_main_advancing_during_eval_blocks():
-    assert "main_not_advanced" in _blocking(_ev(lambda i: i.update(now_main_sha="z" * 40)))
-
-
-# --------------------------- assess_candidate ------------------------------- #
-def _bh():
-    base = {"dispatch": {"current_step": MISSION}, "ew0a": {f: False for f in gate.AUTO_FLAGS},
-            "agent_policy_digest": "abc", "c1": "DISABLED", "phase_0d_status": "not_started"}
-    head = copy.deepcopy(base)
-    return base, head
-
-
-def test_assess_candidate_clean():
-    base, head = _bh()
-    # ordinary, non-protected changes
-    head["changed_paths"] = ["portfolio_automation/some_feature.py", "docs/NORTHSTAR_ORCHESTRATION.md"]
-    out = gate.assess_candidate(base, head)
-    assert out == {"authority_mutated": False, "forbidden_authority_introduced": [],
-                   "protected_path_violations": []}
-
-
-def test_assess_candidate_flags_controller_self_modification():
-    base, head = _bh()
-    head["changed_paths"] = ["scripts/northstar_pr_gate.py"]   # modifying the controller itself
-    out = gate.assess_candidate(base, head)
-    assert "scripts/northstar_pr_gate.py" in out["protected_path_violations"]
-
-
-def test_assess_candidate_detects_authority_mutation():
-    base, head = _bh()
-    head["dispatch"]["current_step"] = "northstar_vs002_execution_adapter_foundation"
-    assert gate.assess_candidate(base, head)["authority_mutated"] is True
-
-
-def test_assess_candidate_detects_auto_flag_flip():
-    base, head = _bh()
-    head["ew0a"]["auto_merge"] = True
-    assert "auto_merge" in gate.assess_candidate(base, head)["forbidden_authority_introduced"]
-
-
-def test_assess_candidate_detects_c1_and_0d():
-    base, head = _bh()
-    head["c1"] = "ENABLED"
-    head["phase_0d_status"] = "active"
-    out = gate.assess_candidate(base, head)
-    assert "c1_enabled" in out["forbidden_authority_introduced"]
-    assert "phase_0d_advanced" in out["forbidden_authority_introduced"]
-
-
-def test_assess_candidate_protected_path_violation_vs_allowlist():
-    base, head = _bh()
-    head["changed_paths"] = [".agent/project_state.yaml", ".agent/mission_registry.yaml"]
-    # project_state.yaml is a protected edit; mission_registry.yaml is an allowlisted new file
-    out = gate.assess_candidate(base, head, allowlisted_new_paths=[".agent/mission_registry.yaml"])
-    assert ".agent/project_state.yaml" in out["protected_path_violations"]
-    assert ".agent/mission_registry.yaml" not in out["protected_path_violations"]
-
-
-# --------------- assembler pure helpers (Codex-hardening fixes) -------------- #
-def test_candidate_mission_from_label():
-    assert asm.candidate_mission_from_pr("body", ["mission:northstar_x"]) == "northstar_x"
-    assert asm.candidate_mission_from_pr("body", ["mission/northstar_z"]) == "northstar_z"
-
-
-def test_candidate_mission_from_body_line():
-    assert asm.candidate_mission_from_pr("intro\nMISSION = northstar_y\ntail", []) == "northstar_y"
-
-
-def test_candidate_mission_none_when_undeclared():
-    # a PR that declares no mission cannot be tautologically authorized
-    assert asm.candidate_mission_from_pr("no declaration here", []) is None
-    assert asm.candidate_mission_from_pr(None, None) is None
-
-
-def test_undeclared_candidate_mission_fails_gate():
-    # when the assembler yields None (PR declares no mission), the gate must block
+def test_undeclared_mission_blocks():
     res = _ev(lambda i: i["candidate"].update(authorized_mission=None))
-    assert res["decision"] == "FAIL"
-    assert "protected_mission_authorizes_pr" in _blocking(res)
+    assert "candidate_mission_declared" in _blk(res)
 
 
-def test_added_only_allowlist_permits_added_but_flags_modified():
-    isp = lambda p: p.startswith((".agent/", "config/agent_policy"))
-    changed = [{"path": ".agent/mission_registry.yaml", "status": "modified"},
-               {"path": "scripts/northstar_pr_gate.py", "status": "added"},
-               {"path": "config/agent_policy.yaml", "status": "modified"}]
-    allow = {".agent/mission_registry.yaml", "scripts/northstar_pr_gate.py"}
-    out = asm.added_only_protected_violations(changed, allow, isp)
-    assert ".agent/mission_registry.yaml" in out   # MODIFYING an allowlisted file still violates
-    assert "scripts/northstar_pr_gate.py" not in out  # scripts/ not protected by isp here
-    assert "config/agent_policy.yaml" in out
+# -------------------------- change envelope / class ------------------------- #
+def test_change_envelope_violation_blocks():
+    res = _ev(lambda i: i["candidate"].update(change_envelope_violations=["config.json"]))
+    assert "change_envelope_default_deny" in _blk(res)
 
 
-def test_controller_self_protection_blocks_modifying_its_own_workflow():
-    # a candidate that MODIFIES the controller's own workflow/script/registry must
-    # be a protected-path violation (cannot self-grant write authority)
-    isp = asm._is_protected
-    changed = [{"path": ".github/workflows/northstar-pr-controller.yml", "status": "modified"},
-               {"path": "scripts/northstar_pr_gate.py", "status": "modified"},
-               {"path": ".agent/mission_registry.yaml", "status": "modified"}]
-    allow = asm.ALLOWLISTED_ADDED_PATHS
-    out = asm.added_only_protected_violations(changed, allow, isp)
-    assert ".github/workflows/northstar-pr-controller.yml" in out
-    assert "scripts/northstar_pr_gate.py" in out
-    assert ".agent/mission_registry.yaml" in out
+def test_unknown_change_class_blocks():
+    assert "change_class_known" in _blk(_ev(lambda i: i["candidate"].update(change_class="weird")))
 
 
-def test_controller_self_protection_permits_bootstrap_add():
-    isp = asm._is_protected
-    changed = [{"path": ".github/workflows/northstar-pr-controller.yml", "status": "added"},
-               {"path": "scripts/northstar_pr_gate.py", "status": "added"}]
-    out = asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, isp)
-    assert out == []   # the bootstrap PR that ADDs the controller is allowed
+def test_missing_required_test_group_blocks():
+    res = _ev(lambda i: i["candidate"].update(missing_required_test_groups=["authority"]))
+    assert "required_test_groups_present" in _blk(res)
 
 
-def test_gate_is_protected_flags_controller_and_workflows():
-    assert gate._is_protected(".github/workflows/northstar-orchestrator.yml")
-    assert gate._is_protected("scripts/northstar_materialize_transition.py")
-    assert gate._is_protected(".agent/missions/x.md")
+def test_forbidden_authority_blocks():
+    res = _ev(lambda i: i["candidate"].update(forbidden_authority_introduced=["auto_merge"]))
+    assert "no_forbidden_authority_introduced" in _blk(res)
 
 
-def test_material_unresolved_from_threads_reads_real_resolution():
-    head = "h" * 40
-    threads = [
-        {"isResolved": False, "comments": [{"author": BOT, "body": "![P1 Badge] x", "commit_id": head}]},
-        {"isResolved": True, "comments": [{"author": BOT, "body": "![P1 Badge] y", "commit_id": head}]},   # resolved -> excluded
-        {"isResolved": False, "comments": [{"author": BOT, "body": "nit, non-material", "commit_id": head}]},
-        {"isResolved": False, "comments": [{"author": BOT, "body": "![P2 Badge] z", "commit_id": "o" * 40}]},  # OLD head -> still counts
-        {"isResolved": False, "comments": [{"author": "someone", "body": "![P1 Badge]", "commit_id": head}]},  # not the bot
-    ]
-    threads.append({"isResolved": False, "comments": [{"author": BOT, "body": "![P0 Badge] crit", "commit_id": head}]})
-    out = asm.material_unresolved_from_threads(threads, BOT)
-    # unresolved material from ANY head blocks: P1 at head, P2 at old head, and P0 (most severe)
-    assert len(out) == 3
-    assert {o["severity"] for o in out} == {"P0", "P1", "P2"}
-    # each assembled record carries author==bot so evaluate_codex_binding's author
-    # filter does not silently drop it
-    assert all(o["author"] == BOT for o in out)
+def test_main_advanced_blocks():
+    assert "main_not_advanced" in _blk(_ev(lambda i: i.update(now_main_sha="z" * 40)))
 
 
-def test_assembled_material_findings_block_the_gate_end_to_end():
-    # an assembled material record (from the assembler) must actually block the gate
-    i = valid_inputs()
-    head = i["pr"]["head_sha"]
-    threads = [{"isResolved": False, "comments": [{"author": BOT, "body": "![P1 Badge] x", "commit_id": head}]}]
-    i["codex"]["inline_comments"] = asm.material_unresolved_from_threads(threads, BOT)
-    res = gate.evaluate_merge_gate(i)
-    assert res["decision"] == "FAIL"
-    assert "codex_clean_at_head" in set(res["blocking_reasons"])
+# ------------------------------ control plane ------------------------------- #
+def test_control_plane_pass():
+    def mut(i):
+        i["candidate"].update(change_class="control_plane", control_plane_authorized=True,
+                              conformance_violations=[], change_envelope_violations=[])
+    assert _ev(mut)["decision"] == "PASS"
 
 
-def test_reconcile_authority_requires_all_sources_to_agree():
+def test_control_plane_unauthorized_blocks():
+    def mut(i):
+        i["candidate"].update(change_class="control_plane", control_plane_authorized=False)
+    assert "control_plane_authorized_by_base_main" in _blk(_ev(mut))
+
+
+def test_control_plane_conformance_violation_blocks():
+    def mut(i):
+        i["candidate"].update(change_class="control_plane", control_plane_authorized=True,
+                              conformance_violations=["wf: pull_request_target"])
+    assert "control_plane_security_conformance" in _blk(_ev(mut))
+
+
+# --------------------------- governance transition -------------------------- #
+def test_governance_transition_exact_match_passes():
+    def mut(i):
+        i["candidate"].update(change_class="governance_transition", transition_exact_match=True,
+                              change_envelope_violations=["ignored for this class"])
+    assert _ev(mut)["decision"] == "PASS"
+
+
+def test_governance_transition_without_exact_match_blocks():
+    def mut(i):
+        i["candidate"].update(change_class="governance_transition", transition_exact_match=False)
+    assert "deterministic_transition_exact_match" in _blk(_ev(mut))
+
+
+# --------------------------- evaluate_change_envelope ----------------------- #
+def test_envelope_allows_listed_paths_and_prefixes():
+    env = {"allowed_paths": ["portfolio_automation/data_governance.py"],
+           "allowed_path_prefixes": ["portfolio_automation/vs002_evidence/", "tests/test_vs002_"]}
+    changed = ["portfolio_automation/vs002_evidence/execution.py",
+               "tests/test_vs002_execution.py", "portfolio_automation/data_governance.py"]
+    assert gate.evaluate_change_envelope(changed, env) == []
+
+
+def test_envelope_default_denies_unknown_path():
+    env = {"allowed_path_prefixes": ["portfolio_automation/vs002_evidence/"]}
+    out = gate.evaluate_change_envelope(["portfolio_automation/scoring.py", "config.json"], env)
+    assert "portfolio_automation/scoring.py" in out and "config.json" in out
+
+
+def test_envelope_absolute_forbidden_even_if_allowed():
+    env = {"allowed_path_prefixes": [".agent/"]}   # tries to allow dispatch state
+    out = gate.evaluate_change_envelope([".agent/project_state.yaml", "config/ew0a_runtime.json"], env)
+    assert ".agent/project_state.yaml" in out and "config/ew0a_runtime.json" in out
+
+
+def test_envelope_secrets_always_denied():
+    env = {"allowed_path_prefixes": [""]}   # allow everything
+    out = gate.evaluate_change_envelope(["deploy/credentials.json", ".env"], env)
+    assert set(out) == {"deploy/credentials.json", ".env"}
+
+
+def test_empty_envelope_denies_everything():
+    assert gate.evaluate_change_envelope(["a.py"], {}) == ["a.py"]
+
+
+# ----------------------- check_control_plane_conformance -------------------- #
+def test_conformance_flags_pull_request_target_and_unpinned():
+    files = {".github/workflows/x.yml": "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n"}
+    out = gate.check_control_plane_conformance(files)
+    assert any("pull_request_target" in v for v in out)
+    assert any("unpinned action" in v for v in out)
+
+
+def test_conformance_flags_registry_not_shadow():
+    files = {".agent/mission_registry.yaml": "controller:\n  mode: enabled\n"}
+    out = gate.check_control_plane_conformance(files)
+    assert any("controller.mode" in v for v in out)
+
+
+def test_conformance_clean_when_pinned_and_shadow():
+    files = {
+        ".github/workflows/x.yml": "on:\n  pull_request:\n    branches: [main]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n",
+        ".agent/mission_registry.yaml": "controller:\n  mode: shadow\n",
+    }
+    assert gate.check_control_plane_conformance(files) == []
+
+
+# ----------------------------- reconcile / assess --------------------------- #
+def test_reconcile_authority_requires_agreement():
     m = "northstar_x"
     ps = {"current_step": m}
     ph = {"stockbot_northstar_redesign": {"engineer_runtime_state": {"mission_id": m},
           "phases": {"northstar_phase_0c": {"step": m}}}}
-    ew = {"mission_id": m}
-    assert asm.reconcile_authority(ps, ph, ew) == m
-    # any disagreement -> None (fail closed)
-    ew2 = {"mission_id": "northstar_other"}
-    assert asm.reconcile_authority(ps, ph, ew2) is None
-    # any missing -> None
-    assert asm.reconcile_authority({"current_step": None}, ph, ew) is None
+    assert asm.reconcile_authority(ps, ph, {"mission_id": m}) == m
+    assert asm.reconcile_authority(ps, ph, {"mission_id": "y"}) is None
+    assert asm.reconcile_authority({"current_step": None}, ph, {"mission_id": m}) is None
 
 
-def test_github_scripts_helpers_are_controller_protected():
-    assert asm._is_protected(".github/scripts/northstar_build_transition_inputs.sh")
-    assert gate._is_protected(".github/scripts/northstar_build_packet_inputs.sh")
-    # but a bootstrap ADD of them is allowed
-    changed = [{"path": ".github/scripts/northstar_build_packet_inputs.sh", "status": "added"}]
-    assert asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, asm._is_protected) == []
-    # modifying them later is a violation
-    changed = [{"path": ".github/scripts/northstar_build_packet_inputs.sh", "status": "modified"}]
-    assert ".github/scripts/northstar_build_packet_inputs.sh" in \
-        asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, asm._is_protected)
+def test_candidate_mission_from_pr():
+    assert asm.candidate_mission_from_pr("x", ["mission:northstar_a"]) == "northstar_a"
+    assert asm.candidate_mission_from_pr("foo\nMISSION = northstar_b\n", []) == "northstar_b"
+    assert asm.candidate_mission_from_pr("none", []) is None
 
 
-# ----------------- deterministic transition lane (gate #6) ------------------ #
-def test_deterministic_transition_exact_match_passes_despite_protected_edits():
-    def mut(i):
-        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=True,
-                              authority_mutated=True,  # a transition DOES mutate dispatch
-                              authorized_mission=None,  # no MISSION line on the governance PR
-                              protected_path_violations=[".agent/project_state.yaml",
-                                                         ".agent/phase_status.yaml"])
-    res = _ev(mut)
-    assert res["decision"] == "PASS", res["blocking_reasons"]
-
-
-def test_deterministic_transition_without_exact_match_blocks():
-    def mut(i):
-        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=False,
-                              authority_mutated=True)
-    res = _ev(mut)
-    assert res["decision"] == "FAIL"
-    assert "deterministic_transition_exact_match" in _blocking(res)
-
-
-def test_deterministic_transition_still_blocks_forbidden_authority():
-    def mut(i):
-        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=True,
-                              forbidden_authority_introduced=["auto_merge"])
-    res = _ev(mut)
-    assert "no_forbidden_authority_introduced" in _blocking(res)
+def test_assess_candidate_detects_auto_flag_and_controller_edit():
+    base = {"dispatch": {"s": MISSION}, "ew0a": {f: False for f in gate.AUTO_FLAGS},
+            "agent_policy_digest": "a", "c1": "DISABLED", "phase_0d_status": "not_started"}
+    head = copy.deepcopy(base)
+    head["ew0a"]["auto_merge"] = True
+    head["changed_paths"] = ["scripts/northstar_pr_gate.py"]
+    out = gate.assess_candidate(base, head)
+    assert "auto_merge" in out["forbidden_authority_introduced"]
+    assert "scripts/northstar_pr_gate.py" in out["protected_path_violations"]

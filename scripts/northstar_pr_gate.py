@@ -1,40 +1,36 @@
 #!/usr/bin/env python3
-"""NORTHSTAR_MERGE_GATE — the single deterministic pre-merge gate.
+"""NORTHSTAR deterministic assurance gate — the autonomous merge authority.
 
 Usage:
     python scripts/northstar_pr_gate.py evaluate --inputs <inputs.json> [--require-pass]
-    python scripts/northstar_pr_gate.py -h
 
-This is a DETERMINISTIC control-plane component, not an LLM. Given a fully
-assembled, already-fetched `inputs` object (PR metadata, Northstar CI result,
-Codex review/reaction state, review-thread state, base-main protected state, and
-a candidate authority assessment), `evaluate_merge_gate` returns a
-machine-readable audit with a per-check breakdown and an overall PASS/FAIL. It
-FAILS CLOSED: any missing/ambiguous input makes the relevant check fail.
+FULLY AUTONOMOUS and DETERMINISTIC: PASS/FAIL is established entirely from trusted
+base-main code and machine-verifiable evidence. NO AI review (Codex or any LLM) and
+NO human participates in the decision. Codex comments, if present, are advisory
+telemetry only and never alter the decision.
 
-Authority precedence: the gate re-derives the authorized mission from base-main
-protected state (passed in `inputs["protected"]`); a candidate branch's own copy
-of state/registry can never satisfy it. The gate performs NO merge; acting on a
-PASS is the caller's job and only in `enabled` mode.
+Merge authority =
+    authorized mission (candidate mission == protected base-main mission)
+  + exact PR head
+  + exact-head northstar-ci success
+  + base-main authority reconciliation
+  + mission CHANGE ENVELOPE (DEFAULT-DENY) for the mission's change class
+  + forbidden-authority checks
+  + control-plane security conformance (for control_plane class)
+  + remote-main freshness.
 
-Codex exact-head binding (observed `chatgpt-codex-connector[bot]` protocol):
-  * a review is a PR review (state COMMENTED) whose `commit_id` is the reviewed head;
-  * material findings are inline comments carrying a P1/P2 severity badge;
-  * a CLEAN signal is a `+1` issue reaction from the bot created AFTER the
-    exact-head review/request anchor, with zero unresolved material threads.
-A stale signal bound to an older head never satisfies the gate, and clean is
-never inferred from silence.
+Fail closed: any missing/ambiguous input makes the relevant check fail. The gate
+performs NO merge; acting on PASS is the caller's job and only in `enabled` mode.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
-CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
-MATERIAL_SEVERITIES = ("P0", "P1", "P2")   # P0 is MORE severe than P1 — must block
 # auto_* capability flags that must never be flipped on by a candidate (ew0a_runtime.json)
 AUTO_FLAGS = (
     "auto_merge",
@@ -44,84 +40,101 @@ AUTO_FLAGS = (
     "auto_capital_action",
 )
 
+# Paths NO ordinary (normal / control_plane) mission envelope may ever allow. Dispatch
+# state and authority are mutated ONLY by an authenticated governance_transition (its
+# own exact-match lane), never by an implementation PR. Secrets/broker/systemd never.
+GLOBAL_ABSOLUTE_FORBIDDEN_PREFIXES = (
+    ".agent/project_state.yaml",
+    ".agent/phase_status.yaml",
+    "config/ew0a_runtime.json",
+    "config/agent_policy.yaml",
+    ".env",
+    "portfolio_automation/broker",
+    "systemd/",
+)
+GLOBAL_ABSOLUTE_FORBIDDEN_SUBSTR = ("credentials", "secret", "id_rsa", ".pem", ".netrc")
 
-def evaluate_codex_binding(codex: dict[str, Any], head_sha: str | None) -> tuple[bool, list[dict]]:
-    """Return (clean_at_head, subchecks). Fail closed.
+CHANGE_CLASSES = ("normal", "control_plane", "governance_transition")
 
-    `codex` shape:
-      {
-        "bot_login": str,
-        "reviews": [{"author","state","commit_id","submitted_at"}...],
-        "inline_comments": [{"author","severity","commit_id","resolved","created_at"}...],
-        "clean_reaction": {"content","actor","created_at"} | None,
-        "exact_head_review_request": {"sha","requested_at"} | None,
-      }
-    """
-    bot = codex.get("bot_login") or CODEX_BOT_LOGIN
-    subs: list[dict] = []
 
-    def s(name: str, ok: bool, detail: str = "") -> bool:
-        subs.append({"name": name, "ok": bool(ok), "detail": detail})
-        return bool(ok)
+# --------------------------------------------------------------------------- #
+# Default-deny change envelope (the primary deterministic replacement for      #
+# open-ended AI review discovering an accidentally-unprotected file).          #
+# --------------------------------------------------------------------------- #
+def _absolutely_forbidden(path: str) -> bool:
+    if any(path.startswith(p) for p in GLOBAL_ABSOLUTE_FORBIDDEN_PREFIXES):
+        return True
+    low = path.lower()
+    return any(tok in low for tok in GLOBAL_ABSOLUTE_FORBIDDEN_SUBSTR)
 
-    if not head_sha:
-        s("head_known", False, "no PR head sha")
-        return False, subs
 
-    reviews = [r for r in codex.get("reviews", []) if r.get("author") == bot]
-    comments = [c for c in codex.get("inline_comments", []) if c.get("author") == bot]
-    reaction = codex.get("clean_reaction")
-    req = codex.get("exact_head_review_request")
+def evaluate_change_envelope(changed: list[str], envelope: dict[str, Any]) -> list[str]:
+    """Return the DEFAULT-DENY violations: every changed path that is not explicitly
+    allowed by the protected mission envelope, or that is absolutely forbidden. An
+    empty envelope denies everything (fail closed)."""
+    allowed_paths = set(envelope.get("allowed_paths") or [])
+    allowed_prefixes = tuple(envelope.get("allowed_path_prefixes") or [])
+    forbidden_prefixes = tuple(envelope.get("forbidden_path_prefixes") or [])
+    violations: list[str] = []
+    for p in changed:
+        if not p:
+            continue
+        if _absolutely_forbidden(p) or any(p.startswith(fp) for fp in forbidden_prefixes):
+            violations.append(p)
+            continue
+        if p in allowed_paths or any(p.startswith(pre) for pre in allowed_prefixes):
+            continue
+        violations.append(p)   # DEFAULT DENY
+    return violations
 
-    head_reviews = [r for r in reviews if r.get("commit_id") == head_sha]
-    s("review_bound_to_head", bool(head_reviews),
-      f"{len(head_reviews)} review(s) at {head_sha[:10]}")
 
-    unresolved_material = [
-        c for c in comments
-        if c.get("severity") in MATERIAL_SEVERITIES and not c.get("resolved", False)
-    ]
-    no_unresolved = s("zero_unresolved_material_threads", not unresolved_material,
-                      f"{len(unresolved_material)} unresolved P1/P2 finding(s)")
+# --------------------------------------------------------------------------- #
+# Control-plane security conformance (deterministic, evaluated on the          #
+# candidate's fetched files by base-main code — the candidate never evaluates  #
+# its own PR).                                                                 #
+# --------------------------------------------------------------------------- #
+def _yaml_on(text: str):
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+        return data.get(True, data.get("on")) if isinstance(data, dict) else None
+    except Exception:
+        return None
 
-    # A clean terminal: a +1 reaction from the bot, bound to the exact head via an
-    # exact-head review request (naming the full head sha) OR the latest head
-    # review, created AFTER that anchor, with no newer material finding at head.
-    reaction_ok = False
-    reaction_detail = "no valid head-bound +1 reaction"
-    if reaction and reaction.get("content") == "+1" and reaction.get("actor") == bot:
-        created = reaction.get("created_at")
-        anchor = None
-        anchor_kind = None
-        if req and req.get("sha") == head_sha and req.get("requested_at"):
-            anchor, anchor_kind = req["requested_at"], "exact-head request"
-        elif head_reviews:
-            anchor = max(r.get("submitted_at", "") for r in head_reviews)
-            anchor_kind = "head review"
-        if anchor and created and created > anchor:
-            newer_findings = [
-                c for c in comments
-                if c.get("commit_id") == head_sha
-                and c.get("severity") in MATERIAL_SEVERITIES
-                and (c.get("created_at") or "") > created
-            ]
-            if not newer_findings:
-                reaction_ok = True
-                reaction_detail = f"+1 after {anchor_kind}; no newer findings"
-            else:
-                reaction_detail = "newer material finding after the +1 (stale)"
-        elif anchor:
-            reaction_detail = "+1 predates the exact-head anchor (stale)"
-        else:
-            reaction_detail = "no exact-head anchor for the +1"
-    s("clean_reaction_bound_to_head", reaction_ok, reaction_detail)
 
-    clean = reaction_ok and no_unresolved
-    return clean, subs
+def check_control_plane_conformance(files: dict[str, str]) -> list[str]:
+    """Deterministic constitutional checks on a control-plane candidate's own files.
+    `files`: {path: text} for the candidate's workflows + mission registry (fetched
+    at the PR head). Returns violations; empty == conformant."""
+    v: list[str] = []
+    for path, text in files.items():
+        if "/.github/workflows/" in f"/{path}" or path.startswith(".github/workflows/"):
+            on = _yaml_on(text)
+            triggers = set(on.keys()) if isinstance(on, dict) else ({on} if on else set())
+            if "pull_request_target" in triggers:
+                v.append(f"{path}: pull_request_target trigger")
+            for u in re.findall(r"uses:\s*([^\s#]+)", text):
+                if u.startswith("./"):
+                    continue
+                ref = u.split("@", 1)[1] if "@" in u else ""
+                if not re.fullmatch(r"[0-9a-f]{40}", ref):
+                    v.append(f"{path}: unpinned action {u}")
+            if re.search(r"permissions:\s*write-all", text):
+                v.append(f"{path}: permissions write-all")
+    reg = files.get(".agent/mission_registry.yaml")
+    if reg is not None:
+        try:
+            import yaml
+            mode = ((yaml.safe_load(reg).get("controller") or {}).get("mode"))
+            if mode != "shadow":
+                v.append("mission_registry controller.mode != shadow (candidate cannot self-enable)")
+        except Exception:
+            v.append("mission_registry unparseable")
+    return v
 
 
 def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic NORTHSTAR_MERGE_GATE. Fail closed on any failed check."""
+    """Deterministic NORTHSTAR assurance gate. Fail closed. No AI/human input."""
     mode = inputs.get("mode", "shadow")
     checks: list[dict] = []
 
@@ -135,80 +148,78 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
     cand = inputs.get("candidate", {}) or {}
     head = pr.get("head_sha")
 
+    # ---- PR identity -------------------------------------------------------
     c("pr_open", pr.get("state") == "OPEN", str(pr.get("state")))
     c("pr_not_draft", pr.get("is_draft") is False, str(pr.get("is_draft")))
     c("base_is_main", pr.get("base_ref") == "main", str(pr.get("base_ref")))
     c("pr_mergeable", pr.get("mergeable") is True, str(pr.get("mergeable")))
-    # --- mission authorization / authority-mutation / protected-path lane ------
-    # A candidate is authorized either as (a) an ordinary mission PR that declares
-    # and matches the protected current mission, OR (b) the controller's OWN
-    # deterministic governance transition PR whose diff EXACTLY matches a
-    # re-derived materialization from certified main. The transition lane is the
-    # ONLY way protected dispatch-field edits are permitted; arbitrary protected
-    # edits remain blocked.
-    is_transition = cand.get("is_deterministic_transition") is True
-    if is_transition:
-        exact = cand.get("transition_exact_match") is True
-        c("deterministic_transition_exact_match", exact,
-          "PR diff exactly equals the re-derived materialized transition" if exact
-          else "governance-transition branch without an exact materialization match")
-        c("protected_mission_authorizes_pr", exact, "deterministic pre-authorized transition edge")
-        c("no_authority_mutation", exact, "sanctioned deterministic transition (exact-match)")
-        c("protected_path_policy_ok", exact, "sanctioned transition edits only")
-    else:
-        c("protected_mission_authorizes_pr",
-          bool(cand.get("authorized_mission")) and cand.get("authorized_mission") == protected.get("current_mission"),
-          f"{cand.get('authorized_mission')} vs {protected.get('current_mission')}")
-        c("no_authority_mutation", cand.get("authority_mutated") is False, str(cand.get("authority_mutated")))
-        c("protected_path_policy_ok", not cand.get("protected_path_violations"),
-          str(cand.get("protected_path_violations") or []))
+    c("candidate_mission_declared", bool(cand.get("authorized_mission")),
+      str(cand.get("authorized_mission")))
+    c("protected_mission_authorizes_pr",
+      bool(cand.get("authorized_mission")) and cand.get("authorized_mission") == protected.get("current_mission"),
+      f"{cand.get('authorized_mission')} vs {protected.get('current_mission')}")
 
+    # ---- change class + DEFAULT-DENY envelope (replaces AI semantic review) --
+    klass = cand.get("change_class")
+    c("change_class_known", klass in CHANGE_CLASSES, str(klass))
+    if klass == "governance_transition":
+        c("deterministic_transition_exact_match", cand.get("transition_exact_match") is True,
+          "PR diff exactly equals the re-derived materialized transition")
+    else:
+        c("change_envelope_default_deny", not cand.get("change_envelope_violations"),
+          str(cand.get("change_envelope_violations") or []))
+        if klass == "control_plane":
+            c("control_plane_authorized_by_base_main", cand.get("control_plane_authorized") is True,
+              "base-main registry authorizes control_plane for the current mission")
+            c("control_plane_security_conformance", not cand.get("conformance_violations"),
+              str(cand.get("conformance_violations") or []))
+
+    # ---- exact-head CI -----------------------------------------------------
     c("ci_is_northstar_ci", ci.get("workflow_name") == "northstar-ci", str(ci.get("workflow_name")))
     c("ci_success", ci.get("status") == "completed" and ci.get("conclusion") == "success",
       f"{ci.get('status')}/{ci.get('conclusion')}")
     c("ci_bound_to_head", bool(head) and ci.get("head_sha") == head,
       f"ci {ci.get('head_sha')} vs head {head}")
 
-    codex_ok, codex_subs = evaluate_codex_binding(inputs.get("codex", {}) or {}, head)
-    for sc in codex_subs:
-        checks.append({"name": "codex:" + sc["name"], "ok": sc["ok"], "detail": sc["detail"]})
-    c("codex_clean_at_head", codex_ok)
+    # ---- required mission test groups (declared by the protected envelope) --
+    missing_groups = cand.get("missing_required_test_groups")
+    if missing_groups is not None:
+        c("required_test_groups_present", not missing_groups, str(missing_groups or []))
 
-    # forbidden authority (production/broker/capital/C1/0D/auto_* flips) is NEVER
-    # permitted, even for a deterministic transition.
+    # ---- forbidden authority (always) --------------------------------------
     c("no_forbidden_authority_introduced", not cand.get("forbidden_authority_introduced"),
       str(cand.get("forbidden_authority_introduced") or []))
+
+    # ---- remote-main freshness ---------------------------------------------
     c("main_not_advanced",
       bool(protected.get("main_sha")) and inputs.get("now_main_sha") == protected.get("main_sha"),
       f"{inputs.get('now_main_sha')} vs {protected.get('main_sha')}")
 
-    # `codex:` entries are diagnostic detail for the aggregate `codex_clean_at_head`
-    # check; only top-level checks gate the decision.
-    blocking = [ck["name"] for ck in checks
-                if not ck["ok"] and not ck["name"].startswith("codex:")]
+    blocking = [ck["name"] for ck in checks if not ck["ok"]]
     decision = "PASS" if not blocking else "FAIL"
     return {
-        "gate": "NORTHSTAR_MERGE_GATE",
+        "gate": "NORTHSTAR_DETERMINISTIC_ASSURANCE_GATE",
         "decision": decision,
         "mode": mode,
         "controller_level": "C0.5_SHADOW" if mode == "shadow" else "enabled",
         "head_sha": head,
+        "change_class": klass,
         "checks": checks,
         "blocking_reasons": blocking,
         "would_merge": decision == "PASS" and mode == "enabled",
         "merge_ready": decision == "PASS",
+        # Codex / any AI review is ADVISORY ONLY and never affects the decision.
+        "codex_role": "advisory_only",
+        "advisory_codex": inputs.get("advisory_codex"),
         "bootstrap_note": "shadow mode performs no merge; enabled mode required to act on PASS",
     }
 
 
 # --------------------------------------------------------------------------- #
-# Candidate authority assessment (used by the CLI/workflow; unit-tested).      #
+# Candidate authority assessment helpers (used by the CLI/assembler; tested).  #
 # --------------------------------------------------------------------------- #
-# The controller's OWN files. Modifying these (vs a bootstrap add) must be a
-# protected-path violation so a candidate branch cannot rewrite its own gate /
-# effect workflows / registry and thereby grant itself write or merge authority.
 CONTROLLER_PROTECTED_PREFIXES = (
-    ".github/",                     # ALL workflows/actions/scripts are security-critical
+    ".github/",
     "scripts/northstar_",
     ".agent/mission_registry.yaml",
     ".agent/missions/",
@@ -216,9 +227,9 @@ CONTROLLER_PROTECTED_PREFIXES = (
 
 
 def _is_protected(path: str) -> bool:
-    """Mirror the engineer-worker protected-path policy, PLUS the controller's own
-    files (self-protection). Falls back to a minimal pattern set if the policy
-    module is unavailable (keeps the gate importable in any checkout)."""
+    """Belt-and-suspenders: controller files + known forbidden-semantic surfaces are
+    protected regardless of envelope (used by assess_candidate and as a sanity layer).
+    The DEFAULT-DENY envelope is the primary mechanism; this is defense in depth."""
     if any(path.startswith(p) for p in CONTROLLER_PROTECTED_PREFIXES):
         return True
     if path.rsplit("/", 1)[-1] in ("recommendations.py", "recommendation_engine.py",
@@ -230,24 +241,16 @@ def _is_protected(path: str) -> bool:
         return bool(is_protected(path))
     except Exception:
         fallback = (".agent/", "config/agent_policy.yaml", "config/ew0a_runtime",
-                    "decision_engine.py", "portfolio_automation/scoring",
-                    "portfolio_automation/broker", "systemd/", ".git/", ".env",
-                    "credentials", "secrets", ".github/workflows/northstar-")
+                    "portfolio_automation/scoring", "portfolio_automation/broker",
+                    "systemd/", ".git/", ".env", "credentials", "secrets")
         return any(tok in path for tok in fallback)
 
 
 def assess_candidate(base: dict[str, Any], head: dict[str, Any],
                      allowlisted_new_paths: list[str] | None = None) -> dict[str, Any]:
-    """Compare base-main vs candidate-head authority surfaces.
-
-    base/head shape: {"dispatch": {field: value}, "ew0a": {flag: bool},
-                      "agent_policy_digest": str, "c1": str, "phase_0d_status": str}
-    head also: {"changed_paths": [str]}.
-    `allowlisted_new_paths`: new files this authorized mission legitimately adds
-    (e.g. the orchestration registry/scripts/workflows). A protected path is a
-    violation only if it is a change to an EXISTING protected path not on the
-    allowlist.
-    """
+    """Compare base-main vs candidate-head authority surfaces (forbidden-authority +
+    a belt-and-suspenders protected-path list). The default-deny envelope is the
+    primary path gate; this remains for the enabled two-checkout diff."""
     allow = set(allowlisted_new_paths or [])
     authority_mutated = (
         base.get("dispatch") != head.get("dispatch")
@@ -261,10 +264,7 @@ def assess_candidate(base: dict[str, Any], head: dict[str, Any],
         forbidden.append("c1_enabled")
     if head.get("phase_0d_status") == "active" and base.get("phase_0d_status") != "active":
         forbidden.append("phase_0d_advanced")
-    violations = [
-        p for p in head.get("changed_paths", [])
-        if _is_protected(p) and p not in allow
-    ]
+    violations = [p for p in head.get("changed_paths", []) if _is_protected(p) and p not in allow]
     return {
         "authority_mutated": authority_mutated,
         "forbidden_authority_introduced": forbidden,
@@ -274,14 +274,13 @@ def assess_candidate(base: dict[str, Any], head: dict[str, Any],
 
 def _cli(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="northstar_pr_gate.py", add_help=True,
-                                 description="Evaluate the NORTHSTAR_MERGE_GATE.")
+                                 description="Evaluate the NORTHSTAR deterministic assurance gate.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     ev = sub.add_parser("evaluate", help="evaluate the gate from an inputs JSON file")
-    ev.add_argument("--inputs", required=True, help="path to the assembled inputs JSON")
+    ev.add_argument("--inputs", required=True)
     ev.add_argument("--require-pass", action="store_true",
                     help="exit 1 unless decision==PASS (for an enabled required check)")
     args = ap.parse_args(argv)
-
     if args.cmd == "evaluate":
         try:
             inputs = json.loads(Path(args.inputs).read_text(encoding="utf-8"))

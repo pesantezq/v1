@@ -22,23 +22,16 @@
 name: northstar-pr-controller
 
 on:
+  # The gate is FULLY DETERMINISTIC and depends on NO Codex/AI review, so the only
+  # triggers needed are PR-state events plus a manual recovery dispatch. The job polls
+  # exact-head northstar-ci to its terminal result itself.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
-  pull_request_review:
-    types: [submitted, dismissed]
-  pull_request_review_comment:
-    types: [created, edited]
-  # NOTE: pull_request_review_thread is a webhook event but NOT a supported Actions
-  # trigger, so it is intentionally omitted. Re-evaluation after the final material
-  # thread is resolved is covered by: the next pull_request_review/_comment, an
-  # `@codex review` issue_comment, or an operator workflow_dispatch(pr_number).
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "PR number to (re)evaluate (manual fallback)."
+        description: "PR number to (re)evaluate (manual recovery)."
         required: false
         type: string
 
@@ -46,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: northstar-pr-controller-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  group: northstar-pr-controller-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -54,10 +47,7 @@ jobs:
     name: Northstar merge gate
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      github.event_name == 'pull_request_review' ||
-      github.event_name == 'pull_request_review_comment' ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -65,7 +55,7 @@ jobs:
       pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
       decision: ${{ steps.gate.outputs.decision }}
@@ -115,10 +105,9 @@ jobs:
           fi
           PR_NUMBER="$PR"
           # Wait for northstar-ci on THIS PR head to finish, so the gate evaluates the
-          # FINAL CI result and its check attaches to the PR head. (A workflow_run-based
-          # re-trigger would attach its check to main, not the PR head — GitHub event
-          # contract — so we poll here instead. Codex re-evaluation is handled by the
-          # pull_request_review / _comment / _thread triggers.)
+          # FINAL CI result and its check attaches to the PR head. The gate is fully
+          # deterministic and needs no AI-review re-trigger; the deadline below yields a
+          # deterministic FAIL in enabled mode (via --require-pass) if CI never completes.
           HEADSHA=$(gh pr view "$PR" -R "${GITHUB_REPOSITORY}" --json headRefOid -q .headRefOid)
           DEADLINE=$(( $(date +%s) + 900 ))
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do

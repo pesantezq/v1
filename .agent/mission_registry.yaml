@@ -75,6 +75,25 @@ missions:
       restore_paused_authorization: true    # restore the EXACT phase_status paused_bounded_authorization object
       restore_source: .agent/phase_status.yaml#stockbot_northstar_redesign.phases.northstar_phase_0c.bounded_authorization.paused_bounded_authorization
     human_boundary_required: false
+    # DEFAULT-DENY change envelope (this is a CONTROL-PLANE mission: it builds the
+    # controller itself). Only these paths may change; anything else FAILS the gate.
+    change_policy:
+      class: control_plane
+      allowed_path_prefixes:
+        - .github/workflows/northstar-pr-controller.yml
+        - .github/workflows/northstar-orchestrator.yml
+        - .github/workflows/claude-authorized-mission.yml
+        - .github/scripts/northstar_
+        - scripts/northstar_
+        - .agent/mission_registry.yaml
+        - .agent/missions/
+        - tests/test_northstar_
+        - docs/NORTHSTAR_ORCHESTRATION.md
+        - docs/vs002_production_evidence_runner.md
+      allowed_paths: []
+      forbidden_path_prefixes: []     # the global absolute-forbidden set still applies
+      required_test_groups: [orchestration, authority, workflow_conformance]
+      semantic_guards: [no_forbidden_authority, control_plane_conformance]
 
   northstar_vs002_execution_adapter_foundation:
     executor: claude
@@ -105,6 +124,20 @@ missions:
     # it is merely PAUSED). The human wall is on its OUTBOUND transition to E4
     # frozen execution, enforced by transition_policy: human_required above.
     human_boundary_required: false
+    # DEFAULT-DENY change envelope — a NORMAL mission bounded to the VS-002 adapter
+    # surfaces only. It may NOT touch controller/workflow/authority/scoring surfaces.
+    change_policy:
+      class: normal
+      allowed_path_prefixes:
+        - portfolio_automation/vs002_evidence/
+        - tests/test_vs002_
+        - docs/vs002_
+      allowed_paths:
+        - portfolio_automation/data_governance.py   # adds the VS002_RESULT namespace
+        - docs/OUTPUT_ARTIFACT_CONTRACTS.md
+      forbidden_path_prefixes: []
+      required_test_groups: [vs002]
+      semantic_guards: [no_forbidden_authority]
 
   northstar_vs002_frozen_execution:
     executor: claude
@@ -122,3 +155,10 @@ missions:
       next_mission: null
       restore_paused_authorization: false
     human_boundary_required: true
+    # E4: no autonomous change envelope — nothing is auto-dispatchable or auto-mergeable.
+    change_policy:
+      class: normal
+      allowed_path_prefixes: []     # DEFAULT-DENY everything; this mission is unauthorized
+      allowed_paths: []
+      required_test_groups: []
+      semantic_guards: [no_forbidden_authority]

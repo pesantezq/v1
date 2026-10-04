@@ -21,10 +21,11 @@ protected main state  ─┐
 mission registry       │
                        ▼
 Claude PR → northstar-ci (exact head) ─┐
-          → Codex review (exact head) ─┤
-          → review-thread state ───────┤
+          → base-main authority + default-deny change envelope ─┤
+          → control-plane conformance (for control-plane class) ┤
                                        ▼
-                             NORTHSTAR_MERGE_GATE  (scripts/northstar_pr_gate.py)
+            NORTHSTAR_DETERMINISTIC_ASSURANCE_GATE  (scripts/northstar_pr_gate.py)
+                     (no Codex / no human in PASS/FAIL)
                                        │ PASS
                                        ▼
                              GitHub auto-merge (enabled mode only)
@@ -51,7 +52,7 @@ Claude PR → northstar-ci (exact head) ─┐
 |---|---|
 | `.agent/mission_registry.yaml` | Declarative routing contract (NOT authority). Risk class, executor, prompt source, auto-dispatch eligibility, transition policy, next/resume target, human boundary. Controller mode. |
 | `.agent/missions/<id>.md` | Protected prompt source for each mission. |
-| `scripts/northstar_pr_gate.py` | `NORTHSTAR_MERGE_GATE` — the single deterministic pre-merge gate. Pure `evaluate_merge_gate(inputs)`. |
+| `scripts/northstar_pr_gate.py` | `NORTHSTAR_DETERMINISTIC_ASSURANCE_GATE` — the autonomous merge authority (no AI/human in PASS/FAIL). Pure `evaluate_merge_gate` / `evaluate_change_envelope` / `check_control_plane_conformance`. |
 | `scripts/northstar_transition.py` | Deterministic transition proposer. Pure `propose_transition(inputs)`. Emits an allowlisted governance-PR proposal or STOP. |
 | `scripts/northstar_mission_packet.py` | Deterministic Claude dispatch packet builder. Pure `build_mission_packet(inputs)`. |
 | `scripts/northstar_materialize_transition.py` | Deterministic transition MATERIALIZER. Surgically applies a trusted proposal to the allowlisted protected fields (comment-preserving), restoring the paused authorization EXACTLY; fail-closed; no main push. |
@@ -85,40 +86,60 @@ hard FAIL. A candidate branch editing the registry (or any protected state) cann
 gain authority: the gate rejects a PR whose base-main authority differs, and
 dispatch/transition read authority from base main, not from the PR.
 
-## NORTHSTAR_MERGE_GATE semantics
+## Deterministic assurance gate (merge authority)
+
+> **Codex = optional advisory semantic reviewer. The Deterministic Assurance Gate
+> = merge authority.** NO AI review (Codex or any LLM) and NO human participates in
+> PASS/FAIL. A Codex outage/quota/absence/stale-review has ZERO effect on an
+> otherwise-valid autonomous E1–E3 merge; Codex comments are advisory telemetry only.
 
 `evaluate_merge_gate(inputs)` returns a machine-readable audit with a per-check
 breakdown and an overall `PASS`/`FAIL`, failing closed on any missing/ambiguous
-input. All of the following must hold:
+input. All of the following must hold (no AI/human input anywhere):
 
-- PR is open, not draft, base == `main`, mergeable.
-- Protected base-main current mission authorizes this PR's mission.
+- PR open, not draft, base == `main`, mergeable.
+- Candidate mission is INDEPENDENTLY declared (a `MISSION = <id>` body line or
+  `mission:<id>` label) and equals the protected base-main current mission.
 - `northstar-ci` conclusion == success, completed, **bound to the current PR head SHA**.
-- Codex review **bound to the current PR head** (see below).
-- Zero unresolved **material** (P1/P2) Codex review threads.
-- Candidate did not mutate authority beyond the authorized mission.
-- Forbidden/protected-path policy satisfied.
-- No real-evidence / production / broker / capital / trading / C1 / Phase-0D authority introduced.
-- Current remote `main` has not advanced since authorization (no invalidation).
+- The mission's **change class** is known, and the changed files satisfy that class:
+  - `normal` / `control_plane`: the **DEFAULT-DENY change envelope** (below);
+  - `control_plane` additionally: base-main authorizes control-plane scope AND the
+    candidate passes **control-plane security conformance**;
+  - `governance_transition`: the PR diff **exactly** equals a re-derived materialized
+    transition.
+- Required mission **test groups** exist (and ran, via the exact-head CI success).
+- No forbidden authority introduced (auto_* flips, C1, Phase 0D, broker/capital).
+- Current remote `main` has not advanced since the snapshot.
 
-### Codex exact-head binding
-Observed `chatgpt-codex-connector[bot]` protocol (PRs #60/#64):
-- A **review** is a PR review (`state: COMMENTED`, never `APPROVED`) whose
-  `commit_id` is the exact head it reviewed; the body carries
-  `**Reviewed commit:** \`<short-sha>\``. Binding uses `commit_id`.
-- **Material findings** are inline review comments carrying a `P1`/`P2` severity
-  badge; each has its own `commit_id`. These must reach zero-unresolved.
-- A **clean** signal is a `+1` issue reaction from the bot, created AFTER the
-  exact-head review/request anchor, with no newer material finding at that head.
-- A review is REQUESTED at an exact head by commenting `@codex review` (also auto
-  on open / ready-for-review).
+### Default-deny change envelope
+Every mission has a machine-readable `change_policy` in the PROTECTED base-main
+registry (class + `allowed_paths` + `allowed_path_prefixes` + `forbidden_path_prefixes`
++ `required_test_groups` + `semantic_guards`). `evaluate_change_envelope(changed,
+envelope)` DENIES BY DEFAULT: any changed path not explicitly allowed → FAIL; an
+empty envelope denies everything. A global absolute-forbidden set
+(`.agent/project_state.yaml`, `.agent/phase_status.yaml`, `config/ew0a_runtime.json`,
+`config/agent_policy.yaml`, secrets, broker, systemd) can never be allowed by any
+`normal`/`control_plane` envelope — those are mutated ONLY by an authenticated
+`governance_transition`. Authority precedence: **protected base main > registry
+routing > candidate declaration**; a candidate may narrow but never widen its own
+envelope (the gate reads the envelope from base main, not the PR).
 
-The gate (`evaluate_codex_binding`) therefore requires: a `+1` reaction bound to
-the exact head (via an exact-head review request naming the full SHA, or the
-latest head review) created after that anchor, AND zero unresolved P1/P2 threads.
-A stale review/reaction against an older head never satisfies the gate; if a new
-commit lands, any prior signal is stale and the gate resets; clean is never
-inferred from silence.
+### Control-plane autonomous trust rotation
+A PR that changes the controller/governance implementation passes automatically ONLY
+when protected base main's registry marks the current mission `change_policy.class ==
+control_plane`. **The candidate's controller code never evaluates its own PR** — the
+pr-controller checks out base `main` and runs `main`'s gate/assembler against the
+candidate's fetched files. `check_control_plane_conformance` deterministically rejects
+a control-plane candidate that weakens a constitutional invariant (adds
+`pull_request_target`, uses a non-SHA-pinned action, ships the registry in a non-shadow
+mode, grants write-all, etc.). After merge + exact-SHA post-merge certification,
+controller N+1 becomes the durable evaluator for subsequent PRs. No human, no Codex.
+
+### Codex (advisory only)
+Codex is NOT requested, polled, waited on, or required by orchestration. If an
+operator or a background process leaves Codex comments, they are recorded as
+`advisory_codex` telemetry and never alter `PASS`/`FAIL`/`would_merge`/auto-merge/
+transition/dispatch eligibility.
 
 ## Post-merge orchestrator semantics
 
@@ -155,8 +176,8 @@ approval or merge authority.
 Automation STOPs (no merge, no transition, no dispatch) for: E4 missions; real
 frozen evidence access/execution; production deployment; broker write; capital/
 trading action; C1 advancement; Phase 0D or later; ambiguous/contradictory
-protected state; inability to prove exact-head CI/review; inability to prove
-current remote-main identity.
+protected state; inability to prove exact-head CI; inability to prove current
+remote-main identity. (There is no human/Codex gate — these are deterministic STOPs.)
 
 ## Controller modes
 
@@ -169,10 +190,11 @@ current remote-main identity.
 
 This implementation PR must not auto-merge itself and must not self-bootstrap
 authority. `enabled` capabilities activate only after this PR passes exact-head
-CI + clean exact-head Codex review + resolved threads, is manually merged under
-existing governance, post-merge main CI succeeds on the exact merge SHA, and
-bootstrap/readiness checks prove the controller evaluates the same gates we
-enforce manually today.
+CI and the deterministic assurance gate, is manually merged under existing
+governance (the ONE final bootstrap-era manual merge, needed only because the
+controller is not yet durable on `main`), post-merge main CI succeeds on the exact
+merge SHA, and the readiness checks prove base-main controller N evaluates candidate
+N+1. After that, E1–E3 progression is autonomous — no human reviewer and no Codex.
 
 ## GitHub Actions threat model
 
@@ -189,24 +211,25 @@ enforce manually today.
 ## Input-assembly hardening (fail-closed on partial data)
 
 `scripts/northstar_assemble_gate_inputs.py` feeds the gate and is hardened so a
-security decision is never made on partial or tautological data:
+security decision is never made on partial or tautological data (and never fetches,
+polls, or waits on Codex):
 - the candidate's claimed mission is derived INDEPENDENTLY from the PR (a
   `MISSION = <id>` contract line or a `mission:<id>` label), never copied from
   protected state, so `protected_mission_authorizes_pr` is a real comparison;
-- all policy-relevant API queries are fully PAGINATED (a finding or protected-path
-  edit on a later page cannot be missed);
-- review-thread resolution is read from the GraphQL `reviewThreads.isResolved`
-  (fixing a finding and resolving the thread actually clears the gate);
+- authority is RECONCILED across all protected sources (project_state, phase_status,
+  ew0a_runtime) and must match roadmap_guard, else fail-closed;
+- the changed-file set is fully PAGINATED and run through the DEFAULT-DENY envelope;
+- the mission's change class + envelope come ONLY from the protected base-main
+  registry (the candidate cannot widen its own envelope);
+- control-plane conformance is computed on the candidate's OWN fetched files by
+  base-main code (the candidate never evaluates its own PR);
 - `now_main_sha` is a FRESH remote read distinct from the checked-out
-  `protected.main_sha`, so `main_not_advanced` can genuinely fail;
-- the protected-path allowlist applies ONLY to files the PR ADDs; MODIFYING the
-  registry/scripts/workflows later is a protected-path violation.
+  `protected.main_sha`, so `main_not_advanced` can genuinely fail.
 
-The PR controller re-evaluates on `pull_request_review` /
-`pull_request_review_comment` (so the required check updates after Codex responds,
-not only before). The Claude dispatch workflow verifies a REAL successful
-`northstar-ci` push run for the current main SHA before dispatching, so a manual
-`workflow_dispatch` cannot manufacture certification for an uncertified SHA.
+The PR controller triggers only on PR-state events + manual recovery dispatch and
+polls exact-head `northstar-ci` to its terminal result in-job. The Claude dispatch
+workflow verifies a REAL successful `northstar-ci` push run for the current main SHA
+before dispatching, so a manual `workflow_dispatch` cannot manufacture certification.
 
 ## Activation contract (configuration-only — no further code PR)
 
