@@ -56,11 +56,13 @@ stockbot_northstar_redesign:
       evidence: docs/G1_SUPERVISOR_MEASUREMENT.md, evals/g1/formal/
   engineer_runtime_state:
     mission_id: northstar_continuous_mission_orchestration_foundation
-                          # 2026-10-02 — repointed: the deterministic VS-002 result runner is COMPLETE and durable
-                          # on main (PR #60 merged @ eaee0584b643, post-merge CI green). The next dispatchable
-                          # BOUNDED mission is the THIN VS-002 execution-adapter foundation (synthetic fixtures
-                          # only; governed result-artifact support; package-integrity wiring); it grants NO
-                          # real-package access, NO real execution, NO production/capital/C1 authority.
+                          # 2026-10-04 — repointed by explicit operator authorization to the
+                          # cross-cutting continuous mission orchestration foundation. This is
+                          # now the ONE dispatchable bounded mission. The previously-authorized
+                          # VS-002 execution-adapter foundation is PAUSED, not complete/cancelled,
+                          # and resumes immediately after this orchestration foundation is durable.
+                          # This repoint grants NO real-package access, real execution,
+                          # production/capital/C1 authority, or mission self-authorization.
                           # Prior 2026-10-01 — repointed: the historical-price-evidence prerequisite is COMPLETE
                           # (frozen VS-002 evidence package durable + lab-revalidated; final
                           # result-blind preregistration MERGED via PR #58 @ 556e554a). The next
@@ -272,7 +274,8 @@ stockbot_northstar_redesign:
           deterministic transition proposal tooling, and shadow-to-enabled rollout tests. Preserve
           roadmap_guard fail-closed semantics, exact-SHA review binding, no worker merge authority, no
           self-authorization, and explicit human_required boundaries for E4/real-evidence/production/
-          capital/C1 transitions. This authorization does NOT permit real VS-002 package access or execution.
+          capital/C1 transitions. This mission does NOT authorize real VS-002 package access or execution,
+          production deployment, broker access, capital/trading action, C1, Phase 0D, or mission self-authorization.
         paused_mission: northstar_vs002_execution_adapter_foundation
         resume_after_completion: northstar_vs002_execution_adapter_foundation
         not_yet_executed: true   # orchestration foundation is not built yet; the VS-002 adapter remains paused
