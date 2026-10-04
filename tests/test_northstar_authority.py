@@ -564,10 +564,10 @@ def test_paused_adapter_authorization_is_preserved_exactly(phase):
         artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
         recomputable artifact digests + deterministic package_id (consumer.validate) plus
         ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
-        package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed.
-        This paused authorization does NOT authorize northstar_vs002_frozen_execution,
-        real-package access, VS-002 metric computation, Phase 0C completion, the 0C Research Store,
-        Phase 0D or later, C1, production deployment, broker access, or trading/capital authority.
+        package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
+        does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
+        computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
+        deployment, broker access, or trading/capital authority.
     """
     normalize = lambda s: " ".join(s.split())
     assert normalize(paused["scope"]) == normalize(expected_scope)
