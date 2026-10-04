@@ -23,16 +23,12 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-10-02: the deterministic VS-002
-#: result runner is COMPLETE and durable on main (PR #60 merged @ eaee0584, post-
-#: merge CI green), so the dispatchable bounded step is repointed to the THIN
-#: VS-002 execution-adapter foundation. Identifiers kept apart:
-#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today (the execution adapter)
-#:   RESULT_RUNNER_MISSION       - the just-completed result runner (now prior_primary)
-#:   HISTORICAL_EVIDENCE_MISSION - the earlier completed prerequisite (before the result runner)
-#:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
-#:   VS_MISSION                  - the Vertical Slice, `preregistered` (VS-002 not executed)
-AUTHORIZED_MISSION = "northstar_vs002_execution_adapter_foundation"
+#: The mission the roadmap authorizes NOW. 2026-10-04: by explicit operator
+#: authorization, a short cross-cutting continuous-orchestration foundation is
+#: inserted ahead of the VS-002 execution adapter to remove manual merge/CI/
+#: continuation waits without weakening roadmap_guard or protected authority.
+#: The adapter is paused and resumes after the orchestration foundation is durable.
+AUTHORIZED_MISSION = "northstar_continuous_mission_orchestration_foundation"
 RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
