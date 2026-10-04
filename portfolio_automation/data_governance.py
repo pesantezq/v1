@@ -67,6 +67,11 @@ class OutputNamespace(str, Enum):
     # package-DIRECTORY atomic publication (staging -> validate -> os.replace ->
     # immutable packages/<id>/) layered on top.
     VS002_EVIDENCE      = "vs002_evidence"
+    # ── VS-002 execution-adapter RESULT artifacts (added 2026-10-04) ─────────
+    # experimental_noncanonical, observe-only, non-production scientific execution
+    # results written by the VS-002 execution adapter under outputs/vs002_result/.
+    # NOT a LIVE/PORTFOLIO/POLICY/decision namespace; grants no authority.
+    VS002_RESULT        = "vs002_result"
 
 
 class DataGovernanceError(Exception):
@@ -101,6 +106,7 @@ _NAMESPACE_SUBDIR: dict[OutputNamespace, str] = {
     OutputNamespace.PROMOTION_APPROVALS: "promotion_approvals",
     OutputNamespace.WEEKLY_ETF_BUNDLES:  "weekly_etf_bundles",
     OutputNamespace.VS002_EVIDENCE:      "vs002_evidence",
+    OutputNamespace.VS002_RESULT:        "vs002_result",
 }
 
 # Namespaces that include user_id as a path segment
@@ -444,5 +450,14 @@ def get_policies(base_dir: Path | str = "outputs") -> dict[OutputNamespace, Outp
                         "price-evidence packages (experimental_noncanonical). "
                         "Per-file artifact writes are governed; the runner's "
                         "package-directory atomic publication stays on top.",
+        ),
+        OutputNamespace.VS002_RESULT: OutputPathPolicy(
+            namespace=OutputNamespace.VS002_RESULT,
+            root=base / "vs002_result",
+            description="Experimental_noncanonical, observe-only, non-production "
+                        "VS-002 execution-adapter result artifacts. NOT a "
+                        "LIVE/PORTFOLIO/POLICY/decision namespace; collision-"
+                        "refused and immutable at the adapter layer; grants no "
+                        "authority.",
         ),
     }
