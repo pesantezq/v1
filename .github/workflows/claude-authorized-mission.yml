@@ -170,11 +170,14 @@ jobs:
           OK=$(sed -n 1p /tmp/verify.txt); SRC=$(sed -n 2p /tmp/verify.txt)
           [ "$OK" = "OK" ] || { echo "::error::authorization re-check failed — STOP"; exit 1; }
           echo "prompt_source=$SRC" >> "$GITHUB_OUTPUT"
-          DEDUP="${MISSION}@${CERTIFIED_SHA:0:12}"
+          # MISSION-LEVEL dedup (NOT per-SHA): once an implementation PR for this
+          # mission exists (any state), never dispatch it again — a later main commit
+          # with a new SHA must not re-launch the same mission.
+          DEDUP="auto-dispatch:${MISSION}"
           echo "dedup=$DEDUP" >> "$GITHUB_OUTPUT"
           EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all --search "$DEDUP in:title" --json number -q 'length')
           if [ "${EXIST:-0}" != "0" ]; then
-            echo "::notice::dispatch for $DEDUP already exists — idempotent no-op."
+            echo "::notice::an implementation PR for $MISSION already exists — idempotent no-op."
             echo "already=yes" >> "$GITHUB_OUTPUT"
           else
             echo "already=no" >> "$GITHUB_OUTPUT"

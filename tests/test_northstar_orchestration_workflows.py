@@ -9,6 +9,7 @@ no path granting Claude merge/approve. Routed to `governance` via the prefix.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -27,6 +28,16 @@ CLAUDE = WF / "claude-authorized-mission.yml"
 ALL = [PR_CONTROLLER, ORCHESTRATOR, CLAUDE]
 
 CLAUDE_ACTION_SHA = "cab360f6565aa35a51d6ce9e43f1f4287c0a32ea"
+
+
+def _load_mod(name: str):
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+gate = _load_mod("northstar_pr_gate")
 
 
 def _load(p: Path) -> dict:
@@ -215,3 +226,22 @@ def test_all_effect_steps_fail_fast():
 def test_claude_dispatch_requires_real_certification():
     t = _text(CLAUDE)
     assert "not post-merge-certified" in t or "UNCERTIFIED" in t
+
+
+def test_claude_dispatch_dedup_is_mission_level_not_per_sha():
+    t = _text(CLAUDE)
+    assert 'DEDUP="auto-dispatch:${MISSION}"' in t
+    # must NOT dedup by the changing certified SHA (that would re-dispatch per commit)
+    assert "${CERTIFIED_SHA:0:12}" not in t
+
+
+def test_github_tree_fully_protected():
+    # the whole .github/ tree is controller-protected (not just northstar-* workflows)
+    assert gate._is_protected(".github/workflows/claude-authorized-mission.yml")
+    assert gate._is_protected(".github/workflows/northstar-ci.yml")
+    assert gate._is_protected(".github/workflows/anything-new.yml")
+
+
+def test_forbidden_semantic_files_protected():
+    for f in ("recommendations.py", "allocation_engine.py", "decision_engine.py"):
+        assert gate._is_protected(f"portfolio_automation/{f}") or gate._is_protected(f)

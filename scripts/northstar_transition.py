@@ -56,6 +56,15 @@ def propose_transition(inputs: dict[str, Any]) -> dict[str, Any]:
              f"{completed} vs {authoritative}"):
         return stop("completed_mission_not_authoritative")
 
+    # 1b. the certified main SHA must actually be the MERGE of THIS mission's
+    # implementation PR (its merged PR declared this mission). This prevents an
+    # unrelated certified main push, while a preauthorized_auto mission is active,
+    # from opening a premature governance transition.
+    if not c("completed_pr_merged_the_mission",
+             inputs.get("completed_pr_mission") == completed,
+             f"merged-PR mission {inputs.get('completed_pr_mission')!r} vs {completed!r}"):
+        return stop("certified_sha_did_not_merge_this_mission")
+
     # 2. post-merge certification must be valid: success push on main at the exact sha
     pm_ok = (post_merge.get("conclusion") == "success"
              and post_merge.get("event") == "push"

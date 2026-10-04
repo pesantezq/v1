@@ -72,6 +72,7 @@ def valid_inputs() -> dict:
         "mode": "shadow",
         "completed_mission": ORCH,
         "authoritative_mission": ORCH,
+        "completed_pr_mission": ORCH,   # the certified SHA merged THIS mission's PR
         "registry": registry(),
         "paused_authorization": copy.deepcopy(PAUSED_AUTH),
         "certified_main_sha": MAIN,
@@ -121,6 +122,7 @@ def test_human_required_transition_stops():
     def mut(i):
         i["completed_mission"] = ADAPTER
         i["authoritative_mission"] = ADAPTER
+        i["completed_pr_mission"] = ADAPTER
     res = _ev(mut)
     assert res["decision"] == "STOP"
     assert res["reason"] == "human_required"
@@ -133,8 +135,19 @@ def test_ambiguous_completed_vs_authoritative_stops():
     assert res["reason"] == "completed_mission_not_authoritative"
 
 
+def test_certified_sha_must_have_merged_the_mission_pr():
+    # an unrelated certified main push (no mission PR / different mission) must STOP
+    res = _ev(lambda i: i.update(completed_pr_mission=None))
+    assert res["decision"] == "STOP"
+    assert res["reason"] == "certified_sha_did_not_merge_this_mission"
+    res2 = _ev(lambda i: i.update(completed_pr_mission="northstar_unrelated"))
+    assert res2["reason"] == "certified_sha_did_not_merge_this_mission"
+
+
 def test_missing_registry_entry_stops():
-    res = _ev(lambda i: i.update(completed_mission="northstar_unknown", authoritative_mission="northstar_unknown"))
+    res = _ev(lambda i: i.update(completed_mission="northstar_unknown",
+                                 authoritative_mission="northstar_unknown",
+                                 completed_pr_mission="northstar_unknown"))
     assert res["reason"] == "missing_registry_entry"
 
 

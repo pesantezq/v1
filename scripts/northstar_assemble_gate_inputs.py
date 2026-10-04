@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
-MATERIAL_SEVERITIES = ("P1", "P2")
+MATERIAL_SEVERITIES = ("P0", "P1", "P2")   # P0 is MORE severe than P1 — must block
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Files THIS bootstrap mission legitimately ADDS. The allowlist applies only when
@@ -140,10 +140,9 @@ def reconcile_authority(project_state: dict, phase_status: dict, ew0a: dict) -> 
 
 
 def _severity_from_body(body: str) -> str | None:
-    if "badge/P1" in body or "![P1" in body:
-        return "P1"
-    if "badge/P2" in body or "![P2" in body:
-        return "P2"
+    for sev in ("P0", "P1", "P2"):
+        if f"badge/{sev}" in body or f"![{sev}" in body:
+            return sev
     return None
 
 
@@ -267,6 +266,7 @@ def _transition_exact_match(repo: str, pr_number: int, head_sha: str) -> bool:
         cur = _git("rev-parse", "HEAD")
         res = trans.propose_transition({
             "mode": "enabled", "completed_mission": mission, "authoritative_mission": mission,
+            "completed_pr_mission": mission,   # re-deriving the same proposal to compare files
             "registry": reg, "paused_authorization": paused,
             "certified_main_sha": cur, "protected_main_sha": cur,
             "post_merge": {"conclusion": "success", "event": "push", "head_branch": "main", "head_sha": cur},
@@ -306,9 +306,50 @@ def _is_protected(path: str) -> bool:
                   ".agent/mission_registry.yaml", ".agent/missions/")
     if any(path.startswith(p) for p in controller):
         return True
+    # Forbidden protected SEMANTICS (CLAUDE.md): scoring/decision/recommendation/
+    # allocation/broker surfaces a mission PR must never silently alter.
+    base = path.rsplit("/", 1)[-1]
+    if base in ("recommendations.py", "recommendation_engine.py", "allocation_engine.py",
+                "decision_engine.py"):
+        return True
     if _pol is not None:
         return bool(_pol(path))
     return path.startswith((".agent/", "config/agent_policy", "config/ew0a_runtime"))
+
+
+AUTO_FLAGS = ("auto_merge", "auto_deploy", "auto_production_mutation",
+              "auto_authority_promotion", "auto_capital_action")
+
+
+def _forbidden_authority(repo: str, head_sha: str) -> list[str]:
+    """Compute forbidden-authority introductions by comparing base-main vs the PR
+    head: any auto_* flag flipped on, C1 enabled, or Phase 0D advanced. This is
+    defense-in-depth ON TOP of the protected-path guard (which already flags any
+    edit to config/ew0a_runtime.json / .agent/phase_status.yaml)."""
+    out: list[str] = []
+    try:
+        base_ew = json.loads((REPO_ROOT / "config/ew0a_runtime.json").read_text(encoding="utf-8"))
+        ht = _head_file(repo, "config/ew0a_runtime.json", head_sha)
+        head_ew = json.loads(ht) if ht else base_ew
+        for f in AUTO_FLAGS:
+            if head_ew.get(f) and not base_ew.get(f):
+                out.append(f)
+        if head_ew.get("c1") == "ENABLED" and base_ew.get("c1") != "ENABLED":
+            out.append("c1_enabled")
+        import yaml
+        def _p0d(ph):
+            try:
+                return ph["stockbot_northstar_redesign"]["phases"]["northstar_phase_0d"]["status"]
+            except Exception:
+                return None
+        base_ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
+        pt = _head_file(repo, ".agent/phase_status.yaml", head_sha)
+        head_ph = yaml.safe_load(pt) if pt else base_ph
+        if _p0d(head_ph) == "active" and _p0d(base_ph) != "active":
+            out.append("phase_0d_advanced")
+    except Exception:
+        return out
+    return out
 
 
 def _git(*args: str) -> str:
@@ -383,7 +424,7 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
         "candidate": {
             "authorized_mission": candidate_mission,   # from the PR, NOT protected state
             "authority_mutated": bool(is_transition),   # a transition legitimately mutates dispatch (verified by exact match)
-            "forbidden_authority_introduced": [],
+            "forbidden_authority_introduced": _forbidden_authority(repo, head_sha),
             "protected_path_violations": protected_violations,
             "is_deterministic_transition": is_transition,
             "transition_exact_match": transition_exact,

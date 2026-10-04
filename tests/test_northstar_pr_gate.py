@@ -342,10 +342,11 @@ def test_material_unresolved_from_threads_reads_real_resolution():
         {"isResolved": False, "comments": [{"author": BOT, "body": "![P2 Badge] z", "commit_id": "o" * 40}]},  # OLD head -> still counts
         {"isResolved": False, "comments": [{"author": "someone", "body": "![P1 Badge]", "commit_id": head}]},  # not the bot
     ]
+    threads.append({"isResolved": False, "comments": [{"author": BOT, "body": "![P0 Badge] crit", "commit_id": head}]})
     out = asm.material_unresolved_from_threads(threads, BOT)
-    # unresolved material from ANY head blocks: the P1 at head AND the P2 at the old head
-    assert len(out) == 2
-    assert {o["severity"] for o in out} == {"P1", "P2"}
+    # unresolved material from ANY head blocks: P1 at head, P2 at old head, and P0 (most severe)
+    assert len(out) == 3
+    assert {o["severity"] for o in out} == {"P0", "P1", "P2"}
 
 
 def test_reconcile_authority_requires_all_sources_to_agree():

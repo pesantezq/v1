@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
-MATERIAL_SEVERITIES = ("P1", "P2")
+MATERIAL_SEVERITIES = ("P0", "P1", "P2")   # P0 is MORE severe than P1 — must block
 # auto_* capability flags that must never be flipped on by a candidate (ew0a_runtime.json)
 AUTO_FLAGS = (
     "auto_merge",
@@ -220,6 +220,9 @@ def _is_protected(path: str) -> bool:
     files (self-protection). Falls back to a minimal pattern set if the policy
     module is unavailable (keeps the gate importable in any checkout)."""
     if any(path.startswith(p) for p in CONTROLLER_PROTECTED_PREFIXES):
+        return True
+    if path.rsplit("/", 1)[-1] in ("recommendations.py", "recommendation_engine.py",
+                                    "allocation_engine.py", "decision_engine.py"):
         return True
     try:
         from portfolio_automation.engineer_worker.policy import is_protected

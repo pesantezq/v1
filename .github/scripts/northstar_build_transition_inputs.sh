@@ -5,9 +5,14 @@
 # roadmap_guard; the paused authorization is read verbatim from phase_status.
 set -uo pipefail
 SHA="${1:?certified sha}"; CONCL="${2:-success}"; EVENT="${3:-push}"; BRANCH="${4:-main}"
-python - "$SHA" "$CONCL" "$EVENT" "$BRANCH" <<'PY'
+# The MISSION declared by the PR merged at the certified SHA (binds completion to
+# the actual mission implementation PR, not just "a green main push").
+PR_MISSION=$(gh api "repos/${GITHUB_REPOSITORY:-}/commits/${SHA}/pulls" \
+  -q '.[0].body' 2>/dev/null | grep -ioE '^\s*MISSION\s*=\s*\S+' | head -1 | sed -E 's/.*=\s*//' || true)
+python - "$SHA" "$CONCL" "$EVENT" "$BRANCH" "${PR_MISSION:-}" <<'PY'
 import json, sys, pathlib
 sha, concl, event, branch = sys.argv[1:5]
+completed_pr_mission = sys.argv[5] or None
 root = pathlib.Path(".").resolve()
 try:
     import yaml
@@ -34,6 +39,7 @@ print(json.dumps({
     "mode": mode,
     "completed_mission": mission,
     "authoritative_mission": mission,
+    "completed_pr_mission": completed_pr_mission,
     "registry": reg,
     "paused_authorization": paused,
     "certified_main_sha": sha,
