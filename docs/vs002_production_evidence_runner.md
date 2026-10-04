@@ -109,17 +109,23 @@ The strict sequence, each step separately authorized. Status as of 2026-10-01:
    (`tests/test_vs002_result_runner*.py`). The real frozen evidence package was
    **NOT opened, enumerated, validated, or evaluated**, and NO real VS-002 result
    was computed. Being durable on `main` grants NO real-experiment-execution authority.
-6. **thin VS-002 execution-adapter foundation** — wire the trusted path
-   (explicit package path -> `consumer.validate` -> `ValidatedSnapshot` ->
-   `verify_evidence_binding` -> `result_runner.run` -> canonical `ExperimentResult`
-   -> governed immutable result artifact) with package-integrity wiring, SYNTHETIC
-   fixtures only. This is the `northstar_vs002_execution_adapter_foundation`
-   mission — the **NEXT authorized bounded step**. Execution-time package
-   integrity = recomputable artifact digests + deterministic `package_id`
-   (`consumer.validate`) PLUS `manifest code_sha == frozen source_production_sha`;
-   the frozen `package_transport_digest` is a **HISTORICAL ATTESTATION ONLY** and is
-   not recomputed. Does NOT open the real package and does NOT execute the experiment.
-7. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
+6. **continuous mission orchestration foundation** — the CURRENT authorized bounded
+   step (`northstar_continuous_mission_orchestration_foundation`). It automates
+   exact-head CI/review gating, merge, post-merge certification, protected state
+   transition handoff, and dispatch of only already-authorized Claude missions.
+   It grants no real-evidence/execution/production/capital/C1 authority.
+7. **thin VS-002 execution-adapter foundation** — already operator-authorized but
+   currently **PAUSED** with its exact scope preserved machine-readably. After the
+   orchestration foundation is durable, resume the trusted path (explicit package
+   path -> `consumer.validate` -> `ValidatedSnapshot` -> `verify_evidence_binding`
+   -> `result_runner.run` -> canonical `ExperimentResult` -> governed immutable
+   result artifact) with package-integrity wiring, SYNTHETIC fixtures only.
+   Execution-time package integrity = recomputable artifact digests + deterministic
+   `package_id` (`consumer.validate`) PLUS
+   `manifest code_sha == frozen source_production_sha`; the frozen
+   `package_transport_digest` is a **HISTORICAL ATTESTATION ONLY** and is not
+   recomputed. Does NOT open the real package and does NOT execute the experiment.
+8. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
    mission (`northstar_vs002_frozen_execution`). NOT authorized.
 
 The authoritative frozen experiment contract is the preregistration JSON in step

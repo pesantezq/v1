@@ -23,16 +23,13 @@ PHASE_FILE = REPO_ROOT / ".agent" / "phase_status.yaml"
 SCRIPT = REPO_ROOT / "scripts" / "agent_context_check.py"
 
 AUTHORIZED_0C_MISSION = "northstar_0c_pit_evidence_gateway_research_store"
-#: The mission the roadmap authorizes NOW. 2026-10-02: the deterministic VS-002
-#: result runner is COMPLETE and durable on main (PR #60 merged @ eaee0584, post-
-#: merge CI green), so the dispatchable bounded step is repointed to the THIN
-#: VS-002 execution-adapter foundation. Identifiers kept apart:
-#:   AUTHORIZED_MISSION          - the one bounded mission dispatchable today (the execution adapter)
-#:   RESULT_RUNNER_MISSION       - the just-completed result runner (now prior_primary)
-#:   HISTORICAL_EVIDENCE_MISSION - the earlier completed prerequisite (before the result runner)
-#:   BROAD_0C_MISSION            - 0C's lifetime identity, preserved as history, NOT dispatchable
-#:   VS_MISSION                  - the Vertical Slice, `preregistered` (VS-002 not executed)
-AUTHORIZED_MISSION = "northstar_vs002_execution_adapter_foundation"
+#: The mission the roadmap authorizes NOW. 2026-10-04: by explicit operator
+#: authorization, a short cross-cutting continuous-orchestration foundation is
+#: inserted ahead of the VS-002 execution adapter to remove manual merge/CI/
+#: continuation waits without weakening roadmap_guard or protected authority.
+#: The adapter is paused and resumes after the orchestration foundation is durable.
+AUTHORIZED_MISSION = "northstar_continuous_mission_orchestration_foundation"
+ADAPTER_MISSION = "northstar_vs002_execution_adapter_foundation"
 RESULT_RUNNER_MISSION = "northstar_vs002_result_runner"
 HISTORICAL_EVIDENCE_MISSION = "northstar_0c_historical_price_evidence_for_vs002"
 BROAD_0C_MISSION = AUTHORIZED_0C_MISSION
@@ -189,15 +186,19 @@ def test_current_phase_and_step(state):
     assert state["current_step"] != VS_MISSION
     # the prerequisite it replaced has moved to prior_primary, not current
     assert state["current_step"] != HISTORICAL_EVIDENCE_MISSION
-    assert state["current_step"] != RESULT_RUNNER_MISSION  # just-completed; now prior_primary
+    assert state["current_step"] != RESULT_RUNNER_MISSION
+    assert state["current_step"] != ADAPTER_MISSION  # explicitly paused while orchestration is current
 
 
 def test_next_official_step_is_the_authorized_mission(state):
     nos = state["next_official_step"]
     assert nos["primary"] == AUTHORIZED_MISSION
-    # History is carried forward, not erased: the just-completed result runner is
-    # now the prior primary (the historical-price evidence prerequisite preceded it).
-    assert nos["prior_primary"] == RESULT_RUNNER_MISSION
+    # The execution adapter was already operator-authorized but is temporarily
+    # paused so this cross-cutting orchestration foundation can remove manual
+    # merge/CI/handoff waits. It is therefore the immediately prior primary and
+    # must remain resumable, not be misclassified as complete.
+    assert nos["prior_primary"] == ADAPTER_MISSION
+    assert nos["secondary"] == []  # paused work must not be advertised as dispatchable
 
 
 def test_controller_pointers_do_not_lag_the_phase_map(state, phase):
@@ -370,7 +371,7 @@ def test_only_the_bounded_0c_mission_is_dispatchable():
 
     assert_mission_authorized(roadmap, AUTHORIZED_MISSION)  # the one that may run
 
-    for refused in (BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
+    for refused in (ADAPTER_MISSION, BROAD_0C_MISSION, VS_MISSION, "northstar_phase_0d",
                     "northstar_0d_certification", "", None):
         with pytest.raises(RoadmapViolation):
             assert_mission_authorized(roadmap, refused)
@@ -542,6 +543,42 @@ def test_phase_0c_authorization_is_preserved_as_history(phase):
     auth = p0c["authorization"]
     assert auth["authorized_by"] == "operator"
     assert auth["authorized_mission"] == AUTHORIZED_0C_MISSION
+
+
+
+def test_paused_adapter_authorization_is_preserved_exactly(phase):
+    """The orchestration insertion may pause the adapter but may not erase or widen
+    the operator-approved adapter scope that must be restored after orchestration."""
+    p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+    paused = p0c["bounded_authorization"]["paused_bounded_authorization"]
+    assert paused["authorized_by"] == "operator"
+    assert paused["authorized_at"].isoformat() == "2026-10-02"
+    assert paused["authorized_mission"] == ADAPTER_MISSION
+    assert paused["status"] == "PAUSED_NOT_EXECUTED"
+    assert paused["not_yet_executed"] is True
+    expected_scope = """
+        Implement and certify the THIN VS-002 execution adapter and governed result-artifact
+        support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
+        (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
+        result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
+        artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
+        recomputable artifact digests + deterministic package_id (consumer.validate) plus
+        ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
+        package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
+        does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
+        computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
+        deployment, broker access, or trading/capital authority.
+    """
+    normalize = lambda s: " ".join(s.split())
+    assert normalize(paused["scope"]) == normalize(expected_scope)
+    assert normalize(paused["resume_condition"]) == normalize(
+        """
+        Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
+        durable on main, and post-merge main CI is green; resumption must restore this exact
+        authorization rather than reconstructing or widening it.
+        """
+    )
+    assert ADAPTER_MISSION in p0c["bounded_authorization"]["resume_after_completion"]
 
 
 def test_phase_0c_depends_on_a_completed_0b(phase):
