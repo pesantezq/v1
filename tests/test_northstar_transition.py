@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -240,6 +243,47 @@ def test_real_mission_registry_parses_and_is_shadow():
     assert m[FROZEN]["risk_class"] == "E4"
     assert m[FROZEN]["auto_dispatch"] is False
     assert "E4" not in reg["auto_dispatch_allowed_risk_classes"]
+
+
+def test_transition_input_builder_serializes_yaml_dates_as_iso8601(tmp_path):
+    # Regression for the first real post-merge orchestrator run: PyYAML loads
+    # unquoted authorized_at scalars as datetime.date, which must be normalized
+    # deterministically before the transition input document is JSON encoded.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'MISSION = "
+        + ORCH
+        + "'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env["GITHUB_REPOSITORY"] = "pesantezq/v1"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / ".github" / "scripts" / "northstar_build_transition_inputs.sh"),
+            MAIN,
+            "success",
+            "push",
+            "main",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(proc.stdout)
+    paused = payload["paused_authorization"]
+    assert paused["authorized_mission"] == ADAPTER
+    assert paused["authorized_at"] == "2026-10-02"
+    assert isinstance(paused["authorized_at"], str)
 
 
 # ------------------------- transition MATERIALIZER -------------------------- #
