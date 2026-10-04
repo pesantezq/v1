@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -248,7 +249,14 @@ def refresh_stale_pr(client: GitHubClient, pr: dict[str, Any]) -> None:
     head = str(pr["head"]["sha"])
     client.put(f"/pulls/{number}/update-branch", {"expected_head_sha": head})
     refreshed = client.get(f"/pulls/{number}")
+    for _ in range(10):
+        if str(refreshed["head"]["sha"]) != head:
+            break
+        time.sleep(1)
+        refreshed = client.get(f"/pulls/{number}")
     new_head = str(refreshed["head"]["sha"])
+    if new_head == head:
+        raise OrchestrationError("GitHub accepted update-branch but the PR head did not advance")
     dispatch_ci(client, str(refreshed["head"]["ref"]))
     comments = client.get(f"/issues/{number}/comments?per_page=100")
     request_codex_review(client, number, new_head, comments)
@@ -265,6 +273,8 @@ def evaluate_pr(
         return "not_open"
 
     marker = parse_marker(pr.get("body"))
+    if not marker:
+        return "unmanaged_pr"
     validate_marker_authority(marker, state, registry)
 
     kind = marker["kind"]
