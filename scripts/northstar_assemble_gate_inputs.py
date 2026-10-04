@@ -50,10 +50,13 @@ ALLOWLISTED_ADDED_PATHS = {
     "scripts/northstar_transition.py",
     "scripts/northstar_mission_packet.py",
     "scripts/northstar_assemble_gate_inputs.py",
+    "scripts/northstar_materialize_transition.py",
     "docs/NORTHSTAR_ORCHESTRATION.md",
     ".github/workflows/northstar-pr-controller.yml",
     ".github/workflows/northstar-orchestrator.yml",
     ".github/workflows/claude-authorized-mission.yml",
+    ".github/scripts/northstar_build_transition_inputs.sh",
+    ".github/scripts/northstar_build_packet_inputs.sh",
 }
 
 _MISSION_LINE = re.compile(r"(?mi)^\s*MISSION\s*=\s*(\S+)\s*$")
@@ -93,11 +96,12 @@ def added_only_protected_violations(changed: list[dict], allowlist: set[str],
     return out
 
 
-def material_unresolved_from_threads(threads: list[dict], head_sha: str,
-                                     bot_login: str) -> list[dict]:
-    """From GraphQL reviewThreads, return the UNRESOLVED material (P1/P2) threads
-    authored by the Codex bot at the given head. `threads`: [{isResolved, comments:
-    [{author, body, commit_id}]}]."""
+def material_unresolved_from_threads(threads: list[dict], bot_login: str) -> list[dict]:
+    """From GraphQL reviewThreads, return EVERY UNRESOLVED material (P1/P2) thread
+    authored by the Codex bot — REGARDLESS of which head the comment was posted on.
+    The invariant is zero unresolved material threads; a thread stays unresolved
+    (and blocking) across new commits until it is actually resolved. `threads`:
+    [{isResolved, comments: [{author, body, commit_id}]}]."""
     out = []
     for th in threads:
         if th.get("isResolved"):
@@ -106,10 +110,33 @@ def material_unresolved_from_threads(threads: list[dict], head_sha: str,
             if cm.get("author") != bot_login:
                 continue
             sev = _severity_from_body(cm.get("body") or "")
-            if sev in MATERIAL_SEVERITIES and cm.get("commit_id") == head_sha:
+            if sev in MATERIAL_SEVERITIES:
                 out.append({"severity": sev, "commit_id": cm.get("commit_id"), "resolved": False})
                 break
     return out
+
+
+# Every protected source that must agree on the dispatchable mission. Disagreement
+# (a partially-applied transition) must HARD-FAIL rather than trust one source.
+def reconcile_authority(project_state: dict, phase_status: dict, ew0a: dict) -> str | None:
+    """Return the single mission all protected sources agree on, else None
+    (fail closed). Sources: project_state.current_step,
+    phase_status.engineer_runtime_state.mission_id,
+    phase_status.phases.northstar_phase_0c.step, ew0a_runtime.mission_id."""
+    try:
+        rd = (phase_status or {}).get("stockbot_northstar_redesign", {}) or {}
+        vals = [
+            (project_state or {}).get("current_step"),
+            (rd.get("engineer_runtime_state", {}) or {}).get("mission_id"),
+            ((rd.get("phases", {}) or {}).get("northstar_phase_0c", {}) or {}).get("step"),
+            (ew0a or {}).get("mission_id"),
+        ]
+    except Exception:
+        return None
+    vals = [v for v in vals]
+    if any(not v for v in vals):
+        return None
+    return vals[0] if len(set(vals)) == 1 else None
 
 
 def _severity_from_body(body: str) -> str | None:
@@ -190,6 +217,82 @@ def _authoritative_mission() -> str | None:
         return None
 
 
+def _load_sibling(mod_name: str):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(mod_name, REPO_ROOT / "scripts" / f"{mod_name}.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _reconciled_authoritative() -> str | None:
+    """Require ALL protected sources to agree AND match the fail-closed roadmap_guard."""
+    try:
+        import yaml
+        ps = yaml.safe_load((REPO_ROOT / ".agent/project_state.yaml").read_text(encoding="utf-8"))
+        ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
+        ew = json.loads((REPO_ROOT / "config/ew0a_runtime.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    reconciled = reconcile_authority(ps, ph, ew)
+    guard = _authoritative_mission()
+    if reconciled and guard and reconciled == guard:
+        return reconciled
+    return None
+
+
+def _head_file(repo: str, path: str, ref: str) -> str | None:
+    import base64
+    try:
+        d = _gh_json([f"repos/{repo}/contents/{path}?ref={ref}"])
+        if d.get("encoding") == "base64":
+            return base64.b64decode(d["content"]).decode("utf-8")
+    except Exception:
+        return None
+    return None
+
+
+def _transition_exact_match(repo: str, pr_number: int, head_sha: str) -> bool:
+    """True iff the PR's diff EXACTLY equals a re-derived deterministic transition
+    materialized from the current (base) main. Fail closed on any error."""
+    try:
+        import yaml
+        trans = _load_sibling("northstar_transition")
+        mat = _load_sibling("northstar_materialize_transition")
+        reg = yaml.safe_load((REPO_ROOT / ".agent/mission_registry.yaml").read_text(encoding="utf-8"))
+        ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
+        paused = (ph["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+                  ["bounded_authorization"].get("paused_bounded_authorization"))
+        mission = _reconciled_authoritative()
+        cur = _git("rev-parse", "HEAD")
+        res = trans.propose_transition({
+            "mode": "enabled", "completed_mission": mission, "authoritative_mission": mission,
+            "registry": reg, "paused_authorization": paused,
+            "certified_main_sha": cur, "protected_main_sha": cur,
+            "post_merge": {"conclusion": "success", "event": "push", "head_branch": "main", "head_sha": cur},
+        })
+        if res.get("decision") != "PROPOSE":
+            return False
+        proposal = res["proposal"]
+        rels = {k.split("#", 1)[0] for k in proposal["allowlisted_field_edits"]}
+        rels.add(".agent/phase_status.yaml")
+        base_files = {rel: (REPO_ROOT / rel).read_text(encoding="utf-8") for rel in rels}
+        expected = mat.materialize_edits(base_files, proposal)["files"]
+        # PR's changed file set must be a SUBSET of the transition's files
+        changed = [f.get("filename") for f in _gh_paginated(f"repos/{repo}/pulls/{pr_number}/files")]
+        allowed = set(expected.keys())
+        if not changed or any(p not in allowed for p in changed):
+            return False
+        # each changed file at head must byte-equal the expected materialization
+        for rel in changed:
+            head_text = _head_file(repo, rel, head_sha)
+            if head_text is None or head_text != expected[rel]:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _is_protected(path: str) -> bool:
     # Controller self-protection first (modifying the controller's own files is a
     # violation unless it is the bootstrap ADD, handled by the added-only allowlist).
@@ -197,8 +300,8 @@ def _is_protected(path: str) -> bool:
         from portfolio_automation.engineer_worker.policy import is_protected as _pol
     except Exception:
         _pol = None
-    controller = (".github/workflows/northstar-", "scripts/northstar_",
-                  ".agent/mission_registry.yaml", ".agent/missions/")
+    controller = (".github/workflows/northstar-", ".github/scripts/northstar_",
+                  "scripts/northstar_", ".agent/mission_registry.yaml", ".agent/missions/")
     if any(path.startswith(p) for p in controller):
         return True
     if _pol is not None:
@@ -232,9 +335,9 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
                 "commit_id": rv.get("commit_id"), "submitted_at": rv.get("submitted_at")}
                for rv in _gh_paginated(f"repos/{repo}/pulls/{pr_number}/reviews")]
 
-    # material findings + REAL resolution state via GraphQL reviewThreads
+    # material findings + REAL resolution state via GraphQL reviewThreads (any head)
     threads = _graphql_review_threads(owner, name, pr_number)
-    inline_comments = material_unresolved_from_threads(threads, head_sha, CODEX_BOT_LOGIN)
+    inline_comments = material_unresolved_from_threads(threads, CODEX_BOT_LOGIN)
 
     clean_reaction = None
     for rx in _gh_paginated(f"repos/{repo}/issues/{pr_number}/reactions"):
@@ -247,7 +350,16 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
 
     # candidate mission: derived from the PR itself (independent of protected state)
     candidate_mission = candidate_mission_from_pr(body, labels)
-    authoritative = _authoritative_mission()
+    # authoritative mission: ALL protected sources must agree (fail closed), AND
+    # must match the fail-closed roadmap_guard read.
+    authoritative = _reconciled_authoritative()
+
+    # deterministic-transition lane: the controller's own governance PR
+    head_ref = (pr.get("head") or {}).get("ref") or ""
+    is_transition = head_ref.startswith("governance/transition-")
+    transition_exact = False
+    if is_transition:
+        transition_exact = _transition_exact_match(repo, pr_number, head_sha)
 
     # main-advance: protected snapshot (checked-out HEAD) vs a FRESH remote read
     protected_main = _git("rev-parse", "HEAD") or None
@@ -268,9 +380,11 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
         "protected": {"current_mission": authoritative, "main_sha": protected_main},
         "candidate": {
             "authorized_mission": candidate_mission,   # from the PR, NOT protected state
-            "authority_mutated": False,                 # deep base/head diff computed in enabled mode
+            "authority_mutated": bool(is_transition),   # a transition legitimately mutates dispatch (verified by exact match)
             "forbidden_authority_introduced": [],
             "protected_path_violations": protected_violations,
+            "is_deterministic_transition": is_transition,
+            "transition_exact_match": transition_exact,
         },
         "now_main_sha": now_main,                        # FRESH remote read
     }

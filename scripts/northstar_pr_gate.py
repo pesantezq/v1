@@ -139,9 +139,30 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
     c("pr_not_draft", pr.get("is_draft") is False, str(pr.get("is_draft")))
     c("base_is_main", pr.get("base_ref") == "main", str(pr.get("base_ref")))
     c("pr_mergeable", pr.get("mergeable") is True, str(pr.get("mergeable")))
-    c("protected_mission_authorizes_pr",
-      bool(cand.get("authorized_mission")) and cand.get("authorized_mission") == protected.get("current_mission"),
-      f"{cand.get('authorized_mission')} vs {protected.get('current_mission')}")
+    # --- mission authorization / authority-mutation / protected-path lane ------
+    # A candidate is authorized either as (a) an ordinary mission PR that declares
+    # and matches the protected current mission, OR (b) the controller's OWN
+    # deterministic governance transition PR whose diff EXACTLY matches a
+    # re-derived materialization from certified main. The transition lane is the
+    # ONLY way protected dispatch-field edits are permitted; arbitrary protected
+    # edits remain blocked.
+    is_transition = cand.get("is_deterministic_transition") is True
+    if is_transition:
+        exact = cand.get("transition_exact_match") is True
+        c("deterministic_transition_exact_match", exact,
+          "PR diff exactly equals the re-derived materialized transition" if exact
+          else "governance-transition branch without an exact materialization match")
+        c("protected_mission_authorizes_pr", exact, "deterministic pre-authorized transition edge")
+        c("no_authority_mutation", exact, "sanctioned deterministic transition (exact-match)")
+        c("protected_path_policy_ok", exact, "sanctioned transition edits only")
+    else:
+        c("protected_mission_authorizes_pr",
+          bool(cand.get("authorized_mission")) and cand.get("authorized_mission") == protected.get("current_mission"),
+          f"{cand.get('authorized_mission')} vs {protected.get('current_mission')}")
+        c("no_authority_mutation", cand.get("authority_mutated") is False, str(cand.get("authority_mutated")))
+        c("protected_path_policy_ok", not cand.get("protected_path_violations"),
+          str(cand.get("protected_path_violations") or []))
+
     c("ci_is_northstar_ci", ci.get("workflow_name") == "northstar-ci", str(ci.get("workflow_name")))
     c("ci_success", ci.get("status") == "completed" and ci.get("conclusion") == "success",
       f"{ci.get('status')}/{ci.get('conclusion')}")
@@ -153,11 +174,10 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
         checks.append({"name": "codex:" + sc["name"], "ok": sc["ok"], "detail": sc["detail"]})
     c("codex_clean_at_head", codex_ok)
 
-    c("no_authority_mutation", cand.get("authority_mutated") is False, str(cand.get("authority_mutated")))
+    # forbidden authority (production/broker/capital/C1/0D/auto_* flips) is NEVER
+    # permitted, even for a deterministic transition.
     c("no_forbidden_authority_introduced", not cand.get("forbidden_authority_introduced"),
       str(cand.get("forbidden_authority_introduced") or []))
-    c("protected_path_policy_ok", not cand.get("protected_path_violations"),
-      str(cand.get("protected_path_violations") or []))
     c("main_not_advanced",
       bool(protected.get("main_sha")) and inputs.get("now_main_sha") == protected.get("main_sha"),
       f"{inputs.get('now_main_sha')} vs {protected.get('main_sha')}")
@@ -188,14 +208,9 @@ def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
 # protected-path violation so a candidate branch cannot rewrite its own gate /
 # effect workflows / registry and thereby grant itself write or merge authority.
 CONTROLLER_PROTECTED_PREFIXES = (
-    ".github/workflows/northstar-pr-controller.yml",
-    ".github/workflows/northstar-orchestrator.yml",
-    ".github/workflows/claude-authorized-mission.yml",
-    "scripts/northstar_pr_gate.py",
-    "scripts/northstar_transition.py",
-    "scripts/northstar_mission_packet.py",
-    "scripts/northstar_assemble_gate_inputs.py",
-    "scripts/northstar_materialize_transition.py",
+    ".github/workflows/northstar-",
+    ".github/scripts/northstar_",
+    "scripts/northstar_",
     ".agent/mission_registry.yaml",
     ".agent/missions/",
 )

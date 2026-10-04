@@ -339,8 +339,65 @@ def test_material_unresolved_from_threads_reads_real_resolution():
         {"isResolved": False, "comments": [{"author": BOT, "body": "![P1 Badge] x", "commit_id": head}]},
         {"isResolved": True, "comments": [{"author": BOT, "body": "![P1 Badge] y", "commit_id": head}]},   # resolved -> excluded
         {"isResolved": False, "comments": [{"author": BOT, "body": "nit, non-material", "commit_id": head}]},
-        {"isResolved": False, "comments": [{"author": BOT, "body": "![P2 Badge] z", "commit_id": "o" * 40}]},  # wrong head
+        {"isResolved": False, "comments": [{"author": BOT, "body": "![P2 Badge] z", "commit_id": "o" * 40}]},  # OLD head -> still counts
         {"isResolved": False, "comments": [{"author": "someone", "body": "![P1 Badge]", "commit_id": head}]},  # not the bot
     ]
-    out = asm.material_unresolved_from_threads(threads, head, BOT)
-    assert len(out) == 1 and out[0]["severity"] == "P1"
+    out = asm.material_unresolved_from_threads(threads, BOT)
+    # unresolved material from ANY head blocks: the P1 at head AND the P2 at the old head
+    assert len(out) == 2
+    assert {o["severity"] for o in out} == {"P1", "P2"}
+
+
+def test_reconcile_authority_requires_all_sources_to_agree():
+    m = "northstar_x"
+    ps = {"current_step": m}
+    ph = {"stockbot_northstar_redesign": {"engineer_runtime_state": {"mission_id": m},
+          "phases": {"northstar_phase_0c": {"step": m}}}}
+    ew = {"mission_id": m}
+    assert asm.reconcile_authority(ps, ph, ew) == m
+    # any disagreement -> None (fail closed)
+    ew2 = {"mission_id": "northstar_other"}
+    assert asm.reconcile_authority(ps, ph, ew2) is None
+    # any missing -> None
+    assert asm.reconcile_authority({"current_step": None}, ph, ew) is None
+
+
+def test_github_scripts_helpers_are_controller_protected():
+    assert asm._is_protected(".github/scripts/northstar_build_transition_inputs.sh")
+    assert gate._is_protected(".github/scripts/northstar_build_packet_inputs.sh")
+    # but a bootstrap ADD of them is allowed
+    changed = [{"path": ".github/scripts/northstar_build_packet_inputs.sh", "status": "added"}]
+    assert asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, asm._is_protected) == []
+    # modifying them later is a violation
+    changed = [{"path": ".github/scripts/northstar_build_packet_inputs.sh", "status": "modified"}]
+    assert ".github/scripts/northstar_build_packet_inputs.sh" in \
+        asm.added_only_protected_violations(changed, asm.ALLOWLISTED_ADDED_PATHS, asm._is_protected)
+
+
+# ----------------- deterministic transition lane (gate #6) ------------------ #
+def test_deterministic_transition_exact_match_passes_despite_protected_edits():
+    def mut(i):
+        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=True,
+                              authority_mutated=True,  # a transition DOES mutate dispatch
+                              authorized_mission=None,  # no MISSION line on the governance PR
+                              protected_path_violations=[".agent/project_state.yaml",
+                                                         ".agent/phase_status.yaml"])
+    res = _ev(mut)
+    assert res["decision"] == "PASS", res["blocking_reasons"]
+
+
+def test_deterministic_transition_without_exact_match_blocks():
+    def mut(i):
+        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=False,
+                              authority_mutated=True)
+    res = _ev(mut)
+    assert res["decision"] == "FAIL"
+    assert "deterministic_transition_exact_match" in _blocking(res)
+
+
+def test_deterministic_transition_still_blocks_forbidden_authority():
+    def mut(i):
+        i["candidate"].update(is_deterministic_transition=True, transition_exact_match=True,
+                              forbidden_authority_introduced=["auto_merge"])
+    res = _ev(mut)
+    assert "no_forbidden_authority_introduced" in _blocking(res)

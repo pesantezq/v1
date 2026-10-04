@@ -31,6 +31,11 @@ on:
     types: [created, edited]
   issue_comment:
     types: [created]
+  # Re-evaluate when northstar-ci FINISHES, so a PR whose Codex review arrived before
+  # CI completed is not left with a stale failing required check.
+  workflow_run:
+    workflows: ["northstar-ci"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -48,6 +53,7 @@ jobs:
       github.event_name == 'pull_request' ||
       github.event_name == 'pull_request_review' ||
       github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'workflow_run' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -57,6 +63,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+      WF_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
       decision: ${{ steps.gate.outputs.decision }}
@@ -76,6 +83,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install PyYAML (reliable — mode read must not silently fall back to shadow)
+        if: hashFiles('requirements.txt') != ''
+        run: python -m pip install -r requirements.txt
+
       - name: Evaluate NORTHSTAR_MERGE_GATE
         id: gate
         shell: bash
@@ -88,19 +99,23 @@ jobs:
             echo "mode=shadow" >> "$GITHUB_OUTPUT"; echo "decision=NO_OP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          [ -f requirements.txt ] && python -m pip install -r requirements.txt >/dev/null 2>&1 || true
-          MODE=$(python - <<'PY'
-          import pathlib
-          try:
-              import yaml
-              print((yaml.safe_load(pathlib.Path(".agent/mission_registry.yaml").read_text()).get("controller") or {}).get("mode","shadow"))
-          except Exception:
-              print("shadow")
-          PY
-          )
-          if [ -z "${PR_NUMBER:-}" ]; then
+          # Read the controller mode; FAIL CLOSED if it cannot be read (never silently
+          # downgrade to a non-blocking shadow pass).
+          if ! MODE=$(python -c "import yaml,pathlib;print((yaml.safe_load(pathlib.Path('.agent/mission_registry.yaml').read_text()).get('controller') or {}).get('mode',''))"); then
+            echo "::error::cannot read controller mode — fail closed."; exit 1
+          fi
+          if [ "$MODE" != "shadow" ] && [ "$MODE" != "enabled" ]; then
+            echo "::error::unknown controller mode '$MODE' — fail closed."; exit 1
+          fi
+          # Resolve the PR number (direct for PR/comment events; via head branch for workflow_run).
+          PR="${PR_NUMBER:-}"
+          if [ -z "$PR" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ -n "${WF_HEAD_BRANCH:-}" ]; then
+            PR=$(gh pr list -R "${GITHUB_REPOSITORY}" --head "${WF_HEAD_BRANCH}" --state open --json number -q '.[0].number // empty')
+          fi
+          if [ -z "$PR" ]; then
             echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=NO_PR" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          PR_NUMBER="$PR"
           if ! python "$ASM" --repo "${GITHUB_REPOSITORY}" --pr "${PR_NUMBER}" --mode "$MODE" --out /tmp/gate_inputs.json; then
             echo "::notice::input assembly unavailable — shadow no-op."
             echo "mode=$MODE" >> "$GITHUB_OUTPUT"; echo "decision=ASSEMBLY_FAILED" >> "$GITHUB_OUTPUT"; exit 0
@@ -113,8 +128,8 @@ jobs:
           print("mode="+str(d.get("mode")))
           print("head_sha="+str((i.get("pr") or {}).get("head_sha") or ""))
           print("protected_main_sha="+str((i.get("protected") or {}).get("main_sha") or ""))
-          print("pr_number="+__import__("os").environ.get("PR_NUMBER",""))
           PY
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           { echo "### Northstar merge gate ($MODE)"; echo; echo '```json'; cat /tmp/gate_out.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
           # In ENABLED mode this job IS the required check: fail on a non-PASS so the
           # ruleset blocks merge. In SHADOW it never blocks.
@@ -146,7 +161,7 @@ jobs:
       - name: Re-validate state, then enable native auto-merge (idempotent)
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # Re-validate immediately before acting (head/base/open unchanged; main not advanced).
           read -r STATE BASE HEAD AUTO < <(gh pr view "$PR" -R "$GITHUB_REPOSITORY" \
             --json state,baseRefName,headRefOid,autoMergeRequest \

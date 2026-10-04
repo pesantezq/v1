@@ -141,7 +141,7 @@ jobs:
         id: verify
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           # Fail closed if Anthropic WIF identifiers are absent (no long-lived secret fallback).
           if [ -z "${WIF_RULE:-}" ] || [ -z "${WIF_ORG:-}" ] || [ -z "${WIF_SA:-}" ]; then
             echo "::error::Anthropic WIF configuration absent (ANTHROPIC_FEDERATION_RULE_ID/ORGANIZATION_ID/SERVICE_ACCOUNT_ID) — fail closed."; exit 1
