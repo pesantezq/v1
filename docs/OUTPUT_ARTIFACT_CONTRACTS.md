@@ -2405,3 +2405,53 @@ and only then atomically publishes the whole directory to the immutable,
 content-addressed `packages/<package_id>/`. Serialization is byte-for-byte
 unchanged (`indent=2`, sorted keys, trailing newline), so artifact digests and
 `package_id` are identical to the pre-governance writer.
+
+## `outputs/vs002_result/<name>.json` — VS-002 execution-adapter result (`engineering.vs002_execution_result.v1`)
+
+`experimental_noncanonical`, observe-only, non-production. Written by the thin
+VS-002 execution adapter (`portfolio_automation/vs002_evidence/execution.py`,
+`execute_frozen_vs002`) under the dedicated `OutputNamespace.VS002_RESULT`
+namespace (`outputs/vs002_result/`). It records one deterministic evaluation of
+the frozen VS-002 preregistration over one explicitly-supplied, already-validated
+evidence package. It grants NO authority and is NOT a promotion/approval/action.
+
+### Envelope shape
+- `schema_version` = `engineering.vs002_execution_result.v1`; `schema_kind` =
+  `experimental_noncanonical`.
+- `observe_only` = `true`, `grants_authority` = `false`, `vs002_executed`
+  (mirrors the runner's flag).
+- `adapter_provenance` (top-level, deliberately OUTSIDE `experiment_result.observations`
+  because `execution` is an authority-screened observation key): `adapter_id`,
+  `adapter_version`, `runner_id`/`runner_version`/`runner_source_sha`,
+  `preregistration_id`, `preregistration_freeze_digest`, `evidence_package_id`,
+  `transport_digest_historical_attestation`,
+  `transport_digest_verification_mode` = `HISTORICAL_ATTESTATION_ONLY`,
+  `transport_digest_recomputed` = `false`, `source_production_sha`,
+  `evidence_schema_version`, `run_identity` (deterministic `vs002exec_…`),
+  `experiment_spec_id`, `experiment_result_id`, `hypothesis_claim_id`.
+- `experiment_spec` = `ExperimentSpec.to_canonical_dict()` — persisted so the
+  `exs_…` the result references is resolvable/reproducible from the artifact alone.
+- `experiment_result` = `ExperimentResult.to_canonical_dict()` whose
+  `observations` are `VS002Result.to_observations()` (the scientific payload,
+  authority-key-safe).
+- `result_digest` = `content_hash(envelope-without-result_digest)` over the single
+  canonical serializer; recomputes deterministically on reload.
+
+### Transport digest
+The frozen `package_transport_digest` (`4e1f5a6f…`) is a HISTORICAL ATTESTATION
+ONLY: it is matched exactly via `result_runner.verify_evidence_binding` and is
+NEVER recomputed by the adapter. Execution-time package integrity instead rests
+on `consumer.validate` (recomputed artifact digests + deterministic `package_id`)
+PLUS `manifest.code_sha == frozen source_production_sha`.
+
+### Write governance
+The destination is resolved and containment-validated through
+`data_governance.validate_output_path` (`..`/absolute/symlink escape fails closed,
+`DataGovernanceError`). Publication is atomic AND exclusive: the payload is written
+to a temp file in the destination directory and `os.link`ed to the final name, so
+an existing immutable result is never overwritten (no check-then-replace window)
+and a second publisher is refused (`RESULT_COLLISION`). The envelope is verified
+(digest, invariants, persisted-spec consistency, deterministic in-memory replay on
+the SAME snapshot) BEFORE publication, so the immutable destination is never
+occupied by an unverified artifact. There is no `latest` pointer.
+

@@ -71,14 +71,15 @@ def make_snapshot(ident, *, package_id=None, code_sha=None, schema=None) -> CON.
     )
 
 
-def make_result(evidence_identity, generated_at) -> RC.VS002Result:
+def make_result(evidence_identity, generated_at, *, base_rows=0) -> RC.VS002Result:
     """A deterministic synthetic VS002Result (INCONCLUSIVE, vs002_executed=False).
 
     Binds the preregistration identity + the supplied evidence identity so the
-    adapter's provenance/verification pass exactly as with the real runner."""
+    adapter's provenance/verification pass exactly as with the real runner.
+    ``base_rows`` lets a test perturb the observations between runs."""
     iso = generated_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     empty_pop = RC.PopulationSummary(
-        base_population_rows=0, scored_population_rows=0, evaluated_signal_rows=0,
+        base_population_rows=base_rows, scored_population_rows=0, evaluated_signal_rows=0,
         selected_cohort_dates=(), exclusion_counts={},
     )
     h1 = RC.H1Result(status=RC.H1Status.INCONCLUSIVE, cohort_count=0,
@@ -300,6 +301,10 @@ def test_canonical_experiment_result_shape(tmp_path, binding, harness):
     assert er["experiment_spec_id"].startswith("exs_")
     assert er["observations"]["schema_version"] == RC.RESULT_SCHEMA_VERSION
     assert doc["schema_version"] == "engineering.vs002_execution_result.v1"
+    # the referenced spec is persisted in the SAME artifact and matches the result
+    spec = doc["experiment_spec"]
+    assert spec["contract_type"] == "experiment_spec"
+    assert spec["experiment_spec_id"] == er["experiment_spec_id"]
 
 
 def test_authority_screen_rejects_authority_keys():
@@ -410,3 +415,31 @@ def test_only_writes_under_base_dir(tmp_path, binding, harness):
     # the only artifact created is the single result file
     created = [p for p in tmp_path.rglob("*") if p.is_file()]
     assert created == [written]
+
+
+# ─────────────────────── verify-before-publish / exclusive write ─────────────
+def test_verification_failure_leaves_no_artifact(tmp_path, binding, monkeypatch, harness):
+    # replay (2nd run) produces different observations -> pre-publish verify fails
+    calls = {"n": 0}
+
+    def flaky_run(snap, prereg, *, evidence_identity, generated_at,
+                  runner_id=RC.DEFAULT_RUNNER_ID, runner_version=RC.RUNNER_VERSION):
+        calls["n"] += 1
+        return make_result(evidence_identity, generated_at, base_rows=calls["n"])
+    monkeypatch.setattr(E.RR, "run", flaky_run)
+    with pytest.raises(VS002ExecutionError) as ei:
+        execute_frozen_vs002(make_request(tmp_path, binding))
+    assert ei.value.category == "RESULT_VERIFICATION_FAILED"
+    # nothing published: the immutable destination is free for a corrected retry
+    assert not (tmp_path / "vs002_result" / "run1.json").exists()
+
+
+def test_publish_exclusive_refuses_existing_destination(tmp_path):
+    dest = tmp_path / "already.json"
+    dest.write_text("ORIGINAL")
+    with pytest.raises(VS002ExecutionError) as ei:
+        E._publish_exclusive(dest, "NEW")
+    assert ei.value.category == "RESULT_COLLISION"
+    assert dest.read_text() == "ORIGINAL"  # never overwritten
+    # no .tmp debris left behind
+    assert [p.name for p in tmp_path.iterdir()] == ["already.json"]

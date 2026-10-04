@@ -33,6 +33,8 @@ metadata (including the historical transport digest) exactly.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -190,6 +192,10 @@ def _build_envelope(result: "RC.VS002Result", snap: "CON.ValidatedSnapshot",
         "grants_authority": False,
         "vs002_executed": result.vs002_executed,
         "adapter_provenance": adapter_provenance,
+        # Persist BOTH the spec and the result so the exs_… reference the result
+        # carries is resolvable/reproducible from the artifact alone (a result with
+        # an unreproducible spec reference is contract-invalid).
+        "experiment_spec": spec.to_canonical_dict(),
         "experiment_result": exp.to_canonical_dict(),
     }
     envelope["result_digest"] = content_hash(envelope)
@@ -276,22 +282,22 @@ def execute_frozen_vs002(req: VS002ExecutionRequest) -> dict[str, Any]:
 
     run_identity = _execution_identity(result, req)
     envelope = _build_envelope(result, snap, req, run_identity)
-
-    # Serialize + persist (governed, atomic). Re-check collision immediately before write.
     try:
         payload = canonical_dumps(envelope)
     except Exception as e:  # finite/strict-JSON failure is an engineering blocker
         raise VS002ExecutionError("RESULT_SERIALIZATION_FAILED", str(e)) from e
-    _require(not destination.exists(), "RESULT_COLLISION",
-             f"a result artifact appeared at {destination} before publication")
-    try:
-        written = DG.safe_write_text(DG.OutputNamespace.VS002_RESULT, req.result_filename,
-                                     payload, user_id=req.user_id, base_dir=req.base_dir)
-    except DG.DataGovernanceError as e:
-        raise VS002ExecutionError("INVALID_RESULT_DESTINATION", str(e)) from e
 
-    # Independent verification + deterministic replay on the SAME snapshot (no reopen).
-    verify_frozen_vs002_result(written, req, snap=snap, expected_identity=provided)
+    # VERIFY BEFORE PUBLISH: digest, invariants, and deterministic replay on the
+    # SAME snapshot (no reopen). If anything fails, NOTHING is written — the
+    # immutable destination is never occupied by an unverified artifact, so a
+    # corrected retry with the same filename is still possible.
+    _verify_doc(envelope, req, snap=snap, expected_identity=provided)
+
+    # Exclusive, atomic publication: immutable, collision-refused, never overwrites.
+    written = _publish_exclusive(destination, payload)
+
+    # Post-publication byte-integrity read-back (cheap; replay already ran above).
+    verify_frozen_vs002_result(written, req)
 
     return {
         "written_path": str(written),
@@ -304,17 +310,40 @@ def execute_frozen_vs002(req: VS002ExecutionRequest) -> dict[str, Any]:
     }
 
 
-def verify_frozen_vs002_result(path: Path, req: VS002ExecutionRequest, *,
-                               snap: Optional["CON.ValidatedSnapshot"] = None,
-                               expected_identity: Optional[EvidenceIdentity] = None
-                               ) -> dict[str, Any]:
-    """Reload + verify a written adapter artifact; optionally replay the runner on
-    the SAME already-loaded snapshot (NO package reopen) and compare.
+def _publish_exclusive(destination: Path, payload: str, encoding: str = "utf-8") -> Path:
+    """Atomic, EXCLUSIVE publication: write a temp file in the destination dir then
+    ``os.link`` it to the final name. ``os.link`` is atomic and fails closed if the
+    destination already exists, so two concurrent publishers cannot both succeed and
+    an existing immutable result is never overwritten (no check-then-replace window)."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(destination.parent),
+                               prefix=f".{destination.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(payload)
+        try:
+            os.link(tmp, destination)
+        except FileExistsError as e:
+            raise VS002ExecutionError(
+                "RESULT_COLLISION",
+                f"a result artifact already exists at {destination} at publication") from e
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return destination
+
+
+def _verify_doc(doc: Mapping[str, Any], req: VS002ExecutionRequest, *,
+                snap: Optional["CON.ValidatedSnapshot"] = None,
+                expected_identity: Optional[EvidenceIdentity] = None) -> dict[str, Any]:
+    """Pure verification of a result envelope (the in-memory dict pre-publish OR a
+    reloaded artifact post-publish). Optionally replays the runner on the SAME
+    already-loaded snapshot (NO package reopen) and compares observations.
 
     Replay is VERIFICATION of the same authorized execution, not a new experiment,
     and writes nothing."""
-    _require(path.exists(), "RESULT_VERIFICATION_FAILED", f"artifact absent: {path}")
-    doc = json.loads(path.read_text(encoding="utf-8"))
     _require(doc.get("schema_version") == EXECUTION_RESULT_SCHEMA,
              "RESULT_VERIFICATION_FAILED", "unexpected result schema_version")
     stored_digest = doc.get("result_digest")
@@ -329,12 +358,29 @@ def verify_frozen_vs002_result(path: Path, req: VS002ExecutionRequest, *,
              "RESULT_VERIFICATION_FAILED", "transport-digest attestation mode drift")
     _require(doc.get("observe_only") is True and doc.get("grants_authority") is False,
              "RESULT_VERIFICATION_FAILED", "artifact must be observe_only and grant no authority")
+    # The persisted spec must be present and must be the one the result references.
+    spec_doc = doc.get("experiment_spec") or {}
+    result_doc = doc.get("experiment_result") or {}
+    _require(bool(spec_doc.get("experiment_spec_id"))
+             and spec_doc.get("experiment_spec_id") == result_doc.get("experiment_spec_id"),
+             "RESULT_VERIFICATION_FAILED",
+             "experiment_result references a spec not persisted in the artifact")
     # Deterministic replay (same snapshot, no reopen) — observations must match.
     if snap is not None and expected_identity is not None:
         replay = RR.run(snap, req.preregistration, evidence_identity=expected_identity,
                         generated_at=req.generated_at, runner_id=req.runner_id,
                         runner_version=req.runner_version)
-        stored_obs = doc["experiment_result"]["observations"]
-        _require(replay.to_observations() == stored_obs,
+        _require(replay.to_observations() == result_doc.get("observations"),
                  "RESULT_VERIFICATION_FAILED", "deterministic replay observations differ")
     return {"verified": True, "result_digest": stored_digest}
+
+
+def verify_frozen_vs002_result(path: Path, req: VS002ExecutionRequest, *,
+                               snap: Optional["CON.ValidatedSnapshot"] = None,
+                               expected_identity: Optional[EvidenceIdentity] = None
+                               ) -> dict[str, Any]:
+    """Reload + verify a written adapter artifact (optionally replaying on the SAME
+    snapshot). Reads the file once; never reopens the evidence package."""
+    _require(path.exists(), "RESULT_VERIFICATION_FAILED", f"artifact absent: {path}")
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    return _verify_doc(doc, req, snap=snap, expected_identity=expected_identity)
