@@ -130,7 +130,7 @@ completed_steps:
 
 next_official_step:
   primary: northstar_continuous_mission_orchestration_foundation  # AUTHORIZED 2026-10-04 by explicit operator decision. Build the continuous mission orchestration foundation: machine-verifiable exact-head merge gate, post-merge main CI certification, protected mission registry/prompt handoff, deterministic governance-transition proposal path, and automatic Claude invocation only after protected state authorizes a mission. No self-authorization; no real-evidence execution; no production/capital/C1 authority. The paused VS-002 execution-adapter foundation resumes next.
-  secondary: [northstar_vs002_execution_adapter_foundation]  # PAUSED, not cancelled or complete; resume immediately after orchestration foundation is durable.
+  secondary: []  # Single-dispatch invariant: the paused VS-002 adapter is NOT an official secondary step. Its exact resumable authorization is preserved under phase_status.yaml bounded_authorization.paused_bounded_authorization.
   prior_primary: northstar_vs002_execution_adapter_foundation  # 2026-10-04: previously current and still authorized in substance, but temporarily PAUSED before implementation so the cross-cutting orchestration foundation can remove manual merge/CI/handoff stalls. Resume after orchestration is durable. Before it: northstar_vs002_result_runner COMPLETE via PR #60 @ eaee0584; before that historical-price-evidence prerequisite COMPLETE.
   note: >
     2026-08-09 — STOCKBOT_NORTHSTAR_REDESIGN opened (docs/NORTHSTAR_REDESIGN.md).
