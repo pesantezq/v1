@@ -279,6 +279,28 @@ stockbot_northstar_redesign:
         paused_mission: northstar_vs002_execution_adapter_foundation
         resume_after_completion: northstar_vs002_execution_adapter_foundation
         not_yet_executed: true   # orchestration foundation is not built yet; the VS-002 adapter remains paused
+        paused_bounded_authorization:
+          authorized_by: operator
+          authorized_at: 2026-10-02
+          authorized_mission: northstar_vs002_execution_adapter_foundation
+          status: PAUSED_NOT_EXECUTED
+          scope: >-
+            Implement and certify the THIN VS-002 execution adapter and governed result-artifact
+            support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
+            (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
+            result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
+            artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
+            recomputable artifact digests + deterministic package_id (consumer.validate) plus
+            ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
+            package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed.
+            This paused authorization does NOT authorize northstar_vs002_frozen_execution,
+            real-package access, VS-002 metric computation, Phase 0C completion, the 0C Research Store,
+            Phase 0D or later, C1, production deployment, broker access, or trading/capital authority.
+          resume_condition: >-
+            Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
+            durable on main, and post-merge main CI is green; resumption must restore this exact
+            authorization rather than reconstructing or widening it.
+          not_yet_executed: true
         prior_bounded_authorization:   # history — the just-COMPLETED bounded result-runner mission
           authorized_by: operator
           authorized_at: 2026-10-01
@@ -427,9 +449,12 @@ stockbot_northstar_redesign:
         evidence) is SATISFIED; the frozen VS-002 evidence package is durable and
         lab-revalidated and the final result-blind preregistration is merged (PR #58 @
         556e554a, freeze b7da049b…). 2026-10-02: the deterministic VS-002 result runner
-        is now COMPLETE and durable on main (PR #60 @ eaee0584); the slice now awaits the thin
-        VS-002 execution-adapter foundation (the current authorized bounded step), and then a
-        SEPARATE authorization for one frozen VS-002 execution. VS-002 has NOT executed.
+        is now COMPLETE and durable on main (PR #60 @ eaee0584). 2026-10-04: the current
+        authorized bounded step is the continuous mission orchestration foundation; the already-
+        authorized VS-002 execution-adapter foundation is PAUSED with its exact scope preserved
+        machine-readably and resumes after orchestration is durable. Only after that adapter is
+        durable may a SEPARATE human authorization be considered for one frozen VS-002 execution.
+        VS-002 has NOT executed.
       step: northstar_vertical_slice_and_preregistration
       depends_on: g1_supervisor_measurement   # durable_measurements above; satisfied 2026-09-04 @ main 9d9db1f
       executed: false   # The PHASE is not complete. VS-001 DID execute and is durable
@@ -437,8 +462,9 @@ stockbot_northstar_redesign:
                         # skill NOT established). VS-002 was designed and deliberately NOT
                         # executed. The slice concludes only when a credible risk-adjusted
                         # experiment has run. The result runner is COMPLETE and durable on main
-                        # (PR #60); the ONE remaining bounded step is the execution-adapter
-                        # foundation, before a separately-authorized frozen VS-002 execution.
+                        # (PR #60). The current bounded step is the orchestration foundation;
+                        # the execution-adapter foundation is PAUSED and resumes next, before
+                        # any separately-authorized frozen VS-002 execution.
       experiments:
         VS-001: executed_durable      # evals/vertical_slice/VS-001_{preregistration,result}.json
         VS-002: preregistered_not_executed  # design frozen + merged: evals/vertical_slice/VS-002_preregistration.json (freeze b7da049b…, PR #58). Historical evals/vertical_slice/VS-002_blocked.json preserved. NOT executed; the result runner is built and durable on main (PR #60), but the experiment has not been run.
