@@ -181,3 +181,37 @@ def test_effect_jobs_checkout_trusted_main():
 def test_registry_controller_mode_is_shadow():
     reg = yaml.safe_load((REPO_ROOT / ".agent" / "mission_registry.yaml").read_text(encoding="utf-8"))
     assert reg["controller"]["mode"] == "shadow"
+
+
+# ------------------- round-2 hardening (re-triggers / fail-closed) ----------- #
+def test_pr_controller_has_terminal_state_retriggers():
+    on = _load(PR_CONTROLLER)
+    on = on.get(True, on.get("on"))
+    for ev in ("pull_request_review", "pull_request_review_comment",
+               "pull_request_review_thread", "workflow_run"):
+        assert ev in on, f"missing re-trigger {ev}"
+
+
+def test_pr_controller_fails_closed_on_assembly_failure_in_enabled():
+    t = _text(PR_CONTROLLER)
+    assert "assembly failed in enabled mode" in t
+    assert "fail closed" in t.lower()
+    # the controller-mode read must also fail closed
+    assert "cannot read controller mode" in t
+
+
+def test_orchestrator_requires_real_ci_push_evidence():
+    t = _text(ORCHESTRATOR)
+    assert 'event=push&status=success' in t
+    assert 'northstar-ci' in t
+    assert "UNCERTIFIED" in t
+
+
+def test_all_effect_steps_fail_fast():
+    for p in ALL:
+        assert "set -euo pipefail" in _text(p), f"{p.name} missing fail-fast in an effect step"
+
+
+def test_claude_dispatch_requires_real_certification():
+    t = _text(CLAUDE)
+    assert "not post-merge-certified" in t or "UNCERTIFIED" in t
