@@ -1,0 +1,57 @@
+schema_version: engineering.mission_registry.v1
+
+orchestration:
+  mission_id: northstar_continuous_mission_orchestration_foundation
+  default_branch: main
+  required_check_names:
+    - Northstar governance
+    - Hermetic regression tests (core)
+    - Hermetic regression tests (governance)
+    - Hermetic regression tests (evidence_data)
+    - Hermetic regression tests (broker_portfolio)
+    - Hermetic regression tests (strategy_research)
+    - Hermetic regression tests (gui_readmodels)
+    - Hermetic regression tests (serial phase)
+  codex_bot_login: chatgpt-codex-connector[bot]
+  controller_protected_paths:
+    - .agent/mission_registry.yaml
+    - .agent/missions
+    - .github/workflows/northstar-orchestrator.yml
+    - .github/workflows/claude-authorized-mission.yml
+    - scripts/northstar_orchestrator.py
+    - scripts/northstar_transition.py
+  exact_head_required: true
+  base_must_equal_current_main: true
+  worker_merge_authority: false
+  auto_authority_promotion: false
+  auto_production_mutation: false
+  auto_capital_action: false
+
+missions:
+  northstar_continuous_mission_orchestration_foundation:
+    executor: controller
+    risk_class: E3
+    prompt_path: .agent/missions/northstar_continuous_mission_orchestration_foundation.md
+    auto_dispatch: false
+    on_success:
+      policy: preauthorized_auto
+      next_mission: northstar_vs002_execution_adapter_foundation
+      transition_recipe: restore_paused_authorization
+
+  northstar_vs002_execution_adapter_foundation:
+    executor: claude
+    risk_class: E3
+    prompt_path: .agent/missions/northstar_vs002_execution_adapter_foundation.md
+    auto_dispatch: true
+    on_success:
+      policy: human_required
+      next_mission: northstar_vs002_frozen_execution
+
+  northstar_vs002_frozen_execution:
+    executor: claude
+    risk_class: E4
+    prompt_path: .agent/missions/northstar_vs002_frozen_execution.md
+    auto_dispatch: false
+    on_success:
+      policy: human_required
+      next_mission: null
