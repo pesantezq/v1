@@ -198,10 +198,11 @@ def test_registry_controller_mode_is_shadow():
 def test_pr_controller_has_terminal_state_retriggers():
     on = _load(PR_CONTROLLER)
     on = on.get(True, on.get("on"))
-    # Codex terminal-state re-evaluation (review / comment / thread resolution).
-    for ev in ("pull_request_review", "pull_request_review_comment",
-               "pull_request_review_thread"):
+    # Codex terminal-state re-evaluation (review / review comment).
+    for ev in ("pull_request_review", "pull_request_review_comment"):
         assert ev in on, f"missing re-trigger {ev}"
+    # pull_request_review_thread is NOT a supported Actions trigger — must be absent.
+    assert "pull_request_review_thread" not in on
     # CI-completion is handled by in-job polling (a workflow_run check would attach to
     # main, not the PR head), so the gate waits for northstar-ci on the PR head.
     t = _text(PR_CONTROLLER)

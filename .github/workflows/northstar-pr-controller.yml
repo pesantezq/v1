@@ -29,10 +29,10 @@ on:
     types: [submitted, dismissed]
   pull_request_review_comment:
     types: [created, edited]
-  # Resolving/unresolving a material thread emits this (not a comment edit), so the
-  # gate recomputes after the last blocking thread is cleared.
-  pull_request_review_thread:
-    types: [resolved, unresolved]
+  # NOTE: pull_request_review_thread is a webhook event but NOT a supported Actions
+  # trigger, so it is intentionally omitted. Re-evaluation after the final material
+  # thread is resolved is covered by: the next pull_request_review/_comment, an
+  # `@codex review` issue_comment, or an operator workflow_dispatch(pr_number).
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -57,7 +57,6 @@ jobs:
       github.event_name == 'pull_request' ||
       github.event_name == 'pull_request_review' ||
       github.event_name == 'pull_request_review_comment' ||
-      github.event_name == 'pull_request_review_thread' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -118,6 +118,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       MISSION: ${{ needs.build-packet.outputs.mission }}
       CERTIFIED_SHA: ${{ needs.build-packet.outputs.certified_sha }}
+      NORTHSTAR_BOT_LOGIN: ${{ vars.NORTHSTAR_BOT_LOGIN }}
       WIF_RULE: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
       WIF_ORG: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
       WIF_SA: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
@@ -175,13 +176,25 @@ jobs:
           # with a new SHA must not re-launch the same mission.
           DEDUP="auto-dispatch:${MISSION}"
           echo "dedup=$DEDUP" >> "$GITHUB_OUTPUT"
-          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all --search "$DEDUP in:title" --json number -q 'length')
+          # Authenticate the dedup: only count PRs authored by the TRUSTED dispatch
+          # bot (vars.NORTHSTAR_BOT_LOGIN), so an external/spoofed PR whose title
+          # contains the dedup token cannot permanently suppress legitimate dispatch.
+          AUTHOR_FILTER=""
+          [ -n "${NORTHSTAR_BOT_LOGIN:-}" ] && AUTHOR_FILTER="--author ${NORTHSTAR_BOT_LOGIN}"
+          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all $AUTHOR_FILTER --search "$DEDUP in:title" --json number -q 'length')
           if [ "${EXIST:-0}" != "0" ]; then
             echo "::notice::an implementation PR for $MISSION already exists — idempotent no-op."
             echo "already=yes" >> "$GITHUB_OUTPUT"
           else
             echo "already=no" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Snapshot remote branches before dispatch
+        if: steps.verify.outputs.already == 'no'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_before.txt
 
       - name: Invoke Claude (WIF, tool-constrained, open PR only — never merge/approve)
         if: steps.verify.outputs.already == 'no'
@@ -204,3 +217,26 @@ jobs:
           # Constrain tools: file edits + safe git only. No gh/merge/approve/admin tools.
           claude_args: >-
             --allowedTools "Read" "Edit" "Write" "Grep" "Glob" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git checkout:*)" "Bash(git push:*)"
+
+      - name: Open the implementation PR explicitly (the action only prepares a branch)
+        if: steps.verify.outputs.already == 'no'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_after.txt
+          NEW=$(comm -13 /tmp/branches_before.txt /tmp/branches_after.txt | head -1)
+          if [ -z "$NEW" ]; then
+            echo "::notice::no new branch was pushed by the dispatch — nothing to open."
+            exit 0
+          fi
+          # Idempotent: only open if the trusted dispatch PR for this mission does not exist.
+          AUTHOR_FILTER=""
+          [ -n "${NORTHSTAR_BOT_LOGIN:-}" ] && AUTHOR_FILTER="--author ${NORTHSTAR_BOT_LOGIN}"
+          EXIST=$(gh pr list -R "$GITHUB_REPOSITORY" --state all $AUTHOR_FILTER --search "auto-dispatch:${MISSION} in:title" --json number -q 'length')
+          if [ "${EXIST:-0}" != "0" ]; then
+            echo "dispatch PR already exists — no-op."; exit 0
+          fi
+          gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$NEW" \
+            --title "auto-dispatch:${MISSION} — implementation" \
+            --body "Automated implementation of the protected mission \`${MISSION}\` dispatched by the Northstar controller at certified main \`${CERTIFIED_SHA}\`. Opened for review; the controller never merges or approves."
+          echo "opened implementation PR from $NEW"

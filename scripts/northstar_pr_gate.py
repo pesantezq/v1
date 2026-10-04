@@ -222,7 +222,8 @@ def _is_protected(path: str) -> bool:
     if any(path.startswith(p) for p in CONTROLLER_PROTECTED_PREFIXES):
         return True
     if path.rsplit("/", 1)[-1] in ("recommendations.py", "recommendation_engine.py",
-                                    "allocation_engine.py", "decision_engine.py"):
+                                    "allocation_engine.py", "decision_engine.py",
+                                    "scoring.py"):
         return True
     try:
         from portfolio_automation.engineer_worker.policy import is_protected
