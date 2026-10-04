@@ -119,6 +119,17 @@ The strict sequence, each step separately authorized. Status as of 2026-10-01:
    (`consumer.validate`) PLUS `manifest code_sha == frozen source_production_sha`;
    the frozen `package_transport_digest` is a **HISTORICAL ATTESTATION ONLY** and is
    not recomputed. Does NOT open the real package and does NOT execute the experiment.
+   **BUILT as a reviewed-pending candidate** (not yet merged):
+   `portfolio_automation/vs002_evidence/execution.py` — `execute_frozen_vs002`
+   (explicit `VS002ExecutionRequest`, `consumer.validate` exactly once, the G8
+   `package_id`/`code_sha` identity gates, `verify_evidence_binding`, the pure
+   `result_runner.run`, a canonical `ExperimentResult` wrapped in a top-level
+   `adapter_provenance` block, and a governed collision-refused immutable write to
+   the new `OutputNamespace.VS002_RESULT`) plus deterministic verification and an
+   in-memory replay that reuses the same snapshot (no package reopen). Certified
+   with `tests/test_vs002_execution.py` — SYNTHETIC fixtures only;
+   `StudentTTableError` stays an ENGINEERING blocker, never `EVIDENCE_INCONCLUSIVE`.
+   The real frozen package is still NOT opened and the experiment is still NOT run.
 7. **one frozen VS-002 execution** — a SEPARATE, later, separately-authorized
    mission (`northstar_vs002_frozen_execution`). NOT authorized.
 
