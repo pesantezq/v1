@@ -56,6 +56,10 @@ _PROTECTED_PATTERNS: tuple[str, ...] = (
     "portfolio_automation/engineer_worker/gpt_supervisor.py",
     "config/ew0a_authority",                  # trusted-controlled authority state
     "config/ew0a_runtime",                    # trusted-controlled runtime policy
+    ".github/workflows/northstar-orchestrator.yml",  # trusted merge/transition controller
+    ".github/workflows/claude-authorized-mission.yml",  # protected Claude handoff
+    "scripts/northstar_orchestrator.py",       # trusted controller implementation
+    "scripts/northstar_transition.py",         # protected state-transition recipe
     # Learning Kernel: lessons, competence and graduation thresholds are
     # controller-owned. The worker may READ them (worker_view) but may never edit
     # them, propose its own activation, or retune its own graduation bar.
