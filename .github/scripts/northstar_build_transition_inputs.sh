@@ -10,6 +10,7 @@ SHA="${1:?certified sha}"; CONCL="${2:-success}"; EVENT="${3:-push}"; BRANCH="${
 PR_MISSION=$(gh api "repos/${GITHUB_REPOSITORY:-}/commits/${SHA}/pulls" \
   -q '.[0].body' 2>/dev/null | grep -ioE '^\s*MISSION\s*=\s*\S+' | head -1 | sed -E 's/.*=\s*//' || true)
 python - "$SHA" "$CONCL" "$EVENT" "$BRANCH" "${PR_MISSION:-}" <<'PY'
+import datetime as _dt
 import json, sys, pathlib
 sha, concl, event, branch = sys.argv[1:5]
 completed_pr_mission = sys.argv[5] or None
@@ -35,6 +36,13 @@ try:
     paused = ba.get("paused_bounded_authorization")
 except Exception:
     paused = None
+
+def _json_default(value):
+    """Serialize only YAML-native date/time scalars; fail closed otherwise."""
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
 print(json.dumps({
     "mode": mode,
     "completed_mission": mission,
@@ -45,5 +53,5 @@ print(json.dumps({
     "certified_main_sha": sha,
     "protected_main_sha": sha,
     "post_merge": {"conclusion": concl, "event": event, "head_branch": branch, "head_sha": sha},
-}))
+}, default=_json_default))
 PY
