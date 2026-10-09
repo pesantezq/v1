@@ -9,11 +9,11 @@
 #       certification of current main, builds the dispatch packet from protected
 #       state, emits outputs. (A manual dispatch cannot manufacture certification.)
 #   job `claude-dispatch`  — WRITE (contents:write to implement on a branch,
-#       pull-requests:write to OPEN a PR, id-token:write for WIF). Runs only when
+#       pull-requests:write to OPEN a PR). Runs only when
 #       mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
 #       before invoking Claude, uses the PROTECTED prompt_source, pins the action to
-#       an immutable SHA, authenticates via Anthropic Workload Identity Federation
-#       (no long-lived secret), constrains Claude's tools so it cannot merge/approve
+#       an immutable SHA, authenticates via the operator-provisioned Claude Code OAuth
+#       token stored in GitHub Actions secrets, constrains Claude's tools so it cannot merge/approve
 #       /modify rules, and is idempotent on the mission@sha identity.
 #
 # Claude never receives merge/approve authority. Third-party actions SHA-pinned.
@@ -113,15 +113,11 @@ jobs:
     permissions:
       contents: write           # implement on a branch (never main)
       pull-requests: write      # OPEN a PR (never approve/merge)
-      id-token: write           # Anthropic Workload Identity Federation (no long-lived secret)
     env:
       GH_TOKEN: ${{ github.token }}
       MISSION: ${{ needs.build-packet.outputs.mission }}
       CERTIFIED_SHA: ${{ needs.build-packet.outputs.certified_sha }}
       NORTHSTAR_BOT_LOGIN: ${{ vars.NORTHSTAR_BOT_LOGIN }}
-      WIF_RULE: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
-      WIF_ORG: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
-      WIF_SA: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
     steps:
       - name: Checkout TRUSTED controller code from main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -138,14 +134,16 @@ jobs:
       - name: Install PyYAML
         run: python -m pip install -r requirements.txt
 
-      - name: Re-verify authorization + WIF, resolve protected prompt
+      - name: Re-verify authorization + Claude OAuth, resolve protected prompt
         id: verify
         shell: bash
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
-          # Fail closed if Anthropic WIF identifiers are absent (no long-lived secret fallback).
-          if [ -z "${WIF_RULE:-}" ] || [ -z "${WIF_ORG:-}" ] || [ -z "${WIF_SA:-}" ]; then
-            echo "::error::Anthropic WIF configuration absent (ANTHROPIC_FEDERATION_RULE_ID/ORGANIZATION_ID/SERVICE_ACCOUNT_ID) — fail closed."; exit 1
+          # Fail closed if the operator-provisioned Claude Code OAuth token is absent.
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::Claude Code OAuth configuration absent (CLAUDE_CODE_OAUTH_TOKEN) — fail closed."; exit 1
           fi
           CUR=$(git rev-parse origin/main)
           [ "$CUR" = "$CERTIFIED_SHA" ] || { echo "::error::main advanced ($CUR != $CERTIFIED_SHA) — STOP"; exit 1; }
@@ -196,13 +194,11 @@ jobs:
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_before.txt
 
-      - name: Invoke Claude (WIF, tool-constrained, open PR only — never merge/approve)
+      - name: Invoke Claude (OAuth, tool-constrained, open PR only — never merge/approve)
         if: steps.verify.outputs.already == 'no'
         uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea  # v1
         with:
-          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
-          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
-          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # A PR opened with the default GITHUB_TOKEN does not trigger downstream CI;
           # use the dedicated triggering credential when configured (falls back in shadow).
           github_token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
