@@ -4,7 +4,7 @@ These prove the ENABLED-mode EFFECTOR architecture EXISTS and is safely GATED â€
 not merely that the decision cores return `would_*` booleans. They assert, by
 parsing the committed workflow YAML: privilege separation (write permissions only
 on effect jobs), every effect job is unreachable unless mode==enabled + the exact
-decision, no pull_request_target, immutable-SHA-pinned actions, WIF for Claude, and
+decision, no pull_request_target, immutable-SHA-pinned actions, OAuth for Claude, and
 no path granting Claude merge/approve. Routed to `governance` via the prefix.
 """
 from __future__ import annotations
@@ -122,7 +122,7 @@ def test_claude_dispatch_privilege_separation():
     assert not _has_write(build["permissions"])
     assert effect["permissions"].get("contents") == "write"
     assert effect["permissions"].get("pull-requests") == "write"
-    assert effect["permissions"].get("id-token") == "write"   # WIF
+    assert "id-token" not in effect["permissions"]   # OAuth does not need OIDC
     assert "build-packet" in effect["needs"]
     assert "enabled" in effect["if"] and "DISPATCH" in effect["if"]
 
@@ -144,14 +144,17 @@ def test_top_level_permissions_are_read_only():
 
 
 # ------------------------------ Claude safety ------------------------------- #
-def test_claude_action_pinned_and_wif():
+def test_claude_action_pinned_and_oauth():
     text = _text(CLAUDE)
     assert f"anthropics/claude-code-action@{CLAUDE_ACTION_SHA}" in text
-    for v in ("ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID", "ANTHROPIC_SERVICE_ACCOUNT_ID"):
-        assert v in text, v
-    # no long-lived Anthropic API/OAuth secret
+    assert "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in text
+    assert "ANTHROPIC_FEDERATION_RULE_ID" not in text
+    assert "ANTHROPIC_ORGANIZATION_ID" not in text
+    assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in text
+    assert "anthropic_federation_rule_id" not in text
+    assert "anthropic_organization_id" not in text
+    assert "anthropic_service_account_id" not in text
     assert "ANTHROPIC_API_KEY" not in text
-    assert "secrets.ANTHROPIC" not in text
 
 
 def test_claude_tools_constrained_no_merge_or_gh():
@@ -165,10 +168,11 @@ def test_claude_tools_constrained_no_merge_or_gh():
         assert forbidden not in allow, f"{forbidden!r} must not be an allowed tool"
 
 
-def test_claude_dispatch_fails_closed_without_wif():
-    # the verify step must fail closed when WIF identifiers are absent
+def test_claude_dispatch_fails_closed_without_oauth():
+    # the verify step must fail closed when the operator-provisioned OAuth token is absent
     text = _text(CLAUDE)
-    assert "WIF configuration absent" in text
+    assert "Claude Code OAuth configuration absent" in text
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in text
     assert "fail closed" in text.lower()
 
 
