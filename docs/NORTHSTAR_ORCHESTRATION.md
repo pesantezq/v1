@@ -58,7 +58,7 @@ Claude PR → northstar-ci (exact head) ─┐
 | `scripts/northstar_materialize_transition.py` | Deterministic transition MATERIALIZER. Surgically applies a trusted proposal to the allowlisted protected fields (comment-preserving), restoring the paused authorization EXACTLY; fail-closed; no main push. |
 | `.github/workflows/northstar-pr-controller.yml` | Read-only `Northstar merge gate` job **+ a separate `auto-merge-effect` write job** (native GitHub auto-merge), unreachable in shadow. |
 | `.github/workflows/northstar-orchestrator.yml` | Read-only post-merge certify/propose job **+ a separate `governance-pr-effect` write job** that materializes the transition and opens ONE governance PR, unreachable in shadow. |
-| `.github/workflows/claude-authorized-mission.yml` | Read-only `build-packet` job **+ a separate `claude-dispatch` write job** that invokes the pinned `anthropics/claude-code-action` via Anthropic WIF, unreachable in shadow. |
+| `.github/workflows/claude-authorized-mission.yml` | Read-only `build-packet` job **+ a separate `claude-dispatch` write job** that invokes the pinned `anthropics/claude-code-action` using the operator-provisioned `CLAUDE_CODE_OAUTH_TOKEN` GitHub Actions secret, unreachable in shadow. |
 | `.github/scripts/northstar_build_{transition,packet}_inputs.sh` | Trusted-main IO glue that assembles controller inputs for the effect/decision jobs. |
 
 ### Decision → effect (privilege separation)
@@ -72,7 +72,7 @@ immediately before acting. The write jobs are **unreachable while mode is shadow
 |---|---|---|
 | `northstar-merge-gate` (PASS) | `auto-merge-effect` (`pull-requests:write`) | enable GitHub-native auto-merge (ruleset stays authoritative) |
 | `post-merge-certify` (PROPOSE) | `governance-pr-effect` (`contents:write`,`pull-requests:write`) | materialize + push governance branch + open ONE PR (never main) |
-| `build-packet` (DISPATCH) | `claude-dispatch` (`contents:write`,`pull-requests:write`,`id-token:write`) | invoke pinned Claude action via WIF, tool-constrained, open PR only |
+| `build-packet` (DISPATCH) | `claude-dispatch` (`contents:write`,`pull-requests:write`) | invoke pinned Claude action via `CLAUDE_CODE_OAUTH_TOKEN`, tool-constrained, open PR only |
 
 ## Authority precedence (fail closed)
 
