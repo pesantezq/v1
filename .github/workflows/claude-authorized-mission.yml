@@ -108,7 +108,32 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Generate short-lived Northstar GitHub App token
+      - name: Generate read-only installation-audit token
+        id: app-audit-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.NORTHSTAR_APP_ID }}
+          private-key: ${{ secrets.NORTHSTAR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Verify installation selects exactly this repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-audit-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-audit-token.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app-audit-token.outputs.installation-id }}
+        run: |
+          set -euo pipefail
+          mapfile -t repos < <(gh api /installation/repositories --paginate -q '.repositories[].full_name')
+          if [ "${#repos[@]}" -ne 1 ] || [ "${repos[0]:-}" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Northstar App installation must select exactly $GITHUB_REPOSITORY; found ${#repos[@]} accessible repositories."
+            exit 1
+          fi
+          echo "GitHub App ${APP_SLUG} installation ${INSTALLATION_ID} selects exactly $GITHUB_REPOSITORY."
+
+      - name: Prove bounded write-token permissions for this repository
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
@@ -117,17 +142,9 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Verify installation is scoped to this repository
+      - name: Confirm non-mutating preflight
         shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
-        run: |
-          set -euo pipefail
-          gh api /installation/repositories --paginate -q '.repositories[].full_name' | grep -Fx "$GITHUB_REPOSITORY"
-          echo "GitHub App ${APP_SLUG} installation ${INSTALLATION_ID} can access $GITHUB_REPOSITORY."
-          echo "No repository mutation was performed."
+        run: echo "Northstar GitHub App credentials, exclusive installation scope, and bounded write-token permissions verified. No repository mutation was performed."
 
   claude-dispatch:
     name: Dispatch Claude mission (effect)
