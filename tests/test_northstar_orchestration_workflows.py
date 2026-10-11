@@ -28,6 +28,7 @@ CLAUDE = WF / "claude-authorized-mission.yml"
 ALL = [PR_CONTROLLER, ORCHESTRATOR, CLAUDE]
 
 CLAUDE_ACTION_SHA = "cab360f6565aa35a51d6ce9e43f1f4287c0a32ea"
+APP_TOKEN_ACTION_SHA = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 
 
 def _load_mod(name: str):
@@ -108,8 +109,9 @@ def test_orchestrator_privilege_separation():
     effect = jobs["governance-pr-effect"]
     assert certify["permissions"].get("contents") == "read"
     assert not _has_write(certify["permissions"])
-    assert effect["permissions"].get("contents") == "write"
-    assert effect["permissions"].get("pull-requests") == "write"
+    # The default GITHUB_TOKEN stays read-only; bounded writes use a short-lived
+    # GitHub App installation token minted inside the enabled-only effect job.
+    assert effect["permissions"] == {"contents": "read"}
     assert "post-merge-certify" in effect["needs"]
     assert "enabled" in effect["if"] and "PROPOSE" in effect["if"]
 
@@ -120,9 +122,8 @@ def test_claude_dispatch_privilege_separation():
     effect = jobs["claude-dispatch"]
     assert build["permissions"].get("contents") == "read"
     assert not _has_write(build["permissions"])
-    assert effect["permissions"].get("contents") == "write"
-    assert effect["permissions"].get("pull-requests") == "write"
-    assert "id-token" not in effect["permissions"]   # OAuth does not need OIDC
+    assert effect["permissions"] == {"contents": "read"}
+    assert "id-token" not in effect["permissions"]   # OAuth/App auth do not need OIDC
     assert "build-packet" in effect["needs"]
     assert "enabled" in effect["if"] and "DISPATCH" in effect["if"]
 
@@ -144,6 +145,16 @@ def test_top_level_permissions_are_read_only():
 
 
 # ------------------------------ Claude safety ------------------------------- #
+def test_github_app_preflight_is_manual_and_non_mutating():
+    jobs = _jobs(CLAUDE)
+    preflight = jobs["github-app-preflight"]
+    assert "workflow_dispatch" in preflight["if"]
+    assert preflight["permissions"] == {"contents": "read"}
+    text = _text(CLAUDE)
+    assert "No repository mutation was performed." in text
+    assert "/installation/repositories" in text
+
+
 def test_claude_action_pinned_and_oauth():
     text = _text(CLAUDE)
     assert f"anthropics/claude-code-action@{CLAUDE_ACTION_SHA}" in text
@@ -221,11 +232,19 @@ def test_no_workflow_mentions_codex_as_a_gate():
         assert "chatgpt-codex-connector" not in t
 
 
-def test_generated_prs_use_triggering_credential():
-    # governance-PR and Claude-dispatch effect jobs must use a triggering credential
-    # (not the default GITHUB_TOKEN, which does not trigger downstream CI).
-    assert "secrets.NORTHSTAR_BOT_TOKEN" in _text(ORCHESTRATOR)
-    assert "secrets.NORTHSTAR_BOT_TOKEN" in _text(CLAUDE)
+def test_generated_prs_use_short_lived_github_app_credential():
+    # Governance and Claude effectors must mint a scoped GitHub App token rather
+    # than using the recursion-limited default token or a long-lived bot PAT.
+    for p in (ORCHESTRATOR, CLAUDE):
+        text = _text(p)
+        assert f"actions/create-github-app-token@{APP_TOKEN_ACTION_SHA}" in text
+        assert "secrets.NORTHSTAR_APP_ID" in text
+        assert "secrets.NORTHSTAR_APP_PRIVATE_KEY" in text
+        assert "permission-contents: write" in text
+        assert "permission-pull-requests: write" in text
+        assert "steps.app-token.outputs.token" in text
+        assert "NORTHSTAR_BOT_TOKEN" not in text
+        assert "vars.NORTHSTAR_BOT_LOGIN" not in text
 
 
 def test_pr_controller_fails_closed_on_assembly_failure_in_enabled():
