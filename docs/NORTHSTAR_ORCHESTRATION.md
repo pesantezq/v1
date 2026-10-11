@@ -247,8 +247,11 @@ prove the following:
    read/write, and Metadata: read-only. Its credentials are stored as
    `NORTHSTAR_APP_ID` and `NORTHSTAR_APP_PRIVATE_KEY` Actions secrets.
 5. Run the manual `claude-authorized-mission` workflow once while still in
-   `shadow`. The `Verify Northstar GitHub App credentials` job must succeed; it
-   requests the same bounded write permissions but performs no repository mutation.
+   `shadow`. The `Verify Northstar GitHub App credentials` job must succeed. It
+   first uses an installation-wide **read-only** token to require that the App
+   installation selects exactly this repository, then separately mints the
+   current-repository bounded write token to prove Contents/Pull-request write
+   permissions. The preflight performs no repository mutation.
 6. Open the governed operator-bootstrap activation PR that flips
    `.agent/mission_registry.yaml` from `shadow` to `enabled` and updates only
    the bootstrap constitutional tests required to represent a legitimate enabled
