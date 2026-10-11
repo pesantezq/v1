@@ -8,9 +8,9 @@
 #   job `build-packet`     — READ-ONLY (contents:read). Verifies REAL post-merge CI
 #       certification of current main, builds the dispatch packet from protected
 #       state, emits outputs. (A manual dispatch cannot manufacture certification.)
-#   job `claude-dispatch`  — WRITE (contents:write to implement on a branch,
-#       pull-requests:write to OPEN a PR). Runs only when
-#       mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
+#   job `claude-dispatch`  — default GITHUB_TOKEN remains READ-ONLY; the job
+#       mints a short-lived, repo-scoped GitHub App token for branch/PR writes only
+#       when mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
 #       before invoking Claude, uses the PROTECTED prompt_source, pins the action to
 #       an immutable SHA, authenticates via the operator-provisioned Claude Code OAuth
 #       token stored in GitHub Actions secrets, constrains Claude's tools so it cannot merge/approve
