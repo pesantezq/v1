@@ -36,10 +36,10 @@ schema_version: northstar.mission_registry.v1
 # durable main after post-merge certification. Workflows fail closed to shadow
 # if this value is missing/unknown.
 controller:
-  mode: shadow            # shadow | enabled
+  mode: enabled           # shadow | enabled
   level: C0.5_SHADOW      # aligns with the existing controller-level vocabulary (roadmap)
-  enabled_by: null        # operator/GPT sets this at activation; null in shadow
-  enabled_at: null
+  enabled_by: pesantezq   # operator bootstrap activation (SHADOW -> ENABLED)
+  enabled_at: "2026-10-17T14:40:38Z"       # UTC ISO-8601, set at operator bootstrap edit time
 
 # Risk classes that may ever be dispatched automatically. E4 (and anything
 # touching real evidence / production / broker / capital / C1 / Phase 0D) is

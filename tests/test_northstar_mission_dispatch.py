@@ -135,12 +135,28 @@ def test_first_activation_requires_certified_post_merge_main_state():
     assert res["reason"] == "main_sha_not_certified"
 
 
-def test_real_registry_ships_shadow_and_bootstrap_cannot_self_dispatch():
+def test_real_registry_rollout_state_and_bootstrap_cannot_self_dispatch():
     import pytest
     try:
         import yaml
     except ImportError:
         pytest.skip("pyyaml not installed")
     reg = yaml.safe_load(REGISTRY_FILE.read_text(encoding="utf-8"))
-    assert reg["controller"]["mode"] == "shadow"
+    controller = reg["controller"]
+    mode = controller["mode"]
+    # Rollout-state contract: SHADOW, or an explicitly-attributed operator bootstrap.
+    assert mode in {"shadow", "enabled"}
+    if mode == "shadow":
+        assert controller["enabled_by"] is None
+        assert controller["enabled_at"] is None
+    else:  # enabled
+        enabled_by = controller["enabled_by"]
+        assert isinstance(enabled_by, str) and enabled_by.strip()
+        assert enabled_by == "pesantezq"
+        enabled_at = controller["enabled_at"]
+        assert isinstance(enabled_at, str) and enabled_at.strip()
+        from datetime import datetime
+        datetime.fromisoformat(enabled_at.replace("Z", "+00:00"))  # parseable ISO-8601
+    # Invariant in BOTH modes: enabling the controller does NOT authorize the
+    # bootstrap mission to self-dispatch.
     assert reg["missions"][ORCH]["auto_dispatch"] is False
