@@ -57,8 +57,8 @@ Claude PR → northstar-ci (exact head) ─┐
 | `scripts/northstar_mission_packet.py` | Deterministic Claude dispatch packet builder. Pure `build_mission_packet(inputs)`. |
 | `scripts/northstar_materialize_transition.py` | Deterministic transition MATERIALIZER. Surgically applies a trusted proposal to the allowlisted protected fields (comment-preserving), restoring the paused authorization EXACTLY; fail-closed; no main push. |
 | `.github/workflows/northstar-pr-controller.yml` | Read-only `Northstar merge gate` job **+ a separate `auto-merge-effect` write job** (native GitHub auto-merge), unreachable in shadow. |
-| `.github/workflows/northstar-orchestrator.yml` | Read-only post-merge certify/propose job **+ a separate `governance-pr-effect` write job** that materializes the transition and opens ONE governance PR, unreachable in shadow. |
-| `.github/workflows/claude-authorized-mission.yml` | Read-only `build-packet` job **+ a separate `claude-dispatch` write job** that invokes the pinned `anthropics/claude-code-action` using the operator-provisioned `CLAUDE_CODE_OAUTH_TOKEN` GitHub Actions secret, unreachable in shadow. |
+| `.github/workflows/northstar-orchestrator.yml` | Read-only post-merge certify/propose job **+ a separate `governance-pr-effect`** that keeps the default `GITHUB_TOKEN` read-only and mints a short-lived, repo-scoped GitHub App token only for the bounded governance branch/PR write, unreachable in shadow. |
+| `.github/workflows/claude-authorized-mission.yml` | Read-only `build-packet` job **+ a separate `claude-dispatch` effect job** that uses `CLAUDE_CODE_OAUTH_TOKEN` for Claude and a short-lived GitHub App installation token for branch/PR writes; includes a manual non-mutating GitHub App credential preflight; unreachable in shadow. |
 | `.github/scripts/northstar_build_{transition,packet}_inputs.sh` | Trusted-main IO glue that assembles controller inputs for the effect/decision jobs. |
 
 ### Decision → effect (privilege separation)
@@ -71,8 +71,8 @@ immediately before acting. The write jobs are **unreachable while mode is shadow
 | Decision job (read-only) | Effect job (write, enabled-only) | Bounded effect |
 |---|---|---|
 | `northstar-merge-gate` (PASS) | `auto-merge-effect` (`pull-requests:write`) | enable GitHub-native auto-merge (ruleset stays authoritative) |
-| `post-merge-certify` (PROPOSE) | `governance-pr-effect` (`contents:write`,`pull-requests:write`) | materialize + push governance branch + open ONE PR (never main) |
-| `build-packet` (DISPATCH) | `claude-dispatch` (`contents:write`,`pull-requests:write`) | invoke pinned Claude action via `CLAUDE_CODE_OAUTH_TOKEN`, tool-constrained, open PR only |
+| `post-merge-certify` (PROPOSE) | `governance-pr-effect` (default token read-only; App token: `contents:write`,`pull-requests:write`) | materialize + push governance branch + open ONE PR (never main) |
+| `build-packet` (DISPATCH) | `claude-dispatch` (default token read-only; App token: `contents:write`,`pull-requests:write`) | invoke pinned Claude action via `CLAUDE_CODE_OAUTH_TOKEN`, tool-constrained, open PR only |
 
 ## Authority precedence (fail closed)
 
@@ -205,7 +205,7 @@ N+1. After that, E1–E3 progression is autonomous — no human reviewer and no 
   downloads/executes untrusted PR artifacts.
 - Untrusted PR fields are never interpolated into shell unsafely.
 - E4 / production secrets sit behind a GitHub Environment with required reviewers.
-- Prefer OIDC/WIF over a long-lived API secret for Claude dispatch.
+- Claude authentication uses the operator-provisioned `CLAUDE_CODE_OAUTH_TOKEN`; GitHub writes use short-lived GitHub App installation tokens that are revoked at job end.
 - Fail closed on API/query ambiguity.
 
 ## Input-assembly hardening (fail-closed on partial data)
@@ -231,28 +231,40 @@ polls exact-head `northstar-ci` to its terminal result in-job. The Claude dispat
 workflow verifies a REAL successful `northstar-ci` push run for the current main SHA
 before dispatching, so a manual `workflow_dispatch` cannot manufacture certification.
 
-## Activation contract (configuration-only — no further code PR)
+## Activation contract
 
-Both the deterministic decision layer AND the gated effect layer ship in this PR.
-After it is durable on `main` and post-merge-certified, activation is
-**repository-administration / configuration work only** — it adds no missing
-controller behavior:
+The deterministic decision layer and gated effect layer are already implemented.
+Before switching from `shadow` to `enabled`, the repository configuration must
+prove the following:
 
-1. Enable GitHub auto-merge (`allow_auto_merge=true`).
-2. Add a `main` ruleset: require the `Northstar merge gate` check (pin its
-   source/app where supported), require PRs (no direct push), force-push protection.
-3. Configure Anthropic WIF repository variables: `ANTHROPIC_FEDERATION_RULE_ID`,
-   `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_SERVICE_ACCOUNT_ID`.
-4. Configure a `NORTHSTAR_BOT_TOKEN` secret (a GitHub App installation token or a
-   fine-scoped PAT) used by the governance-PR and Claude-dispatch effect jobs — a PR
-   created with the default `GITHUB_TOKEN` does not trigger downstream CI, which would
-   stall the handoff. (In shadow, no PR is created, so the fallback to `github.token`
-   is inert.)
-5. Configure an E4 protected GitHub Environment with required reviewers.
-6. Open a governed activation PR flipping `.agent/mission_registry.yaml`
-   `controller.mode` `shadow → enabled`; certify + manually merge it.
+1. GitHub auto-merge is enabled (`allow_auto_merge=true`).
+2. The `main` ruleset requires pull requests and the `Northstar merge gate`,
+   blocks force pushes/deletion, and grants no bypass to the Northstar GitHub App.
+3. `CLAUDE_CODE_OAUTH_TOKEN` exists as a GitHub Actions secret for Claude Code
+   authentication.
+4. A dedicated Northstar GitHub App is installed only on the intended repository,
+   with repository permissions limited to Contents: read/write, Pull requests:
+   read/write, and Metadata: read-only. Its credentials are stored as
+   `NORTHSTAR_APP_ID` and `NORTHSTAR_APP_PRIVATE_KEY` Actions secrets.
+5. Run the manual `claude-authorized-mission` workflow once while still in
+   `shadow`. The `Verify Northstar GitHub App credentials` job must succeed. It
+   first uses an installation-wide **read-only** token to require that the App
+   installation selects exactly this repository, then separately mints the
+   current-repository bounded write token to prove Contents/Pull-request write
+   permissions. The preflight performs no repository mutation.
+6. Open the governed operator-bootstrap activation PR that flips
+   `.agent/mission_registry.yaml` from `shadow` to `enabled` and updates only
+   the bootstrap constitutional tests required to represent a legitimate enabled
+   state. Merge it only through the explicit operator/admin bootstrap path after
+   exact-head validation.
 
-Once `enabled` is durable, the already-implemented effectors run with no further
-development PR: the merge gate enables native auto-merge on PASS, the orchestrator
-materializes the transition and opens the governance PR on PROPOSE, and the
-dispatcher invokes Claude on DISPATCH.
+GitHub App installation tokens are short-lived (about one hour) and are revoked by
+the token action at job completion. The default `GITHUB_TOKEN` remains read-only in
+the App-backed effect jobs. E4 / real-evidence / production / broker / capital / C1
+boundaries remain deterministic human-required STOPs; an optional protected GitHub
+Environment can be added later as defense in depth when an E4 workflow actually
+consumes it.
+
+Once `enabled` is durable, the merge gate may enable native auto-merge on PASS,
+the orchestrator may open the deterministic governance-transition PR on PROPOSE,
+and the dispatcher may invoke Claude only for already-authorized E1–E3 missions.

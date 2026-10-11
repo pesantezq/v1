@@ -8,9 +8,9 @@
 #   job `build-packet`     — READ-ONLY (contents:read). Verifies REAL post-merge CI
 #       certification of current main, builds the dispatch packet from protected
 #       state, emits outputs. (A manual dispatch cannot manufacture certification.)
-#   job `claude-dispatch`  — WRITE (contents:write to implement on a branch,
-#       pull-requests:write to OPEN a PR). Runs only when
-#       mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
+#   job `claude-dispatch`  — default GITHUB_TOKEN remains READ-ONLY; the job
+#       mints a short-lived, repo-scoped GitHub App token for branch/PR writes only
+#       when mode==enabled AND decision==DISPATCH. Re-verifies everything immediately
 #       before invoking Claude, uses the PROTECTED prompt_source, pins the action to
 #       an immutable SHA, authenticates via the operator-provisioned Claude Code OAuth
 #       token stored in GitHub Actions secrets, constrains Claude's tools so it cannot merge/approve
@@ -100,6 +100,52 @@ jobs:
           echo "certified_sha=$CUR" >> "$GITHUB_OUTPUT"
           { echo "### Claude dispatch packet ($(python -c "import json;print(json.load(open('/tmp/packet_out.json'))['mode'])"))"; echo; echo '```json'; cat /tmp/packet_out.json; echo '```'; echo; echo '_Shadow: nothing dispatched._'; } >> "$GITHUB_STEP_SUMMARY" || true
 
+  github-app-preflight:
+    name: Verify Northstar GitHub App credentials
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Generate read-only installation-audit token
+        id: app-audit-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.NORTHSTAR_APP_ID }}
+          private-key: ${{ secrets.NORTHSTAR_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Verify installation selects exactly this repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-audit-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-audit-token.outputs.app-slug }}
+          INSTALLATION_ID: ${{ steps.app-audit-token.outputs.installation-id }}
+        run: |
+          set -euo pipefail
+          mapfile -t repos < <(gh api /installation/repositories --paginate -q '.repositories[].full_name')
+          if [ "${#repos[@]}" -ne 1 ] || [ "${repos[0]:-}" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Northstar App installation must select exactly $GITHUB_REPOSITORY; found ${#repos[@]} accessible repositories."
+            exit 1
+          fi
+          echo "GitHub App ${APP_SLUG} installation ${INSTALLATION_ID} selects exactly $GITHUB_REPOSITORY."
+
+      - name: Prove bounded write-token permissions for this repository
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.NORTHSTAR_APP_ID }}
+          private-key: ${{ secrets.NORTHSTAR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Confirm non-mutating preflight
+        shell: bash
+        run: echo "Northstar GitHub App credentials, exclusive installation scope, and bounded write-token permissions verified. No repository mutation was performed."
+
   claude-dispatch:
     name: Dispatch Claude mission (effect)
     needs: build-packet
@@ -111,19 +157,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write           # implement on a branch (never main)
-      pull-requests: write      # OPEN a PR (never approve/merge)
+      contents: read            # default GITHUB_TOKEN stays read-only; writes use the scoped App token
     env:
-      GH_TOKEN: ${{ github.token }}
       MISSION: ${{ needs.build-packet.outputs.mission }}
       CERTIFIED_SHA: ${{ needs.build-packet.outputs.certified_sha }}
-      NORTHSTAR_BOT_LOGIN: ${{ vars.NORTHSTAR_BOT_LOGIN }}
     steps:
+      - name: Generate short-lived Northstar GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.NORTHSTAR_APP_ID }}
+          private-key: ${{ secrets.NORTHSTAR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Checkout TRUSTED controller code from main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           ref: main
           persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
       - name: Set up Python 3.12
@@ -139,6 +192,8 @@ jobs:
         shell: bash
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NORTHSTAR_BOT_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
         run: |
           set -euo pipefail
           # Fail closed if the operator-provisioned Claude Code OAuth token is absent.
@@ -174,8 +229,8 @@ jobs:
           # with a new SHA must not re-launch the same mission.
           DEDUP="auto-dispatch:${MISSION}"
           echo "dedup=$DEDUP" >> "$GITHUB_OUTPUT"
-          # Authenticate the dedup: only count PRs authored by the TRUSTED dispatch
-          # bot (vars.NORTHSTAR_BOT_LOGIN), so an external/spoofed PR whose title
+          # Authenticate the dedup: only count PRs authored by the TRUSTED GitHub
+          # App bot, so an external/spoofed PR whose title
           # contains the dedup token cannot permanently suppress legitimate dispatch.
           AUTHOR_FILTER=""
           [ -n "${NORTHSTAR_BOT_LOGIN:-}" ] && AUTHOR_FILTER="--author ${NORTHSTAR_BOT_LOGIN}"
@@ -190,6 +245,8 @@ jobs:
       - name: Snapshot remote branches before dispatch
         if: steps.verify.outputs.already == 'no'
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_before.txt
@@ -199,9 +256,9 @@ jobs:
         uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # A PR opened with the default GITHUB_TOKEN does not trigger downstream CI;
-          # use the dedicated triggering credential when configured (falls back in shadow).
-          github_token: ${{ secrets.NORTHSTAR_BOT_TOKEN || github.token }}
+          # App-authored pushes/PRs trigger downstream workflows and do not inherit
+          # the repository owner's admin/ruleset-bypass identity.
+          github_token: ${{ steps.app-token.outputs.token }}
           prompt: |
             Read the protected mission brief at the repository path
             "${{ steps.verify.outputs.prompt_source }}" (authoritative, from source
@@ -217,6 +274,9 @@ jobs:
       - name: Open the implementation PR explicitly (the action only prepares a branch)
         if: steps.verify.outputs.already == 'no'
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NORTHSTAR_BOT_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/branches" --paginate -q '.[].name' | sort > /tmp/branches_after.txt
