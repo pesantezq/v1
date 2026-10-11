@@ -151,8 +151,13 @@ def test_github_app_preflight_is_manual_and_non_mutating():
     assert "workflow_dispatch" in preflight["if"]
     assert preflight["permissions"] == {"contents": "read"}
     text = _text(CLAUDE)
-    assert "No repository mutation was performed." in text
+    assert "owner: ${{ github.repository_owner }}" in text
+    assert "permission-contents: read" in text
+    assert "permission-pull-requests: read" in text
     assert "/installation/repositories" in text
+    assert '"${#repos[@]}" -ne 1' in text
+    assert '"${repos[0]:-}" != "$GITHUB_REPOSITORY"' in text
+    assert "No repository mutation was performed." in text
 
 
 def test_claude_action_pinned_and_oauth():
