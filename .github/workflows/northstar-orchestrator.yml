@@ -7,8 +7,9 @@
 # PRIVILEGE SEPARATION:
 #   job `post-merge-certify`  — READ-ONLY (contents:read). Certifies the exact
 #       post-merge main SHA and runs the deterministic proposer; emits outputs.
-#   job `governance-pr-effect` — WRITE (contents:write + pull-requests:write) ONLY.
-#       Runs only when mode==enabled AND decision==PROPOSE. Re-derives the proposal
+#   job `governance-pr-effect` — default GITHUB_TOKEN remains READ-ONLY; the job
+#       mints a short-lived, repo-scoped GitHub App token with contents/pull-request
+#       write only after mode==enabled AND decision==PROPOSE. Re-derives the proposal
 #       from certified main, surgically materializes ONLY the allowlisted fields
 #       (restoring the paused VS-002 authorization EXACTLY), pushes a deterministic
 #       governance branch, and opens ONE governance PR against main. It NEVER pushes
