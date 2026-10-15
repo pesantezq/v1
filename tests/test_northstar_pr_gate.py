@@ -531,7 +531,14 @@ def test_registry_narrowing_rejects_int_masquerading_as_bool():
 def test_real_base_registry_narrowing_rejects_widening():
     import copy
     base = asm._base_registry()
-    assert isinstance(base, dict) and (base.get("controller") or {}).get("mode") == "shadow"
+    assert isinstance(base, dict)
+    controller = base.get("controller") or {}
+    # Rollout-state-aware (was == "shadow"): the registry-widening security property
+    # must hold in BOTH durable rollout states. The widening rejection below is
+    # mode-independent, so the real base registry may be shadow OR (post-activation) enabled.
+    assert controller.get("mode") in {"shadow", "enabled"}
+    orch = base["missions"]["northstar_continuous_mission_orchestration_foundation"]
+    assert orch["auto_dispatch"] is False
     assert gate.check_registry_authority_narrowing(base, copy.deepcopy(base)) == []
     cand = copy.deepcopy(base)
     cand["missions"]["northstar_continuous_mission_orchestration_foundation"]["auto_dispatch"] = True
