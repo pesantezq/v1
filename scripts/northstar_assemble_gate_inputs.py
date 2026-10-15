@@ -191,6 +191,16 @@ def _base_controller_mode() -> str | None:
         return None
 
 
+def _base_registry() -> dict | None:
+    """The FULL trusted base-main mission registry (parsed), for authority-narrowing
+    comparison against the candidate registry. None if unreadable (gate fails closed)."""
+    try:
+        import yaml
+        return yaml.safe_load((REPO_ROOT / ".agent/mission_registry.yaml").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _mission_envelope(mission: str) -> dict:
     """The DEFAULT-DENY change envelope from the PROTECTED base-main registry."""
     try:
@@ -327,6 +337,12 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
                 if t is not None:
                     cand_files[p] = t
             conformance_violations = gate.check_control_plane_conformance(cand_files, _base_controller_mode())
+            try:
+                import yaml
+                _cand_reg = yaml.safe_load(cand_files.get(".agent/mission_registry.yaml") or "")
+            except Exception:
+                _cand_reg = None
+            conformance_violations = conformance_violations + gate.check_registry_authority_narrowing(_base_registry(), _cand_reg)
 
     missing_groups = _missing_test_groups(envelope.get("required_test_groups") or [])
 

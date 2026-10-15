@@ -137,6 +137,18 @@ change the rollout mode -- shadow->enabled self-enable and enabled->shadow self-
 fail; only an operator bootstrap changes it), grants write-all, etc.). After merge + exact-SHA post-merge certification,
 controller N+1 becomes the durable evaluator for subsequent PRs. No human, no Codex.
 
+Beyond `controller.mode`, `check_registry_authority_narrowing` (trusted base-main code) requires the
+CANDIDATE mission registry to be IDENTICAL to, or strictly NARROWER than, trusted base main — candidate
+tests are never an authority source. `schema_version`, the `controller` scalars, per-mission
+`executor`/`risk_class`/`prompt_source`/`completion_gate`, and `on_success` routing are pinned to exact
+equality; `auto_dispatch_allowed_risk_classes` may only shrink and `human_required_risk_classes` only
+grow; per mission, `auto_dispatch` false->true, `allowed_authority`/`allowed_path(_prefixes)` additions,
+`forbidden_authority`/`forbidden_path_prefixes`/`required_test_groups`/`semantic_guards` removals,
+`human_boundary_required` true->false, and `transition_policy` human_required->preauthorized_auto all
+FAIL; a new mission id, a removed mission id, or any unknown authority-bearing field FAILS CLOSED. This
+holds AFTER activation: an `enabled` base with an `enabled` candidate that attempts any such widening is
+still rejected (closes the registry-authority-widening P1).
+
 ### Codex (advisory only)
 Codex is NOT requested, polled, waited on, or required by orchestration. If an
 operator or a background process leaves Codex comments, they are recorded as

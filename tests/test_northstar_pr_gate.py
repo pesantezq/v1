@@ -376,3 +376,164 @@ def test_reconciled_authoritative_resolves_as_standalone_script(tmp_path):
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().splitlines()[-1] == MISSION, (out.stdout, out.stderr)
+
+
+# -------------------- registry authority-narrowing (P1) --------------------- #
+def _base_reg() -> dict:
+    return {
+        "schema_version": "northstar.mission_registry.v1",
+        "controller": {"mode": "shadow", "level": "C0.5_SHADOW", "enabled_by": None, "enabled_at": None},
+        "auto_dispatch_allowed_risk_classes": ["E1", "E2", "E3"],
+        "human_required_risk_classes": ["E4"],
+        "missions": {
+            "m_orch": {
+                "executor": "claude", "risk_class": "E3", "prompt_source": ".agent/missions/orch.md",
+                "auto_dispatch": False, "completion_gate": "durable_on_main_with_post_merge_ci_success",
+                "allowed_authority": ["impl", "shadow_emit"],
+                "forbidden_authority": ["self_merge", "self_auth"],
+                "transition_policy": "preauthorized_auto",
+                "on_success": {"next_mission": "m_adapter", "restore_paused_authorization": True,
+                               "restore_source": ".agent/phase_status.yaml#x"},
+                "human_boundary_required": False,
+                "change_policy": {"class": "control_plane",
+                                  "allowed_path_prefixes": ["scripts/northstar_", "tests/test_northstar_"],
+                                  "allowed_paths": [], "forbidden_path_prefixes": [],
+                                  "required_test_groups": ["orchestration", "authority"],
+                                  "semantic_guards": ["no_forbidden_authority", "control_plane_conformance"]},
+            },
+            "m_adapter": {
+                "executor": "claude", "risk_class": "E3", "prompt_source": ".agent/missions/adapter.md",
+                "auto_dispatch": True, "completion_gate": "durable_on_main_with_post_merge_ci_success",
+                "allowed_authority": ["thin_adapter"], "forbidden_authority": ["real_pkg", "self_auth"],
+                "transition_policy": "human_required",
+                "on_success": {"next_mission": "m_frozen", "restore_paused_authorization": False},
+                "human_boundary_required": False,
+                "change_policy": {"class": "normal", "allowed_path_prefixes": ["portfolio_automation/vs002_evidence/"],
+                                  "allowed_paths": ["portfolio_automation/data_governance.py"],
+                                  "forbidden_path_prefixes": [], "required_test_groups": ["vs002"],
+                                  "semantic_guards": ["no_forbidden_authority"]},
+            },
+            "m_frozen": {
+                "executor": "claude", "risk_class": "E4", "prompt_source": None,
+                "auto_dispatch": False, "completion_gate": "unauthorized",
+                "allowed_authority": [], "forbidden_authority": ["real_pkg", "all_until_authorized"],
+                "transition_policy": "human_required",
+                "on_success": {"next_mission": None, "restore_paused_authorization": False},
+                "human_boundary_required": True,
+                "change_policy": {"class": "normal", "allowed_path_prefixes": [], "allowed_paths": [],
+                                  "forbidden_path_prefixes": [], "required_test_groups": [],
+                                  "semantic_guards": ["no_forbidden_authority"]},
+            },
+        },
+    }
+
+
+def _narrow(mutate):
+    import copy
+    base = _base_reg(); cand = copy.deepcopy(base); mutate(cand)
+    return gate.check_registry_authority_narrowing(base, cand)
+
+
+def test_registry_narrowing_identical_ok():
+    assert _narrow(lambda c: None) == []
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("mutate, needle", [
+    (lambda c: c["missions"]["m_orch"].__setitem__("auto_dispatch", True), "auto_dispatch"),
+    (lambda c: c["missions"]["m_orch"]["allowed_authority"].append("new_power"), "allowed_authority"),
+    (lambda c: c["missions"]["m_orch"]["forbidden_authority"].remove("self_merge"), "forbidden_authority"),
+    (lambda c: c["missions"]["m_frozen"].__setitem__("human_boundary_required", False), "human_boundary_required"),
+    (lambda c: c["missions"]["m_adapter"].__setitem__("transition_policy", "preauthorized_auto"), "transition_policy"),
+    (lambda c: c["auto_dispatch_allowed_risk_classes"].append("E4"), "auto_dispatch_allowed_risk_classes"),
+    (lambda c: c.__setitem__("human_required_risk_classes", []), "human_required_risk_classes"),
+    (lambda c: c["missions"]["m_orch"]["change_policy"]["allowed_path_prefixes"].append("config/"), "allowed_path_prefixes"),
+    (lambda c: c["missions"]["m_orch"]["change_policy"]["allowed_paths"].append("config/x.py"), "allowed_paths"),
+    (lambda c: c["missions"]["m_orch"]["change_policy"]["required_test_groups"].remove("authority"), "required_test_groups"),
+    (lambda c: c["missions"]["m_orch"]["change_policy"]["semantic_guards"].remove("no_forbidden_authority"), "semantic_guards"),
+    (lambda c: c["missions"].__setitem__("m_new", dict(c["missions"]["m_orch"])), "missions added"),
+    (lambda c: c["controller"].__setitem__("level", "C1"), "controller.level"),
+    (lambda c: c["controller"].__setitem__("mode", "enabled"), "controller.mode"),
+    (lambda c: c["missions"]["m_orch"]["on_success"].__setitem__("next_mission", "m_other"), "next_mission"),
+])
+def test_registry_narrowing_rejects_widening(mutate, needle):
+    out = _narrow(mutate)
+    assert any(needle in x for x in out), out
+
+
+def test_registry_narrowing_malformed_candidate_fails_closed():
+    assert any("candidate registry unparseable" in x for x in gate.check_registry_authority_narrowing(_base_reg(), None))
+    assert any("candidate registry unparseable" in x for x in gate.check_registry_authority_narrowing(_base_reg(), "nope"))
+
+
+def test_registry_narrowing_malformed_base_fails_closed():
+    assert any("base-main registry unparseable" in x for x in gate.check_registry_authority_narrowing(None, _base_reg()))
+    assert any("base-main registry unparseable" in x for x in gate.check_registry_authority_narrowing("nope", _base_reg()))
+
+
+@_pytest.mark.parametrize("mutate", [
+    lambda c: None,
+    lambda c: c["missions"]["m_adapter"].__setitem__("auto_dispatch", False),            # true->false narrows
+    lambda c: c["missions"]["m_orch"]["allowed_authority"].remove("shadow_emit"),         # allowed removal narrows
+    lambda c: c["missions"]["m_orch"]["forbidden_authority"].append("extra_forbidden"),   # forbidden add narrows
+    lambda c: c["missions"]["m_orch"].__setitem__("human_boundary_required", True),       # false->true narrows
+    lambda c: c["missions"]["m_orch"].__setitem__("transition_policy", "human_required"),  # preauth->human narrows
+    lambda c: c["missions"]["m_orch"]["change_policy"]["allowed_path_prefixes"].remove("tests/test_northstar_"),
+    lambda c: c["missions"]["m_orch"]["change_policy"]["forbidden_path_prefixes"].append(".github/"),
+    lambda c: c["missions"]["m_orch"]["change_policy"]["required_test_groups"].append("workflow_conformance"),
+    lambda c: c["missions"]["m_orch"]["change_policy"]["semantic_guards"].append("extra_guard"),
+    lambda c: c["auto_dispatch_allowed_risk_classes"].remove("E3"),                        # auto-risk removal narrows
+    lambda c: c["human_required_risk_classes"].append("E5"),                               # human-risk add narrows
+])
+def test_registry_narrowing_allows_identical_or_narrower(mutate):
+    assert _narrow(mutate) == []
+
+
+def test_registry_narrowing_closes_p1_enabled_base_enabled_candidate_widening():
+    # THE P1: after activation (base + candidate both enabled, mode unchanged so the
+    # base-relative check passes), a candidate that WIDENS authority is still rejected.
+    import copy
+    base = _base_reg()
+    base["controller"].update(mode="enabled", enabled_by="pesantezq", enabled_at="2026-10-15T00:00:00Z")
+    cand = copy.deepcopy(base)
+    cand["missions"]["m_orch"]["auto_dispatch"] = True   # widen while mode stays enabled==enabled
+    out = gate.check_registry_authority_narrowing(base, cand)
+    assert any("auto_dispatch" in x and "widen" in x for x in out), out
+    assert not any("controller.mode" in x for x in out)   # mode identical -> no mode violation
+    assert gate.check_registry_authority_narrowing(base, copy.deepcopy(base)) == []   # identical enabled -> clean
+
+
+def test_registry_narrowing_rejects_unknown_new_field():
+    assert any("unknown authority-bearing field" in x for x in _narrow(
+        lambda c: c["missions"]["m_orch"].__setitem__("secret_backdoor", True)))
+    assert any("unknown authority-bearing field" in x for x in _narrow(
+        lambda c: c.__setitem__("new_toplevel_power", "x")))
+
+
+def test_registry_narrowing_rejects_int_masquerading_as_bool():
+    # YAML 1/0 must NOT masquerade as true/false: the guard requires real booleans,
+    # because downstream dispatch code checks `is True`. (Codex P2 regression.)
+    assert any("non-boolean" in x for x in _narrow(
+        lambda c: c["missions"]["m_frozen"].__setitem__("human_boundary_required", 1)))   # true -> 1 bypass
+    assert any("non-boolean" in x for x in _narrow(
+        lambda c: c["missions"]["m_orch"].__setitem__("auto_dispatch", 1)))                # false -> 1 bypass
+    # exact-equality bool fields are typed too: restore_paused_authorization true -> 1
+    assert any("restore_paused_authorization" in x for x in _narrow(
+        lambda c: c["missions"]["m_orch"]["on_success"].__setitem__("restore_paused_authorization", 1)))
+    # a real boolean widening is still caught, and the identical registry stays clean
+    assert any("auto_dispatch" in x and "widen" in x for x in _narrow(
+        lambda c: c["missions"]["m_orch"].__setitem__("auto_dispatch", True)))
+    assert _narrow(lambda c: None) == []
+
+
+def test_real_base_registry_narrowing_rejects_widening():
+    import copy
+    base = asm._base_registry()
+    assert isinstance(base, dict) and (base.get("controller") or {}).get("mode") == "shadow"
+    assert gate.check_registry_authority_narrowing(base, copy.deepcopy(base)) == []
+    cand = copy.deepcopy(base)
+    cand["missions"]["northstar_continuous_mission_orchestration_foundation"]["auto_dispatch"] = True
+    out = gate.check_registry_authority_narrowing(base, cand)
+    assert any("auto_dispatch" in x and "widen" in x for x in out), out
