@@ -131,8 +131,10 @@ control_plane`. **The candidate's controller code never evaluates its own PR** â
 pr-controller checks out base `main` and runs `main`'s gate/assembler against the
 candidate's fetched files. `check_control_plane_conformance` deterministically rejects
 a control-plane candidate that weakens a constitutional invariant (adds
-`pull_request_target`, uses a non-SHA-pinned action, ships the registry in a non-shadow
-mode, grants write-all, etc.). After merge + exact-SHA post-merge certification,
+`pull_request_target`, uses a non-SHA-pinned action, ships the registry in a controller
+mode that DIFFERS from the trusted base-main mode (base-relative: a candidate can never
+change the rollout mode -- shadow->enabled self-enable and enabled->shadow self-disable both
+fail; only an operator bootstrap changes it), grants write-all, etc.). After merge + exact-SHA post-merge certification,
 controller N+1 becomes the durable evaluator for subsequent PRs. No human, no Codex.
 
 ### Codex (advisory only)
@@ -217,7 +219,10 @@ polls, or waits on Codex):
   `MISSION = <id>` contract line or a `mission:<id>` label), never copied from
   protected state, so `protected_mission_authorizes_pr` is a real comparison;
 - authority is RECONCILED across all protected sources (project_state, phase_status,
-  ew0a_runtime) and must match roadmap_guard, else fail-closed;
+  ew0a_runtime) and must match roadmap_guard, else fail-closed (the assembler puts the
+  repo root on sys.path so the guard import works when the gate runs it as a standalone
+  script, and emits secret-free `protected.reconciliation` diagnostics naming the failing
+  source instead of a bare None);
 - the changed-file set is fully PAGINATED and run through the DEFAULT-DENY envelope;
 - the mission's change class + envelope come ONLY from the protected base-main
   registry (the candidate cannot widen its own envelope);

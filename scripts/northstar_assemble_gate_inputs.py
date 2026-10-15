@@ -120,22 +120,75 @@ def _load_sibling(mod_name: str):
     return m
 
 
-def _reconciled_authoritative() -> str | None:
+def _authority_diagnostics() -> dict[str, Any]:
+    """Deterministic, secret-free authority-reconciliation diagnostics, so a gate run
+    can see WHICH protected source or guard check produced a fail-closed None. Never
+    trusts a single source: the cross-source reconciliation AND the roadmap guard must
+    independently agree."""
+    d: dict[str, Any] = {"reconciled": None, "guard": None, "guard_authoritative": None,
+                         "guard_error": None, "agree": False, "reason": None}
     try:
         import yaml
         ps = yaml.safe_load((REPO_ROOT / ".agent/project_state.yaml").read_text(encoding="utf-8"))
         ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
         ew = json.loads((REPO_ROOT / "config/ew0a_runtime.json").read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    reconciled = reconcile_authority(ps, ph, ew)
+    except Exception as exc:
+        d["reason"] = f"protected_state_unreadable:{type(exc).__name__}"
+        return d
+    d["reconciled"] = reconcile_authority(ps, ph, ew)
+    # The roadmap-guard package lives at the repo ROOT. Ensure the root is importable
+    # whether this module runs as a standalone script (sys.path[0] == scripts/, so a
+    # top-level `portfolio_automation` import would otherwise fail with ModuleNotFound)
+    # or under pytest (root already on the path). This does NOT make the check
+    # permissive -- both independent sources must still agree below.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
     try:
         from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
         auth = RoadmapAuthorization.read(REPO_ROOT)
-        guard = auth.authorized_mission_id if auth.authoritative else None
+        d["guard_authoritative"] = bool(getattr(auth, "authoritative", False))
+        d["guard"] = auth.authorized_mission_id if auth.authoritative else None
+    except Exception as exc:
+        d["guard_error"] = type(exc).__name__
+    rec, guard = d["reconciled"], d["guard"]
+    if not rec:
+        d["reason"] = "protected_sources_disagree_or_incomplete"
+    elif d["guard_error"]:
+        d["reason"] = f"roadmap_guard_unavailable:{d['guard_error']}"
+    elif not d["guard_authoritative"]:
+        d["reason"] = "roadmap_guard_not_authoritative"
+    elif not guard:
+        d["reason"] = "roadmap_guard_missing_mission"
+    elif rec != guard:
+        d["reason"] = "reconciled_vs_guard_mismatch"
+    else:
+        d["agree"] = True
+    return d
+
+
+def _reconciled_authoritative() -> str | None:
+    """The single mission ALL protected sources agree on (project_state.current_step /
+    phase_status.engineer_runtime_state.mission_id / phases.northstar_phase_0c.step /
+    ew0a mission_id) AND the roadmap guard independently confirms authoritative, else
+    None (fail closed). Prints a secret-free reason on None for gate-log diagnosis."""
+    d = _authority_diagnostics()
+    if not d["agree"]:
+        print(f"[northstar] authority reconciliation -> None "
+              f"(reason={d['reason']}; reconciled={d['reconciled']!r} guard={d['guard']!r})",
+              file=sys.stderr)
+    return d["reconciled"] if d["agree"] else None
+
+
+def _base_controller_mode() -> str | None:
+    """Trusted controller rollout mode from the CHECKED-OUT protected base-main
+    registry (never candidate-controlled). None if unreadable/absent so control-plane
+    conformance fails closed."""
+    try:
+        import yaml
+        reg = yaml.safe_load((REPO_ROOT / ".agent/mission_registry.yaml").read_text(encoding="utf-8"))
+        return ((reg.get("controller") or {}).get("mode"))
     except Exception:
-        guard = None
-    return reconciled if (reconciled and guard and reconciled == guard) else None
+        return None
 
 
 def _mission_envelope(mission: str) -> dict:
@@ -273,7 +326,7 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
                 t = _head_file(repo, p, head_sha)
                 if t is not None:
                     cand_files[p] = t
-            conformance_violations = gate.check_control_plane_conformance(cand_files)
+            conformance_violations = gate.check_control_plane_conformance(cand_files, _base_controller_mode())
 
     missing_groups = _missing_test_groups(envelope.get("required_test_groups") or [])
 
@@ -289,7 +342,8 @@ def assemble(repo: str, pr_number: int, mode: str) -> dict:
                "base_ref": base_ref, "head_sha": head_sha,
                "mergeable": pr.get("mergeable") is True},
         "ci": ci,
-        "protected": {"current_mission": authoritative, "main_sha": protected_main},
+        "protected": {"current_mission": authoritative, "main_sha": protected_main,
+                      "reconciliation": _authority_diagnostics()},
         "candidate": {
             "authorized_mission": candidate_mission,
             "change_class": change_class,

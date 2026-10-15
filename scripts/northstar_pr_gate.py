@@ -102,7 +102,7 @@ def _yaml_on(text: str):
         return None
 
 
-def check_control_plane_conformance(files: dict[str, str]) -> list[str]:
+def check_control_plane_conformance(files: dict[str, str], base_controller_mode: str | None) -> list[str]:
     """Deterministic constitutional checks on a control-plane candidate's own files.
     `files`: {path: text} for the candidate's workflows + mission registry (fetched
     at the PR head). Returns violations; empty == conformant."""
@@ -121,15 +121,31 @@ def check_control_plane_conformance(files: dict[str, str]) -> list[str]:
                     v.append(f"{path}: unpinned action {u}")
             if re.search(r"permissions:\s*write-all", text):
                 v.append(f"{path}: permissions write-all")
+    # Base-relative controller-mode conformance. A candidate may NEVER change the
+    # controller rollout mode: its mode must EQUAL the trusted base-main mode, which
+    # the IO layer reads from the CHECKED-OUT protected base-main registry (never from
+    # candidate-controlled data). shadow->shadow and enabled->enabled pass; shadow->
+    # enabled (self-enable) and enabled->shadow (self-disable) both fail. Any missing/
+    # unknown value on either side fails closed. Only an operator bootstrap changes mode.
+    valid_modes = ("shadow", "enabled")
+    if base_controller_mode not in valid_modes:
+        v.append(f"base-main controller.mode missing/unknown: {base_controller_mode!r} (fail closed)")
     reg = files.get(".agent/mission_registry.yaml")
-    if reg is not None:
+    if reg is None:
+        v.append("candidate mission_registry.yaml missing at head (fail closed)")
+    else:
         try:
             import yaml
-            mode = ((yaml.safe_load(reg).get("controller") or {}).get("mode"))
-            if mode != "shadow":
-                v.append("mission_registry controller.mode != shadow (candidate cannot self-enable)")
+            cand_mode = ((yaml.safe_load(reg).get("controller") or {}).get("mode"))
         except Exception:
             v.append("mission_registry unparseable")
+        else:
+            if cand_mode not in valid_modes:
+                v.append(f"mission_registry controller.mode missing/unknown: {cand_mode!r} (fail closed)")
+            elif base_controller_mode in valid_modes and cand_mode != base_controller_mode:
+                v.append(
+                    f"mission_registry controller.mode {cand_mode!r} != base-main "
+                    f"{base_controller_mode!r} (candidate cannot change controller rollout mode)")
     return v
 
 

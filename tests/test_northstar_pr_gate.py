@@ -235,24 +235,71 @@ def test_empty_envelope_denies_everything():
 
 # ----------------------- check_control_plane_conformance -------------------- #
 def test_conformance_flags_pull_request_target_and_unpinned():
-    files = {".github/workflows/x.yml": "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n"}
-    out = gate.check_control_plane_conformance(files)
+    files = {".github/workflows/x.yml": "on:\n  pull_request_target:\n    types: [opened]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n",
+             ".agent/mission_registry.yaml": "controller:\n  mode: shadow\n"}
+    out = gate.check_control_plane_conformance(files, "shadow")
     assert any("pull_request_target" in v for v in out)
     assert any("unpinned action" in v for v in out)
 
 
-def test_conformance_flags_registry_not_shadow():
-    files = {".agent/mission_registry.yaml": "controller:\n  mode: enabled\n"}
-    out = gate.check_control_plane_conformance(files)
-    assert any("controller.mode" in v for v in out)
+def _reg(mode: str) -> dict:
+    return {".agent/mission_registry.yaml": f"controller:\n  mode: {mode}\n"}
 
 
-def test_conformance_clean_when_pinned_and_shadow():
+def test_conformance_mode_shadow_to_shadow_allowed():
+    assert gate.check_control_plane_conformance(_reg("shadow"), "shadow") == []
+
+
+def test_conformance_mode_shadow_to_enabled_rejected():
+    out = gate.check_control_plane_conformance(_reg("enabled"), "shadow")
+    assert any("cannot change controller rollout mode" in v for v in out)
+
+
+def test_conformance_mode_enabled_to_enabled_allowed():
+    assert gate.check_control_plane_conformance(_reg("enabled"), "enabled") == []
+
+
+def test_conformance_mode_enabled_to_shadow_rejected():
+    out = gate.check_control_plane_conformance(_reg("shadow"), "enabled")
+    assert any("cannot change controller rollout mode" in v for v in out)
+
+
+def test_conformance_missing_base_mode_rejected():
+    out = gate.check_control_plane_conformance(_reg("shadow"), None)
+    assert any("base-main controller.mode missing/unknown" in v for v in out)
+
+
+def test_conformance_unknown_base_mode_rejected():
+    out = gate.check_control_plane_conformance(_reg("shadow"), "banana")
+    assert any("base-main controller.mode missing/unknown" in v for v in out)
+
+
+def test_conformance_missing_candidate_registry_rejected():
+    out = gate.check_control_plane_conformance({}, "shadow")
+    assert any("candidate mission_registry.yaml missing" in v for v in out)
+
+
+def test_conformance_unparseable_candidate_registry_rejected():
+    out = gate.check_control_plane_conformance(
+        {".agent/mission_registry.yaml": "controller:\n  mode: [a, b"}, "shadow")
+    assert any("unparseable" in v for v in out)
+
+
+def test_conformance_candidate_mode_absent_rejected():
+    out = gate.check_control_plane_conformance({".agent/mission_registry.yaml": "other: 1\n"}, "shadow")
+    assert any("controller.mode missing/unknown" in v for v in out)
+
+
+def test_conformance_clean_when_pinned_and_mode_matches_base():
     files = {
         ".github/workflows/x.yml": "on:\n  pull_request:\n    branches: [main]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n",
         ".agent/mission_registry.yaml": "controller:\n  mode: shadow\n",
     }
-    assert gate.check_control_plane_conformance(files) == []
+    assert gate.check_control_plane_conformance(files, "shadow") == []
+    # Post-activation rotation: base enabled + candidate enabled is also clean.
+    files_enabled = dict(files)
+    files_enabled[".agent/mission_registry.yaml"] = "controller:\n  mode: enabled\n"
+    assert gate.check_control_plane_conformance(files_enabled, "enabled") == []
 
 
 # ----------------------------- reconcile / assess --------------------------- #
@@ -281,3 +328,51 @@ def test_assess_candidate_detects_auto_flag_and_controller_edit():
     out = gate.assess_candidate(base, head)
     assert "auto_merge" in out["forbidden_authority_introduced"]
     assert "scripts/northstar_pr_gate.py" in out["protected_path_violations"]
+
+
+# ------------------- real protected-state authority reconciliation ---------- #
+def test_real_protected_state_reconciles_to_orchestration_mission():
+    # Real-file proof: all protected sources + the roadmap guard agree, so the gate's
+    # protected.current_mission resolves (NOT None) to the orchestration mission.
+    import yaml
+    import json as _json
+    ps = yaml.safe_load((REPO_ROOT / ".agent/project_state.yaml").read_text(encoding="utf-8"))
+    ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
+    ew = _json.loads((REPO_ROOT / "config/ew0a_runtime.json").read_text(encoding="utf-8"))
+    assert asm.reconcile_authority(ps, ph, ew) == MISSION
+    from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
+    auth = RoadmapAuthorization.read(REPO_ROOT)
+    assert auth.authoritative is True
+    assert auth.authorized_mission_id == MISSION
+    assert asm._reconciled_authoritative() == MISSION
+    diag = asm._authority_diagnostics()
+    assert diag["agree"] is True and diag["reason"] is None
+    assert diag["reconciled"] == MISSION and diag["guard"] == MISSION
+
+
+def test_reconciled_authoritative_resolves_as_standalone_script(tmp_path):
+    # Regression for the live PR#70 gate None: as a standalone script the repo root is
+    # NOT on sys.path, so a top-level `portfolio_automation` import would fail and the
+    # reconciler would (silently) return None. The fix self-heals the path. Runs the
+    # assembler from a file with the repo root OFF sys.path[0] to reproduce the gate env.
+    import subprocess
+    import sys as _sys
+    import textwrap
+    code = textwrap.dedent(
+        """
+        import importlib.util
+        from pathlib import Path
+        root = Path(__ROOT__)
+        spec = importlib.util.spec_from_file_location(
+            "asm_standalone", root / "scripts" / "northstar_assemble_gate_inputs.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        print(m._reconciled_authoritative() or "NONE")
+        """
+    ).replace("__ROOT__", repr(str(REPO_ROOT)))
+    script = tmp_path / "standalone_gate.py"
+    script.write_text(code, encoding="utf-8")
+    out = subprocess.run([_sys.executable, str(script)], cwd=str(REPO_ROOT),
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == MISSION, (out.stdout, out.stderr)
