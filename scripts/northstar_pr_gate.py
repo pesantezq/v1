@@ -149,6 +149,189 @@ def check_control_plane_conformance(files: dict[str, str], base_controller_mode:
     return v
 
 
+# --------------------------------------------------------------------------- #
+# Registry authority NARROWING (control-plane). A candidate mission registry may
+# be IDENTICAL or strictly NARROWER than trusted base main, but may NEVER widen
+# authority autonomously. Evaluated by base-main gate code against the candidate
+# registry; candidate TESTS are never an authority source. Fail closed on any
+# unparseable / unknown / ambiguous input or unknown authority-bearing field.
+# --------------------------------------------------------------------------- #
+_REG_KNOWN_TOPLEVEL = frozenset({
+    "schema_version", "controller",
+    "auto_dispatch_allowed_risk_classes", "human_required_risk_classes", "missions",
+})
+_REG_KNOWN_CONTROLLER = frozenset({"mode", "level", "enabled_by", "enabled_at"})
+_REG_KNOWN_MISSION = frozenset({
+    "executor", "risk_class", "prompt_source", "auto_dispatch", "completion_gate",
+    "allowed_authority", "forbidden_authority", "transition_policy", "on_success",
+    "human_boundary_required", "change_policy",
+})
+_REG_KNOWN_ON_SUCCESS = frozenset({"next_mission", "restore_paused_authorization", "restore_source"})
+_REG_KNOWN_CHANGE_POLICY = frozenset({
+    "class", "allowed_path_prefixes", "allowed_paths",
+    "forbidden_path_prefixes", "required_test_groups", "semantic_guards",
+})
+_REG_TRANSITION_POLICIES = frozenset({"preauthorized_auto", "human_required"})
+_REG_MISSING = object()
+
+
+def _reg_slot(d, key):
+    """Exact-equality slot that distinguishes ABSENT from an explicit null."""
+    return (key in d, d.get(key)) if isinstance(d, dict) else (False, _REG_MISSING)
+
+
+def _reg_typed_eq(a, b) -> bool:
+    """Equality that keeps bool distinct from int: Python treats 1 == True, so a
+    YAML `1`/`0` could otherwise masquerade as `true`/`false` and slip past an
+    authority check while downstream code (which uses `is True`) reads it the other
+    way. bool is only equal to bool."""
+    if isinstance(a, bool) != isinstance(b, bool):
+        return False
+    return a == b
+
+
+def _reg_slot_ne(base, cand, key) -> bool:
+    """True iff the key's slot differs (present/absent, or value by typed equality)."""
+    pb, vb = (key in base, base.get(key)) if isinstance(base, dict) else (False, _REG_MISSING)
+    pc, vc = (key in cand, cand.get(key)) if isinstance(cand, dict) else (False, _REG_MISSING)
+    return pb != pc or not _reg_typed_eq(vb, vc)
+
+
+def _reg_coerce_set(value):
+    """(set, ok): None -> empty; list -> set; anything else -> not ok (fail closed)."""
+    if value is None:
+        return set(), True
+    if isinstance(value, list):
+        try:
+            return set(value), True
+        except TypeError:
+            return set(), False
+    return set(), False
+
+
+def _reg_subset(label, base_list, cand_list):
+    """Candidate must be a SUBSET of base (additions widen -> FAIL)."""
+    bs, okb = _reg_coerce_set(base_list); cs, okc = _reg_coerce_set(cand_list)
+    if not okb or not okc:
+        return [f"{label}: non-list value (fail closed)"]
+    added = cs - bs
+    return [f"{label}: added {sorted(map(str, added))} (authority widening; candidate must be a subset of base)"] if added else []
+
+
+def _reg_superset(label, base_list, cand_list):
+    """Candidate must be a SUPERSET of base (removals widen -> FAIL)."""
+    bs, okb = _reg_coerce_set(base_list); cs, okc = _reg_coerce_set(cand_list)
+    if not okb or not okc:
+        return [f"{label}: non-list value (fail closed)"]
+    removed = bs - cs
+    return [f"{label}: removed {sorted(map(str, removed))} (authority widening; candidate must be a superset of base)"] if removed else []
+
+
+def _reg_bool_narrow(label, base_val, cand_val, forbidden):
+    """Booleans only; `forbidden` is the widening transition, e.g. (False, True)."""
+    if not isinstance(base_val, bool) or not isinstance(cand_val, bool):
+        return [f"{label}: non-boolean value base={base_val!r} cand={cand_val!r} (fail closed)"]
+    if (base_val, cand_val) == forbidden:
+        return [f"{label}: {base_val}->{cand_val} widens authority (must not)"]
+    return []
+
+
+def _reg_unknown_keys(label, base, cand, known):
+    """Any key outside `known` must be exactly equal, so a NEW authority-bearing
+    field (or a change to an unrecognized one) fails closed."""
+    out = []
+    for k in sorted((set(base) | set(cand)) - set(known)):
+        if _reg_slot_ne(base, cand, k):
+            out.append(f"{label}.{k}: unknown authority-bearing field added/changed (fail closed)")
+    return out
+
+
+def _reg_change_policy(pfx, base, cand):
+    if not isinstance(base, dict) or not isinstance(cand, dict):
+        return [f"{pfx}.change_policy: not a mapping (fail closed)"]
+    label = f"{pfx}.change_policy"; v = []
+    if _reg_slot_ne(base, cand, "class"):
+        v.append(f"{label}.class changed {base.get('class')!r}->{cand.get('class')!r} (must be exactly equal)")
+    v += _reg_subset(f"{label}.allowed_path_prefixes", base.get("allowed_path_prefixes"), cand.get("allowed_path_prefixes"))
+    v += _reg_subset(f"{label}.allowed_paths", base.get("allowed_paths"), cand.get("allowed_paths"))
+    v += _reg_superset(f"{label}.forbidden_path_prefixes", base.get("forbidden_path_prefixes"), cand.get("forbidden_path_prefixes"))
+    v += _reg_superset(f"{label}.required_test_groups", base.get("required_test_groups"), cand.get("required_test_groups"))
+    v += _reg_superset(f"{label}.semantic_guards", base.get("semantic_guards"), cand.get("semantic_guards"))
+    v += _reg_unknown_keys(label, base, cand, _REG_KNOWN_CHANGE_POLICY)
+    return v
+
+
+def _reg_mission_contract(mid, base, cand):
+    pfx = f"missions.{mid}"
+    if not isinstance(base, dict) or not isinstance(cand, dict):
+        return [f"{pfx}: not a mapping (fail closed)"]
+    v = []
+    for key in ("executor", "risk_class", "prompt_source", "completion_gate"):
+        if _reg_slot_ne(base, cand, key):
+            v.append(f"{pfx}.{key} changed {base.get(key)!r}->{cand.get(key)!r} (must be exactly equal)")
+    v += _reg_bool_narrow(f"{pfx}.auto_dispatch", base.get("auto_dispatch"), cand.get("auto_dispatch"), (False, True))
+    v += _reg_bool_narrow(f"{pfx}.human_boundary_required", base.get("human_boundary_required"), cand.get("human_boundary_required"), (True, False))
+    v += _reg_subset(f"{pfx}.allowed_authority", base.get("allowed_authority"), cand.get("allowed_authority"))
+    v += _reg_superset(f"{pfx}.forbidden_authority", base.get("forbidden_authority"), cand.get("forbidden_authority"))
+    bt, ct = base.get("transition_policy"), cand.get("transition_policy")
+    if bt not in _REG_TRANSITION_POLICIES or ct not in _REG_TRANSITION_POLICIES:
+        v.append(f"{pfx}.transition_policy: unknown value base={bt!r} cand={ct!r} (fail closed)")
+    elif bt == "human_required" and ct == "preauthorized_auto":
+        v.append(f"{pfx}.transition_policy: human_required->preauthorized_auto widens autonomy (must not)")
+    bos, cos = base.get("on_success") or {}, cand.get("on_success") or {}
+    if not isinstance(bos, dict) or not isinstance(cos, dict):
+        v.append(f"{pfx}.on_success: not a mapping (fail closed)")
+    else:
+        for key in ("next_mission", "restore_paused_authorization", "restore_source"):
+            if _reg_slot_ne(bos, cos, key):
+                v.append(f"{pfx}.on_success.{key} changed (must be exactly equal, incl. absent/null)")
+        v += _reg_unknown_keys(f"{pfx}.on_success", bos, cos, _REG_KNOWN_ON_SUCCESS)
+    v += _reg_change_policy(pfx, base.get("change_policy") or {}, cand.get("change_policy") or {})
+    v += _reg_unknown_keys(pfx, base, cand, _REG_KNOWN_MISSION)
+    return v
+
+
+def check_registry_authority_narrowing(base, candidate):
+    """Pure: violations iff `candidate` mission registry WIDENS authority vs trusted
+    `base`. [] == identical-or-narrower. Fail closed on unparseable/unknown input.
+    `base` and `candidate` are parsed registry dicts (None == parse failure). The
+    base registry MUST come from trusted base main; candidate tests are never an
+    authority source. controller.mode exact-equality here complements (does not
+    replace) the base-relative check in check_control_plane_conformance."""
+    if not isinstance(base, dict):
+        return ["registry: trusted base-main registry unparseable/missing (fail closed)"]
+    if not isinstance(candidate, dict):
+        return ["registry: candidate registry unparseable/missing (fail closed)"]
+    v = []
+    if _reg_slot_ne(base, candidate, "schema_version"):
+        v.append(f"registry.schema_version changed {base.get('schema_version')!r}->{candidate.get('schema_version')!r} (must be exactly equal)")
+    bc, cc = base.get("controller") or {}, candidate.get("controller") or {}
+    if not isinstance(bc, dict) or not isinstance(cc, dict):
+        v.append("registry.controller: not a mapping (fail closed)")
+    else:
+        for key in ("mode", "level", "enabled_by", "enabled_at"):
+            if _reg_slot_ne(bc, cc, key):
+                v.append(f"registry.controller.{key} changed {bc.get(key)!r}->{cc.get(key)!r} (must be exactly equal for autonomous control-plane PRs)")
+        v += _reg_unknown_keys("registry.controller", bc, cc, _REG_KNOWN_CONTROLLER)
+    v += _reg_subset("registry.auto_dispatch_allowed_risk_classes",
+                     base.get("auto_dispatch_allowed_risk_classes"), candidate.get("auto_dispatch_allowed_risk_classes"))
+    v += _reg_superset("registry.human_required_risk_classes",
+                       base.get("human_required_risk_classes"), candidate.get("human_required_risk_classes"))
+    bm, cm = base.get("missions") or {}, candidate.get("missions") or {}
+    if not isinstance(bm, dict) or not isinstance(cm, dict):
+        v.append("registry.missions: not a mapping (fail closed)")
+    else:
+        new, gone = sorted(set(cm) - set(bm)), sorted(set(bm) - set(cm))
+        if new:
+            v.append(f"registry.missions added {new} (new mission id; authority widening)")
+        if gone:
+            v.append(f"registry.missions removed {gone} (mission-id set must remain exactly equal; fail closed)")
+        for mid in sorted(set(bm) & set(cm)):
+            v += _reg_mission_contract(mid, bm[mid], cm[mid])
+    v += _reg_unknown_keys("registry", base, candidate, _REG_KNOWN_TOPLEVEL)
+    return v
+
+
 def evaluate_merge_gate(inputs: dict[str, Any]) -> dict[str, Any]:
     """Deterministic NORTHSTAR assurance gate. Fail closed. No AI/human input."""
     mode = inputs.get("mode", "shadow")
