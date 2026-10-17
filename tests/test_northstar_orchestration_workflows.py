@@ -209,9 +209,27 @@ def test_effect_jobs_checkout_trusted_main():
     assert "ref: main" in claude_text
 
 
-def test_registry_controller_mode_is_shadow():
+def test_registry_controller_rollout_state_contract():
+    # Rollout-state contract: the real registry is either SHADOW or an explicit
+    # operator-ENABLED bootstrap. It can never self-enable (that is enforced
+    # separately by control-plane conformance in scripts/northstar_pr_gate.py).
     reg = yaml.safe_load((REPO_ROOT / ".agent" / "mission_registry.yaml").read_text(encoding="utf-8"))
-    assert reg["controller"]["mode"] == "shadow"
+    controller = reg["controller"]
+    mode = controller["mode"]
+    assert mode in {"shadow", "enabled"}
+    if mode == "shadow":
+        assert controller["enabled_by"] is None
+        assert controller["enabled_at"] is None
+    else:  # enabled: operator bootstrap must be explicitly attributed + timestamped
+        enabled_by = controller["enabled_by"]
+        assert isinstance(enabled_by, str) and enabled_by.strip()
+        assert enabled_by == "pesantezq"
+        enabled_at = controller["enabled_at"]
+        assert isinstance(enabled_at, str) and enabled_at.strip()
+        from datetime import datetime
+        datetime.fromisoformat(enabled_at.replace("Z", "+00:00"))  # parseable ISO-8601
+    # Enabling rollout must never flip the bootstrap mission to self-dispatch.
+    assert reg["missions"]["northstar_continuous_mission_orchestration_foundation"]["auto_dispatch"] is False
 
 
 # ------------------- round-2 hardening (re-triggers / fail-closed) ----------- #

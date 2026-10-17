@@ -233,7 +233,22 @@ def _yaml():
 def test_real_mission_registry_parses_and_is_shadow():
     yaml = _yaml()
     reg = yaml.safe_load(REGISTRY_FILE.read_text(encoding="utf-8"))
-    assert reg["controller"]["mode"] == "shadow"  # bootstrap ships shadow; cannot self-enable
+    # Rollout-state contract (shadow OR explicit operator-enabled bootstrap).
+    # Self-enable is still blocked by control-plane conformance in the gate.
+    controller = reg["controller"]
+    mode = controller["mode"]
+    assert mode in {"shadow", "enabled"}
+    if mode == "shadow":
+        assert controller["enabled_by"] is None
+        assert controller["enabled_at"] is None
+    else:  # enabled
+        enabled_by = controller["enabled_by"]
+        assert isinstance(enabled_by, str) and enabled_by.strip()
+        assert enabled_by == "pesantezq"
+        enabled_at = controller["enabled_at"]
+        assert isinstance(enabled_at, str) and enabled_at.strip()
+        from datetime import datetime
+        datetime.fromisoformat(enabled_at.replace("Z", "+00:00"))  # parseable ISO-8601
     m = reg["missions"]
     assert m[ORCH]["transition_policy"] == "preauthorized_auto"
     assert m[ORCH]["on_success"]["next_mission"] == ADAPTER
