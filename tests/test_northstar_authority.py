@@ -60,6 +60,80 @@ FUTURE_PHASES = [
 NOT_IMPLEMENTED_STATUSES = {"not_started", "ready"}
 
 
+# --- governed ORCHESTRATION -> ADAPTER handoff: state-machine-aware helpers ---
+# The real protected state has EXACTLY two legitimate live missions across this
+# handoff: ORCHESTRATION (pre-transition) or ADAPTER (post). These helpers resolve
+# the live mission from real protected state and pin the exact operator-approved
+# adapter authorization, whether still PAUSED (pre) or PROMOTED to active (post).
+ORCHESTRATION_MISSION = AUTHORIZED_MISSION
+_HANDOFF_MISSIONS = {AUTHORIZED_MISSION, ADAPTER_MISSION}
+
+
+def _norm(s: str) -> str:
+    return " ".join(s.split())
+
+
+_EXPECTED_ADAPTER_SCOPE = _norm("""
+    Implement and certify the THIN VS-002 execution adapter and governed result-artifact
+    support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
+    (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
+    result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
+    artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
+    recomputable artifact digests + deterministic package_id (consumer.validate) plus
+    ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
+    package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
+    does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
+    computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
+    deployment, broker access, or trading/capital authority.
+""")
+_EXPECTED_ADAPTER_RESUME = _norm("""
+    Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
+    durable on main, and post-merge main CI is green; resumption must restore this exact
+    authorization rather than reconstructing or widening it.
+""")
+
+
+def _expected_live_mission() -> str:
+    """The single live dispatch mission resolved from REAL protected state — EXACTLY
+    ORCHESTRATION (pre-transition) or ADAPTER (post the governed handoff). Every
+    authoritative pointer must agree; fail closed on anything else."""
+    ps = _load(STATE_FILE)
+    ph = _load(PHASE_FILE)
+    rd = ph["stockbot_northstar_redesign"]
+    cur = ps["current_step"]
+    assert cur in _HANDOFF_MISSIONS, f"unexpected live mission {cur!r} (not ORCHESTRATION/ADAPTER)"
+    nos = (ps.get("next_official_step") or {}).get("primary")
+    rt = rd["engineer_runtime_state"]["mission_id"]
+    p0c_step = rd["phases"]["northstar_phase_0c"]["step"]
+    ba_mid = rd["phases"]["northstar_phase_0c"]["bounded_authorization"]["authorized_mission"]
+    ew = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())["mission_id"]
+    from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
+    guard = RoadmapAuthorization.read(REPO_ROOT).authorized_mission_id
+    assert nos == rt == p0c_step == ba_mid == ew == guard == cur, (
+        "authoritative pointers disagree: "
+        + repr(dict(cur=cur, nos=nos, rt=rt, p0c=p0c_step, ba=ba_mid, ew=ew, guard=guard)))
+    return cur
+
+
+def _assert_exact_adapter_authorization(obj: dict) -> None:
+    """The operator-approved VS-002 adapter authorization, semantic-exact — whether it
+    is still PAUSED (pre) or has been PROMOTED into the active bounded_authorization
+    (post). Pins the scope so no E4 / real-package / Phase 0D / C1 / production / broker /
+    capital authority can be introduced, and proves it is dispatchable-but-NOT-executed."""
+    assert obj["authorized_by"] == "operator"
+    assert obj["authorized_at"].isoformat() == "2026-10-02"
+    assert obj["authorized_mission"] == ADAPTER_MISSION
+    assert obj["status"] == "PAUSED_NOT_EXECUTED"
+    assert obj["not_yet_executed"] is True
+    assert _norm(obj["scope"]) == _EXPECTED_ADAPTER_SCOPE
+    assert _norm(obj["resume_condition"]) == _EXPECTED_ADAPTER_RESUME
+    # dispatchable (post) must NOT be read as executed, and no forbidden grants leak in.
+    forbidden = ("northstar_vs002_frozen_execution", "real-package access", "phase 0d",
+                 "c1", "production\n", "broker", "capital")
+    low = _norm(obj["scope"]).lower()
+    assert "does not authorize" in low  # the explicit exclusion clause is intact
+
+
 def _load(path: Path) -> dict:
     try:
         import yaml
@@ -469,7 +543,7 @@ def test_engineer_runtime_points_at_the_authorized_mission(phase):
     authorized mission — never a completed one (stale) and never an
     unauthorized future phase."""
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
-    assert rt["mission_id"] == AUTHORIZED_MISSION
+    assert rt["mission_id"] == _expected_live_mission()
     assert rt["c1"] == "DISABLED"
     assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
     assert rt["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
@@ -478,7 +552,7 @@ def test_engineer_runtime_points_at_the_authorized_mission(phase):
 def test_runtime_config_matches_the_authorized_mission_and_grants_nothing():
     """Activation sets WHICH mission may be dispatched. It grants no authority."""
     runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
-    assert runtime["mission_id"] == AUTHORIZED_MISSION
+    assert runtime["mission_id"] == _expected_live_mission()
     assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
     assert runtime["engineering_mode"] == "SUPERVISED_AUTONOMOUS"
     assert runtime["max_concurrent_tasks"] == 1
@@ -501,7 +575,7 @@ def test_runtime_still_refuses_out_of_mission_tasks(durable_ctx):
     # Resolved from the REAL roadmap record, so this exercises the production
     # guard rather than an in-memory stand-in.
     roadmap = RoadmapAuthorization.read(REPO_ROOT)
-    assert policy is not None and policy.mission_id == AUTHORIZED_MISSION
+    assert policy is not None and policy.mission_id == _expected_live_mission()
 
     def _must_not_run(*_a, **_k):
         raise AssertionError("an out-of-mission task must never be dispatched")
@@ -539,8 +613,9 @@ def test_phase_0c_authorization_is_preserved_as_history(phase):
     durable 0C work look unauthorized in hindsight."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
     assert p0c["status"] == "active"
-    # The lifetime identity moved to original_step; it did not vanish.
-    assert p0c["step"] == AUTHORIZED_MISSION
+    # The lifetime identity moved to original_step; it did not vanish. The live step is
+    # the current bounded mission (ORCHESTRATION pre-transition, ADAPTER post).
+    assert p0c["step"] == _expected_live_mission()
     assert p0c["original_step"] == AUTHORIZED_0C_MISSION
     auth = p0c["authorization"]
     assert auth["authorized_by"] == "operator"
@@ -549,38 +624,25 @@ def test_phase_0c_authorization_is_preserved_as_history(phase):
 
 
 def test_paused_adapter_authorization_is_preserved_exactly(phase):
-    """The orchestration insertion may pause the adapter but may not erase or widen
-    the operator-approved adapter scope that must be restored after orchestration."""
+    """The governed handoff may PAUSE the adapter (pre-transition) and later PROMOTE the
+    EXACT paused object to the active bounded_authorization (post-transition), but may
+    never erase or widen the operator-approved adapter scope. Both states are validated;
+    the exact authorization is identical in each."""
     p0c = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
-    paused = p0c["bounded_authorization"]["paused_bounded_authorization"]
-    assert paused["authorized_by"] == "operator"
-    assert paused["authorized_at"].isoformat() == "2026-10-02"
-    assert paused["authorized_mission"] == ADAPTER_MISSION
-    assert paused["status"] == "PAUSED_NOT_EXECUTED"
-    assert paused["not_yet_executed"] is True
-    expected_scope = """
-        Implement and certify the THIN VS-002 execution adapter and governed result-artifact
-        support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
-        (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
-        result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
-        artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
-        recomputable artifact digests + deterministic package_id (consumer.validate) plus
-        ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
-        package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
-        does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
-        computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
-        deployment, broker access, or trading/capital authority.
-    """
-    normalize = lambda s: " ".join(s.split())
-    assert normalize(paused["scope"]) == normalize(expected_scope)
-    assert normalize(paused["resume_condition"]) == normalize(
-        """
-        Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
-        durable on main, and post-merge main CI is green; resumption must restore this exact
-        authorization rather than reconstructing or widening it.
-        """
-    )
-    assert ADAPTER_MISSION in p0c["bounded_authorization"]["resume_after_completion"]
+    ba = p0c["bounded_authorization"]
+    live = _expected_live_mission()
+    if live == ORCHESTRATION_MISSION:
+        # PRE-transition: the adapter authorization is held, exact, under paused_*.
+        assert "paused_bounded_authorization" in ba
+        _assert_exact_adapter_authorization(ba["paused_bounded_authorization"])
+        assert ADAPTER_MISSION in ba["resume_after_completion"]
+        assert ba["authorized_mission"] == ORCHESTRATION_MISSION  # active is still orchestration
+    else:
+        # POST-transition: the SAME exact authorization is now the ACTIVE bounded
+        # authorization; the paused slot has been consumed (absent). Dispatchable, NOT executed.
+        assert "paused_bounded_authorization" not in ba
+        assert ba["authorized_mission"] == ADAPTER_MISSION
+        _assert_exact_adapter_authorization(ba)
 
 
 def test_phase_0c_depends_on_a_completed_0b(phase):
@@ -755,12 +817,13 @@ def test_later_phases_remain_not_started(phase):
 
 
 def test_authority_and_runtime_unchanged_by_reconciliation(phase):
+    live = _expected_live_mission()
     rt = phase["stockbot_northstar_redesign"]["engineer_runtime_state"]
     assert rt["authority"] == "A1_ASSISTED_ENGINEERING"
     assert rt["c1"] == "DISABLED"
-    assert rt["mission_id"] == AUTHORIZED_MISSION
+    assert rt["mission_id"] == live
     runtime = json.loads((REPO_ROOT / "config" / "ew0a_runtime.json").read_text())
-    assert runtime["mission_id"] == AUTHORIZED_MISSION
+    assert runtime["mission_id"] == live
     assert runtime["authority"] == "A1_ASSISTED_ENGINEERING"
     for denied in ("auto_merge", "auto_deploy", "auto_production_mutation",
                    "auto_authority_promotion", "auto_capital_action"):

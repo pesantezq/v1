@@ -29,6 +29,9 @@ HEAD = "h" * 40
 OLD = "o" * 40
 MAIN = "m" * 40
 MISSION = "northstar_continuous_mission_orchestration_foundation"
+ADAPTER_MISSION = "northstar_vs002_execution_adapter_foundation"
+# The live real-repo mission is EXACTLY one of these two across the governed handoff.
+HANDOFF_MISSIONS = {MISSION, ADAPTER_MISSION}
 
 
 def valid_inputs() -> dict:
@@ -332,22 +335,25 @@ def test_assess_candidate_detects_auto_flag_and_controller_edit():
 
 # ------------------- real protected-state authority reconciliation ---------- #
 def test_real_protected_state_reconciles_to_orchestration_mission():
-    # Real-file proof: all protected sources + the roadmap guard agree, so the gate's
-    # protected.current_mission resolves (NOT None) to the orchestration mission.
+    # Real-file proof of RECONCILIATION (not a permanent pin to orchestration): the live
+    # mission is EXACTLY orchestration (pre-transition) or the adapter (post the governed
+    # handoff), and every source + the guard must agree on that same expected value.
     import yaml
     import json as _json
     ps = yaml.safe_load((REPO_ROOT / ".agent/project_state.yaml").read_text(encoding="utf-8"))
     ph = yaml.safe_load((REPO_ROOT / ".agent/phase_status.yaml").read_text(encoding="utf-8"))
     ew = _json.loads((REPO_ROOT / "config/ew0a_runtime.json").read_text(encoding="utf-8"))
-    assert asm.reconcile_authority(ps, ph, ew) == MISSION
+    expected = ps["current_step"]
+    assert expected in HANDOFF_MISSIONS, f"unexpected live mission {expected!r}"
+    assert asm.reconcile_authority(ps, ph, ew) == expected
     from portfolio_automation.engineer_worker.roadmap_guard import RoadmapAuthorization
     auth = RoadmapAuthorization.read(REPO_ROOT)
     assert auth.authoritative is True
-    assert auth.authorized_mission_id == MISSION
-    assert asm._reconciled_authoritative() == MISSION
+    assert auth.authorized_mission_id == expected
+    assert asm._reconciled_authoritative() == expected
     diag = asm._authority_diagnostics()
     assert diag["agree"] is True and diag["reason"] is None
-    assert diag["reconciled"] == MISSION and diag["guard"] == MISSION
+    assert diag["reconciled"] == expected and diag["guard"] == expected
 
 
 def test_reconciled_authoritative_resolves_as_standalone_script(tmp_path):
@@ -375,7 +381,10 @@ def test_reconciled_authoritative_resolves_as_standalone_script(tmp_path):
     out = subprocess.run([_sys.executable, str(script)], cwd=str(REPO_ROOT),
                          capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
-    assert out.stdout.strip().splitlines()[-1] == MISSION, (out.stdout, out.stderr)
+    import yaml as _yaml
+    expected = _yaml.safe_load((REPO_ROOT / ".agent/project_state.yaml").read_text(encoding="utf-8"))["current_step"]
+    assert expected in HANDOFF_MISSIONS, f"unexpected live mission {expected!r}"
+    assert out.stdout.strip().splitlines()[-1] == expected, (out.stdout, out.stderr)
 
 
 # -------------------- registry authority-narrowing (P1) --------------------- #

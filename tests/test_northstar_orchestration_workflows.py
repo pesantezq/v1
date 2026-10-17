@@ -312,3 +312,23 @@ def test_github_tree_fully_protected():
 def test_forbidden_semantic_files_protected():
     for f in ("recommendations.py", "allocation_engine.py", "decision_engine.py"):
         assert gate._is_protected(f"portfolio_automation/{f}") or gate._is_protected(f)
+
+
+def test_generated_transition_pr_body_declares_completed_mission():
+    # Fix A regression: the orchestrator's governance-transition PR body must declare
+    # EXACTLY ONE "MISSION = " line, derived from the TRUSTED proposal's completed_mission
+    # (the outgoing mission that protected base-main authorizes) -- never next_mission --
+    # and be passed via --body-file. Without it the merge gate sees candidate_mission=None.
+    t = _text(ORCHESTRATOR)
+    assert "COMPLETED_MISSION=" in t
+    assert "['completed_mission']" in t                       # derived from the proposal
+    assert 'if [ -z "$COMPLETED_MISSION" ]' in t              # validated non-empty (fail closed)
+    assert "MISSION = %s" in t and "$COMPLETED_MISSION" in t  # the declaration line template
+    assert "--body-file" in t and "/tmp/governance_pr_body.md" in t
+    # Regression guard: must NOT revert to the old inline body that had no MISSION line.
+    assert '--body "Deterministic transition proposal' not in t
+    # The declaration must come from completed_mission, not next_mission. Isolate the
+    # body-construction region (after the commit, which legitimately names next_mission).
+    region = t[t.index("COMPLETED_MISSION="): t.index("opened governance PR")]
+    assert "next_mission" not in region
+    assert region.count("MISSION = %s") == 1                  # exactly one MISSION declaration
