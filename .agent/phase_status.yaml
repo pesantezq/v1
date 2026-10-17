@@ -55,7 +55,7 @@ stockbot_northstar_redesign:
                                              # durable; the supervisor is NOT approved by it.
       evidence: docs/G1_SUPERVISOR_MEASUREMENT.md, evals/g1/formal/
   engineer_runtime_state:
-    mission_id: northstar_continuous_mission_orchestration_foundation
+    mission_id: northstar_vs002_execution_adapter_foundation
                           # 2026-10-04 — repointed by explicit operator authorization to the
                           # cross-cutting continuous mission orchestration foundation. This is
                           # now the ONE dispatchable bounded mission. The previously-authorized
@@ -259,48 +259,30 @@ stockbot_northstar_redesign:
     northstar_phase_0c:
       name: "Point-in-Time EvidenceGateway & Research Store"
       status: active   # 2026-10-04 — Phase 0C REMAINS ACTIVE. Explicit operator authorization temporarily inserts northstar_continuous_mission_orchestration_foundation as the single dispatchable bounded mission ahead of the VS-002 execution adapter, solely to automate exact-head merge gating, post-merge certification, protected state transition handoff, and already-authorized Claude continuation. The adapter is PAUSED, not complete/cancelled, and resumes after this foundation is durable. Phase 0C exit gate remains UNSATISFIED; Research Store absent; 0D not started; C1 disabled.
-      step: northstar_continuous_mission_orchestration_foundation   # 2026-10-04: cross-cutting orchestration foundation inserted by explicit operator authorization. It grants no mission self-authorization and no real VS-002 execution authority. Resume northstar_vs002_execution_adapter_foundation after durable completion.
+      step: northstar_vs002_execution_adapter_foundation   # 2026-10-04: cross-cutting orchestration foundation inserted by explicit operator authorization. It grants no mission self-authorization and no real VS-002 execution authority. Resume northstar_vs002_execution_adapter_foundation after durable completion.
       original_step: northstar_0c_pit_evidence_gateway_research_store   # the phase's lifetime mission identity, preserved as history and NOT currently dispatchable
       bounded_authorization:
         authorized_by: operator
-        authorized_at: 2026-10-04
-        authorized_mission: northstar_continuous_mission_orchestration_foundation
+        authorized_at: 2026-10-02
+        authorized_mission: northstar_vs002_execution_adapter_foundation
+        status: PAUSED_NOT_EXECUTED
         scope: >-
-          Build and certify the repo-native continuous mission orchestration foundation that removes manual
-          waiting between an implementation PR, exact-head CI/review gates, merge, post-merge main CI,
-          protected state transition, and the next already-authorized Claude mission. GitHub owns waiting
-          and deterministic gate evaluation; Claude implements only after protected state authorizes the
-          mission. Add machine-readable mission registry/prompt contracts, merge/post-merge controllers,
-          deterministic transition proposal tooling, and shadow-to-enabled rollout tests. Preserve
-          roadmap_guard fail-closed semantics, exact-SHA review binding, no worker merge authority, no
-          self-authorization, and explicit human_required boundaries for E4/real-evidence/production/
-          capital/C1 transitions. This mission does NOT authorize real VS-002 package access or execution,
-          production deployment, broker access, capital/trading action, C1, Phase 0D, or mission self-authorization.
-        paused_mission: northstar_vs002_execution_adapter_foundation
-        resume_after_completion: northstar_vs002_execution_adapter_foundation
-        not_yet_executed: true   # orchestration foundation is not built yet; the VS-002 adapter remains paused
-        paused_bounded_authorization:
-          authorized_by: operator
-          authorized_at: 2026-10-02
-          authorized_mission: northstar_vs002_execution_adapter_foundation
-          status: PAUSED_NOT_EXECUTED
-          scope: >-
-            Implement and certify the THIN VS-002 execution adapter and governed result-artifact
-            support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
-            (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
-            result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
-            artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
-            recomputable artifact digests + deterministic package_id (consumer.validate) plus
-            ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
-            package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
-            does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
-            computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
-            deployment, broker access, or trading/capital authority.
-          resume_condition: >-
-            Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
-            durable on main, and post-merge main CI is green; resumption must restore this exact
-            authorization rather than reconstructing or widening it.
-          not_yet_executed: true
+          Implement and certify the THIN VS-002 execution adapter and governed result-artifact
+          support: resolve an EXPLICIT caller-supplied package path (no discovery) -> consumer.validate
+          (once) -> ValidatedSnapshot -> verify_evidence_binding against the frozen preregistration ->
+          result_runner.run -> canonical ExperimentResult -> governed immutable, collision-refused result
+          artifact. SYNTHETIC fixtures ONLY. Execution-time package integrity is established by
+          recomputable artifact digests + deterministic package_id (consumer.validate) plus
+          ValidatedSnapshot manifest code_sha == frozen source_production_sha; the frozen
+          package_transport_digest is a HISTORICAL ATTESTATION ONLY and is NOT recomputed. Explicitly
+          does NOT authorize northstar_vs002_frozen_execution, real-package access, VS-002 metric
+          computation, Phase 0C completion, the 0C Research Store, 0D or later, C1, production
+          deployment, broker access, or trading/capital authority.
+        resume_condition: >-
+          Resume only after northstar_continuous_mission_orchestration_foundation is COMPLETE,
+          durable on main, and post-merge main CI is green; resumption must restore this exact
+          authorization rather than reconstructing or widening it.
+        not_yet_executed: true
         prior_bounded_authorization:   # history — the just-COMPLETED bounded result-runner mission
           authorized_by: operator
           authorized_at: 2026-10-01
