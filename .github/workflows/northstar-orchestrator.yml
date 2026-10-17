@@ -180,7 +180,18 @@ jobs:
           git add -A
           git commit -m "chore(northstar): materialize preauthorized transition $(python -c "import json;print(json.load(open('/tmp/proposal.json'))['completed_mission'])") -> $(python -c "import json;print(json.load(open('/tmp/proposal.json'))['next_mission'])")"
           git push origin "$BRANCH"
+          # Declare the COMPLETED (outgoing) mission the transition implements, read
+          # from the TRUSTED deterministic proposal. The governance-transition PR is
+          # evaluated against the protected BASE-MAIN mission that AUTHORIZES the
+          # transition, so the PR declares completed_mission (never next_mission). The
+          # body is built as a trusted file with exactly one "MISSION = " line (first).
+          COMPLETED_MISSION=$(python -c "import json;print(json.load(open('/tmp/proposal.json'))['completed_mission'])")
+          if [ -z "$COMPLETED_MISSION" ]; then echo "::error::empty completed_mission — STOP (no governance PR)."; exit 1; fi
+          {
+            printf 'MISSION = %s\n\n' "$COMPLETED_MISSION"
+            printf 'Deterministic transition proposal materialized by the orchestrator from certified main `%s`. Edits ONLY the allowlisted dispatch fields and restores the paused VS-002 adapter authorization EXACTLY. Goes through ordinary CI/review/governed merge; NOT a direct main push.\n' "$CERTIFIED_SHA"
+          } > /tmp/governance_pr_body.md
           gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
             --title "chore(northstar): governed mission transition (deterministic, allowlisted)" \
-            --body "Deterministic transition proposal materialized by the orchestrator from certified main \`${CERTIFIED_SHA}\`. Edits ONLY the allowlisted dispatch fields and restores the paused VS-002 adapter authorization EXACTLY. Goes through ordinary CI/review/human-merge; NOT a direct main push."
+            --body-file /tmp/governance_pr_body.md
           echo "opened governance PR from $BRANCH"

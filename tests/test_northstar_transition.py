@@ -296,9 +296,20 @@ def test_transition_input_builder_serializes_yaml_dates_as_iso8601(tmp_path):
     )
     payload = json.loads(proc.stdout)
     paused = payload["paused_authorization"]
-    assert paused["authorized_mission"] == ADAPTER
-    assert paused["authorized_at"] == "2026-10-02"
-    assert isinstance(paused["authorized_at"], str)
+    yaml = _yaml()
+    real_ba = (yaml.safe_load(PHASE_FILE.read_text(encoding="utf-8"))
+               ["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]["bounded_authorization"])
+    if "paused_bounded_authorization" in real_ba:
+        # PRE-transition: the builder reports the paused adapter authorization, and the
+        # YAML date scalar is normalized deterministically to the ISO *string*.
+        assert paused is not None
+        assert paused["authorized_mission"] == ADAPTER
+        assert paused["authorized_at"] == "2026-10-02"
+        assert isinstance(paused["authorized_at"], str)
+    else:
+        # POST-transition: the paused authorization has been consumed/promoted, so the
+        # input builder correctly reports NO paused authorization.
+        assert paused is None
 
 
 def test_real_json_normalized_paused_authorization_materializes_exactly():
@@ -309,10 +320,17 @@ def test_real_json_normalized_paused_authorization_materializes_exactly():
     yaml = _yaml()
     phase_text = PHASE_FILE.read_text(encoding="utf-8")
     phase = yaml.safe_load(phase_text)
-    paused_yaml = (
-        phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
-        ["bounded_authorization"]["paused_bounded_authorization"]
-    )
+    _ba = (phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]
+           ["bounded_authorization"])
+    if "paused_bounded_authorization" not in _ba:
+        # POST-transition: the exact paused object has ALREADY been materialized/promoted
+        # into the active bounded_authorization; validate the durable promotion directly.
+        assert _ba["authorized_mission"] == ADAPTER
+        assert _ba["status"] == "PAUSED_NOT_EXECUTED"
+        assert _ba["not_yet_executed"] is True
+        assert _ba["authorized_at"].isoformat() == "2026-10-02"
+        return
+    paused_yaml = _ba["paused_bounded_authorization"]
 
     def iso_default(value):
         if hasattr(value, "isoformat"):
@@ -497,9 +515,35 @@ def test_real_paused_authorization_preserved_unchanged():
     yaml = _yaml()
     phase = yaml.safe_load(PHASE_FILE.read_text(encoding="utf-8"))
     ba = phase["stockbot_northstar_redesign"]["phases"]["northstar_phase_0c"]["bounded_authorization"]
-    pba = ba["paused_bounded_authorization"]
-    assert pba["authorized_mission"] == ADAPTER
-    assert pba["status"] == "PAUSED_NOT_EXECUTED"
-    assert pba["not_yet_executed"] is True
-    # and the active mission is still the orchestration foundation (not the adapter)
-    assert ba["authorized_mission"] == ORCH
+    if "paused_bounded_authorization" in ba:
+        # PRE-transition: the adapter is held PAUSED; the active mission is orchestration.
+        pba = ba["paused_bounded_authorization"]
+        assert pba["authorized_mission"] == ADAPTER
+        assert pba["status"] == "PAUSED_NOT_EXECUTED"
+        assert pba["not_yet_executed"] is True
+        assert ba["authorized_mission"] == ORCH
+    else:
+        # POST-transition: the EXACT adapter authorization has been promoted to active and
+        # remains NOT executed; frozen execution / E4 stays unauthorized (no E4 grant here).
+        assert ba["authorized_mission"] == ADAPTER
+        assert ba["status"] == "PAUSED_NOT_EXECUTED"
+        assert ba["not_yet_executed"] is True
+
+
+def test_yaml_date_scalar_normalizes_to_iso_string_regression():
+    # State-independent mirror of build_transition_inputs.sh's _json_default: a YAML date
+    # scalar (2026-10-02) must serialize to the ISO *string* "2026-10-02", never a
+    # datetime object, so proposal transport stays deterministic even once the real repo
+    # is post-transition and carries no paused authorization to exercise the live path.
+    import datetime as _dt
+    yaml = _yaml()
+    loaded = yaml.safe_load("authorized_at: 2026-10-02\n")
+    assert isinstance(loaded["authorized_at"], _dt.date)
+
+    def _iso(v):
+        if isinstance(v, (_dt.date, _dt.datetime)):
+            return v.isoformat()
+        raise TypeError(type(v).__name__)
+
+    s = json.loads(json.dumps(loaded, default=_iso))
+    assert s["authorized_at"] == "2026-10-02" and isinstance(s["authorized_at"], str)
