@@ -96,11 +96,46 @@ def test_pr_controller_privilege_separation():
     assert gate["permissions"].get("contents") == "read"
     assert gate["permissions"].get("pull-requests") == "read"
     assert not _has_write(gate["permissions"])
-    # effect has pull-requests:write ONLY, needs the gate, gated on enabled+PASS
-    assert effect["permissions"].get("pull-requests") == "write"
-    assert effect["permissions"].get("contents") == "read"
+    # effect's DEFAULT GITHUB_TOKEN is READ-ONLY; the merge mutation is performed with a
+    # short-lived scoped GitHub App token (see test_pr_controller_merge_effect_uses_scoped_app_token).
+    assert effect["permissions"] == {"contents": "read"}
+    assert not _has_write(effect["permissions"])
     assert "northstar-merge-gate" in effect["needs"]
     assert "enabled" in effect["if"] and "PASS" in effect["if"]
+
+
+def test_pr_controller_merge_effect_uses_scoped_app_token():
+    # The enabled merge EFFECT authenticates the mutation with a short-lived, scoped
+    # Northstar GitHub App token (reusing the orchestrator pattern) instead of the default
+    # GITHUB_TOKEN, which GitHub rejects for mergePullRequest. The App is NOT a ruleset
+    # bypass actor: this requests GitHub-native auto-merge; the ruleset stays authoritative.
+    import re
+    jobs = _jobs(PR_CONTROLLER)
+    effect = jobs["auto-merge-effect"]
+    text = _text(PR_CONTROLLER)
+    effect_region = text[text.index("auto-merge-effect:"):]
+    # (1) effect default GITHUB_TOKEN is read-only
+    assert effect["permissions"] == {"contents": "read"}
+    # (2) App token action pinned to an immutable SHA
+    assert f"actions/create-github-app-token@{APP_TOKEN_ACTION_SHA}" in effect_region
+    # (3) App secrets referenced (never values)
+    assert "secrets.NORTHSTAR_APP_ID" in effect_region
+    assert "secrets.NORTHSTAR_APP_PRIVATE_KEY" in effect_region
+    # (4) App requests ONLY contents:write + pull-requests:write (no broader App permission)
+    assert "permission-contents: write" in effect_region
+    assert "permission-pull-requests: write" in effect_region
+    extra = [m for m in set(re.findall(r"permission-[a-z-]+:", effect_region))
+             if m not in ("permission-contents:", "permission-pull-requests:")]
+    assert extra == [], f"unexpected App permissions requested: {extra}"
+    # (5) the merge mutation uses the App token as GH_TOKEN, never the default github.token
+    assert "GH_TOKEN: ${{ steps.app-token.outputs.token }}" in effect_region
+    assert "github.token" not in effect_region
+    merge_lines = [l for l in effect_region.splitlines() if "gh pr merge" in l]
+    assert merge_lines and all("--auto" in l and "--squash" in l for l in merge_lines)
+    # (6) no admin bypass / forced immediate merge / direct push to main
+    assert "--admin" not in effect_region
+    assert "--merge" not in effect_region
+    assert "git push" not in effect_region
 
 
 def test_orchestrator_privilege_separation():
@@ -256,9 +291,11 @@ def test_no_workflow_mentions_codex_as_a_gate():
 
 
 def test_generated_prs_use_short_lived_github_app_credential():
-    # Governance and Claude effectors must mint a scoped GitHub App token rather
-    # than using the recursion-limited default token or a long-lived bot PAT.
-    for p in (ORCHESTRATOR, CLAUDE):
+    # Governance, Claude, AND the PR-controller merge effect must mint a scoped GitHub App
+    # token rather than using the recursion-limited/default token or a long-lived bot PAT.
+    # (The three paths are distinct App writes: orchestrator governance-PR, Claude dispatch,
+    # and the PR-controller native-auto-merge effect — each least-privilege.)
+    for p in (ORCHESTRATOR, CLAUDE, PR_CONTROLLER):
         text = _text(p)
         assert f"actions/create-github-app-token@{APP_TOKEN_ACTION_SHA}" in text
         assert "secrets.NORTHSTAR_APP_ID" in text
