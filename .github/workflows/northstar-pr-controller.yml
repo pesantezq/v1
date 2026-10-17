@@ -157,17 +157,31 @@ jobs:
       needs.northstar-merge-gate.outputs.pr_number != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The default GITHUB_TOKEN stays READ-ONLY. The merge mutation is performed with a
+    # SHORT-LIVED, scoped GitHub App token minted below (contents + pull-requests write
+    # ONLY), reusing the orchestrator's established pattern. The App is NOT a ruleset
+    # bypass actor: the repository ruleset's required checks remain authoritative, so this
+    # requests GitHub-native auto-merge and never force-merges.
     permissions:
       contents: read
-      pull-requests: write      # the ONLY write authority, scoped to this effect job
     env:
-      GH_TOKEN: ${{ github.token }}
       PR: ${{ needs.northstar-merge-gate.outputs.pr_number }}
       WANT_HEAD: ${{ needs.northstar-merge-gate.outputs.head_sha }}
       WANT_MAIN: ${{ needs.northstar-merge-gate.outputs.protected_main_sha }}
     steps:
+      - name: Mint short-lived scoped Northstar App token (effect-only; contents+PRs write)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ secrets.NORTHSTAR_APP_ID }}
+          private-key: ${{ secrets.NORTHSTAR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Re-validate state, then enable native auto-merge (idempotent)
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           # Re-validate immediately before acting (head/base/open unchanged; main not advanced).
@@ -183,8 +197,8 @@ jobs:
           if [ "$AUTO" = "enabled" ]; then
             echo "auto-merge already enabled — idempotent no-op."; exit 0
           fi
-          # Enable GitHub-NATIVE auto-merge. The actual merge still waits on the
-          # repository ruleset's required checks; this does not force a merge and
-          # grants Claude no merge authority.
+          # Enable GitHub-NATIVE auto-merge with the scoped App token. The actual merge
+          # still waits on the repository ruleset's required checks; this does not force a
+          # merge, performs no admin/force bypass, and grants Claude no merge authority.
           gh pr merge "$PR" -R "$GITHUB_REPOSITORY" --auto --squash
           echo "native auto-merge requested for PR #$PR"
