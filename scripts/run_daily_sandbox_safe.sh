@@ -18,6 +18,17 @@
 #   DRY_RUN_MODE=1 bash scripts/run_daily_sandbox_safe.sh
 set -euo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action, self-located, before logs,
+# .env, venv and any FMP call. Exit 3 when held or guard missing. No bypass.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard daily_sandbox_safe || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=daily_sandbox_safe reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 section() {
     printf '\n== %s ==\n' "$1"
 }

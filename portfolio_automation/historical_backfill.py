@@ -93,6 +93,9 @@ def _load_extended_active(root: Path) -> list[str]:
 
 def _load_top100_symbols(root: Path) -> list[str]:
     p = root / "data" / "fmp_cache" / "top100_watchlist.json"
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
+    if fmp_cache_read_hold_reason(p) is not None:  # FMP4-R1: rights-held after HOLD
+        return []
     if not p.exists():
         return []
     try:

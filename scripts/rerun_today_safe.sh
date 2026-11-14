@@ -20,6 +20,17 @@
 #   - Skip preflight
 set -euo pipefail
 
+# FMP4-R1: guard before historical-sim inputs, .env or run-history mutations.
+# The guard accompanies this exact script/release, never REPO_ROOT.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard rerun_today_safe || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=rerun_today_safe reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 # ---------------------------------------------------------------------------
 # Helpers (same pattern as run_daily_safe.sh / preflight.sh)
 # ---------------------------------------------------------------------------

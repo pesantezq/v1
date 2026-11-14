@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action. Self-located: the guard that
+# ships with THIS script (e.g. /opt/stockbot/current/scripts under systemd), not
+# one resolved through REPO_DIR, so a root/release mismatch cannot skip it.
+# Before logs, .env, venv, main.py and every FMP / broker call. Exit 3 when held
+# or when the guard file is missing. No bypass flag exists.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard daily || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=daily reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 REPO_DIR="/opt/stockbot"
 PYTHON_BIN="/opt/stockbot/.venv/bin/python3"
 MAIN_PY="/opt/stockbot/main.py"

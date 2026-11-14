@@ -11,6 +11,17 @@
 
 set -uo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action, self-located, before logs,
+# .env (FMP_API_KEY) and the live FMP backtest. Exit 3 when held/guard missing.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard pattern_loop_recheck || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=pattern_loop_recheck reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 export HOME="${HOME:-/root}"
 export PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 

@@ -201,7 +201,19 @@ class FallbackWatchlist:
 
         The saved JSON includes a ``watchlist_source`` field so it is
         trivially distinguishable from a real FMP-built watchlist.
+
+        FMP4-R1: refused under the FMP cutover HOLD — the fallback blends in
+        previously FMP-scored symbols and would give the rights-held watchlist
+        file a fresh ``updated_at``. Nothing is written or deleted.
         """
+        try:
+            from portfolio_automation.data_budget.fmp_cutover import cutover_hold_reason
+            hold = cutover_hold_reason()
+        except Exception as exc:  # noqa: BLE001 — cannot prove pre-cutover
+            hold = f"fmp_cutover_hold:guard_import_error:{type(exc).__name__}"
+        if hold is not None:
+            logger.error("FMP_CUTOVER_HOLD: fallback watchlist save refused (%s)", hold)
+            return
         self._watchlist_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "updated_at": datetime.now().isoformat(),

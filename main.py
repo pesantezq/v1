@@ -174,6 +174,20 @@ def _persist_guardrail_violations(
             logger_obj.info("Structural violation resolved: %s", old["violation_key"])
 
 
+def _fmp_cutover_hold_reason() -> Optional[str]:
+    """FMP4-R1: shared cutover HOLD reason (None = pre-HOLD, proceed).
+
+    Delegates to ``portfolio_automation.data_budget.fmp_cutover`` — the same
+    clock rules the transport gate uses (real clock, injected clocks can only
+    move time forward, naive/broken clock = HOLD). An import failure is a HOLD.
+    """
+    try:
+        from portfolio_automation.data_budget.fmp_cutover import cutover_hold_reason
+    except Exception as exc:  # noqa: BLE001 — cannot prove pre-cutover → HOLD
+        return f"fmp_cutover_hold:guard_import_error:{type(exc).__name__}"
+    return cutover_hold_reason()
+
+
 def _mark_failed_run(
     store: Optional[PortfolioStateStore],
     run_id: Optional[str],
@@ -709,6 +723,23 @@ def run_portfolio_update(
 
     try:
         # =====================
+        # 0. FMP CUTOVER HOLD (FMP4-R1)
+        # =====================
+        # Before broker overlay, cash-ledger writes, pricing and every
+        # portfolio / risk / memo / decision artifact: under the HOLD the price
+        # source and the rights-held FMP cache are refused, and a price retained
+        # from an earlier run must never be valued as current. Fail closed.
+        _hold = _fmp_cutover_hold_reason()
+        if _hold is not None:
+            result['data_mode'] = 'DATA_UNAVAILABLE'
+            result['degraded_mode'] = True
+            result['degraded_reason'] = _hold
+            raise RuntimeError(
+                f"FMP_CUTOVER_HOLD: market data DATA_UNAVAILABLE ({_hold}); "
+                "no portfolio, risk, memo or decision output produced"
+            )
+
+        # =====================
         # 1. VALIDATE CONFIG
         # =====================
         logger.info("Validating configuration...")
@@ -772,7 +803,12 @@ def run_portfolio_update(
             logger.warning(msg)
             result['warnings'].append(msg)
         
-        # Check if we have enough data to proceed
+        # Check if we have enough data to proceed. A price is only valid when it
+        # was not carried over from a refused fetch: symbols in failed_symbols
+        # keep their previous current_price, which must not count as fresh data
+        # once the FMP cutover HOLD is active (FMP4-R1).
+        if _fmp_cutover_hold_reason() is not None:
+            raise RuntimeError("FMP_CUTOVER_HOLD: holdings prices DATA_UNAVAILABLE")
         valid_holdings = [h for h in holdings if h.current_price is not None]
         if not valid_holdings:
             raise RuntimeError("No valid price data available for any holdings")
@@ -3249,6 +3285,19 @@ def main() -> int:
         )
     except Exception as _rmg_err:
         logger.debug("Run mode governance logging skipped (non-fatal): %s", _rmg_err)
+
+    # ── FMP4-R1 cutover HOLD: before the run lock, state store, broker overlay,
+    # cash ledger and any FMP / LLM use. Exit 3 (same code as the shell guard).
+    # No bypass flag; reopening needs a code change + scoped grant + gate.
+    _hold = _fmp_cutover_hold_reason()
+    if _hold is not None:
+        logger.error(
+            "FMP_CUTOVER_HOLD entrypoint=main.py run_mode=%s reason=%s exit=3 — "
+            "DATA_UNAVAILABLE; no portfolio/risk/memo/decision output, no broker "
+            "or trading side effects. See docs/FMP_CUTOVER_FAILCLOSED.md",
+            args.run_mode, _hold,
+        )
+        return 3
 
     # ── Run lock: exit cleanly if another run is already in progress ──────────
     lock_file = Path("data/run.lock")
