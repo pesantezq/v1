@@ -203,6 +203,31 @@ def collect_portfolio_view(root: Path) -> dict[str, Any]:
           "recent_signals": [ ... ],
         }
     """
+    # Post-cutover: do not open or display old FMP-derived advice as current.
+    # Keep the template's existing read-only context contract, but empty.
+    try:
+        from portfolio_automation.data_budget.fmp_cutover import latest_artifact_hold_status
+        early_hold = latest_artifact_hold_status(None)
+    except Exception as exc:  # noqa: BLE001 - fail closed on unproven rights
+        early_hold = {"status": "FMP_CUTOVER_HOLD",
+                      "data_mode": "DATA_UNAVAILABLE", "is_current": False,
+                      "reason": f"hold_status_error:{type(exc).__name__}"}
+    if early_hold is not None:
+        return {
+            "cards": [card(
+                "Decision Queue", status="red", label="FMP_CUTOVER_HOLD",
+                summary="DATA_UNAVAILABLE - previous portfolio decisions are NOT current",
+                source_artifacts=["decision_plan.json"],
+            )],
+            "persona": "portfolio", "observe_only": True,
+            "fmp_cutover_hold": early_hold,
+            "decisions": [], "holdings": [], "watchlist": [], "recent_signals": [],
+            "allocation": {}, "vm": {}, "weekly_deployment": {},
+            "triage_summary": {}, "news_intelligence": {},
+            "crowd_context_status": {"available": False},
+            "flock_context_status": {"available": False},
+            "schwab_holdings": {}, "simulation_context": {},
+        }
     root = Path(root)
     latest = root / "outputs" / "latest"
     cards: list[dict[str, Any]] = []
