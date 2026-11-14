@@ -43,6 +43,17 @@ LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/monthly_universe_refresh_$(date -u +%Y-%m-%d).log"
 
+# FMP-4 fail-closed cutover HOLD — BEFORE the lock, .env credential load and the
+# ~3,700-call rebuild. Exit 3 + FMP_CUTOVER_HOLD line (log + stderr) when held.
+# A missing guard file aborts the run (set -e). No bypass flag exists.
+# shellcheck source=/dev/null
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+fmp_cutover_guard monthly_universe_refresh >>"$LOG_FILE" 2>&1 || {
+    rc=$?
+    printf 'FMP_CUTOVER_HOLD monthly_universe_refresh exit=%s (see %s)\n' "$rc" "$LOG_FILE" >&2
+    exit "$rc"
+}
+
 # Same lock the weekly run and discovery pulses use, so a monthly refresh can
 # never overlap either of them (both are heavy FMP consumers).
 if [ -d /var/lock ] && [ -w /var/lock ]; then
