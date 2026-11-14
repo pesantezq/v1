@@ -97,6 +97,14 @@ section "Daily Safe Wrapper"
 printf 'Repo root: %s\n' "$REPO_ROOT"
 printf 'Log file: %s\n' "$LOG_FILE"
 
+# FMP-4 fail-closed cutover HOLD — BEFORE preflight, venv, .env credential
+# load, broker sync or any outbound call. Exit 3 + FMP_CUTOVER_HOLD line when
+# held; a missing guard file also aborts (set -e). No bypass flag exists.
+section "FMP Cutover Guard"
+# shellcheck source=/dev/null
+source "$REPO_ROOT/scripts/fmp_cutover_guard.sh"
+fmp_cutover_guard daily_safe || exit $?
+
 section "Preflight"
 "$REPO_ROOT/scripts/preflight.sh"
 printf 'Preflight passed. Continuing to daily run.\n'
