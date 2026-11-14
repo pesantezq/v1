@@ -14,6 +14,14 @@
   {{ ui.page_header("Portfolio", "Observe-only portfolio intelligence and advisory context.",
                     "/dashboard/portfolio", "dashboard-portfolio-content") }}
 
+  {# FMP4-R2: never hide the source HOLD when advisory rows are intentionally empty. #}
+  {% if fmp_cutover_hold %}
+  <div role="alert" class="rounded-xl border border-red-700 bg-red-950/40 p-4 text-red-200">
+    <strong class="font-mono">FMP_CUTOVER_HOLD - DATA_UNAVAILABLE</strong>
+    <p class="text-sm mt-1">Previously generated portfolio decisions are NOT current.
+      No current recommendation is available until source rights and the protected release gate are satisfied.</p>
+  </div>
+  {% endif %}
   {# Observe-only is already shown in the global banner + footer; keep only a
      compact chip here, full wording behind the tooltip (de-duplicated 2026-07-07). #}
   <div>
