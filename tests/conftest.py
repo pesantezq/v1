@@ -50,13 +50,13 @@ def _pin_fmp_cutover_system_clock(monkeypatch):
 
 @pytest.fixture
 def fmp_bash_date(tmp_path):
-    """FMP4-R1 test seam for the bash guard's system clock.
+    """FMP4-R2: a clock-SHADOWING attack vector, no longer a test seam.
 
     ``make(epoch)`` returns env additions (``BASH_ENV``) defining a bash
-    function ``date`` that answers only ``date -u +%s`` with ``epoch`` and
-    delegates every other form to the real ``date``. Bash-only, pytest-only;
-    the production guard still reads the real clock and still applies
-    ``max(real, FMP_CUTOVER_GUARD_NOW_EPOCH)``.
+    function ``date`` that answers ``date -u +%s`` with ``epoch``. FMP4-R1 used
+    this to pin the guard clock; FMP4-R2 hardens the guard so a shadowing
+    ``date`` function makes the clock UNTRUSTED (HOLD, exit 3) whatever epoch it
+    claims. Use ``fmp_bash_clock`` for deterministic pre/post-HOLD bash tests.
     """
     def make(epoch: int) -> dict:
         f = tmp_path / f"fmp_bash_date_{int(epoch)}.sh"
@@ -68,6 +68,43 @@ def fmp_bash_date(tmp_path):
             encoding="utf-8", newline="\n",
         )
         return {"BASH_ENV": f.as_posix()}
+    return make
+
+
+#: The single line in scripts/fmp_cutover_guard.sh naming the trusted clock
+#: binaries. ``fmp_bash_clock`` rewrites ONLY this line, in a temp COPY.
+FMP_GUARD_TRUSTED_BINS_LINE = 'local bins="/usr/bin/date /bin/date"'
+
+
+@pytest.fixture
+def fmp_bash_clock(tmp_path):
+    """FMP4-R2 deterministic seam for the bash guard's TRUSTED clock.
+
+    ``make(scripts, epoch)`` builds ``tmp_path/release_<epoch>/scripts`` holding
+    copies of ``scripts`` plus a copy of the guard whose trusted-binary list
+    points at a fake executable that prints ``epoch``. Everything else — the
+    shadow-function checks, ``\\command`` absolute-path exec, floor, forward-only
+    ``FMP_CUTOVER_GUARD_NOW_EPOCH`` — runs exactly as shipped. The repo files
+    are never modified and no env/config seam exists in production.
+    """
+    import shutil
+
+    repo = Path(__file__).resolve().parents[1]
+
+    def make(scripts, epoch: int) -> Path:
+        rel = tmp_path / f"release_{int(epoch)}"
+        (rel / "scripts").mkdir(parents=True, exist_ok=True)
+        fake = tmp_path / f"fakebin_{int(epoch)}" / "date"
+        fake.parent.mkdir(parents=True, exist_ok=True)
+        fake.write_text(f"#!/bin/sh\necho {int(epoch)}\n", encoding="utf-8", newline="\n")
+        fake.chmod(0o755)
+        guard = (repo / "scripts" / "fmp_cutover_guard.sh").read_text(encoding="utf-8")
+        assert guard.count(FMP_GUARD_TRUSTED_BINS_LINE) == 1, "guard clock line moved"
+        guard = guard.replace(FMP_GUARD_TRUSTED_BINS_LINE, f'local bins="{fake.as_posix()}"')
+        (rel / "scripts" / "fmp_cutover_guard.sh").write_text(guard, encoding="utf-8", newline="\n")
+        for s in scripts:
+            shutil.copy(repo / "scripts" / s, rel / "scripts" / s)
+        return rel
     return make
 
 
