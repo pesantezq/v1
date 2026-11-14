@@ -802,9 +802,14 @@ def _sector_map_from_cache(base_dir: Path | str, symbols: list[str]) -> dict[str
     # The repo layout keeps fmp_cache at repo-root/data/fmp_cache regardless of
     # the outputs base_dir; try both repo-root and base_dir-relative.
     candidates = [Path("data") / "fmp_cache", cache_dir]
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
     for sym in symbols:
         for cdir in candidates:
             p = cdir / f"profile_stable_{sym}.json"
+            # FMP4-R1: rights-held cache refused under HOLD → coverage degrades
+            # honestly (symbol absent), never a guessed classification.
+            if fmp_cache_read_hold_reason(p) is not None:
+                continue
             if not p.exists():
                 continue
             try:

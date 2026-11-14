@@ -449,6 +449,9 @@ def _load_ticker_sector(root: Path, ticker: str) -> str:
     if not safe_ticker:
         return _UNKNOWN_SECTOR
     cache_path = root.joinpath(*_FMP_PROFILE_CACHE_REL) / f"profile_stable_{safe_ticker}.json"
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
+    if fmp_cache_read_hold_reason(cache_path) is not None:  # FMP4-R1: HOLD
+        return _UNKNOWN_SECTOR
     if not cache_path.exists():
         return _UNKNOWN_SECTOR
     try:

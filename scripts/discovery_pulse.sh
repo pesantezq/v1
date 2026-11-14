@@ -11,6 +11,17 @@
 
 set -euo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action, self-located, before logs,
+# the shared flock, .env and any FMP call. Exit 3 when held or guard missing.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard discovery_pulse || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=discovery_pulse reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 REPO_ROOT="${REPO_ROOT:-/opt/stockbot}"
 LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"

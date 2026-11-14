@@ -101,9 +101,17 @@ printf 'Log file: %s\n' "$LOG_FILE"
 # load, broker sync or any outbound call. Exit 3 + FMP_CUTOVER_HOLD line when
 # held; a missing guard file also aborts (set -e). No bypass flag exists.
 section "FMP Cutover Guard"
+# FMP4-R1: self-located — the guard shipped with THIS script, never one found
+# through REPO_ROOT (env/PWD may point at a different checkout than the
+# release being executed). Missing guard = HOLD (exit 3).
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
 # shellcheck source=/dev/null
-source "$REPO_ROOT/scripts/fmp_cutover_guard.sh"
-fmp_cutover_guard daily_safe || exit $?
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard daily_safe || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=daily_safe reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
 
 section "Preflight"
 "$REPO_ROOT/scripts/preflight.sh"

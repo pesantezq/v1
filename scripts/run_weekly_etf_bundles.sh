@@ -15,6 +15,18 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action, self-located, BEFORE the
+# .env load / kill-switch read, lock and any FMP call (so it holds even when
+# the job is disabled). Exit 3 when held or guard missing. No bypass.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard weekly_etf_bundles || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=weekly_etf_bundles reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 REPO_ROOT="${REPO_ROOT:-/opt/stockbot}"
 cd "$REPO_ROOT"
 

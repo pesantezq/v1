@@ -5,6 +5,17 @@
 # =============================================================================
 set -euo pipefail
 
+# FMP4-R1 fail-closed cutover HOLD — FIRST action, self-located, before venv,
+# .env, logs and the pipeline. Exit 3 when held or guard missing. No bypass.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard server_run_pipeline || exit $?
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=server_run_pipeline reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="$REPO_DIR/logs/server_pipeline.log"
 VENV_ACTIVATE="$REPO_DIR/.venv/bin/activate"

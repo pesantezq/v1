@@ -29,6 +29,7 @@ from portfolio_automation.crowd_intelligence.fmp_capability_probe import (
     probe_all, summarize_by_status,
 )
 from portfolio_automation.crowd_intelligence.capability_store import CapabilityStore
+from portfolio_automation.data_budget import fmp_cutover as _fmp_cutover
 
 _DOMAIN = "https://financialmodelingprep.com"
 _MAX_CALLS = 80
@@ -36,6 +37,11 @@ _MAX_CALLS = 80
 
 def _make_http_get_status(api_key: str):
     def http_get_status(path: str, params: dict) -> tuple[int | None, Any, str]:
+        # FMP4-R1: this probe bypasses FMPClient, so re-check the cutover HOLD
+        # before EVERY request — before the URL / API key is assembled.
+        hold = _fmp_cutover.cutover_hold_reason()
+        if hold is not None:
+            return None, None, hold
         q = {**params, "apikey": api_key}
         url = f"{_DOMAIN}{path}?{urllib.parse.urlencode(q)}"
         req = urllib.request.Request(url, headers={"User-Agent": "PortfolioBot/1.0"})
@@ -61,6 +67,14 @@ def _make_http_get_status(api_key: str):
 
 def main(root: str = ".") -> int:
     root_path = Path(root)
+    # FMP4-R1: refuse BEFORE the secret is read, before any request and before
+    # the capability store is written. Exit 3 (same as the scheduled guards).
+    hold = _fmp_cutover.cutover_hold_reason()
+    if hold is not None:
+        print(f"FMP_CUTOVER_HOLD entrypoint=probe_fmp_crowd_endpoints reason={hold} "
+              f"exit={_fmp_cutover.CUTOVER_HOLD_EXIT_CODE} — no FMP calls, no "
+              "credential load. See docs/FMP_CUTOVER_FAILCLOSED.md", file=sys.stderr)
+        return _fmp_cutover.CUTOVER_HOLD_EXIT_CODE
     api_key = (get_secret("FMP_API_KEY") or "").strip()
     if not api_key:
         print("FMP_API_KEY not set — cannot probe.", file=sys.stderr)

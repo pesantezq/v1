@@ -60,8 +60,14 @@ def load_theme_groups(root: Path) -> list[tuple[str, str, list[str]]]:
 
 
 def load_ticker_sector(root: Path, ticker: str) -> str | None:
-    """Resolve sector from the FMP profile cache; None on miss."""
-    doc = _read_json(root / "data" / "fmp_cache" / f"profile_stable_{ticker.upper()}.json")
+    """Resolve sector from the FMP profile cache; None on miss.
+
+    FMP4-R1: None under the FMP cutover HOLD (rights-held cache not opened)."""
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
+    path = root / "data" / "fmp_cache" / f"profile_stable_{ticker.upper()}.json"
+    if fmp_cache_read_hold_reason(path) is not None:
+        return None
+    doc = _read_json(path)
     try:
         data = (doc or {}).get("data") or []
         sec = data[0].get("sector") if data and isinstance(data[0], dict) else None

@@ -78,7 +78,24 @@ def update_holdings_with_prices(
     """
     Update holdings with current market prices.
     Returns tuple of (updated_holdings, failed_symbols).
+
+    FMP4-R1: from the FMP cutover HOLD instant the price source is refused, so a
+    price retained from an earlier run (config/broker overlay/previous refresh)
+    would otherwise be valued as if current. Under the HOLD no price fetch is
+    attempted, every holding's ``current_price`` / ``market_value`` is cleared
+    to ``None`` (DATA_UNAVAILABLE — never zero-filled, never carried forward)
+    and every symbol is reported failed. Pre-HOLD behaviour is unchanged.
     """
+    from portfolio_automation.data_budget.fmp_cutover import cutover_hold_reason
+    hold = cutover_hold_reason()
+    if hold is not None:
+        logger.error("FMP_CUTOVER_HOLD: holdings prices DATA_UNAVAILABLE (%s); "
+                     "inherited prices cleared, no fetch attempted", hold)
+        for holding in holdings:
+            holding.current_price = None
+            holding.market_value = None
+        return holdings, [h.symbol for h in holdings]
+
     symbols = [h.symbol for h in holdings]
     prices = market_client.get_prices(symbols)
 

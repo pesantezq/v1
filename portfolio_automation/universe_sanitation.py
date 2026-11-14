@@ -133,7 +133,11 @@ def _load_theme_candidates(root: Path) -> list[dict[str, Any]]:
 
 
 def _load_fmp_top100(root: Path) -> list[dict[str, Any]]:
-    d = _load_json_safe(root / "data" / "fmp_cache" / "top100_watchlist.json")
+    p = root / "data" / "fmp_cache" / "top100_watchlist.json"
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
+    if fmp_cache_read_hold_reason(p) is not None:  # FMP4-R1: rights-held after HOLD
+        return []
+    d = _load_json_safe(p)
     if d is None:
         return []
     cands = d.get("candidates") if isinstance(d, dict) else None
@@ -191,6 +195,9 @@ def _load_sector(root: Path, ticker: str) -> str:
     ("Financial Services / Asset Management") and contaminate the sector: tag.
     """
     p = root / "data" / "fmp_cache" / f"profile_stable_{ticker}.json"
+    from portfolio_automation.data_budget.fmp_cutover import fmp_cache_read_hold_reason
+    if fmp_cache_read_hold_reason(p) is not None:  # FMP4-R1: rights-held after HOLD
+        return "Unknown"
     if not p.exists():
         return "Unknown"
     d = _load_json_safe(p)

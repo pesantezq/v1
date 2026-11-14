@@ -42,6 +42,7 @@ import argparse
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,49 @@ class FMPCutoverHold(RuntimeError):
 def check_entrypoint(entrypoint: str, clock: Optional[Clock] = None) -> int:
     """Pure decision for a scheduled entrypoint: 0 = proceed, 3 = HOLD."""
     return CUTOVER_HOLD_EXIT_CODE if is_cutover_hold(clock) else 0
+
+
+# ---------------------------------------------------------------------------
+# Direct readers of rights-held FMP cache / derived artifacts (FMP4-R1)
+# ---------------------------------------------------------------------------
+#
+# Several modules read ``data/fmp_cache/*`` files DIRECTLY (not through
+# ``FMPClient``'s ``_DiskCache``), e.g. ``profile_stable_<T>.json`` and the
+# FMP-scored ``top100_watchlist.json``. Those files were obtained / derived under
+# the paid plan, so the same unresolved-rights HOLD applies. This is the ONE
+# shared, path-only check those readers call; it opens nothing, deletes nothing
+# and is not a rights registry (there is no allow-list to edit).
+
+#: Directory holding FMP client cache files and FMP-derived artifacts.
+FMP_RIGHTS_HELD_DIRNAME = "fmp_cache"
+
+#: Data-mode label callers record when the HOLD makes FMP-derived data unusable.
+DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+
+
+def is_rights_held_fmp_path(path: object) -> bool:
+    """True when ``path`` lies under an ``fmp_cache`` directory (any depth).
+
+    An unparseable path is treated as rights-held (fail closed).
+    """
+    try:
+        parts = Path(str(path)).parts
+    except Exception:  # noqa: BLE001
+        return True
+    return any(str(p).lower() == FMP_RIGHTS_HELD_DIRNAME for p in parts)
+
+
+def fmp_cache_read_hold_reason(path: object,
+                               clock: Optional[Clock] = None) -> Optional[str]:
+    """Reason a DIRECT read of ``path`` must be refused, else ``None``.
+
+    Pre-HOLD this is always ``None`` (behaviour unchanged). From the HOLD
+    instant, any path under ``fmp_cache`` is refused; callers must then report
+    the data as missing (``None`` / ``[]`` / "Unknown"), never zero-fill.
+    """
+    if not is_rights_held_fmp_path(path):
+        return None
+    return cutover_hold_reason(clock)
 
 
 # ---------------------------------------------------------------------------

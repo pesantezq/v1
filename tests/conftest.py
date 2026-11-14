@@ -23,6 +23,54 @@ def _hash(p: Path) -> str | None:
         return None
 
 
+#: FMP4-R1 — the simulated "system now" every test sees through the FMP cutover
+#: guard, unless a test overrides it. Fixed before the 2026-11-26T00:00Z HOLD so
+#: suites stay deterministic when CI's real clock passes the HOLD instant.
+FMP_TEST_SYSTEM_NOW_ISO = "2026-11-14T12:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _pin_fmp_cutover_system_clock(monkeypatch):
+    """Pin ``fmp_cutover._system_clock`` (test-only) to a fixed pre-HOLD instant.
+
+    Production keeps ``max(real_now, injected_now)``: an injected clock can never
+    rewind a real post-cutover process. That is exactly why pre-cutover tests
+    would start failing on a real date >= 2026-11-26. This fixture replaces only
+    the *system* clock seam, only inside pytest; tests that simulate a later
+    system time (Nov 27, Jan 2027) re-patch it themselves. Nothing here weakens
+    the runtime rule, and no env/config bypass is introduced.
+    """
+    from datetime import datetime
+
+    from portfolio_automation.data_budget import fmp_cutover as _fc
+
+    pinned = datetime.fromisoformat(FMP_TEST_SYSTEM_NOW_ISO)
+    monkeypatch.setattr(_fc, "_system_clock", lambda: pinned)
+
+
+@pytest.fixture
+def fmp_bash_date(tmp_path):
+    """FMP4-R1 test seam for the bash guard's system clock.
+
+    ``make(epoch)`` returns env additions (``BASH_ENV``) defining a bash
+    function ``date`` that answers only ``date -u +%s`` with ``epoch`` and
+    delegates every other form to the real ``date``. Bash-only, pytest-only;
+    the production guard still reads the real clock and still applies
+    ``max(real, FMP_CUTOVER_GUARD_NOW_EPOCH)``.
+    """
+    def make(epoch: int) -> dict:
+        f = tmp_path / f"fmp_bash_date_{int(epoch)}.sh"
+        f.write_text(
+            "date() {\n"
+            '  if [ "$*" = "-u +%s" ]; then echo ' + str(int(epoch)) + "; "
+            'else command date "$@"; fi\n'
+            "}\n",
+            encoding="utf-8", newline="\n",
+        )
+        return {"BASH_ENV": f.as_posix()}
+    return make
+
+
 @pytest.fixture(autouse=True)
 def _clear_dashboard_auth_env(monkeypatch):
     """Keep dashboard route-render tests deterministic.

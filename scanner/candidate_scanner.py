@@ -38,6 +38,17 @@ logger = logging.getLogger('portfolio_automation.scanner')
 _WATCHLIST_PATH = Path('data/fmp_cache/top100_watchlist.json')
 
 
+def _cutover_hold() -> Optional[str]:
+    """FMP4-R1: HOLD reason (None pre-HOLD). The scanner watchlist is FMP-scored
+    regardless of where it is stored, so this is an explicit local gate on the
+    shared clock rules rather than a path check. Import failure → HOLD."""
+    try:
+        from portfolio_automation.data_budget.fmp_cutover import cutover_hold_reason
+    except Exception as exc:  # noqa: BLE001
+        return f"fmp_cutover_hold:guard_import_error:{type(exc).__name__}"
+    return cutover_hold_reason()
+
+
 class CandidateScanner:
     """
     Filter and score S&P 500 candidates from pre-loaded bulk FMP data.
@@ -155,7 +166,17 @@ class CandidateScanner:
         score ±10 pts if trend status changed.
 
         Returns (updated_watchlist, []) — no debug rows for daily mode.
+
+        FMP4-R1: under the cutover HOLD quotes are refused, so the
+        ``q.get('price') or row.get('price')`` fallback below would re-stamp
+        the previous price with a fresh ``scanned_at``. Returns ``([], [])``
+        instead (DATA_UNAVAILABLE); the stored watchlist is left untouched.
         """
+        hold = _cutover_hold()
+        if hold is not None:
+            logger.error("FMP_CUTOVER_HOLD: scanner daily_refresh refused (%s) — "
+                         "no stale price re-stamped", hold)
+            return [], []
         updated: List[Dict] = []
 
         for row in watchlist:
@@ -199,7 +220,14 @@ class CandidateScanner:
         almost always signals an upstream data outage (e.g. fundamentals source
         down), not a genuine "no stock qualifies". When that happens we keep the
         existing list and log loudly rather than wiping it.
+
+        FMP4-R1: under the cutover HOLD nothing is written (no fresh
+        ``updated_at`` on paid-tier-derived rows); the file is not deleted.
         """
+        hold = _cutover_hold()
+        if hold is not None:
+            logger.error("FMP_CUTOVER_HOLD: watchlist save refused (%s)", hold)
+            return
         if not candidates:
             existing = self.load_watchlist()
             if existing:
@@ -231,7 +259,11 @@ class CandidateScanner:
         )
 
     def load_watchlist(self) -> List[Dict]:
-        """Load persisted Top-k candidates, or [] if not found / unreadable."""
+        """Load persisted Top-k candidates, or [] if not found / unreadable.
+
+        FMP4-R1: [] under the cutover HOLD (file not opened, not deleted)."""
+        if _cutover_hold() is not None:
+            return []
         if not self._watchlist_path.exists():
             return []
         try:
@@ -247,7 +279,10 @@ class CandidateScanner:
         ``None`` means "not certified" — either the watchlist predates screening
         metadata or the file is unreadable. Callers must treat that as
         uncertified rather than as healthy; it is not the same as coverage 0.
+        FMP4-R1: ``None`` (uncertified) under the cutover HOLD.
         """
+        if _cutover_hold() is not None:
+            return None
         if not self._watchlist_path.exists():
             return None
         try:
