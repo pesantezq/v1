@@ -376,3 +376,20 @@ display in other research/strategy/dashboard views. Before protected
 production adoption, the complete GUI and artifact read-surface inventory,
 plus the operator's exact cutoff and release timing approval, remain
 independent gates.
+
+
+## FMP4-R2 P0 inherited-readonly constant repair (draft, not deployed)
+
+The non-author exact-head review of draft PR #82 reproduced fail-open when an
+inherited BASH_ENV marks FMP_CUTOVER_HOLD_EPOCH or FMP_CUTOVER_HOLD_RC read-only.
+Bash rejects a later assignment while sourcing, but can continue with the
+attacker-controlled value. The repair removes security-critical policy globals
+from the shell guard. It uses literal cutoff 1795651200, clock floor 1794614400
+and HOLD return code 3 directly in the expressions, independently checked
+against the Python cutoff constant.
+
+This does NOT protect against arbitrary code already executed by a hostile
+BASH_ENV before the guard is loaded. The production service environment must
+be trusted and separately validated. Early November 25 at 7 PM Eastern HOLD
+timing, source rights, deployment, and protected mission release remain
+unapproved and outside this isolated repair.
