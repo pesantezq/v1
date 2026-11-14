@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 
 from portfolio_automation.env import get_secret
+# FMP-4 fail-closed cutover guard (pure; no network / secrets / I/O).
+from portfolio_automation.data_budget import fmp_cutover as _fmp_cutover
 
 logger = logging.getLogger('portfolio_automation.fmp_client')
 
@@ -110,6 +112,14 @@ class CallBudgetExceeded(Exception):
     """Adding another call would push today's count past the daily budget."""
 
 
+class FMPCutoverRefused(FMPError):
+    """FMP-4: outbound FMP HTTP refused — universal post-cutover HOLD.
+
+    Subclasses ``FMPError`` so every existing ``except FMPError`` handler fails
+    closed (and the cache gate guarantees no stale rescue). The message never
+    contains the API key or a request URL."""
+
+
 # ---------------------------------------------------------------------------
 # Daily call counter (persisted to disk)
 # ---------------------------------------------------------------------------
@@ -170,17 +180,30 @@ class _DiskCache:
     stored_at timestamp for TTL comparison.
     """
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, clock: Optional[Any] = None) -> None:
         self._dir = cache_dir
         self._dir.mkdir(parents=True, exist_ok=True)
+        self._clock = clock
 
     def _path(self, key: str) -> Path:
         # Sanitise key to a safe filename (≤80 chars)
         safe = ''.join(c if c.isalnum() or c in '-_' else '_' for c in key)
         return self._dir / f"{safe[:80]}.json"
 
+    def _held(self, key: str) -> bool:
+        """FMP-4: after cutover, rights to cached subscribed data are
+        unresolved — serve NOTHING (fresh or stale). Files are left untouched
+        (no deletion); the file is not even opened."""
+        reason = _fmp_cutover.cutover_hold_reason(self._clock)
+        if reason is not None:
+            logger.warning("FMP subscribed cache read refused (%s)", reason)
+            return True
+        return False
+
     def get(self, key: str, ttl_seconds: int) -> Optional[Any]:
         """Return cached data if it exists and is within TTL; else None."""
+        if self._held(key):
+            return None
         p = self._path(key)
         if not p.exists():
             return None
@@ -195,6 +218,8 @@ class _DiskCache:
 
     def get_stale(self, key: str) -> Optional[Any]:
         """Return cached data regardless of age (budget-exceeded fallback)."""
+        if self._held(key):
+            return None
         p = self._path(key)
         if not p.exists():
             return None
@@ -247,7 +272,11 @@ class FMPClient:
         retry_base_delay: float = 2.0,
         timeout: int = 30,
         cache_dir: Optional[Path] = None,
+        clock: Optional[Any] = None,
     ) -> None:
+        # ``clock``: injectable UTC clock for the FMP-4 cutover HOLD (tests
+        # only). It can never bypass the HOLD — naive/failed clocks also HOLD.
+        self._clock = clock
         self._api_key = api_key or get_secret('FMP_API_KEY')
         if not self._api_key:
             raise FMPError(
@@ -260,7 +289,7 @@ class FMPClient:
         self._retry_base = retry_base_delay
         self._timeout = timeout
         _dir = cache_dir or _DEFAULT_CACHE_DIR
-        self._cache = _DiskCache(_dir)
+        self._cache = _DiskCache(_dir, clock=clock)
         self._counter = _CallCounter(_dir / 'call_counter.json')
         self._last_call_ts: float = 0.0
         self._last_response_bytes: int = 0
@@ -276,6 +305,21 @@ class FMPClient:
             time.sleep(0.5 - elapsed)
         self._last_call_ts = time.monotonic()
 
+    def _cutover_gate(self, endpoint: str, base_url: str) -> None:
+        """FMP-4 universal HOLD: refuse BEFORE any URL/credential is built.
+
+        Independent of the daily budget (0 / uncapped does not help). The
+        error names the endpoint path only — never the key or a full URL."""
+        reason = _fmp_cutover.cutover_hold_reason(self._clock)
+        if reason is not None:
+            legacy = _fmp_cutover.is_legacy_endpoint(endpoint, base_url)
+            raise FMPCutoverRefused(
+                f"FMP outbound refused ({reason}); "
+                f"endpoint_class={'legacy_v3_v4' if legacy else 'unverified'}. "
+                f"No fallback provider, "
+                f"no cache rescue. See docs/FMP_CUTOVER_FAILCLOSED.md"
+            )
+
     def _raw_get(
         self,
         endpoint: str,
@@ -284,12 +328,19 @@ class FMPClient:
         base_url: str = FMP_BASE_URL,
     ) -> Any:
         """Make one HTTP GET with retry / exponential backoff."""
+        self._cutover_gate(endpoint, base_url)
         params = {**params, 'apikey': self._api_key}
         url = f"{base_url}/{endpoint}?{urllib.parse.urlencode(params)}"
         last_err: Optional[Exception] = None
 
         for attempt in range(self._retry_max):
+            # Re-checked per attempt: a retry/backoff that crosses the cutoff
+            # must not go out.
+            self._cutover_gate(endpoint, base_url)
             self._rate_limit()
+            # Rate-limit sleep can straddle the cutoff; recheck immediately
+            # before constructing a request or issuing an HTTP attempt.
+            self._cutover_gate(endpoint, base_url)
             try:
                 req = urllib.request.Request(
                     url, headers={'User-Agent': 'PortfolioBot/1.0'}
@@ -347,9 +398,11 @@ class FMPClient:
         failure here, never a retried-and-recovered call, because the evidence
         must be the one live response obtained in this bounded acquisition.
         """
+        self._cutover_gate(endpoint, base_url)
         params = {**params, 'apikey': self._api_key}
         url = f"{base_url}/{endpoint}?{urllib.parse.urlencode(params)}"
         self._rate_limit()
+        self._cutover_gate(endpoint, base_url)
         # One outbound attempt == one persisted budget count, recorded BEFORE
         # the request so a 429 / 5xx / auth / transport / timeout / malformed-
         # JSON / API-error-payload failure still consumes budget — a failed
@@ -1329,6 +1382,8 @@ class FMPClient:
         if not symbol:
             raise FMPError("strict-live acquisition requires a symbol")
         sym = symbol.upper()
+        # FMP-4: HOLD before on_attempt — a refused call is not an attempt.
+        self._cutover_gate(_EP_HISTORICAL_DIVADJ, FMP_STABLE_BASE_URL)
         if self._counter.would_exceed(self._budget):
             raise CallBudgetExceeded(
                 f"Daily FMP budget ({self._budget} calls) would be exceeded; "
@@ -1379,6 +1434,8 @@ class FMPClient:
         if not symbol:
             raise FMPError("strict-live companion acquisition requires a symbol")
         sym = symbol.upper()
+        # FMP-4: HOLD before on_attempt — a refused call is not an attempt.
+        self._cutover_gate(_EP_HISTORICAL, FMP_STABLE_BASE_URL)
         if self._counter.would_exceed(self._budget):
             raise CallBudgetExceeded(
                 f"Daily FMP budget ({self._budget} calls) would be exceeded; "
