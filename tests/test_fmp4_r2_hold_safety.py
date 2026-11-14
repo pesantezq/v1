@@ -510,3 +510,94 @@ def test_readonly_inherited_global_does_not_change_legitimate_prehold(tmp_path, 
     result = _run([_guard(rel), "prehold_nominal"], env)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "pre-cutover" in result.stdout
+
+
+# Independent QA P0 (function variant): BASH_ENV read-only functions. Supported
+# boundary: recognized inherited read-only function attacks on the guard's own
+# functions and on `return`/`exit`; arbitrary pre-script BASH_ENV code is NOT claimed.
+_FUNCTION_ATTACKS = [
+    "fmp_cutover_guard() { return 0; }; readonly -f fmp_cutover_guard",
+    "declare() { return 1; }; readonly -f declare; fmp_cutover_guard() { return 0; }; readonly -f fmp_cutover_guard",
+    "return() { builtin return 0; }; readonly -f return",
+    "_fmp_cutover_trusted_epoch() { printf 1; return 0; }; readonly -f _fmp_cutover_trusted_epoch",
+    "exit() { builtin exit 0; }; readonly -f exit",
+]
+
+
+@needs_bash
+@pytest.mark.parametrize("attack", _FUNCTION_ATTACKS)
+def test_readonly_function_attacks_hold_direct(tmp_path, fmp_bash_clock, attack):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    r = _run([_guard(rel), "fn_attack"], _bash_env(tmp_path, attack + "\n"))
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "FMP_CUTOVER_HOLD" in r.stderr
+    assert "pre-cutover" not in r.stdout
+
+
+# The guard must reject a hostile exit function before the wrapper's own plain exit.
+# No wrapper edits are needed: the guard performs an early builtin exit 3.
+@needs_bash
+@pytest.mark.parametrize("attack", _FUNCTION_ATTACKS)
+def test_readonly_function_attacks_block_scheduler_wrapper(tmp_path, fmp_bash_clock, attack):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    marker = tmp_path / "SHOULD_NOT_PASS_GUARD"
+    wrapper = tmp_path / "synthetic_guarded_wrapper.sh"
+    wrapper.write_text(
+        "\n".join([
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f'guard="{_guard(rel)}"',
+            'if [ -r "$guard" ] && . "$guard"; then',
+            '  fmp_cutover_guard synthetic_wrapper || { result=$?; exit "$result"; }',
+            "else",
+            "  exit 3",
+            "fi",
+            f'touch "{marker.as_posix()}"',
+            "",
+        ]),
+        encoding="utf-8", newline="\n",
+    )
+    r = _run([wrapper.as_posix()], _bash_env(tmp_path, attack + "\n"))
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert not marker.exists(), "Scheduler wrapper reached side effect under HOLD"
+
+
+@needs_bash
+def test_function_attack_guard_sourced_twice_prehold_still_admits(tmp_path, fmp_bash_clock):
+    # Legitimate: our own (non-readonly) functions re-sourced stay admitted pre-HOLD.
+    rel = fmp_bash_clock([], EPOCH["nov25"])
+    g = _guard(rel)
+    r = _run(["-c", f'. "{g}" && . "{g}" && fmp_cutover_guard twice'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "pre-cutover" in r.stdout
+
+
+# Real guarded launcher PREAMBLES, copied into disposable release only.
+# Drop everything after the first post-guard assignment and replace it with
+# a marker. Even a test failure cannot load credentials, network or broker.
+@needs_bash
+@pytest.mark.parametrize("script_name, after_guard", [
+    ("run_daily.sh", "\nREPO_DIR="),
+    ("run_monthly_universe_refresh.sh", "\nREPO_ROOT="),
+])
+@pytest.mark.parametrize("attack", _FUNCTION_ATTACKS)
+def test_readonly_function_attacks_block_real_launcher_preambles(
+    tmp_path, fmp_bash_clock, script_name, after_guard, attack,
+):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    original = (REPO / "scripts" / script_name).read_text(encoding="utf-8")
+    assert after_guard in original, script_name
+    preamble = original.split(after_guard, 1)[0]
+    assert "fmp_cutover_guard" in preamble
+    marker = tmp_path / "LAUNCHER_SIDE_EFFECT"
+    copied = rel / "scripts" / script_name
+    copied.write_text(
+        preamble + f'\ntouch "{marker.as_posix()}"\n',
+        encoding="utf-8", newline="\n",
+    )
+    copied.chmod(0o755)
+    env = _bash_env(tmp_path, attack + "\n")
+    result = _run([copied.as_posix()], env)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "FMP_CUTOVER_HOLD" in result.stderr
+    assert not marker.exists(), "Guarded launcher preamble admitted after HOLD"

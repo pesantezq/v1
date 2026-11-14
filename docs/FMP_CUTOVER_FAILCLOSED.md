@@ -393,3 +393,40 @@ BASH_ENV before the guard is loaded. The production service environment must
 be trusted and separately validated. Early November 25 at 7 PM Eastern HOLD
 timing, source rights, deployment, and protected mission release remain
 unapproved and outside this isolated repair.
+
+## FMP4-R2 inherited read-only FUNCTION repair (draft, not deployed)
+
+Independent QA showed two `BASH_ENV` fail-opens after the cutoff (synthetic
+`FMP_CUTOVER_GUARD_NOW_EPOCH=1795737600`), both rc 0 with the wrapper
+continuation reached: `readonly -f fmp_cutover_guard` (the guard's definition
+cannot replace the hostile one) and `readonly -f return` (the guard's bare
+`return 3` was overridden).
+
+Change (only `scripts/fmp_cutover_guard.sh`; wrappers untouched):
+- At source time, if `fmp_cutover_guard` or `_fmp_cutover_trusted_epoch` is
+  already a READ-ONLY function (`builtin declare -pF` shows `-fr`), the guard prints
+  `FMP_CUTOVER_HOLD ... reason=readonly_function_<name>` and fails the `source`
+  with rc 3 (existing wrappers' `else` branch then exits 3; no continuation).
+  Qualifying `declare` with `builtin` is essential: an inherited read-only
+  function named `declare` must not hide a read-only guard-function collision.
+- Every status return uses `builtin return N`, followed by fallbacks
+  (`return N; builtin exit N; exit N`) so a shadowed `builtin`/`return` still
+  ends in a non-continuing stop; direct execution captures `$?` before exiting.
+- The guard rejects any inherited function named `exit` at source time with
+  `builtin exit 3` before a wrapper's plain `exit` can mask HOLD rc 3.
+  The clock check also treats functions named `return` or `exit` as untrusted.
+- The earlier read-only policy-variable fix is unchanged (no policy globals).
+
+Supported threat boundary: recognized inherited read-only function attacks on
+the guard's own functions and on `return`, for scheduler/launcher paths that
+`source` the guard and treat a non-zero source/guard status as HOLD
+(run_daily_safe.sh, run_monthly_universe_refresh.sh, run_daily.sh and the
+other guarded scripts). Legitimate pre-HOLD operation, absent/rewound clock
+HOLDs and the forward-only test clock are unchanged.
+
+Residual assumptions (NOT claimed contained): arbitrary `BASH_ENV` code that
+runs before the script and replaces other primitives, and inherited/exported
+functions not specifically rejected by the guard. A shell guard cannot undo
+side effects already performed by hostile startup code.
+Production requires `BASH_ENV` unset and no exported functions. No production
+environment, provider rights or deployment gate changed.
