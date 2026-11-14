@@ -535,9 +535,72 @@ def probe_registry_artifacts(repo_root: Path) -> HealthCheck:
 # Aggregation
 # ---------------------------------------------------------------------------
 
+#: Timestamp keys tried, in order, to date a latest artifact (detail only —
+#: under the HOLD the artifact is never current whatever its timestamp).
+_ARTIFACT_TS_KEYS = ("generated_at", "as_of", "created_at", "timestamp")
+
+
+def artifact_timestamp(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        for key in _ARTIFACT_TS_KEYS:
+            val = payload.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return None
+
+
+def probe_fmp_cutover_hold(repo_root: Path) -> HealthCheck | None:
+    """FMP4-R2: read-time FMP cutover HOLD status. ``None`` (no check) pre-HOLD.
+
+    Under the HOLD every scheduled wrapper exits 3, so outputs/latest keeps the
+    last pre-HOLD decision_plan.json. This probe refuses to let it read as
+    current: FAIL + ``FMP_CUTOVER_HOLD`` / ``DATA_UNAVAILABLE``. Read-only; it
+    writes nothing and never touches the artifact.
+    """
+    from portfolio_automation.data_budget.fmp_cutover import (
+        latest_artifact_hold_status,
+    )
+    path = repo_root / "outputs" / "latest" / "decision_plan.json"
+    # Admission MUST precede even parsing an old paid-data-derived plan.
+    # Under HOLD, metadata existence alone is enough for the health report.
+    hold = latest_artifact_hold_status(None)
+    if hold is None:
+        return None
+    present = path.is_file()
+    return HealthCheck(
+        name="fmp_cutover_hold",
+        severity=SEV_FAIL,
+        message=(
+            "FMP_CUTOVER_HOLD: DATA_UNAVAILABLE — "
+            + (f"decision_plan.json (generated {hold['artifact_generated_at'] or 'unknown'}) "
+               "is NOT current; do not act on it"
+               if present else "no decision_plan.json")
+            + "; scheduled runs exit 3 until a scoped rights grant + code change + deployment gate"
+        ),
+        details={**hold, "decision_plan_present": present, "path": str(path)},
+    )
+
+
 def collect_status(repo_root: Path) -> StatusReport:
     """Run every probe and assemble a :class:`StatusReport`. Never raises."""
     checks: list[HealthCheck] = []
+    # FMP4-R2: the cutover HOLD fails CLOSED here — if the probe itself errors
+    # while the HOLD may be active, report FAIL rather than silently omitting it.
+    try:
+        hold_check = probe_fmp_cutover_hold(repo_root)
+    except Exception as exc:  # noqa: BLE001
+        hold_check = HealthCheck(
+            name="fmp_cutover_hold", severity=SEV_FAIL,
+            message=f"FMP_CUTOVER_HOLD status unknown (probe raised: {exc}); "
+                    "treat latest artifacts as NOT current",
+        )
+    if hold_check is not None:
+        checks.append(hold_check)
+        # Post-HOLD do not read any outputs/latest data derived from paid FMP.
+        # An old status or memo cannot downgrade the authoritative FAIL state.
+        return StatusReport(
+            generated_at=_now_iso(), repo_root=str(repo_root), checks=checks,
+        )
     for probe in (
         probe_pipeline_run_status,
         probe_sandbox_run_status,

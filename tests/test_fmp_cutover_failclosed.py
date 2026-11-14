@@ -428,8 +428,9 @@ def test_monthly_entrypoint_refuses_before_lock_and_env(tmp_path):
               "PY": "/nonexistent/python"}, cwd=root)
     assert r.returncode == 3, r.stdout + r.stderr
     assert "FMP_CUTOVER_HOLD monthly_universe_refresh" in r.stderr
-    logs = list((root / "logs").glob("monthly_universe_refresh_*.log"))
-    assert logs and "FMP_CUTOVER_HOLD" in logs[0].read_text()
+    # FMP4-R2: the guard now runs BEFORE the log dir is created — the HOLD
+    # line goes to stderr (cron mail / journal) and nothing is written.
+    assert not (root / "logs").exists()
     assert not (root / "SIDE_EFFECT").exists()
 
 

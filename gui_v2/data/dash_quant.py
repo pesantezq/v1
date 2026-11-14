@@ -511,6 +511,27 @@ def collect_quant_view(root: Path) -> dict[str, Any]:
           "efficacy_rows": [ ... ],   # per-period summary rows for the table
         }
     """
+    # An old quant/attribution artifact is not evidence of current data.
+    # HOLD is computed before any source or derived artifact is read.
+    try:
+        from portfolio_automation.data_budget.fmp_cutover import latest_artifact_hold_status
+        early_hold = latest_artifact_hold_status(None)
+    except Exception as exc:  # noqa: BLE001 - fail closed on unproven rights
+        early_hold = {"status": "FMP_CUTOVER_HOLD",
+                      "data_mode": "DATA_UNAVAILABLE", "is_current": False,
+                      "reason": f"hold_status_error:{type(exc).__name__}"}
+    if early_hold is not None:
+        return {
+            "cards": [card(
+                "Research evidence", status="red", label="FMP_CUTOVER_HOLD",
+                summary="DATA_UNAVAILABLE - historical quant signals are NOT current",
+                source_artifacts=[],
+            )],
+            "persona": "quant", "observe_only": True,
+            "fmp_cutover_hold": early_hold,
+            "efficacy_rows": [], "quant_watch_active": [],
+            "quant_feedback_breakdowns": {},
+        }
     root = Path(root)
     latest = root / "outputs" / "latest"
     cards: list[dict[str, Any]] = []

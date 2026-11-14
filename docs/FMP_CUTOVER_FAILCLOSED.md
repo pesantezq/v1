@@ -26,7 +26,7 @@ under every wall-clock or DST reading of the provider switch.
 | `FMPClient._raw_get_once` + VS-002 strict-live methods | Refused before `on_attempt`, before the budget counter is touched, and before any request. No `/full` substitution, no other vendor. |
 | `_DiskCache.get` / `get_stale` | Return `None` (files are not opened, **not deleted**). No fresh or stale subscribed data is served silently. Callers then report data as *missing*. Prices are never zero-filled. |
 | `scripts/run_daily_safe.sh` | Sources `scripts/fmp_cutover_guard.sh` **before** preflight, venv, `.env`, broker sync, and any outbound call. Exits **3** with a `FMP_CUTOVER_HOLD …` line and `DAILY RUN FAILED`. (FMP4-R1: the guard is now self-located, see below.) |
-| `scripts/run_monthly_universe_refresh.sh` | Same guard **before** the flock, `.env` and the ~3,700-call rebuild. Exits **3**. The HOLD line goes to the log and stderr. |
+| `scripts/run_monthly_universe_refresh.sh` | Same guard **before** the flock, `.env` and the ~3,700-call rebuild. Exits **3**. FMP4-R2: the guard is now the **first action**, before the log dir is created. The HOLD line goes to stderr only (cron mail/journal), and a missing guard is also exit **3** (`reason=guard_missing`), no longer rc 1. |
 | FMP4-R1 shell entrypoints: `run_daily.sh` (the live systemd `ExecStart`), `run_daily_sandbox_safe.sh`, `run_weekly_safe.sh`, `discovery_pulse.sh`, `run_weekly_etf_bundles.sh`, `historical_backfill.sh`, `pattern_loop_recheck.sh`, `pattern_loop_reconstruct.sh`, `server_run_pipeline.sh` | The guard runs as the **first action** after `set`. It runs before logs, flock, `.env`, venv, `main.py` and any broker/FMP call. For the ETF job it also runs before the kill-switch read. Exits **3**. A missing guard file also exits **3** (`reason=guard_missing`). |
 | `main.py` | `main()` exits **3** (`FMP_CUTOVER_HOLD entrypoint=main.py …`) **before** the run lock, state store, broker overlay and cash-ledger sync. `run_portfolio_update` also fails closed at step 0: `data_mode=DATA_UNAVAILABLE`, `success=False`, and no summary, recommendations or decision plan. The `valid_holdings` predicate is re-gated, so a run that crosses the instant still stops. |
 | `market_data.update_holdings_with_prices` | Under HOLD, makes **no** `get_prices` call. It clears every `current_price` and `market_value` to `None` and reports every symbol failed. A retained price (e.g. 100 × 10 shares = 1000) is no longer valued. |
@@ -40,6 +40,9 @@ Clock rules: a naive (timezone-ambiguous), non-datetime or failing clock counts 
 **HOLD**. No environment variable, config key, or flag can lift the HOLD.
 `FMP_CUTOVER_GUARD_NOW_EPOCH` (bash, tests only) can only move time *forward*: the
 guard uses `max(real, injected)`. An unreadable `date` output is also a HOLD.
+FMP4-R2: the bash guard reads a **trusted clock** (see *FMP4-R2* below). A shell
+function shadowing `date` or the lookup builtins, a missing date binary, or a
+reading earlier than 2026-11-14T00:00Z is also a HOLD.
 
 Before the HOLD instant, all behaviour is byte-for-byte unchanged: same transport,
 retries, cache, budget counter and v3 access.
@@ -108,8 +111,9 @@ unchanged. It addresses the independent FMP-5 findings:
 * **Deterministic tests (P1).** `tests/conftest.py` pins
   `fmp_cutover._system_clock` (test-only, autouse) to 2026-11-14T12:00Z.
   Tests that simulate a later system time re-patch it (2026-11-26T00:00Z,
-  Nov 27, Jan 2027). For bash, the `fmp_bash_date` fixture uses `BASH_ENV` to
-  define a test-only `date` function for `date -u +%s`. Production still uses
+  Nov 27, Jan 2027). For bash, the `fmp_bash_date` fixture used `BASH_ENV` to
+  define a test-only `date` function for `date -u +%s`. (FMP4-R2 superseded this
+  with `fmp_bash_clock`: that exact vector is now detected and HOLDs.) Production still uses
   `max(real, injected)` in Python and `max(real, FMP_CUTOVER_GUARD_NOW_EPOCH)`
   in bash. No env or config bypass was added.
 
@@ -194,3 +198,181 @@ file-lock failure in the existing capability-store test. Both need controlled
 dependency-complete Linux verification before formal acceptance. Additional
 guarded scripts: active run_sims_daily.sh and manual rerun_today_safe.sh.
 Rerun the expanded shell matrix on the final candidate. No production authority.
+
+
+## FMP4-R2 HOLD-safety repair (2026-11-14, candidate, not deployed)
+
+Task `NSTAR-FMP4-R2-HOLD-SAFETY`, branch `repair/fmp4-r2-hold-safety-20261114`,
+stacked on draft PR #81 (head `87af12ca`), which is stacked on draft PR #80. It
+does not change cron, systemd, `config.json`, `.agent`, CI, VPS state, caches,
+or scoring/decision logic. Pre-HOLD behaviour is unchanged on every touched
+surface.
+
+### 1. Remaining direct paid-cache readers
+
+Inventory: `rg fmp_cache` over `*.py`, excluding `fmp_client._DiskCache` and the
+seven FMP4-R1 readers.
+
+| Reader | Opens paid content? | R2 action |
+|---|---|---|
+| `theme_engine/__main__.py::_load_sp500_from_cache` (`sp500_constituents.json`) | **yes** | Calls `fmp_cache_read_hold_reason` **before** `exists()` or open. Under HOLD it returns `[]` and logs `DATA_UNAVAILABLE`. The run adds `llm_metadata.sp500_universe_status = {data_mode: DATA_UNAVAILABLE, reason, source}`, a HOLD-only key, so pre-HOLD metadata is byte-identical. The file is not deleted. |
+| `main.py:1345` → `degraded_mode.stale_cache_days_for_path` | no (`stat().st_mtime` only) | none |
+| `stockbot_mcp_server.py:318` | no (`exists()` only) | none |
+| `discovery_pulse.py:219`, `fmp_budget_telemetry.py` (`call_counter.json`, dir sizes) | no (Northstar's own call counter / size telemetry, not FMP content) | none |
+| `gui/app.py:6156`, `agent/*`, `tools/review_packet.py`, `backup/recovery_set.py` | no (path lists / exclusions) | none |
+
+Residual: FMP-derived copies **outside** `fmp_cache` are still not covered, for
+example `data/universe/sp500_constituents.json` (`universe/sp500_constituents.py`)
+and FMP-derived fields already in `outputs/*`. Rights for those need a separate
+owner decision. This task adds no rights registry.
+
+### 2. Stale latest artifacts on operator surfaces (read-time, no writer)
+
+`fmp_cutover.latest_artifact_hold_status(generated_at)` is pure: no I/O, no
+writes. Pre-HOLD it returns `None`. Under HOLD it returns
+`{status: FMP_CUTOVER_HOLD, data_mode: DATA_UNAVAILABLE, is_current: False, …}`
+whatever the plan's timestamp. A plan stamped after the HOLD instant cannot rest
+on admissible FMP data either. Consumers:
+
+* `tools/status.py::probe_fmp_cutover_hold`. It appears in `collect_status` only
+  under HOLD, as the **first** check with severity FAIL, and it says the plan
+  "is NOT current; do not act on it". If the probe itself raises, it reports
+  FAIL (fail closed). Every existing `collect_status` consumer inherits it:
+  `tools.notify_status`, the gui_v2 health page, the legacy
+  `gui/production_health_page.py`, and Stage 5 of `run_daily.sh`.
+* `gui_v2/data/dash_today.py`. Under HOLD the Decision core card shows label
+  `FMP_CUTOVER_HOLD` with status red (hero strip: "Action needed"), plus the
+  additive view key `fmp_cutover_hold`. If the status cannot be computed, it
+  shows the HOLD (fail closed).
+
+Nothing in `outputs/latest` is rewritten, renamed or deleted. Tests check that
+the bytes are unchanged.
+
+### 3. Trusted bash clock (`scripts/fmp_cutover_guard.sh`)
+
+`_fmp_cutover_trusted_epoch` replaces the unqualified `date -u +%s`:
+
+* If a shell **function** named `date`, `command`, `builtin`, `declare`,
+  `test`, `[`, `printf`, `type`, `hash`, `unset`, `/usr/bin/date` or
+  `/bin/date` exists, the guard HOLDs with `reason=clock_function_shadows_<name>`,
+  even pre-cutover. This covers both an exported `BASH_FUNC_date%%` and a
+  function defined by `BASH_ENV`.
+* The binary runs by **absolute path** (`/usr/bin/date`, then `/bin/date`)
+  through `\command`. PATH, the hash table (`hash -p`, `BASH_CMDS`) and aliases
+  cannot substitute it.
+* No binary or non-numeric output → `reason=clock_unreadable`. A reading earlier
+  than 2026-11-14T00:00Z (RTC reset / rewound clock) → `reason=clock_before_floor`.
+  The floor is bash-only; Python trusts `datetime.now`.
+* `FMP_CUTOVER_GUARD_NOW_EPOCH` is still forward-only.
+
+**Limit (not overclaimed).** `BASH_ENV` and exported functions run arbitrary
+code before the guard is read. An environment that also overrides `builtin`
+*and* `declare`, or that edits the script, cannot be fully detected from inside
+bash. **Assumption:** scheduled services run in a trustworthy environment:
+systemd/cron with `BASH_ENV` unset, no exported functions, and root-owned
+scripts. A deployment must verify that assumption, for example with
+`systemctl show -p Environment` and `crontab -l` showing no `BASH_ENV`.
+
+Test seam: the `fmp_bash_clock` fixture copies the guard to `tmp_path` and
+rewrites only the `local bins=…` line to point at a fake binary. No env or
+config seam exists in production.
+
+### 4. Monthly launcher
+
+`run_monthly_universe_refresh.sh` now guards first, before `REPO_ROOT`, the log
+dir, the flock, `.env`, network or broker. HOLD and a missing helper both return
+**3**. The parametrized FMP4-R1 matrix now asserts `rc == 3` with
+`reason=guard_missing` (previously only `!= 0`) for **all 13** guarded
+launchers. It also asserts no log dir for all of them except
+`run_daily_safe.sh`, which still logs first by design.
+
+### 5. Read-only rollout matrix (no VPS change made)
+
+The VPS facts below are **operator-reported from an earlier read-only
+inspection, not re-verified by this task**: `/opt/stockbot/current` → release
+`7f2d4103`; root `/opt/stockbot` at `c802b8a1`; daily systemd
+`ExecStart=/opt/stockbot/current/scripts/run_daily.sh`; monthly/weekly/discovery
+via cron (root paths); `portfolio_automation/data_budget/fmp_cutover.py` absent
+in both trees.
+
+| Path | Shell from | Python from | Today (pre-deploy) | Needed for HOLD |
+|---|---|---|---|---|
+| daily (systemd) | release `scripts/run_daily.sh` | root `/opt/stockbot/main.py` + root venv | no guard, no Python HOLD | guard in **release**; `fmp_cutover.py` + R1/R2 Python in **root**; `tools.status` probe in root |
+| monthly / weekly / discovery / ETF (cron) | root `scripts/*.sh` | root | no guard | guard + Python in **root** |
+| GUI v2 / `tools.status` / notify | root (service cwd) | root | no HOLD status | R2 Python in **root** |
+
+Release requirements:
+
+1. **One identity.** Root and release must run the **same commit**. Certify it
+   with `git rev-parse HEAD` in both trees plus an import check:
+   `python -c "import portfolio_automation.data_budget.fmp_cutover as m; print(m.__file__, m.FMP_CUTOVER_HOLD_EPOCH)"`
+   using each venv. It must print `1795651200` and a path inside the intended
+   tree. If the root cannot be adopted cleanly (dirty tree), repoint or pause
+   those cron jobs under separate approval. Do not copy files into a dirty root,
+   and do not mutate a pinned release in place.
+2. **In-flight cutoff.** A run already started before 2026-11-26T00:00Z is still
+   stopped at its next FMP call: the client re-checks before every request and
+   retry, the cache refuses reads, and `valid_holdings` is re-gated. Deploy
+   **well before** the instant, with no deploy during a running job (check
+   `systemctl is-active` and the flock). Then verify with synthetic tests only
+   (`pytest tests/test_fmp4_r2_hold_safety.py tests/test_fmp4_r1_cutover_safety.py tests/test_fmp_cutover_failclosed.py`),
+   never with real wrappers and a loaded `.env`.
+3. **Safe rollback.** *Before* the HOLD, revert to the previous coherent
+   release pair: the guard is stateless and no cache is deleted. *After* the
+   HOLD, reverting removes the HOLD and is **not** an authorized rollback. Fall
+   back instead to an independently accepted HOLD-capable release, or
+   pause/repoint the jobs under operator change control.
+
+### 6. Tests
+
+`tests/test_fmp4_r2_hold_safety.py`: Nov 25/26/27 Python and bash boundaries;
+theme reader held without `exists()`/read and file kept; `tools.status` and GUI
+Today refuse to call the plan current, with artifact bytes unchanged; probe
+errors fail closed; `date` function via `BASH_ENV`, exported `BASH_FUNC_date%%`,
+`command`/`builtin`/`/usr/bin/date` function shadows; PATH, hash and alias
+bypass attempts; missing, garbage and rewound clocks; forward-only injection;
+monthly HOLD and missing-helper exit 3 with no log dir and no `.env`. Network
+tripwires throughout. No trades or broker paths are involved.
+
+### FMP4-R2 residuals (separate owner decisions)
+
+* **Health skill.** The FMP4-R2 HOLD gate for `.claude/commands/daily-tool-analysis.md`
+  was drafted but **not applied**: that path is write-protected in this
+  session. Proposed Step 2 gate: "run `python -m tools.status --format json`; if a
+  `fmp_cutover_hold` check is present, report RED, state the plan is NOT
+  current, do not infer actions, and do not treat exit-3 runs as cron faults."
+  Until it is applied, the HOLD shows up through `tools.status`, notify, GUI and
+  exit code 3, not in the daily skill.
+* **Pre-HOLD scoring** is untouched. Whether any FMP-derived artifact outside
+  `fmp_cache` may still be shown or used after the HOLD is a rights decision
+  (see §1).
+* The GUI route test needs `fastapi`, and the memo-render test needs `markdown`.
+  Neither is installed in the shared QPC Python, so those cases are
+  skipped/failing locally: **UNVERIFIED**. They need a dependency-complete
+  Linux run.
+* Other GUI tabs (Portfolio, Quant) still render plan details without a HOLD
+  banner. The Today cockpit and `tools.status` are the gating surfaces. Extending
+  the banner is a follow-up.
+
+## FMP4-R2 independent read-time suppression hardening
+
+Independent QA identified that the first R2 status implementation still read and
+parsed old `outputs/latest/decision_plan.json` to display its timestamp after
+the cutoff. This is now corrected: `tools.status` checks the authoritative HOLD
+first, then uses file-existence metadata only and returns an explicit FAIL
+without opening downstream output JSON. The Today, Portfolio, and Quant
+collectors likewise return a read-only `FMP_CUTOVER_HOLD` /
+`DATA_UNAVAILABLE` view before reading any `outputs/latest` artifacts,
+without publishing new status files or deleting historical evidence.
+
+The new `tests/test_fmp4_r2_readtime_suppression.py` uses a synthetic
+post-cutoff clock and replaces each view's JSON loader with a throwing
+sentinel. A passing test therefore proves no old latest output was opened by
+those collectors under HOLD. Route smoke tests must also pass on Linux with
+FastAPI installed; current Windows installations without FastAPI skip them.
+
+The implementation does not establish FMP's rights to historical output
+display in other research/strategy/dashboard views. Before protected
+production adoption, the complete GUI and artifact read-surface inventory,
+plus the operator's exact cutoff and release timing approval, remain
+independent gates.

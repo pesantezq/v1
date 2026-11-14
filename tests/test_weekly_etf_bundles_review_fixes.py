@@ -52,15 +52,15 @@ def test_send_blocked_on_low_coverage_and_bad_date():
 
 
 # 2. master kill-switch in the wrapper -------------------------------------- #
-def test_wrapper_skips_when_disabled(tmp_path, fmp_bash_date):
+def test_wrapper_skips_when_disabled(tmp_path, fmp_bash_clock):
     # REPO_ROOT points at a temp dir with no .env → flag defaults off → skip.
-    # FMP4-R1: the cutover guard now runs first; pin the bash clock pre-HOLD so
-    # this stays deterministic after 2026-11-26 (post-HOLD exit 3 is covered in
-    # tests/test_fmp4_r1_cutover_safety.py).
+    # FMP4-R1/R2: the cutover guard now runs first; a temp release copy pins the
+    # guard's TRUSTED clock pre-HOLD (Nov 25) so this stays deterministic after
+    # 2026-11-26 (post-HOLD exit 3 is covered in tests/test_fmp4_r*_*.py).
+    rel = fmp_bash_clock(["run_weekly_etf_bundles.sh"], 1_795_651_200 - 86_400)
     env = {"REPO_ROOT": str(tmp_path), "PATH": "/usr/bin:/bin",
-           "WEEKLY_ETF_BUNDLES_ENABLED": "0",
-           **fmp_bash_date(1_795_651_200 - 86_400)}
-    proc = subprocess.run(["bash", str(REPO / "scripts" / "run_weekly_etf_bundles.sh")],
+           "WEEKLY_ETF_BUNDLES_ENABLED": "0"}
+    proc = subprocess.run(["bash", str(rel / "scripts" / "run_weekly_etf_bundles.sh")],
                           env=env, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0
     assert "disabled" in proc.stdout.lower()
