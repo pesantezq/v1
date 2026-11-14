@@ -160,6 +160,52 @@ def fmp_cache_read_hold_reason(path: object,
 
 
 # ---------------------------------------------------------------------------
+# Read-time "is this latest artifact current?" status (FMP4-R2)
+# ---------------------------------------------------------------------------
+#
+# Under the HOLD every scheduled wrapper exits 3, so ``outputs/latest/*`` keeps
+# whatever the last pre-HOLD run wrote. Operator surfaces (``tools.status``,
+# GUI v2 Today) call this PURE function at READ time, passing the artifact's own
+# ``generated_at``; nothing is written, no artifact is mutated, and no parallel
+# status writer exists. Pre-HOLD it returns ``None`` so those surfaces render
+# exactly as before.
+
+#: Status label for operator surfaces while the cutover HOLD is in force.
+FMP_CUTOVER_HOLD_STATUS = "FMP_CUTOVER_HOLD"
+
+
+def latest_artifact_hold_status(generated_at: object,
+                                clock: Optional[Clock] = None) -> Optional[dict]:
+    """``None`` pre-HOLD; otherwise a dict that forbids labelling it current.
+
+    Under the HOLD a latest artifact is NEVER current, whatever its timestamp:
+    an artifact from before the HOLD instant is outdated, and one stamped after
+    it cannot rest on admissible FMP market data. An unparseable or naive
+    timestamp is classified ``generated_at_unknown`` (still not current).
+    """
+    reason = cutover_hold_reason(clock)
+    if reason is None:
+        return None
+    when = "generated_at_unknown"
+    try:
+        ts = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        if ts.tzinfo is not None and ts.utcoffset() is not None:
+            when = ("generated_before_hold" if ts < FMP_CUTOVER_HOLD_UTC
+                    else "generated_during_hold")
+    except Exception:  # noqa: BLE001 — unknown provenance is still not current
+        pass
+    return {
+        "status": FMP_CUTOVER_HOLD_STATUS,
+        "data_mode": DATA_UNAVAILABLE,
+        "is_current": False,
+        "reason": reason,
+        "artifact_generated_at": generated_at if isinstance(generated_at, str) else None,
+        "artifact_age_class": when,
+        "hold_utc": FMP_CUTOVER_HOLD_UTC.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Legacy endpoint classification
 # ---------------------------------------------------------------------------
 
