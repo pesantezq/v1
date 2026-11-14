@@ -451,3 +451,62 @@ def test_monthly_guard_is_first_action():
     code_before = [ln for ln in lines[:g] if ln.strip() and not ln.lstrip().startswith("#")]
     assert not [ln for ln in code_before
                 if any(b in ln for b in ("mkdir", "LOG_", ".env", "flock", "REPO_ROOT"))]
+
+
+# Independent P0 regression: immutable inherited shell globals used to bypass
+# postcutoff safety when the guard assigned same names as BASH_ENV readonly vars.
+@needs_bash
+@pytest.mark.parametrize("readonly_global", [
+    "readonly FMP_CUTOVER_HOLD_EPOCH=9999999999",
+    "readonly FMP_CUTOVER_HOLD_RC=0",
+    "readonly FMP_CUTOVER_CLOCK_FLOOR_EPOCH=0",
+])
+def test_readonly_inherited_policy_globals_cannot_admit(tmp_path, fmp_bash_clock, readonly_global):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    env = _bash_env(tmp_path, readonly_global + "\n")
+    direct = _run([_guard(rel), "readonly_policy"], env)
+    assert direct.returncode == 3, direct.stdout + direct.stderr
+    assert "FMP_CUTOVER_HOLD" in direct.stderr
+    assert "pre-cutover" not in direct.stdout
+
+
+@needs_bash
+@pytest.mark.parametrize("readonly_global", [
+    "readonly FMP_CUTOVER_HOLD_EPOCH=9999999999",
+    "readonly FMP_CUTOVER_HOLD_RC=0",
+    "readonly FMP_CUTOVER_CLOCK_FLOOR_EPOCH=0",
+])
+def test_readonly_inherited_policy_globals_block_scheduler_wrapper(
+    tmp_path, fmp_bash_clock, readonly_global,
+):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    marker = tmp_path / "SHOULD_NOT_PASS_GUARD"
+    wrapper = tmp_path / "synthetic_guarded_wrapper.sh"
+    wrapper.write_text(
+        "\n".join([
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f'guard="{_guard(rel)}"',
+            'if [ -r "$guard" ] && . "$guard"; then',
+            '  fmp_cutover_guard synthetic_wrapper || { result=$?; exit "$result"; }',
+            "else",
+            "  exit 3",
+            "fi",
+            f'touch "{marker.as_posix()}"',
+            "",
+        ]),
+        encoding="utf-8", newline="\n",
+    )
+    env = _bash_env(tmp_path, readonly_global + "\n")
+    result = _run([wrapper.as_posix()], env)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert not marker.exists(), "Scheduled wrapper reached a side effect under HOLD"
+
+
+@needs_bash
+def test_readonly_inherited_global_does_not_change_legitimate_prehold(tmp_path, fmp_bash_clock):
+    rel = fmp_bash_clock([], EPOCH["nov25"])
+    env = _bash_env(tmp_path, "readonly FMP_CUTOVER_HOLD_EPOCH=9999999999\n")
+    result = _run([_guard(rel), "prehold_nominal"], env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pre-cutover" in result.stdout

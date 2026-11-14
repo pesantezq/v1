@@ -19,11 +19,13 @@
 #
 # Exit/return status 3 == HOLD (clear, non-zero, distinct from generic failure 1).
 
-FMP_CUTOVER_HOLD_EPOCH=1795651200
-FMP_CUTOVER_HOLD_RC=3
-# FMP4-R2: a clock reading earlier than this candidate's creation
-# (2026-11-14T00:00:00Z) is implausible (RTC reset / rewound clock) -> HOLD.
-FMP_CUTOVER_CLOCK_FLOOR_EPOCH=1794614400
+# FMP4-R2 P0: do NOT assign or read environment-inheritable policy globals.
+# Bash preserves inherited readonly variables installed by BASH_ENV; a failed
+# assignment while sourcing can otherwise turn a post-cutoff HOLD into rc 0.
+# Security-critical thresholds and return codes are embedded in expressions.
+# HOLD UTC epoch: 1795651200 (2026-11-26T00:00:00Z).
+# Clock floor: 1794614400 (2026-11-14T00:00:00Z).
+# HOLD return code: 3.
 
 # FMP4-R2 trusted clock. Prints the epoch on stdout, or "untrusted:<why>" /
 # nothing; non-zero status means "cannot prove pre-cutover" (caller HOLDs).
@@ -54,7 +56,7 @@ _fmp_cutover_trusted_epoch() {
             case "$out" in
                 ''|*[!0-9]*) out="" ;;
             esac
-            if [ -n "$out" ] && [ "$out" -ge "$FMP_CUTOVER_CLOCK_FLOOR_EPOCH" ]; then
+            if [ -n "$out" ] && [ "$out" -ge 1794614400 ]; then
                 printf '%s' "$out"
                 return 0
             fi
@@ -71,8 +73,8 @@ fmp_cutover_guard() {
         case "$now" in
             untrusted:*)
                 printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=clock_%s exit=%s — no FMP calls, no credential load, no broker/trading side effects\n' \
-                    "$entry" "${now#untrusted:}" "$FMP_CUTOVER_HOLD_RC" >&2
-                return "$FMP_CUTOVER_HOLD_RC" ;;
+                    "$entry" "${now#untrusted:}" 3 >&2
+                return 3 ;;
         esac
         now=""
     }
@@ -88,13 +90,13 @@ fmp_cutover_guard() {
     fi
     if [ -z "$now" ]; then
         printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=clock_unreadable exit=%s — no FMP calls, no credential load, no broker/trading side effects\n' \
-            "$entry" "$FMP_CUTOVER_HOLD_RC" >&2
-        return "$FMP_CUTOVER_HOLD_RC"
+            "$entry" 3 >&2
+        return 3
     fi
-    if [ "$now" -ge "$FMP_CUTOVER_HOLD_EPOCH" ]; then
+    if [ "$now" -ge 1795651200 ]; then
         printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=post_cutover_rights_unresolved hold_utc=2026-11-26T00:00:00Z now_epoch=%s exit=%s — no FMP calls, no credential load, no broker/trading side effects. See docs/FMP_CUTOVER_FAILCLOSED.md\n' \
-            "$entry" "$now" "$FMP_CUTOVER_HOLD_RC" >&2
-        return "$FMP_CUTOVER_HOLD_RC"
+            "$entry" "$now" 3 >&2
+        return 3
     fi
     printf 'fmp_cutover_guard: pre-cutover (entrypoint=%s, hold_utc=2026-11-26T00:00:00Z)\n' "$entry"
     return 0
