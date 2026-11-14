@@ -91,7 +91,11 @@ def test_hold_is_effective_before_nov27_in_every_timezone():
 
 def test_bash_and_python_epochs_match():
     text = (REPO / "scripts" / "fmp_cutover_guard.sh").read_text(encoding="utf-8")
-    assert f"FMP_CUTOVER_HOLD_EPOCH={fc.FMP_CUTOVER_HOLD_EPOCH}" in text
+    # Bash must agree with the Python cutoff but never read inherited globals.
+    assert f'if [ "$now" -ge {fc.FMP_CUTOVER_HOLD_EPOCH} ]; then' in text
+    assert "FMP_CUTOVER_HOLD_EPOCH=" not in "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
     assert fc.FMP_CUTOVER_HOLD_EPOCH == 1795651200
 
 
