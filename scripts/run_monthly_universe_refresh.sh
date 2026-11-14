@@ -38,21 +38,29 @@
 
 set -euo pipefail
 
+# FMP-4 / FMP4-R2 fail-closed cutover HOLD — FIRST action: before the log dir,
+# the lock, .env credential load and the ~3,700-call rebuild. Self-located (the
+# guard shipped with THIS script). Exit 3 + FMP_CUTOVER_HOLD line on stderr
+# (cron mail / journal) when held; a missing/unreadable guard file is also a
+# HOLD (exit 3, reason=guard_missing), not a generic rc 1. Nothing is written.
+# No bypass flag exists.
+_FMP_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
+# shellcheck source=/dev/null
+if [ -r "$_FMP_GUARD" ] && . "$_FMP_GUARD"; then
+    fmp_cutover_guard monthly_universe_refresh || {
+        rc=$?
+        printf 'FMP_CUTOVER_HOLD monthly_universe_refresh exit=%s\n' "$rc" >&2
+        exit "$rc"
+    }
+else
+    printf 'FMP_CUTOVER_HOLD entrypoint=monthly_universe_refresh reason=guard_missing exit=3\n' >&2
+    exit 3
+fi
+
 REPO_ROOT="${REPO_ROOT:-/opt/stockbot}"
 LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/monthly_universe_refresh_$(date -u +%Y-%m-%d).log"
-
-# FMP-4 fail-closed cutover HOLD — BEFORE the lock, .env credential load and the
-# ~3,700-call rebuild. Exit 3 + FMP_CUTOVER_HOLD line (log + stderr) when held.
-# A missing guard file aborts the run (set -e). No bypass flag exists.
-# shellcheck source=/dev/null
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fmp_cutover_guard.sh"
-fmp_cutover_guard monthly_universe_refresh >>"$LOG_FILE" 2>&1 || {
-    rc=$?
-    printf 'FMP_CUTOVER_HOLD monthly_universe_refresh exit=%s (see %s)\n' "$rc" "$LOG_FILE" >&2
-    exit "$rc"
-}
 
 # Same lock the weekly run and discovery pulses use, so a monthly refresh can
 # never overlap either of them (both are heavy FMP consumers).
