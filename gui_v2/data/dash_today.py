@@ -5,6 +5,19 @@ from gui_v2.data.shared import card, _read_json, weekly_deployment_view
 
 
 def collect_today_view(root: Path) -> dict:
+    # Refuse all paid-data-derived latest artifacts BEFORE opening a file.
+    # Historical evidence has separate rights gates; this is a current view.
+    early_hold = _fmp_cutover_hold(None)
+    if early_hold is not None:
+        return {
+            "cards": [card(
+                "Decision core", status="red", label="FMP_CUTOVER_HOLD",
+                summary="DATA_UNAVAILABLE - prior decisions are NOT current; do not act",
+                source_artifacts=["decision_plan.json"],
+            )],
+            "persona": "today", "observe_only": True,
+            "fmp_cutover_hold": early_hold,
+        }
     latest = Path(root) / "outputs/latest"
     drs = _read_json(latest / "daily_run_status.json") or {}
     dp = _read_json(latest / "decision_plan.json")
@@ -35,17 +48,35 @@ def collect_today_view(root: Path) -> dict:
 
     # Decision core card — check is not None (an empty dict {} is still "present")
     dp_present = dp is not None
-    cards.append(card(
-        "Decision core",
-        status="ok" if dp_present else "red",
-        label="present" if dp_present else "MISSING",
-        summary=(
-            "decision_plan present"
-            if dp_present
-            else "decision_plan.json absent — decisions not trustworthy"
-        ),
-        source_artifacts=["decision_plan.json"],
-    ))
+    hold = _fmp_cutover_hold(dp)
+    if hold is not None:
+        # FMP4-R2: under the cutover HOLD the scheduled run exits 3 and the
+        # plan on disk is outdated — never label it current. Read-time only.
+        cards.append(card(
+            "Decision core",
+            status="red",
+            label=hold["status"],
+            summary=(
+                f"{hold['data_mode']} — decision_plan.json "
+                f"(generated {hold['artifact_generated_at'] or 'unknown'}) is NOT current; "
+                "do not act on it"
+                if dp_present else
+                f"{hold['data_mode']} — decision_plan.json absent"
+            ),
+            source_artifacts=["decision_plan.json"],
+        ))
+    else:
+        cards.append(card(
+            "Decision core",
+            status="ok" if dp_present else "red",
+            label="present" if dp_present else "MISSING",
+            summary=(
+                "decision_plan present"
+                if dp_present
+                else "decision_plan.json absent — decisions not trustworthy"
+            ),
+            source_artifacts=["decision_plan.json"],
+        ))
 
     # Risk card
     risk_overall = risk.get("overall_status") or "unknown"
@@ -113,4 +144,26 @@ def collect_today_view(root: Path) -> dict:
             updated_at=triage.get("generated_at"),
         ))
 
-    return {"cards": cards, "persona": "today", "observe_only": True}
+    view = {"cards": cards, "persona": "today", "observe_only": True}
+    if hold is not None:
+        view["fmp_cutover_hold"] = hold    # additive; absent pre-HOLD
+    return view
+
+
+def _fmp_cutover_hold(dp: object) -> dict | None:
+    """Read-time FMP cutover HOLD status for the plan; ``None`` pre-HOLD.
+
+    Fails CLOSED: if the status cannot be computed, report the HOLD rather than
+    risk presenting an outdated plan as current.
+    """
+    try:
+        from portfolio_automation.data_budget.fmp_cutover import (
+            latest_artifact_hold_status,
+        )
+        from tools.status import artifact_timestamp
+        return latest_artifact_hold_status(artifact_timestamp(dp))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "FMP_CUTOVER_HOLD", "data_mode": "DATA_UNAVAILABLE",
+                "is_current": False, "reason": f"hold_status_error:{type(exc).__name__}",
+                "artifact_generated_at": None, "artifact_age_class": "generated_at_unknown",
+                "hold_utc": "2026-11-26T00:00:00+00:00"}
