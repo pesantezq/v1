@@ -47,9 +47,27 @@ def _configure_stdio_utf8() -> None:
                 pass
 
 
-def _load_sp500_from_cache(root: str) -> list[str]:
-    """Load S&P 500 symbols from the FMP disk cache (no API call)."""
+def _load_sp500_from_cache(root: str, status: dict | None = None) -> list[str]:
+    """Load S&P 500 symbols from the FMP disk cache (no API call).
+
+    FMP4-R2: the file is rights-held after the FMP cutover HOLD. The shared
+    ``fmp_cache_read_hold_reason`` accessor is checked BEFORE ``exists()`` /
+    open; under the HOLD this returns ``[]`` without touching the file (never
+    deleted) and, when ``status`` is given, records ``DATA_UNAVAILABLE``.
+    """
     cache_path = Path(root) / "data" / "fmp_cache" / "sp500_constituents.json"
+    from portfolio_automation.data_budget.fmp_cutover import (
+        DATA_UNAVAILABLE,
+        fmp_cache_read_hold_reason,
+    )
+    hold = fmp_cache_read_hold_reason(cache_path)
+    if hold is not None:
+        logger.warning("Theme engine: S&P 500 universe %s (%s) — cache not read",
+                       DATA_UNAVAILABLE, hold)
+        if status is not None:
+            status.update({"data_mode": DATA_UNAVAILABLE, "reason": hold,
+                           "source": "data/fmp_cache/sp500_constituents.json"})
+        return []
     if not cache_path.exists():
         return []
     try:
@@ -326,7 +344,11 @@ def run(
     _log_llm_summary(llm_metadata)
 
     # ── Step 3: Load S&P 500 symbol list (from cache, no API call) ───────────
-    sp500_symbols = _load_sp500_from_cache(root)
+    sp500_status: dict = {}
+    sp500_symbols = _load_sp500_from_cache(root, status=sp500_status)
+    if sp500_status:
+        # FMP4-R2: additive, HOLD-only key; pre-HOLD metadata is unchanged.
+        llm_metadata["sp500_universe_status"] = sp500_status
 
     # ── Step 4: Map themes to tickers ─────────────────────────────────────────
     from theme_engine.theme_mapper import ThemeMapper
