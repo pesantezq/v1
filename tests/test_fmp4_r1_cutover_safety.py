@@ -362,41 +362,50 @@ def _fake_release(tmp_path, script, with_guard=True):
 @needs_bash
 @pytest.mark.parametrize("script", sorted(ENTRYPOINTS))
 @pytest.mark.parametrize("when", ["hold", "nov27", "jan27"])
-def test_entrypoint_holds_first_with_exit_3(tmp_path, fmp_bash_date, script, when):
-    rel, root = _fake_release(tmp_path, script)
+def test_entrypoint_holds_first_with_exit_3(tmp_path, fmp_bash_clock, script, when):
+    # FMP4-R2: the TRUSTED clock is pinned via a temp release copy (no BASH_ENV).
+    rel, root = _fake_release(tmp_path, script, with_guard=False)
+    pinned = fmp_bash_clock([], EPOCH[when])
+    shutil.copy(pinned / "scripts" / "fmp_cutover_guard.sh", rel / "scripts" / "fmp_cutover_guard.sh")
     env = {"REPO_ROOT": root.as_posix(), "PY": "/nonexistent/python",
-           "FMP_CUTOVER_GUARD_NOW_EPOCH": "0", **fmp_bash_date(EPOCH[when])}
+           "FMP_CUTOVER_GUARD_NOW_EPOCH": "0"}
     r = _run([(rel / "scripts" / script).as_posix()], env, cwd=root)
     out = r.stdout + r.stderr
     assert r.returncode == 3, out
     assert f"FMP_CUTOVER_HOLD entrypoint={ENTRYPOINTS[script]}" in out or \
         f"FMP_CUTOVER_HOLD {ENTRYPOINTS[script]}" in out, out
+    assert "reason=post_cutover_rights_unresolved" in out, out   # time, not distrust
     assert not (tmp_path / "SIDE_EFFECT").exists()             # no .env / creds
-    if script not in ("run_daily_safe.sh", "run_monthly_universe_refresh.sh"):
+    if script != "run_daily_safe.sh":   # FMP4-R2: monthly no longer logs first
         assert not (root / "logs").exists() and not (rel / "logs").exists()
 
 
 @needs_bash
 @pytest.mark.parametrize("script", sorted(ENTRYPOINTS))
-def test_entrypoint_missing_guard_fails_closed(tmp_path, fmp_bash_date, script):
+def test_entrypoint_missing_guard_fails_closed(tmp_path, script):
+    # FMP4-R2: every guarded launcher maps a missing helper to HOLD exit 3 (not 1).
     rel, root = _fake_release(tmp_path, script, with_guard=False)
     r = _run([(rel / "scripts" / script).as_posix()],
-             {"REPO_ROOT": root.as_posix(), **fmp_bash_date(EPOCH["just_before"])}, cwd=root)
-    assert r.returncode != 0
+             {"REPO_ROOT": root.as_posix(), "PY": "/nonexistent/python"}, cwd=root)
+    out = r.stdout + r.stderr
+    assert r.returncode == 3, out
+    assert "reason=guard_missing" in out, out
     assert not (tmp_path / "SIDE_EFFECT").exists()
+    if script != "run_daily_safe.sh":
+        assert not (root / "logs").exists() and not (rel / "logs").exists()
 
 
 @needs_bash
 @pytest.mark.parametrize("when,rc", [("just_before", 0), ("hold", 3), ("jan27", 3)])
-def test_bash_guard_boundary_with_pinned_system_clock(fmp_bash_date, when, rc):
-    r = _run([(REPO / "scripts" / "fmp_cutover_guard.sh").as_posix(), "probe"],
-             fmp_bash_date(EPOCH[when]), cwd=REPO)
+def test_bash_guard_boundary_with_pinned_system_clock(fmp_bash_clock, when, rc):
+    rel = fmp_bash_clock([], EPOCH[when])
+    r = _run([(rel / "scripts" / "fmp_cutover_guard.sh").as_posix(), "probe"], {}, cwd=REPO)
     assert r.returncode == rc, r.stdout + r.stderr
 
 
 def test_guard_precedes_env_lock_venv_in_every_entrypoint():
     # Logs may precede the guard only where the HOLD line itself is logged.
-    logged_first = {"run_daily_safe.sh", "run_monthly_universe_refresh.sh"}
+    logged_first = {"run_daily_safe.sh"}
     for script, name in ENTRYPOINTS.items():
         lines = (REPO / "scripts" / script).read_text(encoding="utf-8").splitlines()
         g = next(i for i, ln in enumerate(lines) if f"fmp_cutover_guard {name}" in ln)
