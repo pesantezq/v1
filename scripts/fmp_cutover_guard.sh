@@ -27,36 +27,55 @@
 # Clock floor: 1794614400 (2026-11-14T00:00:00Z).
 # HOLD return code: 3.
 
-# FMP4-R2 function-attack repair: inherited READ-ONLY functions (BASH_ENV
-# `readonly -f fmp_cutover_guard` / `readonly -f return`) cannot be redefined
-# and, with a bare `return`, could force rc 0. Defenses, all without a bare
-# `return`/`exit` (hostile functions can shadow those): (1) every status
-# return below is `builtin return N`; (2) at source time, if one of THIS
-# file's own functions is already defined READ-ONLY (so our definition could
-# not take effect), HOLD rc 3 explicitly and never reach the continuation;
-# (3) any function shadowing `exit` is rejected BEFORE calling a wrapper's
-# own plain `exit` (which could otherwise turn HOLD rc=3 into rc=0).
-# This cannot contain arbitrary BASH_ENV actions that ran before this file.
-if \builtin declare -F -- exit >/dev/null 2>&1; then
-    \builtin printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=exit_function_shadow exit=3\n' >&2
-    \builtin exit 3
-fi
-for _fmp_n in fmp_cutover_guard _fmp_cutover_trusted_epoch; do
-    _fmp_d="$(\builtin declare -pF -- "$_fmp_n" 2>/dev/null)" || _fmp_d=""
-    _fmp_f="${_fmp_d#declare }"
-    _fmp_f="${_fmp_f%% *}"
-    case "$_fmp_d:$_fmp_f" in
-        declare\ -*:*r*)
-            printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=readonly_function_%s exit=3 — no FMP calls, no credential load, no broker/trading side effects\n' \
-                "$_fmp_n" >&2
-            if [ "${BASH_SOURCE[0]}" = "$0" ]; then builtin exit 3; fi
-            builtin return 3; return 3; builtin exit 3; exit 3 ;;
-    esac
-done
-unset _fmp_n _fmp_d _fmp_f
+# FMP4-R2 function-attack repair (+ inherited-state collision repair).
+# Inherited READ-ONLY functions/variables (BASH_ENV `readonly -f ...`,
+# `readonly name=...`) cannot be redefined/assigned, and hostile functions can
+# shadow `builtin`, `declare`, `return`, `exit`. Defenses:
+#   (1) NO shell variables are assigned anywhere in this file except one
+#       `local bins` (test seam, assignment failure => HOLD). Scratch values
+#       live in POSITIONAL parameters, which cannot be inherited/read-only, and
+#       the direct-run status is carried in "$1" (never `_fmp_rc`/`now`/...).
+#   (2) Every status return is `builtin return N; return N` (a fake `builtin`
+#       returning 0 falls through to the real `return`).
+#   (3) Source-time checks use `\declare` (NOT `builtin declare`, so a `builtin`
+#       function cannot blind them): a POSITIVE CANARY (our own function must
+#       be reported by `declare -F`) rejects a fake/lying `declare`; a function
+#       shadowing `exit` is rejected before any wrapper plain `exit` runs; and
+#       if one of THIS file's functions is already READ-ONLY (our definition
+#       could not take effect) the guard HOLDs rc 3 and never reaches the
+#       continuation. No loop/temp variable is used (nothing to be readonly).
+# This cannot contain arbitrary BASH_ENV actions that ran before this file; see
+# the LIMIT note below and docs/FMP_CUTOVER_FAILCLOSED.md.
+_fmp_canary_fn() { :; }
+case "$(\declare -F -- _fmp_canary_fn 2>/dev/null)" in
+    _fmp_canary_fn) ;;
+    *)
+        printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=declare_untrusted exit=3 — no FMP calls, no credential load, no broker/trading side effects\n' >&2
+        case "${BASH_SOURCE[0]}" in "$0") builtin exit 3; exit 3 ;; esac
+        builtin return 3; return 3; builtin exit 3; exit 3 ;;
+esac
+case "$(\declare -F -- exit 2>/dev/null)" in
+    '') ;;
+    *)
+        printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=exit_function_shadow exit=3\n' >&2
+        \builtin exit 3; exit 3 ;;
+esac
+case "$(\declare -pF -- fmp_cutover_guard 2>/dev/null)" in
+    declare\ -*r*\ fmp_cutover_guard)
+        printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=readonly_function_fmp_cutover_guard exit=3 — no FMP calls, no credential load, no broker/trading side effects\n' >&2
+        case "${BASH_SOURCE[0]}" in "$0") builtin exit 3; exit 3 ;; esac
+        builtin return 3; return 3; builtin exit 3; exit 3 ;;
+esac
+case "$(\declare -pF -- _fmp_cutover_trusted_epoch 2>/dev/null)" in
+    declare\ -*r*\ _fmp_cutover_trusted_epoch)
+        printf 'FMP_CUTOVER_HOLD entrypoint=guard_source reason=readonly_function__fmp_cutover_trusted_epoch exit=3 — no FMP calls, no credential load, no broker/trading side effects\n' >&2
+        case "${BASH_SOURCE[0]}" in "$0") builtin exit 3; exit 3 ;; esac
+        builtin return 3; return 3; builtin exit 3; exit 3 ;;
+esac
 
-# FMP4-R2 trusted clock. Prints the epoch on stdout, or "untrusted:<why>" /
-# nothing; non-zero status means "cannot prove pre-cutover" (caller HOLDs).
+# FMP4-R2 trusted clock. Prints the epoch on stdout, "untrusted:<why>", or
+# nothing (unreadable); it always returns 0 and the caller HOLDs on anything
+# but a plain epoch.
 #   * Shell FUNCTIONS shadowing the clock path (an exported BASH_FUNC_date%%,
 #     or `date() {...}` defined by BASH_ENV) -> untrusted, fail closed.
 #   * The binary is run by ABSOLUTE path through `\command`, so PATH, the hash
@@ -68,71 +87,79 @@ unset _fmp_n _fmp_d _fmp_f
 # detected from inside bash. Production assumes a trusted service environment:
 # BASH_ENV unset and no exported functions (systemd/cron defaults).
 _fmp_cutover_trusted_epoch() {
-    local name bin out
-    local bins="/usr/bin/date /bin/date"
-    for name in date command builtin declare test '[' printf type hash unset \
-                /usr/bin/date /bin/date; do
-        if \declare -F -- "$name" >/dev/null 2>&1 \
-           || \builtin \declare -F -- "$name" >/dev/null 2>&1; then
-            printf 'untrusted:function_shadows_%s' "${name//[!A-Za-z0-9_]/_}"
-            builtin return 1; return 1; builtin exit 1; exit 1
-        fi
-    done
-    for bin in $bins; do
-        if [ -x "$bin" ]; then
-            out="$(\command "$bin" -u +%s 2>/dev/null)" || out=""
-            case "$out" in
-                ''|*[!0-9]*) out="" ;;
+    local bins="/usr/bin/date /bin/date" || {
+        printf 'untrusted:bins_not_assignable'; builtin return 0; return 0
+    }
+    case "$(\declare -F -- _fmp_canary_fn 2>/dev/null)" in
+        _fmp_canary_fn) ;;
+        *) printf 'untrusted:declare_untrusted'; builtin return 0; return 0 ;;
+    esac
+    set -- "$(\declare -F -- date command builtin declare test '[' printf type hash \
+                unset set shift local /usr/bin/date /bin/date 2>/dev/null)"
+    set -- "${1%%$'\n'*}"
+    case "$1" in
+        '') ;;
+        *)
+            printf 'untrusted:function_shadows_%s' "${1//[!A-Za-z0-9_]/_}"
+            builtin return 0; return 0 ;;
+    esac
+    set -- $bins
+    # $@ = candidate binaries; popped one at a time (no loop variable).
+    while [ "$#" -gt 0 ]; do
+        if [ -x "$1" ]; then
+            set -- "$(\command "$1" -u +%s 2>/dev/null)" "$@"   # $1=out $2=bin
+            case "$1" in
+                ''|*[!0-9]*) shift ;;
+                *)
+                    if [ "$1" -ge 1794614400 ]; then
+                        printf '%s' "$1"
+                    else
+                        printf 'untrusted:before_floor'
+                    fi
+                    builtin return 0; return 0 ;;
             esac
-            if [ -n "$out" ] && [ "$out" -ge 1794614400 ]; then
-                printf '%s' "$out"
-                builtin return 0; return 0; builtin exit 0; exit 0
-            fi
-            [ -n "$out" ] && { printf 'untrusted:before_floor'; builtin return 1; return 1; builtin exit 1; exit 1; }
         fi
+        shift
     done
-    builtin return 1; return 1; builtin exit 1; exit 1
+    builtin return 0; return 0
 }
 
 fmp_cutover_guard() {
-    local entry="${1:-unknown}"
-    local now forced
-    now="$(_fmp_cutover_trusted_epoch)" || {
-        case "$now" in
-            untrusted:*)
-                printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=clock_%s exit=%s — no FMP calls, no credential load, no broker/trading side effects\n' \
-                    "$entry" "${now#untrusted:}" 3 >&2
-                builtin return 3; return 3; builtin exit 3; exit 3 ;;
-        esac
-        now=""
-    }
-    case "$now" in
-        ''|*[!0-9]*) now="" ;;
+    # $1 = entrypoint, $2 = trusted epoch (or untrusted:<why>), $3 = forced epoch
+    set -- "${1:-unknown}" "$(_fmp_cutover_trusted_epoch)"
+    case "$2" in
+        untrusted:*)
+            printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=clock_%s exit=%s — no FMP calls, no credential load, no broker/trading side effects\n' \
+                "$1" "${2#untrusted:}" 3 >&2
+            builtin return 3; return 3; builtin exit 3; exit 3 ;;
+        ''|*[!0-9]*) set -- "$1" "" ;;
     esac
-    forced="${FMP_CUTOVER_GUARD_NOW_EPOCH:-}"
-    case "$forced" in
-        ''|*[!0-9]*) forced="" ;;
+    set -- "$1" "$2" "${FMP_CUTOVER_GUARD_NOW_EPOCH:-}"
+    case "$3" in
+        ''|*[!0-9]*) set -- "$1" "$2" "" ;;
     esac
-    if [ -n "$forced" ] && [ -n "$now" ] && [ "$forced" -gt "$now" ]; then
-        now="$forced"
+    if [ -n "$3" ] && [ -n "$2" ] && [ "$3" -gt "$2" ]; then
+        set -- "$1" "$3"
     fi
-    if [ -z "$now" ]; then
+    if [ -z "$2" ]; then
         printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=clock_unreadable exit=%s — no FMP calls, no credential load, no broker/trading side effects\n' \
-            "$entry" 3 >&2
+            "$1" 3 >&2
         builtin return 3; return 3; builtin exit 3; exit 3
     fi
-    if [ "$now" -ge 1795651200 ]; then
+    if [ "$2" -ge 1795651200 ]; then
         printf 'FMP_CUTOVER_HOLD entrypoint=%s reason=post_cutover_rights_unresolved hold_utc=2026-11-26T00:00:00Z now_epoch=%s exit=%s — no FMP calls, no credential load, no broker/trading side effects. See docs/FMP_CUTOVER_FAILCLOSED.md\n' \
-            "$entry" "$now" 3 >&2
+            "$1" "$2" 3 >&2
         builtin return 3; return 3; builtin exit 3; exit 3
     fi
-    printf 'fmp_cutover_guard: pre-cutover (entrypoint=%s, hold_utc=2026-11-26T00:00:00Z)\n' "$entry"
+    printf 'fmp_cutover_guard: pre-cutover (entrypoint=%s, hold_utc=2026-11-26T00:00:00Z)\n' "$1"
     builtin return 0; return 0; builtin exit 0; exit 0
 }
 
-# Direct execution: run the check and exit with its status.
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    fmp_cutover_guard "${1:-manual}"
-    _fmp_rc=$?
-    builtin exit "$_fmp_rc"; exit "$_fmp_rc"
-fi
+# Direct execution: run the check and exit with its status (carried in "$1";
+# no named variable, so an inherited readonly `_fmp_rc` cannot change it).
+case "${BASH_SOURCE[0]}" in
+    "$0")
+        fmp_cutover_guard "${1:-manual}"
+        set -- "$?"
+        builtin exit "$1"; exit "$1" ;;
+esac
