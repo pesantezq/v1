@@ -404,7 +404,7 @@ def test_guard_has_no_unqualified_date_call():
     text = (REPO / "scripts" / "fmp_cutover_guard.sh").read_text(encoding="utf-8")
     code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
     assert not [ln for ln in code if re.search(r"\$\(\s*date\b|^\s*date\b", ln)]
-    assert any('\\command "$bin" -u +%s' in ln for ln in code)
+    assert any('\\command "$1" -u +%s' in ln for ln in code)
 
 
 # ---------------------------------------------------------------------------
@@ -601,3 +601,107 @@ def test_readonly_function_attacks_block_real_launcher_preambles(
     assert result.returncode == 3, result.stdout + result.stderr
     assert "FMP_CUTOVER_HOLD" in result.stderr
     assert not marker.exists(), "Guarded launcher preamble admitted after HOLD"
+
+
+# ---------------------------------------------------------------------------
+# Inherited-state collision repair (NSTAR-FMP4-R2-PR84-INHERITED-STATE-COLLISION)
+# BASH_ENV read-only VARIABLES colliding with the guard's former scratch names,
+# a `builtin` function shadow paired with an immutable fake guard, and read-only
+# status variables. Supported boundary: these recognized inherited-state attacks.
+# NOT claimed: arbitrary BASH_ENV code that replaces every shell primitive
+# (declare AND builtin AND printf AND [ ...) -- that needs a trusted launcher
+# environment (BASH_ENV unset, no exported functions), a separate gate.
+# ---------------------------------------------------------------------------
+_FAKE_GUARD = "fmp_cutover_guard() { return 0; }; readonly -f fmp_cutover_guard"
+_COLLISION_ATTACKS = {
+    "ro_fmp_n": _FAKE_GUARD + "; readonly _fmp_n=x",
+    "ro_fmp_d": _FAKE_GUARD + "; readonly _fmp_d='declare -f'",
+    "ro_fmp_f": _FAKE_GUARD + "; readonly _fmp_f='-f'",
+    "builtin_ret0_fake_guard": "builtin() { return 0; }; readonly -f builtin; " + _FAKE_GUARD,
+    "builtin_ret1_fake_guard": "builtin() { return 1; }; readonly -f builtin; " + _FAKE_GUARD,
+    "builtin_ret0_only": "builtin() { return 0; }; readonly -f builtin",
+    "ro_fmp_rc": "readonly _fmp_rc=0",
+    "ro_now": "readonly now=1000",
+    "ro_entry_forced_bins": "readonly entry=x forced=1 bins=/nonexistent name=x bin=x out=x",
+}
+_NOMINAL_OK = ("ro_fmp_rc", "ro_now")
+_WRAPPER_LINES = [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    'if [ -r "GUARD" ] && . "GUARD"; then',
+    '  fmp_cutover_guard synthetic_wrapper || { result=$?; exit "$result"; }',
+    "else",
+    "  exit 3",
+    "fi",
+    'touch "MARKER"',
+    "",
+]
+
+
+def _assert_held(r, marker):
+    assert r.returncode == 3, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert "FMP_CUTOVER_HOLD" in out, out
+    assert "reason=" in out or "exit=3" in out, out
+    assert "pre-cutover" not in r.stdout
+    assert marker is None or not marker.exists(), "continued past HOLD"
+
+
+@needs_bash
+@pytest.mark.parametrize("name", sorted(_COLLISION_ATTACKS))
+def test_inherited_state_collision_holds_direct(tmp_path, fmp_bash_clock, name):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    r = _run([_guard(rel), "collision"], _bash_env(tmp_path, _COLLISION_ATTACKS[name] + "\n"))
+    _assert_held(r, None)
+
+
+@needs_bash
+@pytest.mark.parametrize("name", sorted(_COLLISION_ATTACKS))
+def test_inherited_state_collision_blocks_source_guard_continue_wrapper(tmp_path, fmp_bash_clock, name):
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    marker = tmp_path / "SHOULD_NOT_PASS_GUARD"
+    wrapper = tmp_path / "collision_wrapper.sh"
+    body = "\n".join(_WRAPPER_LINES).replace("GUARD", _guard(rel)).replace("MARKER", marker.as_posix())
+    wrapper.write_text(body, encoding="utf-8", newline="\n")
+    r = _run([wrapper.as_posix()], _bash_env(tmp_path, _COLLISION_ATTACKS[name] + "\n"))
+    _assert_held(r, marker)
+
+
+@needs_bash
+@pytest.mark.parametrize("script_name, after_guard", [
+    ("run_daily_safe.sh", '\nsection "Preflight"'),
+    ("run_monthly_universe_refresh.sh", "\nREPO_ROOT="),
+])
+@pytest.mark.parametrize("name", sorted(_COLLISION_ATTACKS))
+def test_inherited_state_collision_blocks_real_launcher_preambles(
+    tmp_path, fmp_bash_clock, script_name, after_guard, name,
+):
+    # Real guarded preamble (function definitions + guard only), truncated before
+    # any preflight/.env/venv/network/broker step and replaced by a marker.
+    rel = fmp_bash_clock([], EPOCH["nov27"])
+    original = (REPO / "scripts" / script_name).read_text(encoding="utf-8")
+    assert after_guard in original, script_name
+    preamble = original.split(after_guard, 1)[0]
+    assert "fmp_cutover_guard" in preamble
+    marker = tmp_path / "LAUNCHER_SIDE_EFFECT"
+    copied = rel / "scripts" / script_name
+    copied.write_text(preamble + f'\ntouch "{marker.as_posix()}"\n', encoding="utf-8", newline="\n")
+    copied.chmod(0o755)
+    r = _run([copied.as_posix()], _bash_env(tmp_path, _COLLISION_ATTACKS[name] + "\n"))
+    _assert_held(r, marker)
+
+
+@needs_bash
+@pytest.mark.parametrize("name", _NOMINAL_OK)
+def test_inherited_readonly_scratch_vars_do_not_break_nominal_prehold(tmp_path, fmp_bash_clock, name):
+    rel = fmp_bash_clock([], EPOCH["nov25"])
+    r = _run([_guard(rel), "prehold"], _bash_env(tmp_path, _COLLISION_ATTACKS[name] + "\n"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "pre-cutover" in r.stdout
+
+
+def test_guard_assigns_no_named_scratch_variables():
+    text = (REPO / "scripts" / "fmp_cutover_guard.sh").read_text(encoding="utf-8")
+    code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    assigned = [ln for ln in code if re.match(r"\s*(local\s+)?[A-Za-z_]\w*=", ln)]
+    assert all(ln.lstrip().startswith("local bins=") for ln in assigned), assigned
