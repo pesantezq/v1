@@ -430,3 +430,44 @@ functions not specifically rejected by the guard. A shell guard cannot undo
 side effects already performed by hostile startup code.
 Production requires `BASH_ENV` unset and no exported functions. No production
 environment, provider rights or deployment gate changed.
+
+
+## FMP4-R2 inherited-state collision repair (draft, not deployed)
+
+Independent QA (exact published PR84 head) showed further `BASH_ENV` fail-opens
+after the cutoff (synthetic forced epoch 1795737600; direct rc 0, and the real
+`run_daily_safe.sh` / monthly guarded prefix continued past the guard):
+an immutable fake `fmp_cutover_guard` PLUS `readonly _fmp_n=x`,
+`readonly _fmp_d='declare -f'` or `readonly _fmp_f='-f'` (the guard's global
+scratch names made its own source-time check fail/blind), and a `builtin`
+function shadow (`builtin() { return 0; }; readonly -f builtin`) PLUS a fake
+immutable guard (the `builtin declare -pF` check was blinded). Separately,
+`readonly _fmp_rc=0` or `readonly now=1000` produced rc 1 instead of rc 3.
+
+Change (only `scripts/fmp_cutover_guard.sh`; launchers untouched):
+- No named scratch variables: values live in positional parameters, the
+  direct-run status in `"$1"`; the only named variable is `local bins` (test
+  seam), whose assignment failure is HOLD (`reason=clock_bins_not_assignable`).
+- Source-time checks use `\declare` (backslash-qualified) rather than `builtin declare`, so a
+  `builtin` shadow cannot blind them; a positive canary (own function must be
+  reported by `declare -F`) turns a lying/replaced `declare` into
+  `reason=declare_untrusted` HOLD rc 3.
+- The readonly-function check is a single `case` on `declare -pF` output (no
+  loop variable); `builtin`, `declare`, `printf`, `[`, `set`, `shift`, `local`
+  shadows are rejected in the trusted clock (`reason=clock_function_shadows_*`).
+
+Evidence: 32 new hermetic cases (direct, source/guard/continue wrapper, real
+`run_daily_safe.sh` + monthly preambles truncated before any side effect) fail
+on the published guard and HOLD rc 3 without continuation on the new one;
+nominal pre-HOLD with readonly `_fmp_rc`/`now` stays rc 0.
+
+Fail-closed side effects: an inherited readonly `bins` (the test-seam name)
+HOLDs even pre-cutover.
+
+NOT claimed: arbitrary `BASH_ENV` code that replaces `declare` AND other
+primitives consistently (e.g. a fake `declare` that also forges the canary),
+or side effects already performed before this file is read. A trusted
+production launcher environment (`BASH_ENV` unset, no exported functions) is a
+SEPARATE, unapproved environment gate; no launcher change was made here.
+Trap `exit 0` on EXIT set by hostile startup code is outside this boundary.
+No production service, provider rights or deployment gate changed.
